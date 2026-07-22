@@ -20,6 +20,7 @@ fn pr_state_projection_uses_the_given_map() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            branch: None,
             state: crate::WorktreePrState::Closed,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
@@ -42,6 +43,7 @@ fn pr_state_projection_uses_the_given_map() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            branch: None,
             state: crate::WorktreePrState::Open,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
@@ -58,6 +60,7 @@ fn pr_state_projection_uses_the_given_map() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            branch: None,
             state: crate::WorktreePrState::Merged,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
@@ -88,6 +91,7 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            branch: None,
             state: crate::WorktreePrState::Merged,
             number: Some(91),
             url: None,
@@ -110,6 +114,7 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            branch: None,
             state: crate::WorktreePrState::Merged,
             number: Some(91),
             url: None,
@@ -119,6 +124,69 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
     );
     project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
+}
+
+#[test]
+fn pr_state_projection_excludes_trunk_and_keeps_feature_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let trunk = dir.path().join("trunk");
+    let feature = dir.path().join("feature");
+    std::fs::create_dir_all(&trunk).unwrap();
+    std::fs::create_dir_all(&feature).unwrap();
+    let mut snapshot = SidebarSnapshot::build(
+        WorkspaceId::from_project_root(dir.path()),
+        Vec::new(),
+        Timestamp::now(),
+    );
+    snapshot.worktree_groups = vec![
+        worktree_group(&trunk, Vec::new()),
+        worktree_group(&feature, Vec::new()),
+    ];
+    let mut states = BTreeMap::new();
+    for (path, branch, number) in [(&trunk, "old-feature", 90), (&feature, "feature", 91)] {
+        states.insert(
+            path.display().to_string(),
+            PrLink {
+                branch: Some(branch.to_owned()),
+                state: crate::WorktreePrState::Merged,
+                number: Some(number),
+                url: Some(format!("https://github.com/org/repo/pull/{number}")),
+                ci: Some(crate::WorktreePrCi::Passing),
+                merge_sha: Some(format!("sha-{number}")),
+            },
+        );
+    }
+    let mut diff_cache = DiffStatsCache::default();
+    diff_cache.entries.insert(
+        trunk.display().to_string(),
+        DiffStatsCacheEntry {
+            branch: Some("main".to_owned()),
+            trunk: Some("origin/main".to_owned()),
+            ..DiffStatsCacheEntry::default()
+        },
+    );
+    diff_cache.entries.insert(
+        feature.display().to_string(),
+        DiffStatsCacheEntry {
+            branch: Some("feature".to_owned()),
+            trunk: Some("origin/main".to_owned()),
+            ..DiffStatsCacheEntry::default()
+        },
+    );
+
+    project_pr_state_map(&mut snapshot, &states, &diff_cache);
+
+    let trunk = &snapshot.worktree_groups[0];
+    assert_eq!(trunk.pr_state, None);
+    assert_eq!(trunk.pr_number, None);
+    assert_eq!(trunk.pr_url, None);
+    let feature = &snapshot.worktree_groups[1];
+    assert_eq!(feature.pr_state, Some(crate::WorktreePrState::Merged));
+    assert_eq!(feature.pr_number, Some(91));
+    assert_eq!(
+        feature.pr_url.as_deref(),
+        Some("https://github.com/org/repo/pull/91")
+    );
 }
 
 #[test]

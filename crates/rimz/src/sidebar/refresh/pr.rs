@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use crate::RuntimePaths;
 use crate::forge::{self, ForgeCli};
 use crate::sidebar::refresh::git_stats::{
-    DiffStatsCache, focused_worktree_paths, hot_worktree_paths, needed_worktree_paths,
-    read_diff_stats_cache,
+    DiffStatsCache, focused_worktree_paths, hot_worktree_paths, is_trunk_branch,
+    needed_worktree_paths, read_diff_stats_cache,
 };
 use crate::sidebar::timing::{PR_STATE_HOT_TTL, PR_STATE_RETRY_TTL, PR_STATE_TTL, unix_now_ms};
 use crate::{SidebarSnapshot, WorktreePrCi, WorktreePrState};
@@ -47,6 +47,10 @@ pub struct PrStateCache {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrLink {
+    /// Head branch this link was resolved for. Legacy path-only links have no
+    /// stamp and are re-resolved before reuse.
+    #[serde(default)]
+    pub branch: Option<String>,
     pub state: WorktreePrState,
     #[serde(default)]
     pub number: Option<u64>,
@@ -340,6 +344,7 @@ impl Target {
         merge_sha: Option<String>,
     ) -> PrLink {
         PrLink {
+            branch: Some(self.branch.clone()),
             state,
             number: Some(number),
             url: self.remote.pr_web_url(number),
@@ -349,6 +354,7 @@ impl Target {
     }
 
     fn stamp_pr_url(&self, mut link: PrLink) -> PrLink {
+        link.branch = Some(self.branch.clone());
         link.url = link
             .number
             .and_then(|number| self.remote.pr_web_url(number));
@@ -363,6 +369,15 @@ fn build_targets(needed: &[String], diff_cache: &DiffStatsCache) -> Vec<Target> 
         let Some(branch) = git_branch(worktree) else {
             continue;
         };
+        if is_trunk_branch(
+            &branch,
+            diff_cache
+                .entries
+                .get(path)
+                .and_then(|entry| entry.trunk.as_deref()),
+        ) {
+            continue;
+        }
         let Some(remote) = git_line(worktree, &["remote", "get-url", "origin"]) else {
             continue;
         };
@@ -523,6 +538,7 @@ fn assign_states(
         }
         if let Some(link) = prior
             .get(&target.path)
+            .filter(|link| link.branch.as_deref() == Some(target.branch.as_str()))
             .cloned()
             .map(|link| target.stamp_pr_url(link))
         {
@@ -540,6 +556,8 @@ fn assign_states(
                     states.insert(target.path.clone(), link);
                 }
             }
+        } else if prior.contains_key(&target.path) {
+            transitions.push((target.clone(), None));
         }
     }
     AssignedStates {
@@ -656,7 +674,11 @@ fn probe_repo_group(
         let result = probe_transition(&target, number);
         if !result.ok {
             ok = false;
-            if let Some(link) = prior.get(&target.path).cloned() {
+            if let Some(link) = prior
+                .get(&target.path)
+                .filter(|link| link.branch.as_deref() == Some(target.branch.as_str()))
+                .cloned()
+            {
                 states.insert(target.path.clone(), link);
             }
             continue;
@@ -682,6 +704,7 @@ fn carry_prior_states(
         .filter_map(|target| {
             prior
                 .get(&target.path)
+                .filter(|link| link.branch.as_deref() == Some(target.branch.as_str()))
                 .cloned()
                 .map(|link| (target.path.clone(), link))
         })

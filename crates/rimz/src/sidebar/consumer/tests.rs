@@ -490,6 +490,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
     pr.states.insert(
         wt.clone(),
         crate::sidebar::refresh::pr::PrLink {
+            branch: Some("feature".to_owned()),
             state: crate::WorktreePrState::Open,
             number: Some(91),
             url: None,

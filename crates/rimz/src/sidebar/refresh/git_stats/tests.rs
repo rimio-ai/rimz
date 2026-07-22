@@ -91,6 +91,17 @@ fn write_rimz_worktree_marker_with_pr(
 }
 
 #[test]
+fn trunk_branch_recognizes_main_and_the_resolved_trunk() {
+    assert!(is_trunk_branch("main", None));
+    assert!(is_trunk_branch("main", Some("develop")));
+    assert!(is_trunk_branch("main", Some("origin/main")));
+    assert!(is_trunk_branch("develop", Some("develop")));
+    assert!(is_trunk_branch("develop", Some("origin/develop")));
+    assert!(!is_trunk_branch("feature", Some("origin/main")));
+    assert!(!is_trunk_branch("origin/main", Some("origin/main")));
+}
+
+#[test]
 fn from_pr_marker_stamps_the_diff_cache_entry() {
     let repo = GitFixture::init(&["init", "-q"]);
     write_rimz_worktree_marker_with_pr(&repo, "feature", "HEAD", Some(69));
