@@ -60,6 +60,8 @@ tmux viewers attach read-only and with `ignore-size`, so they cannot type or res
 
 Open the base address without `?arg=` to choose among every live RimZ room on the machine. An unknown or stopped session argument opens the same switcher with a notice; a valid argument continues to attach directly.
 
+The switcher centers its room cards beneath a RIMZ banner when the terminal has space and falls back to a compact full-frame list on small screens. Rooms with prompt activity in the last 24 hours lead, newest prompt first; the rest follow by the most recent room start or attach.
+
 Use ↑/↓ or j/k and the mouse wheel to move, Enter or a second click on the selected card to attach, and printable keys to filter repository names and paths. Backspace edits the filter, Esc clears it before quitting, and Ctrl-C quits immediately.
 
 Each two-line card leads with the repository name and path, then shows live root-agent counts by provider. The red `●` count marks agents that need attention; `◎`, `◇`, and `$` show the headline session count, tokens, and spend from `[sidebar] spend_window`. An unreadable room snapshot leaves the stats line at `–` until the next probe.

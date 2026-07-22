@@ -219,6 +219,7 @@ mod tests {
             project_root: root,
             root_class: rimz::workspace::RootClass::Repo,
             rimz_bin: None,
+            updated_at: jiff::Timestamp::UNIX_EPOCH,
         }
     }
 

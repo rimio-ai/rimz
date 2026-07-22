@@ -108,6 +108,7 @@ pub struct KnownWorkspace {
     pub session_name: String,
     pub root_class: RootClass,
     pub rimz_bin: Option<PathBuf>,
+    pub updated_at: jiff::Timestamp,
 }
 
 /// True when `inner` is `outer` itself or nested under it, compared by path
@@ -252,6 +253,7 @@ fn normalize_known_workspace_record(
             session_name: record.session_name,
             root_class: record.root_class,
             rimz_bin: record.rimz_bin,
+            updated_at: record.updated_at,
         },
         updated_at: record.updated_at,
     })
