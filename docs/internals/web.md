@@ -2,7 +2,7 @@
 
 > See [DESIGN.md](../../DESIGN.md) and [multiplexers.md](./multiplexers.md) for the commitments this doc extends.
 
-RimZ serves every local Zellij and tmux room through one Basic-authenticated ttyd daemon, with a loopback listener by default and an authorization gate for trusted-header reverse proxies.
+RimZ serves every local Zellij and tmux room through one Basic-authenticated writable ttyd daemon and serves explicitly shared rooms through a separate unauthenticated, input-blocked broadcast daemon; both bind loopback by default.
 
 ## Contract
 
@@ -10,7 +10,7 @@ The daemon owns browser transport and rendering; RimZ owns room birth, session v
 
 The store, hooks, sidebar, and wake paths are unchanged for a browser client, and RimZ proxies no pane I/O.
 
-`[web] interface` and `port` select one exact listener, default `127.0.0.1:8200`. A live daemon serves every room on both backends, so mux choice affects only the attach command selected after a browser connects.
+`[web] interface` selects both bind addresses, `port` selects the writable listener at 8200 by default, and `share_port` selects the broadcast listener at 8201 by default. The writable daemon can reach every room after machine-wide authentication; the broadcast daemon reaches only its durable allowlist.
 
 ## Daemon
 
@@ -42,11 +42,29 @@ The first shared-daemon start after an upgrade consumes the old `$XDG_STATE_HOME
 
 `rimz web restart` performs the same stop under the daemon lock when a daemon is online and always starts a fresh process with the current binary and browser profile. `rimz web stop` sends SIGTERM to the gate and ttyd, waits one second while refreshing the process table, uses SIGKILL for a survivor, waits for the public listener to close, and removes the record.
 
+## Broadcast daemon
+
+The read-only surface uses a second ttyd process with structurally separate argv:
+
+```text
+ttyd -O -a -i <interface> -p <share_port> [-t <client-option>...] [-I <custom-index>] <current-rimz-exe> web exec --share
+```
+
+The missing `-W` makes ttyd 1.7 and later drop client input, and the missing `-c` makes the viewer URL unauthenticated. `auth_header`, `trusted_proxies`, the authorization gate, credentials, and remote `--web` forwarding apply only to the writable daemon. The broadcast process receives the same theme, font, reconnect fixes, and pixel-compatible custom index.
+
+`$XDG_STATE_HOME/rimz/web-share.json` stores `{ "sessions": [...] }` through temp-file plus rename. `share` validates a durable workspace record and live mux session before adding one sorted session and ensuring the daemon. The hidden share shim re-reads the file for every connection, repeats the record and liveness checks, and returns the single `this room is not shared` error for missing, unknown, unshared, and dead targets without listing other rooms.
+
+A valid tmux broadcast execs `tmux -S <managed-socket> attach -t <session> -r -f ignore-size` when the probed tmux supports client flags; `-r` blocks mux input as defense in depth and `ignore-size` excludes the viewer from window sizing. A valid Zellij broadcast execs the ordinary `zellij attach <session>` because Zellij has no read-only attach; ttyd remains the input boundary, and viewer geometry can influence the session.
+
+The daemon record at `$XDG_STATE_HOME/rimz/web-ttyd-share.json` carries `pid`, `port`, `interface`, and optional `pixel_protocol`; `$XDG_STATE_HOME/rimz/web-ttyd-share.lock` serializes allowlist and process transitions. A record is live only while its pid names ttyd and the listener accepts a connection. Listener or pixel-protocol drift replaces the process before reuse. Both writable and broadcast records participate in the tmux pixel-client ancestry check.
+
+Removing one session rewrites the allowlist and restarts the daemon so every existing viewer disconnects; still-shared browser tabs can reconnect through ttyd. Removing the final session or using `unshare --all` stops the process. `web stop` stops both daemons but retains the allowlist, `web restart` restarts the broadcast daemon when that list is non-empty, and `rimz reload` replaces each browser daemon only when it is online.
+
 ## Credential and browser client
 
 The one credential named `rimz` lives at `$XDG_STATE_HOME/rimz/web-ttyd-credential.json`, mode 0600, with `name`, `created_at`, and `secret`. ttyd requires it in every auth mode, and a trusted-header gate reads the file at startup to precompute the injected Basic authorization value; the secret stays off gate argv.
 
-Rotation stops and restarts the one live daemon so the old secret stops working immediately. Revocation stops the daemon and removes the credential. ttyd read-only mode is process-wide, so RimZ rejects read-only credential creation.
+Rotation stops and restarts the live writable daemon so the old secret stops working immediately. Revocation stops that daemon and removes the credential. ttyd read-only mode is process-wide, so RimZ rejects read-only credential creation and directs users to the separate broadcast process.
 
 Credential creation, rotation, listing, and revocation have the same behavior in Basic and trusted-header modes. Rotation restarts both ttyd and its gate, so the gate's startup read receives the new secret.
 
@@ -66,15 +84,15 @@ The tmux capability probe accepts an `xterm-256color` rendering client when its 
 
 `rimz web open` resolves or births the room, confirms the session is addressable, ensures the shared daemon, and returns its URL, auth mode, credential, and tunnel target. `--no-start` requires an already-live daemon.
 
-`rimz web url` reads the room identity, existing credential, and live daemon state without changing the daemon or credential. It uses the live port when the daemon runs and the configured port otherwise; its v2 JSON omits `credential` when none exists. `start`, `restart`, `status`, and `stop` act on the one machine daemon and need no room target. `rimz reload` restarts the daemon when it is online so a newly installed build supplies its current browser client; an offline daemon stays offline, and a restart failure warns without failing reload.
+`rimz web url` reads the room identity, existing credential, and live daemon state without changing the daemon or credential. It uses the live port when the daemon runs and the configured port otherwise; its v2 JSON omits `credential` when none exists. `share` and `unshare` own the broadcast allowlist; `restart`, `status`, and `stop` cover both daemon records. `rimz reload` restarts each daemon when it is online so a newly installed build supplies its current browser client; an offline daemon stays offline, and a restart failure warns without failing reload.
 
 After a normal `rimz start` makes the room ready, `[web] enabled = true` asks RimZ to ensure the daemon. This path is deliberately best-effort: missing ttyd, a port collision, or a start failure prints a warning and never refuses the room.
 
 ## Configuration
 
-`[web]` carries `enabled`, `interface`, `port`, `base_url`, `auth_header`, `trusted_proxies`, `font`, `font_source`, and `style_client`.
+`[web]` carries `enabled`, `interface`, `port`, `share_port`, `base_url`, `share_base_url`, `auth_header`, `trusted_proxies`, `font`, `font_source`, and `style_client`.
 
-`enabled` defaults to true, `interface` defaults to `127.0.0.1`, `port` defaults to 8200, and an absent `base_url` resolves to `http://127.0.0.1:<port>`. A reverse proxy can set `base_url` to its public prefix; RimZ appends `/?arg=<session>`.
+`enabled` defaults to true, `interface` defaults to `127.0.0.1`, `port` defaults to 8200, and `share_port` defaults to 8201. Absent base URLs resolve to `http://127.0.0.1:<respective-port>`; a reverse proxy can set either public prefix, and RimZ appends `/?arg=<session>`.
 
 A non-empty trimmed `auth_header` selects trusted-header auth and always enables the gate, while an empty or absent value selects direct Basic Auth unless `trusted_proxies` enables the gate. `trusted_proxies` is empty by default. Trusted-header auth on a non-loopback interface with an empty allowlist warns that only loopback proxies can connect and names the CIDR fix for a proxy on another host.
 
@@ -97,5 +115,7 @@ The gate treats a configured auth header as proof of the public proxy's authenti
 The source gate always admits loopback, but trusted-header authorization still requires the configured header there; loopback carries no header-auth bypass. The private ttyd upstream remains protected by Basic Auth. Use host-level user isolation when another local user can read the serving user's credential file or execute as that user.
 
 Credentials stay out of URLs, logs, store events, and workspace records. The v2 credential appears only in explicit JSON output that reports a saved credential and the human stderr relay.
+
+The broadcast listener intentionally has no RimZ authentication and prints a visible warning whenever an active share binds a non-loopback interface. Its allowlist limits rooms rather than viewers; anyone who can reach the listener can read the terminal output of every allowlisted room. Public deployments put HTTPS, optional viewer authentication, and network filtering in front of `share_port`.
 
 The browser session is shell access as the serving user. A reverse proxy that exposes the listener provides HTTPS and rate limiting.

@@ -104,6 +104,7 @@ struct WebFixture {
     bin_dir: PathBuf,
     ttyd_bin: PathBuf,
     web_port: u16,
+    share_port: u16,
     tmux_log: PathBuf,
     ttyd_log: PathBuf,
 }
@@ -120,13 +121,18 @@ impl WebFixture {
         std::os::unix::fs::symlink(ttyd_shim(), &ttyd_bin).expect("link named ttyd fixture");
         let ttyd_log = env.project_root.join(log_name);
         let web_port = free_loopback_port();
-        write_machine_config(&env, &format!("[web]\nport = {web_port}\n"));
+        let share_port = free_loopback_port();
+        write_machine_config(
+            &env,
+            &format!("[web]\nport = {web_port}\nshare_port = {share_port}\n"),
+        );
         Self {
             env,
             workspace,
             bin_dir,
             ttyd_bin,
             web_port,
+            share_port,
             tmux_log,
             ttyd_log,
         }
@@ -549,6 +555,225 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     assert_eq!(
         String::from_utf8_lossy(&stop.stdout),
         "revoked ttyd credential and stopped 1 daemon(s)\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn read_only_broadcast_allowlist_reuses_restarts_and_stops_its_daemon() {
+    let _guard = daemon_test_guard();
+    let fixture = WebFixture::new("ttyd-broadcast.log");
+    write_machine_config(
+        &fixture.env,
+        &format!(
+            "[web]\nport = {}\nshare_port = {}\ninterface = \"0.0.0.0\"\nshare_base_url = \"https://watch.example/rimz\"\nstyle_client = false\n",
+            fixture.web_port, fixture.share_port
+        ),
+    );
+    let second_root = fixture.env.project_root.join("broadcast-second");
+    std::fs::create_dir_all(&second_root).expect("mkdir second room");
+    fixture.env.record(&second_root);
+    let second = rimz::WorkspaceResolver::resolve(&second_root, None).expect("resolve second room");
+    let sessions = format!(
+        "{}\\n{}",
+        fixture.workspace.session_name, second.session_name
+    );
+
+    let first = fixture
+        .command_with_sessions(&sessions)
+        .args(["--mux", "tmux", "web", "share", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .args(["--print", "--json"])
+        .bounded_output()
+        .expect("share first room");
+    let first_payload = success_json(&first, "share first room");
+    assert_eq!(first_payload["version"], "rimz.web.share.v1");
+    assert_eq!(first_payload["port"], fixture.share_port);
+    assert_eq!(
+        first_payload["url"],
+        format!(
+            "https://watch.example/rimz/?arg={}",
+            fixture.workspace.session_name
+        )
+    );
+    assert!(
+        String::from_utf8_lossy(&first.stderr).contains("broadcast is unauthenticated"),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd-share.json");
+    let allowlist_path = fixture.env.state_root().join("rimz/web-share.json");
+    let first_daemon: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("first share record"))
+            .expect("first share JSON");
+
+    let second_share = fixture
+        .command_with_sessions(&sessions)
+        .args(["--mux", "tmux", "web", "share", "--session"])
+        .arg(&second.session_name)
+        .args(["--print", "--json"])
+        .bounded_output()
+        .expect("share second room");
+    assert_success(&second_share, "share second room");
+    let reused_daemon: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("reused share record"))
+            .expect("reused share JSON");
+    assert_eq!(first_daemon["pid"], reused_daemon["pid"]);
+    let allowlist: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&allowlist_path).expect("broadcast allowlist"))
+            .expect("allowlist JSON");
+    let mut expected_sessions = vec![
+        fixture.workspace.session_name.clone(),
+        second.session_name.clone(),
+    ];
+    expected_sessions.sort();
+    assert_eq!(
+        allowlist["sessions"],
+        serde_json::to_value(expected_sessions).expect("expected sessions JSON")
+    );
+    let log = std::fs::read_to_string(&fixture.ttyd_log).expect("broadcast ttyd log");
+    let share_argv = log
+        .lines()
+        .find(|line| line.contains("\tweb\texec\t--share"))
+        .expect("broadcast daemon argv");
+    assert!(
+        !share_argv.split('\t').any(|arg| arg == "-W"),
+        "{share_argv}"
+    );
+    assert!(
+        !share_argv.split('\t').any(|arg| arg == "-c"),
+        "{share_argv}"
+    );
+
+    let status = fixture
+        .command_with_sessions(&sessions)
+        .args(["web", "status", "--json"])
+        .bounded_output()
+        .expect("broadcast status");
+    let status = success_json(&status, "broadcast status");
+    assert_eq!(status["share"]["online"], true);
+    assert_eq!(status["share"]["port"], fixture.share_port);
+    assert_eq!(status["share"]["sessions"], allowlist["sessions"]);
+
+    let attach = fixture
+        .command_with_sessions(&sessions)
+        .args(["--mux", "tmux", "web", "exec", "--share"])
+        .arg(&fixture.workspace.session_name)
+        .bounded_output()
+        .expect("run read-only attach shim");
+    assert_success(&attach, "read-only attach shim");
+    let tmux_log = std::fs::read_to_string(&fixture.tmux_log).expect("tmux attach log");
+    assert!(
+        tmux_log.contains(&format!(
+            "attach -t {} -r -f ignore-size",
+            fixture.workspace.session_name
+        )),
+        "{tmux_log}"
+    );
+
+    let unshare_first = fixture
+        .command_with_sessions(&sessions)
+        .args(["web", "unshare", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .bounded_output()
+        .expect("unshare first room");
+    assert_success(&unshare_first, "unshare first room");
+    let restarted_daemon: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("restarted share record"))
+            .expect("restarted share JSON");
+    assert_ne!(reused_daemon["pid"], restarted_daemon["pid"]);
+
+    let refused = fixture
+        .command_with_sessions(&sessions)
+        .args(["--mux", "tmux", "web", "exec", "--share"])
+        .arg(&fixture.workspace.session_name)
+        .bounded_output()
+        .expect("refuse unshared room");
+    assert!(!refused.status.success());
+    let refused = String::from_utf8_lossy(&refused.stderr);
+    assert!(refused.contains("this room is not shared"), "{refused}");
+    assert!(!refused.contains("Live RimZ sessions"), "{refused}");
+    assert!(!refused.contains(&second.session_name), "{refused}");
+
+    let unshare_second = fixture
+        .command_with_sessions(&sessions)
+        .args(["web", "unshare", "--session"])
+        .arg(&second.session_name)
+        .bounded_output()
+        .expect("unshare second room");
+    assert_success(&unshare_second, "unshare second room");
+    assert!(!daemon_path.exists(), "last unshare stops broadcast daemon");
+    let empty: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&allowlist_path).expect("empty allowlist"))
+            .expect("empty allowlist JSON");
+    assert_eq!(empty["sessions"], serde_json::json!([]));
+}
+
+#[cfg(unix)]
+#[test]
+fn web_stop_stops_writable_and_broadcast_daemons() {
+    let _guard = daemon_test_guard();
+    let fixture = WebFixture::new("ttyd-stop-both.log");
+    write_machine_config(
+        &fixture.env,
+        &format!(
+            "[web]\nport = {}\nshare_port = {}\nstyle_client = false\n",
+            fixture.web_port, fixture.share_port
+        ),
+    );
+    assert_success(
+        &fixture
+            .command()
+            .args(["web", "start"])
+            .bounded_output()
+            .expect("start writable daemon"),
+        "start writable daemon",
+    );
+    assert_success(
+        &fixture
+            .command()
+            .args(["--mux", "tmux", "web", "share", "--session"])
+            .arg(&fixture.workspace.session_name)
+            .args(["--print"])
+            .bounded_output()
+            .expect("start broadcast daemon"),
+        "start broadcast daemon",
+    );
+
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop both daemons");
+    assert_success(&stop, "stop both daemons");
+    assert_eq!(
+        String::from_utf8_lossy(&stop.stdout),
+        "stopped 2 ttyd daemons\n"
+    );
+    assert!(!fixture.env.state_root().join("rimz/web-ttyd.json").exists());
+    assert!(
+        !fixture
+            .env
+            .state_root()
+            .join("rimz/web-ttyd-share.json")
+            .exists()
+    );
+}
+
+#[test]
+fn read_only_token_error_points_to_broadcast_sharing() {
+    let fixture = WebFixture::new("ttyd-read-only-token.log");
+    let output = fixture
+        .command()
+        .args(["web", "token", "create", "--read-only"])
+        .bounded_output()
+        .expect("reject read-only token");
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("use `rimz web share`"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

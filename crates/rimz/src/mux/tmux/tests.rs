@@ -41,6 +41,21 @@ fn existing_session_attach_targets_the_managed_server() {
 }
 
 #[test]
+fn readonly_attach_blocks_input_and_ignores_viewer_size() {
+    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
+    backend
+        .version
+        .set("tmux 3.5".to_owned())
+        .expect("fresh version cache");
+    let spec = backend.attach_readonly_command("rimz-test");
+
+    assert_eq!(
+        verb_args(&spec),
+        ["attach", "-t", "rimz-test", "-r", "-f", "ignore-size"]
+    );
+}
+
+#[test]
 fn the_managed_endpoint_needs_no_workspace_to_reconstruct() {
     // Any caller rebuilds the same endpoint from the runtime domain alone —
     // this is what keeps `backend_for(MuxName)` free of a workspace argument.

@@ -104,7 +104,12 @@ fn assert_web_config(config: &MachineConfig) {
         Some("https://devbox.example/rimz")
     );
     assert_eq!(config.web.port, 9123);
+    assert_eq!(config.web.share_port, 9124);
     assert_eq!(config.web.interface, "0.0.0.0");
+    assert_eq!(
+        config.web.share_base_url.as_deref(),
+        Some("https://watch.example/rimz")
+    );
     assert_eq!(config.web.auth_header.as_deref(), Some("X-Forwarded-User"));
     assert_eq!(config.web.trusted_proxies, ["10.0.0.0/8", "fd00::/8"]);
     assert_eq!(config.web.font, "FiraCode Nerd Font Mono");
@@ -1616,6 +1621,7 @@ fn notifications_parse_per_machine_preferences() {
 fn web_enabled_defaults_on_and_parses_off() {
     assert!(WebPrefs::default().enabled);
     assert_eq!(WebPrefs::default().port, 8200);
+    assert_eq!(WebPrefs::default().share_port, 8201);
     assert_eq!(WebPrefs::default().interface, "127.0.0.1");
     assert!(WebPrefs::default().auth_header.is_none());
     assert!(WebPrefs::default().trusted_proxies.is_empty());
@@ -1638,8 +1644,10 @@ fn scalar_sections_parse_non_default_values() {
             "[web]\n\
              enabled = false\n\
              port = 9123\n\
+             share_port = 9124\n\
              interface = \"0.0.0.0\"\n\
              base_url = \"https://devbox.example/rimz\"\n\
+             share_base_url = \"https://watch.example/rimz\"\n\
              auth_header = \"X-Forwarded-User\"\n\
              trusted_proxies = [\"10.0.0.0/8\", \"fd00::/8\"]\n\
              font = \"FiraCode Nerd Font Mono\"\n\

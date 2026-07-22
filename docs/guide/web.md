@@ -18,10 +18,12 @@ apt install ttyd         # Debian or Ubuntu
 ```sh
 rimz web            # ensure the room and shared daemon, print URL + credential, open browser
 rimz web url        # print an existing room's URL without requiring the daemon
+rimz web share      # share one live room as a read-only broadcast
+rimz web unshare    # revoke one room's broadcast
 rimz web start      # start the machine-wide daemon without targeting a room
-rimz web restart    # restart it with the current binary and config
-rimz web status     # report the daemon's pid and configured port
-rimz web stop       # stop the daemon
+rimz web restart    # restart active browser daemons with current config
+rimz web status     # report writable and broadcast listeners
+rimz web stop       # stop both browser daemons
 ```
 
 `rimz web` is `rimz web open`.
@@ -33,6 +35,24 @@ The printed route is `http://127.0.0.1:8200/?arg=<session>`. ttyd passes the sel
 The browser shows a Basic-Auth prompt. Use the printed user `rimz` and password. Add `--no-start` when a supervisor owns ttyd and the command should fail rather than start it.
 
 With `[web] enabled = true`, every normal `rimz start` also asks for the shared daemon after the room is ready. A missing binary, occupied port, or daemon error warns on stderr and leaves the room usable in the terminal.
+
+## Share a read-only broadcast
+
+```sh
+rimz web share [PATH] --print
+rimz web share --session rimz-project-a1b2c3 --json
+rimz web unshare [PATH]
+rimz web unshare --session rimz-project-a1b2c3
+rimz web unshare --all
+```
+
+`share` requires an already-live RimZ room, adds only that room to a durable allowlist, starts a second ttyd daemon on `127.0.0.1:8201` by default, and prints its viewer URL. The viewer daemon has no Basic-Auth prompt and drops all browser input; it cannot reach another live room by changing `?arg=` because its shim accepts only allowlisted sessions and gives the same generic refusal for unknown, stopped, and unshared names.
+
+The viewer link is deliberately unauthenticated. Keep the listener on loopback for local viewing, or put HTTPS and any desired viewer authentication in a reverse proxy before exposing it. Set `share_base_url` to the proxy's public prefix; `auth_header` and `trusted_proxies` govern only the writable listener. A shared room on a non-loopback `interface` prints a warning that anyone who can reach `share_port` can watch.
+
+`unshare` restarts the broadcast daemon while other rooms remain shared, which disconnects every existing viewer and lets still-shared tabs reconnect. Removing the last room or using `--all` stops the daemon. The allowlist survives `rimz web stop`; `rimz web status` shows both its retained sessions and whether the broadcast daemon is online.
+
+tmux viewers attach read-only and with `ignore-size`, so they cannot type or resize the presenter's layout. Zellij has no read-only or size-isolated attach mode: ttyd still blocks viewer input, but a viewer window resize can influence the shared Zellij session geometry.
 
 ## Browser appearance and input
 
@@ -106,7 +126,7 @@ rimz web token revoke-all
 
 One credential named `rimz` serves the whole machine in every auth mode. `create` rotates it and restarts the live daemon and gate. Either revoke command stops the daemon and clears the credential.
 
-ttyd read-only mode belongs to the whole process, so `rimz web token create --read-only` is rejected rather than presenting a misleading per-user permission.
+ttyd read-only mode belongs to the whole process, so `rimz web token create --read-only` points to the separate `rimz web share` broadcast instead of presenting a misleading per-user permission.
 
 Treat the password like an SSH private key. It stays out of the URL, logs, events, and workspace records.
 
@@ -116,8 +136,10 @@ Treat the password like an SSH private key. It stays out of the URL, logs, event
 [web]
 enabled = true
 port = 8200
+share_port = 8201
 interface = "127.0.0.1"
 # base_url = "https://devbox.example/rimz"
+# share_base_url = "https://watch.example/rimz"
 # auth_header = "X-Authentik-Username"
 # trusted_proxies = ["172.18.0.0/16"]
 font = "JetBrainsMono Nerd Font Mono"
@@ -125,13 +147,15 @@ font = "JetBrainsMono Nerd Font Mono"
 style_client = true
 ```
 
-`interface` and `port` select the exact public listener. `base_url` changes the prefix RimZ prints when a reverse proxy fronts RimZ; the `/?arg=<session>` query remains. `auth_header` puts a proxy-validated identity header at the authorization gate while ttyd retains Basic Auth, and non-empty `trusted_proxies` admits those source addresses to the gate.
+`interface` selects the bind address for both daemons; `port` selects the writable listener and `share_port` selects the read-only broadcast listener. `base_url` and `share_base_url` change the respective prefixes RimZ prints when a reverse proxy fronts RimZ; the `/?arg=<session>` query remains. `auth_header` puts a proxy-validated identity header at the writable authorization gate while ttyd retains Basic Auth, and non-empty `trusted_proxies` admits those source addresses to that gate.
 
 ## Security boundary
 
 By default, RimZ invokes ttyd with write access, origin checks, mandatory Basic Auth, and an explicit loopback bind.
 
 The one machine credential authenticates the shared listener, so it grants access to every live RimZ room on that machine rather than only the room named in the first URL. An authenticated client can submit another session argument, and a missing or rejected argument lists the live RimZ rooms. A remote `--web` tunnel forwards this same machine-wide surface through its local port.
+
+The broadcast listener is a separate process without `-W` or `-c`: ttyd drops input and admits connections without authentication, while RimZ's per-connection shim limits attachment to the durable room allowlist and never lists other rooms. Its output can still contain secrets. Bind it to loopback or place it behind a reverse proxy and firewall before public exposure.
 
 The browser session is shell access as the serving user, and terminal output can contain secrets. Treat either the credential or trusted-header boundary as machine-wide shell access. Put HTTPS and rate limiting in front before exposing the listener beyond loopback:
 

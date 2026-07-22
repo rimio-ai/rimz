@@ -17,7 +17,7 @@ use crate::store::{atomic, paths};
 
 use super::{CredentialSummary, Result, WebAuth, WebCredential, WebErr, WebWarning, gate::Cidr};
 
-mod client;
+pub(super) mod client;
 
 use client::ClientProfile;
 
@@ -381,7 +381,7 @@ fn reap_legacy_instances() {
     remove_legacy_instance_dir(&dir);
 }
 
-fn is_ttyd_process(process: &crate::proc::ProcInfo) -> bool {
+pub(super) fn is_ttyd_process(process: &crate::proc::ProcInfo) -> bool {
     crate::proc::command::program_label(&process.cmdline) == "ttyd"
 }
 
@@ -718,7 +718,7 @@ fn terminate_live_record(record: &DaemonRecord, ttyd_live: bool, gate_live: bool
 }
 
 #[cfg(unix)]
-fn terminate_pids(pids: &[u32]) {
+pub(super) fn terminate_pids(pids: &[u32]) {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
 
@@ -745,7 +745,7 @@ fn terminate_pids(pids: &[u32]) {
 }
 
 #[cfg(not(unix))]
-fn terminate_pids(_pids: &[u32]) {}
+pub(super) fn terminate_pids(_pids: &[u32]) {}
 
 fn spawn_spec(
     program: &Path,
@@ -785,7 +785,7 @@ fn spawn_spec_for(
         .args(["web", "exec"]))
 }
 
-fn spawn_detached(spec: CommandSpec) -> Result<u32> {
+pub(super) fn spawn_detached(spec: CommandSpec) -> Result<u32> {
     let mut command = spec.to_command();
     command
         .stdin(Stdio::null())
@@ -804,7 +804,7 @@ fn spawn_detached(spec: CommandSpec) -> Result<u32> {
     })
 }
 
-fn ensure_port_available(address: SocketAddr) -> Result<()> {
+pub(super) fn ensure_port_available(address: SocketAddr) -> Result<()> {
     TcpListener::bind(address)
         .map(|_| ())
         .map_err(|_| WebErr::ConfiguredPortInUse {
@@ -824,7 +824,7 @@ fn wait_for_port(port: u16, timeout: Duration) -> bool {
     )
 }
 
-fn wait_for_address(address: SocketAddr, timeout: Duration) -> bool {
+pub(super) fn wait_for_address(address: SocketAddr, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if TcpStream::connect(address).is_ok() {
@@ -836,14 +836,14 @@ fn wait_for_address(address: SocketAddr, timeout: Duration) -> bool {
 }
 
 #[cfg(unix)]
-fn wait_for_address_close(address: SocketAddr, timeout: Duration) {
+pub(super) fn wait_for_address_close(address: SocketAddr, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline && TcpStream::connect(address).is_ok() {
         std::thread::sleep(Duration::from_millis(25));
     }
 }
 
-fn socket_address(interface: &str, port: u16) -> Result<SocketAddr> {
+pub(super) fn socket_address(interface: &str, port: u16) -> Result<SocketAddr> {
     let interface = interface
         .parse::<IpAddr>()
         .map_err(|_| WebErr::InvalidInterface {
@@ -859,7 +859,7 @@ fn record_public_address(record: &DaemonRecord) -> Result<SocketAddr> {
     )?))
 }
 
-fn probe_address(mut address: SocketAddr) -> SocketAddr {
+pub(super) fn probe_address(mut address: SocketAddr) -> SocketAddr {
     if address.ip().is_unspecified() {
         address.set_ip(match address.ip() {
             IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -913,7 +913,7 @@ fn write_daemon_at(path: &Path, record: &DaemonRecord) -> Result<()> {
     Ok(())
 }
 
-fn read_json_optional<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
+pub(super) fn read_json_optional<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -932,7 +932,7 @@ fn read_json_optional<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Optio
         })
 }
 
-fn remove_optional(path: &Path) -> Result<bool> {
+pub(super) fn remove_optional(path: &Path) -> Result<bool> {
     match fs::remove_file(path) {
         Ok(()) => Ok(true),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
