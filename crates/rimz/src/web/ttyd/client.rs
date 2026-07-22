@@ -136,7 +136,7 @@ fn fetch_stock_index(program: &Path) -> Result<String, String> {
         .arg(port.to_string())
         .arg("sh");
     let pid = spawn_detached(spec).map_err(|err| err.to_string())?;
-    let record = DaemonRecord { pid, port };
+    let record = DaemonRecord::basic_loopback(pid, port);
     if !wait_for_port(port, START_TIMEOUT) {
         terminate_record(&record);
         return Err(format!(

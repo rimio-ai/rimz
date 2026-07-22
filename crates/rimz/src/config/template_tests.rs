@@ -69,8 +69,12 @@ fn template_covers_serialized_default_leaves() {
         );
     }
 
-    let allowed_template_only =
-        BTreeSet::from(["web.base_url".to_owned(), "web.font_source".to_owned()]);
+    let allowed_template_only = BTreeSet::from([
+        "web.auth_header".to_owned(),
+        "web.base_url".to_owned(),
+        "web.font_source".to_owned(),
+        "web.trusted_proxies".to_owned(),
+    ]);
     for path in template.difference(&expected) {
         assert!(
             allowed_template_only.contains(path),

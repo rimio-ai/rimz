@@ -77,14 +77,20 @@ pub(crate) fn err() -> anstream::AutoStream<std::io::StderrLock<'static>> {
 pub(crate) fn web_warnings(warnings: &[rimz::web::WebWarning]) {
     let mut stderr = err();
     for warning in warnings {
-        let (surface, detail) = match warning {
+        let skipped = match warning {
             rimz::web::WebWarning::BrowserClientSkipped(detail) => {
-                ("browser terminal fixes", detail)
+                Some(("browser terminal fixes", detail))
             }
-            rimz::web::WebWarning::BrowserFontSkipped(detail) => ("browser font", detail),
-            rimz::web::WebWarning::BrowserThemeSkipped(detail) => ("browser theme", detail),
+            rimz::web::WebWarning::BrowserFontSkipped(detail) => Some(("browser font", detail)),
+            rimz::web::WebWarning::BrowserThemeSkipped(detail) => Some(("browser theme", detail)),
+            rimz::web::WebWarning::HeaderAuthUnprotected(detail) => {
+                let _ = writeln!(stderr, "rimz: warning: {detail}");
+                None
+            }
         };
-        let _ = writeln!(stderr, "rimz: skipping {surface}: {detail}");
+        if let Some((surface, detail)) = skipped {
+            let _ = writeln!(stderr, "rimz: skipping {surface}: {detail}");
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 //! Browser access through one machine-wide ttyd daemon.
 
 use std::io;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -13,6 +14,7 @@ use crate::mux::CommandSpec;
 use crate::room::session::{LiveSessions, workspace_record_for_session};
 use crate::store::atomic;
 
+mod gate;
 mod ttyd;
 
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
@@ -45,10 +47,8 @@ pub enum WebErr {
         "the shared ttyd daemon credential is missing; run `rimz web token create`, then retry"
     )]
     TtydCredentialMissing,
-    #[error(
-        "the shared ttyd daemon did not accept connections on 127.0.0.1:{port} within 5 seconds"
-    )]
-    TtydStartTimeout { port: u16 },
+    #[error("the shared ttyd daemon did not accept connections on {address} within 5 seconds")]
+    TtydStartTimeout { address: SocketAddr },
     #[error(
         "[web] port {port} is already in use by another process; choose a free port in `rimz config path`"
     )]
@@ -57,6 +57,24 @@ pub enum WebErr {
         "ttyd read-only access is per process, not per credential; read-only credentials are not supported"
     )]
     TtydReadOnlyCredential,
+    #[error(
+        "credential rotation is disabled while `[web] auth_header` is set; unset it to return to Basic Auth"
+    )]
+    TrustedHeaderCredential,
+    #[error(
+        "[web] interface `{value}` is not an IP address; set it to an IPv4 or IPv6 address in `rimz config path`"
+    )]
+    InvalidInterface { value: String },
+    #[error(
+        "[web] trusted proxy `{value}` is invalid: {reason}; use an IP address or CIDR in `rimz config path`"
+    )]
+    InvalidTrustedProxy { value: String, reason: String },
+    #[error("web proxy gate failed while {action}: {source}")]
+    GateIo {
+        action: &'static str,
+        #[source]
+        source: io::Error,
+    },
     #[error("ttyd credential `{name}` does not exist (the single credential is `rimz`)")]
     TtydCredentialNotFound { name: String },
     #[error(
@@ -88,12 +106,24 @@ pub struct WebCredential {
     pub secret: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum WebAuth {
+    #[default]
+    Basic,
+    TrustedHeader {
+        header: String,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebOpenPayload {
     pub version: String,
     pub url: String,
     pub session: String,
     pub port: u16,
+    #[serde(default)]
+    pub auth: WebAuth,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<WebCredential>,
 }
@@ -103,6 +133,7 @@ impl WebOpenPayload {
         session: impl Into<String>,
         base_url: impl Into<String>,
         port: u16,
+        auth: WebAuth,
         credential: Option<WebCredential>,
     ) -> Self {
         let session = session.into();
@@ -113,6 +144,7 @@ impl WebOpenPayload {
             url,
             session,
             port,
+            auth,
             credential,
         }
     }
@@ -127,6 +159,7 @@ pub struct WebStatusPayload {
     pub version: String,
     pub online: bool,
     pub pid: Option<u32>,
+    pub interface: String,
     pub port: u16,
 }
 
@@ -135,6 +168,7 @@ pub enum WebWarning {
     BrowserClientSkipped(String),
     BrowserFontSkipped(String),
     BrowserThemeSkipped(String),
+    HeaderAuthUnprotected(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,6 +180,7 @@ pub struct WebAccessOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebDaemonOutcome {
     pub pid: u32,
+    pub interface: String,
     pub port: u16,
     pub warnings: Vec<WebWarning>,
 }
@@ -185,7 +220,8 @@ pub fn open_session(
             session,
             base_url,
             daemon.port,
-            Some(daemon.credential),
+            daemon.auth,
+            daemon.credential,
         ),
         warnings: daemon.warnings,
     })
@@ -198,6 +234,7 @@ pub fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebOpenP
         session,
         base_url,
         daemon.port,
+        daemon.auth,
         daemon.credential,
     ))
 }
@@ -206,6 +243,7 @@ pub fn ensure_daemon(config: &MachineConfig) -> Result<WebDaemonOutcome> {
     let daemon = ttyd::ensure_daemon(config)?;
     Ok(WebDaemonOutcome {
         pid: daemon.pid,
+        interface: daemon.interface,
         port: daemon.port,
         warnings: daemon.warnings,
     })
@@ -227,6 +265,14 @@ pub fn rotate_credential(config: &MachineConfig, read_only: bool) -> Result<Cred
     })
 }
 
+pub fn serve_gate(listen: SocketAddr, upstream: SocketAddr, allow: &[String]) -> Result<()> {
+    let allow = allow
+        .iter()
+        .map(|value| gate::Cidr::parse(value))
+        .collect::<Result<Vec<_>>>()?;
+    gate::serve(listen, upstream, allow)
+}
+
 pub fn revoke_credential(name: Option<&str>) -> Result<bool> {
     if let Some(name) = name
         && name != "rimz"
@@ -244,6 +290,10 @@ pub fn status(config: &MachineConfig) -> Result<WebStatusPayload> {
         version: WEB_SCHEMA_VERSION.to_owned(),
         online: daemon.is_some(),
         pid: daemon.as_ref().map(|record| record.pid),
+        interface: daemon.as_ref().map_or_else(
+            || config.web.interface.clone(),
+            |record| record.interface.clone(),
+        ),
         port: daemon.map_or(config.web.port, |record| record.port),
     })
 }
@@ -385,6 +435,7 @@ mod tests {
             "rimz-test-a1b2c3",
             "http://127.0.0.1:8200/",
             8200,
+            WebAuth::Basic,
             Some(WebCredential {
                 username: "rimz".to_owned(),
                 secret: "secret".to_owned(),
@@ -403,5 +454,12 @@ mod tests {
         let parsed: WebOpenPayload = serde_json::from_slice(&json).expect("parse");
         assert_eq!(parsed, payload);
         assert!(parsed.version_ok());
+        assert_eq!(parsed.auth, WebAuth::Basic);
+
+        let basic: WebOpenPayload = serde_json::from_str(
+            r#"{"version":"rimz.web.v2","url":"http://localhost","session":"rimz-test","port":8200}"#,
+        )
+        .expect("old v2 payload");
+        assert_eq!(basic.auth, WebAuth::Basic);
     }
 }

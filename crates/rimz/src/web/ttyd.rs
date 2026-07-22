@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io;
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -14,7 +14,7 @@ use crate::config::MachineConfig;
 use crate::mux::CommandSpec;
 use crate::store::{atomic, paths};
 
-use super::{CredentialSummary, Result, WebCredential, WebErr, WebWarning};
+use super::{CredentialSummary, Result, WebAuth, WebCredential, WebErr, WebWarning, gate::Cidr};
 
 mod client;
 
@@ -38,17 +38,55 @@ pub(super) struct TtydCredential {
 pub(super) struct DaemonRecord {
     pub(super) pid: u32,
     pub(super) port: u16,
+    #[serde(default = "default_interface")]
+    pub(super) interface: String,
+    #[serde(default)]
+    pub(super) auth: WebAuth,
+    #[serde(default)]
+    pub(super) trusted_proxies: Vec<String>,
+    #[serde(default)]
+    pub(super) gate: Option<GateRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct GateRecord {
+    pub(super) pid: u32,
+    pub(super) upstream_port: u16,
+}
+
+impl DaemonRecord {
+    pub(super) fn basic_loopback(pid: u32, port: u16) -> Self {
+        Self {
+            pid,
+            port,
+            interface: default_interface(),
+            auth: WebAuth::Basic,
+            trusted_proxies: Vec::new(),
+            gate: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DaemonSpec {
+    port: u16,
+    interface: String,
+    auth: WebAuth,
+    trusted_proxies: Vec<String>,
 }
 
 pub(super) struct RunningDaemon {
     pub(super) pid: u32,
     pub(super) port: u16,
-    pub(super) credential: WebCredential,
+    pub(super) interface: String,
+    pub(super) auth: WebAuth,
+    pub(super) credential: Option<WebCredential>,
     pub(super) warnings: Vec<WebWarning>,
 }
 
 pub(super) struct DaemonInspection {
     pub(super) port: u16,
+    pub(super) auth: WebAuth,
     pub(super) credential: Option<WebCredential>,
 }
 
@@ -100,9 +138,7 @@ pub(super) fn open_daemon(config: &MachineConfig, may_start: bool) -> Result<Run
         let Some(record) = daemon_status_locked()? else {
             return Err(WebErr::TtydOffline);
         };
-        let Some(credential) = read_credential()? else {
-            return Err(WebErr::TtydCredentialMissing);
-        };
+        let credential = credential_for_auth(&record.auth)?;
         Ok(running_daemon(record, credential, Vec::new()))
     }
 }
@@ -110,9 +146,21 @@ pub(super) fn open_daemon(config: &MachineConfig, may_start: bool) -> Result<Run
 pub(super) fn inspect_daemon(config: &MachineConfig) -> Result<DaemonInspection> {
     let _guard = acquire_daemon_lock()?;
     let daemon = daemon_status_locked()?;
-    let port = daemon.map_or(config.web.port, |record| record.port);
-    let credential = read_credential()?.map(|credential| basic_auth(&credential));
-    Ok(DaemonInspection { port, credential })
+    let port = daemon
+        .as_ref()
+        .map_or(config.web.port, |record| record.port);
+    let auth = daemon
+        .as_ref()
+        .map_or_else(|| auth_from_config(config), |record| record.auth.clone());
+    let credential = match auth {
+        WebAuth::Basic => read_credential()?.map(|credential| basic_auth(&credential)),
+        WebAuth::TrustedHeader { .. } => None,
+    };
+    Ok(DaemonInspection {
+        port,
+        auth,
+        credential,
+    })
 }
 
 pub(super) fn credential_summary() -> Result<Option<CredentialSummary>> {
@@ -153,41 +201,117 @@ fn clear_credential() -> Result<bool> {
 }
 
 pub(super) fn ensure_daemon(config: &MachineConfig) -> Result<RunningDaemon> {
+    let desired = desired_spec(config)?;
+    let warnings = auth_warnings(&desired);
     let _guard = acquire_daemon_lock()?;
     reap_legacy_instances();
     let daemon = daemon_status_locked()?;
     if let Some(record) = &daemon
-        && record.port == config.web.port
-        && let Some(credential) = read_credential()?
+        && record_matches(record, &desired)
     {
-        return Ok(running_daemon(record.clone(), credential, Vec::new()));
+        let credential = credential_for_auth(&record.auth)?;
+        return Ok(running_daemon(record.clone(), credential, warnings));
     }
     let program = program()?;
-    if daemon
-        .as_ref()
-        .is_none_or(|record| record.port != config.web.port)
-    {
-        ensure_port_available(config.web.port)?;
+    let public_address = socket_address(&desired.interface, desired.port)?;
+    if daemon.as_ref().is_none_or(|record| {
+        socket_address(&record.interface, record.port).ok() != Some(public_address)
+    }) {
+        ensure_port_available(public_address)?;
     }
     if let Some(record) = daemon {
         stop_record(&record)?;
     }
-    let credential = ensure_credential()?;
+    ensure_port_available(public_address)?;
+    let credential = match &desired.auth {
+        WebAuth::Basic => Some(ensure_credential()?),
+        WebAuth::TrustedHeader { .. } => None,
+    };
     let profile = client::profile(config, &program);
-    let record = start_daemon_with_profile(&program, config.web.port, &credential, &profile)?;
-    Ok(running_daemon(record, credential, profile.warnings))
+    let record = start_daemon_with_profile(&program, &desired, credential.as_ref(), &profile)?;
+    let mut warnings = warnings;
+    warnings.extend(profile.warnings);
+    Ok(running_daemon(record, credential, warnings))
 }
 
 fn running_daemon(
     record: DaemonRecord,
-    credential: TtydCredential,
+    credential: Option<TtydCredential>,
     warnings: Vec<WebWarning>,
 ) -> RunningDaemon {
     RunningDaemon {
         pid: record.pid,
         port: record.port,
-        credential: basic_auth(&credential),
+        interface: record.interface,
+        auth: record.auth,
+        credential: credential.as_ref().map(basic_auth),
         warnings,
+    }
+}
+
+fn credential_for_auth(auth: &WebAuth) -> Result<Option<TtydCredential>> {
+    match auth {
+        WebAuth::Basic => read_credential()?
+            .map(Some)
+            .ok_or(WebErr::TtydCredentialMissing),
+        WebAuth::TrustedHeader { .. } => Ok(None),
+    }
+}
+
+fn auth_from_config(config: &MachineConfig) -> WebAuth {
+    config
+        .web
+        .auth_header
+        .as_deref()
+        .map(str::trim)
+        .filter(|header| !header.is_empty())
+        .map_or(WebAuth::Basic, |header| WebAuth::TrustedHeader {
+            header: header.to_owned(),
+        })
+}
+
+fn desired_spec(config: &MachineConfig) -> Result<DaemonSpec> {
+    let interface = config
+        .web
+        .interface
+        .parse::<IpAddr>()
+        .map_err(|_| WebErr::InvalidInterface {
+            value: config.web.interface.clone(),
+        })?
+        .to_string();
+    for value in &config.web.trusted_proxies {
+        Cidr::parse(value)?;
+    }
+    Ok(DaemonSpec {
+        port: config.web.port,
+        interface,
+        auth: auth_from_config(config),
+        trusted_proxies: config.web.trusted_proxies.clone(),
+    })
+}
+
+fn record_matches(record: &DaemonRecord, desired: &DaemonSpec) -> bool {
+    record.port == desired.port
+        && record.interface == desired.interface
+        && record.auth == desired.auth
+        && record.trusted_proxies == desired.trusted_proxies
+        && record.gate.is_some() == !desired.trusted_proxies.is_empty()
+}
+
+fn auth_warnings(desired: &DaemonSpec) -> Vec<WebWarning> {
+    let Ok(interface) = desired.interface.parse::<IpAddr>() else {
+        return Vec::new();
+    };
+    if matches!(desired.auth, WebAuth::TrustedHeader { .. })
+        && !interface.is_loopback()
+        && desired.trusted_proxies.is_empty()
+    {
+        vec![WebWarning::HeaderAuthUnprotected(format!(
+            "trusted-header auth is exposed on {interface}:{}; set `[web] trusted_proxies` or firewall the port so only the authenticating proxy can reach it",
+            desired.port
+        ))]
+    } else {
+        Vec::new()
     }
 }
 
@@ -259,7 +383,10 @@ fn terminate_legacy_instance(instance: &LegacyTtydInstance) {
             .and_then(|pid| kill(pid, Signal::SIGTERM).map_err(|err| err.to_string()));
         match result {
             Ok(()) => {
-                wait_for_port_close(instance.port, Duration::from_secs(1));
+                wait_for_address_close(
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), instance.port),
+                    Duration::from_secs(1),
+                );
                 tracing::debug!(
                     session = %instance.session,
                     pid = instance.pid,
@@ -290,27 +417,110 @@ fn remove_legacy_instance_dir(dir: &Path) {
 
 fn start_daemon_with_profile(
     program: &Path,
-    port: u16,
-    credential: &TtydCredential,
+    desired: &DaemonSpec,
+    credential: Option<&TtydCredential>,
     profile: &ClientProfile,
 ) -> Result<DaemonRecord> {
-    let spec = spawn_spec(program, port, &credential.secret, &profile.args)?;
+    let gated = !desired.trusted_proxies.is_empty();
+    let ttyd_port = if gated {
+        choose_ephemeral_port().map_err(|source| WebErr::GateIo {
+            action: "choosing the ttyd upstream port",
+            source,
+        })?
+    } else {
+        desired.port
+    };
+    let ttyd_interface = if gated {
+        IpAddr::V4(Ipv4Addr::LOCALHOST)
+    } else {
+        desired
+            .interface
+            .parse()
+            .map_err(|_| WebErr::InvalidInterface {
+                value: desired.interface.clone(),
+            })?
+    };
+    let ttyd_address = SocketAddr::new(ttyd_interface, ttyd_port);
+    let spec = spawn_spec(
+        program,
+        ttyd_interface,
+        ttyd_port,
+        &desired.auth,
+        credential,
+        &profile.args,
+    )?;
     let pid = spawn_detached(spec)?;
-    let record = DaemonRecord { pid, port };
-    if !wait_for_port(port, START_TIMEOUT) {
-        let _ = stop_record(&record);
-        return Err(WebErr::TtydStartTimeout { port });
+    if !wait_for_address(ttyd_address, START_TIMEOUT) {
+        terminate_pids(&[pid]);
+        wait_for_address_close(ttyd_address, Duration::from_secs(1));
+        return Err(WebErr::TtydStartTimeout {
+            address: ttyd_address,
+        });
     }
-    write_daemon(&record)?;
+    let gate = if gated {
+        let public_address = socket_address(&desired.interface, desired.port)?;
+        let gate_pid = match spawn_gate(public_address, ttyd_address, &desired.trusted_proxies) {
+            Ok(pid) => pid,
+            Err(err) => {
+                terminate_pids(&[pid]);
+                return Err(err);
+            }
+        };
+        Some(GateRecord {
+            pid: gate_pid,
+            upstream_port: ttyd_port,
+        })
+    } else {
+        None
+    };
+    let record = DaemonRecord {
+        pid,
+        port: desired.port,
+        interface: desired.interface.clone(),
+        auth: desired.auth.clone(),
+        trusted_proxies: desired.trusted_proxies.clone(),
+        gate,
+    };
+    let public_address = record_public_address(&record)?;
+    if !wait_for_address(public_address, START_TIMEOUT) {
+        let _ = stop_record(&record);
+        return Err(WebErr::TtydStartTimeout {
+            address: public_address,
+        });
+    }
+    if let Err(err) = write_daemon(&record) {
+        let _ = stop_record(&record);
+        return Err(err);
+    }
     Ok(record)
 }
 
+fn spawn_gate(listen: SocketAddr, upstream: SocketAddr, allow: &[String]) -> Result<u32> {
+    let exe = std::env::current_exe().map_err(|source| WebErr::Io {
+        path: PathBuf::from("/proc/self/exe"),
+        source,
+    })?;
+    let mut spec = CommandSpec::new(exe.display().to_string())
+        .args(["web", "gate", "--listen"])
+        .arg(listen.to_string())
+        .arg("--upstream")
+        .arg(upstream.to_string());
+    for cidr in allow {
+        spec = spec.arg("--allow").arg(cidr.clone());
+    }
+    spawn_detached(spec)
+}
+
 pub(super) fn rotate_credential(config: &MachineConfig) -> Result<CredentialRotation> {
+    if !matches!(auth_from_config(config), WebAuth::Basic) {
+        return Err(WebErr::TrustedHeaderCredential);
+    }
     let _guard = acquire_daemon_lock()?;
     rotate_credential_locked(config)
 }
 
 fn rotate_credential_locked(config: &MachineConfig) -> Result<CredentialRotation> {
+    let desired = desired_spec(config)?;
     let Some(daemon) = daemon_status_locked()? else {
         return Ok(CredentialRotation {
             credential: basic_auth(&mint_credential()?),
@@ -318,18 +528,22 @@ fn rotate_credential_locked(config: &MachineConfig) -> Result<CredentialRotation
             warnings: Vec::new(),
         });
     };
-    if daemon.port != config.web.port {
-        ensure_port_available(config.web.port)?;
+    let public_address = socket_address(&desired.interface, desired.port)?;
+    if socket_address(&daemon.interface, daemon.port).ok() != Some(public_address) {
+        ensure_port_available(public_address)?;
     }
     let program = program()?;
     let profile = client::profile(config, &program);
     let credential = mint_credential()?;
     stop_record(&daemon)?;
-    start_daemon_with_profile(&program, config.web.port, &credential, &profile)?;
+    ensure_port_available(public_address)?;
+    start_daemon_with_profile(&program, &desired, Some(&credential), &profile)?;
+    let mut warnings = auth_warnings(&desired);
+    warnings.extend(profile.warnings);
     Ok(CredentialRotation {
         credential: basic_auth(&credential),
         restarted: true,
-        warnings: profile.warnings,
+        warnings,
     })
 }
 
@@ -351,15 +565,32 @@ fn daemon_status_locked() -> Result<Option<DaemonRecord>> {
         return Ok(None);
     };
     let processes = crate::proc::list_processes();
-    if processes
+    let ttyd_live = processes
         .iter()
-        .any(|process| process.pid == record.pid && is_ttyd_process(process))
-        && TcpStream::connect(("127.0.0.1", record.port)).is_ok()
-    {
+        .any(|process| process.pid == record.pid && is_ttyd_process(process));
+    let gate_live = record.gate.as_ref().is_none_or(|gate| {
+        processes
+            .iter()
+            .any(|process| process.pid == gate.pid && is_gate_process(process))
+    });
+    let listening = record_public_address(&record)
+        .ok()
+        .is_some_and(|address| TcpStream::connect(address).is_ok());
+    if ttyd_live && gate_live && listening {
         return Ok(Some(record));
     }
     remove_optional(&path)?;
     Ok(None)
+}
+
+fn is_gate_process(process: &crate::proc::ProcInfo) -> bool {
+    crate::proc::command::program_label(&process.cmdline) == "rimz"
+        && process
+            .cmdline
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|args| args == ["web", "gate"])
 }
 
 pub(super) fn stop_daemon() -> Result<bool> {
@@ -384,64 +615,99 @@ fn stop_record(record: &DaemonRecord) -> Result<()> {
 fn terminate_record(record: &DaemonRecord) {
     #[cfg(unix)]
     {
-        use nix::sys::signal::{Signal, kill};
-        use nix::unistd::Pid;
-
-        let mut survivors = Vec::new();
-        if let Ok(raw) = i32::try_from(record.pid) {
-            let _ = kill(Pid::from_raw(raw), Signal::SIGTERM);
-            survivors.push(record.pid);
+        let mut pids = record
+            .gate
+            .as_ref()
+            .map(|gate| gate.pid)
+            .into_iter()
+            .collect::<Vec<_>>();
+        pids.push(record.pid);
+        terminate_pids(&pids);
+        if let Ok(address) = record_public_address(record) {
+            wait_for_address_close(address, Duration::from_secs(1));
         }
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while !survivors.is_empty() && Instant::now() < deadline {
-            let processes = crate::proc::list_processes();
-            survivors.retain(|pid| processes.iter().any(|process| process.pid == *pid));
-            if !survivors.is_empty() {
-                std::thread::sleep(Duration::from_millis(25));
-            }
-        }
-        for pid in survivors {
-            if let Ok(raw) = i32::try_from(pid) {
-                let _ = kill(Pid::from_raw(raw), Signal::SIGKILL);
-            }
-        }
-        wait_for_port_close(record.port, Duration::from_secs(1));
     }
 }
 
+#[cfg(unix)]
+fn terminate_pids(pids: &[u32]) {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
+    let mut survivors = Vec::new();
+    for pid in pids {
+        if let Ok(raw) = i32::try_from(*pid) {
+            let _ = kill(Pid::from_raw(raw), Signal::SIGTERM);
+            survivors.push(*pid);
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !survivors.is_empty() && Instant::now() < deadline {
+        let processes = crate::proc::list_processes();
+        survivors.retain(|pid| processes.iter().any(|process| process.pid == *pid));
+        if !survivors.is_empty() {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+    for pid in survivors {
+        if let Ok(raw) = i32::try_from(pid) {
+            let _ = kill(Pid::from_raw(raw), Signal::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_pids(_pids: &[u32]) {}
+
 fn spawn_spec(
     program: &Path,
+    interface: IpAddr,
     port: u16,
-    secret: &str,
+    auth: &WebAuth,
+    credential: Option<&TtydCredential>,
     extra_args: &[String],
 ) -> Result<CommandSpec> {
-    Ok(spawn_spec_for(
+    spawn_spec_for(
         program,
         &std::env::current_exe().map_err(|source| WebErr::Io {
             path: PathBuf::from("/proc/self/exe"),
             source,
         })?,
+        interface,
         port,
-        secret,
+        auth,
+        credential,
         extra_args,
-    ))
+    )
 }
 
 fn spawn_spec_for(
     program: &Path,
     rimz_exe: &Path,
+    interface: IpAddr,
     port: u16,
-    secret: &str,
+    auth: &WebAuth,
+    credential: Option<&TtydCredential>,
     extra_args: &[String],
-) -> CommandSpec {
-    CommandSpec::new(program.display().to_string())
-        .args(["-W", "-O", "-a", "-c"])
-        .arg(format!("rimz:{secret}"))
-        .args(["-i", "127.0.0.1", "-p"])
+) -> Result<CommandSpec> {
+    let mut spec = CommandSpec::new(program.display().to_string()).args(["-W", "-O", "-a"]);
+    match auth {
+        WebAuth::Basic => {
+            let secret = credential
+                .map(|credential| credential.secret.as_str())
+                .ok_or(WebErr::TtydCredentialMissing)?;
+            spec = spec.arg("-c").arg(format!("rimz:{secret}"));
+        }
+        WebAuth::TrustedHeader { header } => {
+            spec = spec.arg("-H").arg(header.clone());
+        }
+    }
+    Ok(spec
+        .args(["-i", &interface.to_string(), "-p"])
         .arg(port.to_string())
         .args(extra_args.iter().cloned())
         .arg(rimz_exe.display().to_string())
-        .args(["web", "exec"])
+        .args(["web", "exec"]))
 }
 
 fn spawn_detached(spec: CommandSpec) -> Result<u32> {
@@ -463,10 +729,12 @@ fn spawn_detached(spec: CommandSpec) -> Result<u32> {
     })
 }
 
-fn ensure_port_available(port: u16) -> Result<()> {
-    TcpListener::bind(("127.0.0.1", port))
+fn ensure_port_available(address: SocketAddr) -> Result<()> {
+    TcpListener::bind(address)
         .map(|_| ())
-        .map_err(|_| WebErr::ConfiguredPortInUse { port })
+        .map_err(|_| WebErr::ConfiguredPortInUse {
+            port: address.port(),
+        })
 }
 
 fn choose_ephemeral_port() -> io::Result<u16> {
@@ -475,9 +743,16 @@ fn choose_ephemeral_port() -> io::Result<u16> {
 }
 
 fn wait_for_port(port: u16, timeout: Duration) -> bool {
+    wait_for_address(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+        timeout,
+    )
+}
+
+fn wait_for_address(address: SocketAddr, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        if TcpStream::connect(address).is_ok() {
             return true;
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -486,11 +761,35 @@ fn wait_for_port(port: u16, timeout: Duration) -> bool {
 }
 
 #[cfg(unix)]
-fn wait_for_port_close(port: u16, timeout: Duration) {
+fn wait_for_address_close(address: SocketAddr, timeout: Duration) {
     let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline && TcpStream::connect(("127.0.0.1", port)).is_ok() {
+    while Instant::now() < deadline && TcpStream::connect(address).is_ok() {
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+fn socket_address(interface: &str, port: u16) -> Result<SocketAddr> {
+    let interface = interface
+        .parse::<IpAddr>()
+        .map_err(|_| WebErr::InvalidInterface {
+            value: interface.to_owned(),
+        })?;
+    Ok(SocketAddr::new(interface, port))
+}
+
+fn record_public_address(record: &DaemonRecord) -> Result<SocketAddr> {
+    let mut address = socket_address(&record.interface, record.port)?;
+    if address.ip().is_unspecified() {
+        address.set_ip(match address.ip() {
+            IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        });
+    }
+    Ok(address)
+}
+
+fn default_interface() -> String {
+    "127.0.0.1".to_owned()
 }
 
 fn credential_path() -> PathBuf {
@@ -569,15 +868,26 @@ mod tests {
 
     use super::*;
 
+    fn credential() -> TtydCredential {
+        TtydCredential {
+            name: "rimz".to_owned(),
+            created_at: Timestamp::from_second(1_700_000_000).expect("timestamp"),
+            secret: "secret".to_owned(),
+        }
+    }
+
     #[test]
     fn argv_uses_loopback_auth_url_args_and_rimz_shim() {
         let spec = spawn_spec_for(
             Path::new("/tmp/ttyd"),
             Path::new("/opt/rimz/bin/rimz"),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
             8201,
-            "secret",
+            &WebAuth::Basic,
+            Some(&credential()),
             &["-t".to_owned(), "macOptionIsMeta=true".to_owned()],
-        );
+        )
+        .expect("spawn spec");
         assert_eq!(
             spec.args,
             [
@@ -600,6 +910,30 @@ mod tests {
     }
 
     #[test]
+    fn argv_uses_trusted_header_without_basic_auth() {
+        let spec = spawn_spec_for(
+            Path::new("/tmp/ttyd"),
+            Path::new("/opt/rimz/bin/rimz"),
+            "127.0.0.1".parse().expect("IP"),
+            8399,
+            &WebAuth::TrustedHeader {
+                header: "X-Authentik-Username".to_owned(),
+            },
+            None,
+            &[],
+        )
+        .expect("spawn spec");
+
+        assert!(
+            spec.args
+                .windows(2)
+                .any(|args| args == ["-H", "X-Authentik-Username"])
+        );
+        assert!(!spec.args.iter().any(|arg| arg == "-c"));
+        assert!(spec.args.windows(2).any(|args| args == ["-i", "127.0.0.1"]));
+    }
+
+    #[test]
     fn styled_argv_keeps_all_client_options_before_rimz_shim() {
         let extra = vec![
             "-t".to_owned(),
@@ -614,10 +948,13 @@ mod tests {
         let spec = spawn_spec_for(
             Path::new("/tmp/ttyd"),
             Path::new("/opt/rimz/bin/rimz"),
+            "127.0.0.1".parse().expect("IP"),
             8202,
-            "secret",
+            &WebAuth::Basic,
+            Some(&credential()),
             &extra,
-        );
+        )
+        .expect("spawn spec");
 
         let shim = spec
             .args
@@ -637,11 +974,7 @@ mod tests {
     fn credential_roundtrip_is_private() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("credential.json");
-        let credential = TtydCredential {
-            name: "rimz".to_owned(),
-            created_at: Timestamp::from_second(1_700_000_000).expect("timestamp"),
-            secret: "secret".to_owned(),
-        };
+        let credential = credential();
         write_credential_at(&path, &credential).expect("write");
         assert_eq!(read_json_optional(&path).expect("read"), Some(credential));
         assert_eq!(
@@ -657,9 +990,58 @@ mod tests {
         let daemon = DaemonRecord {
             pid: u32::MAX,
             port: 8200,
+            interface: "0.0.0.0".to_owned(),
+            auth: WebAuth::TrustedHeader {
+                header: "X-Forwarded-User".to_owned(),
+            },
+            trusted_proxies: vec!["10.0.0.0/8".to_owned()],
+            gate: Some(GateRecord {
+                pid: u32::MAX - 1,
+                upstream_port: 41820,
+            }),
         };
         write_daemon_at(&path, &daemon).expect("write daemon state");
         assert_eq!(read_json_optional(&path).expect("read state"), Some(daemon));
+    }
+
+    #[test]
+    fn old_daemon_state_defaults_to_basic_loopback_without_a_gate() {
+        let daemon: DaemonRecord =
+            serde_json::from_str(r#"{"pid":42,"port":8200}"#).expect("old record");
+        assert_eq!(daemon, DaemonRecord::basic_loopback(42, 8200));
+    }
+
+    #[test]
+    fn desired_spec_validates_listener_and_proxy_cidrs() {
+        let mut config = MachineConfig::default();
+        config.web.interface = "localhost".to_owned();
+        assert!(matches!(
+            desired_spec(&config),
+            Err(WebErr::InvalidInterface { value }) if value == "localhost"
+        ));
+
+        config.web.interface = "127.0.0.1".to_owned();
+        config.web.trusted_proxies = vec!["10.0.0.0/33".to_owned()];
+        assert!(matches!(
+            desired_spec(&config),
+            Err(WebErr::InvalidTrustedProxy { value, .. }) if value == "10.0.0.0/33"
+        ));
+    }
+
+    #[test]
+    fn exposed_trusted_header_auth_warns_without_a_gate() {
+        let spec = DaemonSpec {
+            port: 8200,
+            interface: "0.0.0.0".to_owned(),
+            auth: WebAuth::TrustedHeader {
+                header: "X-Forwarded-User".to_owned(),
+            },
+            trusted_proxies: Vec::new(),
+        };
+        assert!(matches!(
+            auth_warnings(&spec).as_slice(),
+            [WebWarning::HeaderAuthUnprotected(message)] if message.contains("trusted_proxies")
+        ));
     }
 
     #[test]
@@ -673,5 +1055,9 @@ mod tests {
         assert!(is_ttyd_process(&process("/usr/bin/ttyd -p 8200 sh")));
         assert!(!is_ttyd_process(&process("/usr/bin/ttyd-trace -p 8200")));
         assert!(!is_ttyd_process(&process("sh -c ttyd -p 8200")));
+        assert!(is_gate_process(&process(
+            "/opt/rimz/bin/rimz web gate --listen 0.0.0.0:8200"
+        )));
+        assert!(!is_gate_process(&process("/opt/rimz/bin/rimz web start")));
     }
 }

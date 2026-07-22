@@ -202,15 +202,18 @@ Remote control is the bridge the providers' official mobile apps drive: with a h
 [web]
 enabled = true
 port = 8200
+interface = "127.0.0.1"
 base_url = "https://devbox.example/rimz"
+# auth_header = "X-Authentik-Username"
+# trusted_proxies = ["172.18.0.0/16"]
 font = "JetBrainsMono Nerd Font Mono"
 # font_source = "/path/to/font.woff2"
 style_client = true
 ```
 
-`[web] enabled` defaults to true and gates `rimz web open` plus `rimz remote connect --web`. A normal `rimz start` best-effort starts one loopback ttyd daemon for every Zellij and tmux room on the machine; a missing ttyd or occupied port warns without blocking the room. When disabled, web commands fail before any room change and tell you to change the config on the machine serving the room.
+`[web] enabled` defaults to true and gates `rimz web open` plus `rimz remote connect --web`. A normal `rimz start` best-effort starts one ttyd daemon for every Zellij and tmux room on the machine; a missing ttyd or occupied port warns without blocking the room. When disabled, web commands fail before any room change and tell you to change the config on the machine serving the room.
 
-`port` is the daemon's exact loopback port and defaults to `8200`; choose another fixed port when it is occupied. `base_url` is the URL prefix RimZ prints for `rimz web open` and `rimz web url`, useful when a reverse proxy serves the daemon under a public host or path. `style_client` passes the active theme and `font` family to the browser terminal. The built-in `JetBrainsMono Nerd Font Mono` and `CaskaydiaCove Nerd Font Mono` families download and cache verified regular and bold faces automatically; `font_source` instead names one local font file or HTTPS font URL, while an unrecognized `font` with no source passes through for browser-local resolution. Install ttyd with `brew install ttyd` or `apt install ttyd`. These fields execute nothing, so the section stays outside the trust hash. Command detail is in [web.md](../reference/cli/web.md), and remote browser tunnels in [remote.md](../internals/remote.md#web-tunnels).
+`interface` and `port` select the daemon's exact listener and default to `127.0.0.1:8200`; `interface` accepts an IPv4 or IPv6 address. `base_url` is the URL prefix RimZ prints for `rimz web open` and `rimz web url`, useful when a reverse proxy serves the daemon under a public host or path. A non-empty `auth_header` delegates authentication to a proxy-injected header and disables Basic Auth. A non-empty `trusted_proxies` list accepts bare IPs or IPv4 and IPv6 CIDRs and starts a source-address gate; loopback peers remain allowed. `style_client` passes the active theme and `font` family to the browser terminal. The built-in `JetBrainsMono Nerd Font Mono` and `CaskaydiaCove Nerd Font Mono` families download and cache verified regular and bold faces automatically; `font_source` instead names one local font file or HTTPS font URL, while an unrecognized `font` with no source passes through for browser-local resolution. Install ttyd with `brew install ttyd` or `apt install ttyd`. These fields execute nothing, so the section stays outside the trust hash. Command detail is in [web.md](../reference/cli/web.md), and remote browser tunnels in [remote.md](../internals/remote.md#web-tunnels).
 
 ### Daemon view
 

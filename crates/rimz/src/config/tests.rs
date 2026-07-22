@@ -104,6 +104,9 @@ fn assert_web_config(config: &MachineConfig) {
         Some("https://devbox.example/rimz")
     );
     assert_eq!(config.web.port, 9123);
+    assert_eq!(config.web.interface, "0.0.0.0");
+    assert_eq!(config.web.auth_header.as_deref(), Some("X-Forwarded-User"));
+    assert_eq!(config.web.trusted_proxies, ["10.0.0.0/8", "fd00::/8"]);
     assert_eq!(config.web.font, "FiraCode Nerd Font Mono");
     assert_eq!(config.web.font_source.as_deref(), Some("/tmp/font.woff2"));
     assert!(!config.web.style_client);
@@ -1613,6 +1616,9 @@ fn notifications_parse_per_machine_preferences() {
 fn web_enabled_defaults_on_and_parses_off() {
     assert!(WebPrefs::default().enabled);
     assert_eq!(WebPrefs::default().port, 8200);
+    assert_eq!(WebPrefs::default().interface, "127.0.0.1");
+    assert!(WebPrefs::default().auth_header.is_none());
+    assert!(WebPrefs::default().trusted_proxies.is_empty());
 
     let dir = tempdir().expect("tempdir");
     let config = load_no_fragments(&write(&dir, "[web]\nenabled = false\n")).expect("load");
@@ -1632,7 +1638,10 @@ fn scalar_sections_parse_non_default_values() {
             "[web]\n\
              enabled = false\n\
              port = 9123\n\
+             interface = \"0.0.0.0\"\n\
              base_url = \"https://devbox.example/rimz\"\n\
+             auth_header = \"X-Forwarded-User\"\n\
+             trusted_proxies = [\"10.0.0.0/8\", \"fd00::/8\"]\n\
              font = \"FiraCode Nerd Font Mono\"\n\
              font_source = \"/tmp/font.woff2\"\n\
              style_client = false\n",

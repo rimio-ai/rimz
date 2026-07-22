@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 /// Browser-access preferences for the machine-wide ttyd daemon.
 ///
-/// These are per-machine preferences: the port selects the loopback listener,
+/// These are per-machine preferences: the interface and port select the
+/// listener, trusted-header authentication and proxy CIDRs constrain access,
 /// base URLs can name private hostnames or reverse-proxy paths, font sources
 /// name read-only paths or HTTPS URLs, and no field executes a command. The
 /// section therefore stays outside the project trust hash.
@@ -11,8 +12,13 @@ use serde::{Deserialize, Serialize};
 pub struct WebPrefs {
     pub enabled: bool,
     pub port: u16,
+    pub interface: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_header: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_proxies: Vec<String>,
     pub font: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_source: Option<String>,
@@ -24,7 +30,10 @@ impl Default for WebPrefs {
         Self {
             enabled: true,
             port: 8200,
+            interface: "127.0.0.1".to_owned(),
             base_url: None,
+            auth_header: None,
+            trusted_proxies: Vec::new(),
             font: "JetBrainsMono Nerd Font Mono".to_owned(),
             font_source: None,
             style_client: true,

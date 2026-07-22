@@ -229,7 +229,13 @@ mod tests {
 
     #[test]
     fn local_url_percent_encodes_the_ttyd_session_argument() {
-        let payload = WebOpenPayload::for_session("rimz/a b", "https://remote", 8200, None);
+        let payload = WebOpenPayload::for_session(
+            "rimz/a b",
+            "https://remote",
+            8200,
+            crate::web::WebAuth::Basic,
+            None,
+        );
         assert_eq!(
             local_url(&payload, 8301),
             "http://127.0.0.1:8301/?arg=rimz%2Fa%20b"
