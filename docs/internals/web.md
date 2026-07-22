@@ -28,7 +28,9 @@ The gate parses the configured bare IPs and IPv4 or IPv6 CIDRs before any proces
 
 Room URLs have the shape `<base>/?arg=<percent-encoded-session>`. ttyd appends the decoded session to the hidden shim as `rimz web exec <session>`.
 
-The shim accepts only a session with a durable RimZ workspace record and a matching live mux session. It never treats the browser argument as an argv fragment. A valid tmux target execs `tmux -S <managed-socket> attach -t <session>`; a valid Zellij target execs `zellij attach <session>`. A missing, unknown, or stopped target prints the currently live RimZ sessions and exits 1.
+The shim accepts only a session with a durable RimZ workspace record and a matching live mux session. It never treats the browser argument as an argv fragment. A valid tmux target execs `tmux -S <managed-socket> attach -t <session>`; a valid Zellij target execs `zellij attach <session>`.
+
+A missing, unknown, or stopped target on terminal stdio opens the themed session manager. It joins durable workspace records with one live mux probe, filters by session name, and attaches the selected room as an inherited-stdio child after releasing raw input while preserving the alternate screen; when that child ends, a fresh probe returns the browser tab to the list. The agent counts and attention tally read through `PublishedSnapshotReader`, keeping one incremental consumer cursor per live session and degrading an unreadable snapshot to an unenriched row. Non-terminal stdio prints the same live-session listing and exits 1.
 
 The ttyd binary resolves from `RIMZ_TTYD_BIN`, then `PATH`. A missing binary reports the Homebrew and apt install fix. `interface` must parse as an IP address, each trusted proxy must parse as an IP or CIDR, and an occupied configured listener returns a typed error that points to `[web] port`.
 

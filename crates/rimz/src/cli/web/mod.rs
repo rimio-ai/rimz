@@ -1,5 +1,7 @@
 //! `rimz web` — writable browser access and read-only room broadcasts.
 
+mod picker;
+
 use std::io::Write as _;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -439,12 +441,21 @@ fn render_revoked(stopped: bool) -> Result<()> {
 }
 
 fn exec(session: Option<&str>, share: bool) -> Result<()> {
-    let spec = if share {
-        rimz::web::share_attach_command(session)?
-    } else {
-        rimz::web::existing_session_attach_command(session)?
-    };
-    room::exec_attach_command(&spec)
+    if share {
+        let spec = rimz::web::share_attach_command(session)?;
+        return room::exec_attach_command(&spec);
+    }
+    match rimz::web::existing_session_attach_command(session) {
+        Ok(spec) => room::exec_attach_command(&spec),
+        Err(rimz::web::WebErr::InvalidSession(message)) if picker::available() => {
+            if picker::run(session)? {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!(message))
+            }
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn ensure_web_enabled(config: &rimz::config::MachineConfig) -> Result<()> {

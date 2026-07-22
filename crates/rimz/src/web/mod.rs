@@ -16,9 +16,11 @@ use crate::store::atomic;
 
 mod gate;
 mod share;
+mod sessions;
 mod ttyd;
 
 pub use gate::GateAuth;
+pub use sessions::{LiveRoom, live_rooms};
 
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
 pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 3;
@@ -511,9 +513,10 @@ pub fn existing_session_attach_command(session: Option<&str>) -> Result<CommandS
     let live = LiveSessions::probe();
     let target = live_session_target_with_probe(session, &live);
     let Some((session, mux)) = target else {
+        let rooms = sessions::live_rooms_with(&live)?;
         return Err(WebErr::InvalidSession(invalid_session_message(
-            session, &live,
-        )?));
+            session, &rooms,
+        )));
     };
     Ok(crate::mux::backend_for(mux).attach_existing_command(session))
 }
@@ -537,16 +540,11 @@ fn live_session_target_with_probe<'a>(
         })
 }
 
-fn invalid_session_message(session: Option<&str>, live: &LiveSessions) -> Result<String> {
-    let mut sessions = crate::workspace::known_workspaces()
-        .map_err(|source| WebErr::WorkspaceRecords { source })?
-        .into_iter()
-        .filter_map(|workspace| {
-            live.mux_of(&workspace.session_name)
-                .map(|mux| format!("  {} ({mux})", workspace.session_name))
-        })
+fn invalid_session_message(session: Option<&str>, rooms: &[LiveRoom]) -> String {
+    let sessions = rooms
+        .iter()
+        .map(|room| format!("  {} ({})", room.session_name, room.mux))
         .collect::<Vec<_>>();
-    sessions.sort();
     let requested = session.map_or_else(
         || "no session was provided".to_owned(),
         |session| format!("session `{session}` is not a live RimZ room"),
@@ -556,7 +554,7 @@ fn invalid_session_message(session: Option<&str>, live: &LiveSessions) -> Result
     } else {
         sessions.join("\n")
     };
-    Ok(format!("{requested}\n\nLive RimZ sessions:\n{listing}"))
+    format!("{requested}\n\nLive RimZ sessions:\n{listing}")
 }
 
 fn web_addressable_timeout() -> Duration {
