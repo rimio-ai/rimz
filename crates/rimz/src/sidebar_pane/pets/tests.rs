@@ -39,9 +39,9 @@ fn cell_frame(action: PetAction, phase: u64) -> PetViewFrame {
 #[test]
 fn render_tier_resolves_mode_caps_and_paintability() {
     use PetsGlyphMode::{Auto, Pixel, Sextant};
-    let caps = |pixel_transport, kitty_term| PixelRenderCaps {
+    let caps = |pixel_transport, kitty_clients| PixelRenderCaps {
         pixel_transport,
-        kitty_term,
+        kitty_clients,
     };
 
     for (mode, caps, pixel_paintable, tier) in [

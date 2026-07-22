@@ -4,6 +4,7 @@ use std::env;
 use std::fs::OpenOptions;
 use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
+use std::sync::Arc;
 use std::time::Duration;
 
 const INDEX: &str = "<html><head></head><body></body></html>";
@@ -15,6 +16,7 @@ fn main() {
         return;
     }
     let log = env::var_os("RIMZ_TEST_TTYD_LOG").expect("RIMZ_TEST_TTYD_LOG unset");
+    let index = Arc::new(env::var("RIMZ_TEST_TTYD_INDEX").unwrap_or_else(|_| INDEX.to_owned()));
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -29,6 +31,7 @@ fn main() {
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind ttyd trace port");
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { break };
+        let index = Arc::clone(&index);
         std::thread::spawn(move || {
             stream
                 .set_read_timeout(Some(Duration::from_secs(1)))
@@ -41,10 +44,11 @@ fn main() {
                 return;
             }
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{INDEX}",
-                INDEX.len()
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                index.len()
             );
             let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(index.as_bytes());
         });
     }
 }

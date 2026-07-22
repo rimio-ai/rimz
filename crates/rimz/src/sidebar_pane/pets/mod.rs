@@ -82,7 +82,7 @@ pub fn resolve_render_tier(mode: PetsGlyphMode, caps: PixelRenderCaps) -> PetRen
     match mode {
         PetsGlyphMode::Sextant => PetRenderTier::Cell,
         PetsGlyphMode::Pixel if caps.pixel_transport => PetRenderTier::Pixel,
-        PetsGlyphMode::Auto if caps.pixel_transport && caps.kitty_term => PetRenderTier::Pixel,
+        PetsGlyphMode::Auto if caps.pixel_transport && caps.kitty_clients => PetRenderTier::Pixel,
         _ => PetRenderTier::Cell,
     }
 }

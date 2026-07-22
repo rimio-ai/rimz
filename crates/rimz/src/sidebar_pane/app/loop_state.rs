@@ -410,7 +410,16 @@ impl LoopState {
             // idle backstop interval elapsed. It carries no state of its own —
             // the frame phase below advances the spin and paints, and the
             // backstop poll runs there too.
-            Wakeup::Tick => Ok(LoopFlow::Continue),
+            Wakeup::Tick => {
+                if self.paint.refresh_caps_if_stale(
+                    config.mux,
+                    &config.session_name,
+                    Instant::now(),
+                ) {
+                    self.dirty = true;
+                }
+                Ok(LoopFlow::Continue)
+            }
             Wakeup::Resize => {
                 let settled_width = terminal.size().map(|s| s.width).ok();
                 self.on_resize(config, fetch, terminal, settled_width, anim_start, diag)?;
@@ -908,6 +917,18 @@ impl LoopState {
         detect: impl FnOnce(MuxName, &str, PixelRenderCaps) -> PixelRenderCaps,
     ) {
         self.paint.refresh_caps_with(mux, session_name, detect);
+    }
+
+    #[cfg(test)]
+    fn refresh_pet_render_caps_if_stale_with(
+        &mut self,
+        mux: MuxName,
+        session_name: &str,
+        now: Instant,
+        detect: impl FnOnce(MuxName, &str, PixelRenderCaps) -> PixelRenderCaps,
+    ) -> bool {
+        self.paint
+            .refresh_caps_if_stale_with(mux, session_name, now, detect)
     }
 
     pub(super) fn on_input(

@@ -18,6 +18,11 @@ mod gate;
 mod ttyd;
 
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
+pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 1;
+
+pub(crate) fn pixel_daemon_record() -> Option<(u32, u32)> {
+    ttyd::pixel_daemon_record()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum WebErr {
