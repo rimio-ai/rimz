@@ -207,11 +207,12 @@ impl TerminalModeGuard {
         std::mem::forget(self);
     }
 
-    /// Consume the guard while keeping the current screen visible for another
-    /// terminal application to paint over. Input modes and the panic hook are
-    /// restored without switching away from the alternate screen.
-    pub fn release_keep_screen(mut self) -> io::Result<()> {
-        disable_mouse(self.mouse)?;
+    /// Hand the terminal to another full-screen application without clearing
+    /// the current screen or dropping mouse reporting. The successor paints
+    /// over the held frame and takes ownership of terminal modes; keeping mouse
+    /// capture armed closes the alternate-screen gap in which terminals turn a
+    /// residual wheel tick into an arrow key for the successor.
+    pub fn handoff_keep_screen(mut self) -> io::Result<()> {
         if self.screen == Screen::Alternate {
             execute!(io::stdout(), terminal::EnableLineWrap, cursor::Show)?;
         }
@@ -272,6 +273,12 @@ pub(crate) fn restore_terminal(mouse: MouseCapture, screen: Screen) {
         );
     }
     let _ = terminal::disable_raw_mode();
+}
+
+/// Complete a terminal handoff whose guard preserved the active screen and
+/// mouse mode. Cleanup remains best-effort because the successor already ran.
+pub fn finish_handoff(mouse: MouseCapture, screen: Screen) {
+    restore_terminal(mouse, screen);
 }
 
 #[cfg(test)]

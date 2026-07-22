@@ -25,7 +25,7 @@ use rimz::remote::recovery::{
 };
 use rimz::remote::{RemoteTarget, SshAttachAttempt, SshAttachPlan};
 
-use super::outage_ui::{OutageUi, PANEL_TICK, UiEvent, leave_alternate_screen};
+use super::outage_ui::{OutageUi, PANEL_TICK, UiEvent, release_handoff_screen};
 
 const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(200);
 const CONTROL_MASTER_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
@@ -160,7 +160,7 @@ pub(super) fn supervise_remote(
         );
         guard.restore();
         if std::mem::take(&mut held_alt) {
-            leave_alternate_screen();
+            release_handoff_screen();
         }
         let mut outcome = outcome?;
         outcome.established |= confirmed_master;

@@ -425,6 +425,12 @@ waitForTerminal().then(term=>{{
     cursorShown=true;
     term.options.cursorBlink=false;
     term.attachCustomKeyEventHandler(keyHandler);
+    term.attachCustomWheelEventHandler(event=>{{
+      if(term.buffer.active.type!=="alternate"||term.modes.mouseTrackingMode!=="none")return true;
+      event.preventDefault();
+      event.stopPropagation();
+      return false;
+    }});
   }};
   install();
   let swallowComposition=false;
@@ -956,6 +962,8 @@ mod tests {
         assert!(rendered.contains("compositionstart"));
         assert!(rendered.contains("compositionend"));
         assert!(rendered.contains("textarea.value=\"\""));
+        assert!(rendered.contains("term.attachCustomWheelEventHandler"));
+        assert!(rendered.contains("term.modes.mouseTrackingMode!==\"none\""));
         assert!(rendered.contains("const installPixelLayer=term=>"));
         assert!(rendered.contains("installPixelLayer(term)"));
         assert!(rendered.contains("const RIMZ_PIXEL_PLACEHOLDER=1109742"));
@@ -1073,6 +1081,9 @@ mod tests {
         assert!(rendered.contains("compositionstart"));
         assert!(rendered.contains("compositionend"));
         assert!(rendered.contains("textarea.value=\"\""));
+        assert!(rendered.contains("term.attachCustomWheelEventHandler"));
+        assert!(rendered.contains("term.buffer.active.type!==\"alternate\""));
+        assert!(rendered.contains("term.modes.mouseTrackingMode!==\"none\""));
         assert!(rendered.contains("registerOscHandler(52"));
         assert!(rendered.contains("registerOscHandler(7717"));
         assert!(rendered.contains("const prefix=\"rimz-session=\""));
