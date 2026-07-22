@@ -5,9 +5,6 @@ const installPixelLayer=term=>{
   const MAX_APC_BYTES=8*1024*1024;
   const MAX_IMAGE_BYTES=4*1024*1024;
   const MAX_IMAGES=128;
-  // xterm advances the Kitty placeholder by one cell, while browser fallback
-  // fonts can rasterize its noncharacter plus two diacritics across three more.
-  const PLACEHOLDER_OVERHANG_COLS=3;
   const encoder=new TextEncoder();
   const decoder=new TextDecoder();
   const diacriticIndexes=new Map(RIMZ_PIXEL_DIACRITICS.map((value,index)=>[value.codePointAt(0),index]));
@@ -29,12 +26,14 @@ const installPixelLayer=term=>{
   const context=canvas.getContext("2d");
   if(!context){canvas.remove();return;}
   context.imageSmoothingEnabled=false;
+  let canvasBlank=true;
 
   const closeBitmap=bitmap=>{try{bitmap.close();}catch(_){}};
   const clearCanvas=()=>{
     const dpr=window.devicePixelRatio||1;
     context.setTransform(dpr,0,0,dpr,0,0);
     context.clearRect(0,0,canvas.width/dpr,canvas.height/dpr);
+    canvasBlank=true;
   };
   const resizeCanvas=()=>{
     const rect=screen.getBoundingClientRect();
@@ -209,14 +208,10 @@ const installPixelLayer=term=>{
     return joinBytes(output);
   };
 
-  const cellSize=rect=>{
-    const dimensions=term._core&&term._core._renderService&&term._core._renderService.dimensions;
-    const cell=dimensions&&dimensions.css&&dimensions.css.cell;
-    return {
-      width:cell&&cell.width||rect.width/Math.max(1,term.cols),
-      height:cell&&cell.height||rect.height/Math.max(1,term.rows),
-    };
-  };
+  const cellSize=rect=>({
+    width:rect.width/Math.max(1,term.cols),
+    height:rect.height/Math.max(1,term.rows),
+  });
   const fittedImageRect=(image,placement,size,x,y)=>{
     const boxWidth=placement.cols*size.width;
     const boxHeight=placement.rows*size.height;
@@ -231,15 +226,14 @@ const installPixelLayer=term=>{
     };
   };
   const draw=()=>{
+    if(placements.size===0&&images.size===0&&canvasBlank)return;
     const rect=resizeCanvas();
     context.clearRect(0,0,rect.width,rect.height);
+    canvasBlank=true;
     const size=cellSize(rect);
     const buffer=term.buffer.active;
     const viewport=buffer.viewportY;
-    const theme=term.options.theme||{};
-    const viewportElement=term.element.querySelector(".xterm-viewport");
-    const background=theme.background||(viewportElement&&getComputedStyle(viewportElement).backgroundColor)||"#000";
-    const fittedImages=new Map();
+    const groups=new Map();
     for(let row=0;row<term.rows;row++){
       const line=buffer.getLine(viewport+row);
       if(!line)continue;
@@ -250,33 +244,44 @@ const installPixelLayer=term=>{
         if(chars.length<3||chars[0].codePointAt(0)!==RIMZ_PIXEL_PLACEHOLDER)continue;
         const sourceRow=diacriticIndexes.get(chars[1].codePointAt(0));
         const sourceCol=diacriticIndexes.get(chars[2].codePointAt(0));
-        const x=col*size.width;
-        const y=row*size.height;
-        context.fillStyle=background;
-        context.fillRect(x,y,size.width,size.height);
         const id=cell.getFgColor()&0xffffff;
         const placement=placements.get(id);
-        const image=images.get(id);
         if(!placement||sourceRow===undefined||sourceCol===undefined||sourceRow>=placement.rows||sourceCol>=placement.cols)continue;
-        if(placement.rows>1){
-          if(sourceCol===placement.cols-1){
-            context.fillRect(x+size.width,y,size.width*PLACEHOLDER_OVERHANG_COLS,size.height);
-          }
-          if(!image)continue;
-          const originX=x-sourceCol*size.width;
-          const originY=y-sourceRow*size.height;
-          fittedImages.set(`${id}:${originX}:${originY}`,{image,placement,x:originX,y:originY});
-          continue;
+        const x=col*size.width;
+        const y=row*size.height;
+        const originCol=col-sourceCol;
+        const originRow=row-sourceRow;
+        const key=`${id}:${originCol}:${originRow}`;
+        let group=groups.get(key);
+        if(!group){
+          group={image:images.get(id),placement,x:originCol*size.width,y:originRow*size.height,cells:[]};
+          groups.set(key,group);
         }
-        if(!image)continue;
-        const sourceWidth=image.width/placement.cols;
-        const sourceHeight=image.height/placement.rows;
-        context.drawImage(image,sourceCol*sourceWidth,sourceRow*sourceHeight,sourceWidth,sourceHeight,x,y,size.width,size.height);
+        group.cells.push({x,y});
       }
     }
-    for(const {image,placement,x,y} of fittedImages.values()){
-      const fitted=fittedImageRect(image,placement,size,x,y);
-      context.drawImage(image,fitted.x,fitted.y,fitted.width,fitted.height);
+    const dpr=window.devicePixelRatio||1;
+    const snap=value=>Math.round(value*dpr)/dpr;
+    for(const {image,placement,x,y,cells} of groups.values()){
+      if(!image)continue;
+      context.save();
+      context.beginPath();
+      for(const cell of cells){
+        const left=snap(cell.x);
+        const top=snap(cell.y);
+        const right=snap(cell.x+size.width);
+        const bottom=snap(cell.y+size.height);
+        context.rect(left,top,right-left,bottom-top);
+      }
+      context.clip();
+      if(placement.rows>1){
+        const fitted=fittedImageRect(image,placement,size,x,y);
+        context.drawImage(image,fitted.x,fitted.y,fitted.width,fitted.height);
+      }else{
+        context.drawImage(image,x,y,placement.cols*size.width,size.height);
+      }
+      context.restore();
+      canvasBlank=false;
     }
   };
   let drawQueued=false;
@@ -294,10 +299,10 @@ const installPixelLayer=term=>{
     if(forwarded.length)return write(forwarded,callback);
     if(typeof callback==="function")queueMicrotask(callback);
   };
-  term.onRender(scheduleDraw);
-  term.onScroll(scheduleDraw);
-  term.onResize(()=>{clearCanvas();scheduleDraw();});
-  new ResizeObserver(()=>{clearCanvas();scheduleDraw();}).observe(screen);
+  term.onRender(draw);
+  term.onScroll(draw);
+  term.onResize(()=>{clearCanvas();draw();});
+  new ResizeObserver(()=>{clearCanvas();draw();}).observe(screen);
   const reset=term.reset.bind(term);
   term.reset=(...args)=>{clearImages();const result=reset(...args);scheduleDraw();return result;};
   scheduleDraw();

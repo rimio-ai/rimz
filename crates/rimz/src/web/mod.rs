@@ -21,7 +21,7 @@ mod ttyd;
 pub use gate::GateAuth;
 
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
-pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 2;
+pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 3;
 
 pub(crate) fn pixel_daemon_records() -> Vec<(u32, u32)> {
     [ttyd::pixel_daemon_record(), share::pixel_daemon_record()]

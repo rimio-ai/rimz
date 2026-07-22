@@ -8,6 +8,19 @@ pub use crate::proc::testkit::spawn_count;
 pub use crate::store::atomic::testkit::fsync_count;
 pub use crate::store::event_log::testkit::{bytes_read, bytes_written};
 
+/// Constants shared with the real ttyd pixel layer, serialized for its Node harness.
+pub fn pixel_layer_config_json() -> String {
+    serde_json::json!({
+        "protocol": crate::web::TTYD_PIXEL_PROTOCOL,
+        "placeholder": u32::from(crate::sidebar_pane::pixel::PLACEHOLDER),
+        "diacritics": crate::sidebar_pane::pixel::ROW_COLUMN_DIACRITICS
+            .iter()
+            .map(char::to_string)
+            .collect::<Vec<_>>(),
+    })
+    .to_string()
+}
+
 /// Benchmark one workspace derivation from an already-warm spending walker.
 pub fn spending_scope_from_warm_walker(
     walker: &mut crate::agents::spending::SpendingWalker,
