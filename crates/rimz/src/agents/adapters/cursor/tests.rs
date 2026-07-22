@@ -1688,6 +1688,7 @@ fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks.json");
     let config_path = dir.path().join("cli-config.json");
+    let state_path = dir.path().join("cursor-statusline.json");
     std::fs::write(
         &path,
         serde_json::to_vec_pretty(&json!({
@@ -1705,14 +1706,21 @@ fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
 "#;
     std::fs::write(&config_path, original_config).unwrap();
 
-    let report = install::install_into(&path, &config_path).expect("install");
-    assert!(report.files.iter().all(|file| file.existed));
+    let report = install::install_into(&path, &config_path, &state_path).expect("install");
+    assert_eq!(report.files.len(), 3);
+    assert!(report.files[..2].iter().all(|file| file.existed));
+    assert!(!report.files[2].existed);
     assert_eq!(report.installed_events.len(), CURSOR_HOOKS.len());
     assert!(install::hooks_installed_at(&path));
     assert!(install::statusline_installed_at(&config_path));
     let once = std::fs::read_to_string(&path).unwrap();
     let config_once = std::fs::read_to_string(&config_path).unwrap();
-    install::install_into(&path, &config_path).expect("second install");
+    let second = install::install_into(&path, &config_path, &state_path).expect("second install");
+    assert_eq!(
+        second.files.len(),
+        2,
+        "untouched sidecar stays out of reports"
+    );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), once);
     assert_eq!(std::fs::read_to_string(&config_path).unwrap(), config_once);
 
@@ -1733,19 +1741,45 @@ fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
     assert_eq!(installed_config["statusLine"]["padding"], 2);
     assert_eq!(installed_config["statusLine"]["updateIntervalMs"], 500);
     assert!(installed_config["statusLine"].get("future").is_none());
+    assert!(
+        installed_config["statusLine"]
+            .get("_rimz_managed")
+            .is_none()
+    );
+    assert!(
+        installed_config["statusLine"]
+            .get("_rimz_wrapped")
+            .is_none()
+    );
     assert_eq!(
-        crate::agents::managed_statusline::wrapped_command(
-            installed_config.as_object().unwrap(),
-            &STATUS_LINE,
-        )
-        .as_deref(),
+        install::wrapped_status_line_command_at(&config_path, &state_path).as_deref(),
         Some("'/tmp/my status' --plain '$HOME'")
     );
+    assert_eq!(
+        serde_json::from_str::<Value>(&std::fs::read_to_string(&state_path).unwrap()).unwrap(),
+        json!({
+            "statusLine": {
+                "type": "command",
+                "command": "'/tmp/my status' --plain '$HOME'",
+                "padding": 2,
+                "updateIntervalMs": 500,
+                "timeoutMs": 1000,
+                "future": true
+            }
+        })
+    );
+    assert!(state_path.exists(), "the sidecar is a managed artifact");
 
-    let preview = install::preview_at(&path, &config_path).expect("preview");
+    let preview = install::preview_at(&path, &config_path, &state_path).expect("preview");
+    assert_eq!(
+        preview.files.len(),
+        2,
+        "untouched sidecar stays out of previews"
+    );
     assert_eq!(preview.files[0].candidate, once);
     assert_eq!(preview.files[1].candidate, config_once);
-    let uninstall = install::uninstall_from(&path, &config_path).expect("uninstall");
+    let uninstall = install::uninstall_from(&path, &config_path, &state_path).expect("uninstall");
+    assert_eq!(uninstall.files.len(), 3);
     assert_eq!(uninstall.removed_events.len(), CURSOR_HOOKS.len());
     assert!(!install::managed_artifacts_at(&path));
     let uninstalled: Value =
@@ -1762,6 +1796,185 @@ fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
         serde_json::from_str::<Value>(&std::fs::read_to_string(config_path).unwrap()).unwrap(),
         serde_json::from_str::<Value>(original_config).unwrap()
     );
+    assert!(!state_path.exists());
+}
+
+#[test]
+fn cursor_config_sanitization_preserves_statusline_ownership_and_restore_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks_path = dir.path().join("hooks.json");
+    let config_path = dir.path().join("cli-config.json");
+    let state_path = dir.path().join("cursor-statusline.json");
+    let original = json!({
+        "theme": "dark",
+        "statusLine": {
+            "type": "command",
+            "command": "user-status --compact",
+            "padding": 3,
+            "future": { "kept_on_restore": true }
+        }
+    });
+    std::fs::write(
+        &config_path,
+        format!("{}\n", serde_json::to_string_pretty(&original).unwrap()),
+    )
+    .unwrap();
+
+    let preview = install::preview_at(&hooks_path, &config_path, &state_path).unwrap();
+    assert_eq!(preview.files.len(), 3);
+    assert_eq!(preview.files[2].path, state_path);
+    assert!(!preview.files[2].existed);
+    assert_eq!(
+        preview.status_line_change,
+        Some(crate::agents::StatusLineChange::Wrapping {
+            original: "user-status --compact".to_owned()
+        })
+    );
+    install::install_into(&hooks_path, &config_path, &state_path).unwrap();
+
+    let mut sanitized = original.as_object().unwrap().clone();
+    sanitized.insert(
+        "statusLine".to_owned(),
+        json!({
+            "type": "command",
+            "command": RIMZ_STATUS_LINE_COMMAND
+        }),
+    );
+    let sanitized = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&Value::Object(sanitized)).unwrap()
+    );
+    std::fs::write(&config_path, &sanitized).unwrap();
+
+    assert!(install::statusline_installed_at(&config_path));
+    let preview = install::preview_at(&hooks_path, &config_path, &state_path).unwrap();
+    assert_eq!(preview.files.len(), 2);
+    assert_eq!(preview.files[1].candidate, sanitized);
+    assert_eq!(
+        preview.status_line_change,
+        Some(crate::agents::StatusLineChange::Unchanged)
+    );
+    assert_eq!(
+        install::wrapped_status_line_command_at(&config_path, &state_path).as_deref(),
+        Some("user-status --compact")
+    );
+
+    let state_before = std::fs::read(&state_path).unwrap();
+    let second = install::install_into(&hooks_path, &config_path, &state_path).unwrap();
+    assert_eq!(second.files.len(), 2);
+    assert_eq!(std::fs::read_to_string(&config_path).unwrap(), sanitized);
+    assert_eq!(std::fs::read(&state_path).unwrap(), state_before);
+
+    install::uninstall_from(&hooks_path, &config_path, &state_path).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&std::fs::read_to_string(&config_path).unwrap()).unwrap(),
+        original
+    );
+    assert!(!state_path.exists());
+}
+
+#[test]
+fn legacy_inline_statusline_state_migrates_and_remains_an_uninstall_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks_path = dir.path().join("hooks.json");
+    let config_path = dir.path().join("cli-config.json");
+    let state_path = dir.path().join("cursor-statusline.json");
+    let wrapped = json!({
+        "type": "command",
+        "command": "legacy-user-status",
+        "padding": 4,
+        "future": true
+    });
+    let legacy = json!({
+        "theme": "dark",
+        "statusLine": {
+            "type": "command",
+            "command": RIMZ_STATUS_LINE_COMMAND,
+            "padding": 4,
+            "_rimz_managed": true,
+            "_rimz_wrapped": wrapped
+        }
+    });
+    std::fs::write(
+        &config_path,
+        format!("{}\n", serde_json::to_string_pretty(&legacy).unwrap()),
+    )
+    .unwrap();
+
+    assert!(install::statusline_installed_at(&config_path));
+    let preview = install::preview_at(&hooks_path, &config_path, &state_path).unwrap();
+    assert_eq!(preview.files.len(), 3);
+    assert_eq!(
+        preview.status_line_change,
+        Some(crate::agents::StatusLineChange::Unchanged)
+    );
+    let candidate: Value = serde_json::from_str(&preview.files[1].candidate).unwrap();
+    assert!(candidate["statusLine"].get("_rimz_managed").is_none());
+    assert!(candidate["statusLine"].get("_rimz_wrapped").is_none());
+
+    install::install_into(&hooks_path, &config_path, &state_path).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&std::fs::read_to_string(&state_path).unwrap()).unwrap(),
+        json!({ "statusLine": wrapped })
+    );
+    install::uninstall_from(&hooks_path, &config_path, &state_path).unwrap();
+    let restored: Value =
+        serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert_eq!(restored["statusLine"], wrapped);
+
+    let fallback_config = dir.path().join("legacy-cli-config.json");
+    let fallback_hooks = dir.path().join("legacy-hooks.json");
+    let missing_state = dir.path().join("missing-state.json");
+    std::fs::write(
+        &fallback_config,
+        format!("{}\n", serde_json::to_string_pretty(&legacy).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(
+        install::wrapped_status_line_command_at(&fallback_config, &missing_state).as_deref(),
+        Some("legacy-user-status")
+    );
+    install::uninstall_from(&fallback_hooks, &fallback_config, &missing_state).unwrap();
+    let fallback: Value =
+        serde_json::from_str(&std::fs::read_to_string(fallback_config).unwrap()).unwrap();
+    assert_eq!(fallback["statusLine"], wrapped);
+}
+
+#[test]
+fn foreign_cursor_statusline_stays_unowned_and_survives_uninstall() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks_path = dir.path().join("hooks.json");
+    let config_path = dir.path().join("cli-config.json");
+    let state_path = dir.path().join("cursor-statusline.json");
+    let foreign = json!({
+        "statusLine": {
+            "type": "command",
+            "command": "foreign-status",
+            "padding": 2
+        }
+    });
+    std::fs::write(
+        &config_path,
+        format!("{}\n", serde_json::to_string_pretty(&foreign).unwrap()),
+    )
+    .unwrap();
+
+    assert!(!install::statusline_installed_at(&config_path));
+    assert!(!install::statusline_artifact_at(&config_path));
+    let preview = install::preview_at(&hooks_path, &config_path, &state_path).unwrap();
+    assert_eq!(
+        preview.status_line_change,
+        Some(crate::agents::StatusLineChange::Wrapping {
+            original: "foreign-status".to_owned()
+        })
+    );
+
+    let report = install::uninstall_from(&hooks_path, &config_path, &state_path).unwrap();
+    assert_eq!(report.files.len(), 2);
+    assert_eq!(
+        serde_json::from_str::<Value>(&std::fs::read_to_string(config_path).unwrap()).unwrap(),
+        foreign
+    );
 }
 
 #[test]
@@ -1769,6 +1982,7 @@ fn legacy_hook_install_is_detected_and_repaired_additively() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks.json");
     let config_path = dir.path().join("cli-config.json");
+    let state_path = dir.path().join("cursor-statusline.json");
     let legacy_events = [
         "sessionStart",
         "beforeSubmitPrompt",
@@ -1805,7 +2019,8 @@ fn legacy_hook_install_is_detected_and_repaired_additively() {
     .unwrap();
 
     assert!(!install::hooks_installed_at(&path));
-    let preview = install::preview_at(&path, &config_path).expect("legacy repair preview");
+    let preview =
+        install::preview_at(&path, &config_path, &state_path).expect("legacy repair preview");
     let candidate: Value = serde_json::from_str(&preview.files[0].candidate).unwrap();
     assert_eq!(candidate["future"]["kept"], true);
     assert_eq!(
@@ -1832,11 +2047,11 @@ fn legacy_hook_install_is_detected_and_repaired_additively() {
         }
     }
 
-    install::install_into(&path, &config_path).expect("repair legacy install");
+    install::install_into(&path, &config_path, &state_path).expect("repair legacy install");
     assert!(install::hooks_installed_at(&path));
     assert!(install::statusline_installed_at(&config_path));
     let once = std::fs::read(&path).unwrap();
-    install::install_into(&path, &config_path).expect("second repair install");
+    install::install_into(&path, &config_path, &state_path).expect("second repair install");
     assert_eq!(std::fs::read(&path).unwrap(), once);
 }
 
@@ -1845,7 +2060,8 @@ fn incomplete_and_malformed_hook_configs_are_detected() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks.json");
     let config_path = dir.path().join("cli-config.json");
-    install::install_into(&path, &config_path).expect("install");
+    let state_path = dir.path().join("cursor-statusline.json");
+    install::install_into(&path, &config_path, &state_path).expect("install");
     let mut root: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     root["hooks"].as_object_mut().unwrap().remove("stop");
     std::fs::write(&path, serde_json::to_vec_pretty(&root).unwrap()).unwrap();
@@ -1853,7 +2069,7 @@ fn incomplete_and_malformed_hook_configs_are_detected() {
 
     std::fs::write(&path, "{").unwrap();
     assert!(matches!(
-        install::install_into(&path, &config_path),
+        install::install_into(&path, &config_path, &state_path),
         Err(AgentErr::InstallParse {
             agent: "cursor",
             ..

@@ -566,7 +566,7 @@ Two adjacent surfaces exist but do not fill the stock per-user CLI gap. The team
 | XDG global | `$XDG_CONFIG_HOME/cursor/cli-config.json` | Linux/BSD override |
 | project | `<project>/.cursor/cli.json` | permissions only |
 
-The schema version is `1`, pure JSON. Cursor self-repairs missing fields and backs corrupted configs up as `.bad`. Some fields are CLI-managed and may be overwritten. Concurrent writes use temp-file plus atomic rename in current releases.
+The schema version is `1`, pure JSON. Cursor self-repairs missing fields and backs corrupted configs up as `.bad`. The CLI atomically rewrites `cli-config.json` from its typed model on every run, including `status` and `about`, and discards unknown or private keys during serialization. Concurrent writes use a sibling temp file plus rename in current releases.
 
 Relevant global fields include `model`, `maxMode`, `approvalMode` (`allowlist`, `auto-review`, or `unrestricted`), `sandbox.mode`, `sandbox.networkAccess`, `statusLine`, notifications, display controls, release channel, and network/proxy settings. A statusline object accepts `type`, `command`, `padding`, `updateIntervalMs`, and `timeoutMs`; RimZ carries those rendering siblings when wrapping a user command. Read the remaining config as launch-policy enrichment, not lifecycle truth: slash commands and flags can change the effective session state.
 

@@ -2,7 +2,7 @@
 
 > Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts, balances, and spend are in [providers.md](./providers.md); the raw upstream protocol is in [cursor-reference.md](../../externals/agent-adapter/cursor-reference.md).
 
-Cursor runs as `agent` or its `cursor-agent` alias; `cursor` names the IDE and is intentionally outside binary discovery. RimZ installs additive user hooks in `~/.cursor/hooks.json` and a managed command statusline in `~/.cursor/cli-config.json`, launches a verified resolved path or the provider-unique `cursor-agent` alias, and keys every session on `conversation_id`. User hooks run from `~/.cursor`, so ingress accepts a nonempty absolute `CURSOR_PROJECT_DIR` as the participant start path before the shared verified-pin and `WorkspaceResolver` flow; an absent, empty, or relative value falls back to `.`.
+Cursor runs as `agent` or its `cursor-agent` alias; `cursor` names the IDE and is intentionally outside binary discovery. RimZ installs additive user hooks in `~/.cursor/hooks.json` and a canonical command statusline in `~/.cursor/cli-config.json`, launches a verified resolved path or the provider-unique `cursor-agent` alias, and keys every session on `conversation_id`. User hooks run from `~/.cursor`, so ingress accepts a nonempty absolute `CURSOR_PROJECT_DIR` as the participant start path before the shared verified-pin and `WorkspaceResolver` flow; an absent, empty, or relative value falls back to `.`.
 
 ## Hooks and lifecycle
 
@@ -25,7 +25,9 @@ Cursor exposes no post-compaction hook. The next lifecycle signal closes the ope
 
 **Neutral output.** Every installed event returns Cursor's documented-safe neutral `{}` JSON. The Claude adapter drops payloads carrying `cursor_version`, preventing Cursor's optional Claude-compatible hook loading from double-recording one event.
 
-**Install.** Cursor installation manages two files as one operation. RimZ builds both JSON candidates before writing, writes each by temp-file plus rename, rolls the hook file back byte-for-byte if the statusline write fails, and reports both diffs at consent. The statusline wrapper retains the user's exact prior value under a managed marker, forwards its JSON stdin to that command by direct argv, and restores the value on uninstall. Existing rendering keys remain in place. Incomplete-hook detection requires both the canonical hook set and the managed statusline, so `rimz hooks install cursor` repairs either half while preserving user-owned and unknown entries.
+**Install.** Cursor installation writes the hook and CLI configuration as one transaction. RimZ builds both JSON candidates before writing, writes each by temp-file plus rename, rolls the hook file back byte-for-byte if the statusline write fails, and reports both diffs at consent. Statusline ownership comes from the exact `rimz statusline feed --source cursor` command because Cursor re-serializes `cli-config.json` from its typed model and discards unknown private fields. The marker-free canonical object retains `padding`, `updateIntervalMs`, and `timeoutMs`, so Cursor's rewrite is byte-idempotent and keeps detection installed.
+
+When installation displaces a user statusline, RimZ first stores its exact JSON value in `$XDG_CONFIG_HOME/rimz/cursor-statusline.json` through a durable temp-file-plus-rename write and surfaces that sidecar as a third consent artifact. Statusline forwarding reads the saved command from this RimZ-owned file, and uninstall restores the saved value before deleting the sidecar. Existing inline `_rimz_wrapped` state migrates on reinstall and remains an uninstall fallback. Incomplete-hook detection requires both the canonical hook set and the canonical statusline command, so `rimz hooks install cursor` repairs either half while preserving user-owned and unknown entries.
 
 ### Subagents come from the chats store
 
