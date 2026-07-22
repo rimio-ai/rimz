@@ -20,6 +20,7 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 
 ### Fixed
 
+- Cursor binary discovery verifies the generic `agent` executable before claiming it, launches only a verified path or the provider-unique `cursor-agent` alias, and leaves ambiguous process basenames unattributed until a native hook binds the pane. → [Cursor adapter](./docs/internals/agents/cursor.md#launch-and-resume)
 - Browser authentication now keeps ttyd behind machine-wide Basic Auth while the public gate validates trusted proxy headers and injects that credential upstream; remote `--web` tunnels work through either auth mode, `rimz web restart` applies the current browser profile, and `rimz reload` refreshes an online web daemon after upgrades. → [web](./docs/guide/web.md)
 - Browser panes opened with macOS Option chords no longer begin with the dead-key character those chords would normally compose. → [web](./docs/guide/web.md#browser-appearance-and-input)
 - Browser cursors stay steady while typing when terminal apps request blink modes or bracket redraws with cursor visibility changes. → [web](./docs/guide/web.md#browser-appearance-and-input)

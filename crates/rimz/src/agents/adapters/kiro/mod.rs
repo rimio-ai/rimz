@@ -36,6 +36,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
     kind: "kiro",
     aliases: &[],
     bin_names: &["kiro-cli"],
+    bin_identity: None,
     display_name: "Kiro",
     brand: Brand {
         emblem: None,

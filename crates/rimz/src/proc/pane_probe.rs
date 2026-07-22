@@ -292,7 +292,10 @@ fn hosted_agent_absent_under_root_with(
 }
 
 fn in_pane_agent_cmdline_matches(kind: &str, cmdline: &str) -> bool {
-    crate::agents::registry::command_agent_kind(cmdline) == Some(kind)
+    // The caller already owns provider identity from a durable session or hook.
+    // Admit a colliding native basename for liveness without exposing that
+    // candidate to generic pane classification.
+    crate::agents::registry::command_may_be_agent_kind(cmdline, kind)
 }
 
 fn in_pane_agent_probe_supported(kind: &str) -> bool {

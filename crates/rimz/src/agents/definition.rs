@@ -250,6 +250,24 @@ pub enum StaticPresetMatcher {
     },
 }
 
+/// Provider-identity check for a [`bin_names`](AgentSpec::bin_names) entry that
+/// another provider's installer also ships under the same filename. Cursor's
+/// `agent` collides with the alias Grok's installer symlinks onto `$PATH`, so a
+/// bare filename match cannot prove the located binary is Cursor's.
+#[derive(Clone, Copy, Debug)]
+pub struct BinIdentity {
+    /// The subset of [`bin_names`](AgentSpec::bin_names) that collide with
+    /// another provider's install alias. A candidate matched by one of these is
+    /// accepted only after `verify` confirms it; every other name matches on
+    /// filename alone.
+    pub ambiguous: &'static [&'static str],
+    /// Confirms a candidate is genuinely this provider from its `--version`
+    /// stdout and stderr. The adapter's own version parser recognizes only its
+    /// own release banner, so a colliding alias fails the check and discovery
+    /// skips it.
+    pub verify: fn(&str, &str) -> bool,
+}
+
 /// Static identity, branding, capabilities, and classification tables for one
 /// agent. See the module doc for the definition-vs-trait split.
 #[derive(Debug)]
@@ -311,6 +329,12 @@ pub struct AgentSpec {
     /// kind; Cursor ships its CLI as `cursor-agent`/`agent` while `cursor` is
     /// the IDE.
     pub bin_names: &'static [&'static str],
+    /// Identity check that keeps an ambiguous [`bin_names`](Self::bin_names)
+    /// entry from resolving to a different provider's colliding install alias —
+    /// Cursor's generic `agent` collides with the alias Grok's installer
+    /// symlinks onto `$PATH`. `None` when every `bin_names` entry is
+    /// provider-unique and a filename match settles identity.
+    pub bin_identity: Option<BinIdentity>,
     /// Well-known install directories, relative to `$HOME`, where this agent's
     /// binary lives when its installer has not put
     /// it on `$PATH` — OpenCode's installer drops `opencode` in `~/.opencode/bin`
@@ -972,6 +996,16 @@ impl AgentSpec {
         self.bin_names
             .iter()
             .any(|program| program_names_kind(name, program))
+    }
+
+    /// The identity check to run against a candidate located by `name`, when
+    /// `name` is one of this agent's ambiguous [`bin_names`](Self::bin_names).
+    /// `None` for a provider-unique name, which discovery accepts on filename
+    /// alone.
+    pub(crate) fn ambiguous_bin_identity(&self, name: &str) -> Option<&BinIdentity> {
+        self.bin_identity
+            .as_ref()
+            .filter(|identity| identity.ambiguous.contains(&name))
     }
 
     /// Whether a tool-use payload names a workspace-mutating tool. The tool

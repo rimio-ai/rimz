@@ -126,6 +126,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
     default_model: None,
     process_names: &["claude"],
     bin_names: &["claude"],
+    bin_identity: None,
     extra_bin_dirs: &[],
     // A Claude session spreads across `<session_id>/chat.jsonl` plus
     // `<session_id>/subagents/*.jsonl`; the session directory is the thread.

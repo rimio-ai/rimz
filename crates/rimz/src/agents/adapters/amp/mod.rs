@@ -72,6 +72,7 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
     default_model: None,
     process_names: &["amp", "node"],
     bin_names: &["amp"],
+    bin_identity: None,
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {

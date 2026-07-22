@@ -333,10 +333,26 @@ impl SidebarSnapshot {
 }
 
 fn local_pane_matches(pane: &PaneRef, observation: &LocalSessionObservation) -> bool {
-    crate::store::snapshot::process::pane_agent_kind(pane) == Some(observation.kind.as_str())
+    pane_may_host_kind(pane, observation.kind.as_str())
         && crate::store::snapshot::process::pane_worktree_path(pane).is_some_and(|workspace| {
             crate::worktree::normalize_path_lexical(Path::new(workspace)) == observation.workspace
         })
+}
+
+/// Provider-local observations cannot create a card without stronger binding
+/// evidence. Once that evidence names the kind, accept its native ambiguous
+/// executable for liveness while generic pane presence continues to abstain.
+fn pane_may_host_kind(pane: &PaneRef, kind: &str) -> bool {
+    pane.spawn_command
+        .as_deref()
+        .is_some_and(|command| crate::agents::registry::command_may_be_agent_kind(command, kind))
+        || pane.command.as_deref().is_some_and(|command| {
+            crate::agents::registry::command_may_be_agent_kind(command, kind)
+        })
+        || pane
+            .hosted_agent_kind
+            .as_ref()
+            .is_some_and(|hosted| hosted.as_str() == kind)
 }
 
 fn local_observation_is_current(agent: &AgentState, observation: &LocalSessionObservation) -> bool {

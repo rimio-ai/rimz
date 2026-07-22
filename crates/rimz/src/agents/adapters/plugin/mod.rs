@@ -434,6 +434,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
         default_model: None,
         process_names: leak_strings(&manifest.process_names),
         bin_names: leak_strings(std::slice::from_ref(&manifest.kind)),
+        bin_identity: None,
         extra_bin_dirs: &[],
         thread_key: match manifest.transcripts.as_ref().map(|value| value.thread_key) {
             Some(TranscriptThreadKey::SessionDir) => ThreadKey::SessionDir,

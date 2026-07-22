@@ -76,6 +76,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
     default_model: None,
     process_names: &["grok", "xai-grok-pager"],
     bin_names: &["grok"],
+    bin_identity: None,
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {

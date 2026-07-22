@@ -115,19 +115,37 @@ pub(crate) fn command_agent_kind_with_comm(
         .then(|| adapter.spec().kind)
 }
 
+/// Whether `command` can be the requested agent kind after caller-owned durable
+/// identity already established that kind. This admits an ambiguous executable
+/// basename for liveness and provider-local enrichment; generic process
+/// classification continues through [`command_agent_kind`] and abstains.
+pub(crate) fn command_may_be_agent_kind(command: &str, kind: &str) -> bool {
+    let Some(adapter) = find_definition(kind) else {
+        return false;
+    };
+    let program = crate::proc::command::effective_program_info(command);
+    adapter_matches_program(adapter, program) && adapter.is_interactive_process(command)
+}
+
+/// Candidate kind for best-effort enrichment that cannot create agent truth.
+/// Provider-local discovery uses this to find inputs for a hook-bound session;
+/// pane presence and routing stay on [`command_agent_kind`].
+pub(crate) fn command_agent_kind_candidate(command: &str) -> Option<&'static str> {
+    let program = crate::proc::command::effective_program_info(command);
+    let adapter = all_definitions().find(|adapter| adapter_matches_program(adapter, program))?;
+    adapter
+        .is_interactive_process(command)
+        .then(|| adapter.spec().kind)
+}
+
 fn adapter_for_program(
     program: crate::proc::command::EffectiveProgram<'_>,
 ) -> Option<&'static AgentDefinition> {
     let label = crate::proc::command::basename(program.program);
     all_definitions()
         .find(|adapter| {
-            let definition = adapter.spec();
-            definition.launches_as(label)
-                || (program.from_launcher
-                    && crate::proc::command::agent_script_path_names_kind(
-                        program.program,
-                        definition.kind,
-                    ))
+            adapter.spec().ambiguous_bin_identity(label).is_none()
+                && adapter_matches_program(adapter, program)
         })
         .or_else(|| {
             (!program.from_launcher)
@@ -136,12 +154,26 @@ fn adapter_for_program(
         })
 }
 
+fn adapter_matches_program(
+    adapter: &AgentDefinition,
+    program: crate::proc::command::EffectiveProgram<'_>,
+) -> bool {
+    let definition = adapter.spec();
+    let label = crate::proc::command::basename(program.program);
+    definition.launches_as(label)
+        || (program.from_launcher
+            && crate::proc::command::agent_script_path_names_kind(program.program, definition.kind))
+}
+
 fn adapter_for_comm(comm: &str) -> Option<&'static AgentDefinition> {
     let comm = crate::proc::command::basename(comm.trim());
     if crate::proc::command::is_launcher(comm) {
         return None;
     }
-    let mut matches = all_definitions().filter(|adapter| adapter.spec().runs_as(comm));
+    let mut matches = all_definitions().filter(|adapter| {
+        let definition = adapter.spec();
+        definition.ambiguous_bin_identity(comm).is_none() && definition.runs_as(comm)
+    });
     let adapter = matches.next()?;
     matches.next().is_none().then_some(adapter)
 }
@@ -243,7 +275,9 @@ mod tests {
             ("claude", Some("claude")),
             ("agy", Some("antigravity")),
             ("antigravity", None),
-            ("agent", Some("cursor")),
+            // `agent` is provider-ambiguous. Binary discovery verifies Cursor's
+            // version banner; a process basename alone abstains.
+            ("agent", None),
             ("cursor-agent", Some("cursor")),
             ("kiro-cli-chat", Some("kiro")),
             ("kiro-cli-term", None),
@@ -268,6 +302,8 @@ mod tests {
             ),
             Some("qwen")
         );
+        assert!(command_may_be_agent_kind("agent", "cursor"));
+        assert!(!command_may_be_agent_kind("agent", "grok"));
     }
 
     #[test]
