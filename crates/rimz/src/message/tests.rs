@@ -3,7 +3,9 @@ use std::time::Duration;
 use jiff::Timestamp;
 
 use super::*;
-use crate::agents::{AgentContext, AgentState, AgentStatus, TurnSettle, TurnSettleOutcome};
+use crate::agents::{
+    AgentContext, AgentState, AgentStatus, LifecycleSignal, TurnSettle, TurnSettleOutcome,
+};
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
@@ -202,26 +204,23 @@ fn when_parser_accepts_literal_statuses_and_duration_units() {
 
 #[test]
 fn delivery_checkpoint_recognizes_turn_boundaries() {
-    assert!(delivery_checkpoint(&LifecycleSignal::TurnInterrupted));
-    assert!(delivery_checkpoint(&LifecycleSignal::TurnEnded {
+    let checkpoint = crate::agents::DELIVERY_CHECKPOINT;
+    assert!(checkpoint.contains(&LifecycleSignal::TurnInterrupted));
+    assert!(checkpoint.contains(&LifecycleSignal::TurnEnded {
         errored: false,
         parked_on_background: false,
     }));
-    assert!(delivery_checkpoint(&LifecycleSignal::TurnEnded {
+    assert!(checkpoint.contains(&LifecycleSignal::TurnEnded {
         errored: true,
         parked_on_background: false,
     }));
-    assert!(delivery_checkpoint(&LifecycleSignal::TurnEnded {
+    assert!(checkpoint.contains(&LifecycleSignal::TurnEnded {
         errored: false,
         parked_on_background: true,
     }));
-    assert!(!delivery_checkpoint(&LifecycleSignal::Registered));
-    assert!(delivery_checkpoint(&LifecycleSignal::CompactionEnded {
-        auto: None,
-    }));
-    assert!(!delivery_checkpoint(&LifecycleSignal::SubagentStopped {
-        errored: false
-    }));
+    assert!(!checkpoint.contains(&LifecycleSignal::Registered));
+    assert!(checkpoint.contains(&LifecycleSignal::CompactionEnded { auto: None }));
+    assert!(!checkpoint.contains(&LifecycleSignal::SubagentStopped { errored: false }));
 }
 
 #[test]

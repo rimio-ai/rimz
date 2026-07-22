@@ -180,9 +180,9 @@ Records that are scheduled, condition-blocked, or `Resume`-gated are filtered ou
 
 Three paths, all converging on the same one-message helper:
 
-**Lifecycle hooks.** [`delivery_checkpoint`](../../../crates/rimz/src/message.rs) admits every root `TurnEnded`, plus `TurnInterrupted` and `CompactionEnded`. On one of those the hook finds the FIFO head for the agent's card and spawns a detached `rimz message deliver --message-id <id>` with nulled stdio. `Registered`, subagent stops, and compaction starts do not check the queue.
+**Lifecycle hooks.** The lifecycle reactor declares [`DELIVERY_CHECKPOINT`](../../../crates/rimz/src/agents/lifecycle/event.rs) as `TurnEnded`, `TurnInterrupted`, and `CompactionEnded`. On one of those the reactor finds the FIFO head for the event's agent card and spawns a detached `rimz message deliver --message-id <id>` with nulled stdio. `Registered`, subagent stops, and compaction starts do not check the queue.
 
-The same hook separately nudges the sweep when this agent is *referenced* by an unmet condition: `after` conditions on delivery checkpoints, `when` conditions on a wider set that includes `Registered`, `TurnStarted`, `AwaitingInput`, and the subagent edges, because a dwell can start or break on any of them.
+The same reactor separately nudges the sweep when this agent is *referenced* by an unmet condition: `after` conditions on `DELIVERY_CHECKPOINT`, `when` conditions on the shared [`CONDITION_CHECKPOINT`](../../../crates/rimz/src/agents/lifecycle/event.rs), which additionally includes `Registered`, `TurnStarted`, `AwaitingInput`, and the subagent edges because a dwell can start or break on any of them. Both actions consume the committed `LifecycleEvent`; the ordered delivery helper still re-checks durable state before claiming.
 
 **The elder sweep.** The room's elected sidebar elder reads `message-wake.json` and, when the stamp comes due, spawns `rimz message sweep`. See [Scheduling and wakeups](#scheduling-and-wakeups).
 

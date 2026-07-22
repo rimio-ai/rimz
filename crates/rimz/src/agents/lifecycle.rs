@@ -21,6 +21,15 @@ use serde::{Deserialize, Serialize};
 use crate::agents::AgentStatus;
 use crate::ids::AskId;
 
+mod event;
+mod follow;
+
+pub use event::{
+    CONDITION_CHECKPOINT, DELIVERY_CHECKPOINT, LIFECYCLE_EVENT_VERSION, LifecycleEvent,
+    LifecycleTransition, SignalSet,
+};
+pub use follow::{LifecycleFollowBatch, LifecycleFollowErr, LifecycleFollower};
+
 macro_rules! lifecycle_signal_kinds {
     ($($variant:ident => $label:literal),+ $(,)?) => {
         /// Data-less lifecycle signal kinds every adapter declares explicitly.

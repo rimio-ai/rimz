@@ -32,6 +32,7 @@ pub(crate) use fold::{
     write_carryover,
 };
 pub use fold::{ResumeOutcome, RollupCursor};
+pub(crate) use fold::{lifecycle_follow_seed, lifecycle_log_generation};
 pub use panes::{
     HookPaneRecoveryCandidate, HookPaneRecoveryContext, HookPaneRecoveryMethod,
     HookPaneRecoveryPhase, HookPaneRecoverySelection,

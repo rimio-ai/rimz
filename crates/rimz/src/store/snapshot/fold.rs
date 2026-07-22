@@ -155,6 +155,27 @@ fn read_rollup_cache(path: &Path) -> Option<Arc<RollupCache>> {
     Some(cache)
 }
 
+/// Seed the lifecycle stream at the exact active-log extent its states reflect.
+pub(crate) fn lifecycle_follow_seed(
+    paths: &StatePaths,
+) -> Result<(event_log::LogExtent, Vec<AgentState>)> {
+    let (cache, agents, _resume_outcomes) = catch_up_rollup(paths)?;
+    Ok((cache.extent, agents))
+}
+
+/// Read the active log generation without using the long-lived parse cache.
+///
+/// A follower polls this across rotations, where a same-size cache rewrite must
+/// still become visible even on filesystems with coarse modification times.
+pub(crate) fn lifecycle_log_generation(paths: &StatePaths) -> u64 {
+    std::fs::read(&paths.rollup_cache)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<RollupCache>(&bytes).ok())
+        .filter(|cache| cache.version == ROLLUP_CACHE_VERSION)
+        .map(|cache| cache.extent.generation)
+        .unwrap_or(0)
+}
+
 thread_local! {
     /// This thread's last `rollup.json` parse — the fold base a long-lived
     /// reader re-reads on every catch-up fold.

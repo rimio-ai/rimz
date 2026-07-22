@@ -134,6 +134,8 @@ fn record_mapped_lifecycle_observation(
             return RecordedLifecycle {
                 model_hint,
                 observation,
+                primary_event_id: None,
+                events: Vec::new(),
                 rotation_due: false,
                 waiting_cleared: false,
             };
@@ -143,6 +145,8 @@ fn record_mapped_lifecycle_observation(
     RecordedLifecycle {
         model_hint,
         observation,
+        primary_event_id: receipt.primary_event_id,
+        events: receipt.events,
         rotation_due: receipt.rotation_due,
         waiting_cleared: receipt.waiting_cleared,
     }

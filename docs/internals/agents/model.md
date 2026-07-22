@@ -90,6 +90,14 @@ An adapter emits an agent-agnostic **lifecycle signal**: the *intent* a native e
 
 One pure transition function, [`step`](../../../crates/rimz/src/agents/lifecycle.rs), folds a signal onto the prior state. It is the single home for every transition, reused identically for root agents and subagents: the reducer calls it on replay to derive the rollup, and Store calls it under the workspace lock against the latest durable state for each fresh event. Store returns the transition classification in its receipt, so hook ingestion can log anomalies without re-reading state.
 
+### The lifecycle event envelope
+
+[`LifecycleEvent`](../../../crates/rimz/src/agents/lifecycle/event.rs) is the versioned public projection of one durable transition: event and workspace identity, agent lineage, the complete signal, before-and-after status, phase, transition classification, and the compaction and waiting-clear facts. Store builds the envelope at the same commit seam that appends `agent.lifecycle`, so an append suppressed by lifecycle policy produces no envelope and a derived subagent append produces its own envelope in log order.
+
+Hook ingestion dispatches these envelopes through a static reactor table. Each reactor declares a [`SignalSet`](../../../crates/rimz/src/agents/lifecycle/event.rs) beside its action; queued-delivery nudges, terminal run wakes, and ended-agent message archival consume the same vocabulary that external harnesses receive. Reactors remain latency paths and re-check durable state before acting.
+
+[`rimz events follow`](../../reference/cli/events.md) folds the same `step` function over the durable log and emits one envelope per conforming lifecycle record. The stream starts from a read-only rollup seed at the live edge, or from an empty state at the start of the current generation under `--replay`, and drains a rotated tail before reading the new active log. The durable log remains truth; polling and reactor dispatch only surface it sooner.
+
 ```text
  ●
  │ registered

@@ -100,3 +100,33 @@ fn is_archive_name(path: &Path) -> bool {
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.starts_with("events.") && name.ends_with(".jsonl"))
 }
+
+/// Return up to `limit` newest archive logs in chronological order.
+pub(super) fn newest_archives(archive_dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(archive_dir) {
+        Ok(entries) => entries,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(EventLogErr::Io {
+                path: archive_dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| EventLogErr::Io {
+            path: archive_dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        if is_archive_name(&path) {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    if paths.len() > limit {
+        paths.drain(..paths.len() - limit);
+    }
+    Ok(paths)
+}

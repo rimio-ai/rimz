@@ -159,6 +159,11 @@ pub fn read_from_offset(path: &Path, start: u64) -> Result<(Vec<EventEnvelope>, 
     Ok((events, end))
 }
 
+/// Return the newest archived generations in chronological order.
+pub fn newest_archives(archive_dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
+    rotation::newest_archives(archive_dir, limit)
+}
+
 /// Always-on observability seam: bytes the row scan actually read, so the
 /// performance tier and sidebar tick meter can prove a warm fold is O(new
 /// bytes) rather than O(log) from the integration binary. Per-process and

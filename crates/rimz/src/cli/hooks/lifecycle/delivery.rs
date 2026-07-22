@@ -73,32 +73,19 @@ pub(super) fn record_user_input_for_lifecycle(
 pub(super) fn spawn_queue_delivery_if_checkpoint(
     workspace: &ResolvedWorkspace,
     store: &Store,
-    agent: &AgentDefinition,
-    recorded: &RecordedLifecycle,
+    event: &rimz::agents::LifecycleEvent,
 ) {
-    let delivery_checkpoint = rimz::message::delivery_checkpoint(&recorded.observation.signal);
-    let condition_checkpoint = matches!(
-        recorded.observation.signal,
-        LifecycleSignal::Registered
-            | LifecycleSignal::TurnStarted
-            | LifecycleSignal::TurnEnded { .. }
-            | LifecycleSignal::TurnInterrupted
-            | LifecycleSignal::AwaitingInput { .. }
-            | LifecycleSignal::SubagentStarted
-            | LifecycleSignal::SubagentStopped { .. }
-            | LifecycleSignal::CompactionEnded { .. }
-    );
+    let delivery_checkpoint = rimz::agents::DELIVERY_CHECKPOINT.contains(&event.signal);
+    let condition_checkpoint = rimz::agents::CONDITION_CHECKPOINT.contains(&event.signal);
     if !delivery_checkpoint && !condition_checkpoint {
         return;
     }
-    let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
-        return;
-    };
+    let agent_id = &event.agent_id;
     let pending = match store.list_pending_messages() {
         Ok(messages) => messages,
         Err(err) => {
             debug!(
-                agent = agent.spec().kind,
+                agent = %event.kind,
                 agent_id = %agent_id,
                 error = %err,
                 "message delivery skipped; queued messages unreadable",
@@ -106,9 +93,9 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
             return;
         }
     };
-    let kind = agent.spec().kind_id();
-    let agent_name = recorded.observation.agent_name.as_deref();
-    let card = rimz::agents::AgentCardRef::new(&kind, agent_id, agent_name);
+    let kind = &event.kind;
+    let agent_name = event.agent_name.as_deref();
+    let card = rimz::agents::AgentCardRef::new(kind, agent_id, agent_name);
     if pending.iter().any(|message| {
         message.status == rimz::message::MessageStatus::Queued
             && delivery_checkpoint
@@ -138,7 +125,7 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
     // agent name folds a message queued before registration into the same queue.
     let Some(head) = rimz::message::queue_head(
         pending.iter(),
-        &kind,
+        kind,
         agent_id,
         agent_name,
         jiff::Timestamp::now(),

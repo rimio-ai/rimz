@@ -11,7 +11,6 @@ pub(crate) mod fire;
 pub mod reply;
 pub mod send;
 
-use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{AgentCardRef, AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 
@@ -861,15 +860,6 @@ pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, Stri
         .to_zoned(now.time_zone().clone())
         .map(|target| target.timestamp())
         .map_err(|err| format!("schedule `{raw}` cannot be resolved tomorrow: {err}"))
-}
-
-pub fn delivery_checkpoint(signal: &LifecycleSignal) -> bool {
-    matches!(
-        signal,
-        LifecycleSignal::TurnEnded { .. }
-            | LifecycleSignal::TurnInterrupted
-            | LifecycleSignal::CompactionEnded { .. }
-    )
 }
 
 fn env_ms(key: &str) -> Option<Duration> {
