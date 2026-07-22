@@ -1,14 +1,15 @@
-//! Foreground remote-web preparation, SSH tunnel ownership, and browser open.
+//! Foreground remote-web preparation, local auth relay, SSH tunnel, and browser open.
 //!
 //! One remote prep births the room, ensures ttyd, and returns its credential;
-//! the forwarding child or shared ControlMaster then owns the tunnel.
+//! the process injects that credential into traffic forwarded over SSH.
 
 use std::io::{IsTerminal, Read as _, Write as _};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -159,14 +160,17 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
         bail!("preparing remote web access failed with status 255");
     };
     let (payload, credential) = parse_web_payload(&prep)?;
-    let mut previous_credential = None;
-    render_web_credential(remote, &credential, &mut previous_credential, true);
-    let local_port = rimz::remote::web::choose_local_port(&payload.session, remote.web.port)
-        .context("choosing local web tunnel port")?;
+    let relay_listener = rimz::remote::web::bind_local_relay(&payload.session, remote.web.port)
+        .context("binding local web tunnel relay")?;
+    let local_port = relay_listener.local_addr()?.port();
+    let forward_port = rimz::remote::web::reserve_forward_port()
+        .context("reserving local SSH web forward port")?;
+    let relay_target = Arc::new(Mutex::new(make_relay_target(forward_port, &credential)));
+    spawn_tunnel_relay(relay_listener, relay_target)?;
     let spec =
-        rimz::remote::web::web_tunnel_spec(&remote.target, local_port, tunnel_port(&payload));
+        rimz::remote::web::web_tunnel_spec(&remote.target, forward_port, tunnel_port(&payload));
     let mut tunnel = RemoteTunnel::start(&spec, remote.target.host_display())?;
-    match tunnel.wait_until_ready(local_port)? {
+    match tunnel.wait_until_ready(forward_port)? {
         PortWait::Ready => {}
         PortWait::Exited(_) => {
             bail!("web tunnel exited before local port accepted connections");
@@ -230,7 +234,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
     let mut first_prep = true;
     let mut first_round = true;
     let mut local_port = None;
-    let mut last_credential = None;
+    let mut relay_state = None;
     let mut outage = None;
 
     loop {
@@ -285,11 +289,19 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
             }
         };
         let (payload, credential) = parse_web_payload(&prep)?;
+        let forward_port = rimz::remote::web::reserve_forward_port()
+            .context("reserving local SSH web forward port")?;
+        let round_target = make_relay_target(forward_port, &credential);
         let local_port = match local_port {
             Some(port) => port,
             None => {
-                let port = rimz::remote::web::choose_local_port(&payload.session, remote.web.port)
-                    .context("choosing local web tunnel port")?;
+                let listener =
+                    rimz::remote::web::bind_local_relay(&payload.session, remote.web.port)
+                        .context("binding local web tunnel relay")?;
+                let port = listener.local_addr()?.port();
+                let target = Arc::new(Mutex::new(round_target.clone()));
+                spawn_tunnel_relay(listener, Arc::clone(&target))?;
+                relay_state = Some(target);
                 local_port = Some(port);
                 port
             }
@@ -299,7 +311,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         } else {
             let spec = rimz::remote::web::web_tunnel_spec(
                 &remote.target,
-                local_port,
+                forward_port,
                 tunnel_port(&payload),
             );
             Some(RemoteTunnel::start(&spec, host)?)
@@ -308,13 +320,13 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
             (Some(control), None) => establish_control_forward(
                 &rimz::remote::web::web_control_forward_spec(
                     &remote.target,
-                    local_port,
+                    forward_port,
                     tunnel_port(&payload),
                     control,
                 ),
                 host,
             )?,
-            (None, Some(tunnel)) => tunnel.wait_until_ready(local_port)?,
+            (None, Some(tunnel)) => tunnel.wait_until_ready(forward_port)?,
             _ => unreachable!("web tunnel kind follows ControlMaster availability"),
         };
         let port_ready = match readiness {
@@ -352,7 +364,12 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         };
 
         held_alt.release();
-        render_web_credential(remote, &credential, &mut last_credential, first_round);
+        replace_relay_target(
+            relay_state
+                .as_ref()
+                .context("local web tunnel relay is not running")?,
+            round_target,
+        );
         if first_round {
             let url = rimz::remote::web::local_url(&payload, local_port);
             writeln!(std::io::stdout().lock(), "{url}")?;
@@ -485,22 +502,36 @@ fn tunnel_port(payload: &rimz::web::WebOpenPayload) -> u16 {
     payload.tunnel_port.unwrap_or(payload.port)
 }
 
-fn render_web_credential(
-    remote: &RemoteConnect,
+fn make_relay_target(
+    forward_port: u16,
     credential: &rimz::web::WebCredential,
-    previous: &mut Option<rimz::web::WebCredential>,
-    always: bool,
-) {
-    if always || previous.as_ref() != Some(credential) {
-        let _ = writeln!(
-            std::io::stderr().lock(),
-            "rimz: basic auth for {}: user {}, password {}",
-            remote.target.host_display(),
-            credential.username,
-            credential.secret,
-        );
+) -> rimz::web::RelayTarget {
+    rimz::web::RelayTarget {
+        upstream: SocketAddr::from(([127, 0, 0, 1], forward_port)),
+        authorization: credential.authorization(),
     }
-    *previous = Some(credential.clone());
+}
+
+fn spawn_tunnel_relay(
+    listener: TcpListener,
+    target: Arc<Mutex<rimz::web::RelayTarget>>,
+) -> Result<()> {
+    std::thread::Builder::new()
+        .name("rimz-web-tunnel-relay".to_owned())
+        .spawn(move || {
+            if let Err(error) = rimz::web::serve_tunnel_relay(listener, target) {
+                tracing::error!(%error, "local web tunnel relay stopped");
+            }
+        })
+        .context("starting local web tunnel relay")?;
+    Ok(())
+}
+
+fn replace_relay_target(
+    target: &Mutex<rimz::web::RelayTarget>,
+    replacement: rimz::web::RelayTarget,
+) {
+    *target.lock().unwrap_or_else(PoisonError::into_inner) = replacement;
 }
 
 enum WebPrepOutcome {

@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -192,10 +191,7 @@ fn basic_auth(credential: &TtydCredential) -> WebCredential {
 
 pub(super) fn authorization_header() -> Result<String> {
     let credential = required_credential()?;
-    Ok(format!(
-        "Basic {}",
-        STANDARD.encode(format!("{}:{}", credential.name, credential.secret))
-    ))
+    Ok(basic_auth(&credential).authorization())
 }
 
 fn mint_credential() -> Result<TtydCredential> {

@@ -104,9 +104,9 @@ The section is per-machine and stays outside the trust hash because no field exe
 
 Remote prep is one non-PTY `rimz web open --print --json` call. Its additive `rimz.web.v2` payload includes `auth: {mode: "basic"}` or `auth: {mode: "trusted_header", header: "<name>"}`, `credential: {username, secret}`, and `tunnel_port`. Missing `auth` defaults to Basic and missing `tunnel_port` falls back to `port` for older v2 peers.
 
-The local side checks the exact schema, prints the returned Basic-Auth credential, chooses a local port, and forwards it to `127.0.0.1:<tunnel_port>`. For a gated daemon, this lands directly on ttyd's loopback Basic-authenticated upstream; for a direct daemon, `tunnel_port` equals the public `port`. There is no second token-provisioning SSH call. A legacy trusted-header payload without a credential still fails before tunnel setup and directs the user to its reverse-proxy URL.
+The local side checks the exact schema and binds an in-process relay on the user-facing loopback port. SSH forwards a second ephemeral loopback port to `127.0.0.1:<tunnel_port>`; the relay strips any browser `Authorization` header and injects the returned Basic credential on every request before sending it to that forward. For a gated daemon, the SSH target lands directly on ttyd's loopback Basic-authenticated upstream; for a direct daemon, `tunnel_port` equals the public `port`. This injection supports Safari, whose WebKit client omits cached Basic credentials from WebSocket upgrades even though ttyd authenticates the upgrade itself. There is no browser prompt or second token-provisioning SSH call. A legacy trusted-header payload without a credential still fails before tunnel setup and directs the user to its reverse-proxy URL.
 
-The local port derives from the session in 8300–8399 and scans on collision. Recovery repeats prep so it can rebirth the room, restart the daemon, discover a changed port, and print a changed secret while keeping the local URL stable. Version skew uses the existing remote-upgrade diagnostic; v1 payloads are not accepted.
+The relay port derives from the session in 8300–8399 and scans on collision while retaining its listener to close the selection race. It stays bound across recovery rounds. Recovery repeats prep so it can rebirth the room, restart the daemon, discover a changed port or credential, open a fresh ephemeral SSH forward, and atomically retarget the relay while keeping the local URL stable. Version skew uses the existing remote-upgrade diagnostic; v1 payloads are not accepted.
 
 ## Security
 
@@ -114,9 +114,9 @@ The default listener binds to loopback and requires Basic Auth.
 
 The gate treats a configured auth header as proof of the public proxy's authentication only after the peer address passes the loopback-or-allowlist check. It strips client authorization and presents the machine credential to ttyd itself, so ttyd never trusts a public identity header.
 
-The source gate always admits loopback, but trusted-header authorization still requires the configured header there; loopback carries no header-auth bypass. The private ttyd upstream remains protected by Basic Auth. Use host-level user isolation when another local user can read the serving user's credential file or execute as that user.
+The source gate always admits loopback, but trusted-header authorization still requires the configured header there; loopback carries no header-auth bypass. The private ttyd upstream remains protected by Basic Auth. The client-side remote tunnel relay accepts unauthenticated requests on loopback and presents the remote machine credential upstream, matching the local-user trust boundary of a raw `ssh -L`; use host-level user isolation when another local user can connect as the tunnel-owning user or execute as that user.
 
-Credentials stay out of URLs, logs, store events, and workspace records. The v2 credential appears only in explicit JSON output that reports a saved credential and the human stderr relay.
+Credentials stay out of URLs, logs, store events, and workspace records. The v2 credential appears in explicit JSON output that reports a saved credential and in local credential-management output; the remote tunnel keeps it in process memory for relay injection and omits it from stderr.
 
 The broadcast listener intentionally has no RimZ authentication and prints a visible warning whenever an active share binds a non-loopback interface. Its allowlist limits rooms rather than viewers; anyone who can reach the listener can read the terminal output of every allowlisted room. Public deployments put HTTPS, optional viewer authentication, and network filtering in front of `share_port`.
 

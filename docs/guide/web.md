@@ -34,6 +34,8 @@ The printed route is `http://127.0.0.1:8200/?arg=<session>`. ttyd passes the sel
 
 The browser shows a Basic-Auth prompt. Use the printed user `rimz` and password. Add `--no-start` when a supervisor owns ttyd and the command should fail rather than start it.
 
+Safari can load this direct local page but cannot attach the terminal because WebKit omits Basic credentials from WebSocket upgrades. Use `rimz remote connect --web`, put a trusted-header reverse proxy in front, or open the direct local URL in Chrome. The remote tunnel injects the credential locally and supports Safari without changing the always-on daemon topology.
+
 With `[web] enabled = true`, every normal `rimz start` also asks for the shared daemon after the room is ready. A missing binary, occupied port, or daemon error warns on stderr and leaves the room usable in the terminal.
 
 ## Share a read-only broadcast
@@ -116,7 +118,7 @@ rimz web restart
 
 The gate rejects missing, empty, duplicated, and non-allowlisted identity headers after validating the peer address. An empty `trusted_proxies` list accepts only a proxy connecting from loopback. The gate admits loopback as a source but still requires exactly one identity header there; the private ttyd listener separately requires Basic Auth.
 
-The trusted-header decision applies only at the public gate. `rimz remote connect --web` tunnels through SSH directly to the private ttyd listener and uses the printed machine credential, so it works the same way in Basic and trusted-header configurations.
+The trusted-header decision applies only at the public gate. `rimz remote connect --web` tunnels through SSH directly to the private ttyd listener and injects the machine credential inside its local relay, so it works the same way in Basic and trusted-header configurations.
 
 ## Open a remote room
 
@@ -125,9 +127,9 @@ rimz remote connect dev --web
 rimz remote connect dev --web --web-port 8443
 ```
 
-RimZ uses one SSH prep call to birth or resume the remote room, ensure its shared daemon, and return the credential plus the private tunnel target. It then forwards a local loopback port to the remote ttyd listener and opens `http://127.0.0.1:<local-port>/?arg=<session>`. This path is uniform whether the remote public edge uses Basic or trusted-header auth.
+RimZ uses one SSH prep call to birth or resume the remote room, ensure its shared daemon, and return the credential plus the private tunnel target. It opens an ephemeral SSH forward to the remote ttyd listener, then serves `http://127.0.0.1:<local-port>/?arg=<session>` through a local relay that injects the credential into page and WebSocket requests. The browser receives no password prompt, and Safari works despite WebKit omitting Basic credentials from WebSocket upgrades. This path is uniform whether the remote public edge uses Basic or trusted-header auth.
 
-The tunnel stays in the foreground and follows the normal remote recovery policy. Recovery repeats prep, so a stopped daemon comes back and a rotated credential is printed again; the local URL stays stable. Without `--web-port`, the local port derives from the session in 8300–8399 and scans forward when busy.
+The tunnel stays in the foreground and follows the normal remote recovery policy. Recovery repeats prep, so a stopped daemon comes back and a rotated credential reaches the relay; the local URL stays stable. Without `--web-port`, the local port derives from the session in 8300–8399 and scans forward when busy.
 
 ## Credentials
 
@@ -168,7 +170,7 @@ style_client = true
 
 By default, RimZ invokes ttyd with write access, origin checks, mandatory Basic Auth, and an explicit loopback bind.
 
-The one machine credential authenticates the shared listener, so it grants access to every live RimZ room on that machine rather than only the room named in the first URL. An authenticated client can submit another session argument, and a missing or rejected argument opens the live-room session manager. A remote `--web` tunnel forwards this same machine-wide surface through its local port.
+The one machine credential authenticates the shared listener, so it grants access to every live RimZ room on that machine rather than only the room named in the first URL. An authenticated client can submit another session argument, and a missing or rejected argument opens the live-room session manager. A remote `--web` tunnel forwards this same machine-wide surface through an unauthenticated loopback relay on the client machine, matching the local-user trust boundary of `ssh -L`; use host-level user isolation on a shared client machine.
 
 The broadcast listener is a separate process without `-W` or `-c`: ttyd drops input and admits connections without authentication, while RimZ's per-connection shim limits attachment to the durable room allowlist and never lists other rooms. Its output can still contain secrets. Bind it to loopback or place it behind a reverse proxy and firewall before public exposure.
 

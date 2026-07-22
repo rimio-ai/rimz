@@ -7,7 +7,7 @@
 //! these prove the CLI surface end to end.
 
 use std::io::{Read as _, Write as _};
-use std::net::{SocketAddr, TcpListener};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
@@ -312,6 +312,16 @@ fn tunnel_invocation_count(log: &Path) -> usize {
         .lines()
         .filter(|line| line.split('\t').any(|arg| arg == "-L"))
         .count()
+}
+
+fn tunnel_forward_ports(log: &Path) -> Vec<u16> {
+    shim_invocations(log)
+        .into_iter()
+        .filter_map(|argv| {
+            let forwarding = argv.windows(2).find(|args| args[0] == "-L")?.get(1)?;
+            forwarding.split(':').nth(1)?.parse().ok()
+        })
+        .collect()
 }
 
 fn web_prep_invocation_count(log: &Path) -> usize {
@@ -1262,11 +1272,91 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
         "preparation stderr stays visible"
     );
     assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("basic auth for dev-box: user rimz, password test-web-token"),
-        "credential rides in the preparation payload"
+        !String::from_utf8_lossy(&out.stderr).contains("test-web-token"),
+        "the tunnel credential stays off stderr"
     );
     assert_eq!(tunnel_invocation_count(&log), 1);
+    assert_ne!(
+        tunnel_forward_ports(&log),
+        [port],
+        "SSH forwards through an ephemeral port behind the public relay"
+    );
+}
+
+#[test]
+fn remote_web_relay_injects_auth_for_http_and_safari_websockets() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let request_log = env.project_root.join("tunnel-http.log");
+    let stdout_path = env.project_root.join("stdout.log");
+    let plan = env.project_root.join("tunnel.plan");
+    let port = reserve_local_port();
+    std::fs::write(&plan, "0\n").expect("write tunnel plan");
+    let stdout = std::fs::File::create(&stdout_path).expect("create stdout log");
+
+    let mut child = remote_web_command(&env, &log, port)
+        .arg("--no-reconnect")
+        .env("RIMZ_TEST_SSH_TUNNEL_HTTP_LOG", &request_log)
+        .env("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS", "1200")
+        .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
+        .stdout(stdout)
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn remote web relay");
+
+    wait_for_tunnel_invocation(&mut child, &log);
+    let url = format!("http://127.0.0.1:{port}/?arg=rimz-project-a1b2c3");
+    wait_for_notify_log(&stdout_path, &[&url]);
+    assert_ne!(tunnel_forward_ports(&log), [port]);
+
+    let mut http = TcpStream::connect(("127.0.0.1", port)).expect("connect HTTP relay");
+    http.write_all(b"GET / HTTP/1.1\r\nHost: local\r\nAuthorization: Bearer attacker\r\n\r\n")
+        .expect("write HTTP request");
+    let response = read_http_head(&mut http);
+    assert!(response.starts_with(b"HTTP/1.1 204 No Content"));
+    drop(http);
+
+    let mut websocket = TcpStream::connect(("127.0.0.1", port)).expect("connect WS relay");
+    websocket
+        .write_all(b"GET /ws HTTP/1.1\r\nHost: local\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\nclient-frame")
+        .expect("write Safari-shaped upgrade");
+    websocket
+        .shutdown(std::net::Shutdown::Write)
+        .expect("finish client frames");
+    let mut response = Vec::new();
+    websocket
+        .read_to_end(&mut response)
+        .expect("read upgraded response");
+    assert!(response.starts_with(b"HTTP/1.1 101 Switching Protocols"));
+    assert!(response.ends_with(b"server-frame"));
+
+    let out = child.wait_with_output().expect("wait remote web relay");
+    assert!(
+        out.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let requests = std::fs::read_to_string(&request_log).expect("read tunnel requests");
+    assert_eq!(
+        requests
+            .matches("Authorization: Basic cmltejp0ZXN0LXdlYi10b2tlbg==\r\n")
+            .count(),
+        2,
+        "{requests}"
+    );
+    assert!(!requests.contains("Bearer attacker"), "{requests}");
+    assert!(requests.contains("Upgrade: websocket\r\n"), "{requests}");
+    assert!(requests.contains("client-frame"), "{requests}");
+}
+
+fn read_http_head(stream: &mut TcpStream) -> Vec<u8> {
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).expect("read HTTP response");
+        head.push(byte[0]);
+    }
+    head
 }
 
 #[test]
