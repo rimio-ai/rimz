@@ -150,7 +150,7 @@ fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
         .send_keys(
             &pane_id,
             &format!(
-                "stty raw -echo; dd bs=1 count=4 of={} 2>/dev/null; stty sane",
+                "stty raw -echo; dd bs=1 count=4 of={} 2>/dev/null; stty sane; printf '\\nrimz-raw-reader-ready\\n'",
                 key_bytes.display()
             ),
         )
@@ -182,6 +182,16 @@ fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
         thread::sleep(Duration::from_millis(25));
     };
     assert_eq!(bytes, b"\x1b\x1b[Z");
+    let capture = capture_pane_until(
+        &server.backend,
+        &pane_id,
+        "rimz-raw-reader-ready",
+        Duration::from_secs(2),
+    );
+    assert!(
+        capture.contains("rimz-raw-reader-ready"),
+        "the shell should restore cooked mode before the paste; capture was: {capture:?}",
+    );
     // Leading dash guards the `send-keys -l --` spelling: payload bytes must not
     // be re-read as tmux flags or key names.
     let payload = "-rf rimz-paste-marker";

@@ -58,7 +58,10 @@ fn open_background_view_creates_named_tab_idempotently() {
     require_zellij!();
 
     let name = unique_session_name("bgview");
-    let session = ZellijSession::spawn(&name);
+    let xdg = scoped_runtime_dir();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    create_plain_background_session(xdg.path(), &name, cwd.path(), "120");
+    let session = ZellijSession::attach_existing(xdg, &name);
     let backend = ZellijBackend::with_runtime_dir(session.xdg.path());
     let (_stub_dir, stub) = sidebar_command_stub();
 
