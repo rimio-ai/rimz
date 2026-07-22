@@ -89,7 +89,7 @@ fn birth_refuses_a_server_whose_own_directory_was_deleted() {
         .arg("-S")
         .arg(&socket)
         .args(["new-session", "-d", "-s", "squatter", "sleep 120"])
-        .status()
+        .bounded_status()
         .expect("spawn poisoned server");
     assert!(born.success(), "poisoned server should start");
     std::fs::remove_dir(&launch).expect("unlink launch dir");

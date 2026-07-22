@@ -6,6 +6,8 @@ use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, TabOptions, ZellijBackend, zellij};
 use tempfile::TempDir;
 
+use crate::common::{CommandTimeoutExt, ZellijNamespace};
+
 use super::support::*;
 
 /// The presence-plugin wasm `cargo xtask build-plugin` produces, honoring
@@ -186,46 +188,6 @@ fn wait_for_focus_action(
     }
 }
 
-/// Leave the tab with its sidebar focused — the strand the next switch back has
-/// to repair. Presses the focus-left chord until the attached client's view is
-/// the sidebar alone and holds there, so the tab is provably stranded before the
-/// test switches away; a bare keypress plus a sleep leaves the precondition to
-/// chance and turns any miss into an unexplained repair timeout later.
-fn strand_sidebar_focus(
-    backend: &ZellijBackend,
-    client: &mut AttachedClient,
-    session: &str,
-    sidebar: &PaneId,
-) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut holds = 0;
-    let mut last = String::new();
-    loop {
-        match client_viewed_panes(backend, session) {
-            Ok(viewed) if viewed == [sidebar.clone()] => {
-                holds += 1;
-                if holds == 3 {
-                    return;
-                }
-            }
-            Ok(viewed) => {
-                last = format!("{viewed:?}");
-                holds = 0;
-                client.press_alt('h');
-            }
-            Err(err) => {
-                last = err;
-                holds = 0;
-            }
-        }
-        assert!(
-            Instant::now() < deadline,
-            "client focus never settled on the sidebar {sidebar} in {session}; last view: {last}",
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 fn accepted_focus_repairs(xdg: &Path, target_pane: &PaneId) -> usize {
     rimz::diag::focus_repair::recent(xdg)
         .iter()
@@ -328,23 +290,24 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
 
     // Seed the grant before the server is born so its permission cache read —
     // whenever it happens — sees it. Grants key on the wasm's absolute path.
-    let xdg = scoped_runtime_dir();
-    seed_presence_permissions(xdg.path(), &wasm);
+    let namespace = ZellijNamespace::new();
+    seed_presence_permissions(namespace.path(), &wasm);
 
     // A `rimz` stand-in that logs its argv: the poke's whole host surface.
-    let poke_log = xdg.path().join("poke.log");
-    let focus_exec_log = xdg.path().join("focus-exec.log");
+    let poke_log = namespace.path().join("poke.log");
+    let focus_exec_log = namespace.path().join("focus-exec.log");
     let real_rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
-    let rimz_shim = write_poke_shim(xdg.path(), &poke_log, &real_rimz, &focus_exec_log);
+    let rimz_shim = write_poke_shim(namespace.path(), &poke_log, &real_rimz, &focus_exec_log);
 
     // Born on the pre-seeded dir with a PTY client attached: application
     // state flows only while a client is connected, and the cached grant is
     // proven to the plugin by exactly that flow (Zellij sends no explicit
     // permission result for a cached grant).
     let name = unique_session_name("presence");
-    let session = ZellijSession::attach_pty(xdg, name.clone(), true);
+    let room = LiveZellijSession::from_namespace(namespace, name.clone());
+    let _client = AttachedClient::create_and_attach(&room, 80, 24);
 
-    let backend = ZellijBackend::with_runtime_dir(session.xdg.path());
+    let backend = ZellijBackend::with_runtime_dir(room.path());
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
     let mut opts = rimz::mux::PresencePluginOptions {
         session_name: name.clone(),
@@ -398,7 +361,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         "the first poke carries the Zellij version: {:?}",
         lines[0],
     );
-    let runtime = rimz::store::RuntimePaths::under(workspace_id, session.xdg.path())
+    let runtime = rimz::store::RuntimePaths::under(workspace_id, room.path())
         .expect("presence runtime paths");
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     let writer = loop {
@@ -424,8 +387,8 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
             .is_some_and(|hash| !hash.is_empty())
     );
 
-    let plugins_before = presence_plugin_panes(session.xdg.path(), &name)
-        .expect("presence plugin roster before converge");
+    let plugins_before =
+        presence_plugin_panes(room.path(), &name).expect("presence plugin roster before converge");
     assert_eq!(plugins_before.len(), 1);
 
     // Production reaches this path only for an identity change. The same-
@@ -443,8 +406,8 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
             .any(|line| line.contains("--reason alive")),
         "a converged plugin republishes topology; got {lines:?}",
     );
-    let plugins_after = presence_plugin_panes(session.xdg.path(), &name)
-        .expect("presence plugin roster after converge");
+    let plugins_after =
+        presence_plugin_panes(room.path(), &name).expect("presence plugin roster after converge");
     assert_eq!(plugins_after.len(), 1);
     let current_writer = rimz::sidebar::cache::read_pane_topology_cache(&runtime, &name)
         .and_then(|cache| cache.writer)
@@ -470,18 +433,15 @@ fn presence_identity_transition_keeps_global_background_updates() {
         }
     }
 
-    let xdg = scoped_runtime_dir();
-    seed_presence_permissions(xdg.path(), &wasm);
+    let room = LiveZellijSession::new("presence-upgrade");
+    let xdg = room.path();
+    seed_presence_permissions(xdg, &wasm);
     let cwd = TempDir::new().expect("session cwd tempdir");
-    let name = unique_session_name("presence-upgrade");
-    create_plain_background_session(xdg.path(), &name, cwd.path(), "600");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-    let mut client = AttachedClient::attach(xdg.path(), &name, 160, 45);
+    let name = room.name().to_owned();
+    room.create_plain_background(cwd.path(), "600");
+    let mut client = AttachedClient::attach(&room, 160, 45);
 
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    let backend = ZellijBackend::with_runtime_dir(xdg);
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
     let mut opts = rimz::mux::PresencePluginOptions {
         session_name: name.clone(),
@@ -497,7 +457,7 @@ fn presence_identity_transition_keeps_global_background_updates() {
         .ensure_presence_plugin(&opts)
         .expect("load initial presence identity");
     let runtime =
-        rimz::store::RuntimePaths::under(workspace_id, xdg.path()).expect("presence runtime paths");
+        rimz::store::RuntimePaths::under(workspace_id, xdg).expect("presence runtime paths");
     let initial_cache = poll_until(
         SPAWN_TIMEOUT,
         || {
@@ -516,8 +476,8 @@ fn presence_identity_transition_keeps_global_background_updates() {
     .expect("initial topology cache");
     let initial_writer = initial_cache.writer.expect("initial writer");
 
-    open_new_tab(xdg.path(), &name);
-    let snapshot = expect_list_panes(xdg.path(), &name);
+    open_new_tab(xdg, &name);
+    let snapshot = expect_list_panes(xdg, &name);
     let mut tab_work = snapshot
         .panes
         .iter()
@@ -529,10 +489,9 @@ fn presence_identity_transition_keeps_global_background_updates() {
     assert_eq!(tab_work.len(), 2, "expected one work pane in each tab");
     let (_, _, first_work) = tab_work[0];
     let (_, second_tab_id, second_work) = tab_work[1];
-    client.go_to_tab(1);
-    focus_attached_client_pane_until(xdg.path(), &name, first_work, "first tab", || {
-        client.go_to_tab(1);
-    });
+    let first_work = PaneId::from_parts(MuxName::Zellij, format!("terminal_{first_work}"));
+    let second_work_pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{second_work}"));
+    client.go_to_tab_until(1, &first_work, "first tab");
 
     // A configuration change is the same Zellij identity transition as a wasm
     // upgrade. Converge while tab one owns the attached client's focus.
@@ -563,7 +522,7 @@ fn presence_identity_transition_keeps_global_background_updates() {
 
     let plugins = poll_until(
         SPAWN_TIMEOUT,
-        || presence_plugin_panes(xdg.path(), &name),
+        || presence_plugin_panes(xdg, &name),
         |plugins| plugins.len() == 1,
         "one presence plugin after identity convergence",
     );
@@ -576,18 +535,15 @@ fn presence_identity_transition_keeps_global_background_updates() {
     // Move away from the tab active during convergence, then create and focus
     // a pane. A tab-scoped writer starves here; a background writer publishes
     // both the new topology and the attached client's selection.
-    client.go_to_tab(2);
-    focus_attached_client_pane_until(xdg.path(), &name, second_work, "second tab", || {
-        client.go_to_tab(2);
-    });
-    let before_ids = expect_list_panes(xdg.path(), &name)
+    client.go_to_tab_until(2, &second_work_pane, "second tab");
+    let before_ids = expect_list_panes(xdg, &name)
         .panes
         .into_iter()
         .filter(|pane| pane.is_live_terminal())
         .map(|pane| pane.id)
         .collect::<BTreeSet<_>>();
-    spawn_sleep_pane(xdg.path(), &name, cwd.path());
-    let fresh = expect_list_panes(xdg.path(), &name)
+    spawn_sleep_pane(xdg, &name, cwd.path());
+    let fresh = expect_list_panes(xdg, &name)
         .panes
         .into_iter()
         .find(|pane| {
@@ -643,16 +599,13 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         }
     }
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("switch-repair");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("switch-repair");
+    let xdg = room.path();
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("session cwd tempdir");
-    let poke_log = xdg.path().join("poke.log");
-    let focus_exec_log = xdg.path().join("focus-exec.log");
-    let rimz_shim = write_poke_shim(xdg.path(), &poke_log, &real_rimz, &focus_exec_log);
+    let poke_log = xdg.join("poke.log");
+    let focus_exec_log = xdg.join("focus-exec.log");
+    let rimz_shim = write_poke_shim(xdg, &poke_log, &real_rimz, &focus_exec_log);
     let trace = TempDir::new().expect("zellij trace tempdir");
     let trace_log = trace.path().join("zellij.log");
     let zellij_shim = trace.path().join("zellij");
@@ -689,14 +642,14 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     sidebar
         .extra_env
         .insert("RUST_LOG".to_owned(), "rimz=debug".to_owned());
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    publish_room_bin(xdg.path(), &sidebar);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open sidebar");
-    wait_for_pane_count(xdg.path(), &name, 2);
+    wait_for_pane_count(xdg, &name, 2);
 
-    let mut client = AttachedClient::attach(xdg.path(), &name, 160, 45);
-    let birth_sidebar = raw_sidebar_pane(xdg.path(), &name);
-    let birth_work = expect_list_panes(xdg.path(), &name)
+    let mut client = AttachedClient::attach(&room, 160, 45);
+    let birth_sidebar = raw_sidebar_pane(xdg, &name);
+    let birth_work = expect_list_panes(xdg, &name)
         .panes
         .iter()
         .find(|pane| {
@@ -706,16 +659,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         })
         .map(|pane| PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id)))
         .expect("birth work pane");
-    let birth_work_ordinal = birth_work
-        .creation_ordinal()
-        .expect("numeric birth work pane id");
-    focus_attached_client_pane_until(
-        xdg.path(),
-        &name,
-        birth_work_ordinal,
-        "birth work pane",
-        || client.press_alt('l'),
-    );
+    client.press_alt_until('l', &birth_work, "birth work pane");
 
     let target_tab = "switch target";
     let input_log = cwd.path().join("routed-input.log");
@@ -739,35 +683,20 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
             sidebar: sidebar.clone(),
         })
         .expect("open switch target tab");
-    let target_work = wait_for_named_work_pane_count(xdg.path(), &name, target_tab, 1)[0];
+    let target_work = wait_for_named_work_pane_count(xdg, &name, target_tab, 1)[0];
     let target_sidebar =
-        wait_for_named_sidebar_pane(xdg.path(), &name, target_tab).expect("target tab sidebar");
+        wait_for_named_sidebar_pane(xdg, &name, target_tab).expect("target tab sidebar");
     let target_work = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target_work.id));
     let target_sidebar =
         PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target_sidebar.id));
-    let target_work_ordinal = target_work
-        .creation_ordinal()
-        .expect("numeric target work pane id");
-    focus_attached_client_pane_until(
-        xdg.path(),
-        &name,
-        target_work_ordinal,
-        "target work pane",
-        || client.go_to_tab(2),
-    );
+    client.go_to_tab_until(2, &target_work, "target work pane");
 
-    strand_sidebar_focus(&backend, &mut client, &name, &target_sidebar);
+    client.press_alt_until('h', &target_sidebar, "stranded target sidebar");
 
-    focus_attached_client_pane_until(
-        xdg.path(),
-        &name,
-        birth_work_ordinal,
-        "birth work pane before switch repair",
-        || client.go_to_tab(1),
-    );
+    client.go_to_tab_until(1, &birth_work, "birth work pane before switch repair");
     let pokes_before = poke_lines(&poke_log).len();
     let actions_before = focus_action_count(&trace_log);
-    let repairs_before = accepted_focus_repairs(xdg.path(), &target_work);
+    let repairs_before = accepted_focus_repairs(xdg, &target_work);
     client.go_to_tab(2);
     let settled = wait_for_switch_settled(&poke_log, pokes_before);
     assert!(
@@ -785,32 +714,23 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         actions_before,
         "first switch-settled repair",
     );
-    let repairs = wait_for_accepted_focus_repair(xdg.path(), &target_work, repairs_before);
+    let repairs = wait_for_accepted_focus_repair(xdg, &target_work, repairs_before);
 
-    client.send_line("rimz-routed-first");
-    let routed = poll_until(
-        Duration::from_secs(10),
-        || std::fs::read_to_string(&input_log).map_err(|err| err.to_string()),
-        |contents| contents.contains("rimz-routed-first"),
-        "terminal input routed to repaired work pane",
-    );
-    assert!(routed.contains("rimz-routed-first"));
+    client.assert_input_reaches(&target_work, "repaired target work pane");
 
     assert!(repairs.iter().any(|record| {
         record.target == target_work
             && record.outcome == rimz::diag::focus_repair::FocusRepairOutcome::AcceptedUnconfirmed
     }));
 
-    strand_sidebar_focus(&backend, &mut client, &name, &target_sidebar);
-    focus_attached_client_pane_until(
-        xdg.path(),
-        &name,
-        birth_work_ordinal,
-        "birth work pane before presence reload",
-        || client.go_to_tab(1),
+    client.press_alt_until(
+        'h',
+        &target_sidebar,
+        "stranded target sidebar before reload",
     );
+    client.go_to_tab_until(1, &birth_work, "birth work pane before presence reload");
     let pokes_before_reload = poke_lines(&poke_log).len();
-    let room_bin = rimz::StatePaths::under(sidebar.workspace_id.clone(), xdg.path())
+    let room_bin = rimz::StatePaths::under(sidebar.workspace_id.clone(), xdg)
         .expect("room state paths")
         .room_bin;
     backend
@@ -828,7 +748,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     wait_for_reload_baseline(&poke_log, pokes_before_reload, &birth_work);
     let pokes_before = poke_lines(&poke_log).len();
     let actions_before = focus_action_count(&trace_log);
-    let repairs_before = accepted_focus_repairs(xdg.path(), &target_work);
+    let repairs_before = accepted_focus_repairs(xdg, &target_work);
     client.go_to_tab(2);
     wait_for_switch_settled(&poke_log, pokes_before);
     wait_for_focus_action(
@@ -838,33 +758,20 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         actions_before,
         "post-reload repair",
     );
-    wait_for_accepted_focus_repair(xdg.path(), &target_work, repairs_before);
-    client.send_line("rimz-routed-after-reload");
-    poll_until(
-        Duration::from_secs(10),
-        || std::fs::read_to_string(&input_log).map_err(|err| err.to_string()),
-        |contents| contents.contains("rimz-routed-after-reload"),
-        "terminal input routed after plugin reload",
-    );
+    wait_for_accepted_focus_repair(xdg, &target_work, repairs_before);
+    client.assert_input_reaches(&target_work, "repaired target after plugin reload");
 
-    strand_sidebar_focus(&backend, &mut client, &name, &target_sidebar);
-    focus_attached_client_pane_until(
-        xdg.path(),
-        &name,
-        birth_work_ordinal,
-        "birth work pane before detach",
-        || client.go_to_tab(1),
+    client.press_alt_until(
+        'h',
+        &target_sidebar,
+        "stranded target sidebar before detach",
     );
+    client.go_to_tab_until(1, &birth_work, "birth work pane before detach");
     let actions_before = focus_action_count(&trace_log);
     client.go_to_tab(2);
     drop(client);
-    let detached = poll_until(
-        Duration::from_secs(5),
-        || client_viewed_panes(&backend, &name),
-        Vec::is_empty,
-        "detached client view",
-    );
-    assert!(detached.is_empty());
+    let detached = wait_for_human_client_count(&backend, &name, 0);
+    assert!(detached.viewed_panes.is_empty());
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(
         focus_action_count(&trace_log),
@@ -892,14 +799,15 @@ fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
         }
     }
 
-    let xdg = scoped_runtime_dir();
-    seed_presence_permissions(xdg.path(), &wasm);
+    let namespace = ZellijNamespace::new();
+    seed_presence_permissions(namespace.path(), &wasm);
     let real_rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
     let name = unique_session_name("presence-cwd");
-    let session = ZellijSession::attach_pty(xdg, name.clone(), true);
+    let room = LiveZellijSession::from_namespace(namespace, name.clone());
+    let _client = AttachedClient::create_and_attach(&room, 80, 24);
     let launch_cwd = TempDir::new().expect("plugin launch cwd");
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
-    let runtime = rimz::store::RuntimePaths::under(workspace_id, session.xdg.path())
+    let runtime = rimz::store::RuntimePaths::under(workspace_id, room.path())
         .expect("presence runtime paths");
     let stamp_path = rimz::sidebar::cache::presence_stamp_path(&runtime);
     let plugin_url = format!("file:{}", wasm.display());
@@ -908,7 +816,8 @@ fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
         real_rimz.display(),
     );
 
-    let loaded = scoped_zellij(session.xdg.path())
+    let loaded = room
+        .command()
         .current_dir(launch_cwd.path())
         .args([
             "--session",
@@ -923,7 +832,7 @@ fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
             "--",
             "load",
         ])
-        .status()
+        .bounded_status()
         .expect("load presence plugin from disposable cwd");
     assert!(loaded.success(), "presence plugin load command failed");
     let mut last_written_at_ms = None;
@@ -984,16 +893,17 @@ fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
         }
     }
 
-    let xdg = scoped_runtime_dir();
-    seed_presence_permissions(xdg.path(), &wasm);
-    let poke_log = xdg.path().join("poke.log");
-    let focus_exec_log = xdg.path().join("focus-exec.log");
+    let namespace = ZellijNamespace::new();
+    seed_presence_permissions(namespace.path(), &wasm);
+    let poke_log = namespace.path().join("poke.log");
+    let focus_exec_log = namespace.path().join("focus-exec.log");
     let real_rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
-    let rimz_shim = write_poke_shim(xdg.path(), &poke_log, &real_rimz, &focus_exec_log);
+    let rimz_shim = write_poke_shim(namespace.path(), &poke_log, &real_rimz, &focus_exec_log);
     let name = unique_session_name("focuskey");
-    let mut session = ZellijSession::attach_pty(xdg, name.clone(), true);
+    let room = LiveZellijSession::from_namespace(namespace, name.clone());
+    let mut client = AttachedClient::create_and_attach(&room, 80, 24);
 
-    let backend = ZellijBackend::with_runtime_dir(session.xdg.path());
+    let backend = ZellijBackend::with_runtime_dir(room.path());
     backend
         .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
             session_name: name.clone(),
@@ -1012,28 +922,22 @@ fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
     // Regression shape: the plugin loads from the test process cwd, then the
     // user presses the key from a pane with a different cwd. Url-targeted
     // keybinds miss that running instance; id-targeted keybinds reach it.
-    let before: BTreeSet<u64> = work_pane_geometry(session.xdg.path(), &name)
+    let before: BTreeSet<u64> = work_pane_geometry(room.path(), &name)
         .into_iter()
         .map(|pane| pane.id)
         .collect();
     let pane_cwd = TempDir::new().expect("different cwd tempdir");
-    spawn_sleep_pane(session.xdg.path(), &name, pane_cwd.path());
-    let work_pane = work_pane_geometry(session.xdg.path(), &name)
+    spawn_sleep_pane(room.path(), &name, pane_cwd.path());
+    let work_pane = work_pane_geometry(room.path(), &name)
         .into_iter()
         .find(|pane| !before.contains(&pane.id))
         .unwrap_or_else(|| panic!("new different-cwd pane not found; before ids were {before:?}"));
-    let session_xdg = session.xdg.path().to_path_buf();
-    focus_attached_client_pane_until(
-        &session_xdg,
-        &name,
-        work_pane.id,
-        "different-cwd focus-key source pane",
-        || session.press_alt('l'),
-    );
+    let work_pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", work_pane.id));
+    client.press_alt_until('l', &work_pane, "different-cwd focus-key source pane");
 
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     let focus_line = loop {
-        session.press_alt('p');
+        client.press_alt('p');
         std::thread::sleep(Duration::from_millis(150));
 
         let lines = poke_lines(&poke_log);

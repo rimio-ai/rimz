@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rimz::ids::WorkspaceId;
+use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{MuxBackend, SessionHealth, SidebarPaneOptions, SidebarWidth, ZellijBackend};
 use tempfile::TempDir;
 
@@ -15,13 +15,10 @@ use super::support::*;
 fn attach_command_keeps_terminal_mouse_reporting_enabled() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("mouse");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-    let spec = ZellijBackend::with_runtime_dir(xdg.path())
+    let room = LiveZellijSession::new("mouse");
+    let xdg = room.path();
+    let name = room.name().to_owned();
+    let spec = ZellijBackend::with_runtime_dir(xdg)
         .attach_command(&name, &rimz::config::MultiplexerConfig::default());
     assert!(
         !spec
@@ -55,20 +52,16 @@ fn mouse_reporting_enabled(output: &[u8]) -> bool {
 fn open_sidebar_births_native_layout_and_template() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    std::fs::write(xdg.path().join(".zshrc"), "").expect("disable zsh first-run menu");
-    let name = unique_session_name("sidebar");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("sidebar");
+    let xdg = room.path();
+    std::fs::write(xdg.join(".zshrc"), "").expect("disable zsh first-run menu");
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
 
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    let backend = ZellijBackend::with_runtime_dir(xdg);
     let mut opts = sidebar_opts(&name, cwd.path(), stub, 120);
-    let runtime =
-        rimz::RuntimePaths::under(opts.workspace_id.clone(), xdg.path()).expect("runtime paths");
+    let runtime = rimz::RuntimePaths::under(opts.workspace_id.clone(), xdg).expect("runtime paths");
     runtime.ensure_dirs().expect("runtime dirs");
     let shim_dir = TempDir::new().expect("shim tempdir");
     let marker = cwd.path().join("copilot-env.txt");
@@ -97,17 +90,17 @@ fn open_sidebar_births_native_layout_and_template() {
             "false".to_owned(),
         ),
     ]);
-    publish_room_bin(xdg.path(), &opts);
+    publish_room_bin(xdg, &opts);
     backend.open_sidebar(&opts, None).expect("open_sidebar");
 
-    let panes = wait_for_pane_count(xdg.path(), &name, 2);
+    let panes = wait_for_pane_count(xdg, &name, 2);
     assert!(
         panes.len() >= 2,
         "layout should create a sidebar + terminal pane in {name}: {panes:?}",
     );
-    assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
-    assert_session_has_bottom_bar(xdg.path(), &name);
-    assert_sidebars_not_held(xdg.path(), &name, "initial tab");
+    assert_sidebar_is_left_thirty_percent(xdg, &name);
+    assert_session_has_bottom_bar(xdg, &name);
+    assert_sidebars_not_held(xdg, &name, "initial tab");
 
     let work_pane = panes
         .iter()
@@ -115,22 +108,15 @@ fn open_sidebar_births_native_layout_and_template() {
         .expect("ordinary work shell")
         .pane_id
         .clone();
-    let initial_tab_id = expect_list_panes(xdg.path(), &name)
+    let initial_tab_id = expect_list_panes(xdg, &name)
         .panes
         .iter()
         .find(|pane| pane.pane_ref(&name).pane_id == work_pane)
         .map(|pane| pane.tab_id)
         .expect("initial work tab");
-    let mut client = AttachedClient::attach(xdg.path(), &name, 120, 40);
-    wait_for_focused_client_pane(&backend, &name, &work_pane);
-    let initial_work_id = work_pane.creation_ordinal().expect("initial work pane id");
-    assert_client_input_reaches_pane(
-        xdg.path(),
-        &name,
-        initial_work_id,
-        "birth work pane",
-        |line| client.send_line(line),
-    );
+    let mut client = AttachedClient::attach(&room, 120, 40);
+    client.wait_until_focused(&work_pane, "birth work pane");
+    client.assert_input_reaches(&work_pane, "birth work pane");
     backend
         .send_keys(&work_pane, copilot.to_string_lossy().as_ref())
         .expect("type direct copilot shim");
@@ -153,7 +139,7 @@ fn open_sidebar_births_native_layout_and_template() {
     );
     assert_eq!(marker_text, expected_marker, "direct copilot shim output",);
 
-    let template = new_tab_template_dump(xdg.path(), &name);
+    let template = new_tab_template_dump(xdg, &name);
     assert!(
         template.contains("rimz-sidebar"),
         "new tab template should carry the sidebar pane:\n{template}",
@@ -163,13 +149,13 @@ fn open_sidebar_births_native_layout_and_template() {
         "new tab template should carry an explicit focused right terminal:\n{template}",
     );
 
-    open_new_tab(xdg.path(), &name);
-    wait_for_tab_count(xdg.path(), &name, 2);
-    assert_sidebars_not_held(xdg.path(), &name, "new tab");
+    open_new_tab(xdg, &name);
+    wait_for_tab_count(xdg, &name, 2);
+    assert_sidebars_not_held(xdg, &name, "new tab");
 
-    let tabs = tab_ids(xdg.path(), &name);
+    let tabs = tab_ids(xdg, &name);
     for tab in &tabs {
-        let terminals = nonplugin_titles_in_tab(xdg.path(), &name, *tab);
+        let terminals = nonplugin_titles_in_tab(xdg, &name, *tab);
         let has_sidebar = terminals.iter().any(|t| t == "rimz-sidebar");
         let has_terminal = terminals.iter().any(|t| t != "rimz-sidebar");
         assert!(
@@ -181,28 +167,17 @@ fn open_sidebar_births_native_layout_and_template() {
         .into_iter()
         .find(|tab| *tab != initial_tab_id)
         .expect("new tab id");
-    let new_work = expect_list_panes(xdg.path(), &name)
+    let new_work = expect_list_panes(xdg, &name)
         .panes
         .iter()
         .find(|pane| pane.tab_id == new_tab_id && pane.is_live_terminal() && !pane.is_sidebar())
         .map(|pane| pane.id)
         .expect("new tab work pane");
-    focus_attached_client_pane_until(
-        xdg.path(),
-        &name,
-        new_work,
-        "new-tab template work pane",
-        || client.go_to_tab(2),
-    );
-    assert_client_input_reaches_pane(
-        xdg.path(),
-        &name,
-        new_work,
-        "new-tab template work pane",
-        |line| client.send_line(line),
-    );
+    let new_work = PaneId::from_parts(MuxName::Zellij, format!("terminal_{new_work}"));
+    client.go_to_tab_until(2, &new_work, "new-tab template work pane");
+    client.assert_input_reaches(&new_work, "new-tab template work pane");
 
-    wait_for_pane_count(xdg.path(), &name, 4);
+    wait_for_pane_count(xdg, &name, 4);
 }
 /// The pre-attach health gate: an absent room is born clean and RUNNING
 /// (`Reborn`), a probe of the resulting live room reports `Healthy`, and a second
@@ -212,12 +187,9 @@ fn open_sidebar_births_native_layout_and_template() {
 fn ensure_clean_session_births_running_then_is_idempotent() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("cleanroom");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("cleanroom");
+    let xdg = room.path();
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = SidebarPaneOptions {
@@ -236,8 +208,8 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    publish_room_bin(xdg.path(), &opts);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &opts);
 
     // Absent → born clean and running.
     assert_eq!(
@@ -246,13 +218,13 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
             .expect("ensure_clean_session births the absent room"),
         SessionHealth::Reborn,
     );
-    let born = wait_for_pane_count(xdg.path(), &name, 2);
+    let born = wait_for_pane_count(xdg, &name, 2);
     assert!(
         born.len() >= 2,
         "the gate should birth a sidebar + terminal pane: {born:?}",
     );
     // No pane is held at a "Waiting to run" prompt — the room came up running.
-    assert_sidebars_not_held(xdg.path(), &name, "reborn room");
+    assert_sidebars_not_held(xdg, &name, "reborn room");
 
     // A read-only probe of the now-live, clean room reports healthy.
     assert_eq!(
@@ -269,7 +241,7 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
             .expect("ensure_clean_session on a clean live room"),
         SessionHealth::Healthy,
     );
-    let again = wait_for_pane_count(xdg.path(), &name, 2);
+    let again = wait_for_pane_count(xdg, &name, 2);
     assert_eq!(
         again.len(),
         born.len(),
@@ -288,18 +260,15 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
 fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("nosb");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("nosb");
+    let xdg = room.path();
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
 
     // Birth a live session with a plain, sidebar-less layout. The pane runs a
     // long sleep so the unattached background session stays alive deterministically.
-    create_plain_background_session(xdg.path(), &name, cwd.path(), "60");
-    let plain = wait_for_pane_count(xdg.path(), &name, 1);
+    room.create_plain_background(cwd.path(), "60");
+    let plain = wait_for_pane_count(xdg, &name, 1);
     assert!(
         !plain.is_empty(),
         "plain session should have a pane before open_sidebar: {plain:?}",
@@ -309,16 +278,16 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
     // rebirth one that carries the sidebar.
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = sidebar_opts(&name, cwd.path(), stub, 120);
-    publish_room_bin(xdg.path(), &opts);
-    write_topology_cache_from_list_panes(xdg.path(), &opts.workspace_id, &name);
-    ZellijBackend::with_runtime_dir(xdg.path())
+    publish_room_bin(xdg, &opts);
+    write_topology_cache_from_list_panes(xdg, &opts.workspace_id, &name);
+    ZellijBackend::with_runtime_dir(xdg)
         .open_sidebar(&opts, None)
         .expect("open_sidebar");
 
-    let healed = wait_for_pane_count(xdg.path(), &name, 2);
+    let healed = wait_for_pane_count(xdg, &name, 2);
     assert!(
         healed.len() >= 2,
         "open_sidebar should rebirth a sidebar-less live session with a sidebar: {healed:?}",
     );
-    assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
+    assert_sidebar_is_left_thirty_percent(xdg, &name);
 }

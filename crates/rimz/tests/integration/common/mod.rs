@@ -16,8 +16,9 @@ mod env;
 mod harness;
 mod payloads;
 mod shim;
+mod zellij;
 
-pub use command::{CommandTimeoutExt, ScrubSessionEnvExt};
+pub use command::{CommandTimeoutExt, ROOM_WORKFLOW_TIMEOUT, ScrubSessionEnvExt};
 pub use env::{Env, af_unix_bind_sandboxed, canonical, tmux_pane};
 pub use harness::Harness;
 pub use payloads::{
@@ -31,6 +32,7 @@ pub use shim::{
     path_with_front, write_env_dump_shim, write_failing_agent_shim, write_fake_bash_shell,
     write_fake_login_shell, write_hook_firing_agent,
 };
+pub use zellij::ZellijNamespace;
 
 pub fn exec_args(request: &rimz::harness::launch::ExecRequest) -> Vec<String> {
     rimz::harness::launch::exec_argv(std::path::Path::new("rimz"), request)

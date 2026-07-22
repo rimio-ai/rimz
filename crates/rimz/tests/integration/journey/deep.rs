@@ -18,7 +18,8 @@ use tempfile::TempDir;
 
 use super::{rimz_bin, session_start_at};
 use crate::common::{
-    CommandTimeoutExt, Env, ScrubSessionEnvExt, path_with_front, write_hook_firing_agent,
+    CommandTimeoutExt, Env, ScrubSessionEnvExt, ZellijNamespace, path_with_front,
+    write_hook_firing_agent,
 };
 
 const CAPTURE_BUDGET: Duration = Duration::from_secs(30);
@@ -344,22 +345,19 @@ fn zellij_room_shows_agent_after_hook() {
         return;
     }
 
-    let runtime = tempfile::Builder::new()
-        .prefix("rz")
-        .rand_bytes(6)
-        .tempdir()
-        .expect("short runtime dir");
+    let namespace = ZellijNamespace::new();
     let cwd = TempDir::new().expect("cwd dir");
     let fake_codex = fake_codex_bin(cwd.path());
     let name = "rimz-deep-zellij";
-    let _cleanup = ZellijSessionGuard {
+    let cleanup = ZellijSessionGuard {
         name: name.to_owned(),
-        runtime: runtime.path().to_path_buf(),
+        namespace,
     };
+    let runtime = cleanup.namespace.path();
 
     // Birth a background session whose left pane is a real renderer over the
     // shared store (the self-close layout shape from `backend/zellij.rs`).
-    let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "zellij", name, &[]);
+    let serve = sidebar_serve_line(&env, &rimz, runtime, "zellij", name, &[]);
     let layout = format!(
         r#"layout {{
     tab name="room" {{
@@ -381,7 +379,9 @@ fn zellij_room_shows_agent_after_hook() {
     );
     let layout_path = cwd.path().join("layout.kdl");
     std::fs::write(&layout_path, layout).expect("write layout");
-    let created = scoped_zellij(runtime.path())
+    let created = cleanup
+        .namespace
+        .command()
         .args(["attach", "--create-background", name, "options"])
         .arg("--default-cwd")
         .arg(&env.project_root)
@@ -417,7 +417,7 @@ fn zellij_room_shows_agent_after_hook() {
     // Attach a real client so panes get a usable size and render (a
     // never-attached background session draws into a placeholder pane). Read
     // the composited screen the user would see and look for the agent row.
-    let screen = attach_and_read_until(runtime.path(), name, "codex", CAPTURE_BUDGET);
+    let screen = attach_and_read_until(&cleanup.namespace, name, "codex", CAPTURE_BUDGET);
     assert!(
         screen.contains("codex"),
         "the live zellij sidebar pane should show the agent row:\n{screen}"
@@ -627,7 +627,12 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
 /// Attach a `portable-pty` client to `session` and poll the composited screen
 /// (vt100-parsed master output) until it contains `needle` or the budget
 /// elapses.
-fn attach_and_read_until(runtime: &Path, session: &str, needle: &str, budget: Duration) -> String {
+fn attach_and_read_until(
+    namespace: &ZellijNamespace,
+    session: &str,
+    needle: &str,
+    budget: Duration,
+) -> String {
     const ROWS: u16 = 40;
     const COLS: u16 = 120;
     let pair = native_pty_system()
@@ -640,7 +645,7 @@ fn attach_and_read_until(runtime: &Path, session: &str, needle: &str, budget: Du
         .expect("openpty");
     let mut cmd = CommandBuilder::new("zellij");
     cmd.args(["attach", session]);
-    pin_zellij_pty_env(&mut cmd, runtime);
+    namespace.pin_pty(&mut cmd);
     let mut child = pair.slave.spawn_command(cmd).expect("attach zellij");
     drop(pair.slave);
 
@@ -837,7 +842,7 @@ fn tmux_capture(socket: &Path, args: &[&str]) -> String {
         .arg("-S")
         .arg(socket)
         .args(args)
-        .output()
+        .bounded_output()
         .expect("spawn tmux");
     assert!(
         out.status.success(),
@@ -864,7 +869,7 @@ fn capture_until(
             .arg("-S")
             .arg(socket)
             .args(["capture-pane", "-p", "-t", session])
-            .output()
+            .bounded_output()
             .expect("spawn tmux capture-pane");
         if out.status.success() {
             last = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -893,7 +898,7 @@ fn capture_all_until(
             .arg("-S")
             .arg(socket)
             .args(["list-panes", "-t", session, "-F", "#{pane_id}"])
-            .output()
+            .bounded_output()
             .expect("spawn tmux list-panes");
         if panes.status.success() {
             let mut frame = String::new();
@@ -948,7 +953,7 @@ fn tmux_pane_alive(socket: &Path, session: &str, pane: &str) -> bool {
         .arg("-S")
         .arg(socket)
         .args(["list-panes", "-t", session, "-F", "#{pane_id}"])
-        .output()
+        .bounded_output()
         .expect("spawn tmux list-panes");
     out.status.success()
         && String::from_utf8_lossy(&out.stdout)
@@ -991,47 +996,17 @@ impl Drop for TmuxServerGuard {
             .arg("-S")
             .arg(&self.socket)
             .arg("kill-server")
-            .output();
+            .bounded_output();
     }
-}
-
-// --- zellij helpers ---
-
-fn scoped_zellij(runtime: &Path) -> Command {
-    let mut cmd = Command::new("zellij");
-    cmd.scrub_session_env();
-    pin_zellij_command_env(&mut cmd, runtime);
-    cmd
-}
-
-fn pin_zellij_command_env(cmd: &mut Command, runtime: &Path) {
-    cmd.env("XDG_RUNTIME_DIR", runtime)
-        .env("XDG_STATE_HOME", runtime)
-        .env("XDG_CONFIG_HOME", runtime)
-        .env("XDG_CACHE_HOME", runtime)
-        .env("HOME", runtime)
-        .env("TMPDIR", runtime);
-}
-
-fn pin_zellij_pty_env(cmd: &mut CommandBuilder, runtime: &Path) {
-    cmd.scrub_session_env();
-    cmd.env("XDG_RUNTIME_DIR", runtime);
-    cmd.env("XDG_STATE_HOME", runtime);
-    cmd.env("XDG_CONFIG_HOME", runtime);
-    cmd.env("XDG_CACHE_HOME", runtime);
-    cmd.env("HOME", runtime);
-    cmd.env("TMPDIR", runtime);
 }
 
 struct ZellijSessionGuard {
     name: String,
-    runtime: std::path::PathBuf,
+    namespace: ZellijNamespace,
 }
 
 impl Drop for ZellijSessionGuard {
     fn drop(&mut self) {
-        let _ = scoped_zellij(&self.runtime)
-            .args(["delete-session", &self.name, "--force"])
-            .bounded_output();
+        self.namespace.delete_session(&self.name);
     }
 }

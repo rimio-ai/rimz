@@ -13,12 +13,9 @@ use super::support::*;
 fn open_tab_unfocused_routes_input_back_to_source() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("tabfocus");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("tabfocus");
+    let xdg = room.path();
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-tabfocus"));
@@ -38,12 +35,12 @@ fn open_tab_unfocused_routes_input_back_to_source() {
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    publish_room_bin(xdg.path(), &sidebar);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
-    wait_for_pane_count(xdg.path(), &name, 2);
+    wait_for_pane_count(xdg, &name, 2);
 
-    let mut client = AttachedClient::attach(xdg.path(), &name, 200, 50);
+    let mut client = AttachedClient::attach(&room, 200, 50);
 
     let source_tab = "focus source";
     let input_log = cwd.path().join("source-input.log");
@@ -68,7 +65,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
         })
         .expect("open focused source tab");
 
-    let source_panes = wait_for_named_work_pane_count(xdg.path(), &name, source_tab, 1);
+    let source_panes = wait_for_named_work_pane_count(xdg, &name, source_tab, 1);
     assert_eq!(
         source_panes.len(),
         1,
@@ -76,7 +73,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
     );
     let source_pane =
         PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", source_panes[0].id));
-    let focused = wait_for_focused_client_pane(&backend, &name, &source_pane);
+    let focused = client.wait_until_focused(&source_pane, "focused source tab");
     assert_eq!(
         focused,
         vec![source_pane.clone()],
@@ -98,21 +95,14 @@ fn open_tab_unfocused_routes_input_back_to_source() {
         })
         .expect("open unfocused background tab");
     assert_eq!(
-        wait_for_named_work_pane_count(xdg.path(), &name, background_tab, 1).len(),
+        wait_for_named_work_pane_count(xdg, &name, background_tab, 1).len(),
         1,
         "background tab should open one work pane",
     );
 
-    client.send_line("rimz-source-route");
-    let routed = poll_until(
-        Duration::from_secs(5),
-        || std::fs::read_to_string(&input_log).map_err(|err| err.to_string()),
-        |contents| contents.contains("rimz-source-route"),
-        "unfocused tab input routed to source pane",
-    );
-    assert!(routed.contains("rimz-source-route"));
+    client.assert_input_reaches(&source_pane, "source pane after unfocused tab open");
 
-    let runtime = rimz::store::RuntimePaths::under(workspace_id, xdg.path()).expect("runtime");
+    let runtime = rimz::store::RuntimePaths::under(workspace_id, xdg).expect("runtime");
     let intent = rimz::sidebar::focus_anchor::load(&runtime).expect("applied focus intent");
     assert_eq!(intent.pane_id, source_pane);
     assert_eq!(
@@ -124,12 +114,9 @@ fn open_tab_unfocused_routes_input_back_to_source() {
 fn open_tab_can_omit_sidebar_for_gallery_layout() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("gallery");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("gallery");
+    let xdg = room.path();
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let sidebar = SidebarPaneOptions {
@@ -148,11 +135,11 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    publish_room_bin(xdg.path(), &sidebar);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
-    wait_for_pane_count(xdg.path(), &name, 2);
-    let _client = AttachedClient::attach(xdg.path(), &name, 220, 40);
+    wait_for_pane_count(xdg, &name, 2);
+    let _client = AttachedClient::attach(&room, 220, 40);
 
     let tab_name = "sidebar gallery";
     let work_pane = || PaneCmd {
@@ -171,12 +158,12 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
         .expect("open gallery tab");
 
     assert_eq!(
-        wait_for_named_work_pane_count(xdg.path(), &name, tab_name, 1).len(),
+        wait_for_named_work_pane_count(xdg, &name, tab_name, 1).len(),
         1,
         "gallery tab should hold one work pane",
     );
     assert_eq!(
-        named_sidebar_pane_geometry(xdg.path(), &name, tab_name)
+        named_sidebar_pane_geometry(xdg, &name, tab_name)
             .expect("list gallery sidebar panes")
             .map(|pane| pane.id),
         None,
@@ -190,12 +177,9 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
 fn native_focused_split_preserves_docked_sidebar() {
     require_zellij!();
 
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("worksplit");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let room = LiveZellijSession::new("worksplit");
+    let xdg = room.path();
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
 
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
@@ -216,16 +200,16 @@ fn native_focused_split_preserves_docked_sidebar() {
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    publish_room_bin(xdg.path(), &sidebar);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &sidebar);
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
-    wait_for_pane_count(xdg.path(), &name, 2);
+    wait_for_pane_count(xdg, &name, 2);
 
     let client_columns: u16 = 380;
     let client_rows: u16 = 46;
-    let mut client = AttachedClient::attach(xdg.path(), &name, client_columns, client_rows);
-    write_topology_cache_from_list_panes(xdg.path(), &sidebar.workspace_id, &name);
-    let _mirror = topology_cache_mirror(xdg.path(), &sidebar.workspace_id, &name);
+    let mut client = AttachedClient::attach(&room, client_columns, client_rows);
+    write_topology_cache_from_list_panes(xdg, &sidebar.workspace_id, &name);
+    let _mirror = topology_cache_mirror(xdg, &sidebar.workspace_id, &name);
     let work_pane = || PaneCmd {
         argv: vec!["sleep".to_owned(), "600".to_owned()],
     };
@@ -246,40 +230,38 @@ fn native_focused_split_preserves_docked_sidebar() {
             sidebar: sidebar.clone(),
         })
         .expect("open backend split tab layout");
-    let work = wait_for_named_work_pane_state(xdg.path(), &name, split_tab, 3, |work| {
+    let work = wait_for_named_work_pane_state(xdg, &name, split_tab, 3, |work| {
         work.iter().map(|pane| pane.x + pane.columns).max() == Some(u64::from(client_columns))
     });
     let focused_before = work[1];
     let focused_before_id =
         PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", focused_before.id));
-    focus_attached_client_pane_until(
-        xdg.path(),
-        &name,
-        focused_before.id,
+    client.press_alt_until(
+        'l',
+        &focused_before_id,
         "chosen work pane before native split",
-        || client.press_alt('l'),
     );
-    let focused = wait_for_focused_client_pane(&backend, &name, &focused_before_id);
+    let focused = client.wait_until_focused(&focused_before_id, "chosen work pane");
     assert!(
         focused.iter().any(|pane| pane == &focused_before_id),
         "backend tab should focus the chosen work pane before native split; \
          focused client panes: {focused:?}",
     );
-    let sidebar_before = wait_for_named_sidebar_pane(xdg.path(), &name, split_tab)
-        .expect("backend tab keeps its sidebar");
+    let sidebar_before =
+        wait_for_named_sidebar_pane(xdg, &name, split_tab).expect("backend tab keeps its sidebar");
     assert_eq!(
         sidebar_before.x, 0,
         "backend tab starts with the sidebar docked left: {sidebar_before:?}",
     );
 
-    spawn_sleep_pane(xdg.path(), &name, cwd.path());
+    spawn_sleep_pane(xdg, &name, cwd.path());
     let focused_bounds_hold_two_panes = |pane: &PaneGeometry| {
         pane.x + 2 >= focused_before.x
             && pane.y + 2 >= focused_before.y
             && pane.x + pane.columns <= focused_before.x + focused_before.columns + 2
             && pane.y + pane.rows <= focused_before.y + focused_before.rows + 2
     };
-    let split = wait_for_named_work_pane_state(xdg.path(), &name, split_tab, 4, |work| {
+    let split = wait_for_named_work_pane_state(xdg, &name, split_tab, 4, |work| {
         let work_stays_right_of_sidebar = work
             .iter()
             .all(|pane| pane.x >= sidebar_before.x + sidebar_before.columns);
@@ -292,7 +274,7 @@ fn native_focused_split_preserves_docked_sidebar() {
     });
     poll_until(
         Duration::from_secs(30),
-        || named_sidebar_pane_geometry(xdg.path(), &name, split_tab),
+        || named_sidebar_pane_geometry(xdg, &name, split_tab),
         |sidebar| {
             sidebar.is_some_and(|sidebar| {
                 sidebar.x == sidebar_before.x
@@ -311,7 +293,7 @@ fn native_focused_split_preserves_docked_sidebar() {
         2,
         "native split should divide only the focused pane, got {split:?}",
     );
-    let sidebar_after = named_sidebar_pane_geometry(xdg.path(), &name, split_tab)
+    let sidebar_after = named_sidebar_pane_geometry(xdg, &name, split_tab)
         .expect("list backend tab sidebar")
         .expect("backend tab keeps its sidebar");
     assert_eq!(

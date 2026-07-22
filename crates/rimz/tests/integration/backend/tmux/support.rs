@@ -19,7 +19,9 @@ pub(super) use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed, w
 pub(super) use rimz::workspace::WorkspaceResolver;
 pub(super) use tempfile::TempDir;
 
-pub(super) use crate::common::{Env, ScrubSessionEnvExt, write_failing_agent_shim};
+pub(super) use crate::common::{
+    CommandTimeoutExt, Env, ScrubSessionEnvExt, write_failing_agent_shim,
+};
 
 pub(super) fn tiled_column(panes: Vec<PaneCmd>) -> LayoutColumn {
     LayoutColumn {
@@ -215,7 +217,7 @@ impl TmuxServer {
             .arg("-S")
             .arg(&self.socket)
             .args(args)
-            .output()
+            .bounded_output()
             .unwrap_or_else(|err| panic!("spawn tmux {args:?}: {err}"));
         assert!(
             output.status.success(),
@@ -430,12 +432,12 @@ pub(super) fn wait_for_hook_docked_window_panes(
 
 impl Drop for TmuxServer {
     fn drop(&mut self) {
-        // `.output()` captures stderr so the "no server" message from
+        // Captured stderr keeps the "no server" message from
         // tests that never started a server doesn't leak into test logs.
         let _ = Command::new("tmux")
             .scrub_session_env()
             .args(["-S", self.socket.to_str().unwrap_or(""), "kill-server"])
-            .output();
+            .bounded_output();
     }
 }
 

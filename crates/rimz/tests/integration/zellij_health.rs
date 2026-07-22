@@ -8,7 +8,7 @@ use std::time::Duration;
 use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
 
-use crate::common::{CommandTimeoutExt, Env};
+use crate::common::{CommandTimeoutExt, Env, ROOM_WORKFLOW_TIMEOUT};
 
 #[test]
 fn uninspectable_live_zellij_room_attaches_as_is() {
@@ -27,7 +27,7 @@ fn uninspectable_live_zellij_room_attaches_as_is() {
         // The uninspectable room legitimately holds `start` for the full
         // pre-attach topology ceiling before attaching as-is, so keep the outer
         // test bound roomy while shortening the fake-shim probe.
-        .bounded_output_within(Duration::from_secs(30))
+        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
         .expect("run rimz start");
 
     assert!(output.status.success(), "live room should attach as-is");
@@ -140,7 +140,7 @@ fn tmux_start_skips_wedged_rival_zellij_session_probe() {
         // scheduler-sensitive when nextest runs the gate under load.
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP", "60")
         .env("RIMZ_TEST_SESSION_PROBE_MS", "100")
-        .bounded_output_within(Duration::from_secs(30))
+        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
         .expect("run rimz start");
 
     assert!(
@@ -181,7 +181,7 @@ fn zellij_start_fails_fast_when_selected_session_probe_wedges() {
         // probe deadlines ran and killed their children.
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP", "60")
         .env("RIMZ_TEST_SESSION_PROBE_MS", "100")
-        .bounded_output_within(Duration::from_secs(30))
+        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
         .expect("run rimz start");
 
     assert!(

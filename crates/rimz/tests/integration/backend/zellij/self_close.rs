@@ -43,20 +43,18 @@ fn sidebar_self_closes_when_its_tab_empties() {
         }
     }
 
-    let name = unique_session_name("selfclose");
+    let room = LiveZellijSession::new("selfclose");
+    let name = room.name().to_owned();
     let cwd = TempDir::new().expect("cwd tempdir");
-    let xdg = scoped_runtime_dir();
-    seed_presence_permissions(xdg.path(), &wasm);
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
+    let xdg = room.path();
+    seed_presence_permissions(xdg, &wasm);
 
-    let layout = self_close_layout(&name, &rimz, xdg.path());
+    let layout = self_close_layout(&name, &rimz, xdg);
     let layout_path = cwd.path().join("layout.kdl");
     std::fs::write(&layout_path, layout).expect("write layout");
 
-    let created = scoped_zellij(xdg.path())
+    let created = room
+        .command()
         .args(["attach", "--create-background", &name, "options"])
         .arg("--default-cwd")
         .arg(cwd.path())
@@ -65,10 +63,9 @@ fn sidebar_self_closes_when_its_tab_empties() {
         .bounded_status()
         .expect("create background session");
     assert!(created.success(), "create-background failed for {name}");
+    room.wait_until_ready();
 
-    let session = ZellijSession::attach_existing(xdg, name.clone());
-    let xdg = session.xdg.path();
-    wait_for_attached_client(xdg, &name);
+    let _client = AttachedClient::attach(&room, 80, 24);
     ZellijBackend::with_runtime_dir(xdg)
         .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
             session_name: name.clone(),
@@ -82,9 +79,9 @@ fn sidebar_self_closes_when_its_tab_empties() {
         })
         .expect("load presence plugin for self-close topology");
 
-    wait_for_nonplugin_panes(xdg, &name, 2, Duration::from_secs(15));
+    wait_for_nonplugin_panes(&room, 2, Duration::from_secs(15));
     wait_for_no_serve_processes(&name, Duration::from_secs(15));
-    wait_for_nonplugin_panes(xdg, &name, 0, Duration::from_secs(20));
+    wait_for_nonplugin_panes(&room, 0, Duration::from_secs(20));
 
     let heartbeat_dir = xdg
         .join("rimz")
@@ -97,18 +94,17 @@ fn sidebar_self_closes_when_its_tab_empties() {
 fn split_pane_close_on_exit_removes_a_failed_command() {
     require_zellij!();
 
-    let session = ZellijSession::spawn(unique_session_name("paneclose"));
-    let xdg = session.xdg.path();
-    let target = wait_for_pane_count(xdg, &session.name, 1)[0]
-        .pane_id
-        .clone();
+    let room = LiveZellijSession::new("paneclose");
+    let _client = AttachedClient::create_and_attach(&room, 80, 24);
+    let xdg = room.path();
+    let target = wait_for_pane_count(xdg, room.name(), 1)[0].pane_id.clone();
     let marker_dir = TempDir::new().expect("marker tempdir");
     let marker = marker_dir.path().join("started");
 
     ZellijBackend::with_runtime_dir(xdg)
         .split_pane(SplitPaneOptions {
             target: SplitTarget::SessionPane {
-                session_name: session.name.clone(),
+                session_name: room.name().to_owned(),
                 pane_id: target,
             },
             command: Some(vec![
@@ -134,7 +130,7 @@ fn split_pane_close_on_exit_removes_a_failed_command() {
     poll_until(
         Duration::from_secs(10),
         || {
-            list_panes(xdg, &session.name)
+            list_panes(xdg, room.name())
                 .map(|snapshot| snapshot.panes.iter().filter(|pane| !pane.is_plugin).count())
         },
         |count| *count == 1,
@@ -201,8 +197,10 @@ fn sidebar_serve_command_with_tick(
     )
 }
 
-fn session_nonplugin_count(xdg: &Path, name: &str) -> Result<usize, String> {
-    let output = scoped_zellij(xdg)
+fn session_nonplugin_count(session: &LiveZellijSession) -> Result<usize, String> {
+    let name = session.name();
+    let output = session
+        .command()
         .args(["--session", name, "action", "list-panes", "-j", "-a"])
         .bounded_output()
         .map_err(|err| format!("list panes for {name}: {err}"))?;
@@ -230,11 +228,11 @@ fn session_nonplugin_count(xdg: &Path, name: &str) -> Result<usize, String> {
         .count())
 }
 
-fn wait_for_nonplugin_panes(xdg: &Path, name: &str, target: usize, timeout: Duration) {
+fn wait_for_nonplugin_panes(session: &LiveZellijSession, target: usize, timeout: Duration) {
     poll_until(
         timeout,
-        || session_nonplugin_count(xdg, name),
+        || session_nonplugin_count(session),
         |count| *count == target,
-        &format!("{target} non-plugin panes in {name}"),
+        &format!("{target} non-plugin panes in {}", session.name()),
     );
 }
