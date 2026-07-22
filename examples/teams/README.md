@@ -9,24 +9,24 @@ One team ships today: **forge**, the plan → code → review team RimZ builds i
 Forge carries one change from idea to open PR through three roles, each with its own model and prompt, so every member spends its whole window inside its comfort zone:
 
 - **@planner** (Claude, on Fable) talks with you. It explores the code through subagents, confirms design choices at user gates, and writes the plan to `plan.md`. It owns design and intent: every design question during the loop lands on its desk.
-- **@coder** (Codex, on the current GPT) starts fresh from the plan: a clean window, the exact files to touch, the decisions already made. It treats the plan as a hypothesis to verify against the real code, implements, resolves review findings, and opens the PR.
-- **@reviewer** (Claude, on Opus) is a third fresh window. It reviews the full diff blind — findings drafted before it ever opens the coder's report — then reconciles that report claim by claim, conceding only to the code.
+- **@coder** (Codex, on the current GPT) starts fresh from the plan: a clean window, the exact files to touch, the decisions already made. It treats the plan as a hypothesis to verify against the real code, implements, and resolves review findings.
+- **@reviewer** (Claude, on Opus) is a third fresh window. It reviews the full diff blind — findings drafted before it ever opens the coder's report — then reconciles that report claim by claim, conceding only to the code, and ships the settled work as a PR.
 
 The fragment is four files: [`team.toml`](./forge/team.toml) declares the team and each role's agent kind, model, effort, launch args, prompt, and layout; [`planner.md`](./forge/planner.md), [`coder.md`](./forge/coder.md), and [`reviewer.md`](./forge/reviewer.md) are the role prompts, each stating the role's craft plus the shared team protocol.
 
 ### How the loop runs
 
 ```
-user → @planner —plan→ @coder —result→ @reviewer —review→ @coder ⇄ @reviewer —clear→ @coder —PR→ done
+user → @planner —plan→ @coder —result→ @reviewer —review→ @coder ⇄ @reviewer —settled→ @reviewer —PR→ done
 ```
 
 The team shares one worktree; @coder works on a feature branch so commits accumulate for the reviewer's diff and the final PR. Three git-ignored scratch files at the worktree root carry the substance — `plan.md`, `result.md`, `review.md` — and hand-offs are short `rimz message` lines that point at them:
 
-1. **Plan.** @planner drafts the design with you, gates included, and writes `plan.md`. Its `# <Title>` H1 becomes the PR title.
+1. **Plan.** @planner drafts the design with you, gates included, and writes `plan.md`. Its `# <Title>` H1 seeds the PR title.
 2. **Implement.** @coder implements and verifies the plan, taking open design calls back to @planner, and reports to `result.md`.
-3. **Review.** @reviewer reviews the full merge-base diff blind, drafts `review.md`, then reconciles the coder's report and hands down a verdict: blocking or clear.
-4. **Resolve.** On a blocking verdict, @coder and @reviewer argue each finding with `file:line` evidence — fix, push back, or escalate a design clash to @planner — until a re-review comes back clear.
-5. **PR.** @coder opens the PR: `plan.md` becomes the description, `result.md` the first comment. The open PR ends the loop.
+3. **Review.** @reviewer reviews the full merge-base diff blind, drafts `review.md`, then reconciles the coder's report and decides whether anything must change before merge.
+4. **Resolve.** When changes are wanted, @coder and @reviewer argue each finding with `file:line` evidence — fix, push back, accept an advisory, or escalate a design clash to @planner — until the review is settled.
+5. **PR.** @reviewer synthesizes the plan, implementation report, and review into the PR title and body, then creates or updates the PR. The open, current PR ends the loop.
 
 State lives in the scratch files and git, never in the chat: a member restarted or compacted mid-loop re-derives its step from the files and carries on. The sidebar treats the team as one block, lifting all three the moment any role needs you.
 
@@ -47,13 +47,7 @@ A same-named directory in `~/.agents/teams` is overwritten; remove it first for 
 
 - RimZ installed with hooks set up ([installation](../../docs/guide/installation.md) · [setup](../../docs/guide/setup.md)).
 - The `claude` and `codex` CLIs on `PATH`, each logged in — the planner and reviewer run Claude Code, the coder runs Codex.
-- Optional: the coder's PR step expects a `pr` skill and falls back to plain `gh` or `tea` without one.
-
-Try the team before installing by pointing RimZ at the checkout:
-
-```sh
-RIMZ_AGENTS_HOME="$PWD/examples" rimz agents forge
-```
+- The reviewer's PR step expects the `pr` skill.
 
 ### Launch and work
 
@@ -61,16 +55,10 @@ Launch the team into an isolated worktree and hand the task to the planner — t
 
 ```sh
 rimz agents forge -w feat-complex
-rimz message @planner "add rate limiting to the ingest API"
+rimz message @planner#feat-complex "add rate limiting to the ingest API"
 ```
 
-The planner comes back to you at its design gates; after your sign-off the loop carries the change through code, review, and PR on its own. Useful moves while it runs:
-
-```sh
-rimz agents '#feat-complex'        # the team's cards in its lane
-rimz message @coder --wait "status? one line"
-rimz agents forge --resume         # reopen the newest closed forge team
-```
+The planner comes back to you at its design gates; after your sign-off the loop carries the change through code, review, and PR on its own.
 
 ### Customize
 
