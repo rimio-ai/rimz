@@ -15,8 +15,8 @@ use crate::room::session::{LiveSessions, workspace_record_for_session};
 use crate::store::atomic;
 
 mod gate;
-mod share;
 mod sessions;
+mod share;
 mod ttyd;
 
 pub use gate::GateAuth;
