@@ -49,7 +49,7 @@ enum WorktreeTail {
 /// The row index captured for a row's lines matches `app::visible_rows()`:
 /// both consume one [`VisibleRoster`], so ordinals stay 1:1 under capping,
 /// expansion, and make-up filters. The caller skips a group the filter empties;
-/// a finished multi-row pod the collapse empties still renders its header and
+/// a finished multi-agent pod the collapse empties still renders its header and
 /// two-line receipt when totals exist. The live more/less line is
 /// filter-suppressed because a narrowed body is already uncapped.
 pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(

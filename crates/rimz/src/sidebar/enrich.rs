@@ -28,7 +28,8 @@ use super::refresh::accounts::{cached_accounts_for_snapshot, read_accounts_cache
 use super::refresh::credits::apply_credits_cache;
 use super::refresh::daemon_reap::read_codex_daemon_reap;
 use super::refresh::git_stats::{
-    DiffStatsCache, DiffStatsCacheEntry, read_diff_stats_cache, worktree_group_path_fields,
+    DiffStatsCache, DiffStatsCacheEntry, is_trunk_branch, read_diff_stats_cache,
+    worktree_group_path_fields,
 };
 use super::refresh::live_spend::{apply_live_day_spend, apply_live_today_spend};
 use super::refresh::pr::PrLink;
@@ -205,6 +206,14 @@ pub fn project_pr_state_map(
         ) else {
             continue;
         };
+        if diff_cache.entries.get(path).is_some_and(|entry| {
+            entry
+                .branch
+                .as_deref()
+                .is_some_and(|branch| is_trunk_branch(branch, entry.trunk.as_deref()))
+        }) {
+            continue;
+        }
         group.pr_state = states.get(path).map(|link| link.state);
         group.pr_ci = states
             .get(path)

@@ -161,7 +161,7 @@ pub struct SidebarWorktreeGroup {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub worktree_backed: bool,
     /// Terminal line of work: git verdict `Done` with no attention or running
-    /// member. Forces the archive band and collapses multi-row rosters in
+    /// member. Forces the archive band and collapses multi-agent rosters in
     /// renderers.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub finished: bool,
@@ -190,10 +190,10 @@ pub struct SidebarWorktreeGroup {
 }
 
 impl SidebarWorktreeGroup {
-    /// A finished multi-row roster collapses behind the two-line receipt; a
-    /// lone finished card stays on screen under the merged header.
+    /// A finished roster with several agents collapses behind the two-line
+    /// receipt. Process rows never count, so a lone agent stays on screen.
     pub fn collapses(&self) -> bool {
-        self.finished && self.rows.len() > 1
+        self.finished && self.rows.iter().filter(|row| row.is_agent()).count() > 1
     }
 }
 
@@ -308,6 +308,78 @@ pub struct SidebarLinkHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn collapse_test_row(id: &str, agent: bool) -> SidebarRow {
+        SidebarRow {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            pane: None,
+            worktree_path: None,
+            worktree_branch: None,
+            channel: None,
+            unread: false,
+            inactive: false,
+            archived: false,
+            attention_score: 0,
+            last_activity: jiff::Timestamp::now(),
+            card: if agent {
+                crate::RowCard::Agent(Box::default())
+            } else {
+                crate::RowCard::Process(crate::ProcessCard::default())
+            },
+        }
+    }
+
+    fn collapse_test_group(rows: Vec<SidebarRow>) -> SidebarWorktreeGroup {
+        SidebarWorktreeGroup {
+            key: "group".to_owned(),
+            label: "group".to_owned(),
+            kind: SidebarWorktreeKind::Worktree,
+            status_counts: Vec::new(),
+            rows,
+            diff_added: None,
+            diff_removed: None,
+            commits_ahead: None,
+            commits_behind: None,
+            trunk: None,
+            worktree_backed: false,
+            finished: true,
+            clean: None,
+            landed: None,
+            trunk_sync: None,
+            pr_state: None,
+            pr_ci: None,
+            pr_number: None,
+            pr_url: None,
+        }
+    }
+
+    #[test]
+    fn finished_groups_collapse_only_with_several_agents() {
+        assert!(
+            !collapse_test_group(vec![
+                collapse_test_row("shell-one", false),
+                collapse_test_row("shell-two", false),
+            ])
+            .collapses()
+        );
+        assert!(
+            !collapse_test_group(vec![
+                collapse_test_row("agent", true),
+                collapse_test_row("shell-one", false),
+                collapse_test_row("shell-two", false),
+            ])
+            .collapses()
+        );
+        assert!(
+            collapse_test_group(vec![
+                collapse_test_row("agent-one", true),
+                collapse_test_row("agent-two", true),
+                collapse_test_row("shell", false),
+            ])
+            .collapses()
+        );
+    }
 
     #[test]
     fn presence_classifies_detached_active_idle_boundary_and_unknown_idle() {

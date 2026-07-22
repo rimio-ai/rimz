@@ -501,19 +501,21 @@ fn finished_roster_folds_process_rows_into_the_remainder() {
 }
 
 #[test]
-fn finished_roster_falls_back_to_count_for_process_only_groups() {
+fn finished_process_only_group_stays_expanded() {
     let mut finished = group(vec![process_row("shell-one"), process_row("shell-two")]);
     finished.finished = true;
 
     let (texts, _, _) = render_group(&finished, false);
-    let receipt = roster_receipt(&texts);
-    assert!(receipt.contains("▸ +2 done"), "{texts:?}");
-    assert!(!receipt.contains("zsh"), "{texts:?}");
-    assert_eq!(
-        texts.len(),
-        2,
-        "process-only pods have no totals: {texts:?}"
+    assert!(!finished.collapses());
+    assert!(
+        texts.iter().all(|line| !line.contains("▸ +2 done")),
+        "{texts:?}"
     );
+    assert_eq!(
+        visible_ids(&finished, None, false),
+        ["shell-one", "shell-two"]
+    );
+    assert_eq!(texts.iter().filter(|line| line.contains("zsh")).count(), 2);
 }
 
 #[test]

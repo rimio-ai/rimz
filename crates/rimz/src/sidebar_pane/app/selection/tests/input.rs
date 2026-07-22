@@ -224,6 +224,9 @@ fn collapsing_the_selected_group_pins_on_the_cleared_selection() {
             pane("terminal_1", "tab_0", false),
         ],
     );
+    for row in &mut snapshot.worktree_groups[0].rows {
+        row.card = crate::RowCard::Agent(Box::default());
+    }
     snapshot.worktree_groups[0].finished = true;
     let group_key = snapshot.worktree_groups[0].key.clone();
     let mut ui = UiState {

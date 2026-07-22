@@ -179,6 +179,14 @@ impl DiffStatsCacheEntry {
     }
 }
 
+/// Whether `branch` names this repository's trunk checkout. `main` remains a
+/// trunk name even when the repository resolves a different configured or
+/// remote-default trunk.
+pub(crate) fn is_trunk_branch(branch: &str, trunk: Option<&str>) -> bool {
+    branch == "main"
+        || trunk.map(|trunk| trunk.strip_prefix("origin/").unwrap_or(trunk)) == Some(branch)
+}
+
 pub fn read_diff_stats_cache(path: &Path) -> DiffStatsCache {
     let Ok(bytes) = std::fs::read(path) else {
         return DiffStatsCache::default();

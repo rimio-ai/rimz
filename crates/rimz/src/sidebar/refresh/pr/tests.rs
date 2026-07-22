@@ -89,6 +89,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
     prior.insert(
         "/repo/merged-terminal".to_owned(),
         PrLink {
+            branch: Some("merged-terminal".to_owned()),
             state: WorktreePrState::Merged,
             number: Some(80),
             url: None,
@@ -99,6 +100,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
     prior.insert(
         "/repo/merged-no-ci".to_owned(),
         PrLink {
+            branch: Some("merged-no-ci".to_owned()),
             state: WorktreePrState::Merged,
             number: Some(77),
             url: None,
@@ -109,6 +111,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
     prior.insert(
         "/repo/merged-pending".to_owned(),
         PrLink {
+            branch: Some("merged-pending".to_owned()),
             state: WorktreePrState::Merged,
             number: Some(79),
             url: None,
@@ -119,6 +122,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
     prior.insert(
         "/repo/merged-legacy".to_owned(),
         PrLink {
+            branch: Some("merged-legacy".to_owned()),
             state: WorktreePrState::Merged,
             number: Some(78),
             url: None,
@@ -129,6 +133,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
     prior.insert(
         "/repo/transition".to_owned(),
         PrLink {
+            branch: Some("transition".to_owned()),
             state: WorktreePrState::Open,
             number: Some(81),
             url: None,
@@ -139,6 +144,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
     prior.insert(
         "/repo/closed".to_owned(),
         PrLink {
+            branch: Some("closed".to_owned()),
             state: WorktreePrState::Closed,
             number: Some(82),
             url: None,
@@ -152,6 +158,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
     assert_eq!(
         assigned.states.get("/repo/open"),
         Some(&PrLink {
+            branch: Some("open".to_owned()),
             state: WorktreePrState::Open,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
@@ -162,6 +169,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
     assert_eq!(
         assigned.states.get("/repo/merged-terminal"),
         Some(&PrLink {
+            branch: Some("merged-terminal".to_owned()),
             state: WorktreePrState::Merged,
             number: Some(80),
             url: Some("https://github.com/org/repo/pull/80".to_owned()),
@@ -172,6 +180,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
     assert_eq!(
         assigned.states.get("/repo/merged-no-ci"),
         Some(&PrLink {
+            branch: Some("merged-no-ci".to_owned()),
             state: WorktreePrState::Merged,
             number: Some(77),
             url: Some("https://github.com/org/repo/pull/77".to_owned()),
@@ -182,6 +191,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
     assert_eq!(
         assigned.states.get("/repo/closed"),
         Some(&PrLink {
+            branch: Some("closed".to_owned()),
             state: WorktreePrState::Closed,
             number: Some(82),
             url: Some("https://github.com/org/repo/pull/82".to_owned()),
@@ -202,6 +212,127 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
             ("/repo/transition", Some(81)),
         ]
     );
+}
+
+#[test]
+fn assign_states_re_resolves_mismatched_and_legacy_branch_links() {
+    let targets = vec![
+        target("/repo/matching", "feature"),
+        target("/repo/mismatched", "new-feature"),
+        target("/repo/legacy", "legacy-feature"),
+    ];
+    let prior = BTreeMap::from([
+        (
+            "/repo/matching".to_owned(),
+            PrLink {
+                branch: Some("feature".to_owned()),
+                state: WorktreePrState::Closed,
+                number: Some(40),
+                url: None,
+                ci: None,
+                merge_sha: None,
+            },
+        ),
+        (
+            "/repo/mismatched".to_owned(),
+            PrLink {
+                branch: Some("old-feature".to_owned()),
+                state: WorktreePrState::Closed,
+                number: Some(41),
+                url: None,
+                ci: None,
+                merge_sha: None,
+            },
+        ),
+        (
+            "/repo/legacy".to_owned(),
+            PrLink {
+                branch: None,
+                state: WorktreePrState::Closed,
+                number: Some(42),
+                url: None,
+                ci: None,
+                merge_sha: None,
+            },
+        ),
+    ]);
+
+    let assigned = assign_states(&targets, &BTreeMap::new(), &prior);
+
+    assert_eq!(
+        assigned
+            .states
+            .get("/repo/matching")
+            .and_then(|link| link.branch.as_deref()),
+        Some("feature")
+    );
+    assert_eq!(
+        assigned
+            .transitions
+            .iter()
+            .map(|(target, number)| (target.path.as_str(), *number))
+            .collect::<Vec<_>>(),
+        vec![("/repo/mismatched", None), ("/repo/legacy", None)]
+    );
+    assert_eq!(
+        carry_prior_states(&targets, &prior)
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["/repo/matching"]
+    );
+}
+
+#[test]
+fn build_targets_excludes_main_and_the_resolved_trunk() {
+    let repo = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(args)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    };
+    if !git(&["init", "-q", "-b", "main"]) {
+        return;
+    }
+    assert!(git(&[
+        "remote",
+        "add",
+        "origin",
+        "git@github.com:org/repo.git"
+    ]));
+    assert!(git(&[
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "base"
+    ]));
+    let path = repo.path().display().to_string();
+
+    assert!(build_targets(std::slice::from_ref(&path), &DiffStatsCache::default()).is_empty());
+
+    assert!(git(&["checkout", "-q", "-b", "feature"]));
+    assert_eq!(
+        build_targets(std::slice::from_ref(&path), &DiffStatsCache::default()).len(),
+        1
+    );
+
+    let mut diff_cache = DiffStatsCache::default();
+    diff_cache.entries.insert(
+        path.clone(),
+        DiffStatsCacheEntry {
+            trunk: Some("origin/feature".to_owned()),
+            ..DiffStatsCacheEntry::default()
+        },
+    );
+    assert!(build_targets(&[path], &diff_cache).is_empty());
 }
 
 #[test]
@@ -266,6 +397,7 @@ fn legacy_pr_link_without_ci_defaults_to_unknown() {
     assert_eq!(link.ci, None);
     assert_eq!(link.merge_sha, None);
     assert_eq!(link.url, None);
+    assert_eq!(link.branch, None);
 }
 
 #[test]
@@ -291,6 +423,7 @@ fn pending_ci_keeps_repo_on_hot_ttl() {
         cache.states.insert(
             needed[0].clone(),
             PrLink {
+                branch: Some("a".to_owned()),
                 state,
                 number: Some(91),
                 url: None,
@@ -405,6 +538,7 @@ fn unsupported_reconcile_drops_state_and_marks_head_seen() {
     cache.states.insert(
         "/repo/a".to_owned(),
         PrLink {
+            branch: Some("a".to_owned()),
             state: WorktreePrState::Open,
             number: Some(91),
             url: None,
@@ -577,4 +711,5 @@ fn tea_targets_stamp_gitea_pull_urls() {
         link.url.as_deref(),
         Some("https://gitea.example.test/org/repo/pulls/91")
     );
+    assert_eq!(link.branch.as_deref(), Some("feature"));
 }
