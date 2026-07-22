@@ -42,6 +42,8 @@ const TEST_PANE_PROBE_INTERVAL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_INTE
 #[cfg(feature = "testkit")]
 const TEST_PANE_PROBE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE";
 #[cfg(feature = "testkit")]
+const TEST_PANE_PROBE_ABSENT_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_ABSENT_FILE";
+#[cfg(feature = "testkit")]
 const TEST_RECORD_POLL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_RECORD_POLL_MS";
 #[cfg(feature = "testkit")]
 const TEST_STABLE_RUN_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_STABLE_RUN_MS";
@@ -1237,6 +1239,14 @@ fn pane_probe_interval() -> Duration {
 
 #[cfg(feature = "testkit")]
 fn forced_pane_probe() -> Option<PaneProbe> {
+    if let Some(path) = env::var_os(TEST_PANE_PROBE_ABSENT_FILE_ENV).filter(|path| !path.is_empty())
+    {
+        return Some(if Path::new(&path).exists() {
+            PaneProbe::Absent(0)
+        } else {
+            PaneProbe::Present(0)
+        });
+    }
     match env::var(TEST_PANE_PROBE_ENV).ok().as_deref() {
         Some("present") => Some(PaneProbe::Present(0)),
         Some("absent") => Some(PaneProbe::Absent(0)),

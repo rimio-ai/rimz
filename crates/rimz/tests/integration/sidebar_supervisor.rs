@@ -326,6 +326,8 @@ fn sidebar_supervisor_keeps_pane_watchdog_across_worker_respawns() {
     let env = Env::new();
     let instance =
         rimz::SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da05").expect("instance id");
+    let starts = env.home_root.join("watchdog-worker-starts.log");
+    let pane_absent = env.home_root.join("watchdog-pane-absent");
     let mut cmd = env.rimz();
     cmd.args([
         "sidebar",
@@ -342,13 +344,16 @@ fn sidebar_supervisor_keeps_pane_watchdog_across_worker_respawns() {
     .env("RIMZ_TEST_SIDEBAR_WORKER_FAULT", "abort_after_delay")
     .env("RIMZ_TEST_SIDEBAR_SUPERVISOR_REAP_POLL_MS", "5")
     .env("RIMZ_TEST_SIDEBAR_SUPERVISOR_RESPAWN_BACKOFF_MS", "10")
-    .env("RIMZ_TEST_SIDEBAR_PANE_PROBE_INTERVAL_MS", "100")
-    .env("RIMZ_TEST_SIDEBAR_PANE_PROBE", "absent")
+    .env("RIMZ_TEST_SIDEBAR_WORKER_STARTED_FILE", &starts)
+    .env("RIMZ_TEST_SIDEBAR_PANE_PROBE_INTERVAL_MS", "10")
+    .env("RIMZ_TEST_SIDEBAR_PANE_PROBE_ABSENT_FILE", &pane_absent)
     .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::null());
 
     let mut child = cmd.spawn().expect("spawn sidebar supervisor");
+    wait_for_start_after(&starts, &env.rimz_bin(), 1, Duration::from_secs(2));
+    std::fs::write(&pane_absent, b"absent").expect("release pane watchdog");
     let status = wait_child(&mut child, Duration::from_secs(3));
 
     assert!(status.success(), "supervisor exited with {status}");
