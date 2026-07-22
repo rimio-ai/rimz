@@ -24,7 +24,7 @@ use crate::web::WebWarning;
 const STOCK_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
 const STOCK_INDEX_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const INDEX_CACHE_DIR: &str = "rimz/web-ttyd";
-const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v7";
+const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v8";
 
 const OFFLINE_ENV: &str = "RIMZ_WEB_FONTS_OFFLINE";
 const FONT_CACHE_DIR: &str = "rimz/web-fonts";
@@ -312,10 +312,11 @@ waitForTerminal().then(term=>{{
     if(/^Digit[0-9]$/.test(event.code)&&!event.shiftKey)return event.code.slice(5);
     return null;
   }};
+  let altChordAt=-1e9;
   const keyHandler=event=>{{
     if(event.type==="keydown"&&event.altKey&&!event.ctrlKey&&!event.metaKey){{
       const ch=altKeyChar(event);
-      if(ch&&sendInput("\u001b"+ch)){{event.preventDefault();event.stopPropagation();return false;}}
+      if(ch&&sendInput("\u001b"+ch)){{altChordAt=performance.now();event.preventDefault();event.stopPropagation();return false;}}
     }}
     if(event.type!=="keydown"||event.key!=="Enter"||!event.shiftKey||event.altKey||event.ctrlKey||event.metaKey)return true;
     if(!sendInput("\u001b[13;2u"))return true;
@@ -343,9 +344,19 @@ waitForTerminal().then(term=>{{
     if(term.options.cursorBlink)term.options.cursorBlink=false;
     return true;
   }});
-  const swallowBlinkMode=params=>params.length===1&&params[0]===12;
-  term.parser.registerCsiHandler({{prefix:"?",final:"h"}},swallowBlinkMode);
-  term.parser.registerCsiHandler({{prefix:"?",final:"l"}},swallowBlinkMode);
+  let pendingHide=0,applyingHide=false;
+  const steadyCursorModes=(params,set)=>{{
+    if(params.length>1&&params.includes(12))window.queueMicrotask(()=>{{if(term.options.cursorBlink)term.options.cursorBlink=false;}});
+    if(params.length!==1)return false;
+    if(params[0]===12)return true;
+    if(params[0]!==25)return false;
+    window.clearTimeout(pendingHide);pendingHide=0;
+    if(set||applyingHide)return false;
+    pendingHide=window.setTimeout(()=>{{pendingHide=0;applyingHide=true;term.write("\u001b[?25l",()=>{{applyingHide=false;}});}},50);
+    return true;
+  }};
+  term.parser.registerCsiHandler({{prefix:"?",final:"h"}},params=>steadyCursorModes(params,true));
+  term.parser.registerCsiHandler({{prefix:"?",final:"l"}},params=>steadyCursorModes(params,false));
   term.onSelectionChange(()=>writeClipboard(term.getSelection()));
   const updateOverlay=node=>{{
     const element=node.nodeType===Node.ELEMENT_NODE?node:node.parentElement;
@@ -368,6 +379,20 @@ waitForTerminal().then(term=>{{
     term.attachCustomKeyEventHandler(keyHandler);
   }};
   install();
+  let swallowComposition=false;
+  const textarea=term.textarea;
+  if(textarea){{
+    textarea.addEventListener("compositionstart",()=>{{
+      if(performance.now()-altChordAt>250)return;
+      swallowComposition=true;
+      textarea.blur();textarea.focus();
+    }});
+    textarea.addEventListener("compositionend",()=>{{
+      if(!swallowComposition)return;
+      swallowComposition=false;
+      textarea.value="";
+    }});
+  }}
   const reset=term.reset.bind(term);
   term.reset=(...args)=>{{const result=reset(...args);install();return result;}};
   if(fontFamily)loadFont.then(()=>{{
@@ -874,6 +899,12 @@ mod tests {
         assert!(rendered.contains("rimz-web-client"));
         assert!(rendered.contains("term.options.cursorBlink=false"));
         assert!(rendered.contains("registerCsiHandler({intermediates:\" \",final:\"q\"}"));
+        assert!(rendered.contains("compositionstart"));
+        assert!(rendered.contains("compositionend"));
+        assert!(rendered.contains("textarea.value=\"\""));
+        assert!(rendered.contains("params.includes(12)"));
+        assert!(rendered.contains("const steadyCursorModes=(params,set)=>"));
+        assert!(rendered.contains("term.write(\"\\u001b[?25l\""));
         assert!(rendered.contains("const installPixelLayer=term=>"));
         assert!(rendered.contains("installPixelLayer(term)"));
         assert!(rendered.contains("const RIMZ_PIXEL_PLACEHOLDER=1109742"));
@@ -928,14 +959,14 @@ mod tests {
             weight: 400,
         }];
         let family = "RimZ \"Font\" </style></script>\n";
-        assert_eq!(CUSTOM_INDEX_SCHEMA, "rimz.ttyd-index.v7");
+        assert_eq!(CUSTOM_INDEX_SCHEMA, "rimz.ttyd-index.v8");
         let key = custom_index_key("ttyd 1.7.7", Some(family), &faces);
         assert_eq!(key, custom_index_key("ttyd 1.7.7", Some(family), &faces));
         assert_ne!(key, custom_index_key("ttyd 1.7.8", Some(family), &faces));
         assert_ne!(key, custom_index_key("ttyd 1.7.7", None, &faces));
         assert_ne!(
             key,
-            custom_index_key_with_schema("rimz.ttyd-index.v6", "ttyd 1.7.7", Some(family), &faces)
+            custom_index_key_with_schema("rimz.ttyd-index.v7", "ttyd 1.7.7", Some(family), &faces)
         );
 
         let bootstrap = client_bootstrap(Some(family));
@@ -988,12 +1019,15 @@ mod tests {
             rendered.contains("if(term.options.cursorStyle!==style)term.options.cursorStyle=style")
         );
         assert!(rendered.contains("if(term.options.cursorBlink)term.options.cursorBlink=false"));
-        assert!(
-            rendered.contains("const swallowBlinkMode=params=>params.length===1&&params[0]===12")
-        );
+        assert!(rendered.contains("const steadyCursorModes=(params,set)=>"));
+        assert!(rendered.contains("params.includes(12)"));
+        assert!(rendered.contains("term.write(\"\\u001b[?25l\""));
         assert!(rendered.contains("registerCsiHandler({prefix:\"?\",final:\"h\"}"));
         assert!(rendered.contains("registerCsiHandler({prefix:\"?\",final:\"l\"}"));
         assert!(rendered.contains("term.attachCustomKeyEventHandler(keyHandler)"));
+        assert!(rendered.contains("compositionstart"));
+        assert!(rendered.contains("compositionend"));
+        assert!(rendered.contains("textarea.value=\"\""));
         assert!(rendered.contains("registerOscHandler(52"));
         assert!(rendered.contains("onSelectionChange"));
         assert!(rendered.contains("event.altKey"));

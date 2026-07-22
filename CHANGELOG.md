@@ -21,7 +21,8 @@ RimZ is alpha software on the 0.x line. Commands, flags, config keys, and output
 ### Fixed
 
 - Browser authentication now keeps ttyd behind machine-wide Basic Auth while the public gate validates trusted proxy headers and injects that credential upstream; remote `--web` tunnels work through either auth mode, `rimz web restart` applies the current browser profile, and `rimz reload` refreshes an online web daemon after upgrades. → [web](./docs/guide/web.md)
-- Browser cursors stay steady when terminal apps request a blinking cursor. → [web](./docs/guide/web.md#browser-appearance-and-input)
+- Browser panes opened with macOS Option chords no longer begin with the dead-key character those chords would normally compose. → [web](./docs/guide/web.md#browser-appearance-and-input)
+- Browser cursors stay steady while typing when terminal apps request blink modes or bracket redraws with cursor visibility changes. → [web](./docs/guide/web.md#browser-appearance-and-input)
 - Pixel pets and the pixel context meter render as true pixels in ttyd browser attaches for qualifying tmux rooms; pets keep their native proportions, leave tmux borders and neighboring panes intact, and suppress placeholder glyphs before xterm paints them, while mixed or unsupported clients continue to fall back to sextant cell art. → [pets](./docs/guide/pets.md#crisp-pixels-and-cell-art)
 - Homebrew upgrades through `rimz update` and the install script refresh formula data first, so a stale tap no longer skips a released build. → [installation](./docs/guide/installation.md)
 - Queued `done`-gated messages deliver when an agent's clean turn parks on background work instead of waiting for the background process to exit. → [messaging](./docs/guide/messaging.md)
