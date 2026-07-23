@@ -900,6 +900,39 @@ fn model_cells_show_usd_and_cache_read_detail() {
 }
 
 #[test]
+fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
+    let mut claude = tally(100, 1.0, 1);
+    claude.year.input = 10;
+    claude.year.cache_read = 90;
+    let stats = Stats {
+        by_day: BTreeMap::new(),
+        by_model: BTreeMap::from([
+            (
+                "claude-opus-4-8".to_owned(),
+                model_tally(10, 1.0, 10, 0, 90),
+            ),
+            ("output-only".to_owned(), model_tally(10, 1.0, 0, 10, 0)),
+        ]),
+        by_agent: BTreeMap::from([("claude".to_owned(), claude)]),
+        total: SpendTally::default(),
+    };
+
+    let value = json::stats_json_value(&stats, &AssistStats::default(), 0, false);
+    let models = value["models"].as_array().unwrap();
+    let claude_model = models
+        .iter()
+        .find(|model| model["model"] == "claude-opus-4-8")
+        .unwrap();
+    let output_only = models
+        .iter()
+        .find(|model| model["model"] == "output-only")
+        .unwrap();
+    assert_eq!(claude_model["cache_hit_pct"], 90);
+    assert!(output_only.get("cache_hit_pct").is_none());
+    assert_eq!(value["agents"][0]["cache_hit_pct"], 90);
+}
+
+#[test]
 fn model_breakdown_ranks_by_usd_before_tokens() {
     let stats = Stats {
         by_day: BTreeMap::new(),
