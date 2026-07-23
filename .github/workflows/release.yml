@@ -279,6 +279,12 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
 
+      - name: Dispatch stable docs sync
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ secrets.RIMZ_DOCS_DISPATCH }}
+        run: gh api repos/rimio-ai/rimz-docs/dispatches -f event_type=release-published
+
       # Tags only: the rolling `latest-main` prerelease never touches the tap.
       # The push trigger is tags-only in this workflow, so `event_name == push`
       # selects real `v*` releases.

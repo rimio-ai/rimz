@@ -65,7 +65,28 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_participant_identity(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
     ensure_managed_tmux_endpoint(root, &files)?;
+    ensure_stable_release_dispatches_docs(root)?;
     ensure_inline_tests_stay_small(&files)?;
+    Ok(())
+}
+
+fn ensure_stable_release_dispatches_docs(root: &Path) -> Result<()> {
+    let path = root.join(".github/workflows/release.yml");
+    let source = fs::read_to_string(&path)
+        .with_context(|| format!("read release workflow {}", path.display()))?;
+    let publish = source.find("      - name: Publish GitHub release assets");
+    let dispatch = source.find(
+        r#"      - name: Dispatch stable docs sync
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ secrets.RIMZ_DOCS_DISPATCH }}
+        run: gh api repos/rimio-ai/rimz-docs/dispatches -f event_type=release-published"#,
+    );
+    if !matches!((publish, dispatch), (Some(publish), Some(dispatch)) if publish < dispatch) {
+        bail!(
+            "stable releases must dispatch release-published to rimio-ai/rimz-docs after publication"
+        );
+    }
     Ok(())
 }
 
