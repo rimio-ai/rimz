@@ -8,7 +8,6 @@ use serde_json::Value;
 use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
 
 const GH_HEAD_FIELDS: &str = "headRefName,headRepository,headRepositoryOwner,isCrossRepository";
-const GH_LIST_FIELDS: &str = "number,state,headRefName,statusCheckRollup";
 const TEA_LIST_FIELDS: &str = "index,state,head";
 const LIST_LIMIT: &str = "500";
 const HEAD_FIELDS: &str = "head head_branch headRefName source_branch sourceBranch";
@@ -59,8 +58,21 @@ pub struct PrHead {
 pub struct PrCandidate {
     pub number: u64,
     pub state: WorktreePrState,
-    pub ci: Option<WorktreePrCi>,
-    pub merge_sha: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GhBulkPr {
+    pub(crate) number: u64,
+    pub(crate) state: WorktreePrState,
+    pub(crate) head_ci: Option<WorktreePrCi>,
+    pub(crate) merge_sha: Option<String>,
+    pub(crate) merge_ci: Option<WorktreePrCi>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GhBulkResponse {
+    pub(crate) prs: Vec<Option<GhBulkPr>>,
+    pub(crate) commits: Vec<Option<WorktreePrCi>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -412,27 +424,6 @@ impl ForgeCli {
             Self::Tea => parse_tea_pr_head_json(raw),
         }
     }
-
-    pub(crate) fn open_pr_list_args(self, repo: Option<&str>) -> Vec<&str> {
-        match self {
-            Self::Gh => {
-                let mut args = vec!["pr", "list", "--state", "open"];
-                args.extend(["--json", GH_LIST_FIELDS, "--limit", LIST_LIMIT]);
-                args
-            }
-            Self::Tea => tea_pr_list_args("open", repo),
-        }
-    }
-
-    pub(crate) fn decode_open_prs(
-        self,
-        raw: &str,
-    ) -> Result<BTreeMap<String, PrCandidate>, String> {
-        match self {
-            Self::Gh => parse_gh_pr_list_links(raw),
-            Self::Tea => parse_tea_pr_list_links(raw),
-        }
-    }
 }
 
 fn parse_number(raw: &str) -> Result<u64, String> {
@@ -450,89 +441,183 @@ fn clean_segment(segment: &str) -> &str {
     segment.split(['?', '#']).next().unwrap_or(segment).trim()
 }
 
-#[derive(Deserialize)]
-struct GhPrState {
-    number: u64,
-    state: String,
-    #[serde(rename = "mergeCommit", default)]
-    merge_commit: Option<GhMergeCommit>,
-    #[serde(rename = "statusCheckRollup", default)]
-    status_check_rollup: Option<Vec<Value>>,
-}
-
-#[derive(Deserialize)]
-struct GhMergeCommit {
-    oid: String,
-}
-
-pub fn parse_gh_pr_state_json(raw: &str) -> Result<Option<PrCandidate>, String> {
-    let pulls: Vec<GhPrState> = serde_json::from_str(raw).map_err(|err| err.to_string())?;
-    Ok(pulls
-        .into_iter()
-        .filter_map(gh_pr_candidate)
-        .fold(None, |current, next| Some(prefer_candidate(current, next))))
-}
-
-pub fn parse_gh_pr_detail_json(raw: &str) -> Result<Option<PrCandidate>, String> {
-    let pull: GhPrState = serde_json::from_str(raw).map_err(|err| err.to_string())?;
-    Ok(gh_pr_candidate(pull))
-}
-
-fn gh_pr_candidate(pull: GhPrState) -> Option<PrCandidate> {
-    let state = parse_pr_state(&pull.state)?;
-    let ci = match state {
-        WorktreePrState::Open | WorktreePrState::Merged => {
-            ci_from_gh_rollup(pull.status_check_rollup.as_deref().unwrap_or_default())
-        }
-        WorktreePrState::Closed => None,
-    };
-    let merge_sha = if state == WorktreePrState::Merged {
-        pull.merge_commit.map(|commit| commit.oid)
-    } else {
-        None
+/// Build one aliased GitHub GraphQL query for branch PRs and commit rollups.
+pub(crate) fn github_bulk_query(repo_slug: &str, branches: &[&str], oids: &[&str]) -> String {
+    let (owner, repo) = repo_slug.split_once('/').unwrap_or(("", repo_slug));
+    let mut fields = Vec::with_capacity(branches.len() + oids.len() + 1);
+    // Keep an empty alias plan valid for a repo whose local HEAD is unavailable.
+    fields.push("id".to_owned());
+    for (index, branch) in branches.iter().enumerate() {
+        fields.push(format!(
+            "pr{index}: pullRequests(first: 10, headRefName: {}, states: [OPEN, MERGED, CLOSED], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number state statusCheckRollup {{ state }} mergeCommit {{ oid statusCheckRollup {{ state }} }} }} }}",
+            graphql_string(branch)
+        ));
     }
-    .filter(|sha| !sha.trim().is_empty());
-    Some(PrCandidate {
-        number: pull.number,
-        state,
-        ci,
-        merge_sha,
-    })
+    for (index, oid) in oids.iter().enumerate() {
+        fields.push(format!(
+            "sha{index}: object(oid: {}) {{ ... on Commit {{ oid statusCheckRollup {{ state }} }} }}",
+            graphql_string(oid)
+        ));
+    }
+    format!(
+        "query {{ repository(owner: {}, name: {}) {{ {} }} }}",
+        graphql_string(owner),
+        graphql_string(repo),
+        fields.join(" ")
+    )
 }
 
-pub fn parse_gh_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate>, String> {
+fn graphql_string(raw: &str) -> String {
+    Value::String(raw.to_owned()).to_string()
+}
+
+/// Parse the indexed aliases from a GitHub bulk GraphQL response.
+pub(crate) fn parse_github_bulk_response(
+    raw: &str,
+    branch_count: usize,
+    oid_count: usize,
+) -> Result<GhBulkResponse, String> {
+    #[derive(Deserialize)]
+    struct Response {
+        #[serde(default)]
+        errors: Option<Vec<Value>>,
+        data: Option<Data>,
+    }
+
+    #[derive(Deserialize)]
+    struct Data {
+        repository: Option<serde_json::Map<String, Value>>,
+    }
+
+    #[derive(Deserialize)]
+    struct PullConnection {
+        nodes: Vec<Pull>,
+    }
+
     #[derive(Deserialize)]
     struct Pull {
         number: u64,
         state: String,
-        #[serde(rename = "headRefName")]
-        head_ref_name: String,
-        #[serde(rename = "statusCheckRollup", default)]
-        status_check_rollup: Option<Vec<Value>>,
+        #[serde(rename = "statusCheckRollup")]
+        status_check_rollup: Option<Rollup>,
+        #[serde(rename = "mergeCommit")]
+        merge_commit: Option<Commit>,
     }
 
-    let pulls: Vec<Pull> = serde_json::from_str(raw).map_err(|err| err.to_string())?;
-    let mut links = BTreeMap::new();
-    for pull in pulls {
-        let branch = pull.head_ref_name.trim();
-        let Some(state) = parse_pr_state(&pull.state) else {
-            continue;
+    #[derive(Deserialize)]
+    struct Commit {
+        oid: String,
+        #[serde(rename = "statusCheckRollup")]
+        status_check_rollup: Option<Rollup>,
+    }
+
+    #[derive(Deserialize)]
+    struct Rollup {
+        state: Option<String>,
+    }
+
+    let response: Response = serde_json::from_str(raw).map_err(|err| err.to_string())?;
+    if response
+        .errors
+        .as_ref()
+        .is_some_and(|errors| !errors.is_empty())
+    {
+        return Err("github GraphQL response contains errors".to_owned());
+    }
+    let repository = response
+        .data
+        .and_then(|data| data.repository)
+        .ok_or_else(|| "github GraphQL response has no repository data".to_owned())?;
+
+    let mut prs = Vec::with_capacity(branch_count);
+    for index in 0..branch_count {
+        let alias = format!("pr{index}");
+        let value = repository
+            .get(&alias)
+            .ok_or_else(|| format!("github GraphQL response is missing alias `{alias}`"))?;
+        let connection: PullConnection =
+            serde_json::from_value(value.clone()).map_err(|err| err.to_string())?;
+        let best = connection
+            .nodes
+            .into_iter()
+            .filter_map(|pull| {
+                let state = parse_pr_state(&pull.state)?;
+                let merge_commit = pull
+                    .merge_commit
+                    .filter(|_| state == WorktreePrState::Merged);
+                Some(GhBulkPr {
+                    number: pull.number,
+                    state,
+                    head_ci: pull
+                        .status_check_rollup
+                        .as_ref()
+                        .and_then(|rollup| rollup.state.as_deref())
+                        .and_then(ci_from_gh_rollup_state),
+                    merge_sha: merge_commit
+                        .as_ref()
+                        .and_then(|commit| nonempty(&commit.oid)),
+                    merge_ci: merge_commit
+                        .as_ref()
+                        .and_then(|commit| commit.status_check_rollup.as_ref())
+                        .and_then(|rollup| rollup.state.as_deref())
+                        .and_then(ci_from_gh_rollup_state),
+                })
+            })
+            .fold(None, |current, next| {
+                Some(prefer_github_bulk_pr(current, next))
+            });
+        prs.push(best);
+    }
+
+    let mut commits = Vec::with_capacity(oid_count);
+    for index in 0..oid_count {
+        let alias = format!("sha{index}");
+        let value = repository
+            .get(&alias)
+            .ok_or_else(|| format!("github GraphQL response is missing alias `{alias}`"))?;
+        let commit = if value.is_null() {
+            None
+        } else {
+            Some(serde_json::from_value::<Commit>(value.clone()).map_err(|err| err.to_string())?)
         };
-        if branch.is_empty() {
-            continue;
-        }
-        let candidate = PrCandidate {
-            number: pull.number,
-            state,
-            ci: ci_from_gh_rollup(pull.status_check_rollup.as_deref().unwrap_or_default()),
-            merge_sha: None,
-        };
-        links.insert(
-            branch.to_owned(),
-            prefer_candidate(links.get(branch).cloned(), candidate),
+        commits.push(
+            commit
+                .and_then(|commit| commit.status_check_rollup)
+                .and_then(|rollup| rollup.state)
+                .as_deref()
+                .and_then(ci_from_gh_rollup_state),
         );
     }
-    Ok(links)
+    Ok(GhBulkResponse { prs, commits })
+}
+
+fn prefer_github_bulk_pr(current: Option<GhBulkPr>, next: GhBulkPr) -> GhBulkPr {
+    match current {
+        Some(current)
+            if github_bulk_pr_state_rank(current.state)
+                >= github_bulk_pr_state_rank(next.state) =>
+        {
+            current
+        }
+        _ => next,
+    }
+}
+
+fn github_bulk_pr_state_rank(state: WorktreePrState) -> u8 {
+    match state {
+        WorktreePrState::Closed => 0,
+        WorktreePrState::Merged => 1,
+        WorktreePrState::Open => 2,
+    }
+}
+
+fn ci_from_gh_rollup_state(raw: &str) -> Option<WorktreePrCi> {
+    match raw.trim().to_ascii_uppercase().as_str() {
+        "SUCCESS" => Some(WorktreePrCi::Passing),
+        "FAILURE" | "ERROR" => Some(WorktreePrCi::Failing),
+        "PENDING" | "EXPECTED" => Some(WorktreePrCi::Pending),
+        _ => None,
+    }
 }
 
 pub fn parse_tea_pr_list_json(raw: &str, branch: &str) -> Result<Option<PrCandidate>, String> {
@@ -605,139 +690,6 @@ pub fn tea_commit_status_endpoint(repo_slug: &str, branch: &str) -> String {
     format!("repos/{repo_slug}/commits/{branch}/status")
 }
 
-/// Aggregate GitHub's check rollup into the worst actionable CI verdict.
-pub fn ci_from_gh_rollup(rollup: &[Value]) -> Option<WorktreePrCi> {
-    let mut verdict = None;
-    for item in rollup {
-        let Some(kind) = item.get("__typename").and_then(Value::as_str) else {
-            continue;
-        };
-        let next = if kind.eq_ignore_ascii_case("CheckRun") {
-            ci_from_gh_check_run(
-                item.get("status").and_then(Value::as_str),
-                item.get("conclusion").and_then(Value::as_str),
-            )
-        } else if kind.eq_ignore_ascii_case("StatusContext") {
-            match item.get("state").and_then(Value::as_str) {
-                Some(value)
-                    if ["FAILURE", "ERROR"]
-                        .iter()
-                        .any(|failure| value.eq_ignore_ascii_case(failure)) =>
-                {
-                    Some(WorktreePrCi::Failing)
-                }
-                Some(value)
-                    if ["PENDING", "EXPECTED"]
-                        .iter()
-                        .any(|pending| value.eq_ignore_ascii_case(pending)) =>
-                {
-                    Some(WorktreePrCi::Pending)
-                }
-                Some(value) if value.eq_ignore_ascii_case("SUCCESS") => Some(WorktreePrCi::Passing),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        verdict = worst_ci(verdict, next);
-    }
-    verdict
-}
-
-/// Aggregate GitHub's commit check runs into the worst actionable CI verdict.
-pub fn parse_gh_check_runs(raw: &str) -> Result<Option<WorktreePrCi>, String> {
-    #[derive(Deserialize)]
-    struct Page {
-        #[serde(default)]
-        check_runs: Vec<CheckRun>,
-    }
-
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Response {
-        Page(Page),
-        Pages(Vec<Page>),
-    }
-
-    #[derive(Deserialize)]
-    struct CheckRun {
-        status: Option<String>,
-        conclusion: Option<String>,
-    }
-
-    let pages = match serde_json::from_str(raw).map_err(|err| err.to_string())? {
-        Response::Page(page) => vec![page],
-        Response::Pages(pages) => pages,
-    };
-    Ok(pages
-        .into_iter()
-        .flat_map(|page| page.check_runs)
-        .fold(None, |verdict, run| {
-            worst_ci(
-                verdict,
-                ci_from_gh_check_run(run.status.as_deref(), run.conclusion.as_deref()),
-            )
-        }))
-}
-
-/// Parse GitHub's combined commit status into the sidebar CI vocabulary.
-pub fn parse_gh_combined_status(raw: &str) -> Result<Option<WorktreePrCi>, String> {
-    #[derive(Deserialize)]
-    struct Response {
-        state: Option<String>,
-        #[serde(default)]
-        statuses: Vec<Value>,
-    }
-
-    let response: Response = serde_json::from_str(raw).map_err(|err| err.to_string())?;
-    if response.statuses.is_empty() {
-        return Ok(None);
-    }
-    Ok(response.state.as_deref().and_then(|state| {
-        if state.eq_ignore_ascii_case("success") {
-            Some(WorktreePrCi::Passing)
-        } else if state.eq_ignore_ascii_case("pending") {
-            Some(WorktreePrCi::Pending)
-        } else if ["failure", "error"]
-            .iter()
-            .any(|failure| state.eq_ignore_ascii_case(failure))
-        {
-            Some(WorktreePrCi::Failing)
-        } else {
-            None
-        }
-    }))
-}
-
-fn ci_from_gh_check_run(status: Option<&str>, conclusion: Option<&str>) -> Option<WorktreePrCi> {
-    if conclusion.is_some_and(|value| {
-        [
-            "FAILURE",
-            "TIMED_OUT",
-            "ACTION_REQUIRED",
-            "CANCELLED",
-            "STARTUP_FAILURE",
-        ]
-        .iter()
-        .any(|failure| value.eq_ignore_ascii_case(failure))
-    }) {
-        Some(WorktreePrCi::Failing)
-    } else if status.is_some_and(|value| !value.eq_ignore_ascii_case("COMPLETED"))
-        || (status.is_some_and(|value| value.eq_ignore_ascii_case("COMPLETED"))
-            && conclusion.is_none())
-    {
-        Some(WorktreePrCi::Pending)
-    } else if conclusion.is_some_and(|value| {
-        ["SUCCESS", "NEUTRAL", "SKIPPED"]
-            .iter()
-            .any(|passing| value.eq_ignore_ascii_case(passing))
-    }) {
-        Some(WorktreePrCi::Passing)
-    } else {
-        None
-    }
-}
-
 /// Parse Gitea's combined commit status into the sidebar CI vocabulary.
 pub fn parse_tea_combined_status(raw: &str) -> Result<Option<WorktreePrCi>, String> {
     let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
@@ -756,24 +708,6 @@ pub fn parse_tea_combined_status(raw: &str) -> Result<Option<WorktreePrCi>, Stri
             _ => None,
         });
     Ok(verdict)
-}
-
-pub(crate) fn worst_ci(
-    current: Option<WorktreePrCi>,
-    next: Option<WorktreePrCi>,
-) -> Option<WorktreePrCi> {
-    match (current, next) {
-        (Some(WorktreePrCi::Failing), _) | (_, Some(WorktreePrCi::Failing)) => {
-            Some(WorktreePrCi::Failing)
-        }
-        (Some(WorktreePrCi::Pending), _) | (_, Some(WorktreePrCi::Pending)) => {
-            Some(WorktreePrCi::Pending)
-        }
-        (Some(WorktreePrCi::Passing), _) | (_, Some(WorktreePrCi::Passing)) => {
-            Some(WorktreePrCi::Passing)
-        }
-        (None, None) => None,
-    }
 }
 
 fn pr_state_from_value(value: &Value) -> Option<WorktreePrState> {
@@ -828,8 +762,6 @@ fn tea_pr_candidate(value: &Value) -> Option<(String, PrCandidate)> {
     let candidate = PrCandidate {
         number: pr_number(value)?,
         state: pr_state_from_value(value)?,
-        ci: None,
-        merge_sha: None,
     };
     Some((pr_head_branch(value)?, candidate))
 }

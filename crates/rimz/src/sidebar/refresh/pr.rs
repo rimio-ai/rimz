@@ -1,8 +1,8 @@
 //! Producer-only pull-request and branch-CI enrichment.
 //!
 //! The probe shells out to the repo's forge CLI on a long TTL, publishes `pr-state.json`, and lets consumers project the cached map without forking.
-//! `gh` reports merged state directly; Tea follows terminal candidates with a Gitea detail read for canonical merge state and commit metadata.
-//! CI enrichment stays best-effort: GitHub reads open-list rollups and commit checks, while Tea reads combined commit status for branches and commits.
+//! GitHub resolves each due repository in bounded GraphQL batches; Tea follows terminal candidates with a Gitea detail read for canonical merge state and commit metadata.
+//! CI enrichment stays best-effort: GitHub projects aggregate check rollups, while Tea reads combined commit status for branches and commits.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -24,6 +24,7 @@ const PR_STATE_WAIT_STEP: Duration = Duration::from_millis(20);
 const PR_STATE_WAIT_STEPS: u32 = 15;
 const PR_STATE_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PARALLEL_PR_PROBES: usize = 8;
+const GH_BULK_MAX_ALIASES: usize = 100;
 const UNSUPPORTED_REPO_KEY: &str = "<unsupported>";
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -585,7 +586,7 @@ fn assign_states(
         if let Some(candidate) = open_map.get(&target.branch) {
             states.insert(
                 target.path.clone(),
-                target.pr_link(WorktreePrState::Open, candidate.number, candidate.ci, None),
+                target.pr_link(WorktreePrState::Open, candidate.number, None, None),
             );
             continue;
         }
@@ -705,23 +706,188 @@ fn probe_repo_group(
     prior: &BTreeMap<String, PrLink>,
     prior_branch_ci: &BTreeMap<String, WorktreePrCi>,
 ) -> RepoGroupProbe {
-    let open_map = match query_open_prs(group) {
+    match group.forge_cli {
+        ForgeCli::Gh => probe_github_repo_group(repo_key, group, prior, prior_branch_ci),
+        ForgeCli::Tea => probe_tea_repo_group(repo_key, group, prior, prior_branch_ci),
+    }
+}
+
+#[derive(Debug)]
+struct GhQueryPlan {
+    query: String,
+    pr_targets: Vec<usize>,
+    oids: Vec<String>,
+}
+
+fn plan_github_queries(group: &RepoGroup) -> Vec<GhQueryPlan> {
+    let pr_targets = group
+        .targets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, target)| (!target.trunk).then_some(index))
+        .collect::<Vec<_>>();
+    let mut seen_oids = BTreeSet::new();
+    let oids = group
+        .targets
+        .iter()
+        .filter_map(|target| target.head_sha.as_ref())
+        .filter(|oid| seen_oids.insert((*oid).clone()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let repo_slug = group.repo_slug.as_deref().unwrap_or_default();
+    let mut plans = Vec::new();
+    let mut pr_offset = 0;
+    let mut oid_offset = 0;
+    while pr_offset < pr_targets.len() || oid_offset < oids.len() {
+        let pr_end = (pr_offset + GH_BULK_MAX_ALIASES).min(pr_targets.len());
+        let plan_pr_targets = pr_targets[pr_offset..pr_end].to_vec();
+        let oid_capacity = GH_BULK_MAX_ALIASES - plan_pr_targets.len();
+        let oid_end = (oid_offset + oid_capacity).min(oids.len());
+        let plan_oids = oids[oid_offset..oid_end].to_vec();
+        let branches = plan_pr_targets
+            .iter()
+            .map(|index| group.targets[*index].branch.as_str())
+            .collect::<Vec<_>>();
+        let oid_refs = plan_oids.iter().map(String::as_str).collect::<Vec<_>>();
+        plans.push(GhQueryPlan {
+            query: forge::github_bulk_query(repo_slug, &branches, &oid_refs),
+            pr_targets: plan_pr_targets,
+            oids: plan_oids,
+        });
+        pr_offset = pr_end;
+        oid_offset = oid_end;
+    }
+    if plans.is_empty() {
+        plans.push(GhQueryPlan {
+            query: forge::github_bulk_query(repo_slug, &[], &[]),
+            pr_targets: Vec::new(),
+            oids: Vec::new(),
+        });
+    }
+    plans
+}
+
+fn probe_github_repo_group(
+    repo_key: &str,
+    group: &RepoGroup,
+    prior: &BTreeMap<String, PrLink>,
+    prior_branch_ci: &BTreeMap<String, WorktreePrCi>,
+) -> RepoGroupProbe {
+    if group.repo_slug.is_none() {
+        return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
+    }
+    let plans = plan_github_queries(group);
+    let mut batches = Vec::with_capacity(plans.len());
+    for plan in plans {
+        let query_arg = format!("query={}", plan.query);
+        let Some(output) =
+            command_stdout(&group.worktree, "gh", &["api", "graphql", "-f", &query_arg])
+        else {
+            return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
+        };
+        let response = match forge::parse_github_bulk_response(
+            &output,
+            plan.pr_targets.len(),
+            plan.oids.len(),
+        ) {
+            Ok(response) => response,
+            Err(err) => {
+                tracing::debug!(error = %err, "github bulk PR/CI parse failed");
+                return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
+            }
+        };
+        batches.push((plan, response));
+    }
+    let (states, branch_ci) = project_github_group(group, &batches);
+    RepoGroupProbe {
+        repo_key: repo_key.to_owned(),
+        targets: group.targets.clone(),
+        states,
+        branch_ci,
+        ok: true,
+    }
+}
+
+fn project_github_group(
+    group: &RepoGroup,
+    batches: &[(GhQueryPlan, forge::GhBulkResponse)],
+) -> (BTreeMap<String, PrLink>, BTreeMap<String, WorktreePrCi>) {
+    let mut prs = BTreeMap::new();
+    let mut commits = BTreeMap::new();
+    for (plan, response) in batches {
+        for (alias_index, target_index) in plan.pr_targets.iter().enumerate() {
+            if let Some(pr) = response.prs.get(alias_index).and_then(Option::as_ref) {
+                prs.insert(*target_index, pr.clone());
+            }
+        }
+        for (alias_index, oid) in plan.oids.iter().enumerate() {
+            if let Some(ci) = response.commits.get(alias_index).copied().flatten() {
+                commits.insert(oid.clone(), ci);
+            }
+        }
+    }
+
+    let mut states = BTreeMap::new();
+    let mut branch_ci = BTreeMap::new();
+    for (target_index, target) in group.targets.iter().enumerate() {
+        if !target.trunk
+            && let Some(pr) = prs.get(&target_index)
+        {
+            let link = match pr.state {
+                WorktreePrState::Open => target.pr_link(pr.state, pr.number, pr.head_ci, None),
+                WorktreePrState::Merged => target.pr_link(
+                    pr.state,
+                    pr.number,
+                    pr.merge_ci.or(pr.head_ci),
+                    pr.merge_sha.clone(),
+                ),
+                WorktreePrState::Closed => target.pr_link(pr.state, pr.number, None, None),
+            };
+            states.insert(target.path.clone(), link);
+            continue;
+        }
+        if let Some(ci) = target
+            .head_sha
+            .as_ref()
+            .and_then(|oid| commits.get(oid))
+            .copied()
+        {
+            branch_ci.insert(target.path.clone(), ci);
+        }
+    }
+    (states, branch_ci)
+}
+
+fn failed_repo_group_probe(
+    repo_key: &str,
+    group: &RepoGroup,
+    prior: &BTreeMap<String, PrLink>,
+    prior_branch_ci: &BTreeMap<String, WorktreePrCi>,
+) -> RepoGroupProbe {
+    RepoGroupProbe {
+        repo_key: repo_key.to_owned(),
+        targets: group.targets.clone(),
+        states: carry_prior_states(&group.targets, prior),
+        branch_ci: carry_prior_branch_ci(&group.targets, prior_branch_ci),
+        ok: false,
+    }
+}
+
+fn probe_tea_repo_group(
+    repo_key: &str,
+    group: &RepoGroup,
+    prior: &BTreeMap<String, PrLink>,
+    prior_branch_ci: &BTreeMap<String, WorktreePrCi>,
+) -> RepoGroupProbe {
+    let open_map = match query_open_tea_prs(group) {
         Some(open_map) => open_map,
         None => {
-            return RepoGroupProbe {
-                repo_key: repo_key.to_owned(),
-                targets: group.targets.clone(),
-                states: carry_prior_states(&group.targets, prior),
-                branch_ci: carry_prior_branch_ci(&group.targets, prior_branch_ci),
-                ok: false,
-            };
+            return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
         }
     };
     let assigned = assign_states(&group.targets, &open_map, prior);
     let mut states = assigned.states;
-    if group.forge_cli == ForgeCli::Tea
-        && let Some(repo_slug) = group.repo_slug.as_deref()
-    {
+    if let Some(repo_slug) = group.repo_slug.as_deref() {
         for target in &group.targets {
             let Some(link) = states.get_mut(&target.path) else {
                 continue;
@@ -733,7 +899,7 @@ fn probe_repo_group(
     }
     let mut ok = true;
     for (target, number) in assigned.transitions {
-        let result = probe_transition(&target, number);
+        let result = probe_tea(&target, number);
         if !result.ok {
             ok = false;
             if let Some(link) = prior
@@ -758,11 +924,7 @@ fn probe_repo_group(
             let Some(sha) = target.head_sha.as_deref() else {
                 continue;
             };
-            let ci = match group.forge_cli {
-                ForgeCli::Gh => probe_gh_commit_ci(&target.worktree, repo_slug, sha),
-                ForgeCli::Tea => probe_tea_ci(&group.worktree, repo_slug, sha),
-            };
-            if let Some(ci) = ci {
+            if let Some(ci) = probe_tea_ci(&group.worktree, repo_slug, sha) {
                 branch_ci.insert(target.path.clone(), ci);
             }
         }
@@ -808,14 +970,10 @@ fn carry_prior_branch_ci(
         .collect()
 }
 
-fn query_open_prs(group: &RepoGroup) -> Option<BTreeMap<String, forge::PrCandidate>> {
-    let args = group
-        .forge_cli
-        .open_pr_list_args(group.repo_slug.as_deref());
-    let output = command_stdout(&group.worktree, group.forge_cli.program(), &args)?;
-    group
-        .forge_cli
-        .decode_open_prs(&output)
+fn query_open_tea_prs(group: &RepoGroup) -> Option<BTreeMap<String, forge::PrCandidate>> {
+    let args = forge::tea_pr_list_args("open", group.repo_slug.as_deref());
+    let output = command_stdout(&group.worktree, "tea", &args)?;
+    forge::parse_tea_pr_list_links(&output)
         .inspect_err(|err| tracing::debug!(error = %err, "forge PR open-set parse failed"))
         .ok()
 }
@@ -823,125 +981,6 @@ fn query_open_prs(group: &RepoGroup) -> Option<BTreeMap<String, forge::PrCandida
 struct ProbeState {
     state: Option<PrLink>,
     ok: bool,
-}
-
-fn probe_transition(target: &Target, number: Option<u64>) -> ProbeState {
-    match target.forge_cli {
-        ForgeCli::Gh => probe_github(target, number),
-        ForgeCli::Tea => probe_tea(target, number),
-    }
-}
-
-fn github_transition_args(branch: &str, number: Option<u64>) -> Vec<String> {
-    if let Some(number) = number {
-        return vec![
-            "pr".to_owned(),
-            "view".to_owned(),
-            number.to_string(),
-            "--json".to_owned(),
-            "number,state,mergeCommit,statusCheckRollup".to_owned(),
-        ];
-    }
-    vec![
-        "pr".to_owned(),
-        "list".to_owned(),
-        "--head".to_owned(),
-        branch.to_owned(),
-        "--state".to_owned(),
-        "all".to_owned(),
-        "--json".to_owned(),
-        "number,state,mergeCommit,statusCheckRollup".to_owned(),
-    ]
-}
-
-fn probe_github(target: &Target, number: Option<u64>) -> ProbeState {
-    if number.is_some() {
-        let args = github_transition_args(&target.branch, number);
-        let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-        if let Some(output) = command_stdout(&target.worktree, "gh", &refs) {
-            match forge::parse_gh_pr_detail_json(&output) {
-                Ok(Some(candidate)) => return github_candidate_state(target, candidate),
-                Ok(None) => {}
-                Err(err) => {
-                    tracing::debug!(error = %err, "github PR detail parse failed");
-                }
-            }
-        }
-    }
-    let args = github_transition_args(&target.branch, None);
-    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let Some(output) = command_stdout(&target.worktree, "gh", &refs) else {
-        return ProbeState {
-            state: None,
-            ok: false,
-        };
-    };
-    match forge::parse_gh_pr_state_json(&output) {
-        Ok(Some(candidate)) => github_candidate_state(target, candidate),
-        Ok(None) => ProbeState {
-            state: None,
-            ok: true,
-        },
-        Err(err) => {
-            tracing::debug!(error = %err, "github PR state parse failed");
-            ProbeState {
-                state: None,
-                ok: false,
-            }
-        }
-    }
-}
-
-fn github_candidate_state(target: &Target, candidate: forge::PrCandidate) -> ProbeState {
-    let ci = if candidate.state == WorktreePrState::Merged {
-        candidate
-            .merge_sha
-            .as_deref()
-            .and_then(|sha| {
-                target
-                    .repo_slug
-                    .as_deref()
-                    .and_then(|repo_slug| probe_gh_commit_ci(&target.worktree, repo_slug, sha))
-            })
-            .or(candidate.ci)
-    } else if candidate.state == WorktreePrState::Open {
-        candidate.ci
-    } else {
-        None
-    };
-    ProbeState {
-        state: Some(target.pr_link(candidate.state, candidate.number, ci, candidate.merge_sha)),
-        ok: true,
-    }
-}
-
-fn probe_gh_commit_ci(worktree: &Path, repo_slug: &str, sha: &str) -> Option<WorktreePrCi> {
-    let checks_endpoint = format!("repos/{repo_slug}/commits/{sha}/check-runs?per_page=100");
-    let checks = command_stdout(
-        worktree,
-        "gh",
-        &["api", "--paginate", "--slurp", &checks_endpoint],
-    )
-    .and_then(|output| {
-        forge::parse_gh_check_runs(&output)
-            .map_err(|err| {
-                tracing::debug!(error = %err, "github check-runs parse failed");
-                err
-            })
-            .ok()
-            .flatten()
-    });
-    let status_endpoint = format!("repos/{repo_slug}/commits/{sha}/status");
-    let status = command_stdout(worktree, "gh", &["api", &status_endpoint]).and_then(|output| {
-        forge::parse_gh_combined_status(&output)
-            .map_err(|err| {
-                tracing::debug!(error = %err, "github combined commit-status parse failed");
-                err
-            })
-            .ok()
-            .flatten()
-    });
-    forge::worst_ci(checks, status)
 }
 
 fn tea_pr_detail_args(number: u64, repo: &str) -> Vec<String> {

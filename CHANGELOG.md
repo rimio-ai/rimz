@@ -16,6 +16,7 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 
 ### Fixed
 
+- Sidebar CI badges on merged GitHub pull requests track rerun verdicts, while each repository refresh normally uses one API request. → [sidebar state](./docs/internals/sidebar/state.md#enrichment-lanes)
 - Drag selection and heavy output stay responsive in Chromium-based browser rooms instead of freezing mid-repaint. → [web](./docs/guide/web.md#browser-appearance-and-input)
 - Browser panes opened with macOS Option chords no longer begin with the composed accent after xterm handles the Meta input, including in Safari and Chrome. → [web](./docs/guide/web.md#browser-appearance-and-input)
 - Closing a RimZ browser tab no longer asks for leave-site confirmation; reconnecting reattaches the same room.
