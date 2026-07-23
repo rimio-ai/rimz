@@ -63,12 +63,12 @@ struct DayJson {
     usd: f64,
 }
 
-pub(super) fn emit_json(
+fn stats_json<'a>(
     stats: &Stats,
-    assists: &AssistStats,
+    assists: &'a AssistStats,
     today_day: i64,
     dollars: bool,
-) -> Result<()> {
+) -> StatsJson<'a> {
     let active = Window::AllTime;
     let activity = Activity::of(&stats.by_day, today_day, active);
     let total_usd: f64 = stats
@@ -133,7 +133,7 @@ pub(super) fn emit_json(
         })
         .collect();
 
-    let doc = StatsJson {
+    StatsJson {
         unit: if dollars { "usd" } else { "tokens" },
         sessions: stats.total.year.sessions,
         active_days_28: activity.active_count,
@@ -160,6 +160,25 @@ pub(super) fn emit_json(
         agents,
         days,
         assists,
-    };
-    crate::cli::render::json_pretty(&doc)
+    }
+}
+
+pub(super) fn emit_json(
+    stats: &Stats,
+    assists: &AssistStats,
+    today_day: i64,
+    dollars: bool,
+) -> Result<()> {
+    crate::cli::render::json_pretty(&stats_json(stats, assists, today_day, dollars))
+}
+
+#[cfg(test)]
+pub(super) fn stats_json_value(
+    stats: &Stats,
+    assists: &AssistStats,
+    today_day: i64,
+    dollars: bool,
+) -> serde_json::Value {
+    serde_json::to_value(stats_json(stats, assists, today_day, dollars))
+        .expect("stats JSON is serializable")
 }
