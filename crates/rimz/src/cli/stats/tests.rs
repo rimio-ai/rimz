@@ -883,12 +883,12 @@ fn model_cells_show_usd_and_cache_read_detail() {
     let pct_w = stat_pct_width(&cells, &[]);
     let layout = stat_section_layout(&cells, &[], pct_w, 120);
     emit_stat_section(&mut lines, "Models", &cells, layout, &glyphs);
-    let row = strip_ansi(
-        lines
-            .iter()
-            .find(|line| line.contains("Opus 4.8"))
-            .expect("opus row"),
-    );
+    let raw_row = lines
+        .iter()
+        .find(|line| line.contains("Opus 4.8"))
+        .expect("opus row");
+    assert!(raw_row.contains(&render::paint(render::palette::alarm(), "68%")));
+    let row = strip_ansi(raw_row);
 
     assert!(row.contains("Opus 4.8"));
     assert!(row.contains("100.0%"));
@@ -896,6 +896,7 @@ fn model_cells_show_usd_and_cache_read_detail() {
     assert!(row.contains("↘ 1.2m"));
     assert!(row.contains("↗ 500.0k"));
     assert!(row.contains("◌ 2.5m"));
+    assert!(row.contains("· 68%"));
 }
 
 #[test]
@@ -1078,6 +1079,7 @@ fn agent_cells_rank_by_sessions_and_skip_empty_agents() {
     assert!(!codex.contains("(66.7%)"));
     assert!(claude.contains("◎ 2"));
     assert!(claude.contains("◇ 350"));
+    assert!(claude.contains("$3 · 100%"));
     assert!(claude.contains("33.3%"));
 
     let empty_cells = agent_cells(&[], 0, &glyphs);
@@ -1271,7 +1273,12 @@ fn stat_sections_share_a_percent_column() {
             .find(|line| line.contains("Claude"))
             .expect("agent row"),
     );
-    let pct_col = |line: &str| display_width(line.split_once('%').expect("pct").0);
+    let pct_col = |line: &str| {
+        display_width(
+            line.get(..line.rfind("100.0%").expect("share percentage"))
+                .unwrap(),
+        )
+    };
 
     assert_eq!(pct_col(&model), pct_col(&agent));
 }

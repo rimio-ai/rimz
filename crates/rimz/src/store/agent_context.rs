@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::context::{AgentContext, AgentTurnError};
+use crate::agents::context::{AgentContext, AgentTurnError, merge_session_usage};
 use crate::agents::{
     AgentCost, AgentSpec, AgentTokenUsage, LocalContextRefresh, LocalSpendFold, TranscriptStat,
 };
@@ -116,11 +116,21 @@ pub fn write(
         let mut context = context.clone();
         let observed_cost = context.cost.is_some();
         // Statusline producers own their observed fields, while lifecycle
-        // confirmation owns turn causality. Preserve that independently-written
-        // field across whole-context statusline refreshes.
+        // confirmation and local transcript folds own turn causality and the
+        // resolved transcript path. Preserve those independently-written fields
+        // across whole-context statusline refreshes.
         context.turn_opened_by = record.context.turn_opened_by.clone();
         if context.cost.is_none() {
             context.cost.clone_from(&record.context.cost);
+        }
+        let prior_session_usage = record
+            .context
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.session_usage.clone());
+        if let Some(prior_session_usage) = prior_session_usage {
+            let tokens = context.tokens.get_or_insert_with(AgentTokenUsage::default);
+            merge_session_usage(&mut tokens.session_usage, Some(prior_session_usage));
         }
         let mut locally_priced_cost = record.locally_priced_cost.clone();
         if observed_cost {
@@ -132,7 +142,7 @@ pub fn write(
             context,
             rate_limits_observed_at: None,
             rich_observed_at: None,
-            transcript_path: None,
+            transcript_path: record.transcript_path.clone(),
             transcript_stat: None,
             spend_fold: record.spend_fold.clone(),
             locally_priced_cost,

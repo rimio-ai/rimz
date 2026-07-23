@@ -577,6 +577,7 @@ pub(super) fn model_cells(
         input: String,
         output: String,
         cache_read: String,
+        cache_hit: Option<(u8, String)>,
         share_pct: f64,
     }
 
@@ -594,6 +595,9 @@ pub(super) fn model_cells(
                 input: fmt_tokens_lower(spend.input),
                 output: fmt_tokens_lower(spend.output),
                 cache_read: fmt_tokens_lower(spend.cache_read),
+                cache_hit: spend
+                    .cache_hit_percent()
+                    .map(|percent| (percent, format!("{percent}%"))),
                 share_pct: pct,
             }
         })
@@ -618,12 +622,21 @@ pub(super) fn model_cells(
         .map(|row| display_width(&row.cache_read))
         .max()
         .unwrap_or(0);
+    let cache_hit_w = rows
+        .iter()
+        .filter_map(|row| {
+            row.cache_hit
+                .as_ref()
+                .map(|(_, label)| display_width(label))
+        })
+        .max()
+        .unwrap_or(0);
     let sep = render::paint(render::palette::muted(), "·");
 
     rows.iter()
         .map(|row| {
             let name = pad_to(&render::paint(render::palette::muted(), &row.name), name_w);
-            let left_full = format!(
+            let mut left_full = format!(
                 "{} {name} {} {sep} {} {} {sep} {} {} {sep} {} {}",
                 render::paint(render::palette::cool(), "●"),
                 render::paint(render::palette::money(), &pad_left(&row.usd, usd_w)),
@@ -634,6 +647,17 @@ pub(super) fn model_cells(
                 render::paint(render::palette::muted(), &glyphs.cache_read),
                 pad_left(&row.cache_read, cache_w),
             );
+            if let Some((percent, cache_hit)) = row.cache_hit.as_ref() {
+                let style = match rimz::agents::CacheHealth::classify(*percent) {
+                    rimz::agents::CacheHealth::Good => render::palette::good(),
+                    rimz::agents::CacheHealth::Caution => render::palette::warn(),
+                    rimz::agents::CacheHealth::Alarm => render::palette::alarm(),
+                };
+                left_full.push_str(&format!(
+                    " {sep} {}",
+                    render::paint(style, &pad_left(cache_hit, cache_hit_w))
+                ));
+            }
             let left_compact = format!(
                 "{} {name} {}",
                 render::paint(render::palette::cool(), "●"),
@@ -865,6 +889,7 @@ pub(super) fn agent_cells(
         sessions: String,
         tokens: String,
         usd: String,
+        cache_hit: Option<(u8, String)>,
         share_pct: f64,
         folded: bool,
     }
@@ -877,6 +902,10 @@ pub(super) fn agent_cells(
             sessions: agent.window.sessions.to_string(),
             tokens: fmt_tokens(stats_tokens(&agent.window)),
             usd: fmt_usd(agent.window.usd),
+            cache_hit: agent
+                .window
+                .cache_hit_percent()
+                .map(|percent| (percent, format!("{percent}%"))),
             share_pct: agent.share * 100.0,
             folded: agent.folded,
         })
@@ -896,6 +925,15 @@ pub(super) fn agent_cells(
         .map(|row| display_width(&row.usd))
         .max()
         .unwrap_or(0);
+    let cache_hit_w = rows
+        .iter()
+        .filter_map(|row| {
+            row.cache_hit
+                .as_ref()
+                .map(|(_, label)| display_width(label))
+        })
+        .max()
+        .unwrap_or(0);
     let sep = render::paint(render::palette::muted(), "·");
 
     rows.iter()
@@ -906,7 +944,7 @@ pub(super) fn agent_cells(
                 render::palette::identity(&row.kind)
             };
             let name = pad_to(&render::paint(identity, &row.name), name_w);
-            let left = format!(
+            let left_compact = format!(
                 "{} {name} {} {} {sep} {} {} {sep} {}",
                 render::paint(identity, "●"),
                 render::paint(render::palette::muted(), &glyphs.sessions),
@@ -915,9 +953,21 @@ pub(super) fn agent_cells(
                 pad_left(&row.tokens, tok_w),
                 render::paint(render::palette::money(), &pad_left(&row.usd, usd_w)),
             );
+            let mut left_full = left_compact.clone();
+            if let Some((percent, cache_hit)) = row.cache_hit.as_ref() {
+                let style = match rimz::agents::CacheHealth::classify(*percent) {
+                    rimz::agents::CacheHealth::Good => render::palette::good(),
+                    rimz::agents::CacheHealth::Caution => render::palette::warn(),
+                    rimz::agents::CacheHealth::Alarm => render::palette::alarm(),
+                };
+                left_full.push_str(&format!(
+                    " {sep} {}",
+                    render::paint(style, &pad_left(cache_hit, cache_hit_w))
+                ));
+            }
             StatCell {
-                left_full: left.clone(),
-                left_compact: left,
+                left_full,
+                left_compact,
                 share_pct: row.share_pct,
             }
         })

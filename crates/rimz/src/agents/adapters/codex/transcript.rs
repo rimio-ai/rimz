@@ -74,7 +74,12 @@ pub fn refresh_transcript_context(
         Some(RestingTurnOutcome::Died(error)) => (None, Some(error)),
         None => (None, None),
     };
-    let (tokens, model_id) = transcript_enrichment(&usage, model_hint);
+    let (mut tokens, model_id) = transcript_enrichment(&usage, model_hint);
+    if let Some(session_usage) = spend_fold.session_usage() {
+        tokens
+            .get_or_insert_with(AgentTokenUsage::default)
+            .session_usage = Some(session_usage);
+    }
     let cost = (spend_fold.total_usd > 0.0).then_some(AgentCost {
         total_cost_usd: Some(spend_fold.total_usd),
         ..AgentCost::default()

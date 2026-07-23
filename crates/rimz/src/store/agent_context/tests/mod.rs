@@ -102,6 +102,83 @@ fn turn_openers_replace_and_survive_statusline_refresh() {
 }
 
 #[test]
+fn session_usage_survives_whole_context_statusline_refresh() {
+    let (_dir, runtime) = runtime();
+    let now = Timestamp::now();
+    let mut folded = ctx(now);
+    folded.tokens = Some(crate::agents::AgentTokenUsage {
+        session_usage: Some(crate::agents::AgentSessionUsage {
+            input_tokens: Some(10),
+            cache_read_input_tokens: Some(90),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    write(&runtime, "claude", "sess-1", &folded).unwrap();
+
+    let mut statusline = ctx(now);
+    statusline.tokens = Some(crate::agents::AgentTokenUsage {
+        context_window_size: Some(200_000),
+        used_percentage: Some(25),
+        ..Default::default()
+    });
+    write(&runtime, "claude", "sess-1", &statusline).unwrap();
+    let tokens = read_one(&runtime, "claude", "sess-1")
+        .unwrap()
+        .context
+        .tokens
+        .unwrap();
+    assert_eq!(tokens.used_percentage, Some(25));
+    assert_eq!(
+        tokens
+            .session_usage
+            .and_then(|usage| usage.cache_hit_percent()),
+        Some(90)
+    );
+
+    write(&runtime, "claude", "sess-1", &ctx(now)).unwrap();
+    assert_eq!(
+        read_one(&runtime, "claude", "sess-1")
+            .unwrap()
+            .context
+            .tokens
+            .and_then(|tokens| tokens.session_usage)
+            .and_then(|usage| usage.cache_hit_percent()),
+        Some(90),
+        "a statusline without any token reading still retains the projection"
+    );
+}
+
+#[test]
+fn statusline_refresh_keeps_the_local_fold_bound_to_its_transcript() {
+    let (_dir, runtime) = runtime();
+    let now = Timestamp::now();
+    let mut record = new_record("claude", "sess-1", ctx(now));
+    record.transcript_path = Some("/tmp/sess-1.jsonl".to_owned());
+    record.transcript_stat = Some(crate::agents::TranscriptStat {
+        mtime_secs: 1,
+        mtime_nanos: 2,
+        len: 3,
+        companion: None,
+    });
+    record.spend_fold = Some(crate::agents::LocalSpendFold {
+        input: 10,
+        cache_read: 90,
+        ..Default::default()
+    });
+    write_record(&runtime, &record).unwrap();
+
+    write(&runtime, "claude", "sess-1", &ctx(now)).unwrap();
+    let refreshed = read_one(&runtime, "claude", "sess-1").unwrap();
+    assert_eq!(
+        refreshed.transcript_path.as_deref(),
+        Some("/tmp/sess-1.jsonl")
+    );
+    assert_eq!(refreshed.transcript_stat, None);
+    assert_eq!(refreshed.spend_fold, record.spend_fold);
+}
+
+#[test]
 fn locally_priced_cost_deduplicates_accumulates_and_survives_statusline_refresh() {
     let (_dir, runtime) = runtime();
     let first = crate::agents::LocallyPricedTurnCost {

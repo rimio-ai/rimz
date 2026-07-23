@@ -147,15 +147,22 @@ pub(crate) fn resume_live_fold(
     prices: &PriceBook,
 ) -> LocalSpendFold {
     let mut fold = prior.cloned().unwrap_or_default();
-    if fold.cursor.offset > file_len {
+    let pre_token_counters = fold.total_usd > 0.0
+        && fold.input == 0
+        && fold.output == 0
+        && fold.cache_write == 0
+        && fold.cache_read == 0;
+    if fold.cursor.offset > file_len || pre_token_counters {
         fold = LocalSpendFold::default();
     }
     let parsed = parse_codex_spend(path, Some(&fold.cursor), prices);
-    fold.total_usd += parsed
-        .entries
-        .iter()
-        .map(|entry| entry.cost_usd)
-        .sum::<f64>();
+    for entry in &parsed.entries {
+        fold.total_usd += entry.cost_usd;
+        fold.input = fold.input.saturating_add(entry.input);
+        fold.output = fold.output.saturating_add(entry.output);
+        fold.cache_write = fold.cache_write.saturating_add(entry.cache_write);
+        fold.cache_read = fold.cache_read.saturating_add(entry.cache_read);
+    }
     fold.cursor = parsed.cursor;
     fold
 }

@@ -34,17 +34,17 @@ A one-shot run on a machine with recorded history, default glyph set:
   All time 37.6B  ·  Week 13.2B  ·  Month 27.5B  ·  Year 37.6B
 
   Models
-  ● GPT 5.5     $11,582 · ↘ 629.9m · ↗ 51.0m · ◌ 13.8b   36.2% ━━━━━━───────────
-  ● GPT 5.6 Sol  $9,266 · ↘ 347.3m · ↗ 34.0m · ◌ 12.9b   29.0% ━━━━━────────────
-  ● Opus 4.8     $6,411 · ↘ 210.6m · ↗ 66.9m · ◌  5.4b   20.0% ━━━──────────────
-  ● Fable 5      $3,681 · ↘  70.1m · ↗ 17.6m · ◌  1.4b   11.5% ━━───────────────
-  ● GPT 5.4        $649 · ↘  84.4m · ↗  6.9m · ◌  1.3b    2.0% ─────────────────
-  ● Other          $397 · ↘  79.2m · ↗ 11.8m · ◌  1.1b    1.2% ─────────────────
+  ● GPT 5.5     $11,582 · ↘ 629.9m · ↗ 51.0m · ◌ 13.8b · 96%   36.2% ━━━━━━───────────
+  ● GPT 5.6 Sol  $9,266 · ↘ 347.3m · ↗ 34.0m · ◌ 12.9b · 97%   29.0% ━━━━━────────────
+  ● Opus 4.8     $6,411 · ↘ 210.6m · ↗ 66.9m · ◌  5.4b · 96%   20.0% ━━━──────────────
+  ● Fable 5      $3,681 · ↘  70.1m · ↗ 17.6m · ◌  1.4b · 95%   11.5% ━━───────────────
+  ● GPT 5.4        $649 · ↘  84.4m · ↗  6.9m · ◌  1.3b · 94%    2.0% ─────────────────
+  ● Other          $397 · ↘  79.2m · ↗ 11.8m · ◌  1.1b · 93%    1.2% ─────────────────
 
   Agents
-  ● Codex       ◎ 4003 · ◇ 30.3B · $21,808               77.6% ━━━━━━━━━━━━━────
-  ● Claude      ◎ 1025 · ◇  7.3B · $10,149               19.9% ━━━──────────────
-  ● Other       ◎  131 · ◇   36M ·     $30                2.5% ─────────────────
+  ● Codex       ◎ 4003 · ◇ 30.3B · $21,808 · 97%         77.6% ━━━━━━━━━━━━━────
+  ● Claude      ◎ 1025 · ◇  7.3B · $10,149 · 96%         19.9% ━━━──────────────
+  ● Other       ◎  131 · ◇   36M ·     $30 · 80%          2.5% ─────────────────
 
   Sessions: 5,159              Spend: $31,986.33
   Active days: 28/28           Longest streak: 51 days
@@ -83,6 +83,8 @@ Account-global setup creates the shared roots only (`ensure_shared_runtime`); st
 
 Every window's token total folds in cache-read tokens. Tokens are attributed per model and per agent independently of pricing coverage, so an unpriced model still contributes its tokens to the breakdown.
 
+Full-width model and agent rows append the input-side cache-hit percentage: `cache_read / (cache_read + input)`, where the aggregate `input` already includes cache writes. The integer uses round-half-up and stays absent for a zero denominator. The shared health classifier paints 90% and above green, 70–89% yellow, and lower values red. Compact rows omit the column.
+
 Each named model must carry at least 1.0% of the window's model spend, and each named agent must carry at least 1.0% of its sessions. Smaller entries fold into `Other` before the row cap applies. A section with no priced model spend or no agent sessions has no defined percentage denominator, so its entries remain itemized until the cap applies. Machine-readable JSON keeps every entry separate.
 
 ## Rendering
@@ -117,7 +119,7 @@ Rendering follows three states. A current stats frame always wins, including whi
 
 ## Machine-readable surfaces
 
-`--json` (`json.rs`) emits the stats document instead of the panel: unit, session count, active-day and streak insights, the trailing windows, the per-model and per-agent breakdowns, the per-day buckets, and the assists rollup with its events. This is the stable surface for scripts. It renders All time and conflicts with `--refresh`.
+`--json` (`json.rs`) emits the stats document instead of the panel: unit, session count, active-day and streak insights, the trailing windows, the per-model and per-agent breakdowns with optional `cache_hit_pct`, the per-day buckets, and the assists rollup with its events. This is the stable surface for scripts. It renders All time and conflicts with `--refresh`.
 
 `--assists` (`assists.rs`) prints the complete newest-first assist timeline instead of the dashboard, one line per event with its forensics. It conflicts with `--json` and `--refresh`.
 

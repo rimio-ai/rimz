@@ -250,6 +250,7 @@ mod tests {
                         state: None,
                     },
                     total_usd: 0.42,
+                    ..LocalSpendFold::default()
                 }),
             },
             local_at,

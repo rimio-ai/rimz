@@ -94,7 +94,7 @@ fn droid_card_renders_resolved_custom_model_session_usage_and_plain_cost() {
         "the resolved identity and configured capacity render together:\n{rendered}"
     );
     assert!(
-        rendered.contains("◇ 20k ↘ 15k ↗ 5k ◌ 30k"),
+        rendered.contains("◇ 20k ↘ 15k ↗ 5k ◌ 30k · 67%"),
         "session-lifetime categories use the shared token grammar:\n{rendered}"
     );
     assert!(
@@ -121,6 +121,50 @@ fn droid_card_renders_resolved_custom_model_session_usage_and_plain_cost() {
             && rendered.contains('◇'),
         "a cumulative-only Droid reading keeps the placeholder meter without claiming context fill:\n{rendered}"
     );
+}
+
+#[test]
+fn session_cache_hit_percent_uses_health_tone_and_hides_without_input_data() {
+    let theme = Theme::fixed(false);
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("warm cache"),
+    );
+    let mut context = codex_context(fixed_now());
+    context.tokens = Some(AgentTokenUsage {
+        current_context_tokens: Some(10_000),
+        session_usage: Some(AgentSessionUsage {
+            input_tokens: Some(10),
+            cache_read_input_tokens: Some(90),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    codex.context = Some(context);
+
+    let snapshot = snapshot_with(vec![codex.clone()]);
+    let cost_rolls = CostRolls::default();
+    let row_ctx = test_row_ctx(&snapshot, &theme, 52, 0, 0, &cost_rolls);
+    let lines = worktree_group_block(&row_ctx, &snapshot.worktree_groups[0], false, None).lines;
+    let percent = lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .find(|span| span.content == "90%")
+        .expect("cache hit percentage span");
+    assert_eq!(percent.style.fg, theme.good(Modifier::empty()).fg);
+
+    codex
+        .context
+        .as_mut()
+        .and_then(|context| context.tokens.as_mut())
+        .unwrap()
+        .session_usage = None;
+    let rendered = snapshot_to_screen(&snapshot_with(vec![codex]), 52, 17);
+    assert!(!rendered.contains("· 90%"), "{rendered}");
 }
 
 #[test]

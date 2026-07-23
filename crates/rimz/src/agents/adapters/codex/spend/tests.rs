@@ -312,6 +312,24 @@ fn live_fold_resume_matches_a_cold_full_fold() {
 
     assert_eq!(resumed, cold);
     assert!(resumed.total_usd > first.total_usd);
+    assert_eq!(
+        (
+            first.input,
+            first.output,
+            first.cache_write,
+            first.cache_read
+        ),
+        (50_000, 1_000, 0, 150_000)
+    );
+    assert_eq!(
+        (
+            resumed.input,
+            resumed.output,
+            resumed.cache_write,
+            resumed.cache_read
+        ),
+        (100_000, 2_000, 0, 300_000)
+    );
 }
 
 #[test]
@@ -338,6 +356,35 @@ fn live_fold_resets_when_the_rollout_is_truncated() {
 
     assert_eq!(reset, cold);
     assert!(reset.total_usd < full.total_usd);
+}
+
+#[test]
+fn live_fold_heals_a_pre_token_counter_sidecar() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let prices = PriceBook::embedded();
+    write_live_rollout(&path, &[(200_000, 150_000, 1_000)]);
+    let complete = resume_live_fold(
+        &path,
+        None,
+        std::fs::metadata(&path).unwrap().len(),
+        &prices,
+    );
+    let legacy = LocalSpendFold {
+        cursor: complete.cursor.clone(),
+        total_usd: complete.total_usd,
+        ..LocalSpendFold::default()
+    };
+
+    assert_eq!(
+        resume_live_fold(
+            &path,
+            Some(&legacy),
+            std::fs::metadata(&path).unwrap().len(),
+            &prices,
+        ),
+        complete
+    );
 }
 
 const TOKEN_COUNT_LINE: &str = r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#;

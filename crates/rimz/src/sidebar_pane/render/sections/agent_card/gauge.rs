@@ -410,6 +410,19 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
             .unwrap_or(0);
         left.extend(context_total_spans(theme, severity, total, tokens_int));
     }
+    if let Some(percent) = ctx(row)
+        .and_then(|context| context.tokens.as_ref())
+        .and_then(|tokens| tokens.session_usage.as_ref())
+        .and_then(crate::agents::AgentSessionUsage::cache_hit_percent)
+    {
+        let style = match CacheHealth::classify(percent) {
+            CacheHealth::Good => theme.good(Modifier::empty()),
+            CacheHealth::Caution => theme.warn(Modifier::empty()),
+            CacheHealth::Alarm => theme.alarm(Modifier::empty()),
+        };
+        left.push(Span::styled(" · ", theme.muted()));
+        left.push(Span::styled(format!("{percent}%"), style));
+    }
     left.extend(context_compaction_spans(
         theme,
         agent(row).map_or(0, |agent| agent.compaction_count),
