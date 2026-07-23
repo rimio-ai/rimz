@@ -12,7 +12,10 @@ case "${1:-shell}" in
     web)
         rimz config set web.interface 0.0.0.0
         rimz web open /workspace --print --no-resume
-        exec sleep infinity
+        sleep infinity &
+        sleeper=$!
+        trap 'kill "$sleeper" 2>/dev/null || true; wait "$sleeper" 2>/dev/null || true; exit 0' TERM INT
+        wait "$sleeper"
         ;;
     *)
         exec "$@"
