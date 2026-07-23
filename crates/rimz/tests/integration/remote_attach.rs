@@ -1008,6 +1008,40 @@ fn established_link_drop_reconnects_and_notifies_once() {
 }
 
 #[test]
+fn ctrl_c_during_remote_setup_prompt_stops_without_reconnecting() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    std::fs::write(&plan, "255\n0\n").expect("write plan");
+
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_STDERR", "Killed by signal 2.\n")
+        .bounded_output()
+        .expect("run interrupted remote connect");
+
+    assert!(
+        out.status.success(),
+        "Ctrl-C exits the supervisor cleanly\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        main_invocation_count(&log),
+        1,
+        "the attended attach is not retried"
+    );
+    assert_eq!(
+        master_invocation_count(&log),
+        1,
+        "the supervisor does not open a recovery connection"
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("reconnecting"),
+        "an explicit interruption is not presented as link loss"
+    );
+}
+
+#[test]
 fn unreachable_endpoint_holds_until_restored_then_reconnects_immediately() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");

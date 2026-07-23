@@ -791,6 +791,17 @@ pub fn attach_error_summary(stderr: &str) -> Option<String> {
     Some(summarize_ssh_line(line))
 }
 
+/// Whether OpenSSH reports that Ctrl-C interrupted the remote command.
+///
+/// SSH maps a remote `SIGINT` to its generic status 255, so the diagnostic is
+/// the only distinction from a dropped established transport.
+pub fn attach_interrupted(exit_code: Option<i32>, stderr: &str) -> bool {
+    exit_code == Some(SSH_TRANSPORT_EXIT)
+        && stderr
+            .lines()
+            .any(|line| line.trim() == "Killed by signal 2.")
+}
+
 fn is_ssh_close_notice(line: &str) -> bool {
     (line.starts_with("Connection to ") || line.starts_with("Shared connection to "))
         && (line.ends_with(" closed.") || line.ends_with(" closed by remote host."))

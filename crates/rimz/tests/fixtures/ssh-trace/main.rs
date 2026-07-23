@@ -9,6 +9,7 @@
 //! `$RIMZ_TEST_SSH_RAW_TTY` simulates OpenSSH leaving the controlling tty raw;
 //! `$RIMZ_TEST_SSH_TTY_STATE_LOG` records whether each attach inherited sane
 //! shell flags before that transition.
+//! `$RIMZ_TEST_SSH_STDERR` supplies the visible attach's diagnostic output.
 //! `$RIMZ_TEST_SSH_MASTER_PLAN` scripts background ControlMaster failures and
 //! `$RIMZ_TEST_SSH_MASTER_STDERR` supplies their diagnostic output.
 //! `$RIMZ_TEST_SSH_MASTER_READY_PLAN` controls whether each successful master
@@ -71,6 +72,13 @@ fn main() {
     publish_control_master_if_requested(&argv);
     wait_for_probe_if_requested(&log_path);
     record_and_enter_raw_tty_if_requested();
+    if let Ok(stderr) = env::var("RIMZ_TEST_SSH_STDERR") {
+        let mut stream = std::io::stderr().lock();
+        stream
+            .write_all(stderr.as_bytes())
+            .expect("write attach stderr");
+        stream.flush().expect("flush attach stderr");
+    }
 
     if let Ok(ms) = env::var("RIMZ_TEST_SSH_SLEEP_MS")
         && let Ok(ms) = ms.parse::<u64>()

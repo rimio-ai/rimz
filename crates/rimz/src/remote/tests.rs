@@ -330,6 +330,19 @@ fn attach_error_summary_filters_detach_noise_and_names_control_failures() {
 }
 
 #[test]
+fn attach_interruption_distinguishes_ctrl_c_from_transport_loss() {
+    assert!(attach_interrupted(
+        Some(SSH_TRANSPORT_EXIT),
+        "Killed by signal 2.\nShared connection to dev-box closed.\n"
+    ));
+    assert!(!attach_interrupted(
+        Some(SSH_TRANSPORT_EXIT),
+        "Connection to dev-box closed by remote host.\n"
+    ));
+    assert!(!attach_interrupted(Some(130), "Killed by signal 2.\n"));
+}
+
+#[test]
 fn term_plan_selects_keep_copy_or_downgrade() {
     for term in ["alacritty", "xterm-kitty", "xterm-ghostty"] {
         assert!(term_needs_terminfo_copy(term), "{term}");

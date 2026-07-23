@@ -9,6 +9,7 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 ### Fixed
 
 - Closing a RimZ browser tab no longer asks for leave-site confirmation; reconnecting reattaches the same room.
+- Ctrl-C stops `rimz remote connect` without opening another recovery attempt, including while the remote host asks a setup, hook-installation, or trust question. → [remote](./docs/guide/remote.md#a-link-that-heals-itself)
 
 ## [0.4.2] (2026-07-22)
 
