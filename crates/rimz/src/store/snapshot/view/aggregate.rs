@@ -11,7 +11,7 @@ use super::layout::{
     status_counts,
 };
 use super::score;
-use super::{SidebarWorktreeGroup, SidebarWorktreeKind};
+use super::{SidebarWorktreeGroup, SidebarWorktreeKind, cohort_team};
 
 mod status;
 mod subagents;
@@ -156,10 +156,16 @@ pub(super) fn build_worktree_groups_from_rows(
                 label
             };
             let status_counts = status_counts(&rows);
+            let team = cohort_team(
+                rows.iter()
+                    .map(|row| row.as_agent().and_then(|agent| agent.team.as_deref())),
+            )
+            .map(ToOwned::to_owned);
             SidebarWorktreeGroup {
                 key,
                 label,
                 kind,
+                team,
                 status_counts,
                 rows,
                 diff_added: None,

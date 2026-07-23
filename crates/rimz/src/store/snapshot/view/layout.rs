@@ -802,6 +802,12 @@ pub struct AgentWorktreeGroup<'a> {
     pub agents: Vec<&'a AgentState>,
 }
 
+impl AgentWorktreeGroup<'_> {
+    pub fn team(&self) -> Option<&str> {
+        super::cohort_team(self.agents.iter().map(|agent| agent.team.as_deref()))
+    }
+}
+
 /// Group root agents by worktree and rank them the way the sidebar ranks rows
 /// and groups: attention agents first (longest-overdue), calm agents in stable
 /// spawn order, the `external` catch-all last. The `rimz agents list` roster

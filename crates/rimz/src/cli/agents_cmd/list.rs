@@ -183,7 +183,7 @@ fn group_header_cells(
         rimz::SidebarWorktreeKind::External => unreachable!("external returned above"),
     };
     let mut cells = vec![render::cell(label).fg(render::palette::header())];
-    if let Some(team) = shared_group_team(group)
+    if let Some(team) = group.team()
         && !group.label.ends_with(&format!("/{team}"))
     {
         cells.push(render::cell(format!("· {team} team")).fg(render::palette::meta()));
@@ -235,22 +235,6 @@ fn channel_group_is_worktree_backed(
             .agents
             .iter()
             .all(|agent| agent.worktree_path.as_deref() == Some(first))
-}
-
-fn shared_group_team(group: &rimz::store::snapshot::AgentWorktreeGroup<'_>) -> Option<String> {
-    let first = group
-        .agents
-        .first()
-        .and_then(|agent| agent.team.as_deref())?;
-    if group
-        .agents
-        .iter()
-        .all(|agent| agent.team.as_deref() == Some(first))
-    {
-        Some(first.to_owned())
-    } else {
-        None
-    }
 }
 
 fn list_channel_filter(

@@ -274,6 +274,7 @@ mod tests {
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
             kind: SidebarWorktreeKind::Worktree,
+            team: None,
             status_counts: Vec::new(),
             rows,
             diff_added: None,

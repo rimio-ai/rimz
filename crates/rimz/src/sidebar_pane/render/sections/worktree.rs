@@ -180,7 +180,7 @@ fn finished_roster_line(
         .collect::<Vec<_>>();
     let process_count = hidden_rows.len().saturating_sub(members.len());
 
-    let team = finished_team(group);
+    let team = group.team.as_deref();
     let cost = group.rows.iter().filter_map(session_cost_usd).sum::<f64>();
     let cost_spans = if cost >= 0.005 {
         vec![Span::styled(
@@ -248,18 +248,6 @@ fn finished_roster_line(
     }
 
     pin_right(spans, cost_spans, width)
-}
-
-fn finished_team(group: &SidebarWorktreeGroup) -> Option<&str> {
-    let mut agents = group.rows.iter().filter_map(|row| row.as_agent());
-    let team = agents
-        .next()?
-        .team
-        .as_deref()
-        .filter(|team| !team.is_empty())?;
-    agents
-        .all(|agent| agent.team.as_deref() == Some(team))
-        .then_some(team)
 }
 
 fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Option<Line<'static>> {
@@ -443,7 +431,17 @@ fn group_header(
             format!("{} {}", theme.glyph(role), group.label)
         }
     };
-    let left = ellipsize(&label_with_prefix, label_width);
+    let team_suffix = group
+        .team
+        .as_deref()
+        .filter(|team| !group.label.ends_with(&format!("/{team}")))
+        .map(|team| format!(" · {team}"));
+    let full_label = format!(
+        "{label_with_prefix}{}",
+        team_suffix.as_deref().unwrap_or_default()
+    );
+    let left = ellipsize(&full_label, label_width);
+    let left_width = text_width(&left);
     let hyperlink = badge.as_ref().and_then(|badge| {
         let url = group.pr_url.as_ref()?;
         let badge_text = badge.trim_start();
@@ -452,7 +450,7 @@ fn group_header(
             .as_ref()
             .map(|(glyph, _)| text_width(glyph))
             .unwrap_or_default();
-        let start = text_width(&left)
+        let start = left_width
             .saturating_add(ci_width)
             .saturating_add(badge_lead);
         let end = start.saturating_add(text_width(badge_text));
@@ -466,7 +464,7 @@ fn group_header(
     // right-pinned stats, with plain space filling the gap. Sized to land the line
     // exactly on the content width — a space frames the dotted run from the text
     // on each side it touches.
-    let middle = cw.saturating_sub(text_width(&left) + identity_width + right_width);
+    let middle = cw.saturating_sub(left_width + identity_width + right_width);
     let fill = if sealed {
         match (right.is_empty(), middle) {
             (false, m) if m >= 2 => {
@@ -494,7 +492,18 @@ fn group_header(
     } else {
         theme.styled(Component::WorktreeHeader, Modifier::BOLD)
     };
-    let mut spans = vec![Span::styled(left, label_style)];
+    let mut spans = if left == full_label {
+        let mut spans = vec![Span::styled(label_with_prefix, label_style)];
+        if let Some(suffix) = team_suffix {
+            spans.push(Span::styled(
+                suffix,
+                theme.styled(Component::TeamLabel, Modifier::empty()),
+            ));
+        }
+        spans
+    } else {
+        vec![Span::styled(left, label_style)]
+    };
     if let Some((glyph, component)) = ci {
         spans.push(Span::styled(
             glyph,

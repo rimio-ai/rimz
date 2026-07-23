@@ -67,6 +67,67 @@ fn render_named_channel_header_uses_hash_glyph_and_bare_label() {
 }
 
 #[test]
+fn render_active_team_header_tolerates_strays_and_yields_to_git_facts() {
+    let mut planner = agent(
+        "planner",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/worktrees/feature-migration"),
+        Some("feature-migration"),
+        Some("design"),
+    );
+    planner.team = Some("forge".to_owned());
+    planner.role = Some("planner".to_owned());
+    let stray = agent(
+        "stray",
+        "codex",
+        AgentStatus::Idle,
+        Some("/repo/worktrees/feature-migration"),
+        Some("feature-migration"),
+        None,
+    );
+    let mut snapshot = snapshot_with(vec![planner, stray]);
+    let group = &mut snapshot.worktree_groups[0];
+    assert_eq!(group.team.as_deref(), Some("forge"));
+    assert_eq!(
+        serde_json::to_value(&*group).unwrap()["team"],
+        "forge",
+        "the projection carries team identity into snapshot JSON"
+    );
+    group.diff_added = Some(12);
+    group.diff_removed = Some(3);
+    group.commits_ahead = Some(2);
+    group.trunk = Some("main".to_owned());
+    group.trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
+
+    let theme = Theme::fixed(false);
+    let header = &group_lines_at_width(&snapshot, &theme, 0, 48)[0];
+    let team = header
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == " · forge")
+        .expect("active team label");
+    assert_eq!(
+        team.style,
+        theme.styled(Component::TeamLabel, Modifier::empty())
+    );
+
+    let narrow = group_lines_at_width(&snapshot, &theme, 0, 32)[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(
+        narrow.contains('…'),
+        "team label clips with the name: {narrow}"
+    );
+    assert!(
+        narrow.contains("⑂ main"),
+        "git verdict stays pinned: {narrow}"
+    );
+}
+
+#[test]
 fn render_worktree_channel_leads_with_merge_glyph() {
     let mut design = agent(
         "claude-1",

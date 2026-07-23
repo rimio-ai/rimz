@@ -74,6 +74,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         kind: crate::SidebarWorktreeKind::Worktree,
+        team: None,
         status_counts: Vec::new(),
         rows: vec![crate::SidebarRow {
             id: "claude-1".to_owned(),
@@ -692,6 +693,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
             kind: crate::SidebarWorktreeKind::Worktree,
+            team: None,
             status_counts: Vec::new(),
             rows: vec![crate::SidebarRow {
                 id: "agent-1".to_owned(),

@@ -62,6 +62,7 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         kind: crate::SidebarWorktreeKind::Worktree,
+        team: None,
         status_counts: Vec::new(),
         rows: panes
             .into_iter()
@@ -125,6 +126,7 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         kind: crate::SidebarWorktreeKind::Worktree,
+        team: None,
         status_counts: vec![crate::SidebarStatusCount {
             status: crate::agents::AgentStatus::Idle,
             count: 1,
