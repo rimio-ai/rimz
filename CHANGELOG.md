@@ -6,6 +6,10 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 
 ## Unreleased
 
+### Fixed
+
+- Closing a RimZ browser tab no longer asks for leave-site confirmation; reconnecting reattaches the same room.
+
 ## [0.4.2] (2026-07-22)
 
 The browser gets a real front door: the web daemon's base URL opens a themed live-session manager that lists and ranks your rooms, and `rimz web share` broadcasts a room read-only through a second, input-blocked daemon. Around it, agent lifecycle transitions stream as JSON Lines, layout cells accept any executable on PATH, the sidebar shows branch CI before a pull request exists, and a broad pass steadies browser fonts, cursors, input, and remote tunnel auth.
