@@ -91,6 +91,35 @@ fn local_context_fold_is_resumable_and_leaves_cost_statusline_owned() {
 }
 
 #[test]
+fn empty_fold_keeps_an_established_current_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session-1.jsonl");
+    std::fs::write(&path, "{\"type\":\"user\"}\n").unwrap();
+
+    let refresh = refresh(&path, None, None).unwrap();
+    assert!(matches!(
+        refresh.context.tokens,
+        crate::agents::LocalTokenPatch::Keep
+    ));
+
+    let mut context = crate::agents::AgentContext {
+        tokens: Some(AgentTokenUsage {
+            context_window_size: Some(200_000),
+            used_percentage: Some(25),
+            current_context_tokens: Some(50_000),
+            ..AgentTokenUsage::default()
+        }),
+        ..Default::default()
+    };
+    refresh.context.apply(&mut context, ClaudeAdapter.spec());
+
+    let tokens = context.tokens.unwrap();
+    assert_eq!(tokens.context_window_size, Some(200_000));
+    assert_eq!(tokens.used_percentage, Some(25));
+    assert_eq!(tokens.current_context_tokens, Some(50_000));
+}
+
+#[test]
 fn local_context_refresh_stat_gates_and_discovers_session_file() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("projects").join("-repo");

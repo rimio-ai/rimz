@@ -1,5 +1,6 @@
 use super::*;
-use crate::agents::{PriceBook, SessionOrigin, TokenSplit, TranscriptStat};
+use crate::agents::adapters::codex::spend::live_fold_needs_token_counter_backfill;
+use crate::agents::{LocalSpendFold, PriceBook, SessionOrigin, TokenSplit, TranscriptStat};
 
 #[test]
 fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
@@ -1093,6 +1094,70 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
     )
     .expect("missing stat refreshes");
     assert_eq!(refresh.context.effort, crate::agents::FieldPatch::Keep);
+}
+
+#[test]
+fn refresh_transcript_context_backfills_unchanged_legacy_fold() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    std::fs::write(
+        &path,
+        concat!(
+            r#"{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#,
+            "\n",
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10,"total_tokens":110},"total_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10},"model_context_window":272000}}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+    let stat = TranscriptStat::from_path(&path).unwrap();
+    let legacy = LocalSpendFold {
+        cursor: crate::agents::spending::SpendCursor {
+            offset: stat.len,
+            ..crate::agents::spending::SpendCursor::default()
+        },
+        total_usd: 1.0,
+        ..LocalSpendFold::default()
+    };
+
+    let refresh = refresh_transcript_context(
+        "sess-1",
+        None,
+        Some(path.to_string_lossy().as_ref()),
+        Some(&stat),
+        Some(&legacy),
+        &pricing_cache_path,
+    )
+    .expect("unchanged legacy fold bypasses the stat gate for one cold backfill");
+    let usage = refresh
+        .context
+        .tokens
+        .as_value()
+        .and_then(|tokens| tokens.session_usage.as_ref())
+        .expect("backfill publishes session usage");
+
+    assert_eq!(usage.input_tokens, Some(60));
+    assert_eq!(usage.output_tokens, Some(10));
+    assert_eq!(usage.cache_read_input_tokens, Some(40));
+    assert_eq!(usage.cache_hit_percent(), Some(40));
+    let rebuilt = refresh.spend_fold.into_set().unwrap();
+    assert!(
+        !live_fold_needs_token_counter_backfill(&rebuilt),
+        "the rebuilt fold becomes stat-gateable again"
+    );
+    assert!(
+        refresh_transcript_context(
+            "sess-1",
+            None,
+            Some(path.to_string_lossy().as_ref()),
+            Some(&stat),
+            Some(&rebuilt),
+            &pricing_cache_path,
+        )
+        .is_none(),
+        "the unchanged rebuilt fold returns to the cheap stat-gated path"
+    );
 }
 
 #[test]
