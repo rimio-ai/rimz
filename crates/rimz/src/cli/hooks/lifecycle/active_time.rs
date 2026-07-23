@@ -132,6 +132,7 @@ mod tests {
                 LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
+                    name: None,
                     native_key: None,
                 },
                 Some(ActiveTimeOp::Progress),
