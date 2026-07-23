@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -25,7 +25,7 @@ fn room(
     stats: Option<RoomStats>,
 ) -> RoomRow {
     RoomRow {
-        room: rimz::web::LiveRoom {
+        room: LiveRoom {
             session_name: name.to_owned(),
             mux,
             project_root: root.into(),
@@ -164,15 +164,9 @@ fn room_agents_count_only_pane_bound_root_sessions() {
 }
 
 #[test]
-fn session_sync_osc_sets_and_clears_the_browser_target() {
-    assert_eq!(
-        session_sync_osc(Some(("rimz-docs-a1b2c3", "docs & notes"))),
-        "\x1b]7717;rimz-session=rimz-docs-a1b2c3\x07\x1b]7717;rimz-name=docs%20%26%20notes\x07"
-    );
-    assert_eq!(
-        session_sync_osc(None),
-        "\x1b]7717;rimz-session=\x07\x1b]7717;rimz-name=\x07"
-    );
+fn session_sync_is_emitted_only_in_web_mode() {
+    assert!(session_sync_enabled(Mode::Web));
+    assert!(!session_sync_enabled(Mode::Terminal));
 }
 
 #[test]
@@ -294,11 +288,11 @@ fn filter_matches_displayed_repo_name_and_path_then_attaches() {
 
     assert_eq!(picker.selected.as_deref(), Some("rimz-docs"));
     assert_eq!(
-        picker.handle_event(key(KeyCode::Char('i'), KeyModifiers::NONE)),
+        picker.handle_event(key(KeyCode::Char('f'), KeyModifiers::NONE)),
         None
     );
     assert_eq!(
-        picker.handle_event(key(KeyCode::Char('n'), KeyModifiers::NONE)),
+        picker.handle_event(key(KeyCode::Char('r'), KeyModifiers::NONE)),
         None
     );
     assert_eq!(
@@ -352,6 +346,129 @@ fn probe_retains_a_visible_session_selection_and_clamps_a_vanished_one() {
         now(),
     );
     assert_eq!(picker.selected.as_deref(), Some("rimz-docs"));
+}
+
+#[test]
+fn new_key_opens_the_overlay_while_other_letters_filter_rooms() {
+    let mut picker = Picker::new(None);
+    picker.apply_probe(rows(), now());
+
+    assert_eq!(
+        picker.handle_event(key(KeyCode::Char('n'), KeyModifiers::NONE)),
+        None
+    );
+    assert!(matches!(picker.view, View::NewSession(_)));
+    assert!(picker.filter.is_empty());
+
+    assert_eq!(
+        picker.handle_event(key(KeyCode::Esc, KeyModifiers::NONE)),
+        None
+    );
+    assert!(matches!(picker.view, View::Rooms));
+    picker.handle_event(key(KeyCode::Char('d'), KeyModifiers::NONE));
+    assert_eq!(picker.filter, "d");
+}
+
+#[test]
+fn new_session_overlay_filters_navigates_and_confirms_every_row_kind() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let alpha = home.join("alpha");
+    let beta = home.join("beta");
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::create_dir_all(&beta).unwrap();
+    std::fs::create_dir_all(home.join(".hidden")).unwrap();
+    let recent = KnownWorkspace {
+        workspace_id: rimz::WorkspaceId::from_project_root(Path::new("/repo/recent")),
+        project_root: PathBuf::from("/repo/recent"),
+        session_name: "rimz-recent".to_owned(),
+        root_class: rimz::workspace::RootClass::Repo,
+        rimz_bin: None,
+        updated_at: now(),
+    };
+    let mut overlay = NewSession::new(home.to_path_buf(), vec![recent]);
+
+    let rows = overlay.rows();
+    assert!(matches!(rows[0], NewSessionRow::Recent { .. }));
+    assert!(matches!(rows[1], NewSessionRow::Current { .. }));
+    assert!(matches!(rows[2], NewSessionRow::Directory { .. }));
+    assert_eq!(
+        overlay.selected_action(),
+        Some(Action::Create(PathBuf::from("/repo/recent")))
+    );
+    overlay.selected = 1;
+    assert_eq!(
+        overlay.selected_action(),
+        Some(Action::Create(home.to_path_buf()))
+    );
+    overlay.selected = 2;
+    assert_eq!(
+        overlay.selected_action(),
+        Some(Action::Create(alpha.clone()))
+    );
+
+    overlay.input = "bet".to_owned();
+    overlay.selected = 0;
+    assert_eq!(
+        overlay.rows(),
+        vec![NewSessionRow::Directory {
+            name: "beta".to_owned(),
+            path: beta,
+        }]
+    );
+    overlay.input.clear();
+    overlay.selected = 2;
+    overlay.handle_key(KeyCode::Right, KeyModifiers::NONE);
+    assert_eq!(overlay.current_dir, alpha);
+    overlay.handle_key(KeyCode::Backspace, KeyModifiers::NONE);
+    assert_eq!(overlay.current_dir, home);
+}
+
+#[test]
+fn new_session_overlay_render_snapshot() {
+    let recent = KnownWorkspace {
+        workspace_id: rimz::WorkspaceId::from_project_root(Path::new("/repo/recent")),
+        project_root: PathBuf::from("/repo/recent"),
+        session_name: "rimz-recent".to_owned(),
+        root_class: rimz::workspace::RootClass::Repo,
+        rimz_bin: None,
+        updated_at: now(),
+    };
+    let mut picker = Picker::new(None);
+    picker.view = View::NewSession(NewSession {
+        current_dir: PathBuf::from("/home/dev"),
+        input: String::new(),
+        selected: 0,
+        dormant: vec![recent],
+        directories: vec![
+            PathBuf::from("/home/dev/code"),
+            PathBuf::from("/home/dev/notes"),
+        ],
+        notice: None,
+    });
+
+    insta::assert_snapshot!(render_text(&mut picker, 70, 20), @r"
+                  ██████╗ ██╗███╗   ███╗███████╗
+                  ██╔══██╗██║████╗ ████║╚══███╔╝
+                  ██████╔╝██║██╔████╔██║  ███╔╝
+                  ██╔══██╗██║██║╚██╔╝██║ ███╔╝
+                  ██║  ██║██║██║ ╚═╝ ██║███████╗
+                  ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝╚══════╝
+
+    ╭ new session ───────────────────────────────────────────╮
+    │ path: /home/dev                                        │
+    │ recent                                                 │
+    │ ▸ recent  /repo/recent                                 │
+    │ directories                                            │
+    │   .  /home/dev                                         │
+    │   code/                                                │
+    │   notes/                                               │
+    │                                                        │
+    │                                                        │
+    │ filter: _                                              │
+    ╰────────────────────────────────────────────────────────╯
+      ↑↓ select · →/tab open · ← back · ⏎ create · esc cancel
+    ");
 }
 
 #[test]
@@ -470,7 +587,7 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
                          │                                                        │
                          │ filter: _                                              │
                          ╰────────────────────────────────────────────────────────╯
-                              ↑↓ select · ⏎ attach · type to filter · esc quit
+                          ↑↓ select · ⏎ attach · n new · type to filter · esc quit
 
     FILTERED
                                        ██████╗ ██╗███╗   ███╗███████╗
@@ -492,7 +609,7 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
                          │                                                        │
                          │ filter: quiet_                                         │
                          ╰────────────────────────────────────────────────────────╯
-                              ↑↓ select · ⏎ attach · type to filter · esc quit
+                          ↑↓ select · ⏎ attach · n new · type to filter · esc quit
 
     EMPTY
                                        ██████╗ ██╗███╗   ███╗███████╗
@@ -514,7 +631,7 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
                          │                                                        │
                          │ filter: _                                              │
                          ╰────────────────────────────────────────────────────────╯
-                              ↑↓ select · ⏎ attach · type to filter · esc quit
+                          ↑↓ select · ⏎ attach · n new · type to filter · esc quit
 
     NOTICE
                                        ██████╗ ██╗███╗   ███╗███████╗
@@ -544,7 +661,7 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
                          │                                                        │
                          │ filter: _                                              │
                          ╰────────────────────────────────────────────────────────╯
-                              ↑↓ select · ⏎ attach · type to filter · esc quit
+                          ↑↓ select · ⏎ attach · n new · type to filter · esc quit
 
     DEGRADED
     ╭ RimZ ── sessions ────────────────────╮
@@ -555,7 +672,7 @@ fn picker_render_snapshots_cover_populated_filtered_empty_and_notice_frames() {
     │   codex ×1          ◎ 3  ◇ 1k  $0.75 │
     │                                      │
     │ filter: _                            │
-    │ ↑↓ select · ⏎ attach · type to filte │
+    │ ↑↓ select · ⏎ attach · n new · type  │
     ╰──────────────────────────────────────╯
     "###);
 }

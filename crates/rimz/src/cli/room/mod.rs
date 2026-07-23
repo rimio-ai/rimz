@@ -63,7 +63,7 @@ enum RoomEntry<'a> {
         mux: MuxName,
         first_run: bool,
     },
-    StartWeb {
+    StartDetached {
         workspace: rimz::ResolvedWorkspace,
         mux: MuxName,
         no_resume: bool,
@@ -93,7 +93,7 @@ impl RoomEntry<'_> {
     fn mode(&self) -> AttachMode {
         match self {
             Self::Start { args, .. } => args.attach.mode(),
-            Self::StartWeb { .. } | Self::WebSession { .. } => AttachMode::Print,
+            Self::StartDetached { .. } | Self::WebSession { .. } => AttachMode::Print,
             Self::AttachCwd { mode, .. } | Self::AttachSession { mode, .. } => *mode,
         }
     }
@@ -101,16 +101,17 @@ impl RoomEntry<'_> {
     fn no_resume(&self) -> bool {
         match self {
             Self::Start { args, .. } => args.no_resume,
-            Self::StartWeb { no_resume, .. } | Self::WebSession { no_resume, .. } => *no_resume,
+            Self::StartDetached { no_resume, .. } | Self::WebSession { no_resume, .. } => {
+                *no_resume
+            }
             Self::AttachCwd { no_resume, .. } | Self::AttachSession { no_resume, .. } => *no_resume,
         }
     }
 
     fn resume_prompt_mode(&self) -> ResumePromptMode {
         let confirm_resume = match self {
-            Self::StartWeb { confirm_resume, .. } | Self::WebSession { confirm_resume, .. } => {
-                *confirm_resume
-            }
+            Self::StartDetached { confirm_resume, .. }
+            | Self::WebSession { confirm_resume, .. } => *confirm_resume,
             Self::Start { .. } | Self::AttachCwd { .. } | Self::AttachSession { .. } => false,
         };
         resume_prompt_mode(confirm_resume, start_attended())
@@ -119,7 +120,7 @@ impl RoomEntry<'_> {
     fn refresh_ms(&self) -> Option<u16> {
         match self {
             Self::Start { args, .. } => args.refresh_ms,
-            Self::StartWeb { .. } | Self::WebSession { .. } => None,
+            Self::StartDetached { .. } | Self::WebSession { .. } => None,
             Self::AttachCwd { refresh_ms, .. } | Self::AttachSession { refresh_ms, .. } => {
                 *refresh_ms
             }
@@ -129,7 +130,7 @@ impl RoomEntry<'_> {
     fn session_name(&self) -> &str {
         match self {
             Self::Start { workspace, .. }
-            | Self::StartWeb { workspace, .. }
+            | Self::StartDetached { workspace, .. }
             | Self::AttachCwd { workspace, .. } => &workspace.session_name,
             Self::WebSession { record, .. } => &record.session_name,
             Self::AttachSession { session, .. } => session,
@@ -139,7 +140,7 @@ impl RoomEntry<'_> {
     fn workspace_id(&self) -> Option<&WorkspaceId> {
         match self {
             Self::Start { workspace, .. }
-            | Self::StartWeb { workspace, .. }
+            | Self::StartDetached { workspace, .. }
             | Self::AttachCwd { workspace, .. } => Some(&workspace.workspace_id),
             Self::WebSession { record, .. } => Some(&record.workspace_id),
             Self::AttachSession { record, .. } => record
@@ -209,6 +210,16 @@ pub(crate) fn ensure_workspace_room_for_web(
     no_resume: bool,
     confirm_resume: bool,
 ) -> Result<RoomContext> {
+    preflight_web_engine()?;
+    ensure_workspace_room_detached(path, globals, no_resume, confirm_resume)
+}
+
+pub(crate) fn ensure_workspace_room_detached(
+    path: &Path,
+    globals: &GlobalFlags,
+    no_resume: bool,
+    confirm_resume: bool,
+) -> Result<RoomContext> {
     validate_agent_plugins()?;
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
@@ -218,10 +229,9 @@ pub(crate) fn ensure_workspace_room_for_web(
         MissingSessionReport::Silent,
     ))?;
     render::room::print_notices(ensure_single_backend_room(mux, &workspace.session_name)?)?;
-    preflight_web_engine()?;
     setup::ensure_default_config()?;
     let ready = prepare_room(
-        RoomEntry::StartWeb {
+        RoomEntry::StartDetached {
             workspace,
             mux,
             no_resume,
@@ -229,7 +239,7 @@ pub(crate) fn ensure_workspace_room_for_web(
         },
         globals,
     )?;
-    web_context_from_ready(ready)
+    managed_context_from_ready(ready)
 }
 
 fn validate_agent_plugins() -> Result<()> {
@@ -269,7 +279,7 @@ pub(crate) fn ensure_session_room_for_web(
         },
         globals,
     )?;
-    web_context_from_ready(ready)
+    managed_context_from_ready(ready)
 }
 
 pub(crate) fn web_room_for_session(session: &str, globals: &GlobalFlags) -> Result<RoomContext> {
@@ -307,7 +317,7 @@ pub(crate) fn existing_web_room_for_path(
     RoomContext::from_record(&record, machine_config(), mux, RoomSizing::OrdinaryTab)
 }
 
-fn web_context_from_ready(ready: ReadyRoom) -> Result<RoomContext> {
+fn managed_context_from_ready(ready: ReadyRoom) -> Result<RoomContext> {
     match ready {
         ReadyRoom::Managed(context) => Ok(*context),
         ReadyRoom::External { session_name, .. } => {
@@ -399,24 +409,26 @@ enum ReadyRoom {
 
 fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
     let mut machine_config = machine_config();
-    let remote_control_readiness =
-        if matches!(entry, RoomEntry::Start { .. } | RoomEntry::StartWeb { .. }) {
-            preflight_account_budgets(rimz::config::MachineConfig::load())?;
-            // Fail-fast precondition for installed agents: fixable host misconfiguration
-            // aborts the launch here with the fix, before hook-install or session side
-            // effects. An enabled host whose agent is not installed is an inert toggle,
-            // skipped here so the room still starts; `rimz doctor` surfaces it.
-            rimz::remote_control::prepare_hosts(&machine_config.remote_control);
-            let readiness =
-                rimz::remote_control::ReadinessSnapshot::probe(&machine_config.remote_control);
-            readiness.start_gate()?;
-            Some(readiness)
-        } else {
-            None
-        };
+    let remote_control_readiness = if matches!(
+        entry,
+        RoomEntry::Start { .. } | RoomEntry::StartDetached { .. }
+    ) {
+        preflight_account_budgets(rimz::config::MachineConfig::load())?;
+        // Fail-fast precondition for installed agents: fixable host misconfiguration
+        // aborts the launch here with the fix, before hook-install or session side
+        // effects. An enabled host whose agent is not installed is an inert toggle,
+        // skipped here so the room still starts; `rimz doctor` surfaces it.
+        rimz::remote_control::prepare_hosts(&machine_config.remote_control);
+        let readiness =
+            rimz::remote_control::ReadinessSnapshot::probe(&machine_config.remote_control);
+        readiness.start_gate()?;
+        Some(readiness)
+    } else {
+        None
+    };
 
     let mux = match &entry {
-        RoomEntry::Start { mux, .. } | RoomEntry::StartWeb { mux, .. } => *mux,
+        RoomEntry::Start { mux, .. } | RoomEntry::StartDetached { mux, .. } => *mux,
         RoomEntry::WebSession { record, .. } => {
             render::room::present_mux_pick(pick_mux_for_session(
                 &record.session_name,
@@ -492,7 +504,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     }
 
     if let RoomEntry::Start { workspace, .. }
-    | RoomEntry::StartWeb { workspace, .. }
+    | RoomEntry::StartDetached { workspace, .. }
     | RoomEntry::AttachCwd { workspace, .. } = &entry
     {
         retire_renamed_session(backend.as_ref(), workspace);
@@ -505,7 +517,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     }
 
     let ready = match &entry {
-        RoomEntry::Start { workspace, .. } | RoomEntry::StartWeb { workspace, .. } => {
+        RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
             let mut context = RoomContext::from_resolved(
                 workspace,
                 machine_config.clone(),
@@ -689,7 +701,7 @@ fn preflight_account_budgets(
 
 fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
     match entry {
-        RoomEntry::Start { workspace, .. } | RoomEntry::StartWeb { workspace, .. } => {
+        RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
             render::room::print_notices(ensure_single_backend_room(mux, &workspace.session_name)?)?;
             rimz_socket_environment_preflight(&workspace.workspace_id)?;
             mux_environment_preflight(mux, &workspace.session_name)

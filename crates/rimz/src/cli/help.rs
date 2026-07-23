@@ -8,6 +8,7 @@ pub(crate) const GROUPS: [(&str, &[&str]); 4] = [
         &[
             "start",
             "attach",
+            "sessions",
             "remote",
             "web",
             "list",

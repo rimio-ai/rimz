@@ -31,6 +31,11 @@ pub enum LiveRoomErr {
         "no live RimZ room `{session_name}`; run `rimz start` first or enter one with `rimz attach`"
     )]
     Unavailable { session_name: String },
+    #[error("reading RimZ workspace records: {source}")]
+    WorkspaceRecords {
+        #[source]
+        source: std::io::Error,
+    },
     #[error(transparent)]
     Mux(#[from] MuxErr),
 }

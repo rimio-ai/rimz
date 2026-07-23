@@ -46,7 +46,7 @@ With `[web] enabled = true`, every normal `rimz start` also asks for the shared 
 
 ## Session manager
 
-Open the base address without `?room=` to choose among every live RimZ room on the machine. An unknown or stopped session argument opens the same switcher with a notice; a valid argument continues to attach directly.
+Open the base address without `?room=` to choose among every live RimZ room on the machine. An unknown or stopped session argument opens the same switcher with a notice; a valid argument continues to attach directly. The browser reuses the same picker as the first-class [`rimz sessions`](../reference/cli/getting-started.md#pick-a-session) terminal command.
 
 <p align="center">
   <img src="../rimz-sessions.png" alt="The session manager: a RIMZ banner over a bordered sessions box, one card per live room with repository name, path, provider agent counts, session count, tokens, and spend" width="720">
@@ -55,7 +55,7 @@ Open the base address without `?room=` to choose among every live RimZ room on t
 
 The switcher centers its room cards in a fixed 24-row panel beneath a RIMZ banner when the terminal has space, using 40% of the terminal width within its 58- to 84-column bounds. Empty rows keep the box stable when only a few rooms are live; small screens fall back to a compact full-frame list. Rooms with prompt activity in the last 24 hours lead, newest prompt first; the rest follow by the most recent room start or attach.
 
-Use ↑/↓ or j/k and the mouse wheel to move, Enter or a second click on the selected card to attach, and printable keys to filter repository names and paths. Backspace edits the filter, Esc clears it before quitting, and Ctrl-C quits immediately.
+Use ↑/↓ or j/k and the mouse wheel to move, Enter or a second click on the selected card to attach, and printable keys to filter repository names and paths. Backspace edits the filter, Esc clears it before quitting, and Ctrl-C quits immediately. Press `n` to choose a dormant workspace or browse from `$HOME`; Enter births and attaches its room, while arrows and Tab navigate directories.
 
 Each two-line card leads with the repository name and path, then shows live root-agent counts by provider. The red `●` count marks agents that need attention; `◎`, `◇`, and `$` show the headline session count, tokens, and spend from `[sidebar] spend_window`. An unreadable room snapshot leaves the stats line at `–` until the next probe.
 

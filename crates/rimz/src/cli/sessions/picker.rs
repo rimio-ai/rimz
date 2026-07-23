@@ -1,9 +1,9 @@
-//! Interactive live-room picker for ttyd browser sessions.
+//! Interactive live-room picker shared by terminal and browser sessions.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::io::{self, IsTerminal, Write};
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -18,11 +18,15 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
 use ratatui::{Frame, Terminal};
 use rimz::config::{GlyphRole, MachineConfig, ThemeConfig, ThemeProviderStyle};
 use rimz::ids::{AgentKind, MuxName};
+use rimz::room::session::{LiveRoom, LiveSessions};
 use rimz::sidebar::consumer::PublishedSnapshotReader;
 use rimz::theme::{Identity, Palette, Tone, resolve_provider_brand, theme_glyphs};
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
+use rimz::workspace::KnownWorkspace;
 use rimz::{RuntimePaths, SpendWindow, StatePaths};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use crate::cli::GlobalFlags;
 
 const EVENT_POLL: Duration = Duration::from_millis(250);
 const PROBE_INTERVAL: Duration = Duration::from_secs(2);
@@ -43,15 +47,19 @@ const BANNER: [&str; 6] = [
     "╚═╝  ╚═╝╚═╝╚═╝     ╚═╝╚══════╝",
 ];
 
-pub(super) fn available() -> bool {
-    io::stdin().is_terminal() && io::stdout().is_terminal()
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Mode {
+    Terminal,
+    Web,
 }
 
 /// `false` means terminal setup failed before the picker took over, so the
 /// caller can preserve its direct-attach or invalid-session fallback.
 pub(super) fn run(
+    mode: Mode,
     rejected_session: Option<&str>,
     initial_attach: Option<(&str, &rimz::mux::CommandSpec)>,
+    globals: &GlobalFlags,
 ) -> Result<bool> {
     let guard = match TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Alternate) {
         Ok(guard) => guard,
@@ -89,16 +97,19 @@ pub(super) fn run(
     });
 
     if initial_attach.is_none() {
-        write_session_sync(None)?;
+        write_session_sync(mode, None)?;
     }
 
     loop {
-        let (session, display_name, spec) = if let Some(initial_attach) = initial_attach.take() {
-            initial_attach
+        let launch = if let Some((session, display_name, spec)) = initial_attach.take() {
+            Launch::Attach(session, display_name, spec)
         } else {
             if Instant::now() >= next_probe {
-                match probe_rows(&mut readers) {
-                    Ok(rows) => picker.apply_probe(rows, jiff::Timestamp::now()),
+                match probe_inventory(&mut readers) {
+                    Ok((rows, dormant)) => {
+                        picker.apply_probe(rows, jiff::Timestamp::now());
+                        picker.apply_dormant(dormant);
+                    }
                     Err(err) => picker.notice = Some(format!("could not read live rooms: {err}")),
                 }
                 next_probe = Instant::now() + PROBE_INTERVAL;
@@ -115,55 +126,89 @@ pub(super) fn run(
                 Action::Quit => return Ok(true),
                 Action::Attach(session, display_name, mux) => {
                     let spec = rimz::mux::backend_for(mux).attach_existing_command(&session);
-                    (session, display_name, spec)
+                    Launch::Attach(session, display_name, spec)
                 }
+                Action::Create(path) => Launch::Create(path),
             }
         };
 
         guard
             .take()
-            .context("web session picker lost its terminal guard")?
+            .context("session picker lost its terminal guard")?
             .handoff_keep_screen()
-            .context("handing off the web session picker")?;
-        write_session_sync(Some((&session, &display_name)))?;
-        let outcome = spec.to_command().spawn().and_then(|mut child| child.wait());
+            .context("handing off the session picker")?;
+        let (target, outcome) = match launch {
+            Launch::Attach(session, display_name, spec) => {
+                write_session_sync(mode, Some((&session, &display_name)))?;
+                let outcome = spec
+                    .to_command()
+                    .spawn()
+                    .and_then(|mut child| child.wait())
+                    .map_err(anyhow::Error::from);
+                (Some((session, display_name)), outcome)
+            }
+            Launch::Create(path) => {
+                match crate::cli::room::ensure_workspace_room_detached(&path, globals, false, false)
+                {
+                    Ok(context) => {
+                        let session = context.session_name().to_owned();
+                        let display_name = session_display_name(&session);
+                        let spec = rimz::mux::backend_for(context.mux_name())
+                            .attach_existing_command(&session);
+                        write_session_sync(mode, Some((&session, &display_name)))?;
+                        let outcome = spec
+                            .to_command()
+                            .spawn()
+                            .and_then(|mut child| child.wait())
+                            .map_err(anyhow::Error::from);
+                        (Some((session, display_name)), outcome)
+                    }
+                    Err(err) => {
+                        let error = err.context(format!("creating a room for {}", path.display()));
+                        (None, Err(error))
+                    }
+                }
+            }
+        };
         guard = Some(
             TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Alternate)
-                .context("restoring the web session picker")?,
+                .context("restoring the session picker")?,
         );
-        write_session_sync(None)?;
+        write_session_sync(mode, None)?;
         terminal.clear()?;
         match outcome {
             Ok(status) if status.success() => picker.notice = None,
             Ok(status) => {
+                let session = target
+                    .as_ref()
+                    .map(|(session, _)| session.as_str())
+                    .unwrap_or("new room");
                 picker.notice = Some(format!(
                     "session `{session}` attach exited with {}",
                     exit_status_label(status)
                 ));
             }
             Err(err) => {
-                picker.notice = Some(format!("could not attach session `{session}`: {err}"));
+                picker.notice = Some(match target {
+                    Some((session, _)) => {
+                        format!("could not attach session `{session}`: {err}")
+                    }
+                    None => format!("could not create session: {err:#}"),
+                });
             }
         }
         next_probe = Instant::now();
     }
 }
 
-fn session_sync_osc(target: Option<(&str, &str)>) -> String {
-    let (session, display_name) = target.unwrap_or_default();
-    format!(
-        "\x1b]{};rimz-session={}\x07\x1b]{};rimz-name={}\x07",
-        rimz::web::TTYD_SESSION_OSC,
-        session,
-        rimz::web::TTYD_SESSION_OSC,
-        rimz::web::encode_query_value(display_name)
-    )
+fn session_sync_enabled(mode: Mode) -> bool {
+    mode == Mode::Web
 }
 
-pub(super) fn write_session_sync(target: Option<(&str, &str)>) -> Result<()> {
-    let mut stdout = io::stdout().lock();
-    stdout.write_all(session_sync_osc(target).as_bytes())?;
-    stdout.flush()?;
+fn write_session_sync(mode: Mode, target: Option<(&str, &str)>) -> Result<()> {
+    if session_sync_enabled(mode) {
+        rimz::web::write_session_sync(target)?;
+    }
     Ok(())
 }
 
@@ -173,26 +218,29 @@ fn exit_status_label(status: std::process::ExitStatus) -> String {
         .map_or_else(|| status.to_string(), |code| format!("status {code}"))
 }
 
-fn probe_rows(
+fn probe_inventory(
     readers: &mut BTreeMap<String, PublishedSnapshotReader>,
-) -> rimz::web::Result<Vec<RoomRow>> {
-    let rooms = rimz::web::live_rooms()?;
+) -> rimz::room::LiveRoomResult<(Vec<RoomRow>, Vec<KnownWorkspace>)> {
+    let live = LiveSessions::probe();
+    let rooms = rimz::room::session::live_rooms_with(&live)?;
+    let dormant = rimz::room::session::dormant_workspaces(&live)?;
     let live_names = rooms
         .iter()
         .map(|room| room.session_name.clone())
         .collect::<BTreeSet<_>>();
     readers.retain(|session, _| live_names.contains(session));
-    Ok(rooms
+    let rows = rooms
         .into_iter()
         .map(|room| {
             let stats = stats_for_room(&room, readers);
             RoomRow { room, stats }
         })
-        .collect())
+        .collect();
+    Ok((rows, dormant))
 }
 
 fn stats_for_room(
-    room: &rimz::web::LiveRoom,
+    room: &LiveRoom,
     readers: &mut BTreeMap<String, PublishedSnapshotReader>,
 ) -> Option<RoomStats> {
     if !readers.contains_key(&room.session_name) {
@@ -287,14 +335,207 @@ fn digits(value: usize) -> usize {
 
 #[derive(Clone, Debug, PartialEq)]
 struct RoomRow {
-    room: rimz::web::LiveRoom,
+    room: LiveRoom,
     stats: Option<RoomStats>,
+}
+
+enum Launch {
+    Attach(String, String, rimz::mux::CommandSpec),
+    Create(PathBuf),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Action {
     Attach(String, String, MuxName),
+    Create(PathBuf),
     Quit,
+}
+
+#[derive(Debug)]
+enum View {
+    Rooms,
+    NewSession(NewSession),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NewSessionRow {
+    Recent { name: String, path: PathBuf },
+    Current { path: PathBuf },
+    Directory { name: String, path: PathBuf },
+}
+
+impl NewSessionRow {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Recent { path, .. } | Self::Current { path } | Self::Directory { path, .. } => {
+                path
+            }
+        }
+    }
+
+    fn matches(&self, filter: &str) -> bool {
+        if filter.is_empty() {
+            return true;
+        }
+        let filter = filter.to_lowercase();
+        let path = crate::cli::render::home_relative(&self.path().to_string_lossy());
+        let name = match self {
+            Self::Recent { name, .. } | Self::Directory { name, .. } => name.as_str(),
+            Self::Current { .. } => ".",
+        };
+        name.to_lowercase().contains(&filter) || path.to_lowercase().contains(&filter)
+    }
+}
+
+#[derive(Debug)]
+struct NewSession {
+    current_dir: PathBuf,
+    input: String,
+    selected: usize,
+    dormant: Vec<KnownWorkspace>,
+    directories: Vec<PathBuf>,
+    notice: Option<String>,
+}
+
+impl NewSession {
+    fn new(current_dir: PathBuf, dormant: Vec<KnownWorkspace>) -> Self {
+        let mut session = Self {
+            current_dir,
+            input: String::new(),
+            selected: 0,
+            dormant,
+            directories: Vec::new(),
+            notice: None,
+        };
+        session.reload_directories();
+        session
+    }
+
+    fn reload_directories(&mut self) {
+        match std::fs::read_dir(&self.current_dir) {
+            Ok(entries) => {
+                self.directories = entries
+                    .filter_map(|entry| entry.ok())
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| !name.starts_with('.'))
+                            && path.is_dir()
+                    })
+                    .collect();
+                self.directories.sort_by(|left, right| {
+                    left.file_name()
+                        .cmp(&right.file_name())
+                        .then_with(|| left.cmp(right))
+                });
+                self.notice = None;
+            }
+            Err(err) => {
+                self.directories.clear();
+                self.notice = Some(format!(
+                    "could not read {}: {err}",
+                    crate::cli::render::home_relative(&self.current_dir.to_string_lossy())
+                ));
+            }
+        }
+        self.normalize_selection();
+    }
+
+    fn rows(&self) -> Vec<NewSessionRow> {
+        self.dormant
+            .iter()
+            .map(|workspace| NewSessionRow::Recent {
+                name: repo_display_name(&workspace.project_root)
+                    .unwrap_or_else(|| workspace.session_name.clone()),
+                path: workspace.project_root.clone(),
+            })
+            .chain(std::iter::once(NewSessionRow::Current {
+                path: self.current_dir.clone(),
+            }))
+            .chain(self.directories.iter().map(|path| {
+                NewSessionRow::Directory {
+                    name: path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or_default()
+                        .to_owned(),
+                    path: path.clone(),
+                }
+            }))
+            .filter(|row| row.matches(&self.input))
+            .collect()
+    }
+
+    fn normalize_selection(&mut self) {
+        self.selected = self.selected.min(self.rows().len().saturating_sub(1));
+    }
+
+    fn move_selection(&mut self, offset: isize) {
+        let len = self.rows().len();
+        if len == 0 {
+            self.selected = 0;
+            return;
+        }
+        self.selected = self
+            .selected
+            .saturating_add_signed(offset)
+            .min(len.saturating_sub(1));
+    }
+
+    fn selected_row(&self) -> Option<NewSessionRow> {
+        self.rows().into_iter().nth(self.selected)
+    }
+
+    fn descend(&mut self) {
+        let Some(row) = self.selected_row() else {
+            return;
+        };
+        let path = row.path();
+        if path != self.current_dir && path.is_dir() {
+            self.current_dir = path.to_path_buf();
+            self.input.clear();
+            self.selected = 0;
+            self.reload_directories();
+        }
+    }
+
+    fn ascend(&mut self) {
+        let Some(parent) = self.current_dir.parent() else {
+            return;
+        };
+        self.current_dir = parent.to_path_buf();
+        self.input.clear();
+        self.selected = 0;
+        self.reload_directories();
+    }
+
+    fn selected_action(&self) -> Option<Action> {
+        Some(Action::Create(self.selected_row()?.path().to_path_buf()))
+    }
+
+    fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
+        match code {
+            KeyCode::Up => self.move_selection(-1),
+            KeyCode::Down => self.move_selection(1),
+            KeyCode::Right | KeyCode::Tab => self.descend(),
+            KeyCode::Left => self.ascend(),
+            KeyCode::Enter => return self.selected_action(),
+            KeyCode::Backspace if self.input.is_empty() => self.ascend(),
+            KeyCode::Backspace => {
+                self.input.pop();
+                self.normalize_selection();
+            }
+            KeyCode::Char(character)
+                if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.input.push(character);
+                self.normalize_selection();
+            }
+            _ => {}
+        }
+        None
+    }
 }
 
 #[derive(Debug)]
@@ -304,6 +545,8 @@ struct Picker {
     filter: String,
     notice: Option<String>,
     hit_rows: BTreeMap<u16, String>,
+    dormant: Vec<KnownWorkspace>,
+    view: View,
 }
 
 impl Picker {
@@ -316,6 +559,8 @@ impl Picker {
                 .filter(|session| !session.is_empty())
                 .map(|session| format!("session `{session}` is not a live RimZ room")),
             hit_rows: BTreeMap::new(),
+            dormant: Vec::new(),
+            view: View::Rooms,
         }
     }
 
@@ -335,6 +580,14 @@ impl Picker {
         });
         self.rows = rows;
         self.normalize_selection();
+    }
+
+    fn apply_dormant(&mut self, dormant: Vec<KnownWorkspace>) {
+        self.dormant = dormant;
+        if let View::NewSession(session) = &mut self.view {
+            session.dormant = self.dormant.clone();
+            session.normalize_selection();
+        }
     }
 
     fn visible(&self) -> Vec<&RoomRow> {
@@ -397,17 +650,63 @@ impl Picker {
         ))
     }
 
+    fn open_new_session(&mut self) {
+        let start = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.view = View::NewSession(NewSession::new(start, self.dormant.clone()));
+    }
+
     fn handle_event(&mut self, event: Event) -> Option<Action> {
+        if let Event::Key(key) = &event
+            && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c' | 'C'))
+        {
+            return Some(Action::Quit);
+        }
+
+        if matches!(self.view, View::NewSession(_)) {
+            return match event {
+                Event::Key(key)
+                    if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
+                {
+                    if key.code == KeyCode::Esc {
+                        self.view = View::Rooms;
+                        None
+                    } else if let View::NewSession(session) = &mut self.view {
+                        session.handle_key(key.code, key.modifiers)
+                    } else {
+                        None
+                    }
+                }
+                Event::Mouse(mouse) => {
+                    if let View::NewSession(session) = &mut self.view {
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => session.move_selection(-1),
+                            MouseEventKind::ScrollDown => session.move_selection(1),
+                            _ => {}
+                        }
+                    }
+                    None
+                }
+                _ => None,
+            };
+        }
+
         match event {
             Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && matches!(key.code, KeyCode::Char('c' | 'C'))
-                {
-                    return Some(Action::Quit);
-                }
                 match key.code {
                     KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
                     KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+                    KeyCode::Char('n')
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.open_new_session();
+                    }
                     KeyCode::Enter => return self.selected_action(),
                     KeyCode::Backspace => {
                         self.filter.pop();
@@ -587,7 +886,7 @@ fn render(frame: &mut Frame<'_>, picker: &mut Picker, theme: &PickerTheme) {
     );
     render_picker_block(frame, picker, theme, block_area, false);
     frame.render_widget(
-        Paragraph::new("↑↓ select · ⏎ attach · type to filter · esc quit")
+        Paragraph::new(help_text(picker))
             .style(theme.faint())
             .alignment(Alignment::Center),
         help_area,
@@ -631,13 +930,17 @@ fn render_picker_block(
     area: Rect,
     help_inside: bool,
 ) {
+    let view_title = match &picker.view {
+        View::Rooms => "sessions",
+        View::NewSession(_) => "new session",
+    };
     let title = if help_inside {
         Line::from(vec![
             Span::styled(" RimZ ", theme.accent().add_modifier(Modifier::BOLD)),
-            Span::styled("── sessions ", theme.muted()),
+            Span::styled(format!("── {view_title} "), theme.muted()),
         ])
     } else {
-        Line::from(Span::styled(" sessions ", theme.muted()))
+        Line::from(Span::styled(format!(" {view_title} "), theme.muted()))
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -652,6 +955,11 @@ fn render_picker_block(
     if inner.width > 2 {
         inner.x += 1;
         inner.width -= 2;
+    }
+
+    if let View::NewSession(session) = &mut picker.view {
+        render_new_session(frame, session, theme, inner, help_inside);
+        return;
     }
 
     let notice_height = u16::from(picker.notice.is_some());
@@ -691,10 +999,140 @@ fn render_picker_block(
     }
     if help_inside && controls_height == 2 {
         frame.render_widget(
-            Paragraph::new("↑↓ select · ⏎ attach · type to filter · esc quit").style(theme.faint()),
+            Paragraph::new(help_text(picker)).style(theme.faint()),
             Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
         );
     }
+}
+
+fn help_text(picker: &Picker) -> &'static str {
+    match &picker.view {
+        View::Rooms => "↑↓ select · ⏎ attach · n new · type to filter · esc quit",
+        View::NewSession(_) => "↑↓ select · →/tab open · ← back · ⏎ create · esc cancel",
+    }
+}
+
+fn render_new_session(
+    frame: &mut Frame<'_>,
+    session: &mut NewSession,
+    theme: &PickerTheme,
+    inner: Rect,
+    help_inside: bool,
+) {
+    let notice_height = u16::from(session.notice.is_some());
+    if let Some(notice) = session.notice.as_deref() {
+        frame.render_widget(
+            Paragraph::new(truncate_width(notice, usize::from(inner.width))).style(theme.alarm()),
+            Rect::new(inner.x, inner.y, inner.width, 1),
+        );
+    }
+
+    let path_y = inner.y.saturating_add(notice_height);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("path: ", theme.meta()),
+            Span::styled(
+                crate::cli::render::home_relative(&session.current_dir.to_string_lossy()),
+                theme.body(),
+            ),
+        ])),
+        Rect::new(inner.x, path_y, inner.width, 1),
+    );
+
+    let controls_height = if help_inside { 2 } else { 1 };
+    let list_y = path_y.saturating_add(1);
+    let list_height = inner
+        .bottom()
+        .saturating_sub(list_y)
+        .saturating_sub(controls_height);
+    render_new_session_rows(
+        frame,
+        session,
+        theme,
+        Rect::new(inner.x, list_y, inner.width, list_height),
+    );
+
+    let filter_y = inner.y.saturating_add(inner.height - controls_height);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("filter: ", theme.meta()),
+            Span::styled(session.input.clone(), theme.body()),
+            Span::styled("_", theme.accent()),
+        ])),
+        Rect::new(inner.x, filter_y, inner.width, 1),
+    );
+    if help_inside {
+        frame.render_widget(
+            Paragraph::new("↑↓ select · →/tab open · ← back · ⏎ create · esc cancel")
+                .style(theme.faint()),
+            Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
+        );
+    }
+}
+
+fn render_new_session_rows(
+    frame: &mut Frame<'_>,
+    session: &NewSession,
+    theme: &PickerTheme,
+    area: Rect,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let rows = session.rows();
+    let mut items = Vec::new();
+    let mut selected_item = None;
+    let mut row_index = 0;
+    for (title, recent) in [("recent", true), ("directories", false)] {
+        items.push(ListItem::new(Line::from(Span::styled(
+            title.to_owned(),
+            theme.meta().add_modifier(Modifier::BOLD),
+        ))));
+        let start_len = items.len();
+        for row in rows
+            .iter()
+            .filter(|row| matches!(row, NewSessionRow::Recent { .. }) == recent)
+        {
+            let selected = row_index == session.selected;
+            if selected {
+                selected_item = Some(items.len());
+            }
+            let prefix = if selected { "▸ " } else { "  " };
+            let content = match row {
+                NewSessionRow::Recent { name, path } => format!(
+                    "{prefix}{name}  {}",
+                    crate::cli::render::home_relative(&path.to_string_lossy())
+                ),
+                NewSessionRow::Current { path } => format!(
+                    "{prefix}.  {}",
+                    crate::cli::render::home_relative(&path.to_string_lossy())
+                ),
+                NewSessionRow::Directory { name, .. } => format!("{prefix}{name}/"),
+            };
+            let mut item = ListItem::new(truncate_width(&content, usize::from(area.width)));
+            if selected {
+                item = item.style(theme.selected());
+            }
+            items.push(item);
+            row_index += 1;
+        }
+        if items.len() == start_len {
+            items.push(ListItem::new(Span::styled("  (none)", theme.muted())));
+        }
+    }
+
+    let capacity = usize::from(area.height);
+    let selected_item = selected_item.unwrap_or(0);
+    let start = selected_item
+        .saturating_add(1)
+        .saturating_sub(capacity)
+        .min(items.len().saturating_sub(capacity));
+    let shown = items
+        .into_iter()
+        .skip(start)
+        .take(capacity)
+        .collect::<Vec<_>>();
+    frame.render_widget(List::new(shown).style(theme.body()), area);
 }
 
 fn render_rooms(frame: &mut Frame<'_>, picker: &mut Picker, theme: &PickerTheme, area: Rect) {
@@ -873,7 +1311,7 @@ fn push_agent_spans(
     }
 }
 
-fn repo_name(room: &rimz::web::LiveRoom) -> String {
+fn repo_name(room: &LiveRoom) -> String {
     repo_display_name(&room.project_root).unwrap_or_else(|| room.session_name.clone())
 }
 
@@ -893,7 +1331,7 @@ pub(super) fn session_display_name(session: &str) -> String {
         .unwrap_or_else(|| session.to_owned())
 }
 
-fn room_path(room: &rimz::web::LiveRoom) -> String {
+fn room_path(room: &LiveRoom) -> String {
     crate::cli::render::home_relative(&room.project_root.to_string_lossy())
 }
 

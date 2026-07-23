@@ -32,6 +32,7 @@ mod render;
 mod reset;
 pub(crate) mod room;
 mod send;
+mod sessions;
 mod setup;
 mod sidebar;
 mod spinner;
@@ -139,6 +140,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Ping) => doctor::ping(),
         Some(Subcmd::Start(args)) => room::start(args, &globals),
         Some(Subcmd::Attach(args)) => room::attach(args, &globals),
+        Some(Subcmd::Sessions(args)) => sessions::run(args, &globals),
         Some(Subcmd::Remote(args)) => remote::run(args, &globals),
         Some(Subcmd::Web(args)) => web::run(args, &globals),
         None => room::start(
@@ -443,6 +445,8 @@ enum Subcmd {
     ///
     /// Omit the name to use the cwd's workspace.
     Attach(AttachArgs),
+    /// Pick and open live RimZ rooms in a session manager.
+    Sessions(sessions::SessionsArgs),
     /// Manage and connect to SSH remote rooms.
     Remote(remote::RemoteArgs),
     /// Open a Zellij room in the browser.
