@@ -47,6 +47,8 @@ pub(in crate::web) fn profile(config: &MachineConfig, ttyd_program: &Path) -> Cl
             "cursorBlink=false".to_owned(),
             "-t".to_owned(),
             "titleFixed=RimZ".to_owned(),
+            "-t".to_owned(),
+            "disableLeaveAlert=true".to_owned(),
         ],
         warnings: Vec::new(),
         pixel_protocol: None,
@@ -962,6 +964,8 @@ mod tests {
                 "cursorBlink=false",
                 "-t",
                 "titleFixed=RimZ",
+                "-t",
+                "disableLeaveAlert=true",
             ]
         );
         assert!(profile.warnings.is_empty());

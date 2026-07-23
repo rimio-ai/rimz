@@ -70,7 +70,7 @@ Rotation stops and restarts the live writable daemon so the old secret stops wor
 
 Credential creation, rotation, listing, and revocation have the same behavior in Basic and trusted-header modes. Rotation restarts both ttyd and its gate, so the gate's startup read receives the new secret.
 
-The daemon always passes `macOptionIsMeta=true`, `cursorBlink=false`, and `titleFixed=RimZ`. With `style_client = true`, it also projects the shared theme into xterm.js options and resolves the configured font.
+The daemon always passes `macOptionIsMeta=true`, `cursorBlink=false`, `titleFixed=RimZ`, and `disableLeaveAlert=true`. With `style_client = true`, it also projects the shared theme into xterm.js options and resolves the configured font.
 
 The built-in Nerd Font families use SHA-256-pinned regular and bold faces. HTTPS custom sources use a URL-hashed cache entry, local sources are read directly, and supported files end in `.ttf`, `.otf`, `.woff`, or `.woff2`. Font bytes live under `$XDG_CACHE_HOME/rimz/web-fonts`; `RIMZ_WEB_FONTS_OFFLINE` makes resolution cache-only.
 
