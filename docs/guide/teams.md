@@ -10,9 +10,9 @@ A team launches several agents as one unit, each in a named role with its own co
 Define the roles once in `agents.toml`, then launch the whole set with one name; each member answers to its own role handle. For a one-off pairing, put [roles directly in the layout spec](./fleet.md#compose-a-layout) with `cell:role`; a role set earns a named team when it recurs. You compose the roles the way the work splits — the shipped `forge` team, one split that works really well, pairs a planner, a coder, and a reviewer on one feature.
 
 ```sh
-rimz agents forge -w feat-complex         # planner, coder, reviewer on one feature
+rimz teams launch forge -w feat-complex   # planner, coder, reviewer on one feature
 rimz message @planner "ship the plan"     # each member answers to its role handle
-rimz agents forge --resume                # reopen the newest closed forge team
+rimz teams resume forge                   # reopen the newest closed forge team
 ```
 
 ## Why split the work
@@ -43,12 +43,18 @@ The split reads like it should multiply cost; in practice it divides it. Buildin
 
 ## Set up forge
 
-From a checkout of this repository, copy the fragment into the agents home and launch it into a worktree:
+Install the release-matched bundle from GitHub, then launch it into a worktree:
+
+```sh
+rimz teams install forge
+rimz teams launch forge -w feat-complex     # the whole team, one isolated worktree
+```
+
+From a repository checkout, copy the fragment instead when you want to edit that checkout's version directly:
 
 ```sh
 mkdir -p ~/.agents/teams
 cp -r examples/teams/forge ~/.agents/teams/
-rimz agents forge -w feat-complex     # the whole team, one isolated worktree
 ```
 
 Then hand the task to the planner and let the loop carry it: type into the planner's pane, or message it.
@@ -58,6 +64,21 @@ rimz message @planner "add rate limiting to the ingest API"
 ```
 
 The planner comes back to you at its design gates; the sidebar lifts the whole team the moment any role needs you ([one team, one line of work](#one-team-one-line-of-work)). The `claude` and `codex` CLIs must be on `PATH`; models, feature flags, and the rest of the install fine print are in the [examples README](../../examples/README.md#forge-agent-team--teamsforge).
+
+## See and drive your teams
+
+The team catalogue merges configured definitions with the cohorts alive in this room:
+
+```sh
+rimz teams                              # every definition and live instance
+rimz teams show forge                   # roles, models, validation, and live members
+rimz teams launch forge -w feat-query   # launch or reconcile one cohort
+rimz teams resume forge                 # reopen its newest closed cohort
+```
+
+Add `--json` to `rimz teams` or `show` for the structured report.
+`launch` and `resume` use the same reconciliation and recovery engine as their `rimz agents` equivalents, while keeping the common team lifecycle together.
+The full flag surface lives in the [teams CLI reference](../reference/cli/teams.md).
 
 ## Define your own team
 
@@ -97,7 +118,7 @@ args = "--strict-mcp-config --tools 'Bash,Read,Edit,Write,WebFetch,WebSearch,Ski
 system-prompt-file = "reviewer.md"
 ```
 
-Launching the team name opens every member in that layout, and each answers to its role handle: `@reviewer` inside the team's channel, `forge.reviewer` from anywhere in the workspace. The optional `leader` names the role that receives a trailing launch prompt; without it, the first declared role leads. `rimz agents forge -w feat-x "task"` therefore seeds the planner directly, while the rest of the team starts ready for its hand-offs. `rimz agents forge.reviewer` launches or re-adds that one role with the same identity it has inside the full team, and from a pane in the team's own channel the bare `rimz agents reviewer` means the same thing.
+Launching the team name opens every member in that layout, and each answers to its role handle: `@reviewer` inside the team's channel, `forge.reviewer` from anywhere in the workspace. The optional `leader` names the role that receives a trailing launch prompt; without it, the first declared role leads. `rimz teams launch forge -w feat-x "task"` therefore seeds the planner directly, while the rest of the team starts ready for its hand-offs. `rimz agents forge.reviewer` launches or re-adds that one role with the same identity it has inside the full team, and from a pane in the team's own channel the bare `rimz agents reviewer` means the same thing.
 
 Start from the forge directory or from scratch: rename the roles, add or drop some, swap the models and prompts — a pair, a trio, or a whole bench of specialists. The role prompts do the heavy lifting: each one states the role's craft, how the roles hand work to each other, and who owns which decision, which is what turns co-launched agents into a team instead of a row of panes. The full config shape, override fields included, is in [configuration → agent profiles, commands, and teams](./configuration.md#agent-profiles-commands-and-teams).
 
@@ -110,7 +131,7 @@ Point any co-launched layout — a named team or an inline multi-agent spec — 
 `--resume` (alias `--continue`) forces the resume path, reopening the newest matching set of sessions: by team name and role for a team, or by cell order for an inline spec. Resume takes identity, working directory, and channel from RimZ's durable records and each role's model, effort, system prompt, and permission mode from its profile, so a resumed team comes back configured exactly as it launched. It stands alone: no prompt, model, or channel flags ride with it.
 
 ```sh
-rimz agents forge --resume         # reopen the newest closed forge team
+rimz teams resume forge            # reopen the newest closed forge team
 rimz agents claude,codex --resume  # reopen the newest matching inline pair
 rimz agents claude --resume        # resume the freshest closed Claude session
 ```
@@ -119,7 +140,7 @@ When the place is easier to name than the spec, `rimz agents resume '#feat-x'` r
 
 ## One team, one line of work
 
-The room treats a team as a single line of work: the sidebar keeps its members as one contiguous block with one derived state, so one member asking for you lifts the whole block ([the sidebar guide → Teams read as one](./sidebar.md#teams-read-as-one)).
+The room treats a team as a single line of work: the sidebar names the active group with `· <team>`, keeps its members as one contiguous block with one derived state, and lets one member asking for you lift the whole block ([the sidebar guide → Teams read as one](./sidebar.md#teams-read-as-one)).
 
 ## See also
 
@@ -128,4 +149,5 @@ The room treats a team as a single line of work: the sidebar keeps its members a
 - [Messaging](./messaging.md) — reach a role by handle: park, steer, schedule, and channels.
 - [Examples → forge](../../examples/README.md) — the shipped forge fragment: install, prerequisites, and try-before-install.
 - [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
+- [Teams CLI reference](../reference/cli/teams.md) — discover, inspect, install, launch, and resume named teams.
 - [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents`, `worktree`, and `gc` surface.

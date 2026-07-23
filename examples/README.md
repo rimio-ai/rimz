@@ -35,16 +35,22 @@ zellij setup --check
 
 [`teams/forge`](./teams/forge/) is one RimZ drop-in fragment for the plan → code → review loop: `@planner` runs Claude, `@coder` runs Codex, and `@reviewer` runs Claude. Its `team.toml` declares the three profiles and the team, and the three Markdown files are the role prompts. The [teams README](./teams/README.md) walks the whole loop: roles, hand-offs, install, and customization.
 
-Install the fragment by copying it into the agents home:
+Install the release-matched bundle from GitHub:
+
+```sh
+rimz teams install forge
+```
+
+From a repository checkout, copying remains the local-edit alternative:
 
 ```sh
 mkdir -p ~/.agents/teams
 cp -r examples/teams/forge ~/.agents/teams/
 ```
 
-A same-named directory in `~/.agents/teams` is overwritten; remove it first if you want a clean copy. Entries in `~/.config/rimz/agents.toml` override fragment entries with the same names.
+`rimz teams install forge --force` replaces files in a same-named installed directory; the plain install preserves it. Entries in `~/.config/rimz/agents.toml` override fragment entries with the same names.
 
-Launch with `rimz agents forge`; the launch grammar lives in the [agents CLI reference](../docs/reference/cli/agents.md). Each role answers to `@planner`, `@coder`, or `@reviewer`.
+Launch with `rimz teams launch forge`; the lifecycle grammar lives in the [teams CLI reference](../docs/reference/cli/teams.md). Each role answers to `@planner`, `@coder`, or `@reviewer`.
 
 The `claude` and `codex` CLIs must be on `PATH`. The profiles in `team.toml` pin models (`fable`, `opus`) and Codex feature flags; adjust them there to taste. The coder's PR step expects a `pr` skill and falls back to plain `gh` or `tea` without it.
 

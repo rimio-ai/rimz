@@ -46,6 +46,8 @@ rimz agents logs @coder -n 20        # transcript tail (-f follows)
 rimz agents history @coder -n 10     # per-turn tokens, cost, and outcome
 rimz agents restart @coder           # bounce in place and resume the session
 rimz agents resume '#docs'           # restore every closed place in one lane
+rimz teams                           # configured teams and their live instances
+rimz teams show forge                # resolved roles, validation, and live members
 rimz message @coder "rebase first"   # park for the next turn boundary
 rimz message @coder --wait "did the migration land? one line" # ask and print the reply
 rimz message --steer @coder "stop"   # interrupt the live turn now
@@ -132,7 +134,7 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 - [sidebar.md](./docs/interface/sidebar.md) — the sidebar on screen: cockpit, agent cards, provider dashboard, rendered frames, glyph legend.
 
 **Reference** — `docs/reference/`
-- [cli.md](./docs/reference/cli.md) — CLI entry and command map; leaves [getting-started.md](./docs/reference/cli/getting-started.md) (start/attach/sessions/remote/web/list/setup/doctor), [web.md](./docs/reference/cli/web.md) (shared ttyd browser access and credential helpers), [agents.md](./docs/reference/cli/agents.md) (launch, `-p`, message, transcript, pane, worktree, loop, addressing), [events.md](./docs/reference/cli/events.md) (streaming lifecycle transitions), [asks.md](./docs/reference/cli/asks.md) (structured blocking prompts and native answers), [channel.md](./docs/reference/cli/channel.md), [hooks-trust.md](./docs/reference/cli/hooks-trust.md), [maintenance.md](./docs/reference/cli/maintenance.md).
+- [cli.md](./docs/reference/cli.md) — CLI entry and command map; leaves [getting-started.md](./docs/reference/cli/getting-started.md) (start/attach/sessions/remote/web/list/setup/doctor), [web.md](./docs/reference/cli/web.md) (shared ttyd browser access and credential helpers), [agents.md](./docs/reference/cli/agents.md) (launch, `-p`, message, transcript, pane, worktree, loop, addressing), [teams.md](./docs/reference/cli/teams.md) (discover, inspect, install, launch, and resume named teams), [events.md](./docs/reference/cli/events.md) (streaming lifecycle transitions), [asks.md](./docs/reference/cli/asks.md) (structured blocking prompts and native answers), [channel.md](./docs/reference/cli/channel.md), [hooks-trust.md](./docs/reference/cli/hooks-trust.md), [maintenance.md](./docs/reference/cli/maintenance.md).
 - [agent-support.md](./docs/reference/agent-support.md) — per-agent status, integration surface, and permission-mode mapping for Claude, Codex, Amp, Copilot, Kimi, Pi, OpenCode, Antigravity, Cursor, Droid, Kiro, Qwen, Grok; [agent-plugins.md](./docs/reference/agent-plugins.md) — external bundle, canonical wire, and probe contracts.
 
 **Internals** — `docs/internals/`; [README.md](./docs/internals/README.md) is the index. The three multi-doc subsystems keep a folder; every other subsystem is one flat file.

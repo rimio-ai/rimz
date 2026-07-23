@@ -1,0 +1,98 @@
+# Teams
+
+`rimz teams` discovers, inspects, installs, launches, and resumes named teams.
+
+A team is a configured set of role bindings and a layout.
+Each role keeps its own model, prompt, context window, and address while the team shares one lane.
+The [teams guide](../../guide/teams.md) explains how to design a team; this page owns the command forms.
+
+## List teams
+
+```sh
+rimz teams
+rimz teams --json
+```
+
+The human table merges the effective team definitions with live team instances.
+It shows the resolved role, model, and effort summary, each live lane and member count, and either the live state or the definition error.
+Live instances remain visible when their definition has since been removed.
+
+The effective catalogue merges the machine `agents.toml`, fragments under `~/.agents/teams/`, and a trusted repository overlay.
+An unreadable or invalid effective config fails at entry with the source error.
+`--json` emits the same catalogue as structured team records with definitions, resolved roles, validation, and live instances.
+
+## Inspect one team
+
+```sh
+rimz teams show forge
+rimz teams show forge --json
+```
+
+`show` names the best-effort definition source, layout, leader, and validation result, then lists each resolved role's profile or kind, model, effort, mode, and prompt files.
+Live instances include the lane, member handle and status, context fill, and tracked session cost.
+The report ends with copy-ready launch and resume forms.
+
+## Launch a team
+
+```sh
+rimz teams launch forge
+rimz teams launch forge -w feat-rate-limits "add rate limiting"
+rimz teams launch forge --channel triage
+rimz teams launch forge --from-pr 91 --bg
+```
+
+`launch` accepts a configured team name and sends an optional trailing prompt to its configured leader.
+It uses the same launch and relaunch-reconciliation path as `rimz agents <team>`, including worktree creation, channel placement, pull-request checkout, and existing-cohort focus or recovery.
+
+The team surface carries only cohort-level controls:
+
+- `-w, --worktree [NAME]` creates or reuses a RimZ-owned worktree; a bare `-w` chooses a fresh name.
+- `--channel NAME` launches in a durable named lane instead of a worktree.
+- `--from-pr PR` creates or reuses a worktree from a pull-request number or URL.
+- `--description TEXT` seeds the member-card description until agents name their sessions.
+- `--bg` leaves focus where it is.
+- `--new-tab` opens the launch in a new tab or window.
+
+Per-agent model, prompt-file, permission, supervised-run, and pane-placement overrides stay on [`rimz agents`](./agents.md).
+Put stable role-specific choices in the team definition.
+
+## Resume a team
+
+```sh
+rimz teams resume forge
+rimz teams resume forge -w feat-rate-limits
+```
+
+`resume` reopens the newest matching closed cohort with the same identity, directory, and lane from durable state.
+Current role profiles supply the launch configuration.
+`-w NAME` limits selection to one worktree.
+
+## Install a team bundle
+
+```sh
+rimz teams install
+rimz teams install forge
+rimz teams install forge --force
+rimz teams install forge --ref main
+```
+
+The bare form lists bundles under `examples/teams/` in the RimZ GitHub repository.
+The named form downloads every file in that bundle into `~/.agents/teams/<name>/`.
+The default Git ref is the release tag matching the running binary, `v<CARGO_PKG_VERSION>`, so the examples and command stay version-aligned.
+`--ref TAG|BRANCH` selects another tag or branch; development builds whose tag is unavailable report the `--ref main` recovery command.
+
+An existing destination is preserved unless `--force` is present.
+Bundle files use durable temp-file-plus-rename writes.
+Network, API, validation, and filesystem failures stop the install with the failing URL or path and a recovery cue.
+
+## Compatibility forms
+
+The existing agent forms remain equivalent:
+
+```sh
+rimz agents forge -w feat-rate-limits
+rimz agents forge --resume
+```
+
+Use `rimz teams` when the intent is team discovery or lifecycle control.
+Use `rimz agents` for inline layouts, one role from a team, or per-agent launch controls.

@@ -145,6 +145,10 @@ Producer and consumer run one ordered spine in [`enrich.rs`](../../../crates/rim
 - Activity sidecars land before the pane overlay, so row age, ranking, waiting guards, and the stall window all see the per-tool timestamp rather than the coarser turn-grained event time.
 - The pane overlay admits the cards, and everything after it (process metrics, provider panels, git and PR facts, spend tallies, the presentation sort) enriches only panes the frame already holds.
 
+Worktree-group construction stamps `SidebarWorktreeGroup.team` in this renderer-independent fold.
+The derivation selects the unique non-empty team carried by agent rows in the group: rows without a team are tolerated, while two distinct team names yield no group label.
+CLI and sidebar renderers consume that one projected field, so active headers, finished receipts, and fleet tables stay aligned.
+
 `project_local` is the renderer-local half: classify session presence against this reader's clock, resolve this renderer's own view, and drop this renderer's own pane from the roster. Splitting there is what makes the producer's fold shareable at all.
 
 A frameless fold, which is what a cold consumer or a CLI caller wanting rollup metadata gets, leaves `panes_produced_at_ms` null and `worktree_groups` empty while store metadata still paints.
