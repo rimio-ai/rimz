@@ -138,6 +138,11 @@ pub struct SidebarWorktreeGroup {
     pub key: String,
     pub label: String,
     pub kind: SidebarWorktreeKind,
+    /// The unique non-empty team carried by this group's team-stamped rows.
+    /// Roleless processes and stray agents do not hide a cohort label; two
+    /// distinct teams make the group ambiguous.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
     pub status_counts: Vec<SidebarStatusCount>,
     pub rows: Vec<SidebarRow>,
     /// Total insertions and deletions relative to trunk.
@@ -195,6 +200,20 @@ impl SidebarWorktreeGroup {
     pub fn collapses(&self) -> bool {
         self.finished && self.rows.iter().filter(|row| row.is_agent()).count() > 1
     }
+}
+
+/// The unique non-empty team in a cohort. Unstamped members are tolerated;
+/// two distinct stamped teams make the cohort ambiguous.
+pub fn cohort_team<'a>(teams: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
+    let mut unique = None;
+    for team in teams.into_iter().flatten().filter(|team| !team.is_empty()) {
+        match unique {
+            None => unique = Some(team),
+            Some(current) if current == team => {}
+            Some(_) => return None,
+        }
+    }
+    unique
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -335,6 +354,7 @@ mod tests {
             key: "group".to_owned(),
             label: "group".to_owned(),
             kind: SidebarWorktreeKind::Worktree,
+            team: None,
             status_counts: Vec::new(),
             rows,
             diff_added: None,
@@ -379,6 +399,28 @@ mod tests {
             ])
             .collapses()
         );
+    }
+
+    #[test]
+    fn cohort_team_tolerates_strays_and_rejects_conflicts() {
+        assert_eq!(cohort_team([Some("forge")]), Some("forge"));
+        assert_eq!(
+            cohort_team([Some("forge"), None, Some(""), Some("forge")]),
+            Some("forge")
+        );
+        assert_eq!(cohort_team([Some("forge"), Some("docs")]), None);
+        assert_eq!(cohort_team([None, Some("")]), None);
+    }
+
+    #[test]
+    fn group_team_serializes_only_when_present() {
+        let mut group = collapse_test_group(Vec::new());
+        let without = serde_json::to_value(&group).unwrap();
+        assert!(without.get("team").is_none());
+
+        group.team = Some("forge".to_owned());
+        let with = serde_json::to_value(&group).unwrap();
+        assert_eq!(with["team"], "forge");
     }
 
     #[test]

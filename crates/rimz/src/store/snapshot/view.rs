@@ -39,7 +39,7 @@ pub use model::{
     DailyBudgetView, PresenceSample, RemoteControlBadge, SidebarLinkFreshness, SidebarLinkHealth,
     SidebarPresence, SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup,
     SidebarWorktreeKind, WorktreePrCi, WorktreePrState, WorktreeTrunkSync, actionable_unread_count,
-    lead_unread_row, triage_key,
+    cohort_team, lead_unread_row, triage_key,
 };
 pub use reap::RuntimeReapInputs;
 
@@ -66,7 +66,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 10;
+pub const SNAPSHOT_VERSION: u32 = 11;
 
 /// Sidebar view-model. The pane frame admits every rendered card; store,
 /// sidecars, and realtime events only enrich rows admitted from live panes.

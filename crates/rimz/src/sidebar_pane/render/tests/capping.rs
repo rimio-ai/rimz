@@ -314,13 +314,13 @@ fn finished_roster_names_keep_soft_provider_brand_tones() {
 }
 
 #[test]
-fn finished_roster_leads_with_one_shared_team_only() {
-    let mut planner = agent_row("planner", AgentStatus::Success);
-    planner.as_agent_mut().expect("agent row").team = Some("rimz".to_owned());
-    let mut coder = agent_row("coder", AgentStatus::Success);
-    coder.as_agent_mut().expect("agent row").team = Some("rimz".to_owned());
-    let mut finished = group(vec![planner, coder]);
+fn finished_roster_leads_with_the_projected_team() {
+    let mut finished = group(vec![
+        agent_row("planner", AgentStatus::Success),
+        agent_row("coder", AgentStatus::Success),
+    ]);
     finished.finished = true;
+    finished.team = Some("rimz".to_owned());
 
     let (texts, _, _) = render_group(&finished, false);
     assert!(
@@ -328,17 +328,7 @@ fn finished_roster_leads_with_one_shared_team_only() {
         "{texts:?}"
     );
 
-    finished.rows[1].as_agent_mut().expect("agent row").team = Some("other".to_owned());
-    let (texts, _, _) = render_group(&finished, false);
-    assert!(!roster_receipt(&texts).contains("rimz"), "{texts:?}");
-    assert!(!roster_receipt(&texts).contains("other"), "{texts:?}");
-
-    finished.rows[0].as_agent_mut().expect("agent row").team = Some("rimz".to_owned());
-    finished.rows[1].as_agent_mut().expect("agent row").team = None;
-    let (texts, _, _) = render_group(&finished, false);
-    assert!(!roster_receipt(&texts).contains("rimz"), "{texts:?}");
-
-    finished.rows[0].as_agent_mut().expect("agent row").team = None;
+    finished.team = None;
     let (texts, _, _) = render_group(&finished, false);
     assert!(
         roster_receipt(&texts).contains("▸ ✓ planner  ✓ coder"),
@@ -921,6 +911,7 @@ fn group(rows: Vec<crate::SidebarRow>) -> crate::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         kind: crate::SidebarWorktreeKind::Worktree,
+        team: None,
         status_counts: Vec::new(),
         rows,
         diff_added: None,

@@ -114,6 +114,7 @@ fn worktree_group(spec: WorktreeGroupSpec) -> rimz::SidebarWorktreeGroup {
         key: spec.key.to_owned(),
         label: spec.label.to_owned(),
         kind: rimz::SidebarWorktreeKind::Worktree,
+        team: None,
         status_counts: Vec::new(),
         rows: spec.rows,
         diff_added: spec.diff_added,

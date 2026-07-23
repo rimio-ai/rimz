@@ -237,6 +237,16 @@ pub struct AgentsArgs {
     passthrough: Vec<String>,
 }
 
+/// Team-command fields forwarded into the existing `rimz agents` launch path.
+pub(crate) struct TeamLaunchOptions {
+    pub(crate) description: Option<String>,
+    pub(crate) worktree: Option<String>,
+    pub(crate) channel: Option<String>,
+    pub(crate) from_pr: Option<rimz::forge::PrTarget>,
+    pub(crate) bg: bool,
+    pub(crate) new_tab: bool,
+}
+
 /// Prompt source for a supervised `--print` run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
@@ -712,6 +722,25 @@ impl AgentsArgs {
             loop_task: None,
             passthrough: Vec::new(),
         }
+    }
+
+    pub(crate) fn team_launch(
+        team: String,
+        prompt: Option<String>,
+        options: TeamLaunchOptions,
+    ) -> Self {
+        let mut args = Self::for_create(team, prompt, options.worktree, options.channel);
+        args.description = options.description;
+        args.from_pr = options.from_pr;
+        args.bg = options.bg;
+        args.new_tab = options.new_tab;
+        args
+    }
+
+    pub(crate) fn team_resume(team: String, worktree: Option<String>) -> Self {
+        let mut args = Self::for_create(team, None, worktree, None);
+        args.resume = true;
+        args
     }
 }
 

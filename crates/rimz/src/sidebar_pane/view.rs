@@ -462,6 +462,7 @@ mod tests {
             key: "group-0".to_owned(),
             label: "main".to_owned(),
             kind: SidebarWorktreeKind::Worktree,
+            team: None,
             status_counts: Vec::new(),
             rows,
             diff_added: None,

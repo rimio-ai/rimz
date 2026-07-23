@@ -39,6 +39,7 @@ mod spinner;
 mod stats;
 mod statusline;
 pub(crate) mod supervised;
+mod teams;
 mod transcript;
 mod trust;
 mod uninstall;
@@ -118,6 +119,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Channel(args)) => channel::run(args, &globals),
         Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
         Some(Subcmd::Agents(args)) => agents_cmd::run(*args, &globals),
+        Some(Subcmd::Teams(args)) => teams::run(args, &globals),
         Some(Subcmd::Asks(args)) => asks::run(args, &globals),
         Some(Subcmd::Answer(args)) => answer::run(args, &globals),
         Some(Subcmd::Loop(args)) => loop_cmd::run(args, &globals),
@@ -484,6 +486,8 @@ enum Subcmd {
     Worktree(worktree::WorktreeArgs),
     /// Launch agent tabs, optionally in RimZ-owned worktrees.
     Agents(Box<agents_cmd::AgentsArgs>),
+    /// Discover, inspect, install, launch, and resume named teams.
+    Teams(teams::TeamsArgs),
     /// Inspect the blocking prompts agents currently have open.
     Asks(asks::AsksArgs),
     /// Answer one current blocking prompt in its agent pane.

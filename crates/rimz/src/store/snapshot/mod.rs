@@ -53,8 +53,8 @@ pub use view::{
     DailyBudgetView, PresenceSample, RemoteControlBadge, RuntimeReapInputs, SNAPSHOT_VERSION,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarProviderPanel,
     SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice,
-    WorktreePrCi, WorktreePrState, WorktreeTrunkSync, actionable_unread_count, lead_unread_row,
-    triage_key,
+    WorktreePrCi, WorktreePrState, WorktreeTrunkSync, actionable_unread_count, cohort_team,
+    lead_unread_row, triage_key,
 };
 pub(crate) use view::{format_plan_label, sort_windows};
 

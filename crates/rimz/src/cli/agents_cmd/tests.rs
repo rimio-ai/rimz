@@ -46,6 +46,45 @@ fn parse_agents(argv: &[&str]) -> AgentsArgs {
         .args
 }
 
+#[test]
+fn team_launch_and_resume_forward_only_the_team_surface() {
+    let launch = AgentsArgs::team_launch(
+        "forge".to_owned(),
+        Some("ship it".to_owned()),
+        TeamLaunchOptions {
+            description: Some("team task".to_owned()),
+            worktree: Some("feat-x".to_owned()),
+            channel: None,
+            from_pr: Some(rimz::forge::PrTarget {
+                number: 91,
+                forge: None,
+                host: None,
+                repo: None,
+            }),
+            bg: true,
+            new_tab: true,
+        },
+    );
+    assert_eq!(launch.spec.as_deref(), Some("forge"));
+    assert_eq!(launch.prompt.as_deref(), Some("ship it"));
+    assert_eq!(launch.description.as_deref(), Some("team task"));
+    assert_eq!(launch.worktree.as_deref(), Some("feat-x"));
+    assert_eq!(launch.from_pr.as_ref().map(|pr| pr.number), Some(91));
+    assert!(launch.bg);
+    assert!(launch.new_tab);
+    assert!(!launch.resume);
+    assert!(!launch.print);
+    assert!(launch.model.is_none());
+    assert!(launch.passthrough.is_empty());
+
+    let resume = AgentsArgs::team_resume("forge".to_owned(), Some("feat-x".to_owned()));
+    assert_eq!(resume.spec.as_deref(), Some("forge"));
+    assert_eq!(resume.worktree.as_deref(), Some("feat-x"));
+    assert!(resume.resume);
+    assert!(resume.prompt.is_none());
+    assert!(!resume.bg);
+}
+
 fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
     let argv =
         rimz::harness::launch::exec_argv(Path::new("/bin/rimz"), input).expect("render exec argv");
@@ -1036,6 +1075,7 @@ mod render {
             vec![
                 agent_in_lane("planner", Some("auth-refresh"), auth_path, Some("forge")),
                 agent_in_lane("coder", Some("auth-refresh"), auth_path, Some("forge")),
+                agent_in_lane("stray", Some("auth-refresh"), auth_path, None),
                 agent_in_lane("docs", Some("docs"), Some("/repo/main"), None),
                 external,
                 agent_in_lane(

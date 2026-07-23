@@ -116,6 +116,7 @@ fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
         key: format!("channel:{label}"),
         label: label.to_owned(),
         kind: SidebarWorktreeKind::Channel,
+        team: None,
         status_counts: Vec::new(),
         rows: vec![activity_row(false, None, Timestamp::now(), path)],
         diff_added: None,

@@ -164,6 +164,20 @@ pub(crate) fn agent_specs() -> Vec<CompletionCandidate> {
     agent_specs_from(&MachineConfig::load_lenient())
 }
 
+pub(crate) fn team_names() -> Vec<CompletionCandidate> {
+    team_names_from(&MachineConfig::load_lenient())
+}
+
+fn team_names_from(config: &MachineConfig) -> Vec<CompletionCandidate> {
+    config
+        .agents
+        .teams
+        .0
+        .keys()
+        .map(|name| candidate(name, "team"))
+        .collect()
+}
+
 fn agent_specs_from(config: &MachineConfig) -> Vec<CompletionCandidate> {
     let mut candidates = Vec::new();
     let mut suffix_bases = Vec::new();
@@ -400,6 +414,10 @@ mod tests {
         assert!(candidates.iter().any(|candidate| {
             candidate.get_value() == "writer-yolo" && candidate.is_hide_set()
         }));
+        assert_eq!(
+            team_names_from(&config)[0].get_value().to_string_lossy(),
+            "forge"
+        );
     }
 
     #[test]

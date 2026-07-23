@@ -461,6 +461,7 @@ mod tests {
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
             kind: crate::SidebarWorktreeKind::Worktree,
+            team: None,
             status_counts,
             rows,
             diff_added: None,
