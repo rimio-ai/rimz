@@ -1,6 +1,6 @@
 //! Browser access through one machine-wide ttyd daemon.
 
-use std::io;
+use std::io::{self, Write as _};
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -13,20 +13,37 @@ use serde::{Deserialize, Serialize};
 use crate::config::MachineConfig;
 use crate::ids::MuxName;
 use crate::mux::CommandSpec;
-use crate::room::session::{LiveSessions, workspace_record_for_session};
+use crate::room::session::{LiveRoom, LiveSessions, live_rooms_with, workspace_record_for_session};
 use crate::store::atomic;
 
 mod gate;
-mod sessions;
 mod share;
 mod ttyd;
 
 pub use gate::{GateAuth, RelayTarget};
-pub use sessions::{LiveRoom, live_rooms};
 
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
 pub const TTYD_SESSION_OSC: u16 = 7717;
 pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 3;
+
+/// Build the private ttyd OSC sequence that synchronizes browser room state.
+pub fn session_sync_osc(target: Option<(&str, &str)>) -> String {
+    let (session, display_name) = target.unwrap_or_default();
+    format!(
+        "\x1b]{};rimz-session={}\x07\x1b]{};rimz-name={}\x07",
+        TTYD_SESSION_OSC,
+        session,
+        TTYD_SESSION_OSC,
+        encode_query_value(display_name)
+    )
+}
+
+/// Write and flush the browser room synchronization sequence.
+pub fn write_session_sync(target: Option<(&str, &str)>) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(session_sync_osc(target).as_bytes())?;
+    stdout.flush()
+}
 
 pub(crate) fn pixel_daemon_records() -> Vec<(u32, u32)> {
     [ttyd::pixel_daemon_record(), share::pixel_daemon_record()]
@@ -123,11 +140,8 @@ pub enum WebErr {
     },
     #[error("{0}")]
     InvalidSession(String),
-    #[error("reading RimZ workspace records: {source}")]
-    WorkspaceRecords {
-        #[source]
-        source: io::Error,
-    },
+    #[error(transparent)]
+    LiveRoom(#[from] crate::room::LiveRoomErr),
 }
 
 pub type Result<T> = std::result::Result<T, WebErr>;
@@ -541,7 +555,7 @@ pub fn existing_session_attach_command(session: Option<&str>) -> Result<CommandS
     let live = LiveSessions::probe();
     let target = live_session_target_with_probe(session, &live);
     let Some((session, mux)) = target else {
-        let rooms = sessions::live_rooms_with(&live)?;
+        let rooms = live_rooms_with(&live)?;
         return Err(WebErr::InvalidSession(invalid_session_message(
             session, &rooms,
         )));
@@ -634,6 +648,18 @@ pub fn encode_query_value(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_sync_osc_sets_and_clears_the_browser_target() {
+        assert_eq!(
+            session_sync_osc(Some(("rimz-docs-a1b2c3", "docs & notes"))),
+            "\x1b]7717;rimz-session=rimz-docs-a1b2c3\x07\x1b]7717;rimz-name=docs%20%26%20notes\x07"
+        );
+        assert_eq!(
+            session_sync_osc(None),
+            "\x1b]7717;rimz-session=\x07\x1b]7717;rimz-name=\x07"
+        );
+    }
 
     #[test]
     fn joins_base_url_and_session_as_browser_room() {

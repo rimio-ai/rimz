@@ -8,7 +8,7 @@ This page is the map: it indexes every command and collects the conventions that
 
 | Scene | Commands | Reference |
 | --- | --- | --- |
-| **Open and attach a room** | `rimz`, `start`, `attach`, `list`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) |
+| **Open and attach a room** | `rimz`, `start`, `attach`, `sessions`, `list`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) |
 | **Reach a room anywhere** | `remote`, `web` | [Remote](./cli/remote.md) · [Web](./cli/web.md) |
 | **Run and steer agents** | `agents`, `asks`, `answer`, `message`, `transcript`, `pane`, `events` | [Agents](./cli/agents.md) · [Asks](./cli/asks.md) · [Message](./cli/message.md) · [Transcript](./cli/transcript.md) · [Pane](./cli/pane.md) · [Events](./cli/events.md) |
 | **Cost, usage, and budgets** | `stats`, `providers`, `budget` | [Stats](./cli/stats.md) · [Providers](./cli/providers.md) · [Budgets](./cli/agents.md#inspect-and-change-a-budget) |

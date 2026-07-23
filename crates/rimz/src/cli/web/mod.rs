@@ -1,7 +1,5 @@
 //! `rimz web` — writable browser access and read-only room broadcasts.
 
-mod picker;
-
 use std::io::Write as _;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -175,7 +173,7 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
         WebSubcmd::Restart => restart(),
         WebSubcmd::Stop => stop(),
         WebSubcmd::Token { command } => token(command),
-        WebSubcmd::Exec { session, share } => exec(session.as_deref(), share),
+        WebSubcmd::Exec { session, share } => exec(session.as_deref(), share, globals),
         WebSubcmd::Gate {
             listen,
             upstream,
@@ -444,25 +442,27 @@ fn render_revoked(stopped: bool) -> Result<()> {
     Ok(())
 }
 
-fn exec(session: Option<&str>, share: bool) -> Result<()> {
+fn exec(session: Option<&str>, share: bool, globals: &GlobalFlags) -> Result<()> {
     if share {
         let spec = rimz::web::share_attach_command(session)?;
         return exec_session_attach(&spec, session);
     }
     match rimz::web::existing_session_attach_command(session) {
-        Ok(spec) if picker::available() => {
+        Ok(spec) if crate::cli::sessions::picker_available() => {
             let Some(session) = session.filter(|session| !session.is_empty()) else {
                 return exec_session_attach(&spec, session);
             };
-            if picker::run(None, Some((session, &spec)))? {
+            if crate::cli::sessions::run_web_picker(None, Some((session, &spec)), globals)? {
                 Ok(())
             } else {
                 exec_session_attach(&spec, Some(session))
             }
         }
         Ok(spec) => exec_session_attach(&spec, session),
-        Err(rimz::web::WebErr::InvalidSession(message)) if picker::available() => {
-            if picker::run(session, None)? {
+        Err(rimz::web::WebErr::InvalidSession(message))
+            if crate::cli::sessions::picker_available() =>
+        {
+            if crate::cli::sessions::run_web_picker(session, None, globals)? {
                 Ok(())
             } else {
                 Err(anyhow::anyhow!(message))
@@ -476,8 +476,8 @@ fn exec_session_attach(spec: &rimz::mux::CommandSpec, session: Option<&str>) -> 
     let session = session
         .filter(|session| !session.is_empty())
         .context("validated browser attach lost its session target")?;
-    let display_name = picker::session_display_name(session);
-    picker::write_session_sync(Some((session, &display_name)))?;
+    let display_name = crate::cli::sessions::session_display_name(session);
+    rimz::web::write_session_sync(Some((session, &display_name)))?;
     room::exec_attach_command(spec)
 }
 

@@ -1,6 +1,6 @@
 # Getting started CLI
 
-`rimz` opens one room for the project you are in and keeps it attachable. The room is a plain Zellij or tmux session with the sidebar added — your keybinds, layout, and scrollback stay yours — so leaving is a normal multiplexer detach and [`rimz reset`](./maintenance.md#update-reload-reset-gc-and-uninstall) is the escape hatch if one ever wedges. This page covers the commands that open, reach, and diagnose a local room: `start`, `attach`, `list`, `setup`, and `doctor`. Reaching a room on another host is [`rimz remote`](./remote.md); how RimZ picks the room from your directory is [the root model in ARCHITECTURE.md](../../../ARCHITECTURE.md).
+`rimz` opens one room for the project you are in and keeps it attachable. The room is a plain Zellij or tmux session with the sidebar added — your keybinds, layout, and scrollback stay yours — so leaving is a normal multiplexer detach and [`rimz reset`](./maintenance.md#update-reload-reset-gc-and-uninstall) is the escape hatch if one ever wedges. This page covers the commands that open, reach, and diagnose a local room: `start`, `attach`, `sessions`, `list`, `setup`, and `doctor`. Reaching a room on another host is [`rimz remote`](./remote.md); how RimZ picks the room from your directory is [the root model in ARCHITECTURE.md](../../../ARCHITECTURE.md).
 
 ```sh
 rimz setup                 # one-time: detect the machine, write config, choose hooks and appearance
@@ -13,6 +13,7 @@ rimz                       # open the room and drop in
 | Open the current project's room | `rimz` |
 | Start or reattach a room for a path | `rimz start [PATH]` |
 | Attach by directory or exact session name | `rimz attach [SESSION]` |
+| Pick, create, and enter rooms interactively | `rimz sessions` |
 | Find known rooms and their live backend | `rimz list` |
 | Open the current room in a browser | `rimz web open` |
 | Bootstrap this machine's config | `rimz setup` |
@@ -40,6 +41,20 @@ When `[web] enabled = true`, room start also ensures the shared ttyd browser dae
 **Resume on rebirth.** When a room comes back from a reboot or a crashed multiplexer, RimZ offers to recover the agents that were running, defaulting yes; non-interactive starts recover automatically. `start` prints context first, such as `rimz: this room's previous session ended with agents still running (2026-07-02 17:37)`, before the recovery prompt names the count and labels. `--no-resume` brings the room up empty. Live agents in a healthy room are never touched by this; the flag only governs the recovery launch.
 
 `--refresh-ms <MS>` overrides the sidebar render cadence for sidebars born by this launch; the persistent cadence lives in machine config.
+
+## Pick a session
+
+```sh
+rimz sessions
+```
+
+`rimz sessions` opens the themed manager for every live RimZ room on the machine. Each card shows the repository and path, live root-agent counts and attention, and the configured headline session, token, and spend totals. Rooms with prompt activity in the last 24 hours lead, then the remaining rooms follow by recent workspace activity.
+
+Use ↑/↓ or j/k to move, Enter to attach, printable keys to filter repository names and paths, Backspace to edit, and Esc to clear the filter before quitting. `n` opens the new-session selector, so that letter is reserved instead of entering the filter.
+
+The new-session selector combines dormant known workspaces with a directory browser rooted at `$HOME`. Use ↑/↓ to move, → or Tab to descend, ← or Backspace on an empty filter to ascend, Enter to birth and attach a room for the selected path, and Esc to return to the live-room list. Unreadable directories keep the selector available with an empty directory section and a notice.
+
+Run the manager from a plain terminal. It refuses to nest inside tmux or Zellij and directs an existing mux client to `rimz attach`; non-terminal stdio prints the live-session listing and exits nonzero.
 
 ## List rooms
 

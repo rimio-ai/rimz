@@ -6,6 +6,10 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 
 ## Unreleased
 
+### Added
+
+- `rimz sessions` promotes the browser's themed live-room manager to a terminal command, and `n` opens a dormant-workspace plus directory selector that births and attaches a new room. → [Getting started](./docs/reference/cli/getting-started.md#pick-a-session)
+
 ### Fixed
 
 - Closing a RimZ browser tab no longer asks for leave-site confirmation; reconnecting reattaches the same room.

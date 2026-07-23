@@ -1,14 +1,16 @@
-//! Session-record lookup, one-shot cross-mux live sets, mux choice, and
-//! renamed-session retirement.
+//! Live room inventory, session-record lookup, cross-mux live sets, mux choice,
+//! and renamed-session retirement.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use super::{LiveRoomErr, LiveRoomResult};
 use crate::ids::MuxName;
 use crate::mux::MuxBackend;
 use crate::store::workspace_record;
-use crate::{RuntimePaths, StatePaths, WorkspaceRecord};
+use crate::workspace::KnownWorkspace;
+use crate::{RuntimePaths, StatePaths, WorkspaceId, WorkspaceRecord};
 use anyhow::{Context, Result, bail};
 
 const LIST_SESSIONS_ATTEMPTS: u8 = 3;
@@ -16,6 +18,70 @@ const LIST_SESSIONS_RETRY_DELAY: Duration = Duration::from_millis(250);
 const SESSION_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 const SESSION_PROBE_RETRY_TIMEOUT: Duration = Duration::from_secs(3);
 const TEST_SESSION_PROBE_MS: &str = "RIMZ_TEST_SESSION_PROBE_MS";
+
+/// One durable RimZ workspace joined to its currently-live mux session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveRoom {
+    pub session_name: String,
+    pub mux: MuxName,
+    pub project_root: PathBuf,
+    pub workspace_id: WorkspaceId,
+    pub updated_at: jiff::Timestamp,
+}
+
+/// Every known workspace whose managed mux session is currently live.
+pub fn live_rooms() -> LiveRoomResult<Vec<LiveRoom>> {
+    live_rooms_with(&LiveSessions::probe())
+}
+
+/// Every known workspace whose managed mux session is live under this probe.
+pub fn live_rooms_with(live: &LiveSessions) -> LiveRoomResult<Vec<LiveRoom>> {
+    let known = crate::workspace::known_workspaces()
+        .map_err(|source| LiveRoomErr::WorkspaceRecords { source })?;
+    Ok(live_rooms_from(known, |session| live.mux_of(session)))
+}
+
+/// Known workspaces without a live mux session, newest record first.
+pub fn dormant_workspaces(live: &LiveSessions) -> LiveRoomResult<Vec<KnownWorkspace>> {
+    let known = crate::workspace::known_workspaces()
+        .map_err(|source| LiveRoomErr::WorkspaceRecords { source })?;
+    Ok(dormant_workspaces_from(known, |session| {
+        live.mux_of(session).is_some()
+    }))
+}
+
+fn live_rooms_from(
+    known: Vec<KnownWorkspace>,
+    mux_of: impl Fn(&str) -> Option<MuxName>,
+) -> Vec<LiveRoom> {
+    let mut rooms = known
+        .into_iter()
+        .filter_map(|workspace| {
+            let mux = mux_of(&workspace.session_name)?;
+            Some(LiveRoom {
+                session_name: workspace.session_name,
+                mux,
+                project_root: workspace.project_root,
+                workspace_id: workspace.workspace_id,
+                updated_at: workspace.updated_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    rooms.sort_by(|left, right| left.session_name.cmp(&right.session_name));
+    rooms
+}
+
+fn dormant_workspaces_from(
+    known: Vec<KnownWorkspace>,
+    is_live: impl Fn(&str) -> bool,
+) -> Vec<KnownWorkspace> {
+    let mut dormant = known
+        .into_iter()
+        .filter(|workspace| !is_live(&workspace.session_name))
+        .collect::<Vec<_>>();
+    dormant.sort_by_key(|workspace| std::cmp::Reverse(workspace.updated_at));
+    dormant
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MissingSessionReport {
@@ -424,6 +490,53 @@ fn matching_sidebar_heartbeat_mtime(
 mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
+
+    fn known(session: &str, root: &str, updated_at: i64) -> KnownWorkspace {
+        KnownWorkspace {
+            workspace_id: WorkspaceId::from_project_root(Path::new(root)),
+            project_root: PathBuf::from(root),
+            session_name: session.to_owned(),
+            root_class: crate::workspace::RootClass::Repo,
+            rimz_bin: None,
+            updated_at: jiff::Timestamp::from_second(updated_at).unwrap(),
+        }
+    }
+
+    #[test]
+    fn live_and_dormant_room_joins_partition_and_sort_workspaces() {
+        let workspaces = vec![
+            known("rimz-zulu", "/repo/zulu", 30),
+            known("rimz-stopped-old", "/repo/stopped-old", 10),
+            known("rimz-alpha", "/repo/alpha", 20),
+            known("rimz-stopped-new", "/repo/stopped-new", 40),
+        ];
+        let mux_of = |session: &str| match session {
+            "rimz-alpha" => Some(MuxName::Tmux),
+            "rimz-zulu" => Some(MuxName::Zellij),
+            _ => None,
+        };
+
+        let rooms = live_rooms_from(workspaces.clone(), mux_of);
+        assert_eq!(
+            rooms
+                .iter()
+                .map(|room| (room.session_name.as_str(), room.mux))
+                .collect::<Vec<_>>(),
+            vec![
+                ("rimz-alpha", MuxName::Tmux),
+                ("rimz-zulu", MuxName::Zellij),
+            ]
+        );
+
+        let dormant = dormant_workspaces_from(workspaces, |session| mux_of(session).is_some());
+        assert_eq!(
+            dormant
+                .iter()
+                .map(|workspace| workspace.session_name.as_str())
+                .collect::<Vec<_>>(),
+            ["rimz-stopped-new", "rimz-stopped-old"]
+        );
+    }
 
     #[test]
     fn live_sessions_resolve_with_zellij_first_precedence() {
