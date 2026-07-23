@@ -159,7 +159,7 @@ pub(super) struct PanelPlan {
     pub(super) agent_rows: usize,
 }
 
-pub(super) const PANEL_FIXED_ROWS: usize = 18;
+pub(super) const PANEL_FIXED_ROWS: usize = 19;
 pub(super) const PANEL_HEADER_ROWS: usize = 9;
 pub(super) const SECTION_CHROME_ROWS: usize = 2;
 const SECTION_FLOOR_ROWS: usize = 3;
@@ -477,6 +477,7 @@ pub(super) fn heatmap_lines(
         }
         lines.push(line.trim_end().to_string());
     }
+    lines.push(String::new());
     lines.push(format!("  {}", ramp_key(&styles)));
 }
 
@@ -945,13 +946,13 @@ pub(super) fn agent_cells(
             };
             let name = pad_to(&render::paint(identity, &row.name), name_w);
             let left_compact = format!(
-                "{} {name} {} {} {sep} {} {} {sep} {}",
+                "{} {name} {} {sep} {} {} {sep} {} {}",
                 render::paint(identity, "●"),
+                render::paint(render::palette::money(), &pad_left(&row.usd, usd_w)),
                 render::paint(render::palette::muted(), &glyphs.sessions),
                 pad_left(&row.sessions, sess_w),
                 render::paint(render::palette::muted(), &glyphs.total),
                 pad_left(&row.tokens, tok_w),
-                render::paint(render::palette::money(), &pad_left(&row.usd, usd_w)),
             );
             let mut left_full = left_compact.clone();
             if let Some((percent, cache_hit)) = row.cache_hit.as_ref() {

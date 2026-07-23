@@ -693,6 +693,65 @@ fn finished_receipt_pins_cost_then_tokens_and_muted_age() {
 }
 
 #[test]
+fn finished_receipt_aggregates_session_cache_hit_percent() {
+    let mut first = agent_row("planner", AgentStatus::Success);
+    let first_agent = first.as_agent_mut().expect("agent row");
+    first_agent.usage.total_tokens = Some(100);
+    let mut first_context = claude_context(fixed_now());
+    first_context.tokens = Some(AgentTokenUsage {
+        session_usage: Some(AgentSessionUsage {
+            input_tokens: Some(10),
+            cache_read_input_tokens: Some(90),
+            ..AgentSessionUsage::default()
+        }),
+        ..AgentTokenUsage::default()
+    });
+    first_agent.context = Some(first_context);
+
+    let mut second = agent_row("coder", AgentStatus::Success);
+    let second_agent = second.as_agent_mut().expect("agent row");
+    second_agent.usage.total_tokens = Some(100);
+    let mut second_context = claude_context(fixed_now());
+    second_context.tokens = Some(AgentTokenUsage {
+        session_usage: Some(AgentSessionUsage {
+            input_tokens: Some(90),
+            cache_read_input_tokens: Some(10),
+            ..AgentSessionUsage::default()
+        }),
+        ..AgentTokenUsage::default()
+    });
+    second_agent.context = Some(second_context);
+
+    let mut finished = group(vec![first, second]);
+    finished.finished = true;
+    let (texts, _, _) = render_group(&finished, false);
+    let totals = texts.last().expect("finished totals receipt");
+    assert!(
+        totals.contains("◇ 200") && totals.contains(" · 50%"),
+        "the receipt aggregates member session counters: {texts:?}"
+    );
+    assert!(
+        !totals.contains("90%") && !totals.contains("10%"),
+        "no individual member ratio leaks into the team receipt: {texts:?}"
+    );
+
+    let mut no_counters = group(vec![
+        agent_row("planner", AgentStatus::Success),
+        agent_row("coder", AgentStatus::Success),
+    ]);
+    no_counters.finished = true;
+    for row in &mut no_counters.rows {
+        row.as_agent_mut().expect("agent row").usage.total_tokens = Some(100);
+    }
+    let (texts, _, _) = render_group(&no_counters, false);
+    let totals = texts.last().expect("finished totals receipt");
+    assert!(
+        !totals.contains('%'),
+        "a receipt without session counters omits the ratio: {texts:?}"
+    );
+}
+
+#[test]
 fn finished_totals_degrade_tokens_before_the_right_pin() {
     let mut row = agent_row_with_cost("planner", 1.0);
     row.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);

@@ -715,6 +715,16 @@ fn heatmap_cells_render_spaced() {
             assert_eq!(ch, ' ', "day cell ends with a space");
         }
     }
+    assert_eq!(lines.len(), 12);
+    assert!(
+        !lines[lines.len() - 3].is_empty(),
+        "the last day row precedes the legend gap"
+    );
+    assert_eq!(lines[lines.len() - 2], "");
+    assert_eq!(
+        strip_ansi(lines.last().expect("heatmap legend")),
+        "  Less · ░ ▒ ▓ █ More"
+    );
 }
 
 #[test]
@@ -803,7 +813,7 @@ fn panel_fit_preserves_data_before_header_chrome() {
     );
     assert!(used(tall, 2) <= 79);
 
-    let floor = fit(Some(38), true, 8, 10, 0);
+    let floor = fit(Some(39), true, 8, 10, 0);
     assert_eq!(
         floor,
         PanelPlan {
@@ -812,9 +822,9 @@ fn panel_fit_preserves_data_before_header_chrome() {
             agent_rows: 3,
         }
     );
-    assert!(used(floor, 0) <= 37);
+    assert!(used(floor, 0) <= 38);
 
-    let without_header = fit(Some(29), true, 8, 10, 0);
+    let without_header = fit(Some(30), true, 8, 10, 0);
     assert_eq!(
         without_header,
         PanelPlan {
@@ -823,9 +833,9 @@ fn panel_fit_preserves_data_before_header_chrome() {
             agent_rows: 3,
         }
     );
-    assert!(used(without_header, 0) <= 28);
+    assert!(used(without_header, 0) <= 29);
 
-    let very_short = fit(Some(25), true, 8, 10, 0);
+    let very_short = fit(Some(26), true, 8, 10, 0);
     assert_eq!(
         very_short,
         PanelPlan {
@@ -834,7 +844,7 @@ fn panel_fit_preserves_data_before_header_chrome() {
             agent_rows: 1,
         }
     );
-    assert!(used(very_short, 0) <= 24);
+    assert!(used(very_short, 0) <= 25);
 
     let no_breakdowns = fit(Some(24), true, 0, 0, 0);
     assert!(!no_breakdowns.header);
@@ -1104,15 +1114,12 @@ fn agent_cells_rank_by_sessions_and_skip_empty_agents() {
     assert!(codex < claude, "larger trailing-year session count leads");
     let codex = strip_ansi(&lines[codex]);
     let claude = strip_ansi(&lines[claude]);
-    assert!(codex.contains("◎ 4"));
-    assert!(codex.contains("◇ 100"));
-    assert!(codex.contains("$9"));
+    assert!(codex.contains("$9 · ◎ 4 · ◇ 100"), "{codex:?}");
     assert!(codex.contains("66.7%"));
     assert!(!codex.contains("sess"));
     assert!(!codex.contains("(66.7%)"));
-    assert!(claude.contains("◎ 2"));
-    assert!(claude.contains("◇ 350"));
-    assert!(claude.contains("$3 · 100%"));
+    assert!(claude.contains("$3 · ◎ 2 · ◇ 350"), "{claude:?}");
+    assert!(claude.contains("◇ 350 · 100%"));
     assert!(claude.contains("33.3%"));
 
     let empty_cells = agent_cells(&[], 0, &glyphs);

@@ -2,7 +2,8 @@
 //! and right-pinned git story, the dim `external` divider, and the row roster
 //! with its parallel hit-test map entries. Finished multi-row pods collapse
 //! hidden agents into a two-line receipt: an expandable team/member roster with
-//! cost pinned right, then token totals with the finished age pinned right.
+//! cost pinned right, then token totals and cache health with the finished age
+//! pinned right.
 
 use std::collections::HashSet;
 
@@ -268,14 +269,26 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
         .filter_map(|row| row.as_agent().map(|agent| (row, agent)))
         .collect::<Vec<_>>();
     let max_last_activity = agents.iter().map(|(row, _)| row.last_activity).max()?;
-    let (total, input, output, cache_read) = agents.iter().fold(
-        (0_u64, 0_u64, 0_u64, 0_u64),
-        |(total, input, output, cache_read), (_, agent)| {
+    let (total, input, output, cache_read, session_cache_read, session_input) = agents.iter().fold(
+        (0_u64, 0_u64, 0_u64, 0_u64, 0_u64, 0_u64),
+        |(total, input, output, cache_read, session_cache_read, session_input), (_, agent)| {
+            let session_usage = agent
+                .context
+                .as_ref()
+                .and_then(|context| context.tokens.as_ref())
+                .and_then(|tokens| tokens.session_usage.as_ref());
             (
                 total.saturating_add(agent.usage.total_tokens.unwrap_or(0)),
                 input.saturating_add(agent.usage.fresh_input_tokens.unwrap_or(0)),
                 output.saturating_add(agent.usage.output_tokens.unwrap_or(0)),
                 cache_read.saturating_add(agent.usage.cache_read_input_tokens.unwrap_or(0)),
+                session_cache_read.saturating_add(
+                    session_usage.map_or(0, crate::agents::AgentSessionUsage::cache_read_tokens),
+                ),
+                session_input.saturating_add(
+                    session_usage
+                        .map_or(0, crate::agents::AgentSessionUsage::displayed_input_tokens),
+                ),
             )
         },
     );
@@ -291,10 +304,25 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
         return None;
     }
 
+    let cache_hit = (total > 0)
+        .then(|| crate::agents::context::cache_hit_percent(session_cache_read, session_input))
+        .flatten()
+        .map_or_else(Vec::new, |percent| {
+            let style = match crate::agents::CacheHealth::classify(percent) {
+                crate::agents::CacheHealth::Good => ctx.theme.good(Modifier::empty()),
+                crate::agents::CacheHealth::Caution => ctx.theme.warn(Modifier::empty()),
+                crate::agents::CacheHealth::Alarm => ctx.theme.alarm(Modifier::empty()),
+            };
+            vec![
+                Span::styled(" · ", ctx.theme.muted()),
+                Span::styled(format!("{percent}%"), style),
+            ]
+        });
     let width = content_width(ctx.width);
     let left_budget = width
         .saturating_sub(spans_width(&right) + usize::from(!right.is_empty()))
-        .saturating_sub(2);
+        .saturating_sub(2)
+        .saturating_sub(spans_width(&cache_hit));
     let mut left = vec![Span::raw("  ")];
     if total > 0 {
         let full = token_breakdown_spans(
@@ -330,6 +358,7 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
                 Span::styled(format!(" {}", tokens_int(total)), ctx.theme.body()),
             ]);
         }
+        left.extend(cache_hit);
     }
     Some(pin_right(left, right, width))
 }
