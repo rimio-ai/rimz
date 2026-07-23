@@ -275,6 +275,7 @@ fn client_bootstrap(family: Option<&str>) -> String {
     let diacritics = serde_json::to_string(&diacritics)
         .expect("serializing the static pixel diacritic table cannot fail");
     let pixel_layer = include_str!("pixel_layer.js");
+    let input_guard = include_str!("input_guard.js");
     let pixel_protocol = crate::web::TTYD_PIXEL_PROTOCOL;
     let session_osc = crate::web::TTYD_SESSION_OSC;
     let placeholder = u32::from(PLACEHOLDER);
@@ -286,6 +287,7 @@ const RIMZ_PIXEL_PROTOCOL={pixel_protocol};
 const RIMZ_PIXEL_PLACEHOLDER={placeholder};
 const RIMZ_PIXEL_DIACRITICS={diacritics};
 {pixel_layer}
+{input_guard}
 const NativeWebSocket=window.WebSocket;
 window.WebSocket=class extends NativeWebSocket{{
   constructor(url,protocols){{
@@ -328,26 +330,7 @@ waitForTerminal().then(term=>{{
     if(!text)return;
     try{{navigator.clipboard.writeText(text).catch(()=>{{}});}}catch(_){{}}
   }};
-  const altKeyChar=event=>{{
-    if(/^Key[A-Z]$/.test(event.code)){{
-      const ch=event.code.slice(3);
-      return event.shiftKey?ch:ch.toLowerCase();
-    }}
-    if(/^Digit[0-9]$/.test(event.code)&&!event.shiftKey)return event.code.slice(5);
-    return null;
-  }};
-  let altChordAt=-1e9;
-  const keyHandler=event=>{{
-    if(event.type==="keydown"&&event.altKey&&!event.ctrlKey&&!event.metaKey){{
-      const ch=altKeyChar(event);
-      if(ch&&sendInput("\u001b"+ch)){{altChordAt=performance.now();event.preventDefault();event.stopPropagation();return false;}}
-    }}
-    if(event.type!=="keydown"||event.key!=="Enter"||!event.shiftKey||event.altKey||event.ctrlKey||event.metaKey)return true;
-    if(!sendInput("\u001b[13;2u"))return true;
-    event.preventDefault();
-    event.stopPropagation();
-    return false;
-  }};
+  const keyHandler=installInputGuard(term,sendInput);
   term.parser.registerOscHandler(52,data=>{{
     const semi=data.indexOf(";");
     if(semi<0)return true;
@@ -450,20 +433,6 @@ waitForTerminal().then(term=>{{
     }});
   }};
   install();
-  let swallowComposition=false;
-  const textarea=term.textarea;
-  if(textarea){{
-    textarea.addEventListener("compositionstart",()=>{{
-      if(performance.now()-altChordAt>250)return;
-      swallowComposition=true;
-      textarea.blur();textarea.focus();
-    }});
-    textarea.addEventListener("compositionend",()=>{{
-      if(!swallowComposition)return;
-      swallowComposition=false;
-      textarea.value="";
-    }});
-  }}
   const reset=term.reset.bind(term);
   term.reset=(...args)=>{{const result=reset(...args);install();return result;}};
   if(fontFamily)loadFont.then(()=>{{
@@ -987,7 +956,12 @@ mod tests {
         assert!(!rendered.contains("registerCsiHandler({intermediates:\" \",final:\"q\"}"));
         assert!(rendered.contains("compositionstart"));
         assert!(rendered.contains("compositionend"));
+        assert!(rendered.contains("root.addEventListener(\"compositionstart\""));
+        assert!(rendered.contains("root.addEventListener(\"compositionend\""));
+        assert!(rendered.contains("event.type===\"keypress\"&&suppressKeypress"));
+        assert!(rendered.contains("event.stopPropagation()"));
         assert!(rendered.contains("textarea.value=\"\""));
+        assert!(!rendered.contains("textarea.addEventListener(\"compositionstart\""));
         assert!(rendered.contains("term.attachCustomWheelEventHandler"));
         assert!(rendered.contains("term.modes.mouseTrackingMode!==\"none\""));
         assert!(rendered.contains("const installPixelLayer=term=>"));
@@ -1112,6 +1086,9 @@ mod tests {
         assert!(rendered.contains("term.attachCustomKeyEventHandler(keyHandler)"));
         assert!(rendered.contains("compositionstart"));
         assert!(rendered.contains("compositionend"));
+        assert!(rendered.contains("root.addEventListener(\"compositionstart\""));
+        assert!(rendered.contains("root.addEventListener(\"compositionend\""));
+        assert!(rendered.contains("event.type===\"keypress\"&&suppressKeypress"));
         assert!(rendered.contains("textarea.value=\"\""));
         assert!(rendered.contains("term.attachCustomWheelEventHandler"));
         assert!(rendered.contains("term.buffer.active.type!==\"alternate\""));

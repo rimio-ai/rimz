@@ -12,6 +12,7 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 
 ### Fixed
 
+- Browser panes opened with macOS Option chords no longer begin with the composed accent after xterm handles the Meta input, including in Safari and Chrome. → [web](./docs/guide/web.md#browser-appearance-and-input)
 - Closing a RimZ browser tab no longer asks for leave-site confirmation; reconnecting reattaches the same room.
 - Ctrl-C stops `rimz remote connect` without opening another recovery attempt, including while the remote host asks a setup, hook-installation, or trust question. → [remote](./docs/guide/remote.md#a-link-that-heals-itself)
 
