@@ -264,6 +264,8 @@ cargo install --locked rimz
 
 Prebuilt binaries and building from source are in the [installation guide](./docs/guide/installation.md).
 
+For a self-contained room with RimZ, both multiplexers, ttyd, and the priority agent CLIs preinstalled, [run the Docker image](./docs/guide/installation.md#run-in-docker).
+
 Hooks are how agents report to the room. The first `rimz` run offers to install them with a diff preview, and `rimz hooks install` does the same on demand:
 
 ```sh
