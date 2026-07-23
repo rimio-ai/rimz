@@ -925,6 +925,7 @@ fn gallery_render_columns(
         .map(|(index, (state, selector))| {
             let mut snapshot = sidebar_fixture_snapshot(state)?;
             snapshot.theme.mode = theme.mode;
+            snapshot.theme.display.pixel = theme.display.pixel;
             snapshot.theme.glyphs = theme.glyphs.clone();
             snapshot.theme.pets.glyphs = theme.pets.glyphs;
             snapshot.theme.pets.enabled = pets;
