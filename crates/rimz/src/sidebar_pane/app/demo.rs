@@ -103,6 +103,11 @@ pub fn serve_gallery(
                     .ensure_pixel_transmitted(terminal.backend_mut(), &state.ui, now_ms)?;
             }
             draw_gallery_to_terminal(&mut terminal, &mut states)?;
+            for state in &mut states {
+                state
+                    .paint
+                    .ensure_meters_transmitted(terminal.backend_mut(), &state.ui, now_ms)?;
+            }
             Ok(())
         })();
         let end_result = terminal.backend_mut().write_all(END_SYNC);

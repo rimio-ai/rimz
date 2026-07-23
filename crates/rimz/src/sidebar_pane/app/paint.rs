@@ -188,16 +188,7 @@ impl FramePainter {
                 .saturating_mul(ui.animation_phase);
             self.ensure_pixel_transmitted(terminal.backend_mut(), ui, now_ms)?;
             render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
-            if let Some(pixels) = &ui.meter_pixels {
-                for (image_id, raster) in pixels.visible_rasters() {
-                    self.meter_painter.ensure_transmitted(
-                        terminal.backend_mut(),
-                        image_id,
-                        raster,
-                        now_ms,
-                    )?;
-                }
-            }
+            self.ensure_meters_transmitted(terminal.backend_mut(), ui, now_ms)?;
             Ok(())
         })();
         let end_result = terminal.backend_mut().write_all(END_SYNC);
@@ -216,6 +207,21 @@ impl FramePainter {
         {
             self.painter
                 .ensure_transmitted(writer, pixel, frame, now_ms)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn ensure_meters_transmitted<W: Write>(
+        &mut self,
+        writer: &mut W,
+        ui: &UiState,
+        now_ms: u64,
+    ) -> io::Result<()> {
+        if let Some(pixels) = &ui.meter_pixels {
+            for (image_id, raster) in pixels.visible_rasters() {
+                self.meter_painter
+                    .ensure_transmitted(writer, image_id, raster, now_ms)?;
+            }
         }
         Ok(())
     }

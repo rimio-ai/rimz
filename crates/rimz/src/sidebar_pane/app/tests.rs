@@ -397,6 +397,63 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
 }
 
 #[test]
+fn meter_transmission_paints_visible_rasters_once() {
+    let ws = workspace();
+    let snapshot = snapshot(&ws);
+    let mut ui = UiState::default();
+    let mut painter = paint::FramePainter::new(
+        PixelRenderCaps {
+            pixel_transport: true,
+            kitty_clients: true,
+        },
+        false,
+    );
+
+    painter.refresh_view(&mut ui, &snapshot, false);
+    let image_id = ui
+        .meter_pixels
+        .as_mut()
+        .expect("meter pixels")
+        .intern(crate::sidebar_pane::pixel::meter::MeterRaster::new(
+            2,
+            0.5,
+            [1, 2, 3],
+            Vec::new(),
+            [4, 5, 6],
+        ))
+        .expect("meter raster");
+    let placeholder = ratatui::text::Line::from(ratatui::text::Span::styled(
+        placeholder_cluster(0, 0),
+        ratatui::style::Style::default().fg(crate::sidebar_pane::pixel::image_id_color(image_id)),
+    ));
+    ui.meter_pixels
+        .as_mut()
+        .expect("meter pixels")
+        .observe_visible(&[placeholder]);
+
+    let mut first = Vec::new();
+    painter
+        .ensure_meters_transmitted(&mut first, &ui, 0)
+        .expect("transmit visible meter");
+    let text = String::from_utf8_lossy(&first);
+    assert!(text.contains("a=t"));
+    assert!(text.contains(&format!("i={image_id}")));
+
+    let mut repeat = Vec::new();
+    painter
+        .ensure_meters_transmitted(&mut repeat, &ui, 1)
+        .expect("deduplicate resident meter");
+    assert!(repeat.is_empty());
+
+    ui.meter_pixels = None;
+    let mut disabled = Vec::new();
+    painter
+        .ensure_meters_transmitted(&mut disabled, &ui, 2)
+        .expect("skip disabled meters");
+    assert!(disabled.is_empty());
+}
+
+#[test]
 fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
     let ws = workspace();
     let mut snapshot = snapshot(&ws);

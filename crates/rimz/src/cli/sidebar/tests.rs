@@ -348,8 +348,9 @@ fn gallery_columns_follow_requested_order_and_selection() {
 
 #[test]
 fn gallery_render_columns_apply_pets_override() {
-    let columns =
-        super::gallery_render_columns(true, &rimz::config::ThemeConfig::default()).unwrap();
+    let mut theme = rimz::config::ThemeConfig::default();
+    theme.display.pixel = rimz::config::PixelMode::Off;
+    let columns = super::gallery_render_columns(true, &theme).unwrap();
     assert_eq!(
         columns
             .iter()
@@ -365,9 +366,13 @@ fn gallery_render_columns_apply_pets_override() {
             (true, "bsod")
         ],
     );
+    assert!(
+        columns
+            .iter()
+            .all(|(snapshot, _)| snapshot.theme.display.pixel == rimz::config::PixelMode::Off)
+    );
 
-    let disabled =
-        super::gallery_render_columns(false, &rimz::config::ThemeConfig::default()).unwrap();
+    let disabled = super::gallery_render_columns(false, &theme).unwrap();
     assert!(
         disabled
             .iter()
