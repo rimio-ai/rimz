@@ -213,6 +213,15 @@ fn inspect(
         "parked",
         crate::cli::render::cell(if ledger.parked.is_some() { "yes" } else { "no" }),
     );
+    if let Some(cap) = config.harness.turn_budget {
+        kv.push(
+            "turn cap",
+            crate::cli::render::cell(format!(
+                "${:.2}/turn (source: config; per turn)",
+                cap.as_usd()
+            )),
+        );
+    }
     let mut out = crate::cli::render::out();
     kv.render(&mut out)?;
 

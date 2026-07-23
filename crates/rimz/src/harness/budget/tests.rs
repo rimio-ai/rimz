@@ -186,6 +186,226 @@ fn day_budget_rebases_on_first_sight_and_when_local_date_advances() {
 }
 
 #[test]
+fn turn_budget_parks_at_cap_and_rebases_on_a_new_turn() {
+    let first = Timestamp::from_second(200).expect("first turn");
+    let second = Timestamp::from_second(300).expect("second turn");
+    let now = Timestamp::from_second(201).expect("now");
+    let mut entry = None;
+
+    assert!(matches!(
+        evaluate_turn_scope(
+            &agent(10.0, AgentStatus::Running, Some(first)),
+            &mut entry,
+            3.0,
+            first,
+        ),
+        BudgetVerdict::Under { spend_usd, .. } if spend_usd == 0.0
+    ));
+    assert!(matches!(
+        evaluate_turn_scope(
+            &agent(13.0, AgentStatus::Running, Some(first)),
+            &mut entry,
+            3.0,
+            now,
+        ),
+        BudgetVerdict::Park { spend_usd, .. } if spend_usd == 3.0
+    ));
+    entry.as_mut().expect("turn entry").last_interrupt_at = Some(now);
+
+    assert!(matches!(
+        evaluate_turn_scope(
+            &agent(13.5, AgentStatus::Running, Some(second)),
+            &mut entry,
+            3.0,
+            second,
+        ),
+        BudgetVerdict::Under { spend_usd, .. } if spend_usd == 0.0
+    ));
+    let entry = entry.expect("rebased turn entry");
+    assert_eq!(entry.baseline_cost_usd, 13.5);
+    assert!(entry.parked.is_none());
+    assert!(entry.last_interrupt_at.is_none());
+}
+
+#[test]
+fn first_tick_of_a_new_turn_cannot_reinterrupt_prior_turn_spend() {
+    let first = Timestamp::from_second(200).expect("first turn");
+    let second = Timestamp::from_second(300).expect("second turn");
+    let mut entry = Some(TurnScopeEntry {
+        turn_started_at: first,
+        baseline_cost_usd: 0.0,
+        parked: Some(BudgetParkStamp {
+            at_cost: 50.0,
+            at: first,
+        }),
+        last_interrupt_at: Some(first),
+    });
+
+    assert!(matches!(
+        evaluate_turn_scope(
+            &agent(50.25, AgentStatus::Running, Some(second)),
+            &mut entry,
+            3.0,
+            second,
+        ),
+        BudgetVerdict::Under { spend_usd, .. } if spend_usd == 0.0
+    ));
+    let entry = entry.expect("rebased turn entry");
+    assert_eq!(entry.baseline_cost_usd, 50.25);
+    assert!(entry.parked.is_none());
+    assert!(entry.last_interrupt_at.is_none());
+}
+
+#[test]
+fn turn_budget_clears_midnight_auto_continue_parks() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let config: MachineConfig = toml::from_str("[harness]\nturn_budget = \"5\"\n").expect("config");
+    let first = Timestamp::from_second(200).expect("first turn");
+    let mut state = agent(6.0, AgentStatus::Running, Some(first));
+    state.last_activity = first;
+    write_scope_state(
+        &runtime,
+        &BudgetScopeState {
+            turn: BTreeMap::from([(
+                scope_agent_key(&state),
+                TurnScopeEntry {
+                    turn_started_at: first,
+                    baseline_cost_usd: 0.0,
+                    parked: None,
+                    last_interrupt_at: None,
+                },
+            )]),
+            ..Default::default()
+        },
+    )
+    .expect("scope state");
+    let messages_dir = dir.path().join("messages");
+    let arm = |state: &AgentState| {
+        crate::harness::auto_continue::arm_budget_park(
+            &runtime,
+            &state.kind,
+            &state.agent_id,
+            Timestamp::from_second(86_400).expect("deadline"),
+            state.last_activity,
+        );
+    };
+
+    arm(&state);
+    let mut snapshot =
+        SidebarSnapshot::build_with_agents(workspace_id.clone(), vec![state.clone()], first);
+    snapshot.agent_panes = vec![crate::PaneAgent {
+        kind: state.kind.clone(),
+        kind_ordinal: state.kind_ordinal,
+        name: state.name.clone(),
+        name_explicit: state.name_explicit,
+        profile: state.profile.clone(),
+        role: state.role.clone(),
+        channel: state.channel.clone(),
+        agent_id: Some(state.agent_id.clone()),
+        pane_id: PaneId::from_parts(crate::MuxName::Tmux, "%1"),
+        pane_pid: None,
+        worktree_path: None,
+        worktree_branch: None,
+    }];
+    enforce(&snapshot, &runtime, &messages_dir, &config);
+    assert!(
+        read_scope_state(&runtime)
+            .turn
+            .get(&scope_agent_key(&state))
+            .is_some_and(|entry| entry.last_interrupt_at == Some(first))
+    );
+    assert!(
+        !crate::harness::auto_continue::budget_park_armed(&runtime, &state.kind, &state.agent_id,),
+        "a turn-only park has no midnight resume"
+    );
+
+    let second = Timestamp::from_second(300).expect("second turn");
+    state.turn_started_at = Some(second);
+    arm(&state);
+    let snapshot = SidebarSnapshot::build_with_agents(workspace_id, vec![state.clone()], second);
+    enforce(&snapshot, &runtime, &messages_dir, &config);
+    assert!(
+        !crate::harness::auto_continue::budget_park_armed(&runtime, &state.kind, &state.agent_id,),
+        "all-under includes a rebased turn verdict"
+    );
+}
+
+#[test]
+fn turn_park_projection_ignores_a_stale_turn_entry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let config: MachineConfig = toml::from_str("[harness]\nturn_budget = \"5\"\n").expect("config");
+    let first = Timestamp::from_second(200).expect("first turn");
+    let second = Timestamp::from_second(300).expect("second turn");
+    let state = agent(6.0, AgentStatus::Running, Some(second));
+    write_scope_state(
+        &runtime,
+        &BudgetScopeState {
+            turn: BTreeMap::from([(
+                scope_agent_key(&state),
+                TurnScopeEntry {
+                    turn_started_at: first,
+                    baseline_cost_usd: 0.0,
+                    parked: Some(BudgetParkStamp {
+                        at_cost: 6.0,
+                        at: first,
+                    }),
+                    last_interrupt_at: Some(first),
+                },
+            )]),
+            ..Default::default()
+        },
+    )
+    .expect("scope state");
+
+    let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id, vec![state], second);
+    project_parks(&mut snapshot, &runtime, &config);
+
+    assert!(snapshot.agents[0].budget_park.is_none());
+}
+
+#[test]
+fn disabling_turn_budget_clears_turn_scope_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let turn = Timestamp::from_second(200).expect("turn");
+    let state = agent(6.0, AgentStatus::Idle, Some(turn));
+    write_scope_state(
+        &runtime,
+        &BudgetScopeState {
+            turn: BTreeMap::from([(
+                scope_agent_key(&state),
+                TurnScopeEntry {
+                    turn_started_at: turn,
+                    baseline_cost_usd: 0.0,
+                    parked: None,
+                    last_interrupt_at: None,
+                },
+            )]),
+            ..Default::default()
+        },
+    )
+    .expect("scope state");
+    let snapshot = SidebarSnapshot::build_with_agents(workspace_id, Vec::new(), turn);
+
+    enforce(
+        &snapshot,
+        &runtime,
+        &dir.path().join("messages"),
+        &MachineConfig::default(),
+    );
+
+    assert!(read_scope_state(&runtime).turn.is_empty());
+}
+
+#[test]
 fn active_absolute_waiver_hides_the_paused_projection() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
@@ -575,6 +795,17 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
     assert_eq!(fleet_label.label(), "fleet budget: $25.50 of $25.00/day");
     assert_eq!(
         BudgetPark {
+            cap_usd: 3.0,
+            spend_usd: 3.25,
+            window: BudgetWindow::Turn,
+            scope: BudgetScope::Turn,
+            ..fleet_label.clone()
+        }
+        .label(),
+        "turn budget: $3.25 of $3.00/turn"
+    );
+    assert_eq!(
+        BudgetPark {
             scope: BudgetScope::Account,
             account_kind: Some(kind),
             ..fleet_label
@@ -648,17 +879,17 @@ fn unsupported_account_budget_is_ignored_by_projection_and_enforcement() {
 }
 
 #[test]
-fn park_projection_uses_agent_then_fleet_then_account_precedence() {
+fn park_projection_uses_agent_then_turn_then_fleet_then_account_precedence() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime");
     runtime.ensure_dirs().expect("dirs");
     let config: MachineConfig = toml::from_str(
-            "timezone = \"UTC\"\n[harness]\nbudget = \"10/day\"\n[accounts.budget]\nclaude = \"20/day\"\n",
-        )
-        .expect("config");
+        "timezone = \"UTC\"\n[harness]\nbudget = \"10/day\"\nturn_budget = \"7\"\n[accounts.budget]\nclaude = \"20/day\"\n",
+    )
+    .expect("config");
     let now = Timestamp::from_second(200).expect("timestamp");
-    let state = agent(6.0, AgentStatus::Idle, Some(now));
+    let state = agent(8.0, AgentStatus::Idle, Some(now));
     let parked = BudgetParkStamp {
         at_cost: 30.0,
         at: now,
@@ -689,6 +920,18 @@ fn park_projection_uses_agent_then_fleet_then_account_precedence() {
     write_scope_state(
         &runtime,
         &BudgetScopeState {
+            turn: BTreeMap::from([(
+                scope_agent_key(&state),
+                TurnScopeEntry {
+                    turn_started_at: now,
+                    baseline_cost_usd: 0.0,
+                    parked: Some(BudgetParkStamp {
+                        at_cost: 7.0,
+                        at: now,
+                    }),
+                    last_interrupt_at: Some(now),
+                },
+            )]),
             last_interrupt_at: BTreeMap::from([(scope_agent_key(&state), now)]),
             ..Default::default()
         },
@@ -708,6 +951,11 @@ fn park_projection_uses_agent_then_fleet_then_account_precedence() {
 
     std::fs::remove_file(budget_ledger_path(&runtime, &state.kind, &state.agent_id))
         .expect("remove agent ledger");
+    assert_eq!(projected_scope(&state), Some(BudgetScope::Turn));
+
+    let mut scope_state = read_scope_state(&runtime);
+    scope_state.turn.clear();
+    write_scope_state(&runtime, &scope_state).expect("clear turn park");
     assert_eq!(projected_scope(&state), Some(BudgetScope::Fleet));
 
     let mut fleet = DailyBudgetScope::Fleet.read_ledger(&runtime);

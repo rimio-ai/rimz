@@ -26,7 +26,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 - [Scripting](./guide/scripting.md): supervised one-shot `-p` turns with exit codes, JSON and streaming output, and the background-run primitives that drop agents into scripts and CI.
 - [Loops](./guide/loops.md): schedule turns on a clock, guard them with watchdogs, let agents set their own alarms, and keep the fleet moving with auto-continue.
 - [Notifications](./guide/notifications.md): reach your phone or run your own command when an agent needs you, and let handlers clear routine prompts themselves.
-- [Budgets](./guide/budget.md): enforce dollar caps at four scopes, one agent, one loop task, a room's fleet, a provider login, and resume the work a cap parked.
+- [Budgets](./guide/budget.md): enforce dollar caps across five scopes — one turn, one agent, one loop task, a room's fleet, or a provider login — and resume the work a cap parked.
 
 ## Customization
 
