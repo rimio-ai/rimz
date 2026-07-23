@@ -132,6 +132,7 @@ fn forked_rollout_skips_copied_history_and_keeps_its_cumulative_baseline() {
         &[
             r#"{"type":"session_meta","payload":{"id":"fork","forked_from_id":"parent"}}"#,
             r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
+            r#"{"type":"response_item","timestamp":"2026-01-01T09:59:59.000Z","payload":{"type":"message","role":"assistant"}}"#,
             r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.100Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#,
             r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.200Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"output_tokens":120}}}}"#,
             r#"{"type":"event_msg","timestamp":"2026-01-01T10:01:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":450,"output_tokens":170}}}}"#,

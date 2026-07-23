@@ -285,11 +285,7 @@ fn suppress_replayed_tool(record: &RolloutRecord<'_>, state: &mut CodexSpendStat
     let Some(second) = timestamp_second(record.timestamp.as_ref()) else {
         return true;
     };
-    if state.replay_second.as_deref() == Some(second.as_str()) {
-        return true;
-    }
-    state.skipping_replay = false;
-    false
+    state.replay_second.as_deref() == Some(second.as_str())
 }
 
 fn is_usage_entry(record: &RolloutRecord<'_>) -> bool {
