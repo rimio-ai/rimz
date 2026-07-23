@@ -32,6 +32,7 @@ fn final_message_fallback_reads_only_at_output_checkpoints() {
         LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         },
     );
@@ -313,6 +314,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: true,
+                name: Some("Edit".to_owned()),
                 native_key: None,
             }),
         ),
@@ -321,6 +323,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: false,
+                name: Some("Bash".to_owned()),
                 native_key: None,
             }),
         ),
@@ -329,6 +332,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: false,
                 edits: false,
+                name: Some("Read".to_owned()),
                 native_key: None,
             }),
         ),
@@ -337,6 +341,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: false,
                 edits: false,
+                name: Some("AskUserQuestion".to_owned()),
                 native_key: None,
             }),
         ),
@@ -359,6 +364,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
         LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         }
     );

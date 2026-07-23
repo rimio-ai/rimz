@@ -128,6 +128,7 @@ fn cached_enrich_waits_for_producer_workspace_publication() {
                 output: 7,
                 cache_write: 0,
                 cache_read: 0,
+                tool_calls: Default::default(),
                 message_id: Some("msg-miss".to_owned()),
                 request_id: Some("req-miss".to_owned()),
                 dedup_key: None,
@@ -198,7 +199,7 @@ fn cached_enrich_waits_for_producer_workspace_publication() {
         sessions: 1,
         ..Default::default()
     };
-    tally.year = tally.headline;
+    tally.year = tally.headline.clone();
     crate::agents::spending::write_workspace_spending_cache(
         &runtime.workspace_spending_path(&hash),
         &crate::agents::spending::WorkspaceSpendingCache {

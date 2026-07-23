@@ -66,6 +66,7 @@ fn native_hooks_normalize_lifecycle() {
     let tool = |mutates, edits| LifecycleSignal::ToolUsed {
         mutates,
         edits,
+        name: None,
         native_key: None,
     };
     let ended = |errored, parked_on_background| LifecycleSignal::TurnEnded {

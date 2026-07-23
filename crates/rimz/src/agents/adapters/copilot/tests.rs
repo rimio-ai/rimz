@@ -98,6 +98,7 @@ fn classifies_native_asks_and_lifecycle_events() {
         Some(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         })
     );
@@ -180,6 +181,7 @@ fn batched_ask_waits_and_post_tool_completion_clears_before_assistant_output() {
         LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         }
     );
@@ -348,6 +350,7 @@ fn tool_mapping_uses_camel_case_names() {
             Some(LifecycleSignal::ToolUsed {
                 mutates,
                 edits,
+                name: None,
                 native_key: None,
             }),
             "{tool}"
@@ -365,6 +368,7 @@ fn tool_mapping_uses_camel_case_names() {
         Some(LifecycleSignal::ToolUsed {
             mutates: true,
             edits: true,
+            name: None,
             native_key: None,
         })
     );
@@ -379,6 +383,7 @@ fn tool_mapping_uses_camel_case_names() {
         Some(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         })
     );

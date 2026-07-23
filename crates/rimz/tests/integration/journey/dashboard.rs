@@ -162,6 +162,7 @@ fn spend_window(usd: f64, sessions: u32) -> SpendWindow {
         cache_write: 6_000,
         cache_read: 68_000,
         sessions,
+        ..Default::default()
     }
 }
 

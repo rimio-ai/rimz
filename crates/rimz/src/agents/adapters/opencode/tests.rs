@@ -479,6 +479,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: true,
+                name: Some("edit".to_owned()),
                 native_key: None,
             }),
         ),
@@ -487,10 +488,19 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: false,
+                name: Some("bash".to_owned()),
                 native_key: None,
             }),
         ),
-        ("read", None),
+        (
+            "read",
+            Some(LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+                name: Some("read".to_owned()),
+                native_key: None,
+            }),
+        ),
     ] {
         let observed = hook_observation(
             &OpencodeAdapter,
@@ -512,6 +522,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
             LifecycleSignal::ToolUsed {
                 mutates: false,
                 edits: false,
+                name: None,
                 native_key: None,
             },
             "{event}"

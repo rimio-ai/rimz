@@ -275,7 +275,7 @@ impl RoomStats {
             headline: snapshot
                 .workspace_value_tally
                 .as_ref()
-                .map_or_else(SpendWindow::default, |tally| tally.headline),
+                .map_or_else(SpendWindow::default, |tally| tally.headline.clone()),
             last_prompt_at: snapshot
                 .root_agents()
                 .filter_map(|agent| agent.turn_started_at)

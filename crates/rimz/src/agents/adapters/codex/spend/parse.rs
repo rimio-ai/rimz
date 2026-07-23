@@ -3,6 +3,7 @@
 //! This module classifies JSONL lines, tracks cumulative totals and current model across resume cursors, and emits raw token events for pricing.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::io::{BufRead as _, Read as _};
 use std::path::{Path, PathBuf};
 
@@ -26,6 +27,8 @@ pub(super) enum CodexLineKind {
     SessionMeta,
     /// Structured session log: `turn_context` or `event_msg` + `token_count`.
     Session,
+    /// Provider response item carrying a named tool call.
+    ResponseItem,
     /// Headless/exec log: flat `usage`, `input_tokens`, or `prompt_tokens` field.
     Headless,
 }
@@ -40,6 +43,9 @@ pub(super) fn codex_line_kind(line: &[u8]) -> Option<CodexLineKind> {
 
     if has(line, br#""type":"session_meta""#) {
         return Some(CodexLineKind::SessionMeta);
+    }
+    if has(line, br#""type":"response_item""#) {
+        return Some(CodexLineKind::ResponseItem);
     }
 
     let has_turn_ctx = has(line, br#""type":"turn_context""#);
@@ -89,6 +95,8 @@ pub(super) struct CodexSpendState {
     replay_second: Option<String>,
     #[serde(default)]
     skipping_replay: bool,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pending_tool_calls: BTreeMap<String, u32>,
 }
 
 /// Parse a Codex session JSONL file into `CodexTokenEvent` values from
@@ -154,8 +162,24 @@ pub(super) fn parse_codex_session(
                     record,
                     &mut state.previous_totals,
                     &mut state.current_model,
+                    &mut state.pending_tool_calls,
                     &mut out,
                 );
+            }
+            Some(CodexLineKind::ResponseItem) => {
+                let Some(record) = decode_line(line) else {
+                    continue;
+                };
+                if suppress_replayed_tool(&record, state) {
+                    continue;
+                }
+                if let RolloutKind::ToolCall(name) = record.kind {
+                    let count = state
+                        .pending_tool_calls
+                        .entry(name.into_owned())
+                        .or_default();
+                    *count = count.saturating_add(1);
+                }
             }
             Some(CodexLineKind::Headless) => {
                 if let Ok(entry) = serde_json::from_slice::<CodexLogEntry<'_>>(line) {
@@ -163,11 +187,20 @@ pub(super) fn parse_codex_session(
                         &entry,
                         &fallback_timestamp,
                         &mut state.current_model,
+                        &mut state.pending_tool_calls,
                         &mut out,
                     );
                 }
             }
             None => {}
+        }
+    }
+    if let Some(last) = out.last_mut()
+        && !state.pending_tool_calls.is_empty()
+    {
+        for (name, count) in std::mem::take(&mut state.pending_tool_calls) {
+            let total = last.tool_calls.entry(name).or_default();
+            *total = total.saturating_add(count);
         }
     }
     (out, next_offset)
@@ -245,6 +278,20 @@ fn suppress_replayed_entry(record: &RolloutRecord<'_>, state: &mut CodexSpendSta
     true
 }
 
+fn suppress_replayed_tool(record: &RolloutRecord<'_>, state: &mut CodexSpendState) -> bool {
+    if !state.skipping_replay {
+        return false;
+    }
+    let Some(second) = timestamp_second(record.timestamp.as_ref()) else {
+        return true;
+    };
+    if state.replay_second.as_deref() == Some(second.as_str()) {
+        return true;
+    }
+    state.skipping_replay = false;
+    false
+}
+
 fn is_usage_entry(record: &RolloutRecord<'_>) -> bool {
     matches!(
         &record.kind,
@@ -263,6 +310,7 @@ fn visit_session_entry(
     record: RolloutRecord<'_>,
     previous_totals: &mut Option<CodexRawUsage>,
     current_model: &mut Option<String>,
+    pending_tool_calls: &mut BTreeMap<String, u32>,
     out: &mut Vec<CodexTokenEvent>,
 ) {
     if let RolloutKind::TurnContext(context) = &record.kind {
@@ -304,6 +352,7 @@ fn visit_session_entry(
         output_tokens: raw.output_tokens,
         reasoning_output_tokens: raw.reasoning_output_tokens,
         total_tokens: raw.total_tokens,
+        tool_calls: std::mem::take(pending_tool_calls),
     });
 }
 
@@ -311,6 +360,7 @@ fn visit_headless_entry(
     entry: &CodexLogEntry<'_>,
     fallback_timestamp: &str,
     current_model: &mut Option<String>,
+    pending_tool_calls: &mut BTreeMap<String, u32>,
     out: &mut Vec<CodexTokenEvent>,
 ) {
     let Some(raw) = headless_usage(entry) else {
@@ -334,6 +384,7 @@ fn visit_headless_entry(
         output_tokens: raw.output_tokens,
         reasoning_output_tokens: raw.reasoning_output_tokens,
         total_tokens: raw.total_tokens,
+        tool_calls: std::mem::take(pending_tool_calls),
     });
 }
 

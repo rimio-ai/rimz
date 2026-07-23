@@ -803,6 +803,7 @@ fn idle_agent_row(
             sub_agents: Vec::new(),
             compacting: false,
             compaction_count: 0,
+            tool_calls: BTreeMap::new(),
             turn_error_label: None,
         })),
     }

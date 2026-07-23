@@ -307,6 +307,7 @@ mod tests {
             LifecycleSignal::ToolUsed {
                 mutates: false,
                 edits: false,
+                name: None,
                 native_key: Some("sibling-call".to_owned()),
             },
         );

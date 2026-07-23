@@ -92,6 +92,26 @@ fn token_windows_and_native_sessions_populate_public_tallies() {
 }
 
 #[test]
+fn tool_calls_populate_each_trailing_window_and_provider_tally() {
+    let file = PathBuf::from("/x/opencode.db");
+    let mut entry = cached_entry(NOW_SECS - 8 * 86_400, 0.01, "session-a");
+    entry.tool_calls = BTreeMap::from([("bash".to_owned(), 2), ("read".to_owned(), 3)]);
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(&file, vec![entry])]),
+        ..Default::default()
+    };
+    let files = vec![(opencode_adapter(), file)];
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+
+    let spending = aggregate_spending(&files, &cache, &counted, NOW_SECS, &HeadlineSpec::default());
+
+    assert_eq!(spending.total.week.tool_calls, 0);
+    assert_eq!(spending.total.month.tool_calls, 5);
+    assert_eq!(spending.total.year.tools["read"], 3);
+    assert_eq!(spending.by_provider["opencode"].year.tools["bash"], 2);
+}
+
+#[test]
 fn headline_cutoffs_are_global_and_scoped() {
     const HOUR: u64 = 3_600;
     let dir = TempDir::new().unwrap();
@@ -780,6 +800,7 @@ fn claude_duplicate_dedup_keeps_the_richest_main_thread_record() {
         output: 0,
         cache_write: 0,
         cache_read: 0,
+        tool_calls: Default::default(),
         message_id: Some("msg-rich".to_owned()),
         request_id: Some("req-rich".to_owned()),
         dedup_key: None,
@@ -979,6 +1000,7 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         output: 50,
         cache_write: 10,
         cache_read: 70,
+        tool_calls: BTreeMap::from([("Read".to_owned(), 2)]),
         message_id: Some("msg-1".to_owned()),
         request_id: Some("req-1".to_owned()),
         dedup_key: None,
@@ -1002,6 +1024,7 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         output: 20,
         cache_write: 0,
         cache_read: 40,
+        tool_calls: BTreeMap::from([("Bash".to_owned(), 1)]),
         message_id: None,
         request_id: None,
         dedup_key: None,
@@ -1046,7 +1069,9 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
     );
     let by_model = compute_model_breakdown(&files, &cache, NOW_SECS);
     assert_eq!(by_model["claude-opus-4-8"].year.tokens, 160);
+    assert_eq!(by_model["claude-opus-4-8"].year.tools["Read"], 2);
     assert_eq!(by_model["gpt-5-codex"].year.tokens, 220);
+    assert_eq!(by_model["gpt-5-codex"].year.tools["Bash"], 1);
     assert_eq!(by_model["gpt-5-old"].year.tokens, 330);
     assert_eq!(by_model["gpt-5-old"].month.tokens, 0);
 }

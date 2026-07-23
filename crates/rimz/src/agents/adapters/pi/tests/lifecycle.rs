@@ -33,6 +33,7 @@ fn lifecycle_signals_map_every_wired_event() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: true,
+                name: Some("edit".to_owned()),
                 native_key: Some("sibling-call".to_owned()),
             }),
         ),
@@ -42,13 +43,19 @@ fn lifecycle_signals_map_every_wired_event() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: false,
+                name: Some("bash".to_owned()),
                 native_key: Some("sibling-call".to_owned()),
             }),
         ),
         (
             "tool_execution_end",
             json!({ "session_id": "sess-1", "tool_name": "read" }),
-            None,
+            Some(LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+                name: Some("read".to_owned()),
+                native_key: None,
+            }),
         ),
         // An ordinary tool call is neutral; only the rpiv questionnaire blocks.
         ("tool_call", session.clone(), None),

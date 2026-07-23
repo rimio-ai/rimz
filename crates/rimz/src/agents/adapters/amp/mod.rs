@@ -150,6 +150,9 @@ const AMP_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "private rewritten thread-cache fold",
         gap: "estimated pricing does not reconcile Amp credits or workspace billing",
     },
+    tool_stats: ConcernCoverage::Unsupported {
+        reason: "tool statistics are not integrated for this adapter",
+    },
     remote_control: ConcernCoverage::Unsupported {
         reason: "readiness is not detectable",
     },
@@ -306,6 +309,7 @@ impl crate::agents::capabilities::HookCapability for AmpAdapter {
                 edits: parsed
                     .files_modified
                     .unwrap_or_else(|| self.spec().tool_edits_files(payload)),
+                name: None,
                 native_key: None,
             },
             "agent_end" => LifecycleSignal::TurnEnded {

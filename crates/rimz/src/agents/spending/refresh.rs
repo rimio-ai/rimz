@@ -429,6 +429,7 @@ mod tests {
             output: 0,
             cache_write: 0,
             cache_read: 0,
+            tool_calls: Default::default(),
             message_id: Some(format!("m-{ts_secs}")),
             request_id: None,
             dedup_key: None,

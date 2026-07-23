@@ -478,6 +478,7 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
             edits.map(|edits| LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits,
+                name: None,
                 native_key: None,
             }),
             "{tool}",

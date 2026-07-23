@@ -62,8 +62,31 @@ struct ClaudeMessage {
     /// Anthropic message ID (`msg-…`).  The dedup key alongside `requestId`.
     id: Option<String>,
     model: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_claude_content")]
+    content: Vec<ClaudeContentBlock>,
     #[serde(default)]
     usage: ClaudeUsage,
+}
+
+#[derive(Deserialize)]
+struct ClaudeContentBlock {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    name: Option<String>,
+}
+
+fn deserialize_claude_content<'de, D>(deserializer: D) -> Result<Vec<ClaudeContentBlock>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let Some(blocks) = value.as_array() else {
+        return Ok(Vec::new());
+    };
+    Ok(blocks
+        .iter()
+        .filter_map(|block| serde_json::from_value(block.clone()).ok())
+        .collect())
 }
 
 /// The `message.usage` token counts.  `Option` tolerates both an absent field
@@ -320,7 +343,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             continue;
         };
         let usage = &entry.message.usage;
-        let Some(main_entry) = usage_entry(
+        let Some(mut main_entry) = usage_entry(
             usage,
             entry.message.model.as_deref(),
             entry.cost_usd,
@@ -335,6 +358,18 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
         ) else {
             continue;
         };
+        for name in entry
+            .message
+            .content
+            .iter()
+            .filter(|block| block.kind.as_deref() == Some("tool_use"))
+            .filter_map(|block| block.name.as_deref())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            let count = main_entry.tool_calls.entry(name.to_owned()).or_default();
+            *count = count.saturating_add(1);
+        }
         if origin.is_none() {
             origin = origin_path(entry.cwd.as_deref());
         }
@@ -517,6 +552,25 @@ mod tests {
         assert_eq!(entries[0].cache_write, 3);
         assert_eq!(entries[0].cache_read, 7);
         assert_eq!(parsed.origin.as_deref(), Some(cwd.as_path()));
+    }
+
+    #[test]
+    fn captures_named_tool_use_blocks_on_the_priced_response() {
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "tools.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.5,"requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","name":"Read"},{"type":"text","text":"working"},{"type":"tool_use","name":"Read"},{"type":"tool_use","name":"Bash"}],"usage":{"input_tokens":10,"output_tokens":5}}}"#,
+            ],
+        );
+
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
+
+        assert_eq!(
+            entries[0].tool_calls,
+            BTreeMap::from([("Bash".to_owned(), 1), ("Read".to_owned(), 2)])
+        );
     }
 
     #[test]

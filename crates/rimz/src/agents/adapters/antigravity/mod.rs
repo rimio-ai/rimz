@@ -269,6 +269,9 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     account_spend: ConcernCoverage::Unsupported {
         reason: "quota is work-metered and no cumulative billing ledger is published",
     },
+    tool_stats: ConcernCoverage::Unsupported {
+        reason: "tool statistics are not integrated for this adapter",
+    },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no CLI remote-control host is documented",
     },
@@ -585,6 +588,7 @@ fn decode_lifecycle_fields(
                 Some(LifecycleSignal::ToolUsed {
                     mutates,
                     edits,
+                    name: None,
                     native_key: None,
                 }),
             )

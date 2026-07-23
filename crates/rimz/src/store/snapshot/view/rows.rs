@@ -53,6 +53,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
             sub_agents: Vec::new(),
             compacting: agent.is_compacting(now),
             compaction_count: agent.compaction_count,
+            tool_calls: agent.tool_calls.clone(),
             turn_error_label: None,
         })),
     }

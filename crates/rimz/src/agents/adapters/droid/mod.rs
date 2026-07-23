@@ -161,6 +161,9 @@ const DROID_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     account_spend: ConcernCoverage::Unsupported {
         reason: "no machine-readable auth or usage surface",
     },
+    tool_stats: ConcernCoverage::Unsupported {
+        reason: "tool statistics are not integrated for this adapter",
+    },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no remote-control surface",
     },
@@ -307,6 +310,7 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
             "PostToolUse" => LifecycleSignal::ToolUsed {
                 mutates: self.spec().tool_mutates(payload),
                 edits: self.spec().tool_edits_files(payload),
+                name: None,
                 native_key: None,
             },
             "Stop" => LifecycleSignal::TurnEnded {

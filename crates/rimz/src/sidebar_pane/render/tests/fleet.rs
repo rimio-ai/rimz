@@ -102,9 +102,9 @@ fn cockpit_reads_workspace_tally_while_store_reads_global_tally() {
         ..Default::default()
     };
     snapshot.workspace_value_tally = Some(crate::SpendTally {
-        headline,
-        week: headline,
-        month: headline,
+        headline: headline.clone(),
+        week: headline.clone(),
+        month: headline.clone(),
         year: headline,
     });
 

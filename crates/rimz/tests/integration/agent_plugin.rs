@@ -161,7 +161,7 @@ fn plugin_check_replays_example_envelopes_and_rejects_bad_input() {
         stdout,
         r#"plugin `scriptbot`
 manifest: valid ($PLUGIN/agent.toml)
-coverage: 9 wired, 1 partial, 6 unsupported
+coverage: 9 wired, 1 partial, 7 unsupported
 lifecycle: 8 native, 1 derived, 2 absent
 probes: none declared
 replay: $PLUGIN/fixtures/envelopes.jsonl

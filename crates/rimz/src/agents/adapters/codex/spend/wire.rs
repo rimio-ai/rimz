@@ -4,6 +4,7 @@
 //! distinct exec-only wrapper shapes.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
@@ -36,6 +37,7 @@ pub struct CodexTokenEvent {
     /// Total tokens as reported (or summed) for the event. Fingerprint-only, for
     /// the same reason as `reasoning_output_tokens`.
     pub total_tokens: u64,
+    pub tool_calls: BTreeMap<String, u32>,
 }
 
 // ── Typed structs — headless format ──────────────────────────────────────────

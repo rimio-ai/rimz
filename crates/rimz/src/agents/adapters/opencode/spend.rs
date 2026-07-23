@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 use serde::Deserialize;
 
-use super::database::{MessageTime, open_readonly};
+use super::database::{MessageTime, open_readonly, tool_calls_by_message};
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, origin_path, record_unknown_model,
@@ -103,9 +103,10 @@ pub(crate) fn parse_opencode_spend(
     let Some(conn) = open_readonly(path) else {
         return empty_parse(0);
     };
+    let mut tool_calls = tool_calls_by_message(&conn);
     let mut stmt = match conn
-        .prepare("SELECT session_id, data FROM message ORDER BY rowid")
-        .or_else(|_| conn.prepare("SELECT NULL, data FROM message ORDER BY rowid"))
+        .prepare("SELECT id, session_id, data FROM message ORDER BY rowid")
+        .or_else(|_| conn.prepare("SELECT id, NULL, data FROM message ORDER BY rowid"))
     {
         Ok(stmt) => stmt,
         Err(_) => return empty_parse(0),
@@ -123,18 +124,29 @@ pub(crate) fn parse_opencode_spend(
             Ok(None) => break,
             Err(_) => break,
         };
-        let thread_id = row
+        let message_id = row
             .get::<_, Option<String>>(0)
             .ok()
             .flatten()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
-        let Ok(data) = row.get::<_, String>(1) else {
+        let thread_id = row
+            .get::<_, Option<String>>(1)
+            .ok()
+            .flatten()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        let Ok(data) = row.get::<_, String>(2) else {
             continue;
         };
-        if let Some((entry, entry_origin)) =
+        if let Some((mut entry, entry_origin)) =
             parse_message_entry(&data, thread_id, prices, &mut unknown_models)
         {
+            if let Some(message_id) = message_id
+                && let Some(calls) = tool_calls.remove(&message_id)
+            {
+                entry.tool_calls = calls;
+            }
             if origin.is_none() {
                 origin = entry_origin;
             }
@@ -296,6 +308,11 @@ mod tests {
             [],
         )
         .unwrap();
+        conn.execute(
+            "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, data TEXT)",
+            [],
+        )
+        .unwrap();
         path
     }
 
@@ -308,6 +325,22 @@ mod tests {
         conn.execute(
             "INSERT INTO message (id, session_id, data) VALUES ('msg', ?1, ?2)",
             (session_id, data),
+        )
+        .unwrap();
+    }
+
+    fn insert_tool_part(path: &Path, message_id: &str, tool: &str) {
+        let conn = Connection::open(path).unwrap();
+        let index: i64 = conn
+            .query_row("SELECT COUNT(*) FROM part", [], |row| row.get(0))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, data) VALUES (?1, ?2, ?3)",
+            (
+                format!("part-{index}"),
+                message_id,
+                format!(r#"{{"type":"tool","tool":"{tool}"}}"#),
+            ),
         )
         .unwrap();
     }
@@ -380,6 +413,32 @@ mod tests {
         assert_eq!(entry.thread_id.as_deref(), Some("ses"));
         assert_eq!(parsed.origin.as_deref(), Some(cwd.as_path()));
         assert_eq!(parsed.cursor, SpendCursor::default());
+    }
+
+    #[test]
+    fn attaches_tool_parts_to_their_message_entry() {
+        let dir = TempDir::new().unwrap();
+        let path = create_db(dir.path(), "opencode.db");
+        insert_message(
+            &path,
+            r#"{
+                "cost": 0.42,
+                "modelID": "gpt-priced",
+                "providerID": "openai",
+                "time": { "created": 1780590149011 },
+                "tokens": { "input": 100, "output": 20 }
+            }"#,
+        );
+        insert_tool_part(&path, "msg", "bash");
+        insert_tool_part(&path, "msg", "read");
+        insert_tool_part(&path, "msg", "read");
+
+        let parsed = parse_opencode_spend(&path, None, &prices());
+
+        assert_eq!(
+            parsed.entries[0].tool_calls,
+            BTreeMap::from([("bash".to_owned(), 1), ("read".to_owned(), 2)])
+        );
     }
 
     #[test]

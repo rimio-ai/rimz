@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
-    assert_eq!(SPENDING_CACHE_VERSION, 20);
+    assert_eq!(SPENDING_CACHE_VERSION, 21);
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);
     let file = write_jsonl(
@@ -40,6 +40,7 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
                     output: 0,
                     cache_write: 0,
                     cache_read: 0,
+                    tool_calls: Default::default(),
                     message_id: Some("msg-old".to_string()),
                     request_id: Some("req-old".to_string()),
                     dedup_key: None,

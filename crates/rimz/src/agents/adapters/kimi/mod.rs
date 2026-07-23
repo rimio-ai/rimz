@@ -185,6 +185,9 @@ const KIMI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "managed OAuth quota plus priced agent-record tokens",
         gap: "effective provider attribution and non-USD balance currency need shared model support",
     },
+    tool_stats: ConcernCoverage::Unsupported {
+        reason: "tool statistics are not integrated for this adapter",
+    },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no remote-control surface",
     },
@@ -351,6 +354,7 @@ fn kimi_root_signal(
     let neutral_tool = || LifecycleSignal::ToolUsed {
         mutates: false,
         edits: false,
+        name: None,
         native_key: None,
     };
     match event_name {
@@ -380,6 +384,7 @@ fn kimi_root_signal(
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: adapter.spec().tool_mutates(payload),
             edits: adapter.spec().tool_edits_files(payload),
+            name: None,
             native_key: None,
         }),
         "Stop" | "Interrupt" => Some(LifecycleSignal::TurnEnded {

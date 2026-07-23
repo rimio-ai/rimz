@@ -21,7 +21,7 @@ You read it two ways. `rimz stats` prints the whole history on demand, from anyw
 - **The insight lines** close it: sessions and spend for the window, cost per session and average spend per active day over the same spend span, how many days saw activity, your heaviest single day, and your longest and current active-day streaks. Week and Month also compare spend with the immediately preceding equal window. All time keeps the recent `Active days: N/28` cadence line while its average, like its spend, covers the trailing year.
 - **Assists** shows non-zero category counts for the ways RimZ saves work: delivered auto-continues, pre-delivery auto-compaction, reset-credit redemptions, and sessions restored automatically after a crash or reboot. The section stays absent until RimZ has a counted assist to report; `rimz stats --assists` carries the complete newest-first event timeline.
 
-For a shell or a script, `rimz stats --json` emits the per-day buckets that scripts can use for their own trend windows, the usage windows, both breakdowns (including `cache_hit_pct` when the input-side denominator exists), the insights, and the structured assists rollup plus events. `rimz stats --assists` prints the complete newest-first assist timeline with the redeem request id and reset windows, continue and compact message and agent ids, and restored workspace and session. `rimz stats --refresh` instead holds the panel open and repaints it every minute; this is the live pane the `rimzd` daemon view carries.
+For a shell or a script, `rimz stats --json` emits the per-day buckets that scripts can use for their own trend windows, the usage windows, both breakdowns (including `cache_hit_pct` when the input-side denominator exists), tool-call totals and per-name `tools` maps, the insights, and the structured assists rollup plus events. `rimz stats --assists` prints the complete newest-first assist timeline with the redeem request id and reset windows, continue and compact message and agent ids, and restored workspace and session. `rimz stats --refresh` instead holds the panel open and repaints it every minute; this is the live pane the `rimzd` daemon view carries.
 
 `rimz stats` only reads. It touches no agent, writes nothing to your sessions, and prints from a cache RimZ keeps under its own state directory. Its one network call is the weekly price-table refresh described below, which `RIMZ_PRICING_OFFLINE=1` turns off.
 
@@ -91,11 +91,13 @@ The window is yours to set with `[sidebar] spend_window` ([configuration](./conf
 - `24h`: a trailing twenty-four hours.
 - `today`: since calendar midnight in your configured `timezone`.
 
-To read one agent's cost instead of the room's, [`rimz agents show`](./fleet.md#manage-a-running-room) prints that session's token split and dollar total.
+To read one agent's cost instead of the room's, [`rimz agents show`](./fleet.md#manage-a-running-room) prints that session's token split, dollar total, and named tool-call summary. The same live per-session `tool_calls` map is available in `rimz sidebar snapshot` JSON. Claude, Codex, Pi, and OpenCode supply tool statistics; [agent support](../reference/agent-support.md#the-wiring-matrix) declares the other adapters' gaps.
 
 ## How the numbers are calculated
 
 Historical figures come from the transcript and session files your agents already write to disk. RimZ never scrapes a pane or guesses from the screen; token counts come from provider-owned records and structured wires.
+
+Tool-call figures deliberately have two sources. The agent-card map counts named live tool-completion events for that session, while `rimz stats --json` rebuilds history from provider-owned transcripts, Codex rollouts, Pi sessions, and OpenCode tool parts. The historical maps therefore backfill existing sessions after an upgrade and can be more complete than live counts; in particular, Codex hooks miss unified-exec and web-search paths that its rollout history retains.
 
 The cache-hit percentage measures prompt input served from cache: `cache read / (cache read + cache write + fresh input)`, rounded to the nearest whole percent. Output is outside the denominator. The agent card uses cumulative counters for that provider session, covering the same lifetime as its session dollar figure; the Models and Agents rows use the selected stats window. A missing or zero input-side denominator stays absent. Green means at least 90%, yellow means 70–89%, and red means below 70%.
 

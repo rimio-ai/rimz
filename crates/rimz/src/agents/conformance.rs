@@ -831,7 +831,7 @@ fn assert_coverage_honest(
             realtime_cost_from_fixture(adapter, conformance),
             "{kind} RealtimeCost coverage must match session_cost_usd fixture output"
         ),
-        IntegrationConcern::AccountSpend => {}
+        IntegrationConcern::AccountSpend | IntegrationConcern::ToolStats => {}
     }
 }
 

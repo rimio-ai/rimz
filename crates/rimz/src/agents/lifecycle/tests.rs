@@ -22,6 +22,7 @@ fn tool(edits: bool) -> LifecycleSignal {
     LifecycleSignal::ToolUsed {
         mutates: true,
         edits,
+        name: None,
         native_key: None,
     }
 }
@@ -158,6 +159,7 @@ fn parked_wake_and_answered_prompt_preserve_boundary_facts() {
         LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         },
         state(AgentStatus::Running, TurnPhase::Acting, false),
@@ -171,6 +173,7 @@ fn keyed_wait_clears_only_for_the_matching_tool() {
     let tool = |native_key: Option<&str>| LifecycleSignal::ToolUsed {
         mutates: true,
         edits: false,
+        name: None,
         native_key: native_key.map(ToOwned::to_owned),
     };
 
@@ -238,6 +241,7 @@ fn activity_evidence_reconciles_only_running_and_resting_states() {
                 LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
+                    name: None,
                     native_key: None,
                 },
                 "tool used outside a running turn",

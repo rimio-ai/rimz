@@ -146,7 +146,7 @@ fn room_agents_count_only_pane_bound_root_sessions() {
         ..SpendWindow::default()
     };
     snapshot.workspace_value_tally = Some(rimz::SpendTally {
-        headline,
+        headline: headline.clone(),
         ..rimz::SpendTally::default()
     });
 

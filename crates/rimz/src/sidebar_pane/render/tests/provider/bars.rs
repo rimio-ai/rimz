@@ -844,6 +844,7 @@ fn provider_stats_read_todays_jsonl_spend_and_tokens() {
             cache_write: 0,
             cache_read: 68_000,
             sessions: 5,
+            ..Default::default()
         },
         ..Default::default()
     });

@@ -154,6 +154,9 @@ const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     account_spend: ConcernCoverage::Unsupported {
         reason: "whoami schema and credit ledger are unpublished",
     },
+    tool_stats: ConcernCoverage::Unsupported {
+        reason: "tool statistics are not integrated for this adapter",
+    },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no stock-TUI remote-control surface",
     },

@@ -81,8 +81,36 @@ struct PiMessage {
     role: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     model: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_pi_content")]
+    content: Vec<PiContentBlock>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     usage: Option<PiUsage>,
+}
+
+#[derive(Deserialize)]
+struct PiContentBlock {
+    #[serde(
+        rename = "type",
+        default,
+        deserialize_with = "deserialize_optional_string_lossy"
+    )]
+    kind: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    name: Option<String>,
+}
+
+fn deserialize_pi_content<'de, D>(deserializer: D) -> Result<Vec<PiContentBlock>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let Some(blocks) = value.as_array() else {
+        return Ok(Vec::new());
+    };
+    Ok(blocks
+        .iter()
+        .filter_map(|block| serde_json::from_value(block.clone()).ok())
+        .collect())
 }
 
 #[derive(Deserialize)]
@@ -242,10 +270,25 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceB
         if token_total == 0 && cost <= 0.0 {
             continue;
         }
-        out.push(CachedEntry {
+        let mut cached = CachedEntry {
             model: msg.model.clone(),
             ..CachedEntry::new(ts_secs, cost, &split)
-        });
+        };
+        // Pi's durable session shape records each call once on the assistant
+        // message as a `toolCall` content block. Hook `tool_call` events are
+        // extension traffic and do not appear as separate durable session rows.
+        for name in msg
+            .content
+            .iter()
+            .filter(|block| block.kind.as_deref() == Some("toolCall"))
+            .filter_map(|block| block.name.as_deref())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            let count = cached.tool_calls.entry(name.to_owned()).or_default();
+            *count = count.saturating_add(1);
+        }
+        out.push(cached);
     }
     SpendParse {
         entries: out,
@@ -292,6 +335,25 @@ mod tests {
         );
         assert!(entries[0].message_id.is_none());
         assert!(!entries[0].is_sidechain);
+    }
+
+    #[test]
+    fn captures_each_durable_tool_call_content_block_once() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{{"role":"assistant","content":[{{"type":"toolCall","name":"read"}},{{"type":"text","text":"working"}},{{"type":"toolCall","name":"bash"}},{{"type":"toolCall","name":"read"}}],"usage":{{"input":100,"output":50,"cost":{{"total":0.42}}}}}}}}"#
+        )
+        .unwrap();
+
+        let entries = parse_pi_spend(&path, None, &prices()).entries;
+
+        assert_eq!(
+            entries[0].tool_calls,
+            BTreeMap::from([("bash".to_owned(), 1), ("read".to_owned(), 2)])
+        );
     }
 
     #[test]

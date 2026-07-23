@@ -166,6 +166,9 @@ const QWEN_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "effective provider credentials/Alibaba quota/transcripts",
         gap: "multi-provider billing; sidechain branch pruning is not reconstructed; Alibaba quota is experimental and display-only; other subscription metering is unknown",
     },
+    tool_stats: ConcernCoverage::Unsupported {
+        reason: "tool statistics are not integrated for this adapter",
+    },
     remote_control: ConcernCoverage::Unsupported {
         reason: "ACP/daemon mode is outside the pane-first adapter",
     },
@@ -632,11 +635,13 @@ fn lifecycle_signal(
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: spec.tool_mutates(payload),
             edits: spec.tool_edits_files(payload),
+            name: None,
             native_key: parse_tool_use(payload).tool_use_id,
         }),
         "PostToolUseFailure" => Some(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: parse_tool_use(payload).tool_use_id,
         }),
         "PreToolUse" => {

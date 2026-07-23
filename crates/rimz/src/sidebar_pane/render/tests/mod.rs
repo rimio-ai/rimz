@@ -605,6 +605,7 @@ fn provider_panel(
                 cache_write: 12_000,
                 cache_read: 68_000,
                 sessions: 12,
+                ..Default::default()
             },
             ..Default::default()
         }),
@@ -711,6 +712,7 @@ fn two_provider_panels() -> Vec<crate::SidebarProviderPanel> {
                     cache_write: 0,
                     cache_read: 8_000,
                     sessions: 3,
+                    ..Default::default()
                 },
                 ..Default::default()
             });
