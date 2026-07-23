@@ -1,0 +1,211 @@
+name: Docker image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: release tag to rebuild (defaults to the latest release)
+        required: false
+  schedule:
+    # Refresh the latest release's mutable tags with current upstream tools.
+    - cron: "0 5 * * *"
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - docker/**
+      - .dockerignore
+      - .github/workflows/docker-image.yml
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  # Publishes serialize on one non-cancelling lane; PR validation builds key
+  # per-ref and cancel stale runs.
+  group: docker-image-${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref) || 'publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  resolve:
+    name: resolve release
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.release.outputs.image }}
+      matrix: ${{ steps.release.outputs.matrix }}
+      ref: ${{ steps.release.outputs.ref }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - id: release
+        name: Resolve release and build matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/${owner}/rimz"
+
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            tag="pr"
+            version="pr"
+            ref="$GITHUB_SHA"
+            matrix='{"include":[{"variant":"debian","base":"debian:13-slim","arch":"amd64","platform":"linux/amd64","runner":"ubuntu-latest"}]}'
+          else
+            if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+              tag="$GITHUB_REF_NAME"
+            else
+              tag="${REQUESTED_TAG:-$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)}"
+            fi
+            if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9][A-Za-z0-9.-]*)?$'; then
+              echo "::error::invalid RimZ release tag: ${tag}"
+              exit 1
+            fi
+            version="${tag#v}"
+            if ! printf '%s' "$version" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
+              echo "::error::invalid Docker tag derived from ${tag}: ${version}"
+              exit 1
+            fi
+            ref="$tag"
+            matrix='{"include":[{"variant":"debian","base":"debian:13-slim","arch":"amd64","platform":"linux/amd64","runner":"ubuntu-latest"},{"variant":"debian","base":"debian:13-slim","arch":"arm64","platform":"linux/arm64","runner":"ubuntu-24.04-arm"},{"variant":"ubuntu","base":"ubuntu:26.04","arch":"amd64","platform":"linux/amd64","runner":"ubuntu-latest"},{"variant":"ubuntu","base":"ubuntu:26.04","arch":"arm64","platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]}'
+          fi
+
+          {
+            echo "image=$image"
+            echo "matrix=$matrix"
+            echo "ref=$ref"
+            echo "tag=$tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build ${{ matrix.variant }}/${{ matrix.arch }}
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.ref }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ github.token }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build image
+        env:
+          BASE_IMAGE: ${{ matrix.base }}
+          IMAGE: ${{ needs.resolve.outputs.image }}
+          PLATFORM: ${{ matrix.platform }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          common=(
+            --platform "$PLATFORM"
+            --pull
+            --no-cache
+            --build-arg "BASE_IMAGE=$BASE_IMAGE"
+            -f docker/Dockerfile
+          )
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            docker buildx build "${common[@]}" --load -t rimz-docker-pr .
+            exit 0
+          fi
+
+          metadata="${RUNNER_TEMP}/build-metadata.json"
+          docker buildx build "${common[@]}" \
+            --metadata-file "$metadata" \
+            --output "type=image,name=${IMAGE},push-by-digest=true,name-canonical=true,push=true" \
+            .
+          digest="$(jq -er '."containerimage.digest"' "$metadata")"
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${VARIANT}-${digest#sha256:}"
+          echo "pushed ${IMAGE}@${digest}"
+
+      - name: Upload image digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rimz-digest-${{ matrix.variant }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Publish validation summary
+        if: github.event_name == 'pull_request'
+        run: |
+          {
+            echo "### Validated Docker image build (not pushed)"
+            echo
+            echo "- \`debian:13-slim\` on \`linux/amd64\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  manifest:
+    name: publish manifests
+    if: github.event_name != 'pull_request'
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: rimz-digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        env:
+          TOKEN: ${{ github.token }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Publish multi-arch tags
+        env:
+          DIGESTS_DIR: ${{ runner.temp }}/digests
+          IMAGE: ${{ needs.resolve.outputs.image }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          publish_variant() {
+            variant="$1"
+            shift
+            files=("${DIGESTS_DIR}/${variant}-"*)
+            if [ ! -e "${files[0]}" ]; then
+              echo "::error::no ${variant} image digests were downloaded"
+              exit 1
+            fi
+
+            command=(docker buildx imagetools create)
+            for tag in "$@"; do
+              command+=(-t "${IMAGE}:${tag}")
+            done
+            for file in "${files[@]}"; do
+              command+=("${IMAGE}@sha256:${file##*-}")
+            done
+            "${command[@]}"
+          }
+
+          publish_variant debian "$VERSION" latest "${VERSION}-debian" debian
+          publish_variant ubuntu "${VERSION}-ubuntu" ubuntu
+
+          {
+            echo "### Published multi-arch RimZ images"
+            echo
+            echo "- \`${IMAGE}:${VERSION}\`"
+            echo "- \`${IMAGE}:latest\`"
+            echo "- \`${IMAGE}:${VERSION}-debian\`"
+            echo "- \`${IMAGE}:debian\`"
+            echo "- \`${IMAGE}:${VERSION}-ubuntu\`"
+            echo "- \`${IMAGE}:ubuntu\`"
+          } >> "$GITHUB_STEP_SUMMARY"

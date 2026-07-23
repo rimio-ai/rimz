@@ -1,17 +1,61 @@
 # Installation
 
-RimZ is a single binary for macOS and Linux. Pick one install path: the [install script](#install-with-the-script), [Homebrew](#install-with-homebrew-macos) on macOS, a [prebuilt binary](#install-a-prebuilt-binary) from the releases page, or [Cargo](#install-with-cargo). [Building from source](#build-from-source) is for working on RimZ itself or for platforms the prebuilt paths miss.
+RimZ is a single binary for macOS and Linux. Pick one host install path: the [install script](#install-with-the-script), [Homebrew](#install-with-homebrew-macos) on macOS, a [prebuilt binary](#install-a-prebuilt-binary) from the releases page, or [Cargo](#install-with-cargo). [Run in Docker](#run-in-docker) for a self-contained room with the supported tools already installed. [Building from source](#build-from-source) is for working on RimZ itself or for platforms the prebuilt paths miss.
 
 ## Prerequisites
 
 - **macOS or Linux.**
 - **A terminal multiplexer** — Zellij 0.44 or newer, or tmux 3.5 or newer. One is enough; both are first-class. Distribution packages are often too old; [get a current Zellij or tmux](#get-a-current-zellij-or-tmux) has install recipes for current builds.
-- **The agent CLIs you plan to run** — Claude Code, Codex, Pi, OpenCode, Droid, Kiro CLI, or Grok Build, installed per their own docs. RimZ drives the stock CLIs and bundles none of them.
+- **The agent CLIs you plan to run on a host install** — Claude Code, Codex, Pi, OpenCode, Droid, Kiro CLI, or Grok Build, installed per their own docs. RimZ drives the stock CLIs; the Docker image preinstalls Claude Code, Codex, Pi, and OpenCode.
 - **Git** — agent worktrees and the sidebar's git status use it.
 
 RimZ refuses to start against a multiplexer below the minimum supported version, and `rimz doctor` reports the installed version and whether it clears that floor. On tmux, 3.6 or newer gives the best experience ([why](#rimz-doctor-flags-the-multiplexer-as-unsupported)).
 
 The multiplexer needs no configuration for RimZ: every room sets its own options on session start and reattach, and your existing Zellij or tmux config keeps owning your theme, shell, and keybinds. The room's essential settings are in [set up your machine](./setup.md#configure-your-multiplexer), and a full baseline for your own sessions is [Zellij and tmux baselines](./multiplexer.md).
+
+## Run in Docker
+
+A normal container gives a clean shell but leaves you to assemble its developer tools. The RimZ image starts as uid 1000 with RimZ, current Zellij, tmux, ttyd, GitHub CLI, Node.js, Claude Code, Codex, Pi, and OpenCode ready on `PATH`:
+
+```sh
+docker run --rm -it -v "$PWD":/workspace ghcr.io/rimio-ai/rimz
+```
+
+The bind mount makes the current checkout the room at `/workspace`. Agent authentication otherwise disappears with the container; add a named home volume to keep logins, agent state, RimZ configuration, and the hooks baked into the image:
+
+```sh
+docker run --rm -it \
+  -v "$PWD":/workspace \
+  -v rimz-home:/home/rimz \
+  ghcr.io/rimio-ai/rimz
+```
+
+Codex keeps per-hook trust behind its own UI, so the image leaves that consent to you: after the first Codex launch, run `/hooks` inside Codex and trust the RimZ hooks. `rimz doctor` reports the hooks as installed but untrusted until then.
+
+The `web` command births the `/workspace` room, binds RimZ to every container interface, and leaves the authenticated ttyd daemon online:
+
+```sh
+docker run -d --name rimz-web \
+  -p 8200:8200 \
+  -v "$PWD":/workspace \
+  -v rimz-home:/home/rimz \
+  ghcr.io/rimio-ai/rimz web
+docker logs rimz-web              # URL and generated Basic credential
+docker rm -f rimz-web             # stop and remove it
+```
+
+The default and `debian` tags use Debian 13; `ubuntu` uses Ubuntu 26.04 LTS. A release such as `0.4.2` also has `0.4.2-debian` and `0.4.2-ubuntu` tags. The workflow refreshes these tags daily so the bundled toolchain stays current; pin an image digest when the complete filesystem must stay immutable.
+
+The uid-1000 `rimz` user has passwordless sudo, so the same image works as a devcontainer base:
+
+```json
+{
+  "image": "ghcr.io/rimio-ai/rimz",
+  "remoteUser": "rimz"
+}
+```
+
+Docker builds run on both amd64 and arm64. Use the normal host install when you need another agent CLI, direct access to an existing host multiplexer, or native desktop integration.
 
 ## Install with the script
 
