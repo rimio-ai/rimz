@@ -253,6 +253,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "notifications.body",
         "harness.smart_compact",
         "harness.budget",
+        "harness.turn_budget",
         "harness.rtk",
     ] {
         validate_set_key(&test_files(), &parse_key(key).unwrap())
@@ -940,6 +941,23 @@ fn harness_smart_compact_values_are_parsed_as_strings() {
     assert_eq!(parse_set_value(&key, "70%").as_str(), Some("70%"));
     assert_eq!(parse_set_value(&key, "120000").as_str(), Some("120000"));
     assert_eq!(parse_set_value(&key, "180k").as_str(), Some("180k"));
+}
+
+#[test]
+fn harness_turn_budget_values_are_validated_as_plain_amount_strings() {
+    let key = parse_key("harness.turn_budget").expect("key");
+
+    let value = parse_set_value(&key, "3");
+    assert_eq!(value.as_str(), Some("3"));
+    validate_set_value(&key, &value).expect("plain turn cap");
+
+    let err = validate_set_value(&key, &Value::from("3/day"))
+        .expect_err("daily window is invalid for a turn cap")
+        .to_string();
+    assert!(
+        err.contains("must be a plain dollar amount"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

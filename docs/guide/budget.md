@@ -6,13 +6,14 @@ A budget is a dollar cap RimZ enforces at the scale you promise yourself. It can
 
 One term collision to clear first: the `5h` and `7d` bars on the provider dashboard are also called budgets. Those are your subscription plan's included usage, metered by the provider and read-only to you ([budget is not spend](./insight.md#budget-is-not-spend)). Most of this page is about the dollar caps you set; the [last section](#the-surplus-gate) reads the provider's budget instead, releasing background work only when the week has slack your own sessions will not need.
 
-## One model, four scopes
+## One model, five scopes
 
-A cap is a dollar amount (`5`, `$4.50`), optionally windowed with `/day`, which measures from local midnight in your configured `timezone`. Four scopes wear the same model:
+A cap is a dollar amount (`5`, `$4.50`), optionally windowed with `/day`, which measures from local midnight in your configured `timezone`. Five scopes wear the same model:
 
 | Scope | Caps | Set with | Window |
 | --- | --- | --- | --- |
 | Agent | one agent's spend | `--budget` at launch, or the profile `budget` field | session, or `/day` |
+| Turn | every agent turn in the room | `harness.turn_budget = "3"` | turn |
 | Loop task | one task's scheduled runs | `rimz loop add … --budget 5 --budget-per-day 20` | per run, per day |
 | Room | every agent under one project root, worktrees included | `harness.budget = "50/day"` | `/day` only |
 | Account | one provider login, every room on the machine | `[accounts.budget] claude = "100/day"` | `/day` only |
@@ -42,6 +43,18 @@ rimz agents budget @coder clear   # remove it
 ```
 
 A supervised `-p` run treats its `--budget` as a run outcome instead of a park: the run records `budget_exceeded` and exits `125`, distinct from a timeout or failure, so a pipeline branches on it ([scripting](./scripting.md#one-turn-one-exit-code)).
+
+### Cap every turn
+
+`harness.turn_budget` bounds the dollars one agent can spend between the start and end of one turn, independently of the agent's session cap and the daily room and account caps:
+
+```sh
+rimz config set harness.turn_budget 3
+```
+
+The key takes a plain amount such as `3` or `$2.50`, applies to human- and teammate-triggered turns alike, and defaults to no limit. It lives only in per-machine `config.toml`: remove the key to turn the cap off. `rimz budget` displays the configured turn cap but does not adjust it.
+
+Crossing the cap parks the current turn with no clock-based reset. The next human prompt starts a fresh turn and therefore a fresh baseline; background and agent-to-agent deliveries remain parked, so automation cannot reopen the spend path after crossing the cap.
 
 ### Cap a loop task
 
@@ -86,6 +99,7 @@ Two honest limits. Cost arrives with provider responses, so the last tool call c
 
 ## What resumes a parked agent
 
+- **A new turn does.** A turn-budget park reopens on the next human prompt, which starts a fresh per-turn baseline. Teammate-triggered turns receive the cap too, but agent-to-agent traffic does not reopen an existing park.
 - **You do.** A human message delivered after the park waives that agent's next turn, once; the waiver is consumed when the turn ends. Background and agent-to-agent deliveries stay parked, so a chatty team cannot spend through your cap.
 - **The day does.** A `/day` park reopens at the next local midnight, and with [auto-continue](./loops.md#keep-the-fleet-moving) on, the continue prompt goes to the agents RimZ interrupted — never to agents that were already at rest.
 - **A raise does.** Raising or clearing a cap (`rimz agents budget @coder +5`, `rimz budget +10`) queues the configured continue prompt to the agents that cap parked in this room; add `--no-continue` to lift the cap and leave them at rest.
@@ -111,6 +125,6 @@ The gate rides loop tasks only, on `--agent` and `--wake` actions, and it is eva
 - [Token Insight](./insight.md) — reading the spend that budgets act on: the cockpit, the provider dashboard, and `rimz stats`.
 - [Loops](./loops.md#keep-the-fleet-moving) — auto-continue, task budgets, and hands-off recovery in one loop.
 - [Scripting](./scripting.md) — the `-p` exit-code contract, including `125` for a run over budget.
-- [Configuration → daily dollar budgets](./configuration.md#daily-dollar-budgets) — the `harness.budget` and `[accounts.budget]` keys.
+- [Configuration → dollar budgets](./configuration.md#dollar-budgets) — the `harness.turn_budget`, `harness.budget`, and `[accounts.budget]` keys.
 - [Budget reference](../reference/cli/agents.md#inspect-and-change-a-budget) — the complete `rimz budget` and `rimz agents budget` surface.
 - [Providers internals](../internals/agents/providers.md) — spend windows, ledgers, and park mechanics in depth.

@@ -1,11 +1,12 @@
-//! Agent, room-fleet, and provider-account dollar caps.
+//! Agent-turn, agent-session, room-fleet, and provider-account dollar caps.
 //!
 //! Launch identity carries agent [`BudgetSpec`]s; machine config supplies the
-//! local-day fleet and account caps. The sidebar producer evaluates durable
-//! transcript spend plus live card costs, writes cache-class scope ledgers, and
-//! spawns the hidden `agents budget-park` helper when a running turn crosses a
-//! cap. The helper owns the pane interrupt and supervised-run transition; this
-//! module stays safe in the sidebar's read-only store import graph.
+//! per-turn, local-day fleet, and account caps. The sidebar producer evaluates
+//! durable transcript spend plus live card costs, writes cache-class scope
+//! ledgers, and spawns the hidden `agents budget-park` helper when a running
+//! turn crosses a cap. The helper owns the pane interrupt and supervised-run
+//! transition; this module stays safe in the sidebar's read-only store import
+//! graph.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -33,6 +34,7 @@ const INTERRUPT_RETRY_SECS: i64 = 120;
 #[serde(rename_all = "snake_case")]
 pub enum BudgetWindow {
     Session,
+    Turn,
     Day,
 }
 
@@ -40,6 +42,7 @@ impl BudgetWindow {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Session => "session",
+            Self::Turn => "turn",
             Self::Day => "day",
         }
     }
@@ -81,8 +84,10 @@ impl FromStr for BudgetSpec {
 impl fmt::Display for BudgetSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "${:.2}", self.cap_usd)?;
-        if self.window == BudgetWindow::Day {
-            f.write_str("/day")?;
+        match self.window {
+            BudgetWindow::Session => {}
+            BudgetWindow::Turn => f.write_str("/turn")?,
+            BudgetWindow::Day => f.write_str("/day")?,
         }
         Ok(())
     }
@@ -115,6 +120,7 @@ pub struct BudgetParkStamp {
 pub enum BudgetScope {
     #[default]
     Agent,
+    Turn,
     Fleet,
     Account,
 }
@@ -142,6 +148,7 @@ impl BudgetPark {
     pub fn label(&self) -> String {
         let prefix = match self.scope {
             BudgetScope::Agent => "budget".to_owned(),
+            BudgetScope::Turn => "turn budget".to_owned(),
             BudgetScope::Fleet => "fleet budget".to_owned(),
             BudgetScope::Account => format!(
                 "{} account budget",
@@ -402,9 +409,23 @@ impl fmt::Display for BudgetCapSource {
     }
 }
 
-/// Per-agent waiver and interrupt state shared by fleet and account parks.
+/// One agent turn's spend baseline and park effects.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TurnScopeEntry {
+    pub turn_started_at: Timestamp,
+    pub baseline_cost_usd: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked: Option<BudgetParkStamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_interrupt_at: Option<Timestamp>,
+}
+
+/// Per-agent turn state plus waiver and interrupt state shared by fleet and
+/// account parks.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct BudgetScopeState {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub turn: BTreeMap<String, TurnScopeEntry>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub waivers: BTreeMap<String, Timestamp>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -450,7 +471,7 @@ impl BudgetLedger {
 
     pub fn spend_usd(&self, total_cost_usd: f64) -> f64 {
         match self.spec.window {
-            BudgetWindow::Session => total_cost_usd,
+            BudgetWindow::Session | BudgetWindow::Turn => total_cost_usd,
             BudgetWindow::Day => (total_cost_usd
                 - self
                     .day_baseline
@@ -542,14 +563,12 @@ pub fn spend_summary(
 }
 
 fn fmt_spend(spend_usd: f64, cap_usd: f64, window: BudgetWindow) -> String {
-    format!(
-        "${spend_usd:.2} of ${cap_usd:.2}{}",
-        if window == BudgetWindow::Day {
-            "/day"
-        } else {
-            ""
-        }
-    )
+    let suffix = match window {
+        BudgetWindow::Session => "",
+        BudgetWindow::Turn => "/turn",
+        BudgetWindow::Day => "/day",
+    };
+    format!("${spend_usd:.2} of ${cap_usd:.2}{suffix}")
 }
 
 /// Pure budget decision plus day/waiver bookkeeping. The caller owns IO.
@@ -566,7 +585,7 @@ pub fn evaluate(
     };
     let total = total_cost_usd(agent).unwrap_or(0.0);
     let spend_usd = match ledger.spec.window {
-        BudgetWindow::Session => total,
+        BudgetWindow::Session | BudgetWindow::Turn => total,
         BudgetWindow::Day => {
             let date = now.to_zoned(zone.clone()).date();
             match ledger.day_baseline.as_mut() {
@@ -639,6 +658,14 @@ pub fn project_parks(
     for agent in &mut snapshot.agents {
         agent.budget_park = ledger_for_agent(runtime, agent)
             .and_then(|ledger| agent_scope_park(agent, &ledger, now, &zone));
+        if agent.budget_park.is_some() {
+            continue;
+        }
+        if let Some(cap) = config.harness.turn_budget
+            && let Some(entry) = scope_state.turn.get(&scope_agent_key(agent))
+        {
+            agent.budget_park = turn_scope_park(agent, entry, cap.as_usd());
+        }
         if agent.budget_park.is_some() || active_scope_waiver(agent, &scope_state) {
             continue;
         }
@@ -672,6 +699,25 @@ pub fn project_parks(
             &zone,
         );
     }
+}
+
+fn turn_scope_park(agent: &AgentState, entry: &TurnScopeEntry, cap_usd: f64) -> Option<BudgetPark> {
+    let parked = entry.parked.as_ref()?;
+    if Some(entry.turn_started_at) != agent.turn_started_at
+        || !pause_applies(agent, entry.last_interrupt_at.is_some())
+    {
+        return None;
+    }
+    let total = total_cost_usd(agent).unwrap_or(parked.at_cost);
+    Some(BudgetPark {
+        cap_usd,
+        spend_usd: (total - entry.baseline_cost_usd).max(0.0),
+        window: BudgetWindow::Turn,
+        at: parked.at,
+        scope: BudgetScope::Turn,
+        account_kind: None,
+        resets_at: None,
+    })
 }
 
 fn agent_scope_park(
@@ -752,8 +798,12 @@ pub fn enforce(
     let scopes = evaluate_scopes(snapshot, runtime, config, now, day_cutoff);
     let mut scope_state = read_scope_state(runtime);
     let scope_before = scope_state.clone();
+    if config.harness.turn_budget.is_none() {
+        scope_state.turn.clear();
+    }
     {
         let mut ctx = EnforceCtx {
+            config,
             runtime,
             snapshot,
             now,
@@ -842,6 +892,7 @@ fn evaluate_scopes(
 }
 
 struct EnforceCtx<'a> {
+    config: &'a MachineConfig,
     runtime: &'a RuntimePaths,
     snapshot: &'a SidebarSnapshot,
     now: Timestamp,
@@ -866,6 +917,18 @@ fn enforce_agent(agent: &AgentState, ctx: &mut EnforceCtx<'_>) {
     let verdict = ledger.as_mut().map_or(BudgetVerdict::Disabled, |ledger| {
         evaluate(agent, ledger, ctx.now, ctx.zone, latest_delivery)
     });
+    let key = scope_agent_key(agent);
+    let mut turn_entry = ctx.scope_state.turn.remove(&key);
+    let turn_verdict = ctx
+        .config
+        .harness
+        .turn_budget
+        .map_or(BudgetVerdict::Disabled, |cap| {
+            evaluate_turn_scope(agent, &mut turn_entry, cap.as_usd(), ctx.now)
+        });
+    if let Some(turn_entry) = turn_entry {
+        ctx.scope_state.turn.insert(key, turn_entry);
+    }
     let scope_verdict = evaluate_scope_waiver(
         agent,
         binding_scope_park(ctx.scopes, &agent.kind),
@@ -873,7 +936,7 @@ fn enforce_agent(agent: &AgentState, ctx: &mut EnforceCtx<'_>) {
         ctx.scope_state,
         ctx.now,
     );
-    let classification = classify_parks(&verdict, scope_verdict);
+    let classification = classify_parks(&verdict, &turn_verdict, scope_verdict);
     apply_enforcement_effects(agent, &mut ledger, classification, ctx);
     if ledger != before
         && let Some(ledger) = ledger.as_ref()
@@ -886,16 +949,25 @@ fn enforce_agent(agent: &AgentState, ctx: &mut EnforceCtx<'_>) {
 #[derive(Clone, Copy)]
 struct ParkClassification {
     agent_parked: bool,
+    turn_parked: bool,
     scope_parked: bool,
     all_under: bool,
 }
 
-fn classify_parks(verdict: &BudgetVerdict, scope_verdict: ScopeAgentVerdict) -> ParkClassification {
+fn classify_parks(
+    verdict: &BudgetVerdict,
+    turn_verdict: &BudgetVerdict,
+    scope_verdict: ScopeAgentVerdict,
+) -> ParkClassification {
     ParkClassification {
         agent_parked: matches!(verdict, BudgetVerdict::Park { .. }),
+        turn_parked: matches!(turn_verdict, BudgetVerdict::Park { .. }),
         scope_parked: scope_verdict == ScopeAgentVerdict::Park,
         all_under: matches!(
             verdict,
+            BudgetVerdict::Under { .. } | BudgetVerdict::Disabled
+        ) && matches!(
+            turn_verdict,
             BudgetVerdict::Under { .. } | BudgetVerdict::Disabled
         ) && scope_verdict == ScopeAgentVerdict::Under,
     }
@@ -911,7 +983,7 @@ fn apply_enforcement_effects(
         crate::harness::auto_continue::clear_budget_park(ctx.runtime, &agent.kind, &agent.agent_id);
         return;
     }
-    if !classification.agent_parked && !classification.scope_parked {
+    if !classification.agent_parked && !classification.turn_parked && !classification.scope_parked {
         return;
     }
     update_auto_continue(agent, ledger.as_ref(), classification, ctx);
@@ -960,7 +1032,16 @@ fn interrupt_parked_agent(
         .scope_parked
         .then(|| ctx.scope_state.last_interrupt_at.get(&key).copied())
         .flatten();
-    let last_interrupt = [agent_interrupt, scope_interrupt]
+    let turn_interrupt = classification
+        .turn_parked
+        .then(|| {
+            ctx.scope_state
+                .turn
+                .get(&key)
+                .and_then(|entry| entry.last_interrupt_at)
+        })
+        .flatten();
+    let last_interrupt = [agent_interrupt, turn_interrupt, scope_interrupt]
         .into_iter()
         .flatten()
         .max();
@@ -985,6 +1066,11 @@ fn interrupt_parked_agent(
         {
             ledger.last_interrupt_at = Some(ctx.now);
         }
+        if classification.turn_parked
+            && let Some(entry) = ctx.scope_state.turn.get_mut(&key)
+        {
+            entry.last_interrupt_at = Some(ctx.now);
+        }
         if classification.scope_parked {
             ctx.scope_state.last_interrupt_at.insert(key, ctx.now);
         }
@@ -996,6 +1082,42 @@ enum ScopeAgentVerdict {
     Under,
     Park,
     Waived,
+}
+
+fn evaluate_turn_scope(
+    agent: &AgentState,
+    entry: &mut Option<TurnScopeEntry>,
+    cap_usd: f64,
+    now: Timestamp,
+) -> BudgetVerdict {
+    let Some(turn_started_at) = agent.turn_started_at else {
+        *entry = None;
+        return BudgetVerdict::Under {
+            spend_usd: 0.0,
+            cap_usd,
+        };
+    };
+    let total = total_cost_usd(agent).unwrap_or(0.0);
+    let entry = match entry {
+        Some(entry) if entry.turn_started_at == turn_started_at => entry,
+        entry => entry.insert(TurnScopeEntry {
+            turn_started_at,
+            baseline_cost_usd: total,
+            parked: None,
+            last_interrupt_at: None,
+        }),
+    };
+    let spend_usd = (total - entry.baseline_cost_usd).max(0.0);
+    if spend_usd < cap_usd {
+        entry.parked = None;
+        entry.last_interrupt_at = None;
+        return BudgetVerdict::Under { spend_usd, cap_usd };
+    }
+    entry.parked.get_or_insert(BudgetParkStamp {
+        at_cost: total,
+        at: now,
+    });
+    BudgetVerdict::Park { spend_usd, cap_usd }
 }
 
 fn evaluate_daily_scope(

@@ -151,22 +151,23 @@ Codex reset-credit expiry rescue is always active within 30 minutes of a credit'
 
 The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth), and the live paths are in [provider internals → Auto-continue](../internals/agents/providers.md#auto-continue) and [Auto-redeem](../internals/agents/providers.md#auto-redeem).
 
-### Daily dollar budgets
+### Dollar budgets
 
 ```toml
 timezone = "America/New_York"
 
 [harness]
 budget = "50/day"
+turn_budget = "3"
 
 [accounts.budget]
 claude = "100/day"
 codex = "100/day"
 ```
 
-`harness.budget` turns on a cap for each room's whole fleet, while `[accounts.budget]` turns on a cap for one provider login across every room on the machine. An account key requires wired authoritative account-spend history; subscription quota bars and point-in-time or partial estimates do not qualify, so `config set`, strict loading, room start, and account-budget commands reject unknown and ineligible kinds such as Antigravity with the key to remove or fix. Cursor remains eligible for per-agent/session and room caps, but not an account-day cap. Supported daily caps read spend since local midnight in `timezone` and require the `/day` suffix; a bare amount is rejected with the form to use. These keys run no command and stay outside the project trust hash.
+`harness.turn_budget` caps each agent turn in the room and accepts a plain dollar amount such as `"3"` or `"$2.50"`; a new prompt starts a fresh turn baseline. `harness.budget` turns on a cap for each room's whole fleet, while `[accounts.budget]` turns on a cap for one provider login across every room on the machine. An account key requires wired authoritative account-spend history; subscription quota bars and point-in-time or partial estimates do not qualify, so `config set`, strict loading, room start, and account-budget commands reject unknown and ineligible kinds such as Antigravity with the key to remove or fix. Cursor remains eligible for per-agent/session and room caps, but not an account-day cap. Supported daily caps read spend since local midnight in `timezone` and require the `/day` suffix; a bare amount is rejected with the form to use. These keys run no command and stay outside the project trust hash.
 
-These keys are the on-switch; `rimz budget` inspects and adjusts an armed cap at runtime without touching them, and refuses to arm a cap they never set. The full cap model — the per-agent and loop-task scopes, what a park does, and what resumes it — is the [budgets guide](./budget.md).
+The daily keys are the on-switch; `rimz budget` inspects and adjusts an armed daily cap at runtime without touching them, and refuses to arm a cap they never set. The command displays `harness.turn_budget` read-only; change that standing per-turn cap with `rimz config set harness.turn_budget 3` or remove the key. The full cap model — the per-turn, per-agent, and loop-task scopes, what a park does, and what resumes it — is the [budgets guide](./budget.md).
 
 ### Smart compaction
 
@@ -243,7 +244,7 @@ claude = 50.0
 codex = 25.0
 ```
 
-`budget` sets the enforced local-day dollar cap described in [Daily dollar budgets](#daily-dollar-budgets) for descriptor-gated providers with durable spend; an unsupported entry refuses room birth instead of disappearing into lenient defaults. `usage_limit_usd` is separate, display-only, and has no account-spend eligibility gate, so Cursor remains valid there: its monthly ceiling scales the provider dashboard's `ex`/`api` bar when the provider reports no real cap, while the provider still enforces real spend and agents keep running. Account enrichment is local, read-only, and best-effort; `RIMZ_OAUTH_USAGE_OFFLINE=1` disables the live fetches for one process tree without touching transcript-derived totals or credential files.
+`budget` sets the enforced local-day dollar cap described in [Dollar budgets](#dollar-budgets) for descriptor-gated providers with durable spend; an unsupported entry refuses room birth instead of disappearing into lenient defaults. `usage_limit_usd` is separate, display-only, and has no account-spend eligibility gate, so Cursor remains valid there: its monthly ceiling scales the provider dashboard's `ex`/`api` bar when the provider reports no real cap, while the provider still enforces real spend and agents keep running. Account enrichment is local, read-only, and best-effort; `RIMZ_OAUTH_USAGE_OFFLINE=1` disables the live fetches for one process tree without touching transcript-derived totals or credential files.
 
 ### Off-box error reporting
 

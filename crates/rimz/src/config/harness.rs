@@ -87,6 +87,85 @@ pub enum DayCapParseError {
     TooLarge(String),
 }
 
+/// A per-turn dollar cap stored as cents so machine config keeps exact
+/// equality while reusing the public budget grammar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TurnCap {
+    cents: u64,
+}
+
+impl TurnCap {
+    pub fn as_usd(self) -> f64 {
+        self.cents as f64 / 100.0
+    }
+}
+
+impl FromStr for TurnCap {
+    type Err = TurnCapParseError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let spec = raw
+            .parse::<BudgetSpec>()
+            .map_err(TurnCapParseError::Budget)?;
+        if spec.window != BudgetWindow::Session {
+            return Err(TurnCapParseError::PlainAmountRequired(
+                raw.trim().to_owned(),
+            ));
+        }
+        let cents = (spec.cap_usd * 100.0).round();
+        if cents > u64::MAX as f64 {
+            return Err(TurnCapParseError::TooLarge(raw.trim().to_owned()));
+        }
+        Ok(Self {
+            cents: cents as u64,
+        })
+    }
+}
+
+impl fmt::Display for TurnCap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let dollars = self.cents / 100;
+        let cents = self.cents % 100;
+        if cents == 0 {
+            write!(f, "{dollars}")
+        } else {
+            write!(f, "{dollars}.{cents:02}")
+        }
+    }
+}
+
+impl Serialize for TurnCap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for TurnCap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum TurnCapParseError {
+    #[error(transparent)]
+    Budget(#[from] crate::harness::budget::BudgetParseError),
+    #[error(
+        "turn budget `{0}` must be a plain dollar amount; use an amount such as `3` or `$2.50`"
+    )]
+    PlainAmountRequired(String),
+    #[error("turn budget `{0}` is too large")]
+    TooLarge(String),
+}
+
 use crate::message::AutoCompact;
 
 /// rtk output compression mode for agent-run cargo commands in `cargo xtask`.
@@ -119,6 +198,9 @@ pub struct HarnessConfig {
     /// Default local-calendar-day cap for one room's whole agent fleet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<DayCap>,
+    /// Default per-turn dollar cap for every agent in the room.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_budget: Option<TurnCap>,
     /// Compact before messages and scheduled loop wakes when the agent's
     /// context window has reached this threshold. Unset keeps compaction opt-in.
     #[serde(
@@ -183,6 +265,21 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("must end in `/day`")
+        );
+    }
+
+    #[test]
+    fn turn_cap_requires_plain_amount_and_round_trips() {
+        let config: HarnessConfig =
+            toml::from_str("turn_budget = \"$2.50\"").expect("parse turn cap");
+        assert_eq!(config.turn_budget.map(TurnCap::as_usd), Some(2.5));
+        let rendered = toml::to_string(&config).expect("serialize harness");
+        assert!(rendered.contains("turn_budget = \"2.50\""), "{rendered}");
+        assert!(
+            toml::from_str::<HarnessConfig>("turn_budget = \"3/day\"")
+                .unwrap_err()
+                .to_string()
+                .contains("must be a plain dollar amount")
         );
     }
 

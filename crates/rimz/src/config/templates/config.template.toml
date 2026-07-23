@@ -146,5 +146,6 @@ aggressive_resize = true
 
 [harness]
 ## budget = "50/day"             # turn on the whole-room local-day cap; adjust the live cap with `rimz budget`
+## turn_budget = "3"              # cap every agent turn at this dollar amount
 ## smart_compact = "70%"          # default for messages/wakes ("70%", "120000", or "180k"); unset = off
 # rtk = "auto"                    # wrap agent cargo runs (build/check/test/nextest/clippy) through `rtk`; auto = when rtk is on PATH, on = force, off = never

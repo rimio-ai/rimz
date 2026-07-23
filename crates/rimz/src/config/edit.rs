@@ -808,6 +808,7 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
     if is_harness_smart_compact_edit(path)
         || is_harness_rtk_edit(path)
         || is_daily_budget_edit(path)
+        || is_turn_budget_edit(path)
         || is_auto_redeem_min_gain_edit(path)
         || is_sidebar_theme_scheme_edit(path)
         || is_sidebar_glyph_string_edit(path)
@@ -838,6 +839,13 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
             invalid_value!("{} must be a string ending in `/day`", path.join("."));
         };
         raw.parse::<super::DayCap>()
+            .map_err(|err| ConfigEditErr::InvalidValue(err.to_string()))?;
+    }
+    if is_turn_budget_edit(path) {
+        let Some(raw) = value.as_str() else {
+            invalid_value!("harness.turn_budget must be a plain dollar amount string");
+        };
+        raw.parse::<super::TurnCap>()
             .map_err(|err| ConfigEditErr::InvalidValue(err.to_string()))?;
     }
     if is_harness_smart_compact_edit(path) {
@@ -910,6 +918,10 @@ fn is_harness_rtk_edit(path: &[String]) -> bool {
 fn is_daily_budget_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "budget")
         || matches!(path, [root, child, _] if root == "accounts" && child == "budget")
+}
+
+fn is_turn_budget_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "harness" && child == "turn_budget")
 }
 
 fn is_auto_redeem_min_gain_edit(path: &[String]) -> bool {
