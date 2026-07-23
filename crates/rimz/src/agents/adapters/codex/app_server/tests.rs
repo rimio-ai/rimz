@@ -704,6 +704,7 @@ fn seed_transcript_context(runtime: &RuntimePaths) {
                     state: None,
                 },
                 total_usd: 0.42,
+                ..LocalSpendFold::default()
             }),
         },
         transcript_at,

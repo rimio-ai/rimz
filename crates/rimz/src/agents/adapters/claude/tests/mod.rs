@@ -9,6 +9,7 @@ mod context;
 mod install;
 mod install_statusline;
 mod lifecycle;
+mod local_context;
 mod subagents;
 
 #[test]

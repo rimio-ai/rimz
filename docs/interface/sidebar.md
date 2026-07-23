@@ -25,7 +25,7 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
 ▌⣾ claude · Opus 4.8 · xhigh · 1m                $1.27    ← line 1: identity · model · reasoning config · context window · usd value
 ▌  store refactor                                        ← line 2: session description
 ▌  ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context window progress: how full the context window is
-▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 8m    ← token stats: filled toks in context window
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%             ◔ 8m    ← token stats: filled toks in context window · session cache hit
 ▌  ⧉ subagents (2)                                        ← subagents spawned this turn
 ▌    ✓ Explore — locate the render seam                   ← done child: collapses to one line
 ▌    ⠁ Explore — audit the trust hash                     ← active child: thinking head
@@ -94,6 +94,7 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `▣ ━━━━╺━──── 38.2%` | context meter — how full the window is; the bar fills as used, `▢` hollow at 0%. Small windows draw linearly, and the fill curve grows with the window. The fill also shows *where* the window went: a wide cache-read run in the meter's health tone, with gap-fronted `╺` runs for cache-write and fresh-input accents; components at or above 0.5% of the filled window earn a half-cell floor, smaller components fold into the lead run, and the segmented fill meets the track without a trailing gap |
 | `▤ 76k`           | filled context — the absolute tokens in the window, the `▣` meter's numerator |
 | `◇ ↘ ↗ ◌` / `◍`   | token markers, one stable color each: `◇` total (blue) · `↘` input incl. cache creation (deep red, the costliest read) · `↗` output incl. thinking when reported separately (blue) · `◌` cache-read (green); a cumulative-only card uses these four without implying occupancy, while a current-context line adds `◍` cache-write (violet) for the per-call split |
+| `97%`              | session cache hit — cached prompt input divided by cached plus cache-written plus fresh input; green at 90%+, yellow at 70–89%, red below 70%; absent before the session has input-side counters |
 | `↻ N`             | completed context compactions — the card's lifetime count, from the first; trails the context line after a `·` (the same glyph marks provider budget resets and Codex reset credits — the last two rows of this table) |
 | `◔ 5m`            | last-activity age — shown once it crosses five minutes, so a card stays quiet through normal churn; the face fills by the quarter hour (`◔`≤15m · `◑`≤30m · `◕`≤45m · `●`≤60m · `◉` past) and heats to red by the hour, where resuming likely re-reads the whole context uncached. A finished card heats on the same ramp, since prompting it again pays that same uncached re-read. On a running subagent line the same face reads the child's elapsed work as a fixed `m`/`h` label (`<1m` under a minute) |
 | `C 11%` / `M 512M` / `⇅ 3M/s` | a working process row's CPU · resident memory (RSS) · combined VFS I/O rate — one fixed-width grid (`C` sky · `M` sage · `⇅` violet) that appears only once all three have values |
@@ -185,7 +186,7 @@ idle:
 ○ claude · Opus 4.8 · xhigh                              ← line 1 — glyph · name · model · reasoning config
   refactor auth module                                   ← line 2 — what it's on
   ▢ ───────────────────────────────────────────    0%    ← context meter — empty window
-  ▤ 12k · ◌ 10k ↘ 2k                             ◔ 6m    ← context line — filled window · composition · age
+  ▤ 12k · ◌ 10k ↘ 2k · 83%                       ◔ 6m    ← context line — filled window · composition · session cache hit · age
 ```
 
 complete:
@@ -194,13 +195,13 @@ complete:
 ✓ claude · Opus 4.8 · xhigh · 1m                $2.14
   store refactor
   ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━───────────── 78.4%
-  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 8m
+  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%             ◔ 8m
 ```
 
 - **Line 1 — identity.** The animated leading cell, then the agent's handle — its team role, explicit name, or profile, else the kind — in the provider brand color (so a team reads `planner` / `coder` / `reviewer`; unknown kinds mid-gray), then capability: model · one reasoning-configuration token (effort or `thinking`) · window token, dim metadata under the brand-colored name. Capability degrades by width — wide carries model · reasoning configuration · window, medium drops reasoning configuration, narrow keeps just the name; the window token rides non-idle cards only. The `$cost` pins right and joins the line once the card has a nonzero price (an idle agent at `$0.00` shows nothing), counting up in the same eased odometer roll as the cockpit headline. Provider totals and locally priced counters render identically. Cumulative session values join the headline aggregate; Antigravity's replace-style current usage stays card-only when its canonical model ID or qualified selector label resolves to the local price table, without claiming subscription billing or creating provider-history/stat records.
 - **Line 2 — what it's on.** The label falls through a priority list until something names the session: Codex thread metadata (`preview`, then `name`) first, then the named session (`--name` / `/rename`), the launch or adapter-reported `description`, the agent's task, the session's first usable prompt, and finally its latest prompt. The first-prompt slot stays fixed across later turns so an unnamed session keeps one label. An idle agent with nothing yet collapses to the identity line. A turn that died on a provider API error takes the line over with the upstream error text (`API Error: Overloaded`) for as long as its `!` holds, so the card says why without a jump ([model.md → displayed status](../internals/agents/model.md#displayed-status)).
 - **The context meter (`▣`/`▢`).** The resting card's one bar: `▢` hollow at 0%, including before the first measurement, and `▣` once anything fills it; the value is always the raw percent *used*. The drawn fill's log curve grows with the context window: windows up to 256k stay linear, and 1M windows use the full curve to keep useful visual resolution through their working range; linear geometry remains configurable. Supported kitty-graphics paths move the fill edge at pixel precision; every other flat bar rounds to the nearest half cell, and any nonzero fill keeps a one-pixel or half-cell floor. The fill also shows *where* the window went — a dominant cache-read run in the current health tone, with gap-fronted `╺` runs for cache-write (`◍`) and fresh-input (`↘`) accents. Components at or above 0.5% of the filled window earn the cell bar's half-cell floor; smaller components fold into the lead run, and the segmented fill rounds to a whole cell so its final accent meets the track without a trailing gap. A row with no per-call split yet paints one flat run. The health bands, fill geometry, and pixel tier are tunable ([theme.md → Display](../guide/theme.md#display)).
-- **The stats line.** Before token data arrives it reads `▤ 0`; all-zero composition columns drop whole. With current-window data, it is the meter's absolute companion: `▤` is `input + cache-write + cache-read` of the latest API call, the numerator the `▣` percent scales, followed after a `·` by `◌` cache-read, `◍` cache-write, `↘` fresh input, and `↗` output. A provider-reported occupancy without categories renders as the bare `▤ total` and a flat meter; Qwen adds transcript categories only while their filled-input sum matches its live scalar. A zero column drops whole, so a Codex card (no per-call cache-write in its protocol) never grows a `◍`; these columns stay disjoint per call, unlike the fleet lines whose `↘` subsumes cache-write. When current-window occupancy is absent and a provider exposes only cumulative session counters, as stock-pane Droid does, the line instead uses `◇ total ↘ input ↗ output ◌ cache-read`; cache creation folds into input and separately reported thinking folds into output. Cumulative categories never establish gauge occupancy or a `▤` composition. A completed-compaction count joins as `· ↻ N` from the first, and the last-activity age pins right once it crosses five minutes (a delegating parent reads the freshest of its own and its children's activity).
+- **The stats line.** Before token data arrives it reads `▤ 0`; all-zero composition columns drop whole. With current-window data, it is the meter's absolute companion: `▤` is `input + cache-write + cache-read` of the latest API call, the numerator the `▣` percent scales, followed after a `·` by `◌` cache-read, `◍` cache-write, `↘` fresh input, and `↗` output. A provider-reported occupancy without categories renders as the bare `▤ total` and a flat meter; Qwen adds transcript categories only while their filled-input sum matches its live scalar. A zero column drops whole, so a Codex card (no per-call cache-write in its protocol) never grows a `◍`; these columns stay disjoint per call, unlike the fleet lines whose `↘` subsumes cache-write. When current-window occupancy is absent and a provider exposes only cumulative session counters, as stock-pane Droid does, the line instead uses `◇ total ↘ input ↗ output ◌ cache-read`; cache creation folds into input and separately reported thinking folds into output. Cumulative categories never establish gauge occupancy or a `▤` composition. When cumulative input-side counters exist, the trailing plain percent is the session cache-hit ratio and uses the shared green/yellow/red health bands. A completed-compaction count joins as `· ↻ N` from the first, and the last-activity age pins right once it crosses five minutes (a delegating parent reads the freshest of its own and its children's activity).
 
 The `▣`/`▢` and `▤` glyphs share one lead column, so the card reads as an aligned grid.
 
@@ -212,7 +213,7 @@ resting:
  ⣾ claude · Opus · 1m                           $1.27
    store refactor
    ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────────── 78.4%
-   ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                  ◔ 8m
+   ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%            ◔ 8m
 ```
 
 selected — only appends, never reshapes
@@ -220,7 +221,7 @@ selected — only appends, never reshapes
 ▌⣾ claude · Opus · 1m                           $1.27
 ▌  store refactor
 ▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────────── 78.4%
-▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                  ◔ 8m
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%            ◔ 8m
 ▌  ⧉ subagents (1)                                       ← appended
 ▌    ⢿ Explore
 ```

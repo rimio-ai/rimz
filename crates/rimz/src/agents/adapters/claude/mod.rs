@@ -20,6 +20,7 @@
 pub(crate) mod account;
 mod ask;
 mod install;
+mod local_context;
 mod local_sessions;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
@@ -666,6 +667,22 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
             return Vec::new();
         };
         parsed.into_observations(Timestamp::now())
+    }
+
+    fn local_context_refresh(
+        &self,
+        trigger: super::RefreshTrigger<'_>,
+        ctx: &super::LocalContextRefreshCtx<'_>,
+    ) -> Option<super::LocalContextRefresh> {
+        if let super::RefreshTrigger::Hook(event_name) = trigger
+            && !matches!(
+                event_name,
+                "SessionStart" | "UserPromptSubmit" | "PostToolUse" | "Stop"
+            )
+        {
+            return None;
+        }
+        local_context::refresh(ctx)
     }
 }
 

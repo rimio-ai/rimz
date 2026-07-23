@@ -212,6 +212,7 @@ fn stale_provider_observation_updates_latest_locked_record() {
             state: None,
         },
         total_usd: 0.12,
+        ..LocalSpendFold::default()
     });
     merge_local_context(&runtime, spec("codex"), "sess-1", refresh, local_at).unwrap();
     let opener = crate::ids::MessageId::parse("msg_0123456789abcdef").unwrap();
@@ -263,6 +264,7 @@ fn foldless_local_refresh_preserves_prior_spend_fold() {
             state: None,
         },
         total_usd: 1.25,
+        ..LocalSpendFold::default()
     });
     write_record(&runtime, &prior).unwrap();
 

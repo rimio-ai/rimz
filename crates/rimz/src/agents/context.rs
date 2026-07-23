@@ -309,7 +309,8 @@ pub enum LocalTokenPatch {
     #[default]
     Keep,
     /// Accept a new gauge unless it is the fresh-zero sentinel, preserving an
-    /// established gauge and its exact provider-reported window in that case.
+    /// established gauge and its exact provider-reported window in that case;
+    /// merge cumulative session counters independently of current occupancy.
     PreserveEstablished(Option<AgentTokenUsage>),
     /// Replace current-call occupancy while retaining monotonic session totals.
     ReplaceCurrentPreservingSession(Option<AgentTokenUsage>),
@@ -472,13 +473,32 @@ fn preserve_established_tokens(
     prior: Option<&AgentTokenUsage>,
     refresh: &mut Option<AgentTokenUsage>,
 ) {
-    let Some(prior) = prior.filter(|tokens| established_token_usage(tokens)) else {
+    let Some(prior) =
+        prior.filter(|tokens| established_token_usage(tokens) || tokens.session_usage.is_some())
+    else {
         return;
     };
+    let incoming_session = refresh
+        .as_ref()
+        .and_then(|tokens| tokens.session_usage.clone());
     match refresh {
         None => *refresh = Some(prior.clone()),
-        Some(tokens) if inferred_fresh_tokens(tokens) => *tokens = prior.clone(),
+        Some(tokens)
+            if inferred_fresh_tokens(tokens)
+                || (tokens.session_usage.is_some()
+                    && tokens.context_window_size.is_none()
+                    && tokens.used_percentage.is_none()
+                    && tokens.remaining_percentage.is_none()
+                    && tokens.current_context_tokens.is_none()
+                    && tokens.current_usage.is_none()) =>
+        {
+            *tokens = prior.clone();
+        }
         Some(_) => {}
+    }
+    if let Some(tokens) = refresh {
+        merge_session_usage(&mut tokens.session_usage, incoming_session);
+        merge_session_usage(&mut tokens.session_usage, prior.session_usage.clone());
     }
 }
 
@@ -728,6 +748,37 @@ pub struct AgentSessionUsage {
     pub thinking_tokens: Option<u64>,
 }
 
+const CACHE_HIT_GOOD_MIN: u8 = 90;
+const CACHE_HIT_CAUTION_MIN: u8 = 70;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheHealth {
+    Good,
+    Caution,
+    Alarm,
+}
+
+impl CacheHealth {
+    pub const fn classify(percent: u8) -> Self {
+        if percent >= CACHE_HIT_GOOD_MIN {
+            Self::Good
+        } else if percent >= CACHE_HIT_CAUTION_MIN {
+            Self::Caution
+        } else {
+            Self::Alarm
+        }
+    }
+}
+
+pub(crate) fn cache_hit_percent(cache_read: u64, fresh_or_written_input: u64) -> Option<u8> {
+    let denominator = u128::from(cache_read) + u128::from(fresh_or_written_input);
+    if denominator == 0 {
+        return None;
+    }
+    let rounded = (u128::from(cache_read) * 100 + denominator / 2) / denominator;
+    Some(rounded.min(100) as u8)
+}
+
 impl AgentSessionUsage {
     pub fn displayed_input_tokens(&self) -> u64 {
         self.input_tokens
@@ -748,6 +799,10 @@ impl AgentSessionUsage {
 
     pub fn cache_read_tokens(&self) -> u64 {
         self.cache_read_input_tokens.unwrap_or(0)
+    }
+
+    pub fn cache_hit_percent(&self) -> Option<u8> {
+        cache_hit_percent(self.cache_read_tokens(), self.displayed_input_tokens())
     }
 
     pub fn is_zero(&self) -> bool {
@@ -1433,6 +1488,30 @@ mod tests {
             }
             .is_zero()
         );
+    }
+
+    #[test]
+    fn cache_hit_percent_rounds_and_classifies_health() {
+        let usage = |input, cache_write, cache_read| AgentSessionUsage {
+            input_tokens: Some(input),
+            cache_creation_input_tokens: Some(cache_write),
+            cache_read_input_tokens: Some(cache_read),
+            ..AgentSessionUsage::default()
+        };
+
+        assert_eq!(AgentSessionUsage::default().cache_hit_percent(), None);
+        assert_eq!(usage(1, 0, 2).cache_hit_percent(), Some(67));
+        assert_eq!(usage(1, 0, 1).cache_hit_percent(), Some(50));
+        assert_eq!(cache_hit_percent(u64::MAX, 0), Some(100));
+        assert_eq!(
+            usage(u64::MAX, u64::MAX, u64::MAX).cache_hit_percent(),
+            Some(50),
+            "wide input-side arithmetic remains bounded"
+        );
+        assert_eq!(CacheHealth::classify(69), CacheHealth::Alarm);
+        assert_eq!(CacheHealth::classify(70), CacheHealth::Caution);
+        assert_eq!(CacheHealth::classify(89), CacheHealth::Caution);
+        assert_eq!(CacheHealth::classify(90), CacheHealth::Good);
     }
 
     #[test]

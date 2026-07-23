@@ -38,6 +38,8 @@ struct ModelJson {
     input: u64,
     output: u64,
     cache_read: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_hit_pct: Option<u8>,
     usd: f64,
     share: f64,
 }
@@ -49,6 +51,8 @@ struct AgentJson {
     tokens: u64,
     usd: f64,
     sessions: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_hit_pct: Option<u8>,
     share: f64,
 }
 
@@ -89,6 +93,7 @@ pub(super) fn emit_json(
                 input: spend.input,
                 output: spend.output,
                 cache_read: spend.cache_read,
+                cache_hit_pct: spend.cache_hit_percent(),
                 usd: spend.usd,
                 share: if total_usd > 0.0 {
                     spend.usd / total_usd
@@ -113,6 +118,7 @@ pub(super) fn emit_json(
             tokens: stats_tokens(&agent.window),
             usd: agent.window.usd,
             sessions: agent.window.sessions,
+            cache_hit_pct: agent.window.cache_hit_percent(),
             share: agent.share,
         })
         .collect();

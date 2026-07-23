@@ -49,6 +49,10 @@ impl SpendWindow {
         self.cache_write += entry.cache_write;
         self.cache_read += entry.cache_read;
     }
+
+    pub fn cache_hit_percent(&self) -> Option<u8> {
+        crate::agents::context::cache_hit_percent(self.cache_read, self.input)
+    }
 }
 
 /// The widest spend window. Entries at or beyond this age never contribute to

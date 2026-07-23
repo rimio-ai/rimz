@@ -10,6 +10,7 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 
 - Multi-architecture Debian 13 and Ubuntu 26.04 Docker images provide a ready RimZ room, web deployment, and uid-1000 devcontainer base with current multiplexers and the priority agent CLIs. → [installation](./docs/guide/installation.md#run-in-docker)
 - `rimz sessions` promotes the browser's themed live-room manager to a terminal command, and `n` opens a dormant-workspace plus directory selector that births and attaches a new room. → [Getting started](./docs/reference/cli/getting-started.md#pick-a-session)
+- Agent cards show the session's prompt-cache hit percentage with health coloring, and `rimz stats` adds the same ratio to model and agent breakdowns and JSON. → [Token Insight](./docs/guide/insight.md#how-the-numbers-are-calculated)
 
 ### Fixed
 

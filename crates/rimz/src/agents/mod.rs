@@ -64,10 +64,10 @@ pub use account::{
 };
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
-    AgentSessionUsage, AgentTokenUsage, AgentTurnError, ContextObservation, CostCoverage,
-    FieldPatch, LocalContextPatch, LocalTokenPatch, ProviderAccountScope, RateLimitWindow,
-    RateLimitWindowScope, SessionContextInput, SessionContextRefresh, SubagentContext,
-    SubagentObservation, TurnErrorClass, TurnSettle, TurnSettleOutcome,
+    AgentSessionUsage, AgentTokenUsage, AgentTurnError, CacheHealth, ContextObservation,
+    CostCoverage, FieldPatch, LocalContextPatch, LocalTokenPatch, ProviderAccountScope,
+    RateLimitWindow, RateLimitWindowScope, SessionContextInput, SessionContextRefresh,
+    SubagentContext, SubagentObservation, TurnErrorClass, TurnSettle, TurnSettleOutcome,
 };
 pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCredits};
@@ -594,11 +594,32 @@ pub struct TranscriptStat {
     pub companion: Option<TranscriptCompanionStat>,
 }
 
-/// Resumable per-request spend fold over a session's local transcript.
+/// Resumable per-request spend and raw token-split fold over a session's local transcript.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LocalSpendFold {
     pub cursor: spending::SpendCursor,
     pub total_usd: f64,
+    #[serde(default)]
+    pub input: u64,
+    #[serde(default)]
+    pub output: u64,
+    #[serde(default)]
+    pub cache_write: u64,
+    #[serde(default)]
+    pub cache_read: u64,
+}
+
+impl LocalSpendFold {
+    pub fn session_usage(&self) -> Option<AgentSessionUsage> {
+        (self.input > 0 || self.output > 0 || self.cache_write > 0 || self.cache_read > 0)
+            .then_some(AgentSessionUsage {
+                input_tokens: Some(self.input),
+                output_tokens: Some(self.output),
+                cache_creation_input_tokens: Some(self.cache_write),
+                cache_read_input_tokens: Some(self.cache_read),
+                thinking_tokens: None,
+            })
+    }
 }
 
 impl TranscriptStat {
