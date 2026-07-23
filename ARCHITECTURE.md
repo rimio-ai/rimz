@@ -72,7 +72,7 @@ workspace store         ~/.local/state/rimz/workspaces/<workspace_id>/
 
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/<workspace_id>/  (or /tmp/rimz-<uid>/…)
   one room's disposable tier: wakeup sockets, heartbeats, read receipts,
-  and enrichment sidecars
+  enrichment sidecars, and active-time accumulators
 
 shared persistent       ~/.local/state/rimz/shared/
   account-global provider state: accounts, rate limits, credits, spend, pricing

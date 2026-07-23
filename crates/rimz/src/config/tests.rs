@@ -1445,6 +1445,10 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     let dir = tempdir().expect("tempdir");
     let config = load_no_fragments(&write(&dir, "")).expect("load");
     assert_eq!(
+        config.agents.attention.active_grace_secs.get(),
+        crate::agents::DEFAULT_ACTIVE_GRACE_SECS,
+    );
+    assert_eq!(
         config.agents.attention.stalled_after_secs.get(),
         crate::agents::DEFAULT_STALL_AFTER_SECS,
     );
@@ -1456,9 +1460,10 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     let tuned = load_no_fragments(&write_named(
         &dir,
         "agents.toml",
-        "[agents.attention]\nstalled_after_secs = 2700\narchive_after_secs = 7200\n",
+        "[agents.attention]\nactive_grace_secs = 60\nstalled_after_secs = 2700\narchive_after_secs = 7200\n",
     ))
     .expect("load");
+    assert_eq!(tuned.agents.attention.active_grace_secs.get(), 60);
     assert_eq!(tuned.agents.attention.stalled_after_secs.get(), 2700);
     assert_eq!(tuned.agents.attention.archive_after_secs.get(), 7200);
 
@@ -1466,6 +1471,14 @@ fn attention_config_defaults_parses_and_rejects_zero() {
         load_no_fragments(&write_named(&dir, "agents.toml", "[agents.attention]\n")).expect("load");
     assert_eq!(partial.agents.attention, AttentionConfig::default());
 
+    assert!(
+        load_no_fragments(&write_named(
+            &dir,
+            "agents.toml",
+            "[agents.attention]\nactive_grace_secs = 0\n",
+        ))
+        .is_err()
+    );
     assert!(
         load_no_fragments(&write_named(
             &dir,

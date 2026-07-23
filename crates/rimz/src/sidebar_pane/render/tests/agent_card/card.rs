@@ -79,6 +79,82 @@ fn render_agent_capability_and_window() {
 }
 
 #[test]
+fn active_time_renders_muted_without_requiring_model_metadata() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    claude.model = None;
+    claude.context = None;
+    claude.estimated_active_secs = Some(25 * 60);
+    let snapshot = snapshot_with(vec![claude]);
+    let theme = Theme::fixed(true);
+    let lines = group_lines(&snapshot, &theme, 99);
+    let active = lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .find(|span| span.content.as_ref() == "≈25m")
+        .expect("active-time token");
+
+    assert_eq!(active.style, theme.muted());
+}
+
+#[test]
+fn active_time_yields_to_cost_under_width_pressure() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    claude.context = Some(claude_context(fixed_now()));
+    claude.estimated_active_secs = Some(25 * 60);
+    let snapshot = snapshot_with(vec![claude]);
+    let theme = Theme::fixed(true);
+    let wide = line_texts(&group_lines_at_width(&snapshot, &theme, 99, 54));
+    assert!(
+        wide.iter()
+            .any(|line| line.contains("≈25m") && line.contains("$1.27")),
+        "{wide:?}"
+    );
+
+    let narrow = (12..54).find_map(|width| {
+        let lines = line_texts(&group_lines_at_width(&snapshot, &theme, 99, width));
+        lines
+            .iter()
+            .any(|line| line.contains("$1.27") && !line.contains('≈'))
+            .then_some((width, lines))
+    });
+    assert!(
+        narrow.is_some(),
+        "cost must survive at a width where active time is trimmed"
+    );
+}
+
+#[test]
+fn zero_or_unknown_active_time_stays_off_the_identity_line() {
+    for estimated_active_secs in [None, Some(0)] {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        );
+        claude.estimated_active_secs = estimated_active_secs;
+        let rendered = snapshot_to_screen(&snapshot_with(vec![claude]), 54, 15);
+        assert!(!rendered.contains('≈'), "{rendered}");
+    }
+}
+
+#[test]
 fn render_cursor_normalized_model_metadata_once() {
     let mut cursor = agent(
         "cursor-1",

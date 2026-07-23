@@ -65,6 +65,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(ClockQ3, "◕", None),
     glyph!(ClockQ4, "●", None),
     glyph!(ClockOver, "◉", None),
+    glyph!(ValueApprox, "≈", None),
     glyph!(WorktreeBranch, "⑂", Some("\u{e0a0}")),
     glyph!(WorktreeMerge, "⮌", Some("\u{f17f}")),
     glyph!(WorktreeAhead, "⇡", None),

@@ -3,6 +3,7 @@ use super::*;
 #[cfg(test)]
 use rimz::agents::AgentState;
 
+mod active_time;
 mod context;
 mod delivery;
 mod identity;
@@ -86,6 +87,14 @@ pub(crate) fn handle_lifecycle_hook(
         .and_then(|recorded| recorded.observation.agent_id.clone())
         .or_else(|| decoded.context_agent_id().cloned())
         .or_else(|| agent_id.clone());
+    active_time::record(
+        store,
+        agent,
+        decoded,
+        recorded.as_ref(),
+        context_agent_id.as_deref(),
+        &event_name,
+    );
     if let Some(agent_id) = context_agent_id {
         let parent_agent_id = recorded
             .as_ref()

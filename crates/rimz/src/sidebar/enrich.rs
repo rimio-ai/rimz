@@ -512,6 +512,15 @@ fn enrich_core(
                 .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
         );
         snapshot = snapshot.with_agent_activity(&activity);
+        let active_time = crate::store::active_time::read_for_keys(
+            runtime,
+            snapshot
+                .agents
+                .iter()
+                .filter(|agent| agent.parent_agent_id.is_none())
+                .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
+        );
+        snapshot = snapshot.with_active_time(&active_time);
         crate::harness::budget::project_parks(&mut snapshot, runtime, &machine_config);
     }
 

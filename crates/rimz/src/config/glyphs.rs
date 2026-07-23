@@ -8,8 +8,9 @@ use super::validate_glyph_cells;
 /// A configurable sidebar glyph role. The namespaces mirror the on-screen
 /// reading order, so `[theme.glyphs.<set>.<namespace>]` groups the glyphs the
 /// way the sidebar lays them out: `status` heads, the `cockpit` summaries,
-/// `tokens`, `meter` bars, the age `clock`, the `worktree` header, the agent
-/// `card`, `process` rows, help `keys`, and `chrome`.
+/// `tokens`, `meter` bars, the age `clock`, compact `value` qualifiers, the
+/// `worktree` header, the agent `card`, `process` rows, help `keys`, and
+/// `chrome`.
 macro_rules! glyph_roles {
     ($($namespace:literal { $($variant:ident => $name:literal,)+ })+) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -88,6 +89,9 @@ glyph_roles! {
         ClockQ3 => "q3",
         ClockQ4 => "q4",
         ClockOver => "over",
+    }
+    "value" {
+        ValueApprox => "approx",
     }
     "worktree" {
         WorktreeBranch => "branch",

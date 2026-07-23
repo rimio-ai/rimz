@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AttentionConfig {
+    /// Seconds of silence an active-time span may accrue before it pauses.
+    /// This bounds the work estimate independently of attention escalation.
+    pub active_grace_secs: NonZeroU32,
     /// Seconds a `running` agent may record no completed tool or turn activity
     /// before the sidebar projects it to the actionable `!` attention bucket.
     pub stalled_after_secs: NonZeroU32,
@@ -25,6 +28,8 @@ pub struct AttentionConfig {
 impl Default for AttentionConfig {
     fn default() -> Self {
         Self {
+            active_grace_secs: NonZeroU32::new(crate::agents::DEFAULT_ACTIVE_GRACE_SECS)
+                .expect("non-zero default active-time grace"),
             stalled_after_secs: NonZeroU32::new(crate::agents::DEFAULT_STALL_AFTER_SECS)
                 .expect("non-zero default stall window"),
             inactive_after_secs: NonZeroU32::new(crate::agents::DEFAULT_INACTIVE_AFTER_SECS)

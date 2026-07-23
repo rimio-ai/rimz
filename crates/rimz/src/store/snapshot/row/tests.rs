@@ -126,6 +126,26 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
 }
 
 #[test]
+fn agent_card_without_active_time_field_deserializes_as_unknown() {
+    let mut value = serde_json::to_value(AgentCard {
+        estimated_active_secs: Some(1_500),
+        ..AgentCard::default()
+    })
+    .unwrap();
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("estimated_active_secs");
+
+    assert_eq!(
+        serde_json::from_value::<AgentCard>(value)
+            .unwrap()
+            .estimated_active_secs,
+        None
+    );
+}
+
+#[test]
 fn display_name_prefers_agent_handle_and_falls_back_to_row_name() {
     let mut agent = SidebarRow {
         id: "agent:s1".to_owned(),

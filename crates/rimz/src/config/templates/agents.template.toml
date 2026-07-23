@@ -19,6 +19,7 @@
 # Project files .worktreeinclude and .worktreelink seed copied files and shared symlink dirs.
 
 [agents.attention]
+# active_grace_secs = 180              # silence credited to active time before the estimate pauses
 # stalled_after_secs = 1800            # silent running agent becomes actionable after this many seconds
 # inactive_after_secs = 3600           # a card idle this many seconds sinks below live work (the prompt-cache window)
 # archive_after_secs = 86400           # a card idle this many seconds parks below hot and warm work

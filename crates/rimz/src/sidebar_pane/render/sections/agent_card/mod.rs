@@ -13,8 +13,8 @@ use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::render::fmt::{
-    activity_short, age_secs, dollars2, elapsed_label, model_label, pct_label, tokens_int,
-    window_short,
+    active_label, activity_short, age_secs, dollars2, elapsed_label, model_label, pct_label,
+    tokens_int, window_short,
 };
 use crate::sidebar_pane::render::labels::{
     CardAttention, CardEmphasis, TokenColumns, TokenDetail, activity_age_style, agent_glyph,

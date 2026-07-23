@@ -153,6 +153,11 @@ impl ContextSeverity {
 /// overrides this for the live sidebar projection.
 pub const DEFAULT_STALL_AFTER_SECS: u32 = 30 * 60;
 
+/// Default silence window credited to a working span before estimated active
+/// time pauses. The next progress signal resumes accrual without counting the
+/// intervening idle gap.
+pub const DEFAULT_ACTIVE_GRACE_SECS: u32 = 3 * 60;
+
 /// Whether a `running` agent has gone silent past `stalled_after_secs`. Only
 /// `running` can stall: every other status is terminal, idle, or already an
 /// attention state. The sidebar projects a stalled agent to the attention
@@ -472,6 +477,11 @@ pub struct AgentState {
     /// Same enrich-only discipline as `context_pct`: display, never routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<AgentContext>,
+    /// Runtime-sidecar projection of this root session's estimated working
+    /// time. Rebuilt on every enrichment fold and kept out of the durable
+    /// rollup wire.
+    #[serde(skip)]
+    pub estimated_active_secs: Option<u64>,
     /// Runtime-ledger projection. The producer and consumers rebuild it from
     /// the budget cache; the event reducer never treats it as durable truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -663,6 +673,7 @@ impl From<AgentStateWire> for AgentState {
             budget: wire.budget,
             usage: wire.usage,
             context: wire.context,
+            estimated_active_secs: None,
             budget_park: wire.budget_park,
             subagent_description: wire.subagent_description,
             subagent_started_at: wire.subagent_started_at,
@@ -727,6 +738,7 @@ impl AgentState {
             budget: None,
             usage: AgentUsageSummary::default(),
             context: None,
+            estimated_active_secs: None,
             budget_park: None,
             subagent_description: None,
             subagent_started_at: None,

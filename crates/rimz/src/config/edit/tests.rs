@@ -118,6 +118,7 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "sidebar.focus_key",
     "sidebar.spend_window",
     "sidebar.afk_after_secs",
+    "agents.attention.active_grace_secs",
     "agents.attention.stalled_after_secs",
     "agents.attention.inactive_after_secs",
     "agents.attention.archive_after_secs",
