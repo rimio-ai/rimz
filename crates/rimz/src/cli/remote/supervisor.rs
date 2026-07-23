@@ -164,6 +164,14 @@ pub(super) fn supervise_remote(
         }
         let mut outcome = outcome?;
         outcome.established |= confirmed_master;
+        if outcome
+            .stderr
+            .as_deref()
+            .is_some_and(|stderr| rimz::remote::attach_interrupted(outcome.status.code(), stderr))
+        {
+            guard.reset_emulator();
+            return Ok(());
+        }
         let summary = session_error_summary(
             outcome.stderr.as_deref(),
             outcome.status.code(),

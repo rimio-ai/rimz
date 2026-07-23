@@ -174,6 +174,7 @@ An attach over a confirmed master pipes and drains SSH stderr instead of letting
 | Exit | `established` | Verdict |
 | --- | --- | --- |
 | `0` | any | `CleanExit` — return to the caller |
+| `255` with OpenSSH's remote `SIGINT` diagnostic | any | Explicit Ctrl-C — return to the caller without retrying |
 | `255` | yes | `Retry` — enter background recovery |
 | `255` | no | `Fatal` — the link never came up |
 | any other code | any | `Fatal` — auth failure, missing remote `rimz`, version refusal, a stuck room |
@@ -226,7 +227,7 @@ The panel separates four pipeline stages. Network checkpoints hold their last se
 
 Presentation details worth preserving: the panel centers one block with left-aligned rows and fixed label columns; initial-stage wording says `Connecting` while recovery says `Connection lost`; exactly one row animates, the Internet row while waiting for the network, the SSH session row while establishing the master, and the Multiplexer row after confirmation; the active phase, countdown, and final OpenSSH stderr line fold into that row while the dim header carries the attempt, elapsed time, and `Ctrl-C stops`. Once shown, the panel stays for at least `1.5s`, so a fast reconnect uses the remaining hold window for the attaching animation instead of flashing. A connection that lands inside the grace never shows a panel, marker, or handoff frame.
 
-Ctrl-C is polled as a terminal event in raw mode: it kills a pending master, restores the terminal, and stops the supervisor cleanly.
+Ctrl-C is polled as a terminal event in raw mode: it kills a pending master, restores the terminal, and stops the supervisor cleanly. Once SSH owns the terminal, OpenSSH reports a remote prompt interrupted by Ctrl-C as status 255 plus `Killed by signal 2.`; the supervisor recognizes that diagnostic before transport classification and stops instead of reconnecting.
 
 ## Link health
 
