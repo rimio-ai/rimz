@@ -323,6 +323,9 @@ pub struct AgentCard {
     pub context: Option<AgentContext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_severity: Option<ContextSeverity>,
+    /// Estimated working time for this root session, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_active_secs: Option<u64>,
     /// The session's registration instant, copied from
     /// `AgentState.registered_at`. The live-spend enrichment reads it to date a
     /// session's first cost; row ordering keys on pane creation, not this.
@@ -364,6 +367,7 @@ impl Default for AgentCard {
             usage: AgentUsageSummary::default(),
             context: None,
             context_severity: None,
+            estimated_active_secs: None,
             registered_at: None,
             sub_agents: Vec::new(),
             compacting: false,

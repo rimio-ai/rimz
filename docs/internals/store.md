@@ -36,6 +36,7 @@ Freshness is an extent, not a timestamp. A derived rollup records the `LogExtent
 | [`runtime.rs`](../../crates/rimz/src/store/runtime.rs) | The runtime-versus-audit read scope. |
 | [`message_store.rs`](../../crates/rimz/src/store/message_store.rs), [`run_store.rs`](../../crates/rimz/src/store/run_store.rs) | The live message queue and the supervised-run records. |
 | [`sidecar.rs`](../../crates/rimz/src/store/sidecar.rs) | The shared latest-wins enrichment sidecar store behind `agent_context/` and `subagent_context/`. |
+| [`active_time.rs`](../../crates/rimz/src/store/active_time.rs) | The per-session estimated active-time accumulator, serialized by per-record flocks. |
 | [`wakeup.rs`](../../crates/rimz/src/store/wakeup.rs) | The best-effort datagrams a commit posts to live consumers. |
 | [`gc.rs`](../../crates/rimz/src/store/gc.rs) | Maintenance: stale runtime hints, orphan write temps, dead workspaces. |
 | [`single_flight.rs`](../../crates/rimz/src/store/single_flight.rs) | Cross-process producer election, imported by the sidebar and so free of every writer module. |
@@ -94,6 +95,7 @@ heartbeat/sidebar.*.json              renderer liveness timestamps
 read-marks/{sidebar.<id>,manual}.json read receipts that clear unread rows
 agent_context/, subagent_context/     latest-wins per-session enrichment sidecars
 agent-activity/                       per-agent activity hints
+active-time/                          per-root-session active-time accumulators
 agent-telemetry/copilot-otel.jsonl    room-scoped metadata-only Copilot export
 ```
 
@@ -249,7 +251,7 @@ The recovery flow itself, from roster to repopulated panes, is [sidebar.md → R
 
 `rimz reset` is a room boundary. It cancels active runs and terminal-wakes their waiters, force-rotates the log, clears diagnostics, and removes the runtime directory. A soft reset applies the same carryover contract as rotation, so agent identity including ended sessions survives within retention even after pane teardown. `--hard` is the explicit forget boundary: it drops the carryover and the derived caches. Provider-owned session files live outside this store either way ([`writer/reset.rs`](../../crates/rimz/src/store/writer/reset.rs)).
 
-`rimz gc` is the global collector. Inside the runtime directory it removes expired heartbeats, the wakeup sockets those heartbeats named, stale context and activity and telemetry sidecars, read receipts whose owning sidebar has expired, and stale provider probe markers. It leaves `run.*.sock` alone, because a live supervised-run waiter may still own one, and keeps `read-marks/manual.json` with the room runtime.
+`rimz gc` is the global collector. Inside the runtime directory it removes expired heartbeats, the wakeup sockets those heartbeats named, stale context, activity, active-time, and telemetry sidecars, read receipts whose owning sidebar has expired, and stale provider probe markers. It leaves `run.*.sock` alone, because a live supervised-run waiter may still own one, and keeps `read-marks/manual.json` with the room runtime.
 
 Across the state tree it archives orphaned message records, prunes carryover agents past the retention window, sweeps orphaned atomic-write temp files, and prunes workspaces it can prove are dead: a recorded project root that no longer exists, or an abandoned `rimz start` scaffold with no history. A directory whose record is unreadable but which still holds history is kept and reported, never deleted ([`gc/collect.rs`](../../crates/rimz/src/store/gc/collect.rs), [`gc/prune.rs`](../../crates/rimz/src/store/gc/prune.rs)).
 

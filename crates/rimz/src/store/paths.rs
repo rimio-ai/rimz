@@ -179,6 +179,9 @@ pub struct RuntimePaths {
     /// Per-agent activity heartbeats (see [`crate::agent_activity`]). Latency
     /// hints the snapshot folds into each agent's `last_activity`.
     pub agent_activity_dir: PathBuf,
+    /// Per-root-session estimated active-time accumulators. Hook producers
+    /// update them under per-record locks; snapshot enrichment reads them.
+    pub active_time_dir: PathBuf,
 }
 
 /// Data-cache filenames that lived in the runtime `shared/` dir before
@@ -233,6 +236,7 @@ impl RuntimePaths {
         let subagent_context_dir = root.join("subagent_context");
         let agent_telemetry_dir = root.join("agent-telemetry");
         let agent_activity_dir = root.join("agent-activity");
+        let active_time_dir = root.join("active-time");
         Ok(Self {
             workspace_id,
             root,
@@ -245,6 +249,7 @@ impl RuntimePaths {
             subagent_context_dir,
             agent_telemetry_dir,
             agent_activity_dir,
+            active_time_dir,
         })
     }
 
@@ -556,6 +561,7 @@ impl RuntimePaths {
         mkdir_p(&self.subagent_context_dir)?;
         mkdir_p(&self.agent_telemetry_dir)?;
         mkdir_p(&self.agent_activity_dir)?;
+        mkdir_p(&self.active_time_dir)?;
         Ok(())
     }
 }

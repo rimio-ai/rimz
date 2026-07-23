@@ -111,9 +111,9 @@ pub use registry::{
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentCardRef, AgentState, AgentStatus, COMPACTING_WINDOW_SECS,
-    ContextSeverity, DEFAULT_ARCHIVE_AFTER_SECS, DEFAULT_INACTIVE_AFTER_SECS,
-    DEFAULT_STALL_AFTER_SECS, OpenAsk, is_stalled, is_turn_dead, settled_outcome,
-    single_line_description, usable_description,
+    ContextSeverity, DEFAULT_ACTIVE_GRACE_SECS, DEFAULT_ARCHIVE_AFTER_SECS,
+    DEFAULT_INACTIVE_AFTER_SECS, DEFAULT_STALL_AFTER_SECS, OpenAsk, is_stalled, is_turn_dead,
+    settled_outcome, single_line_description, usable_description,
 };
 pub(crate) use state::{display_turn_error, effective_turn_error_class};
 pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition, TranscriptRole};

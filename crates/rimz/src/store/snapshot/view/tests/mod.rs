@@ -32,6 +32,7 @@ use crate::agents::{
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::AgentKind;
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
+use crate::store::active_time::ActiveTimeRecord;
 use crate::store::session_death::GHOST_SESSION_TTL_SECS;
 use crate::store::snapshot::project::reduce_agent_states;
 use crate::store::snapshot::row::SidebarRow;
@@ -47,6 +48,67 @@ fn paneless_codex(id: &str, worktree: &str, rank: i64) -> AgentState {
     // The app-server daemon fires the hook with no mux pane env, so the
     // agent carries its worktree but never stamps a pane.
     agent("codex", id, AgentStatus::Running, rank).worktree(worktree)
+}
+
+#[test]
+fn active_time_fold_stamps_only_roots_and_preserves_existing_clocks() {
+    let mut root = agent("claude", "root", AgentStatus::Running, 0);
+    root.last_activity = ago(30);
+    let mut child = agent("claude", "child", AgentStatus::Running, 1);
+    child.parent_agent_id = Some(root.agent_id.clone());
+    child.subagent_started_at = Some(ago(60));
+    let root_activity = root.last_activity;
+    let child_started_at = child.subagent_started_at;
+    let records = [
+        ActiveTimeRecord {
+            kind: root.kind.clone(),
+            agent_id: root.agent_id.clone(),
+            credited_ms: 10_000,
+            last_progress: ago(300),
+            active: true,
+        },
+        ActiveTimeRecord {
+            kind: child.kind.clone(),
+            agent_id: child.agent_id.clone(),
+            credited_ms: 999_000,
+            last_progress: ago(1),
+            active: false,
+        },
+    ];
+
+    let snapshot = room(vec![root, child]).with_active_time(&records);
+    let root = rollup_agent(&snapshot, "root");
+    let child = rollup_agent(&snapshot, "child");
+
+    assert_eq!(root.estimated_active_secs, Some(190));
+    assert_eq!(root.last_activity, root_activity);
+    assert_eq!(child.estimated_active_secs, None);
+    assert_eq!(child.subagent_started_at, child_started_at);
+    assert_eq!(
+        row_from_agent(root, epoch())
+            .as_agent()
+            .and_then(|card| card.estimated_active_secs),
+        Some(190)
+    );
+}
+
+#[test]
+fn inactive_active_time_record_projects_frozen_credit() {
+    let root = agent("codex", "root", AgentStatus::Idle, 0);
+    let record = ActiveTimeRecord {
+        kind: root.kind.clone(),
+        agent_id: root.agent_id.clone(),
+        credited_ms: 12_500,
+        last_progress: ago(900),
+        active: false,
+    };
+
+    let snapshot = room(vec![root]).with_active_time(&[record]);
+
+    assert_eq!(
+        rollup_agent(&snapshot, "root").estimated_active_secs,
+        Some(12)
+    );
 }
 
 #[test]

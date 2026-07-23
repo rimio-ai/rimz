@@ -798,6 +798,7 @@ fn idle_agent_row(
             },
             context: None,
             context_severity: None,
+            estimated_active_secs: None,
             // No session yet — the pane's process start is this row's spawn key.
             registered_at: None,
             sub_agents: Vec::new(),

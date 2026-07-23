@@ -70,6 +70,7 @@ fn collect_workspace_runtime(
     let sock_dir = workspace_root.join("sock");
     let read_marks_dir = workspace_root.join("read-marks");
     let activity_dir = workspace_root.join("agent-activity");
+    let active_time_dir = workspace_root.join("active-time");
     let context_dir = workspace_root.join("agent_context");
     let subagent_context_dir = workspace_root.join("subagent_context");
     let telemetry_dir = workspace_root.join("agent-telemetry");
@@ -78,6 +79,7 @@ fn collect_workspace_runtime(
         &sock_dir,
         &read_marks_dir,
         &activity_dir,
+        &active_time_dir,
         &context_dir,
         &subagent_context_dir,
         &telemetry_dir,
@@ -93,6 +95,7 @@ fn collect_workspace_runtime(
     collect_heartbeats(&heartbeat_dir, &sock_dir, older_than, sweep, report)?;
     collect_stale_read_marks(&read_marks_dir, &heartbeat_dir, older_than, sweep, report)?;
     collect_stale_sidecars(&activity_dir, older_than, sweep, report)?;
+    collect_stale_sidecars(&active_time_dir, older_than, sweep, report)?;
     collect_stale_sidecars(&context_dir, older_than, sweep, report)?;
     collect_stale_sidecars(&subagent_context_dir, older_than, sweep, report)?;
     if !room_is_live {
@@ -102,6 +105,7 @@ fn collect_workspace_runtime(
     sweep.remove_dir_if_empty(&sock_dir, report)?;
     sweep.remove_dir_if_empty(&read_marks_dir, report)?;
     sweep.remove_dir_if_empty(&activity_dir, report)?;
+    sweep.remove_dir_if_empty(&active_time_dir, report)?;
     sweep.remove_dir_if_empty(&context_dir, report)?;
     sweep.remove_dir_if_empty(&subagent_context_dir, report)?;
     if !room_is_live {
@@ -111,10 +115,11 @@ fn collect_workspace_runtime(
     Ok(())
 }
 
-/// Reap stale per-session sidecar files — activity heartbeats, statusline
-/// context sidecars, and per-subagent context sidecars. A paired advisory lock
-/// keeps its stable inode while the JSON record exists; orphaned locks become
-/// ordinary stale sidecars on a later sweep.
+/// Reap stale per-session sidecar files — activity heartbeats, active-time
+/// accumulators, statusline context sidecars, and per-subagent context
+/// sidecars. A paired advisory lock keeps its stable inode while the JSON
+/// record exists; orphaned locks become ordinary stale sidecars on a later
+/// sweep.
 fn collect_stale_sidecars(
     dir: &Path,
     older_than: Duration,
@@ -550,6 +555,12 @@ mod tests {
             br#"{"kind":"claude","agent_id":"sess-1","at":"1970-01-01T00:00:00Z"}"#,
         )
         .unwrap();
+        let stale_active_time = rt.active_time_dir.join("active.deadbeef.json");
+        fs::write(
+            &stale_active_time,
+            br#"{"kind":"claude","agent_id":"sess-1","credited_ms":1000,"last_progress":"1970-01-01T00:00:00Z","active":false}"#,
+        )
+        .unwrap();
         let stale_context = rt.agent_context_dir.join("cafef00dcafef00d.json");
         fs::write(&stale_context, b"{}").unwrap();
         let stale_subagent = rt.subagent_context_dir.join("sub.cafebabecafebabe.json");
@@ -560,6 +571,7 @@ mod tests {
         for path in [
             &stale_read_marks,
             &stale_activity,
+            &stale_active_time,
             &stale_context,
             &stale_subagent,
             &stale_telemetry,
@@ -571,7 +583,7 @@ mod tests {
             collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
                 .unwrap();
 
-        assert_eq!(report.sidecar_files_removed, 5);
+        assert_eq!(report.sidecar_files_removed, 6);
         assert!(
             !rt.read_marks_dir.exists(),
             "the emptied read-marks dir is removed"
@@ -579,6 +591,10 @@ mod tests {
         assert!(
             !rt.agent_activity_dir.exists(),
             "the emptied activity dir is removed"
+        );
+        assert!(
+            !rt.active_time_dir.exists(),
+            "the emptied active-time dir is removed"
         );
         assert!(
             !rt.agent_context_dir.exists(),

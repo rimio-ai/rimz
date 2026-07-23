@@ -186,6 +186,9 @@
 ## q4 = "●"
 ## over = "◉"
 
+[theme.glyphs.unicode.value]
+## approx = "≈"
+
 [theme.glyphs.unicode.worktree]
 ## branch = "⑂"
 ## merge = "⮌"
@@ -287,6 +290,9 @@
 ## q3 = "◕"
 ## q4 = "●"
 ## over = "◉"
+
+[theme.glyphs.nerd_font.value]
+## approx = "≈"
 
 [theme.glyphs.nerd_font.worktree]
 ## branch = ""

@@ -223,7 +223,7 @@ The fetch worker publishes process metrics and group roots alongside pane produc
 
 ### Sidecars
 
-Per-session sidecars (`agent_context/`, `subagent_context/`, `agent-activity/`) are the one exception to producer ownership: CLI hook and statusline runs write them latest-wins, and the elder's transcript watcher refreshes transcript-tail context between hooks ([push channels](#push-channels)). Every renderer reads them fresh behind stat-gated parse caches.
+Per-session sidecars (`agent_context/`, `subagent_context/`, `agent-activity/`, `active-time/`) are the one exception to producer ownership: CLI hook and statusline runs write the context and activity records, the hook updates active-time accumulators under per-record locks, and the elder's transcript watcher refreshes transcript-tail context between hooks ([push channels](#push-channels)). Every renderer reads them fresh behind stat-gated parse caches.
 
 ### Coordination and receipts
 

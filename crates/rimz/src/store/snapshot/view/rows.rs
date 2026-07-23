@@ -49,6 +49,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
             },
             context: agent.context.clone(),
             context_severity: None,
+            estimated_active_secs: agent.estimated_active_secs,
             registered_at: agent.registered_at,
             sub_agents: Vec::new(),
             compacting: agent.is_compacting(now),

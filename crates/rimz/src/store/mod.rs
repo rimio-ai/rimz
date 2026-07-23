@@ -12,6 +12,7 @@
 //!   event_log/      frame codec, rotation, recovery, unit tests
 //!   message_store.rs live message queue JSONL store
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
+//!   active_time.rs   grace-capped per-session working-time accumulator
 //!   session_death.rs shared store-provable session death rules
 //!   writer.rs       write choreography façade: lock → write → append → wake → publish
 //!   writer/         debounce, lifecycle policy, publish, queue, reap, reset
@@ -33,6 +34,7 @@
 //! serialization is the workspace lock's job; every writer is a short-lived
 //! CLI process serialized through `workspace.lock` (flock).
 
+pub mod active_time;
 pub mod agent_context;
 pub mod atomic;
 pub mod event;

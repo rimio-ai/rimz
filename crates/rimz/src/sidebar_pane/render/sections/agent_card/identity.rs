@@ -170,6 +170,20 @@ pub(super) fn agent_identity_line(
             ));
         }
     }
+    if let Some(seconds) = agent(row)
+        .and_then(|agent| agent.estimated_active_secs)
+        .filter(|seconds| *seconds > 0)
+    {
+        left.push(Span::styled(" · ", theme.muted()));
+        left.push(Span::styled(
+            format!(
+                "{}{}",
+                theme.glyph(GlyphRole::ValueApprox),
+                active_label(seconds)
+            ),
+            theme.muted(),
+        ));
+    }
     pin_right(left, right, width)
 }
 
@@ -278,5 +292,14 @@ mod tests {
         let theme = Theme::fixed_for_theme(false, &theme_config);
         let spans = attention_name_spans(&theme, "claude", "claude", normal_attention());
         assert_eq!(spans[0].style.fg, Some(Color::Rgb(1, 2, 3)));
+    }
+
+    #[test]
+    fn active_time_labels_keep_two_unit_precision() {
+        assert_eq!(active_label(1), "<1m");
+        assert_eq!(active_label(25 * 60), "25m");
+        assert_eq!(active_label(5 * 3_600), "5h00m");
+        assert_eq!(active_label(20 * 3_600 + 20 * 60), "20h20m");
+        assert_eq!(active_label(2 * 86_400 + 3 * 3_600), "2d3h");
     }
 }

@@ -313,6 +313,7 @@ pub fn consumer_fold_inputs_stamp(
         runtime.agent_context_dir.as_path(),
         runtime.subagent_context_dir.as_path(),
         runtime.agent_activity_dir.as_path(),
+        runtime.active_time_dir.as_path(),
         runtime.read_marks_dir.as_path(),
     ];
     let mut runtime_stamps = runtime_files

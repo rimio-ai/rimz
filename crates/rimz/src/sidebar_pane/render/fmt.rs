@@ -72,6 +72,20 @@ pub(super) fn elapsed_label(seconds: i64) -> String {
     }
 }
 
+/// A cumulative working-time estimate: `<1m`, whole minutes, hour+minute
+/// pairs through one day, then day+hour pairs.
+pub(super) fn active_label(seconds: u64) -> String {
+    if seconds < 60 {
+        "<1m".to_owned()
+    } else if seconds < 60 * 60 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 60 * 60 * 24 {
+        format!("{}h{:02}m", seconds / 3_600, (seconds % 3_600) / 60)
+    } else {
+        format!("{}d{}h", seconds / 86_400, (seconds % 86_400) / 3_600)
+    }
+}
+
 /// A budget window's reset countdown, two units scaled to how much time is left:
 /// `{d}d{hh:02}h` at a day or more (`30d10h`, `6d23h`, `1d02h`), `{h}h{mm:02}m`
 /// under a day (`20h20m`, `5h00m`, `0h45m`). The provider panel right-aligns the
