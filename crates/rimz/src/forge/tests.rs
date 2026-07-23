@@ -281,203 +281,141 @@ fn builds_pull_request_web_urls() {
 }
 
 #[test]
-fn parses_gh_pr_state_json_with_priority() {
-    assert_eq!(
-        parse_gh_pr_state_json(r#"[{"number":1,"state":"CLOSED"},{"number":2,"state":"OPEN"}]"#)
-            .unwrap(),
-        Some(PrCandidate {
-            number: 2,
-            state: WorktreePrState::Open,
-            ci: None,
-            merge_sha: None,
-        })
+fn builds_github_bulk_query_with_ordered_escaped_aliases() {
+    let query = github_bulk_query(
+        "org/repo",
+        &["feature", "quote\"branch"],
+        &["head-one", "head\"two"],
     );
-    assert_eq!(
-        parse_gh_pr_state_json(
-            r#"[
-                {"number":1,"state":"OPEN","statusCheckRollup":null},
-                {
-                    "number":2,
-                    "state":"MERGED",
-                    "mergeCommit":{"oid":"merged-sha"},
-                    "statusCheckRollup":[
-                        {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}
-                    ]
+
+    assert!(query.starts_with(r#"query { repository(owner: "org", name: "repo") {"#));
+    assert!(query.contains(
+        r#"pr0: pullRequests(first: 10, headRefName: "feature", states: [OPEN, MERGED, CLOSED]"#
+    ));
+    assert!(query.contains(r#"pr1: pullRequests(first: 10, headRefName: "quote\"branch""#));
+    assert!(query.contains(r#"sha0: object(oid: "head-one")"#));
+    assert!(query.contains(r#"sha1: object(oid: "head\"two")"#));
+    assert_eq!(query.matches("pullRequests(").count(), 2);
+    assert_eq!(query.matches(": object(").count(), 2);
+}
+
+#[test]
+fn parses_github_bulk_prs_and_commits_by_alias() {
+    let response = parse_github_bulk_response(
+        r#"{
+            "data": {
+                "repository": {
+                    "pr0": {"nodes": [
+                        {"number": 10, "state": "CLOSED", "statusCheckRollup": null, "mergeCommit": null},
+                        {"number": 11, "state": "MERGED", "statusCheckRollup": {"state": "FAILURE"}, "mergeCommit": {"oid": "old-merge", "statusCheckRollup": {"state": "SUCCESS"}}},
+                        {"number": 12, "state": "OPEN", "statusCheckRollup": {"state": "PENDING"}, "mergeCommit": null},
+                        {"number": 13, "state": "OPEN", "statusCheckRollup": {"state": "FAILURE"}, "mergeCommit": null}
+                    ]},
+                    "pr1": {"nodes": [
+                        {"number": 20, "state": "MERGED", "statusCheckRollup": {"state": "FAILURE"}, "mergeCommit": {"oid": "merge-sha", "statusCheckRollup": {"state": "SUCCESS"}}}
+                    ]},
+                    "pr2": {"nodes": [
+                        {"number": 30, "state": "CLOSED", "statusCheckRollup": {"state": "ERROR"}, "mergeCommit": null}
+                    ]},
+                    "pr3": {"nodes": []},
+                    "pr4": {"nodes": [
+                        {"number": 40, "state": "MERGED", "statusCheckRollup": {"state": "EXPECTED"}, "mergeCommit": {"oid": "", "statusCheckRollup": null}}
+                    ]},
+                    "sha0": {"oid": "head-a", "statusCheckRollup": {"state": "SUCCESS"}},
+                    "sha1": {"oid": "head-b", "statusCheckRollup": {"state": "ERROR"}},
+                    "sha2": {"oid": "head-c", "statusCheckRollup": {"state": "UNKNOWN"}},
+                    "sha3": null
                 }
-            ]"#
-        )
-        .unwrap(),
-        Some(PrCandidate {
-            number: 2,
-            state: WorktreePrState::Merged,
-            ci: Some(WorktreePrCi::Passing),
-            merge_sha: Some("merged-sha".to_owned()),
-        })
-    );
-    assert_eq!(parse_gh_pr_state_json("[]").unwrap(), None);
-    assert!(parse_gh_pr_state_json("{").is_err());
-}
-
-#[test]
-fn parses_gh_pr_detail_object() {
-    assert_eq!(
-        parse_gh_pr_detail_json(
-            r#"{"number":2,"state":"MERGED","mergeCommit":{"oid":"merged-sha"}}"#
-        )
-        .unwrap(),
-        Some(PrCandidate {
-            number: 2,
-            state: WorktreePrState::Merged,
-            ci: None,
-            merge_sha: Some("merged-sha".to_owned()),
-        })
-    );
-    assert!(parse_gh_pr_detail_json("[]").is_err());
-}
-
-#[test]
-fn parses_gh_pr_list_links_by_head_branch_with_priority() {
-    let links = parse_gh_pr_list_links(
-        r#"[
-            {"number":1,"state":"CLOSED","headRefName":"feature"},
-            {"number":2,"state":"OPEN","headRefName":"feature"},
-            {"number":3,"state":"OPEN","headRefName":"other"}
-        ]"#,
+            }
+        }"#,
+        5,
+        4,
     )
     .unwrap();
 
     assert_eq!(
-        links.get("feature"),
-        Some(&PrCandidate {
-            number: 2,
-            state: WorktreePrState::Open,
-            ci: None,
-            merge_sha: None,
-        })
+        response.prs,
+        vec![
+            Some(GhBulkPr {
+                number: 12,
+                state: WorktreePrState::Open,
+                head_ci: Some(WorktreePrCi::Pending),
+                merge_sha: None,
+                merge_ci: None,
+            }),
+            Some(GhBulkPr {
+                number: 20,
+                state: WorktreePrState::Merged,
+                head_ci: Some(WorktreePrCi::Failing),
+                merge_sha: Some("merge-sha".to_owned()),
+                merge_ci: Some(WorktreePrCi::Passing),
+            }),
+            Some(GhBulkPr {
+                number: 30,
+                state: WorktreePrState::Closed,
+                head_ci: Some(WorktreePrCi::Failing),
+                merge_sha: None,
+                merge_ci: None,
+            }),
+            None,
+            Some(GhBulkPr {
+                number: 40,
+                state: WorktreePrState::Merged,
+                head_ci: Some(WorktreePrCi::Pending),
+                merge_sha: None,
+                merge_ci: None,
+            }),
+        ]
     );
     assert_eq!(
-        links.get("other"),
-        Some(&PrCandidate {
-            number: 3,
-            state: WorktreePrState::Open,
-            ci: None,
-            merge_sha: None,
-        })
-    );
-    assert!(parse_gh_pr_list_links("{").is_err());
-}
-
-#[test]
-fn classifies_gh_check_rollups_by_worst_verdict() {
-    let parse = |raw: &str| serde_json::from_str::<Vec<Value>>(raw).unwrap();
-    assert_eq!(
-        ci_from_gh_rollup(&parse(
-            r#"[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]"#
-        )),
-        Some(WorktreePrCi::Passing)
-    );
-    assert_eq!(
-        ci_from_gh_rollup(&parse(
-            r#"[{"__typename":"StatusContext","state":"EXPECTED"}]"#
-        )),
-        Some(WorktreePrCi::Pending)
-    );
-    assert_eq!(
-        ci_from_gh_rollup(&parse(
-            r#"[{"__typename":"CheckRun","status":"COMPLETED","conclusion":null}]"#
-        )),
-        Some(WorktreePrCi::Pending)
-    );
-    assert_eq!(
-        ci_from_gh_rollup(&parse(
-            r#"[
-                {"__typename":"StatusContext","state":"SUCCESS"},
-                {"__typename":"CheckRun","status":"completed","conclusion":"timed_out"}
-            ]"#
-        )),
-        Some(WorktreePrCi::Failing)
-    );
-    assert_eq!(
-        ci_from_gh_rollup(&parse(
-            r#"[
-                {"__typename":"CheckRun","status":"COMPLETED","conclusion":"NEUTRAL"},
-                {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SKIPPED"}
-            ]"#
-        )),
-        Some(WorktreePrCi::Passing)
+        response.commits,
+        vec![
+            Some(WorktreePrCi::Passing),
+            Some(WorktreePrCi::Failing),
+            None,
+            None,
+        ]
     );
 }
 
 #[test]
-fn parses_gh_commit_checks_and_combined_status() {
-    assert_eq!(
-        parse_gh_check_runs(
-            r#"{
-                "check_runs":[
-                    {"status":"completed","conclusion":"success"},
-                    {"status":"in_progress","conclusion":null}
-                ]
-            }"#
+fn github_rollup_state_mapping_is_aggregate_only() {
+    for (state, expected) in [
+        ("SUCCESS", Some(WorktreePrCi::Passing)),
+        ("failure", Some(WorktreePrCi::Failing)),
+        ("ERROR", Some(WorktreePrCi::Failing)),
+        ("PENDING", Some(WorktreePrCi::Pending)),
+        ("expected", Some(WorktreePrCi::Pending)),
+        ("NEUTRAL", None),
+        ("", None),
+    ] {
+        assert_eq!(ci_from_gh_rollup_state(state), expected, "{state}");
+    }
+}
+
+#[test]
+fn rejects_incomplete_or_error_github_bulk_responses() {
+    assert!(parse_github_bulk_response("{", 0, 0).is_err());
+    assert!(
+        parse_github_bulk_response(
+            r#"{"errors":[{"message":"rate limited"}],"data":{"repository":{"pr0":{"nodes":[]}}}}"#,
+            1,
+            0,
         )
-        .unwrap(),
-        Some(WorktreePrCi::Pending)
+        .is_err()
     );
-    assert_eq!(
-        parse_gh_check_runs(
-            r#"[
-                {"check_runs":[{"status":"completed","conclusion":"neutral"}]},
-                {"check_runs":[{"status":"completed","conclusion":"startup_failure"}]}
-            ]"#
-        )
-        .unwrap(),
-        Some(WorktreePrCi::Failing)
+    assert!(parse_github_bulk_response(r#"{"data":{"repository":null}}"#, 0, 0).is_err());
+    assert!(
+        parse_github_bulk_response(r#"{"data":{"repository":{"pr0":{"nodes":[]}}}}"#, 2, 0)
+            .is_err()
     );
-    assert_eq!(parse_gh_check_runs(r#"{"check_runs":[]}"#).unwrap(), None);
-    assert_eq!(
-        parse_gh_combined_status(r#"{"state":"success","statuses":[{}]}"#).unwrap(),
-        Some(WorktreePrCi::Passing)
+    assert!(parse_github_bulk_response(r#"{"data":{"repository":{"sha0":null}}}"#, 0, 2).is_err());
+    assert!(
+        parse_github_bulk_response(r#"{"data":{"repository":{"sha0":null}}}"#, 0, 1)
+            .unwrap()
+            .commits[0]
+            .is_none()
     );
-    assert_eq!(
-        parse_gh_combined_status(r#"{"state":"error","statuses":[{}]}"#).unwrap(),
-        Some(WorktreePrCi::Failing)
-    );
-    assert_eq!(
-        parse_gh_combined_status(r#"{"state":"pending","statuses":[]}"#).unwrap(),
-        None
-    );
-}
-
-#[test]
-fn gh_pr_links_include_rollup_ci() {
-    let links = parse_gh_pr_list_links(
-        r#"[{
-            "number":2,
-            "state":"OPEN",
-            "headRefName":"feature",
-            "statusCheckRollup":[
-                {"__typename":"StatusContext","state":"SUCCESS"},
-                {"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":null}
-            ]
-        }]"#,
-    )
-    .unwrap();
-
-    assert_eq!(links["feature"].ci, Some(WorktreePrCi::Pending));
-}
-
-#[test]
-fn gh_pr_links_accept_null_rollup() {
-    let links = parse_gh_pr_list_links(
-        r#"[{
-            "number":2,
-            "state":"OPEN",
-            "headRefName":"feature",
-            "statusCheckRollup":null
-        }]"#,
-    )
-    .unwrap();
-
-    assert_eq!(links["feature"].ci, None);
 }
 
 #[test]
@@ -488,8 +426,6 @@ fn parses_tea_pr_list_and_detail_json() {
         Some(PrCandidate {
             number: 916,
             state: WorktreePrState::Merged,
-            ci: None,
-            merge_sha: None,
         })
     );
     assert_eq!(
@@ -544,8 +480,6 @@ fn parses_tea_pr_list_links_by_head_branch() {
         Some(&PrCandidate {
             number: 9,
             state: WorktreePrState::Merged,
-            ci: None,
-            merge_sha: None,
         })
     );
     assert_eq!(
@@ -557,8 +491,6 @@ fn parses_tea_pr_list_links_by_head_branch() {
         Some(&PrCandidate {
             number: 10,
             state: WorktreePrState::Open,
-            ci: None,
-            merge_sha: None,
         })
     );
     assert!(parse_tea_pr_list_links("{}").is_err());
@@ -581,7 +513,7 @@ fn tea_pr_list_args_thread_limit_state_and_repo() {
 }
 
 #[test]
-fn forge_cli_builds_and_decodes_head_and_open_list_commands() {
+fn forge_cli_builds_and_decodes_head_commands() {
     assert_eq!(
         ForgeCli::Gh.pr_head_args(42, None).unwrap().join(" "),
         "pr view 42 --json headRefName,headRepository,headRepositoryOwner,isCrossRepository"
@@ -598,37 +530,6 @@ fn forge_cli_builds_and_decodes_head_and_open_list_commands() {
         "could not derive the origin repository for tea"
     );
     assert_eq!(
-        ForgeCli::Gh.open_pr_list_args(None),
-        [
-            "pr",
-            "list",
-            "--state",
-            "open",
-            "--json",
-            "number,state,headRefName,statusCheckRollup",
-            "--limit",
-            "500"
-        ]
-    );
-    assert_eq!(
-        ForgeCli::Tea.open_pr_list_args(Some("org/repo")),
-        [
-            "pr",
-            "list",
-            "--state",
-            "open",
-            "--output",
-            "json",
-            "--fields",
-            "index,state,head",
-            "--limit",
-            "500",
-            "--repo",
-            "org/repo"
-        ]
-    );
-
-    assert_eq!(
         ForgeCli::Gh
             .decode_pr_head(
                 r#"{"headRefName":"feature","headRepository":{"name":"repo"},"headRepositoryOwner":{"login":"org"}}"#,
@@ -643,20 +544,6 @@ fn forge_cli_builds_and_decodes_head_and_open_list_commands() {
             .unwrap()
             .branch,
         "feature"
-    );
-    assert_eq!(
-        ForgeCli::Gh
-            .decode_open_prs(r#"[{"number":1,"state":"OPEN","headRefName":"feature"}]"#)
-            .unwrap()["feature"]
-            .number,
-        1
-    );
-    assert_eq!(
-        ForgeCli::Tea
-            .decode_open_prs(r#"[{"index":2,"state":"open","head":"feature"}]"#)
-            .unwrap()["feature"]
-            .number,
-        2
     );
 }
 

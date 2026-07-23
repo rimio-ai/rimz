@@ -64,16 +64,16 @@ fn repo_due_tracks_fresh_stale_nudge_uncached_and_failure_backoff() {
 }
 
 #[test]
-fn assign_states_handles_open_terminal_transition_closed_and_absent() {
+fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
     let targets = vec![
-        target("/repo/open", "open"),
-        target("/repo/merged-terminal", "merged-terminal"),
-        target("/repo/merged-no-ci", "merged-no-ci"),
-        target("/repo/merged-pending", "merged-pending"),
-        target("/repo/merged-legacy", "merged-legacy"),
-        target("/repo/transition", "transition"),
-        target("/repo/closed", "closed"),
-        target("/repo/none", "none"),
+        tea_target("/repo/open", "open"),
+        tea_target("/repo/merged-terminal", "merged-terminal"),
+        tea_target("/repo/merged-no-ci", "merged-no-ci"),
+        tea_target("/repo/merged-pending", "merged-pending"),
+        tea_target("/repo/merged-legacy", "merged-legacy"),
+        tea_target("/repo/transition", "transition"),
+        tea_target("/repo/closed", "closed"),
+        tea_target("/repo/none", "none"),
     ];
     let mut open_map = BTreeMap::new();
     open_map.insert(
@@ -81,8 +81,6 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
         forge::PrCandidate {
             number: 91,
             state: WorktreePrState::Open,
-            ci: Some(WorktreePrCi::Passing),
-            merge_sha: None,
         },
     );
     let mut prior = BTreeMap::new();
@@ -161,8 +159,8 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
             branch: Some("open".to_owned()),
             state: WorktreePrState::Open,
             number: Some(91),
-            url: Some("https://github.com/org/repo/pull/91".to_owned()),
-            ci: Some(WorktreePrCi::Passing),
+            url: Some("https://gitea.example.test/org/repo/pulls/91".to_owned()),
+            ci: None,
             merge_sha: None,
         })
     );
@@ -172,7 +170,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
             branch: Some("merged-terminal".to_owned()),
             state: WorktreePrState::Merged,
             number: Some(80),
-            url: Some("https://github.com/org/repo/pull/80".to_owned()),
+            url: Some("https://gitea.example.test/org/repo/pulls/80".to_owned()),
             ci: Some(WorktreePrCi::Failing),
             merge_sha: Some("terminal-sha".to_owned()),
         })
@@ -183,7 +181,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
             branch: Some("merged-no-ci".to_owned()),
             state: WorktreePrState::Merged,
             number: Some(77),
-            url: Some("https://github.com/org/repo/pull/77".to_owned()),
+            url: Some("https://gitea.example.test/org/repo/pulls/77".to_owned()),
             ci: None,
             merge_sha: Some("no-ci-sha".to_owned()),
         })
@@ -194,7 +192,7 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
             branch: Some("closed".to_owned()),
             state: WorktreePrState::Closed,
             number: Some(82),
-            url: Some("https://github.com/org/repo/pull/82".to_owned()),
+            url: Some("https://gitea.example.test/org/repo/pulls/82".to_owned()),
             ci: None,
             merge_sha: None,
         })
@@ -215,11 +213,11 @@ fn assign_states_handles_open_terminal_transition_closed_and_absent() {
 }
 
 #[test]
-fn assign_states_re_resolves_mismatched_and_legacy_branch_links() {
+fn tea_assign_states_re_resolves_mismatched_and_legacy_branch_links() {
     let targets = vec![
-        target("/repo/matching", "feature"),
-        target("/repo/mismatched", "new-feature"),
-        target("/repo/legacy", "legacy-feature"),
+        tea_target("/repo/matching", "feature"),
+        tea_target("/repo/mismatched", "new-feature"),
+        tea_target("/repo/legacy", "legacy-feature"),
     ];
     let prior = BTreeMap::from([
         (
@@ -285,7 +283,7 @@ fn assign_states_re_resolves_mismatched_and_legacy_branch_links() {
 
 #[test]
 fn trunk_targets_never_attach_pr_links() {
-    let mut trunk = target("/repo/main", "main");
+    let mut trunk = tea_target("/repo/main", "main");
     trunk.trunk = true;
     let prior = BTreeMap::from([(
         trunk.path.clone(),
@@ -303,8 +301,6 @@ fn trunk_targets_never_attach_pr_links() {
         forge::PrCandidate {
             number: 92,
             state: WorktreePrState::Open,
-            ci: Some(WorktreePrCi::Failing),
-            merge_sha: None,
         },
     )]);
 
@@ -313,6 +309,187 @@ fn trunk_targets_never_attach_pr_links() {
     assert!(assigned.states.is_empty());
     assert!(assigned.transitions.is_empty());
     assert!(carry_prior_states(&[trunk], &prior).is_empty());
+}
+
+#[test]
+fn github_query_plans_dedupe_heads_and_skip_trunk_pr_aliases() {
+    let mut feature_a = target("/repo/a", "feature-a");
+    feature_a.head_sha = Some("shared".to_owned());
+    let mut feature_b = target("/repo/b", "feature-b");
+    feature_b.head_sha = Some("shared".to_owned());
+    let mut trunk = target("/repo/main", "main");
+    trunk.trunk = true;
+    trunk.head_sha = Some("trunk".to_owned());
+    let group = repo_group(vec![feature_a, feature_b, trunk]);
+
+    let plans = plan_github_queries(&group);
+
+    assert_eq!(plans.len(), 1, "one plan means one gh invocation");
+    assert_eq!(plans[0].pr_targets, [0, 1]);
+    assert_eq!(plans[0].oids, ["shared", "trunk"]);
+    assert_eq!(plans[0].query.matches("pullRequests(").count(), 2);
+    assert_eq!(plans[0].query.matches(": object(").count(), 2);
+    assert!(!plans[0].query.contains(r#"headRefName: "main""#));
+}
+
+#[test]
+fn github_query_plans_chunk_at_the_alias_bound() {
+    let target_count = GH_BULK_MAX_ALIASES / 2 + 1;
+    let targets = (0..target_count)
+        .map(|index| {
+            let mut target = target(
+                &format!("/repo/feature-{index}"),
+                &format!("feature-{index}"),
+            );
+            target.head_sha = Some(format!("head-{index}"));
+            target
+        })
+        .collect();
+    let group = repo_group(targets);
+
+    let plans = plan_github_queries(&group);
+
+    assert_eq!(plans.len(), 2);
+    assert_eq!(
+        plans
+            .iter()
+            .map(|plan| plan.pr_targets.len() + plan.oids.len())
+            .sum::<usize>(),
+        target_count * 2
+    );
+    assert!(
+        plans
+            .iter()
+            .all(|plan| plan.pr_targets.len() + plan.oids.len() <= GH_BULK_MAX_ALIASES)
+    );
+}
+
+#[test]
+fn github_projection_refreshes_pr_and_branch_verdicts_from_one_response() {
+    let mut targets = vec![
+        target("/repo/open", "open"),
+        target("/repo/merged-now-passing", "merged-now-passing"),
+        target("/repo/merged-now-failing", "merged-now-failing"),
+        target("/repo/closed", "closed"),
+        target("/repo/no-pr", "no-pr"),
+        target("/repo/main", "main"),
+        target("/repo/merged-fallback", "merged-fallback"),
+    ];
+    for (index, target) in targets.iter_mut().enumerate() {
+        target.head_sha = Some(format!("head-{index}"));
+    }
+    targets[5].trunk = true;
+    let group = repo_group(targets);
+    let mut plans = plan_github_queries(&group);
+    assert_eq!(plans.len(), 1);
+    let plan = plans.remove(0);
+    let response = forge::GhBulkResponse {
+        prs: vec![
+            Some(forge::GhBulkPr {
+                number: 10,
+                state: WorktreePrState::Open,
+                head_ci: Some(WorktreePrCi::Pending),
+                merge_sha: None,
+                merge_ci: None,
+            }),
+            Some(forge::GhBulkPr {
+                number: 11,
+                state: WorktreePrState::Merged,
+                head_ci: Some(WorktreePrCi::Failing),
+                merge_sha: Some("merge-11".to_owned()),
+                merge_ci: Some(WorktreePrCi::Passing),
+            }),
+            Some(forge::GhBulkPr {
+                number: 12,
+                state: WorktreePrState::Merged,
+                head_ci: Some(WorktreePrCi::Passing),
+                merge_sha: Some("merge-12".to_owned()),
+                merge_ci: Some(WorktreePrCi::Failing),
+            }),
+            Some(forge::GhBulkPr {
+                number: 13,
+                state: WorktreePrState::Closed,
+                head_ci: Some(WorktreePrCi::Failing),
+                merge_sha: None,
+                merge_ci: None,
+            }),
+            None,
+            Some(forge::GhBulkPr {
+                number: 14,
+                state: WorktreePrState::Merged,
+                head_ci: Some(WorktreePrCi::Passing),
+                merge_sha: Some("merge-14".to_owned()),
+                merge_ci: None,
+            }),
+        ],
+        commits: vec![
+            Some(WorktreePrCi::Failing),
+            Some(WorktreePrCi::Failing),
+            Some(WorktreePrCi::Passing),
+            Some(WorktreePrCi::Passing),
+            Some(WorktreePrCi::Passing),
+            Some(WorktreePrCi::Pending),
+            Some(WorktreePrCi::Failing),
+        ],
+    };
+
+    let (states, branch_ci) = project_github_group(&group, &[(plan, response)]);
+
+    assert_eq!(states["/repo/open"].ci, Some(WorktreePrCi::Pending));
+    assert_eq!(
+        states["/repo/merged-now-passing"].ci,
+        Some(WorktreePrCi::Passing),
+        "a prior failing verdict is replaced by the fresh merge rollup"
+    );
+    assert_eq!(
+        states["/repo/merged-now-failing"].ci,
+        Some(WorktreePrCi::Failing),
+        "a prior passing verdict is replaced by the fresh merge rollup"
+    );
+    assert_eq!(states["/repo/closed"].ci, None);
+    assert_eq!(
+        states["/repo/merged-fallback"].ci,
+        Some(WorktreePrCi::Passing)
+    );
+    assert_eq!(
+        states["/repo/merged-fallback"].merge_sha.as_deref(),
+        Some("merge-14")
+    );
+    assert!(!states.contains_key("/repo/no-pr"));
+    assert!(!states.contains_key("/repo/main"));
+    assert_eq!(
+        branch_ci,
+        BTreeMap::from([
+            ("/repo/main".to_owned(), WorktreePrCi::Pending),
+            ("/repo/no-pr".to_owned(), WorktreePrCi::Passing),
+        ])
+    );
+}
+
+#[test]
+fn github_group_failure_carries_complete_prior_truth() {
+    let group = repo_group(vec![
+        target("/repo/merged", "merged"),
+        target("/repo/no-pr", "no-pr"),
+    ]);
+    let prior = BTreeMap::from([(
+        "/repo/merged".to_owned(),
+        PrLink {
+            branch: Some("merged".to_owned()),
+            state: WorktreePrState::Merged,
+            number: Some(91),
+            url: Some("https://github.com/org/repo/pull/91".to_owned()),
+            ci: Some(WorktreePrCi::Failing),
+            merge_sha: Some("merge-sha".to_owned()),
+        },
+    )]);
+    let prior_branch_ci = BTreeMap::from([("/repo/no-pr".to_owned(), WorktreePrCi::Passing)]);
+
+    let probe = failed_repo_group_probe("gh:github.com:org/repo", &group, &prior, &prior_branch_ci);
+
+    assert!(!probe.ok);
+    assert_eq!(probe.states, prior);
+    assert_eq!(probe.branch_ci, prior_branch_ci);
 }
 
 #[test]
@@ -371,21 +548,7 @@ fn build_targets_marks_main_and_the_resolved_trunk() {
 }
 
 #[test]
-fn transition_args_prefer_cached_pr_numbers() {
-    assert_eq!(
-        github_transition_args("feature", Some(42)),
-        [
-            "pr",
-            "view",
-            "42",
-            "--json",
-            "number,state,mergeCommit,statusCheckRollup",
-        ]
-    );
-    assert_eq!(
-        github_transition_args("feature", None)[..4],
-        ["pr", "list", "--head", "feature"]
-    );
+fn tea_detail_args_carry_cached_pr_numbers() {
     assert_eq!(
         tea_pr_detail_args(42, "org/repo"),
         ["api", "repos/org/repo/pulls/42"]
@@ -837,12 +1000,23 @@ fn target(path: &str, branch: &str) -> Target {
     }
 }
 
-#[test]
-fn tea_targets_stamp_gitea_pull_urls() {
-    let mut target = target("/repo/tea", "feature");
+fn repo_group(targets: Vec<Target>) -> RepoGroup {
+    group_targets(targets)
+        .remove("gh:github.com:org/repo")
+        .unwrap()
+}
+
+fn tea_target(path: &str, branch: &str) -> Target {
+    let mut target = target(path, branch);
     target.forge_cli = ForgeCli::Tea;
     target.repo_key = "tea:gitea.example.test:org/repo".to_owned();
     target.remote = forge::RemoteRepo::parse("git@gitea.example.test:org/repo.git").unwrap();
+    target
+}
+
+#[test]
+fn tea_targets_stamp_gitea_pull_urls() {
+    let target = tea_target("/repo/tea", "feature");
 
     let link = target.pr_link(WorktreePrState::Open, 91, None, None);
 
