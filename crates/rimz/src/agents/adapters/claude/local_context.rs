@@ -43,13 +43,16 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
     }
     fold.cursor = parsed.cursor;
     let session_usage = fold.session_usage();
+    let tokens = session_usage.map_or(LocalTokenPatch::Keep, |session_usage| {
+        LocalTokenPatch::PreserveEstablished(Some(AgentTokenUsage {
+            session_usage: Some(session_usage),
+            ..AgentTokenUsage::default()
+        }))
+    });
 
     Some(LocalContextRefresh {
         context: LocalContextPatch {
-            tokens: LocalTokenPatch::PreserveEstablished(Some(AgentTokenUsage {
-                session_usage,
-                ..AgentTokenUsage::default()
-            })),
+            tokens,
             ..LocalContextPatch::default()
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),

@@ -139,6 +139,15 @@ pub(crate) fn parse_codex_spend(
     }
 }
 
+/// Detect a pre-counter live fold that needs one cold replay after upgrade.
+pub(super) fn live_fold_needs_token_counter_backfill(fold: &LocalSpendFold) -> bool {
+    fold.total_usd > 0.0
+        && fold.input == 0
+        && fold.output == 0
+        && fold.cache_write == 0
+        && fold.cache_read == 0
+}
+
 /// Resume the live card's exact per-request cost fold from its persisted cursor.
 pub(crate) fn resume_live_fold(
     path: &Path,
@@ -147,12 +156,7 @@ pub(crate) fn resume_live_fold(
     prices: &PriceBook,
 ) -> LocalSpendFold {
     let mut fold = prior.cloned().unwrap_or_default();
-    let pre_token_counters = fold.total_usd > 0.0
-        && fold.input == 0
-        && fold.output == 0
-        && fold.cache_write == 0
-        && fold.cache_read == 0;
-    if fold.cursor.offset > file_len || pre_token_counters {
+    if fold.cursor.offset > file_len || live_fold_needs_token_counter_backfill(&fold) {
         fold = LocalSpendFold::default();
     }
     let parsed = parse_codex_spend(path, Some(&fold.cursor), prices);

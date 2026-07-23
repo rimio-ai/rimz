@@ -16,7 +16,7 @@ use super::install::{codex_config_path, read_existing_table};
 use super::rollout::{
     CodexTaskComplete, RolloutError, RolloutKind, RolloutRecord, decode_line, read_rollout_header,
 };
-use super::spend::resume_live_fold;
+use super::spend::{live_fold_needs_token_counter_backfill, resume_live_fold};
 use crate::agents::context::{
     AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass, TurnSettle,
     TurnSettleOutcome,
@@ -28,7 +28,7 @@ use crate::agents::{
 };
 
 /// Refresh Codex's local transcript-derived context for one session, skipping the
-/// tail read when the persisted transcript stat still matches.
+/// tail read when the persisted transcript stat still matches and its fold is current.
 pub fn refresh_transcript_context(
     session_id: &str,
     model_hint: Option<&str>,
@@ -45,14 +45,16 @@ pub fn refresh_transcript_context(
     }
     let path = path?;
     let stat = stat?;
-    if prior_transcript_stat.is_some_and(|prior| *prior == stat) {
+    let prior_spend_fold = (prior_transcript_path.map(Path::new) == Some(path.as_path()))
+        .then_some(prior_spend_fold)
+        .flatten();
+    let needs_token_counter_backfill =
+        prior_spend_fold.is_some_and(live_fold_needs_token_counter_backfill);
+    if prior_transcript_stat.is_some_and(|prior| *prior == stat) && !needs_token_counter_backfill {
         return None;
     }
 
     let prices = pricing::cached_book(pricing_cache_path);
-    let prior_spend_fold = (prior_transcript_path.map(Path::new) == Some(path.as_path()))
-        .then_some(prior_spend_fold)
-        .flatten();
     let spend_fold = resume_live_fold(&path, prior_spend_fold, stat.len, &prices);
     let tail = read_transcript_tail(&path);
     let (usage, outcome, _) = tail
