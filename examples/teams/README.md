@@ -34,14 +34,20 @@ Why this split pays for itself — independent windows, matched model strengths,
 
 ### Install
 
-From a checkout of this repository, copy the fragment into the agents home:
+Install the bundle matching the running RimZ release:
+
+```sh
+rimz teams install forge
+```
+
+From a checkout of this repository, copy the fragment when you want that checkout's version:
 
 ```sh
 mkdir -p ~/.agents/teams
 cp -r examples/teams/forge ~/.agents/teams/
 ```
 
-A same-named directory in `~/.agents/teams` is overwritten; remove it first for a clean copy. Entries in `~/.config/rimz/agents.toml` override fragment entries with the same names.
+The plain install preserves a same-named directory in `~/.agents/teams`; pass `--force` to replace its files. Entries in `~/.config/rimz/agents.toml` override fragment entries with the same names.
 
 **Prerequisites:**
 
@@ -54,7 +60,7 @@ A same-named directory in `~/.agents/teams` is overwritten; remove it first for 
 Launch the team into an isolated worktree and hand the task to the planner — type into its pane, or message it:
 
 ```sh
-rimz agents forge -w feat-complex
+rimz teams launch forge -w feat-complex
 rimz message @planner#feat-complex "add rate limiting to the ingest API"
 ```
 
