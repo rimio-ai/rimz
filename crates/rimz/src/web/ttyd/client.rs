@@ -274,6 +274,7 @@ fn client_bootstrap(family: Option<&str>) -> String {
         .collect::<Vec<_>>();
     let diacritics = serde_json::to_string(&diacritics)
         .expect("serializing the static pixel diacritic table cannot fail");
+    let flow_control = include_str!("flow_control.js");
     let pixel_layer = include_str!("pixel_layer.js");
     let input_guard = include_str!("input_guard.js");
     let pixel_protocol = crate::web::TTYD_PIXEL_PROTOCOL;
@@ -286,27 +287,10 @@ const fontFamily={family};
 const RIMZ_PIXEL_PROTOCOL={pixel_protocol};
 const RIMZ_PIXEL_PLACEHOLDER={placeholder};
 const RIMZ_PIXEL_DIACRITICS={diacritics};
+{flow_control}
+installWebSocketGate();
 {pixel_layer}
 {input_guard}
-const NativeWebSocket=window.WebSocket;
-window.WebSocket=class extends NativeWebSocket{{
-  constructor(url,protocols){{
-    let target=url;
-    try{{
-      const parsed=new URL(url,window.location.href);
-      if(parsed.host===window.location.host&&parsed.pathname.endsWith("/ws")){{
-        const search=new URLSearchParams(window.location.search);
-        if(search.has("room")){{
-          parsed.search="";
-          parsed.searchParams.set("arg",search.get("room"));
-        }}else parsed.search=window.location.search;
-        target=parsed;
-      }}
-    }}catch(_){{}}
-    if(protocols===undefined)super(target);
-    else super(target,protocols);
-  }}
-}};
 const waitForTerminal=()=>new Promise(resolve=>{{
   let attempts=0;
   const find=()=>{{
@@ -320,6 +304,7 @@ const loadFont=fontFamily&&document.fonts
   :Promise.resolve();
 waitForTerminal().then(term=>{{
   installPixelLayer(term);
+  installBacklogMeter(term);
   const sendInput=data=>{{
     if(typeof term.input==="function"){{term.input(data,true);return true;}}
     const core=term._core&&term._core.coreService;
@@ -966,6 +951,16 @@ mod tests {
         assert!(rendered.contains("term.modes.mouseTrackingMode!==\"none\""));
         assert!(rendered.contains("const installPixelLayer=term=>"));
         assert!(rendered.contains("installPixelLayer(term)"));
+        assert!(rendered.contains("const HIGH=512*1024"));
+        assert!(rendered.contains("const LOW=128*1024"));
+        assert!(rendered.contains("const installWebSocketGate=()=>"));
+        assert!(rendered.contains("const installBacklogMeter=term=>"));
+        assert!(rendered.contains("installBacklogMeter(term)"));
+        assert!(rendered.contains("new NativeWebSocketStream(rewriteWsUrl(url),{protocols})"));
+        assert!(rendered.contains("value instanceof ArrayBuffer"));
+        assert!(rendered.contains("this.finishStreamClose(closeCode,reason,true)"));
+        assert!(rendered.contains("this.dispatchClose(1006,\"\",false)"));
+        assert!(rendered.contains("new CloseEvent(\"close\",{code,reason,wasClean})"));
         assert!(rendered.contains("const RIMZ_PIXEL_PLACEHOLDER=1109742"));
         assert!(rendered.contains("const RIMZ_PIXEL_DIACRITICS=[\"̅\",\"̍\",\"̎\""));
         assert!(rendered.contains("const suppressPlaceholderGlyphs=chunk=>"));
@@ -1103,6 +1098,7 @@ mod tests {
         assert!(rendered.contains("decodeURIComponent(value)"));
         assert!(rendered.contains("document.title=name?name+\" · RimZ\":\"RimZ\""));
         assert!(rendered.contains("window.history.replaceState"));
+        assert!(rendered.contains("window.WebSocket=class extends EventTarget"));
         assert!(rendered.contains("window.WebSocket=class extends NativeWebSocket"));
         assert!(rendered.contains("const search=new URLSearchParams(window.location.search)"));
         assert!(rendered.contains("if(search.has(\"room\"))"));
