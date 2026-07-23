@@ -1082,7 +1082,11 @@ fn provider_stats_rows(
     region: usize,
     layout: ProviderLayout,
 ) -> Vec<Vec<Span<'static>>> {
-    let Some(headline) = panel.spending.as_ref().map(|spending| spending.headline) else {
+    let Some(headline) = panel
+        .spending
+        .as_ref()
+        .map(|spending| spending.headline.clone())
+    else {
         fn dash(_: u64) -> String {
             "–".to_owned()
         }

@@ -27,6 +27,7 @@ fn token_line_classifies_known_usage_shapes_only() {
         br#"{"type":"turn_context","payload":{}}"#,
         br#"{"usage":{"input_tokens":100,"output_tokens":50},"model":"gpt-5"}"#,
         br#"{"prompt_tokens":100,"completion_tokens":50,"model":"gpt-5"}"#,
+        br#"{"type":"response_item","payload":{"type":"function_call","name":"shell"}}"#,
     ] {
         assert!(
             token_line(line),
@@ -97,6 +98,31 @@ fn parse_codex_session_usage_shapes_and_cumulative_deltas() {
     assert_eq!(events[0].input_tokens, 200);
     assert_eq!(events[0].output_tokens, 80);
     assert_eq!(events[0].model.as_deref(), Some("gpt-5"));
+}
+
+#[test]
+fn response_item_tools_attach_to_the_next_usage_entry() {
+    let (_dir, path) = write_session(
+        "tools.jsonl",
+        &[
+            r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
+            r#"{"type":"response_item","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"function_call","name":"shell"}}"#,
+            r#"{"type":"response_item","timestamp":"2026-01-01T10:00:01.000Z","payload":{"type":"custom_tool_call","name":"apply_patch"}}"#,
+            r#"{"type":"response_item","timestamp":"2026-01-01T10:00:02.000Z","payload":{"type":"web_search_call"}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:03.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#,
+        ],
+    );
+
+    let entries = parse_codex_spend(&path, None, &gpt5_book()).entries;
+
+    assert_eq!(
+        entries[0].tool_calls,
+        BTreeMap::from([
+            ("apply_patch".to_owned(), 1),
+            ("shell".to_owned(), 1),
+            ("web_search".to_owned(), 1),
+        ])
+    );
 }
 
 #[test]
@@ -213,6 +239,7 @@ fn dedup_key_separates_events_differing_only_in_reasoning_or_total() {
         output_tokens: 50,
         reasoning_output_tokens: 5,
         total_tokens: 155,
+        tool_calls: BTreeMap::new(),
     };
     let key = |event: &wire::CodexTokenEvent| {
         codex_event_dedup_key(&event.timestamp, event.model.as_deref().unwrap(), event)

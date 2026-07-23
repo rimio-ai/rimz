@@ -82,7 +82,7 @@ Account-global setup creates the shared roots only (`ensure_shared_runtime`); st
 - **Non-interactive runs are always All time.** `render_panel` receives `active: None` and falls back to `AllTime`, so the report shape stays fixed for pipes, scripts, and `--json`.
 - **Only the held dashboard can change it.** `Tab` and `Shift-Tab` cycle the windows row into a tab bar; a one-shot run has no way to select a different window.
 
-Every window's token total folds in cache-read tokens. Tokens are attributed per model and per agent independently of pricing coverage, so an unpriced model still contributes its tokens to the breakdown.
+Every window's token total folds in cache-read tokens. Tokens are attributed per model and per agent independently of pricing coverage, so an unpriced model still contributes its tokens to the breakdown. Spending cache v21 also carries the named tool-call map parsed with each supported response; aggregation sums those maps into `u64` totals per window, model, and agent, and the one-time version bump reparses finalized history.
 
 Full-width model and agent rows append the input-side cache-hit percentage: `cache_read / (cache_read + input)`, where the aggregate `input` already includes cache writes. The integer uses round-half-up and stays absent for a zero denominator. The shared health classifier paints 90% and above green, 70–89% yellow, and lower values red. Compact rows omit the column.
 
@@ -120,7 +120,7 @@ Rendering follows three states. A current stats frame always wins, including whi
 
 ## Machine-readable surfaces
 
-`--json` (`json.rs`) emits the stats document instead of the panel: unit, session count, active-day and streak insights, the trailing windows, the per-model and per-agent breakdowns with optional `cache_hit_pct`, the per-day buckets, and the assists rollup with its events. This is the stable surface for scripts. It renders All time and conflicts with `--refresh`.
+`--json` (`json.rs`) emits the stats document instead of the panel: unit, session count, active-day and streak insights, the trailing windows, the per-model and per-agent breakdowns with optional `cache_hit_pct`, tool-call totals and per-name maps on every window and breakdown, the per-day buckets, and the assists rollup with its events. This is the stable surface for scripts. It renders All time and conflicts with `--refresh`.
 
 `--assists` (`assists.rs`) prints the complete newest-first assist timeline instead of the dashboard, one line per event with its forensics. It conflicts with `--json` and `--refresh`.
 

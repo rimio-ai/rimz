@@ -152,6 +152,7 @@ fn files_modified_flag_precedes_static_tool_fallback() {
             LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits,
+                name: None,
                 native_key: None,
             }
         );

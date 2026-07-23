@@ -219,6 +219,7 @@ mod tests {
         assert!(!CONDITION_CHECKPOINT.contains(&LifecycleSignal::ToolUsed {
             mutates: true,
             edits: false,
+            name: None,
             native_key: None,
         }));
     }

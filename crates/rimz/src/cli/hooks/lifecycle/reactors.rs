@@ -116,6 +116,7 @@ mod tests {
             LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: false,
+                name: None,
                 native_key: None,
             },
             LifecycleSignal::AwaitingInput {

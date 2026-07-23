@@ -78,6 +78,8 @@ OpenCode message rows are mutable: an assistant row is inserted before streaming
 
 OpenCode's whole database is one spending file, so the parser stamps each row with the table's `session_id`; `SpendWindow.sessions` counts those ids rather than collapsing the DB to one thread. The live-card dollar supplement uses that same stamped `session_id` to select only the current session from the multi-session database.
 
+Every named `tool_after` event feeds the live session tool map. Historical tool statistics read `part.data` rows with `type = "tool"`, group their `tool` names by `message_id`, and attach the counts to the matching assistant spend entry during the same cold fold.
+
 ## Known gaps
 
 Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.

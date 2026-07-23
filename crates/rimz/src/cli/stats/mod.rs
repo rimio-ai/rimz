@@ -141,9 +141,9 @@ impl Window {
 
     fn select(self, tally: &SpendTally) -> SpendWindow {
         match self {
-            Self::AllTime | Self::Year => tally.year,
-            Self::Week => tally.week,
-            Self::Month => tally.month,
+            Self::AllTime | Self::Year => tally.year.clone(),
+            Self::Week => tally.week.clone(),
+            Self::Month => tally.month.clone(),
         }
     }
 

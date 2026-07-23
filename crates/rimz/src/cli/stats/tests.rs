@@ -914,17 +914,26 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
     let mut claude = tally(100, 1.0, 1);
     claude.year.input = 10;
     claude.year.cache_read = 90;
+    claude.year.tool_calls = 3;
+    claude.year.tools = BTreeMap::from([("Read".to_owned(), 3)]);
+    let mut claude_model = model_tally(10, 1.0, 10, 0, 90);
+    claude_model.year.tool_calls = 3;
+    claude_model.year.tools = BTreeMap::from([("Read".to_owned(), 3)]);
+    let mut total = SpendTally::default();
+    total.week.tool_calls = 1;
+    total.week.tools = BTreeMap::from([("Read".to_owned(), 1)]);
+    total.month.tool_calls = 2;
+    total.month.tools = BTreeMap::from([("Read".to_owned(), 2)]);
+    total.year.tool_calls = 3;
+    total.year.tools = BTreeMap::from([("Read".to_owned(), 3)]);
     let stats = Stats {
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
-            (
-                "claude-opus-4-8".to_owned(),
-                model_tally(10, 1.0, 10, 0, 90),
-            ),
+            ("claude-opus-4-8".to_owned(), claude_model),
             ("output-only".to_owned(), model_tally(10, 1.0, 0, 10, 0)),
         ]),
         by_agent: BTreeMap::from([("claude".to_owned(), claude)]),
-        total: SpendTally::default(),
+        total,
     };
 
     let value = json::stats_json_value(&stats, &AssistStats::default(), 0, false);
@@ -939,7 +948,14 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
         .unwrap();
     assert_eq!(claude_model["cache_hit_pct"], 90);
     assert!(output_only.get("cache_hit_pct").is_none());
+    assert!(output_only.get("tool_calls").is_none());
+    assert_eq!(claude_model["tool_calls"], 3);
+    assert_eq!(claude_model["tools"]["Read"], 3);
     assert_eq!(value["agents"][0]["cache_hit_pct"], 90);
+    assert_eq!(value["agents"][0]["tools"]["Read"], 3);
+    assert_eq!(value["windows"]["week"]["tool_calls"], 1);
+    assert_eq!(value["windows"]["month"]["tools"]["Read"], 2);
+    assert_eq!(value["windows"]["year"]["tool_calls"], 3);
 }
 
 #[test]

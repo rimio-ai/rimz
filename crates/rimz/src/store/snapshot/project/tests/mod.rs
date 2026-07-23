@@ -101,6 +101,7 @@ mod phase_status;
 mod prompt_task;
 mod subagents;
 mod timestamps;
+mod tool_stats;
 
 #[test]
 fn serialized_lifecycle_event_folds_like_constructed_event() {

@@ -205,6 +205,9 @@ const CLAUDE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     account_spend: ConcernCoverage::Wired {
         via: "OAuth usage/transcripts",
     },
+    tool_stats: ConcernCoverage::Wired {
+        via: "hook tool names + transcript tool_use blocks",
+    },
     remote_control: ConcernCoverage::Wired {
         via: "pane/background",
     },
@@ -908,6 +911,10 @@ fn map_claude_lifecycle_signal(
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: spec.tool_mutates(payload),
             edits: spec.tool_edits_files(payload),
+            name: parts
+                .post_tool_use
+                .as_ref()
+                .and_then(|tool| tool.tool_name.clone()),
             native_key: None,
         }),
         "PreToolUse" => {
@@ -926,6 +933,7 @@ fn map_claude_lifecycle_signal(
                 None => Some(LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
+                    name: None,
                     native_key: None,
                 }),
             }

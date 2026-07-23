@@ -28,6 +28,10 @@ struct WindowsJson {
 struct WindowJson {
     tokens: u64,
     usd: f64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    tool_calls: u64,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    tools: BTreeMap<String, u64>,
 }
 
 #[derive(Serialize)]
@@ -38,6 +42,10 @@ struct ModelJson {
     input: u64,
     output: u64,
     cache_read: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    tool_calls: u64,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    tools: BTreeMap<String, u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_hit_pct: Option<u8>,
     usd: f64,
@@ -51,6 +59,10 @@ struct AgentJson {
     tokens: u64,
     usd: f64,
     sessions: u32,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    tool_calls: u64,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    tools: BTreeMap<String, u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_hit_pct: Option<u8>,
     share: f64,
@@ -61,6 +73,10 @@ struct DayJson {
     date: String,
     tokens: u64,
     usd: f64,
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 fn stats_json<'a>(
@@ -93,6 +109,8 @@ fn stats_json<'a>(
                 input: spend.input,
                 output: spend.output,
                 cache_read: spend.cache_read,
+                tool_calls: spend.tool_calls,
+                tools: spend.tools.clone(),
                 cache_hit_pct: spend.cache_hit_percent(),
                 usd: spend.usd,
                 share: if total_usd > 0.0 {
@@ -113,12 +131,14 @@ fn stats_json<'a>(
     let agents = agent_breakdown(stats, active, None)
         .into_iter()
         .map(|agent| AgentJson {
+            cache_hit_pct: agent.window.cache_hit_percent(),
             kind: agent.kind.to_owned(),
             name: agent.name,
             tokens: stats_tokens(&agent.window),
             usd: agent.window.usd,
             sessions: agent.window.sessions,
-            cache_hit_pct: agent.window.cache_hit_percent(),
+            tool_calls: agent.window.tool_calls,
+            tools: agent.window.tools,
             share: agent.share,
         })
         .collect();
@@ -146,14 +166,20 @@ fn stats_json<'a>(
             week: WindowJson {
                 tokens: stats_tokens(&stats.total.week),
                 usd: stats.total.week.usd,
+                tool_calls: stats.total.week.tool_calls,
+                tools: stats.total.week.tools.clone(),
             },
             month: WindowJson {
                 tokens: stats_tokens(&stats.total.month),
                 usd: stats.total.month.usd,
+                tool_calls: stats.total.month.tool_calls,
+                tools: stats.total.month.tools.clone(),
             },
             year: WindowJson {
                 tokens: stats_tokens(&stats.total.year),
                 usd: stats.total.year.usd,
+                tool_calls: stats.total.year.tool_calls,
+                tools: stats.total.year.tools.clone(),
             },
         },
         models,

@@ -310,6 +310,7 @@ fn spending_fixture_scaled(
                     output: 80,
                     cache_write: 0,
                     cache_read: 800,
+                    tool_calls: Default::default(),
                     message_id: Some(format!("msg-{index}")),
                     request_id: Some(format!("req-{index}")),
                     dedup_key: None,

@@ -99,6 +99,7 @@ fn spend_window(usd: f64) -> SpendWindow {
         cache_read: (usd * 400_000.0) as u64,
         cache_write: (usd * 50_000.0) as u64,
         sessions: 4,
+        ..Default::default()
     }
 }
 

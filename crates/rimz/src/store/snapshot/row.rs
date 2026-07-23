@@ -1,6 +1,8 @@
 //! Sidebar row data model: shared row identity plus the kind-specific card
 //! payload the renderer paints.
 
+use std::collections::BTreeMap;
+
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -336,6 +338,9 @@ pub struct AgentCard {
     /// the context line renders `↻ N` from the first completed compaction.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compaction_count: u32,
+    /// Named tool calls observed for this session.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_calls: BTreeMap<String, u32>,
     /// Provider error label projected while a dead turn escalates to failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error_label: Option<String>,
@@ -363,6 +368,7 @@ impl Default for AgentCard {
             sub_agents: Vec::new(),
             compacting: false,
             compaction_count: 0,
+            tool_calls: BTreeMap::new(),
             turn_error_label: None,
         }
     }
@@ -442,11 +448,12 @@ impl AgentCard {
     }
 
     /// Evidence that the session has already done work. A compacted session may
-    /// rest at a 0% context gauge, but token, compaction, or spend history keeps
-    /// it distinct from a never-started agent.
+    /// rest at a 0% context gauge, but token, tool, compaction, or spend history
+    /// keeps it distinct from a never-started agent.
     pub fn has_session_history(&self) -> bool {
         self.usage.total_tokens.is_some_and(|total| total > 0)
             || self.compaction_count > 0
+            || !self.tool_calls.is_empty()
             || self
                 .context
                 .as_ref()

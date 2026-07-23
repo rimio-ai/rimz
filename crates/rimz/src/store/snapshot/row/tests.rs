@@ -32,6 +32,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         card: RowCard::Agent(Box::new(AgentCard {
             status: AgentStatus::Running,
             prompt: Some("fix auth flow".to_owned()),
+            tool_calls: BTreeMap::from([("Read".to_owned(), 4)]),
             usage: AgentUsageSummary {
                 context_pct: Some(42),
                 context_window: Some(200_000),
@@ -63,6 +64,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         assert!(value.get(key).is_some(), "missing flat key {key}");
     }
     assert_eq!(value["prompt"], "fix auth flow");
+    assert_eq!(value["tool_calls"]["Read"], 4);
     assert_eq!(serde_json::from_value::<SidebarRow>(value).unwrap(), agent);
 
     let process = SidebarRow {
@@ -257,6 +259,13 @@ fn agent_card_session_history_requires_positive_evidence() {
     assert!(
         AgentCard {
             compaction_count: 1,
+            ..AgentCard::default()
+        }
+        .has_session_history()
+    );
+    assert!(
+        AgentCard {
+            tool_calls: BTreeMap::from([("Read".to_owned(), 1)]),
             ..AgentCard::default()
         }
         .has_session_history()

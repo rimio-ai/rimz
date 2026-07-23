@@ -590,6 +590,7 @@ integration_concerns! {
     RichContext => "rich",
     HookInstall => "install",
     AccountSpend => "spend",
+    ToolStats => "tools",
     RemoteControl => "remote",
 }
 
@@ -685,6 +686,7 @@ pub struct CoverageAnnotations {
     pub rich_context: ConcernCoverage,
     pub hook_install: ConcernCoverage,
     pub account_spend: ConcernCoverage,
+    pub tool_stats: ConcernCoverage,
     pub remote_control: ConcernCoverage,
 }
 
@@ -706,6 +708,7 @@ impl CoverageAnnotations {
             IntegrationConcern::RichContext => self.rich_context,
             IntegrationConcern::HookInstall => self.hook_install,
             IntegrationConcern::AccountSpend => self.account_spend,
+            IntegrationConcern::ToolStats => self.tool_stats,
             IntegrationConcern::RemoteControl => self.remote_control,
         }
     }

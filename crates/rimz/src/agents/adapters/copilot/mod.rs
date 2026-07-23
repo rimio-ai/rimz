@@ -168,6 +168,9 @@ const COPILOT_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "finalized session.shutdown history priced by the local book",
         gap: "no authoritative account dollar ledger",
     },
+    tool_stats: ConcernCoverage::Unsupported {
+        reason: "tool statistics are not integrated for this adapter",
+    },
     remote_control: ConcernCoverage::Unsupported {
         reason: "remote-control preflight is not wired",
     },
@@ -456,12 +459,14 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                 None => LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
+                    name: None,
                     native_key: None,
                 },
             },
             "postToolUse" | "postToolUseFailure" => LifecycleSignal::ToolUsed {
                 mutates: tools.any_named(self.spec().tools.mutating),
                 edits: tools.any_named(self.spec().tools.editing),
+                name: None,
                 native_key: None,
             },
             "agentStop" => LifecycleSignal::TurnEnded {

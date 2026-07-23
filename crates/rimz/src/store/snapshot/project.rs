@@ -472,6 +472,7 @@ fn carried_base(
         state.budget = prior.budget.clone();
         state.usage = prior.usage.clone();
         state.compaction_count = prior.compaction_count;
+        state.tool_calls = prior.tool_calls.clone();
         state.last_compact_command_tokens = prior.last_compact_command_tokens;
         state.registered_at = prior.registered_at.or(Some(event_ts));
     }
@@ -580,6 +581,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.open_ask = lifecycle.open_ask;
     state.compacting_since = lifecycle.compacting_since;
     state.compaction_count = lifecycle.compaction_count;
+    state.tool_calls = lifecycle.tool_calls;
     state
 }
 
@@ -653,6 +655,7 @@ struct LifecycleProjection {
     phase: lifecycle::TurnPhase,
     compacting_since: Option<Timestamp>,
     compaction_count: u32,
+    tool_calls: BTreeMap<String, u32>,
     turn_started_at: Option<Timestamp>,
     waiting_since: Option<Timestamp>,
     open_ask: Option<crate::agents::OpenAsk>,
@@ -682,6 +685,17 @@ fn lifecycle_projection(
         None
     };
     let compaction_count = prior.map_or(0, |p| p.compaction_count) + u32::from(compaction_closed);
+    let mut tool_calls = prior.map_or_else(BTreeMap::new, |p| p.tool_calls.clone());
+    if let lifecycle::LifecycleSignal::ToolUsed {
+        name: Some(name), ..
+    } = &signal
+    {
+        let name = name.trim();
+        if !name.is_empty() {
+            let total = tool_calls.entry(name.to_owned()).or_default();
+            *total = total.saturating_add(1);
+        }
+    }
     // A context reset that rests the agent retires the prior turn's subagents: a
     // manual `/compact` (`CompactionEnded` resting to idle) summarizes away the
     // turn the children belonged to, and a `/clear` (`Registered`) drops it
@@ -734,6 +748,7 @@ fn lifecycle_projection(
         phase: next.phase,
         compacting_since,
         compaction_count,
+        tool_calls,
         turn_started_at,
         waiting_since,
         open_ask,

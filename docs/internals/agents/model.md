@@ -70,6 +70,7 @@ Each event is a *partial* update. How the reducer treats a field the event omits
 | set-once | fills from the first usable observation, then stays stable | `first_prompt` |
 | activity | replaced by the latest event, where *clearing* it is meaningful: an idle agent has no `task` | `status`, `task`, `last_activity` |
 | carry-forward | persists until a newer value arrives; a missing value never resets it | `model`, `effort`, `context_pct`, `context_window`, `prompt`, `description`, `transcript_path`, `recent_prompts` |
+| accumulated | increments from durable named events and survives replay | `tool_calls` |
 | live-derived | never stored; computed at snapshot time from the live pane or git | `pane`, `worktree_path`, `worktree_branch` |
 | transient heads | opened and closed by signals, painted over the base status | the turn [phase](#turn-phase), the [compaction bracket](#the-compaction-bracket) |
 
@@ -86,7 +87,7 @@ Each event is a *partial* update. How the reducer treats a field the event omits
 
 ## The state machine
 
-An adapter emits an agent-agnostic **lifecycle signal**: the *intent* a native event carries ([`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs)). Every `agent.lifecycle` event carries its signal explicitly in the params; a payload without one folds to nothing. Which native event maps to which signal is each provider's adapter doc.
+An adapter emits an agent-agnostic **lifecycle signal**: the *intent* a native event carries ([`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs)). Every `agent.lifecycle` event carries its signal explicitly in the params; a payload without one folds to nothing. Which native event maps to which signal is each provider's adapter doc. `ToolUsed.name` carries the provider's tool name when that adapter supports tool statistics; replay increments the session's `tool_calls` map, while unnamed legacy and unsupported-adapter events preserve lifecycle behavior without inventing a count.
 
 One pure transition function, [`step`](../../../crates/rimz/src/agents/lifecycle.rs), folds a signal onto the prior state. It is the single home for every transition, reused identically for root agents and subagents: the reducer calls it on replay to derive the rollup, and Store calls it under the workspace lock against the latest durable state for each fresh event. Store returns the transition classification in its receipt, so hook ingestion can log anomalies without re-reading state.
 

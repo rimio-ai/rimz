@@ -64,6 +64,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(ToolUsed {
                 mutates: false,
                 edits: false,
+                name: None,
                 native_key: None,
             }),
         ),
@@ -73,6 +74,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(ToolUsed {
                 mutates: true,
                 edits: false,
+                name: Some("shell".to_owned()),
                 native_key: None,
             }),
         ),
@@ -82,6 +84,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(ToolUsed {
                 mutates: true,
                 edits: false,
+                name: Some("Bash".to_owned()),
                 native_key: None,
             }),
         ),
@@ -91,6 +94,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(ToolUsed {
                 mutates: false,
                 edits: false,
+                name: Some("read".to_owned()),
                 native_key: None,
             }),
         ),
@@ -100,6 +104,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(ToolUsed {
                 mutates: false,
                 edits: false,
+                name: Some("request_user_input".to_owned()),
                 native_key: None,
             }),
         ),

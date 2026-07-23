@@ -198,6 +198,7 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
             LifecycleSignal::ToolUsed {
                 mutates,
                 edits,
+                name: None,
                 native_key: None,
             }
         );
@@ -211,6 +212,7 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
         LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         }
     );

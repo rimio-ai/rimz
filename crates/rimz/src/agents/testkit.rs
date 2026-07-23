@@ -93,6 +93,7 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
             signals.push(LifecycleSignal::ToolUsed {
                 mutates,
                 edits,
+                name: None,
                 native_key: None,
             });
         }

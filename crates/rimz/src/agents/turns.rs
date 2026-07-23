@@ -151,6 +151,7 @@ mod tests {
             output: 20,
             cache_write: 30,
             cache_read: 40,
+            tool_calls: Default::default(),
             message_id: None,
             request_id: None,
             dedup_key: None,

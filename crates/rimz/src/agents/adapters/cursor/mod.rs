@@ -164,6 +164,9 @@ const CURSOR_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     account_spend: ConcernCoverage::Unsupported {
         reason: "identity/plan/version are wired; no durable provider usage history",
     },
+    tool_stats: ConcernCoverage::Unsupported {
+        reason: "tool statistics are not integrated for this adapter",
+    },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no remote-control surface",
     },
@@ -398,6 +401,7 @@ impl crate::agents::capabilities::HookCapability for CursorAdapter {
             "postToolUse" if self.spec().tool_mutates(payload) => LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: self.spec().tool_edits_files(payload),
+                name: None,
                 native_key: None,
             },
             "stop" if parsed.stop_outcome() == payloads::StopOutcome::Aborted => {

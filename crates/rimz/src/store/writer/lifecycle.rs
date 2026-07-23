@@ -504,6 +504,7 @@ fn proof_of_work_tool(signal: &LifecycleSignal) -> bool {
         LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             ..
         }
     )
@@ -600,15 +601,24 @@ mod tests {
         let proof = LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         };
         let mutating = LifecycleSignal::ToolUsed {
             mutates: true,
             edits: false,
+            name: None,
+            native_key: None,
+        };
+        let named = LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+            name: Some("Read".to_owned()),
             native_key: None,
         };
 
         assert!(append_lifecycle_event(&mutating, None, false));
+        assert!(append_lifecycle_event(&named, None, false));
         assert!(!append_lifecycle_event(&proof, None, false));
         assert!(append_lifecycle_event(&proof, None, true));
         assert!(!append_lifecycle_event(
@@ -702,6 +712,7 @@ mod tests {
         let proof = observation(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         });
         let before = std::fs::metadata(&store.paths().events_log)
@@ -764,6 +775,7 @@ mod tests {
         let proof = observation(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         });
         let receipt = store
@@ -923,6 +935,7 @@ mod tests {
         parent.signal = LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         };
         let spawned = |model: &str, total_tokens| SpawnedSubagent {

@@ -61,6 +61,7 @@ fn permission_result_and_interrupt_clear_waiting_state() {
         LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         }
     );
@@ -86,6 +87,7 @@ fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
         LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: None,
         }
     );
@@ -160,6 +162,7 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
         LifecycleSignal::ToolUsed {
             mutates: true,
             edits: true,
+            name: None,
             native_key: None,
         }
     );

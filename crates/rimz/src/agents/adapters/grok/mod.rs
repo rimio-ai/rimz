@@ -157,6 +157,9 @@ const GROK_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     account_spend: ConcernCoverage::Wired {
         via: "auth.json identity + completed-turn dollars",
     },
+    tool_stats: ConcernCoverage::Unsupported {
+        reason: "tool statistics are not integrated for this adapter",
+    },
     remote_control: ConcernCoverage::Unsupported {
         reason: "ACP and remote control are outside the stock TUI adapter",
     },
@@ -617,12 +620,14 @@ fn lifecycle_signal(
             LifecycleSignal::ToolUsed {
                 mutates: tool.is_some_and(|tool| spec.tools.mutating.contains(&tool)),
                 edits: tool.is_some_and(|tool| spec.tools.editing.contains(&tool)),
+                name: None,
                 native_key: payload.tool_use_id.clone(),
             }
         }
         "PostToolUseFailure" => LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            name: None,
             native_key: payload.tool_use_id.clone(),
         },
         "Notification" => LifecycleSignal::AwaitingInput {

@@ -155,6 +155,7 @@ pub(crate) enum RolloutKind<'a> {
     TurnAborted,
     TaskComplete(CodexTaskComplete<'a>),
     ItemCompleted(CodexItemCompleted<'a>),
+    ToolCall(Cow<'a, str>),
     Other,
 }
 
@@ -265,6 +266,29 @@ pub(crate) fn decode_line(line: &[u8]) -> Option<RolloutRecord<'_>> {
             })
         }
         "event_msg" => decode_event(timestamp, envelope.payload.raw()),
+        "response_item" => {
+            let payload = parse_raw::<ResponseItemPayload<'_>>(envelope.payload.raw())?;
+            let named = || {
+                payload
+                    .name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(|name| Cow::Owned(name.to_owned()))
+            };
+            let name = match payload.payload_type.as_deref() {
+                Some("function_call" | "custom_tool_call") => named(),
+                Some("local_shell_call") => named().or(Some(Cow::Borrowed("local_shell"))),
+                Some("web_search_call") => Some(Cow::Borrowed("web_search")),
+                _ => None,
+            };
+            Some(RolloutRecord {
+                timestamp,
+                kind: name.map_or(RolloutKind::Other, RolloutKind::ToolCall),
+                error: top_level_error,
+                message: None,
+            })
+        }
         _ => Some(RolloutRecord {
             timestamp,
             kind: RolloutKind::Other,
@@ -335,6 +359,19 @@ struct RolloutEnvelope<'a> {
     payload: RawField<'a>,
     #[serde(borrow, default)]
     error: RawField<'a>,
+}
+
+#[derive(Default, Deserialize)]
+struct ResponseItemPayload<'a> {
+    #[serde(
+        rename = "type",
+        borrow,
+        default,
+        deserialize_with = "deserialize_optional_cow_str"
+    )]
+    payload_type: Option<Cow<'a, str>>,
+    #[serde(borrow, default, deserialize_with = "deserialize_optional_cow_str")]
+    name: Option<Cow<'a, str>>,
 }
 
 #[derive(Default, Deserialize)]

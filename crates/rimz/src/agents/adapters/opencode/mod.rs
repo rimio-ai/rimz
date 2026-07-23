@@ -169,6 +169,9 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     account_spend: ConcernCoverage::Wired {
         via: "SQLite message store + auth.json OAuth usage probe",
     },
+    tool_stats: ConcernCoverage::Wired {
+        via: "tool_after names + SQLite tool parts",
+    },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no remote-control surface",
     },
@@ -440,12 +443,14 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
                 Some(LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
+                    name: None,
                     native_key: None,
                 })
             }
-            "tool_after" if self.spec().tool_mutates(payload) => Some(LifecycleSignal::ToolUsed {
-                mutates: true,
+            "tool_after" => Some(LifecycleSignal::ToolUsed {
+                mutates: self.spec().tool_mutates(payload),
                 edits: self.spec().tool_edits_files(payload),
+                name: optional_payload_string(payload, &["tool_name"]),
                 native_key: None,
             }),
             "session_compacting" => Some(LifecycleSignal::Compacting),

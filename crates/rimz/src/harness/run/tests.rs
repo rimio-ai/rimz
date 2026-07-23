@@ -317,6 +317,7 @@ fn record_lifecycle_folds_transcript_path_on_run_writes() {
         LifecycleSignal::ToolUsed {
             mutates: true,
             edits: true,
+            name: None,
             native_key: None,
         },
     );
@@ -374,6 +375,7 @@ fn record_lifecycle_folds_first_late_transcript_path() {
         LifecycleSignal::ToolUsed {
             mutates: true,
             edits: true,
+            name: None,
             native_key: None,
         },
     );

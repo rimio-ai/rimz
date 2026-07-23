@@ -63,7 +63,9 @@ use super::aggregate::{
 /// companions such as OpenCode's WAL, so main-file-only cursors rebuild once.
 /// v20 locally prices Grok completions whose current wire omits native cost
 /// ticks, so finalized sessions previously cached with no entries rebuild once.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 20;
+/// v21 records per-tool call counts, so finalized supported-provider sessions
+/// rebuild once to backfill their transcript history.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 21;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///
@@ -206,6 +208,9 @@ pub struct CachedEntry {
     /// Cache-read (Claude `cache_read_input_tokens`; Codex `cached_input_tokens`).
     #[serde(default, rename = "r", skip_serializing_if = "is_zero")]
     pub cache_read: u64,
+    /// Named tool calls attributed to this provider response.
+    #[serde(default, rename = "n", skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_calls: BTreeMap<String, u32>,
     /// `message.id` from Claude entries; `None` for Codex and Pi entries.
     #[serde(default, rename = "m", skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
@@ -447,6 +452,7 @@ fn rolled_entry_from(entry: &CachedEntry) -> CachedEntry {
         output: entry.output,
         cache_write: entry.cache_write,
         cache_read: entry.cache_read,
+        tool_calls: entry.tool_calls.clone(),
         message_id: None,
         request_id: None,
         dedup_key: None,
@@ -469,6 +475,10 @@ fn merge_rollup(rollups: &mut BTreeMap<RollupKey, CachedEntry>, entry: CachedEnt
             rolled.output += entry.output;
             rolled.cache_write += entry.cache_write;
             rolled.cache_read += entry.cache_read;
+            for (name, count) in &entry.tool_calls {
+                let total = rolled.tool_calls.entry(name.clone()).or_default();
+                *total = total.saturating_add(*count);
+            }
         })
         .or_insert(entry);
 }

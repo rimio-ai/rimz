@@ -3,6 +3,8 @@
 //! This is the provider-agnostic model the store reducer writes and the
 //! sidebar projects. The rollup itself lives with the agent integration layer.
 
+use std::collections::BTreeMap;
+
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -529,6 +531,9 @@ pub struct AgentState {
     /// compaction. Display-only.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compaction_count: u32,
+    /// Named tool calls observed for this session.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_calls: BTreeMap<String, u32>,
     /// Occupied-context-token reading for the latest smart-compact command this
     /// agent received. The send path suppresses duplicate `/compact` sends while
     /// the carried-forward gauge still equals this baseline, without rescanning
@@ -605,6 +610,8 @@ struct AgentStateWire {
     compacting_since: Option<Timestamp>,
     #[serde(default)]
     compaction_count: u32,
+    #[serde(default)]
+    tool_calls: BTreeMap<String, u32>,
     last_compact_command_tokens: Option<u64>,
     last_seen: Timestamp,
     last_activity: Timestamp,
@@ -664,6 +671,7 @@ impl From<AgentStateWire> for AgentState {
             open_ask: wire.open_ask,
             compacting_since: wire.compacting_since,
             compaction_count: wire.compaction_count,
+            tool_calls: wire.tool_calls,
             last_compact_command_tokens: wire.last_compact_command_tokens,
             last_seen: wire.last_seen,
             last_activity: wire.last_activity,
@@ -727,6 +735,7 @@ impl AgentState {
             open_ask: None,
             compacting_since: None,
             compaction_count: 0,
+            tool_calls: BTreeMap::new(),
             last_compact_command_tokens: None,
             last_seen: at,
             last_activity: at,

@@ -187,6 +187,7 @@ impl CanonicalEvent {
                 LifecycleSignal::ToolUsed {
                     mutates,
                     edits,
+                    name: None,
                     native_key: None,
                 },
                 true,

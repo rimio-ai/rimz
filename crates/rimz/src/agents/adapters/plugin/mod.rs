@@ -518,6 +518,9 @@ fn derive_coverage(manifest: &PluginManifest, hook_reason: &'static str) -> Cove
             "plugin spend probe",
             "spend probe not declared",
         ),
+        tool_stats: ConcernCoverage::Unsupported {
+            reason: "plugin manifest has no tool-statistics contract",
+        },
         remote_control: ConcernCoverage::Unsupported {
             reason: "plugin remote control is not supported",
         },
@@ -1163,7 +1166,7 @@ globs = ["history/**/*.jsonl"]
             }] += 1;
             totals
         });
-        assert_eq!(coverage, [10, 1, 5]);
+        assert_eq!(coverage, [10, 1, 6]);
         let lifecycle = spec
             .lifecycle_hooks
             .iter()

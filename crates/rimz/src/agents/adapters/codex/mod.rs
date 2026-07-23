@@ -296,6 +296,10 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     account_spend: ConcernCoverage::Wired {
         via: "app-server/OAuth usage/rollouts",
     },
+    tool_stats: ConcernCoverage::Partial {
+        via: "hook tool names + rollout response items",
+        gap: "live hooks miss unified-exec and web-search calls",
+    },
     remote_control: ConcernCoverage::Wired {
         via: "pane/background",
     },
@@ -1190,6 +1194,10 @@ fn map_codex_lifecycle_signal(
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: spec.tool_mutates(payload),
             edits: spec.tool_edits_files(payload),
+            name: parts
+                .post_tool_use
+                .as_ref()
+                .and_then(|tool| tool.tool_name.clone()),
             native_key: None,
         }),
         "PreToolUse" => {
@@ -1208,6 +1216,7 @@ fn map_codex_lifecycle_signal(
                 None => Some(LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
+                    name: None,
                     native_key: None,
                 }),
             }

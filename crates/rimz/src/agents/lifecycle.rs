@@ -129,9 +129,9 @@ pub enum LifecycleSignal {
         errored: bool,
     },
     /// A tool completed (`PostToolUse`) or non-blocking tool started
-    /// (`PreToolUse`). Adapters emit this for every completed tool; `mutates`,
-    /// not emission, marks proof of real work durable enough to record without
-    /// a state change. `edits` marks the file-editing subset (Claude
+    /// (`PreToolUse`). Adapters emit this for every completed tool; a `name`
+    /// makes the call durable for statistics, while unnamed proof needs a
+    /// mutation or state change. `edits` marks the file-editing subset (Claude
     /// `Edit`/`Write`/…, Codex `apply_patch`): the first edit of a turn moves
     /// it from reasoning to acting. Defaulted so a `tool_used` event written
     /// before the bit existed still replays.
@@ -139,6 +139,8 @@ pub enum LifecycleSignal {
         mutates: bool,
         #[serde(default)]
         edits: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         native_key: Option<String>,
     },

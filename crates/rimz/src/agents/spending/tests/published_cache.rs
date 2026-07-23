@@ -209,6 +209,7 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
         output: 20,
         cache_write: 3,
         cache_read: 4,
+        tool_calls: BTreeMap::from([("Read".to_owned(), 2)]),
         message_id: Some("msg-1".to_owned()),
         request_id: Some("req-1".to_owned()),
         dedup_key: None,
@@ -225,6 +226,7 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
         output: 50,
         cache_write: 0,
         cache_read: 25,
+        tool_calls: Default::default(),
         message_id: None,
         request_id: None,
         dedup_key: Some("codex:event".to_owned()),
@@ -245,6 +247,9 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
             "i": 10,
             "l": "claude-opus-4-8",
             "m": "msg-1",
+            "n": {
+              "Read": 2
+            },
             "o": 20,
             "q": "req-1",
             "r": 4,

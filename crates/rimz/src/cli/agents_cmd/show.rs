@@ -366,6 +366,9 @@ fn render_context_section(
         "compactions",
         render::cell(agent.compaction_count.to_string()),
     );
+    if !agent.tool_calls.is_empty() {
+        kv.push("tools", render::cell(format_tool_calls(&agent.tool_calls)));
+    }
     kv.push(
         "cost",
         render::cell(
@@ -389,6 +392,29 @@ fn render_context_section(
     );
     kv.render(w)?;
     writeln!(w)
+}
+
+fn format_tool_calls(tool_calls: &std::collections::BTreeMap<String, u32>) -> String {
+    let total = tool_calls
+        .values()
+        .copied()
+        .map(u64::from)
+        .fold(0_u64, u64::saturating_add);
+    let mut ranked: Vec<_> = tool_calls.iter().collect();
+    ranked.sort_unstable_by(|(name_a, count_a), (name_b, count_b)| {
+        count_b.cmp(count_a).then_with(|| name_a.cmp(name_b))
+    });
+    let visible = ranked
+        .iter()
+        .take(3)
+        .map(|(name, count)| format!("{name} {count}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if ranked.len() > 3 {
+        format!("{total} · {visible}, …")
+    } else {
+        format!("{total} · {visible}")
+    }
 }
 
 pub(super) fn render_placement_section(
@@ -668,5 +694,17 @@ mod tests {
             serde_json::to_string(&message).expect("serialize show message"),
             r#"{"id":"msg_1","status":"timed_out","from":"@planner","age":"2m ago","text":"check"}"#
         );
+    }
+
+    #[test]
+    fn tool_calls_render_total_then_top_three() {
+        let calls = std::collections::BTreeMap::from([
+            ("Edit".to_owned(), 9),
+            ("Read".to_owned(), 7),
+            ("Bash".to_owned(), 18),
+            ("Write".to_owned(), 2),
+        ]);
+
+        assert_eq!(format_tool_calls(&calls), "36 · Bash 18, Edit 9, Read 7, …");
     }
 }

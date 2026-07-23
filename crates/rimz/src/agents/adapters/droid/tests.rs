@@ -125,6 +125,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
             LifecycleSignal::ToolUsed {
                 mutates,
                 edits,
+                name: None,
                 native_key: None,
             }
         );

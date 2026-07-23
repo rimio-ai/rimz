@@ -34,6 +34,7 @@ fn render_fleet_store_pins_week_month_rows_under_the_dashboard() {
             cache_write: 120_000,
             cache_read: 6_800_000,
             sessions: 12,
+            ..Default::default()
         },
         week: crate::SpendWindow {
             usd: 312.40,
@@ -43,6 +44,7 @@ fn render_fleet_store_pins_week_month_rows_under_the_dashboard() {
             cache_write: 900_000,
             cache_read: 51_000_000,
             sessions: 92,
+            ..Default::default()
         },
         month: crate::SpendWindow {
             usd: 1_240.57,
@@ -52,6 +54,7 @@ fn render_fleet_store_pins_week_month_rows_under_the_dashboard() {
             cache_write: 1_900_000,
             cache_read: 121_000_000,
             sessions: 212,
+            ..Default::default()
         },
         year: crate::SpendWindow {
             usd: 4_821.90,
@@ -61,6 +64,7 @@ fn render_fleet_store_pins_week_month_rows_under_the_dashboard() {
             cache_write: 3_000_000,
             cache_read: 210_000_000,
             sessions: 980,
+            ..Default::default()
         },
     });
     snapshot.workspace_value_tally = Some(crate::SpendTally {
@@ -72,6 +76,7 @@ fn render_fleet_store_pins_week_month_rows_under_the_dashboard() {
             cache_write: 80_000,
             cache_read: 2_400_000,
             sessions: 4,
+            ..Default::default()
         },
         week: crate::SpendWindow {
             usd: 8.25,
@@ -81,6 +86,7 @@ fn render_fleet_store_pins_week_month_rows_under_the_dashboard() {
             cache_write: 80_000,
             cache_read: 2_400_000,
             sessions: 4,
+            ..Default::default()
         },
         month: crate::SpendWindow {
             usd: 8.25,
@@ -90,6 +96,7 @@ fn render_fleet_store_pins_week_month_rows_under_the_dashboard() {
             cache_write: 80_000,
             cache_read: 2_400_000,
             sessions: 4,
+            ..Default::default()
         },
         year: crate::SpendWindow {
             usd: 8.25,
@@ -99,6 +106,7 @@ fn render_fleet_store_pins_week_month_rows_under_the_dashboard() {
             cache_write: 80_000,
             cache_read: 2_400_000,
             sessions: 4,
+            ..Default::default()
         },
     });
     let rendered = snapshot_to_screen(&snapshot, 60, 34);

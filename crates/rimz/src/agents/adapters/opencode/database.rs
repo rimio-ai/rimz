@@ -1,5 +1,6 @@
 //! OpenCode storage discovery and read-only SQLite access.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
@@ -115,6 +116,55 @@ pub(super) fn open_readonly(path: &Path) -> Option<Connection> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
     )
     .ok()
+}
+
+#[derive(Deserialize)]
+struct ToolPart {
+    #[serde(
+        rename = "type",
+        default,
+        deserialize_with = "deserialize_optional_string_lossy"
+    )]
+    kind: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    tool: Option<String>,
+}
+
+/// Named tool parts grouped under their owning message.
+pub(super) fn tool_calls_by_message(conn: &Connection) -> BTreeMap<String, BTreeMap<String, u32>> {
+    let Ok(mut statement) = conn.prepare("SELECT message_id, data FROM part ORDER BY rowid") else {
+        return BTreeMap::new();
+    };
+    let Ok(mut rows) = statement.query([]) else {
+        return BTreeMap::new();
+    };
+    let mut grouped = BTreeMap::<String, BTreeMap<String, u32>>::new();
+    while let Ok(Some(row)) = rows.next() {
+        let (Ok(message_id), Ok(data)) = (row.get::<_, String>(0), row.get::<_, String>(1)) else {
+            continue;
+        };
+        let Ok(part) = serde_json::from_str::<ToolPart>(&data) else {
+            continue;
+        };
+        if part.kind.as_deref() != Some("tool") {
+            continue;
+        }
+        let Some(tool) = part
+            .tool
+            .as_deref()
+            .map(str::trim)
+            .filter(|tool| !tool.is_empty())
+        else {
+            continue;
+        };
+        let count = grouped
+            .entry(message_id)
+            .or_default()
+            .entry(tool.to_owned())
+            .or_default();
+        *count = count.saturating_add(1);
+    }
+    grouped
 }
 
 #[derive(Deserialize)]

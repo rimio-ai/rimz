@@ -28,6 +28,7 @@ fn seed_sets_status_phase_clocks_and_empty_enrichment() {
     assert!(running.subagent_description.is_none());
     assert!(running.open_ask.is_none());
     assert_eq!(running.compaction_count, 0);
+    assert!(running.tool_calls.is_empty());
 
     let waiting = AgentState::seed(
         AgentKind::new_unchecked("codex"),
@@ -134,6 +135,32 @@ fn usage_summary_stays_flat_in_persisted_state_wire() {
     }
     let decoded: AgentState = serde_json::from_value(encoded).expect("decode persisted state");
     assert_eq!(decoded.usage, agent.usage);
+}
+
+#[test]
+fn tool_calls_round_trip_and_default_for_legacy_state() {
+    let mut agent = AgentState::seed(
+        AgentKind::new_unchecked("claude"),
+        AgentSessionId::from("sess-tools"),
+        AgentStatus::Running,
+        Timestamp::from_second(1_700_000_000).unwrap(),
+    );
+    agent.tool_calls = BTreeMap::from([("Bash".to_owned(), 2), ("Read".to_owned(), 3)]);
+
+    let encoded = serde_json::to_value(&agent).expect("encode state");
+    assert_eq!(encoded["tool_calls"]["Read"], 3);
+    let decoded: AgentState = serde_json::from_value(encoded).expect("decode state");
+    assert_eq!(decoded.tool_calls, agent.tool_calls);
+
+    let legacy: AgentState = serde_json::from_value(serde_json::json!({
+        "agent_id": "sess-legacy",
+        "kind": "claude",
+        "status": "idle",
+        "last_seen": "2026-07-01T00:00:00Z",
+        "last_activity": "2026-07-01T00:00:00Z"
+    }))
+    .expect("legacy state");
+    assert!(legacy.tool_calls.is_empty());
 }
 
 #[test]

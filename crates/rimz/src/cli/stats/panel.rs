@@ -764,6 +764,11 @@ pub(super) fn fold_window(acc: &mut SpendWindow, add: &SpendWindow) {
     acc.output += add.output;
     acc.cache_write += add.cache_write;
     acc.cache_read += add.cache_read;
+    acc.tool_calls = acc.tool_calls.saturating_add(add.tool_calls);
+    for (name, count) in &add.tools {
+        let total = acc.tools.entry(name.clone()).or_default();
+        *total = total.saturating_add(*count);
+    }
     acc.sessions += add.sessions;
 }
 
@@ -817,15 +822,16 @@ pub(super) fn agent_breakdown(
         .iter()
         .filter_map(|(kind, tally)| {
             let window = active.select(tally);
+            let share = if total_sessions > 0 {
+                window.sessions as f64 / total_sessions as f64
+            } else {
+                0.0
+            };
             (window.tokens > 0).then(|| AgentBreakdown {
                 kind: kind.as_str(),
                 name: agent_display_name(kind),
                 window,
-                share: if total_sessions > 0 {
-                    window.sessions as f64 / total_sessions as f64
-                } else {
-                    0.0
-                },
+                share,
                 folded: false,
             })
         })

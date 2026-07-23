@@ -2258,6 +2258,7 @@ fn spend_tally(usd: f64, tokens: u64, sessions: u32) -> rimz::SpendTally {
             cache_write: tokens / 20,
             cache_read: tokens / 10,
             sessions,
+            ..Default::default()
         }
     };
     rimz::SpendTally {

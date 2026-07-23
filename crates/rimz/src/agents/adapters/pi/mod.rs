@@ -190,6 +190,9 @@ const PI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     account_spend: ConcernCoverage::Wired {
         via: "auth.json/session spend + after_provider_response headers + OAuth usage probe",
     },
+    tool_stats: ConcernCoverage::Wired {
+        via: "tool_execution_end names + session toolCall blocks",
+    },
     remote_control: ConcernCoverage::Unsupported {
         reason: "no remote-control surface",
     },
@@ -438,16 +441,16 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
                 Some(LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
+                    name: tool_name.map(ToOwned::to_owned),
                     native_key: optional_payload_string(payload, &["tool_call_id"]),
                 })
             }
-            "tool_execution_end" if self.spec().tool_mutates(payload) => {
-                Some(LifecycleSignal::ToolUsed {
-                    mutates: true,
-                    edits: self.spec().tool_edits_files(payload),
-                    native_key: optional_payload_string(payload, &["tool_call_id"]),
-                })
-            }
+            "tool_execution_end" => Some(LifecycleSignal::ToolUsed {
+                mutates: self.spec().tool_mutates(payload),
+                edits: self.spec().tool_edits_files(payload),
+                name: tool_name.map(ToOwned::to_owned),
+                native_key: optional_payload_string(payload, &["tool_call_id"]),
+            }),
             "session_before_compact" => Some(LifecycleSignal::Compacting),
             "session_compact" => Some(LifecycleSignal::CompactionEnded {
                 auto: parsed

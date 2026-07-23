@@ -17,7 +17,7 @@ use super::user_input::UserInputRecord;
 type FastHashMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>;
 type FastHashSet<K> = HashSet<K, foldhash::fast::RandomState>;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpendWindow {
     pub usd: f64,
     /// The `◇` total: `input` (cache-write folded in) + `output`. A maintained
@@ -32,9 +32,19 @@ pub struct SpendWindow {
     pub cache_write: u64,
     #[serde(default)]
     pub cache_read: u64,
+    /// Total named tool calls observed in this window.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub tool_calls: u64,
+    /// Named tool call counts in this window.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools: BTreeMap<String, u64>,
     /// Distinct sessions (threads) with activity in this window.
     #[serde(default)]
     pub sessions: u32,
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 impl SpendWindow {
@@ -48,6 +58,12 @@ impl SpendWindow {
         self.output += entry.output;
         self.cache_write += entry.cache_write;
         self.cache_read += entry.cache_read;
+        for (name, count) in &entry.tool_calls {
+            let count = u64::from(*count);
+            self.tool_calls = self.tool_calls.saturating_add(count);
+            let total = self.tools.entry(name.clone()).or_default();
+            *total = total.saturating_add(count);
+        }
     }
 
     pub fn cache_hit_percent(&self) -> Option<u8> {
@@ -124,7 +140,10 @@ impl SpendTally {
     /// True when nothing has been recorded in the trailing year. `year` is the
     /// widest window, so a zero year means every window is zero.
     pub fn is_zero(&self) -> bool {
-        self.year.usd == 0.0 && self.year.tokens == 0
+        self.year.usd == 0.0
+            && self.year.tokens == 0
+            && self.year.tool_calls == 0
+            && self.year.tools.is_empty()
     }
 }
 
