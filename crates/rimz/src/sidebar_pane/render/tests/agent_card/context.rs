@@ -354,8 +354,8 @@ fn codex_card_renders_the_per_call_composition() {
     // `last_token_usage` on the lifecycle rail — no rich context blob. The
     // context line legends it: `▤` the window numerator (cache reads + fresh
     // input, exactly what the `▣` percent scales — not the call total, which
-    // includes output), then `◌`/`↘`/`↗`. No `◍` column: the protocol reports
-    // no per-call cache-write, so it drops rather than reading a false zero.
+    // includes output), then `◌`/`↘`/`↗`. No `◍` column: this pre-0.145 shape
+    // omits per-call cache-write, so it drops rather than reading a false zero.
     let mut codex = agent(
         "codex-1",
         "codex",
@@ -392,7 +392,7 @@ fn codex_card_renders_the_per_call_composition() {
     );
     assert!(
         !rendered.contains('◍'),
-        "no per-call cache-write exists, so the column drops:\n{rendered}"
+        "an unreported per-call cache-write drops the column:\n{rendered}"
     );
     assert_snapshot("codex_card_context_composition", rendered);
 }

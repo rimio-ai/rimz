@@ -28,6 +28,8 @@ pub struct CodexTokenEvent {
     pub input_tokens: u64,
     /// Cached (prompt-cache-hit) input tokens, capped to `input_tokens`.
     pub cached_input_tokens: u64,
+    /// Prompt-cache-write input tokens, a subset of `input_tokens`.
+    pub cache_write_input_tokens: u64,
     pub output_tokens: u64,
     /// Reasoning tokens, already folded into `output_tokens` for pricing. Kept
     /// here only to strengthen the cross-file dedup fingerprint so two distinct

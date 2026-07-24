@@ -29,7 +29,8 @@
 //! [`super::rollout::CodexRawUsage`] normalizes field-name variants across providers
 //! that embed Codex-compatible usage: `prompt_tokens`/`completion_tokens`
 //! (OpenAI), `input`/`output` (compact),
-//! `cached_tokens`/`cached_input_tokens` (cache).
+//! `cached_tokens`/`cached_input_tokens` (cache read), and
+//! `cache_write_tokens`/`cache_write_input_tokens` (cache write).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -83,10 +84,12 @@ pub(super) fn legacy_spend_relative(path: &Path) -> bool {
 /// Codex logs token counts, not dollars, so each event is multiplied through
 /// the price book: uncached input at the input rate, the cached slice at the
 /// model's cache-read rate when it is explicit (else at the input rate, per
-/// [`codex_event_cost`]), and output (which already includes reasoning tokens)
-/// at the output rate. Codex records `cache_write: 0`, so its aggregate `◇` total stays
-/// input + output. Events whose model has no known price still contribute
-/// tokens and sessions with zero dollars while recording an unknown-model chase.
+/// [`codex_billed_split`]), cache writes at the model's cache-create rate, and
+/// output (which already includes reasoning tokens) at the output rate.
+/// Automatic cache population records zero writes; explicit prompt caching can
+/// record nonzero writes. Events whose model has no known price still
+/// contribute tokens and sessions with zero dollars while recording an
+/// unknown-model chase.
 /// Codex entries carry no message/request IDs, so a provider-namespaced event
 /// fingerprint deduplicates copied rollout events across files.
 pub(crate) fn parse_codex_spend(
@@ -103,15 +106,17 @@ pub(crate) fn parse_codex_spend(
         let Some(model) = event.model.as_deref() else {
             continue;
         };
-        let uncached_input = event.input_tokens.saturating_sub(event.cached_input_tokens);
+        let uncached_input = event
+            .input_tokens
+            .saturating_sub(event.cached_input_tokens)
+            .saturating_sub(event.cache_write_input_tokens);
         let Some(ts_secs) = iso_to_unix_secs(&event.timestamp) else {
             continue;
         };
-        // Codex has no cache-creation concept: its cached slice is a read. The `◇`
-        // total is fresh input + output, so `input` is the uncached slice and the
-        // cached slice rides `cache_read`.
+        // Automatic cache population reports zero writes. Explicit prompt
+        // caching reports a write slice priced at the model's cache-create rate.
         let split = TokenSplit::new(uncached_input, event.output_tokens)
-            .cached(0, event.cached_input_tokens);
+            .cached(event.cache_write_input_tokens, event.cached_input_tokens);
         let cost = match prices.price(model) {
             Some(price) => price.cost_of(codex_billed_split(price, split)),
             None => {
@@ -184,7 +189,11 @@ fn codex_billed_split(price: Pricing, split: TokenSplit) -> TokenSplit {
     if price.cache_read_explicit {
         split
     } else {
-        TokenSplit::new(split.input.saturating_add(split.cache_read), split.output)
+        TokenSplit {
+            input: split.input.saturating_add(split.cache_read),
+            cache_read: 0,
+            ..split
+        }
     }
 }
 

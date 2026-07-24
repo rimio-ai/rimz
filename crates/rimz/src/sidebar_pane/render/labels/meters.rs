@@ -98,8 +98,8 @@ pub(in crate::sidebar_pane::render) fn token_breakdown_spans(
 /// measurement), a `·` seam, then the latest API call's composition ordered by
 /// how the window filled — `◌` read back from cache, `◍` newly written to it,
 /// `↘` fresh input, `↗` output generated (which joins the window next turn).
-/// A zero column drops whole — the line shows what filled the window, and a
-/// provider with no per-call cache-write (Codex) simply never grows a `◍`.
+/// A zero column drops whole — the line shows what filled the window, and a row
+/// with no reported per-call cache-write simply never grows a `◍`.
 /// The `▤` head wears the bar's `severity` tone and each composition marker its
 /// bar-segment color, so the line is the bar's color-keyed legend; the figures
 /// read at the dim chrome weight — a step under the name line's soft tokens, so

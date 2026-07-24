@@ -15,6 +15,7 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
              {\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.5\",\"effort\":\"xhigh\"}}\n\
              {\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":\
              {\"last_token_usage\":{\"input_tokens\":129200,\"cached_input_tokens\":120000,\
+             \"cache_write_input_tokens\":8000,\
              \"output_tokens\":800,\"total_tokens\":130000},\
              \"total_token_usage\":{\"input_tokens\":1000,\"output_tokens\":200,\
              \"cached_input_tokens\":400},\
@@ -28,6 +29,7 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     assert_eq!(usage.effort.as_deref(), Some("xhigh"));
     assert_eq!(usage.last_input_tokens, Some(129_200));
     assert_eq!(usage.last_cached_input_tokens, Some(120_000));
+    assert_eq!(usage.last_cache_write_tokens, Some(8_000));
     assert_eq!(usage.last_output_tokens, Some(800));
 
     // A brand-new session (rollout opened, no `token_count` yet) reads as an
@@ -46,6 +48,7 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     assert_eq!(usage.effort, None);
     assert_eq!(usage.last_input_tokens, Some(0));
     assert_eq!(usage.last_cached_input_tokens, Some(0));
+    assert_eq!(usage.last_cache_write_tokens, Some(0));
     assert_eq!(usage.last_output_tokens, Some(0));
 
     // An unreadable rollout is unknown, not zero — the gauge stays hidden.
@@ -66,6 +69,7 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     let usage = usage_from_transcript(&older);
     assert_eq!(usage.last_input_tokens, Some(500));
     assert_eq!(usage.last_cached_input_tokens, None);
+    assert_eq!(usage.last_cache_write_tokens, None);
     assert_eq!(usage.last_output_tokens, None);
 }
 
@@ -942,9 +946,9 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
 
 #[test]
 fn transcript_enrichment_maps_split_to_rich_usage() {
-    // The latest-call split maps onto `current_usage` (cached slice removed from
-    // the input numerator), with no baked percentage — the gauge derives it from
-    // `current_usage` over the window downstream.
+    // The latest-call split maps onto `current_usage` (cache-read and cache-write
+    // slices removed from fresh input), with no baked percentage — the gauge
+    // derives it from `current_usage` over the window downstream.
     let split = TranscriptUsage {
         context_window: Some(10_000),
         context_window_reported: true,
@@ -953,6 +957,7 @@ fn transcript_enrichment_maps_split_to_rich_usage() {
         effort: None,
         last_input_tokens: Some(1_200),
         last_cached_input_tokens: Some(1_000),
+        last_cache_write_tokens: Some(100),
         last_output_tokens: Some(80),
     };
     let (tokens, model_id) = transcript_enrichment(&split, None);
@@ -961,9 +966,9 @@ fn transcript_enrichment_maps_split_to_rich_usage() {
     assert_eq!(tokens.context_window_size, Some(10_000));
     assert_eq!(tokens.used_percentage, None);
     assert_eq!(tokens.remaining_percentage, None);
-    assert_eq!(current.input_tokens, Some(200));
+    assert_eq!(current.input_tokens, Some(100));
     assert_eq!(current.cache_read_input_tokens, Some(1_000));
-    assert_eq!(current.cache_creation_input_tokens, None);
+    assert_eq!(current.cache_creation_input_tokens, Some(100));
     assert_eq!(current.output_tokens, Some(80));
     assert_eq!(
         current.input_tokens.unwrap()
@@ -988,6 +993,7 @@ fn transcript_enrichment_uses_configured_model_when_tail_lacks_turn_context() {
         effort: None,
         last_input_tokens: None,
         last_cached_input_tokens: None,
+        last_cache_write_tokens: None,
         last_output_tokens: None,
     };
 

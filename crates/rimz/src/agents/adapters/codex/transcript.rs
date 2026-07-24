@@ -128,13 +128,16 @@ pub(super) struct TranscriptUsage {
     /// when the user changes it in the Codex TUI.
     pub(super) effort: Option<String>,
     /// The latest call's full input from `last_token_usage.input_tokens` —
-    /// the cached slice included, so this is the window numerator the
+    /// the cache-read and cache-write slices included, so this is the window numerator the
     /// composition line splits.
     pub(super) last_input_tokens: Option<u64>,
     /// The cached slice of the latest call's input from
     /// `last_token_usage.cached_input_tokens` — the card's `◌` cache-read
-    /// figure. The protocol has no per-call cache-write.
+    /// figure.
     pub(super) last_cached_input_tokens: Option<u64>,
+    /// The cache-write slice of the latest call's input from
+    /// `last_token_usage.cache_write_input_tokens` — the card's `◍` figure.
+    pub(super) last_cache_write_tokens: Option<u64>,
     /// The latest call's output from `last_token_usage.output_tokens`.
     pub(super) last_output_tokens: Option<u64>,
 }
@@ -145,14 +148,17 @@ pub(super) fn transcript_enrichment(
 ) -> (Option<AgentTokenUsage>, Option<String>) {
     let current_usage = if usage.last_input_tokens.is_some()
         || usage.last_cached_input_tokens.is_some()
+        || usage.last_cache_write_tokens.is_some()
         || usage.last_output_tokens.is_some()
     {
         Some(AgentCurrentUsage {
-            input_tokens: usage
-                .last_input_tokens
-                .map(|input| input.saturating_sub(usage.last_cached_input_tokens.unwrap_or(0))),
+            input_tokens: usage.last_input_tokens.map(|input| {
+                input
+                    .saturating_sub(usage.last_cached_input_tokens.unwrap_or(0))
+                    .saturating_sub(usage.last_cache_write_tokens.unwrap_or(0))
+            }),
             output_tokens: usage.last_output_tokens,
-            cache_creation_input_tokens: None,
+            cache_creation_input_tokens: usage.last_cache_write_tokens,
             cache_read_input_tokens: usage.last_cached_input_tokens,
         })
     } else {
@@ -299,6 +305,7 @@ impl TranscriptUsage {
             effort: None,
             last_input_tokens: Some(0),
             last_cached_input_tokens: Some(0),
+            last_cache_write_tokens: Some(0),
             last_output_tokens: Some(0),
         }
     }
@@ -721,6 +728,7 @@ struct LastUsage {
     total: Option<u64>,
     window: u64,
     cached: Option<u64>,
+    cache_write: Option<u64>,
     output: Option<u64>,
 }
 
@@ -935,6 +943,9 @@ fn last_usage_from_info(info: Option<&super::rollout::CodexUsageInfo<'_>>) -> Op
     let cached = last
         .filter(|usage| usage.cached_reported())
         .map(|usage| usage.cached_input_tokens);
+    let cache_write = last
+        .filter(|usage| usage.cache_write_reported())
+        .map(|usage| usage.cache_write_input_tokens);
     let output = last
         .filter(|usage| usage.output_reported())
         .map(|usage| usage.output_tokens);
@@ -943,6 +954,7 @@ fn last_usage_from_info(info: Option<&super::rollout::CodexUsageInfo<'_>>) -> Op
         total,
         window,
         cached,
+        cache_write,
         output,
     })
 }
@@ -966,6 +978,7 @@ fn usage_from_last_record(
         effort,
         last_input_tokens: last.input,
         last_cached_input_tokens: last.cached,
+        last_cache_write_tokens: last.cache_write,
         last_output_tokens: last.output,
     }
 }

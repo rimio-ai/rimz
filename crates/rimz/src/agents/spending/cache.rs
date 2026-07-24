@@ -201,8 +201,8 @@ pub struct CachedEntry {
     /// Output tokens (Codex `output_tokens` already includes reasoning).
     #[serde(default, rename = "o", skip_serializing_if = "is_zero")]
     pub output: u64,
-    /// Cache-write tokens (Claude `cache_creation_input_tokens`, Pi
-    /// `cacheWrite`); `0` for providers with no cache-creation concept (Codex).
+    /// Cache-write tokens (Claude `cache_creation_input_tokens`, Codex
+    /// `cache_write_input_tokens`, Pi `cacheWrite`).
     #[serde(default, rename = "w", skip_serializing_if = "is_zero")]
     pub cache_write: u64,
     /// Cache-read (Claude `cache_read_input_tokens`; Codex `cached_input_tokens`).
