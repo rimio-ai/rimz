@@ -1,6 +1,6 @@
 # Browser drag probe
 
-`web-drag-probe.mjs` measures the browser client's emitted terminal mouse reports while it drives a fixed-rate diagonal drag across a live RimZ web terminal.
+`drag-probe.mjs` measures the browser client's emitted terminal mouse reports while it drives a fixed-rate diagonal drag across a live RimZ web terminal.
 
 ## Setup
 
@@ -18,14 +18,14 @@ The target needs a live web room with mouse mode active in the multiplexer or te
 Pass credentials in the URL:
 
 ```sh
-node scripts/web-drag-probe.mjs \
+node scripts/web-probe/drag-probe.mjs \
   --url 'http://rimz:secret@127.0.0.1:8200/?room=my-room&rimzdebug=1'
 ```
 
 Or keep them separate:
 
 ```sh
-node scripts/web-drag-probe.mjs \
+node scripts/web-probe/drag-probe.mjs \
   --url 'http://127.0.0.1:8200/?room=my-room&rimzdebug=1' \
   --user rimz \
   --pass secret \
