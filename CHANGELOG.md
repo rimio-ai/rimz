@@ -20,6 +20,7 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 
 ### Fixed
 
+- Agent cards keep their activity and estimated active-time clocks current during Claude Code and Codex `/btw` side conversations.
 - `rimz agents fork` replays the source profile's launch posture, so its system prompt, tool configuration, model, effort, and permissions carry into the provider-native fork instead of reverting to defaults. → [agents](./docs/reference/cli/agents.md#fork)
 - Sidebar CI badges on merged GitHub pull requests track rerun verdicts, while each repository refresh normally uses one API request. → [sidebar state](./docs/internals/sidebar/state.md#enrichment-lanes)
 - Continuous tmux drag selection and heavy output stay responsive in browser rooms: obsolete pointer positions coalesce behind a settled response paint at a viewport-scaled cadence, while pixel pets or context meters leave the full-resolution canvas untouched until their visible scene changes. → [web](./docs/guide/web.md#browser-appearance-and-input)

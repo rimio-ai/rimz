@@ -87,6 +87,28 @@ pub fn record_progress(
     .map(|_| ())
 }
 
+/// Advance an already-open working span without opening a new one.
+pub fn record_pulse(
+    runtime: &RuntimePaths,
+    kind: &str,
+    agent_id: &str,
+    at: Timestamp,
+    grace_secs: u32,
+) -> Result<bool, atomic::AtomicErr> {
+    update_record(runtime, kind, agent_id, at, |record, existed| {
+        if !existed || !record.active || at <= record.last_progress {
+            return false;
+        }
+        record.credited_ms = record.credited_ms.saturating_add(bounded_elapsed_ms(
+            at,
+            record.last_progress,
+            grace_secs,
+        ));
+        record.last_progress = at;
+        true
+    })
+}
+
 /// Close a working span at `at`. Repeated stops are idempotent.
 pub fn record_stop(
     runtime: &RuntimePaths,
@@ -311,6 +333,46 @@ mod tests {
         record_stop(&runtime, "claude", "sess-1", at(310), GRACE).unwrap();
 
         assert_eq!(record(&runtime).display_secs(at(900), GRACE), 190);
+    }
+
+    #[test]
+    fn pulse_requires_an_open_span() {
+        let (_dir, runtime) = runtime();
+        assert!(!record_pulse(&runtime, "claude", "sess-1", at(10), GRACE).unwrap());
+        assert!(
+            read_for_keys(&runtime, [("claude", "sess-1")])
+                .into_iter()
+                .next()
+                .is_none()
+        );
+
+        record_progress(&runtime, "claude", "sess-1", at(0), GRACE).unwrap();
+        record_stop(&runtime, "claude", "sess-1", at(5), GRACE).unwrap();
+        assert!(!record_pulse(&runtime, "claude", "sess-1", at(10), GRACE).unwrap());
+        assert_eq!(record(&runtime).credited_ms, 5_000);
+    }
+
+    #[test]
+    fn pulse_credits_and_advances_an_open_span() {
+        let (_dir, runtime) = runtime();
+        record_progress(&runtime, "claude", "sess-1", at(0), GRACE).unwrap();
+
+        assert!(record_pulse(&runtime, "claude", "sess-1", at(10), GRACE).unwrap());
+        let record = record(&runtime);
+        assert_eq!(record.credited_ms, 10_000);
+        assert_eq!(record.last_progress, at(10));
+        assert!(record.active);
+    }
+
+    #[test]
+    fn stale_pulse_is_a_no_op() {
+        let (_dir, runtime) = runtime();
+        record_progress(&runtime, "claude", "sess-1", at(10), GRACE).unwrap();
+
+        assert!(!record_pulse(&runtime, "claude", "sess-1", at(5), GRACE).unwrap());
+        let record = record(&runtime);
+        assert_eq!(record.credited_ms, 0);
+        assert_eq!(record.last_progress, at(10));
     }
 
     #[test]

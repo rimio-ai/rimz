@@ -15,6 +15,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
         payload,
         agent_id,
         parent_agent_id,
+        parent_activity_id,
         model_hint,
         transcript_path,
         turn_ended,
@@ -35,16 +36,11 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     }
     // Refresh the activity heartbeat on progress-proving events so the
     // sidebar's `last_activity` advances per tool call, not just per turn.
-    if (decoded.records_progress() || parent_agent_id.is_some())
-        && let Err(err) =
-            rimz::agent_activity::touch(store.runtime_paths(), agent.spec().kind, agent_id)
-    {
-        warn!(
-            agent = agent.spec().kind,
-            event = %event_name,
-            error = %err,
-            "lifecycle: failed to touch the agent activity heartbeat",
-        );
+    if decoded.records_progress() || parent_agent_id.is_some() {
+        touch_agent_activity(store, agent, event_name, agent_id);
+    }
+    if let Some(parent_agent_id) = parent_activity_id {
+        touch_agent_activity(store, agent, event_name, parent_agent_id);
     }
     // Child details travel on the durable child observation. Provider payloads
     // can repeat root model/transcript fields, so root-scoped sidecars and
@@ -79,6 +75,19 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
         agent.context_refresh_spawn(rimz::agents::RefreshTrigger::Hook(event_name), &refresh_ctx)
     {
         spawn_refresh_detached(&spawn);
+    }
+}
+
+fn touch_agent_activity(store: &Store, agent: &AgentDefinition, event_name: &str, agent_id: &str) {
+    if let Err(err) =
+        rimz::agent_activity::touch(store.runtime_paths(), agent.spec().kind, agent_id)
+    {
+        warn!(
+            agent = agent.spec().kind,
+            event = %event_name,
+            error = %err,
+            "lifecycle: failed to touch the agent activity heartbeat",
+        );
     }
 }
 
@@ -402,6 +411,7 @@ mod tests {
                 payload: &payload,
                 agent_id: &agent_id,
                 parent_agent_id: None,
+                parent_activity_id: None,
                 model_hint: None,
                 transcript_path: None,
                 turn_ended: false,
@@ -417,6 +427,61 @@ mod tests {
             context.session_preview.as_deref(),
             Some("final local context")
         );
+    }
+
+    #[test]
+    fn subagent_stop_touches_child_and_parent_activity() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let workspace_id =
+            rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/hooks-test"));
+        let paths = rimz::store::StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let runtime = rimz::store::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let store = Store::open(paths, runtime).unwrap();
+        let workspace = ResolvedWorkspace {
+            workspace_id,
+            project_root: "/tmp/hooks-test".into(),
+            root_class: rimz::workspace::RootClass::Directory,
+            worktree_root: "/tmp/hooks-test".into(),
+            worktree_branch: None,
+            session_name: "hooks-test".to_owned(),
+            mux_hint: None,
+        };
+        let definition = rimz::agents::definition_by_kind("claude").unwrap();
+        let payload = serde_json::json!({
+            "session_id": "root-session",
+            "agent_id": "child-session",
+            "agent_type": "Explore",
+        });
+        let mut decoded = definition
+            .decode_hook("SubagentStop", &payload)
+            .expect("subagent stop decodes");
+
+        manage_agent_context(AgentContextHook {
+            workspace: &workspace,
+            store: &store,
+            agent: definition,
+            context: LifecycleEventContext {
+                event_name: "SubagentStop",
+                decoded: &mut decoded,
+                payload: &payload,
+                agent_id: "child-session",
+                parent_agent_id: Some("root-session"),
+                parent_activity_id: Some("root-session"),
+                model_hint: None,
+                transcript_path: None,
+                turn_ended: false,
+            },
+        });
+
+        let mut touched = rimz::agent_activity::read_for_keys(
+            store.runtime_paths(),
+            [("claude", "child-session"), ("claude", "root-session")],
+        )
+        .into_iter()
+        .map(|activity| activity.agent_id.to_string())
+        .collect::<Vec<_>>();
+        touched.sort();
+        assert_eq!(touched, ["child-session", "root-session"]);
     }
 
     // Capabilities this test double has no behavior for.
