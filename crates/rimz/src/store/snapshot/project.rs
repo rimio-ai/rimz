@@ -208,6 +208,7 @@ fn reduce_lifecycle_event(
     if let Some(reason) = quarantine_reason(
         &signal,
         prior,
+        observation.compacted_from.is_some(),
         event_parent_agent_id.as_ref(),
         event_task.as_deref(),
     ) {
@@ -234,7 +235,7 @@ fn reduce_lifecycle_event(
         );
     }
     let card_identity = identity.assign(&kind, &agent_id, observation, prior);
-    let state = assemble_agent_state(AgentStateInput {
+    let mut state = assemble_agent_state(AgentStateInput {
         kind: &kind,
         agent_id: &agent_id,
         event,
@@ -247,12 +248,14 @@ fn reduce_lifecycle_event(
         establishes_identity,
         card_identity,
     });
+    inherit_compaction_registration(map, &mut state);
     map.insert(key, state);
 }
 
 fn quarantine_reason(
     signal: &lifecycle::LifecycleSignal,
     prior: Option<&AgentState>,
+    has_compaction_predecessor: bool,
     event_parent_agent_id: Option<&AgentSessionId>,
     event_task: Option<&str>,
 ) -> Option<&'static str> {
@@ -264,7 +267,9 @@ fn quarantine_reason(
             Some("lost marker for unknown session ignored by agent-state reducer")
         }
         lifecycle::LifecycleSignal::Compacting
-        | lifecycle::LifecycleSignal::CompactionEnded { .. } => {
+        | lifecycle::LifecycleSignal::CompactionEnded { .. }
+            if !has_compaction_predecessor =>
+        {
             Some("compaction signal for unknown session ignored by agent-state reducer")
         }
         lifecycle::LifecycleSignal::SubagentStopped { .. }
@@ -466,6 +471,7 @@ fn carried_base(
         state.description = prior.description.clone();
         state.transcript_path = prior.transcript_path.clone();
         state.origin = prior.origin;
+        state.compacted_from = prior.compacted_from.clone();
         state.recent_prompts = prior.recent_prompts.clone();
         state.model = prior.model.clone();
         state.effort = prior.effort.clone();
@@ -575,6 +581,9 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     if let Some(origin) = input.observation.origin {
         state.origin = Some(origin);
     }
+    if let Some(compacted_from) = &input.observation.compacted_from {
+        state.compacted_from = Some(compacted_from.clone());
+    }
     state.usage = usage;
     state.turn_started_at = lifecycle.turn_started_at;
     state.waiting_since = lifecycle.waiting_since;
@@ -583,6 +592,28 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.compaction_count = lifecycle.compaction_count;
     state.tool_calls = lifecycle.tool_calls;
     state
+}
+
+fn inherit_compaction_registration(
+    map: &BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    continuation: &mut AgentState,
+) {
+    let Some(compacted_from) = continuation.compacted_from.as_ref() else {
+        return;
+    };
+    let predecessor_key = (continuation.kind.clone(), compacted_from.clone());
+    let Some(predecessor_registered_at) = map
+        .get(&predecessor_key)
+        .and_then(|predecessor| predecessor.registered_at)
+    else {
+        return;
+    };
+    if continuation
+        .registered_at
+        .is_some_and(|registered_at| predecessor_registered_at < registered_at)
+    {
+        continuation.registered_at = Some(predecessor_registered_at);
+    }
 }
 
 fn assemble_launch_state(

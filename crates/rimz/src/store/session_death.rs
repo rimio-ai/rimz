@@ -38,7 +38,19 @@ pub(crate) fn supersedes(older: &AgentState, newer: &AgentState) -> bool {
         && newer.last_activity > older.last_activity
         && (older_yields_pane(older, newer)
             || cleared_conversation_supersedes(older, newer)
-            || same_process_conversation_supersedes(older, newer))
+            || same_process_conversation_supersedes(older, newer)
+            || compaction_continuation_supersedes(older, newer))
+}
+
+/// Whether `newer` is the compacted continuation of `older` in the exact same
+/// pane and agent-process incarnation. The provider-named predecessor is
+/// stronger evidence than the running-owner guard: the old root cannot receive
+/// another hook after Codex moves the continuation to a new session id.
+///
+/// ponytail: daemon-owned continuations abstain; add provider session-instance
+/// proof before promoting app-server-routed sessions.
+pub(crate) fn compaction_continuation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
+    newer.compacted_from.as_ref() == Some(&older.agent_id) && same_agent_instance(older, newer)
 }
 
 /// A provider that follows its latest conversation can prove an in-place
@@ -259,6 +271,37 @@ mod tests {
         ));
         assert!(older_yields_pane(&older, &newer));
         assert!(supersedes(&older, &newer));
+    }
+
+    #[test]
+    fn compacted_continuation_supersedes_resting_or_running_predecessor() {
+        for status in [AgentStatus::Success, AgentStatus::Running] {
+            let (older, mut newer) =
+                conversation_pair("codex", status, Some(SessionOrigin::Forked));
+            newer.compacted_from = Some(older.agent_id.clone());
+
+            assert!(compaction_continuation_supersedes(&older, &newer));
+            assert!(supersedes(&older, &newer));
+        }
+    }
+
+    #[test]
+    fn compacted_continuation_requires_the_same_agent_instance() {
+        let (mut older, mut newer) =
+            conversation_pair("codex", AgentStatus::Success, Some(SessionOrigin::Forked));
+        assert!(
+            !compaction_continuation_supersedes(&older, &newer),
+            "a plain fork does not supersede its source"
+        );
+
+        newer.compacted_from = Some(older.agent_id.clone());
+        newer.runtime_owner.as_mut().unwrap().pid += 1;
+        assert!(!compaction_continuation_supersedes(&older, &newer));
+
+        newer.runtime_owner = older.runtime_owner.clone();
+        older.pane.as_mut().unwrap().pane_process_start = Some(older.last_activity);
+        newer.pane.as_mut().unwrap().pane_process_start = Some(newer.last_activity);
+        assert!(!compaction_continuation_supersedes(&older, &newer));
     }
 
     #[test]

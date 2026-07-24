@@ -25,6 +25,7 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 
 ### Fixed
 
+- Codex agent cards follow the successor session created by `/compact` in Codex 0.145 and newer instead of staying pinned to the completed predecessor.
 - Healthy builds and large-file copies stay in the sidebar's working state while Linux completes blocking disk I/O; `!` now requires a sustained non-progressing process stall, and a new foreground command starts with a fresh stall baseline.
 - Agent cards keep their activity and estimated active-time clocks current during Claude Code and Codex `/btw` side conversations.
 - `rimz agents fork` replays the source profile's launch posture, so its system prompt, tool configuration, model, effort, and permissions carry into the provider-native fork instead of reverting to defaults. → [agents](./docs/reference/cli/agents.md#fork)

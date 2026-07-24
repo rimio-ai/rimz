@@ -42,6 +42,7 @@ fn registered_observation(agent_id: &str) -> AgentLifecycleObservation {
         description: None,
         transcript_path: None,
         origin: None,
+        compacted_from: None,
         usage: rimz::agents::AgentUsageSummary::default(),
         pane_id: None,
         pane_stamp: None,

@@ -67,7 +67,7 @@ pub(crate) use self::transcript::with_codex_sessions_root;
 use self::transcript::{
     RestingTurnOutcome, TranscriptScanNeed, TranscriptUsage, configured_model,
     configured_reasoning_effort, find_session_transcript, payload_reasoning_effort,
-    scan_transcript_tail,
+    scan_transcript_tail, session_forked_from,
 };
 #[cfg(test)]
 use self::transcript::{
@@ -612,6 +612,11 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
                     signal,
                     LifecycleSignal::Registered | LifecycleSignal::TurnStarted
                 );
+            let compact_continuation = parent_agent_id.is_none()
+                && parts
+                    .session_start
+                    .as_ref()
+                    .is_some_and(|start| start.source == SessionSource::Compact);
             let mut observation = build_codex_observation(
                 payload,
                 &parts,
@@ -620,8 +625,13 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
                 parent_agent_id,
                 transcript,
             );
-            if root_identity_event && let Some(agent_id) = observation.agent_id.as_ref() {
+            if (root_identity_event || compact_continuation)
+                && let Some(agent_id) = observation.agent_id.as_ref()
+            {
                 observation.origin = session_origin(agent_id.as_str());
+                if compact_continuation {
+                    observation.compacted_from = session_forked_from(agent_id.as_str());
+                }
             }
             decoded.attach_lifecycle(observation);
         }

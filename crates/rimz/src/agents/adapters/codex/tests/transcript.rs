@@ -1314,6 +1314,8 @@ fn session_origin_reads_only_rollout_head_lineage() {
     with_codex_sessions_root(dir.path(), || {
         assert_eq!(session_origin("fresh"), Some(SessionOrigin::Fresh));
         assert_eq!(session_origin("fork"), Some(SessionOrigin::Forked));
+        assert_eq!(session_forked_from("fresh"), None);
+        assert_eq!(session_forked_from("fork").as_deref(), Some("fresh"));
         assert_eq!(session_origin("not-meta"), None);
         assert_eq!(session_origin("missing"), None);
     });

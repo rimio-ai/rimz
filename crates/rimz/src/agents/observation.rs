@@ -267,6 +267,10 @@ pub struct AgentLifecycleObservation {
     /// collapse the superseded same-pane `/clear` conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SessionOrigin>,
+    /// The predecessor root condensed into this session, set only from
+    /// provider evidence that compaction created a successor session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted_from: Option<AgentSessionId>,
     /// Token and context enrichment, flattened to preserve lifecycle event
     /// compatibility.
     #[serde(default, flatten)]
@@ -307,6 +311,7 @@ impl AgentLifecycleObservation {
             description: None,
             transcript_path: None,
             origin: None,
+            compacted_from: None,
             usage: AgentUsageSummary::default(),
             pane_id: None,
             pane_stamp: None,

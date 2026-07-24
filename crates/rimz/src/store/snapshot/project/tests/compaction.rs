@@ -74,6 +74,71 @@ fn compaction_ended_for_unknown_session_folds_to_nothing() {
 }
 
 #[test]
+fn linked_compaction_end_seeds_and_carries_the_continuation() {
+    let predecessor = raw_lifecycle_at(
+        "codex",
+        1,
+        serde_json::json!({
+            "event_name": "Stop",
+            "agent_id": "predecessor",
+            "signal": {
+                "signal": "turn_ended",
+                "errored": false,
+                "parked_on_background": false
+            },
+        }),
+    );
+    let continuation = raw_lifecycle_at(
+        "codex",
+        2,
+        serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "continuation",
+            "compacted_from": "predecessor",
+            "signal": { "signal": "compaction_ended" },
+        }),
+    );
+    let continued_turn = raw_lifecycle_at(
+        "codex",
+        3,
+        serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "continuation",
+            "signal": { "signal": "turn_started" },
+        }),
+    );
+
+    let after_start = reduce_agent_states(&[predecessor.clone(), continuation.clone()]);
+    let predecessor_state = after_start
+        .iter()
+        .find(|agent| agent.agent_id == "predecessor")
+        .unwrap();
+    let continuation_state = after_start
+        .iter()
+        .find(|agent| agent.agent_id == "continuation")
+        .unwrap();
+    assert_eq!(
+        continuation_state.compacted_from.as_deref(),
+        Some("predecessor")
+    );
+    assert_eq!(
+        continuation_state.registered_at, predecessor_state.registered_at,
+        "the continuation inherits pane primacy"
+    );
+
+    let after_turn = reduce_agent_states(&[predecessor, continuation, continued_turn]);
+    let continuation_state = after_turn
+        .iter()
+        .find(|agent| agent.agent_id == "continuation")
+        .unwrap();
+    assert_eq!(
+        continuation_state.compacted_from.as_deref(),
+        Some("predecessor"),
+        "sparse later observations keep the predecessor link"
+    );
+}
+
+#[test]
 fn compacting_after_registration_still_stamps_the_head() {
     let registered = lifecycle_for_agent("session-a", "SessionStart", signal("registered"));
     let compact = lifecycle_for_agent("session-a", "PreCompact", signal("compacting"));

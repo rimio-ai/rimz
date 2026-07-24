@@ -492,6 +492,45 @@ fn root_identity_events_stamp_codex_session_origin() {
 }
 
 #[test]
+fn compact_session_start_stamps_the_named_predecessor() {
+    let dir = tempfile::tempdir().unwrap();
+    let day_dir = dir.path().join("2026").join("06").join("26");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    std::fs::write(
+        day_dir.join("rollout-2026-06-26T00-00-00-successor.jsonl"),
+        r#"{"type":"session_meta","payload":{"id":"successor","forked_from_id":"predecessor"}}"#,
+    )
+    .unwrap();
+
+    with_codex_sessions_root(dir.path(), || {
+        let compact = hook_lifecycle(
+            &CodexAdapter,
+            "SessionStart",
+            &json!({"session_id":"successor","source":"compact"}),
+        );
+        assert_eq!(compact.origin, Some(SessionOrigin::Forked));
+        assert_eq!(compact.compacted_from.as_deref(), Some("predecessor"));
+
+        for source in ["startup", "resume", "clear"] {
+            let other = hook_lifecycle(
+                &CodexAdapter,
+                "SessionStart",
+                &json!({"session_id":"successor","source":source}),
+            );
+            assert_eq!(other.compacted_from, None, "{source}");
+        }
+
+        let missing = hook_lifecycle(
+            &CodexAdapter,
+            "SessionStart",
+            &json!({"session_id":"missing","source":"compact"}),
+        );
+        assert_eq!(missing.origin, None);
+        assert_eq!(missing.compacted_from, None);
+    });
+}
+
+#[test]
 fn root_lifecycle_effort_falls_back_to_rollout_turn_context() {
     let dir = tempfile::tempdir().unwrap();
     let day_dir = dir.path().join("2026").join("06").join("26");
