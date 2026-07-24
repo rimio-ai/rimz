@@ -41,6 +41,9 @@
 [test-groups]
 live-zellij = { max-threads = 2 }
 live-tmux = { max-threads = 4 }
+# Browser + ttyd processes are heavy, and every fixture holds the run-wide
+# daemon lock, so one slot avoids spending a second test's lock budget waiting.
+live-web = { max-threads = 1 }
 # Rendered journeys each run a real `rimz sidebar serve` process over a PTY. The
 # full journey sweep now covers the dashboard, rate-limit recovery, selection,
 # remote badge, and resume paths, so cap this tier like the live-mux tier instead
@@ -61,6 +64,11 @@ filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^journey::deep::tmux
 test-group = 'live-tmux'
 retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
 
+[[profile.default.overrides]]
+filter = 'package(rimz) & test(/^backend::web::/)'
+test-group = 'live-web'
+retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
+
 # Rendered journeys are as latency-sensitive as the live-mux tiers — each polls
 # a real `rimz sidebar serve` process over a PTY for a rendered frame within a
 # deadline — so a starved runner can stall a render past the budget during the
@@ -79,7 +87,7 @@ retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s",
 # and fast. Escalate to the full suite (`cargo xtask ci` / explicit filters)
 # when a change touches the excluded surfaces.
 [profile.gate]
-default-filter = 'not (package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^backend::single_backend_room::/) | test(/^journey::/) | test(/^examples::pane_send::pane_send_resolver_completes_full_round_trip$/)))'
+default-filter = 'not (package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^backend::web::/) | test(/^backend::single_backend_room::/) | test(/^journey::/) | test(/^examples::pane_send::pane_send_resolver_completes_full_round_trip$/)))'
 status-level = "retry"
 failure-output = "immediate-final"
 fail-fast = { max-fail = 3 }
@@ -89,7 +97,7 @@ fail-fast = { max-fail = 3 }
 # Together, `live` and `journey` are the exact complement of `gate`.
 # Inherits the live-server groups and the retry budget from `default`.
 [profile.live]
-default-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^backend::single_backend_room::/) | test(/^journey::deep::/) | test(/^examples::pane_send::pane_send_resolver_completes_full_round_trip$/))'
+default-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^backend::web::/) | test(/^backend::single_backend_room::/) | test(/^journey::deep::/) | test(/^examples::pane_send::pane_send_resolver_completes_full_round_trip$/))'
 status-level = "retry"
 failure-output = "immediate-final"
 fail-fast = { max-fail = 3 }

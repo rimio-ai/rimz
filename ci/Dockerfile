@@ -33,7 +33,7 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git gh curl ca-certificates xz-utils \
       build-essential pkg-config libssl-dev \
-      libevent-dev libncurses-dev bison \
+      libevent-dev libncurses-dev bison ttyd chromium \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://sh.rustup.rs | \
@@ -151,6 +151,8 @@ RUN rustc -V \
  && uv --version \
  && tmux -V \
  && zellij --version \
+ && ttyd --version \
+ && chromium --version \
  && mold --version \
  && zig version \
  && rcodesign --version \
