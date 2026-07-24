@@ -7,6 +7,7 @@ use super::{AgentDefinition, HookOutput, LifecycleSignal, RecordedLifecycle, Sto
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ActiveTimeOp {
     Progress,
+    Pulse,
     Stop,
 }
 
@@ -18,13 +19,20 @@ pub(super) fn record(
     agent_id: Option<&str>,
     event_name: &str,
 ) {
-    if recorded.is_some_and(|recorded| recorded.observation.parent_agent_id.is_some()) {
-        return;
-    }
     let signal = recorded.map(|recorded| &recorded.observation.signal);
-    let Some(op) = active_time_op(signal, decoded.records_progress(), decoded.ends_session())
-    else {
+    let parent_agent_id =
+        recorded.and_then(|recorded| recorded.observation.parent_agent_id.as_deref());
+    let Some(op) = active_time_op(
+        signal,
+        parent_agent_id.is_some(),
+        decoded.records_progress(),
+        decoded.ends_session(),
+    ) else {
         return;
+    };
+    let agent_id = match op {
+        ActiveTimeOp::Pulse => parent_agent_id,
+        ActiveTimeOp::Progress | ActiveTimeOp::Stop => agent_id,
     };
     let Some(agent_id) = agent_id else { return };
     let now = jiff::Timestamp::now();
@@ -42,6 +50,14 @@ pub(super) fn record(
             at,
             grace_secs,
         ),
+        ActiveTimeOp::Pulse => rimz::store::active_time::record_pulse(
+            store.runtime_paths(),
+            agent.spec().kind,
+            agent_id,
+            at,
+            grace_secs,
+        )
+        .map(|_| ()),
         ActiveTimeOp::Stop => rimz::store::active_time::record_stop(
             store.runtime_paths(),
             agent.spec().kind,
@@ -62,9 +78,14 @@ pub(super) fn record(
 
 fn active_time_op(
     signal: Option<&LifecycleSignal>,
+    is_child: bool,
     records_progress: bool,
     ends_session: bool,
 ) -> Option<ActiveTimeOp> {
+    if is_child {
+        return matches!(signal, Some(LifecycleSignal::SubagentStopped { .. }))
+            .then_some(ActiveTimeOp::Pulse);
+    }
     match signal {
         Some(
             LifecycleSignal::TurnStarted
@@ -96,7 +117,7 @@ fn active_time_at(
     turn_error: Option<&rimz::agents::AgentTurnError>,
 ) -> jiff::Timestamp {
     match op {
-        ActiveTimeOp::Progress => now,
+        ActiveTimeOp::Progress | ActiveTimeOp::Pulse => now,
         ActiveTimeOp::Stop => turn_error.map_or(now, |error| error.at),
     }
 }
@@ -156,18 +177,38 @@ mod tests {
         ];
         for (signal, expected) in cases {
             assert_eq!(
-                active_time_op(Some(&signal), true, true),
+                active_time_op(Some(&signal), false, true, true),
                 expected,
                 "{}",
                 signal.tag()
             );
         }
         assert_eq!(
-            active_time_op(None, true, false),
+            active_time_op(None, false, true, false),
             Some(ActiveTimeOp::Progress)
         );
-        assert_eq!(active_time_op(None, false, true), Some(ActiveTimeOp::Stop));
-        assert_eq!(active_time_op(None, false, false), None);
+        assert_eq!(
+            active_time_op(None, false, false, true),
+            Some(ActiveTimeOp::Stop)
+        );
+        assert_eq!(active_time_op(None, false, false, false), None);
+    }
+
+    #[test]
+    fn child_mapping_pulses_only_on_subagent_stop() {
+        assert_eq!(
+            active_time_op(
+                Some(&LifecycleSignal::SubagentStopped { errored: false }),
+                true,
+                false,
+                false,
+            ),
+            Some(ActiveTimeOp::Pulse)
+        );
+        assert_eq!(
+            active_time_op(Some(&LifecycleSignal::SubagentStarted), true, true, true,),
+            None
+        );
     }
 
     #[test]

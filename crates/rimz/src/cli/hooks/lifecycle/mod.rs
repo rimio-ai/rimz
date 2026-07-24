@@ -99,6 +99,15 @@ pub(crate) fn handle_lifecycle_hook(
         let parent_agent_id = recorded
             .as_ref()
             .and_then(|recorded| recorded.observation.parent_agent_id.as_deref());
+        let parent_activity_id = recorded
+            .as_ref()
+            .filter(|recorded| {
+                matches!(
+                    recorded.observation.signal,
+                    LifecycleSignal::SubagentStopped { .. }
+                )
+            })
+            .and_then(|recorded| recorded.observation.parent_agent_id.as_deref());
         manage_agent_context(AgentContextHook {
             workspace,
             store,
@@ -109,6 +118,7 @@ pub(crate) fn handle_lifecycle_hook(
                 payload,
                 agent_id: agent_id.as_str(),
                 parent_agent_id,
+                parent_activity_id,
                 model_hint,
                 transcript_path,
                 turn_ended,
@@ -307,6 +317,7 @@ struct LifecycleEventContext<'a> {
     payload: &'a Value,
     agent_id: &'a str,
     parent_agent_id: Option<&'a str>,
+    parent_activity_id: Option<&'a str>,
     model_hint: Option<&'a str>,
     transcript_path: Option<&'a str>,
     turn_ended: bool,
@@ -451,6 +462,7 @@ mod tests {
                 payload: &serde_json::json!({}),
                 agent_id: &agent_id,
                 parent_agent_id: None,
+                parent_activity_id: None,
                 model_hint: None,
                 transcript_path: None,
                 turn_ended: false,

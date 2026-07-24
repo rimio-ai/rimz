@@ -8,6 +8,7 @@
 //! rate-limit resets) are exact — the suite never reads the wall clock.
 
 mod agent_panes;
+mod forks;
 mod grouping;
 mod lazy_bind;
 mod pane_binding;
