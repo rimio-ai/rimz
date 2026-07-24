@@ -19,6 +19,10 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 - Codex 0.145+ cache writes are parsed from rollouts, priced at the model's cache-create rate, and rendered in agent cards and `rimz stats`.
 - `harness.idle_compact` compacts a large idle agent context before the provider cache expires, either for every eligible agent or only while a teammate still works or the pull request remains open. → [loops](./docs/guide/loops.md#idle-compaction)
 
+### Changed
+
+- First-run consent prompts default to no: the project-trust grant for an untrusted clone and the hands-off automation opt-in both need an explicit yes, so pressing Enter never activates a cloned repo's command surface or unattended runs. Re-running setup still defaults the automation prompt to your current setting. → [security](./docs/guide/security.md#project-trust)
+
 ### Fixed
 
 - Healthy builds and large-file copies stay in the sidebar's working state while Linux completes blocking disk I/O; `!` now requires a sustained non-progressing process stall, and a new foreground command starts with a fresh stall baseline.

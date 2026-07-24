@@ -748,7 +748,7 @@ fn prompt_project_trust(project_root: &Path) {
         tracing::warn!(error = %err, "trust birth prompt render failed");
         return;
     }
-    match confirm_with_default("Trust this project's config on this machine?", true) {
+    match confirm_with_default("Trust this project's config on this machine?", false) {
         Ok(true) => match rimz::trust::grant(project_root) {
             Ok(_) => {
                 if let Err(err) = write_project_trust_notice(&[

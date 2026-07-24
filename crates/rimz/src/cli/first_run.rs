@@ -166,7 +166,13 @@ pub(crate) fn ask(
     }
     writeln!(out)?;
 
-    let Some(automation) = prompt_bool("  Enable hands-off automation?", true, input, out)? else {
+    let Some(automation) = prompt_bool(
+        "  Enable hands-off automation?",
+        defaults.automation,
+        input,
+        out,
+    )?
+    else {
         return Ok(Answers {
             defaults,
             truecolor,
@@ -411,13 +417,13 @@ mod tests {
         assert!(answers.truecolor);
         assert!(answers.nerd_font);
         assert!(!answers.pet_enabled);
-        assert!(answers.automation);
+        assert!(!answers.automation);
         assert!(rendered.contains("Use truecolor?"));
         assert!(rendered.contains("Use Nerd Font icons?"));
         assert!(rendered.contains("Want a pet?"));
         assert!(rendered.contains("Enable hands-off automation?"));
-        assert_eq!(rendered.matches("[y/N]").count(), 3);
-        assert_eq!(rendered.matches("[Y/n]").count(), 1);
+        assert_eq!(rendered.matches("[y/N]").count(), 4);
+        assert_eq!(rendered.matches("[Y/n]").count(), 0);
     }
 
     #[test]
