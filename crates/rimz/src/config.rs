@@ -79,7 +79,10 @@ pub use glyphs::{
     GlyphOverrides, GlyphRole, ThemeGlyphsConfig, glyph_lookup_hint, is_named_glyph_set,
     validate_glyph_source,
 };
-pub use harness::{DayCap, DayCapParseError, HarnessConfig, RtkMode, TurnCap, TurnCapParseError};
+pub use harness::{
+    DEFAULT_IDLE_COMPACT_AFTER, DayCap, DayCapParseError, HarnessConfig, IdleCompactMode, RtkMode,
+    TurnCap, TurnCapParseError,
+};
 pub use loop_::{CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks};
 pub use mux::{
     MultiplexerConfig, MuxConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,

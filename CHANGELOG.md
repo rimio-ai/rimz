@@ -17,6 +17,7 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 - Finished team receipts show the aggregate session cache-hit percentage, and `rimz stats` leads Agents rows with dollars and separates the heatmap legend from the grid. → [Token Insight](./docs/guide/insight.md#the-full-picture-rimz-stats)
 - `rimz agents show` and sidebar snapshots expose live per-session tool-call counts, while `rimz stats --json` adds backfilled tool totals and per-name maps for Claude, Codex, Pi, and OpenCode history. → [Token Insight](./docs/guide/insight.md#how-the-numbers-are-calculated)
 - Codex 0.145+ cache writes are parsed from rollouts, priced at the model's cache-create rate, and rendered in agent cards and `rimz stats`.
+- `harness.idle_compact` compacts a large idle agent context before the provider cache expires, either for every eligible agent or only while a teammate still works or the pull request remains open. → [loops](./docs/guide/loops.md#idle-compaction)
 
 ### Fixed
 

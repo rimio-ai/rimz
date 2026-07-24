@@ -104,6 +104,7 @@ RimZ ships those reflexes built in. Switched on, the room recognizes each stop f
 ```sh
 rimz config set resume.auto_continue true     # resume rate-limit and API-error parks
 rimz config set resume.auto_redeem true       # spend Codex reset credits when they buy real time
+rimz config set harness.idle_compact auto     # compact warm idle contexts while work may return
 rimz config set harness.smart_compact 200k    # compact before a message once context passes 200k tokens (or "70%")
 ```
 
@@ -132,6 +133,12 @@ A Codex plan grants reset credits: redeem one and a spent usage window refills o
 - Scheduled redeem. Several credits approach expiry together. RimZ measures from your own recent usage how long a fresh window takes to fill and spaces the redemptions that far apart, working back from each credit's expiry, so each credit lands on a window with room to absorb it. A redemption or a natural reset moves the next attempt later, keeping the chain paced to real capacity.
 
 The reflex fails closed and paces itself. Every rule starts from a credit in hand, blocked gain and doomed credit additionally require a readable reset time, and attempts are throttled account-wide across every room on the machine: ten minutes between attempts, thirty after a success. A successful redemption immediately refreshes the account reading, and because a refilled window is certified recovered capacity, [auto-continue](#auto-continue) wakes the parked turns on it. The verdict and pacing model in full are [providers.md → Auto-redeem](../internals/agents/providers.md#auto-redeem).
+
+### Idle compaction
+
+An idle agent can outlive its provider's warm prompt cache, making the next message pay to cache the whole accumulated conversation again. `harness.idle_compact = "auto"` submits the agent's own compact command after 59 minutes of inactivity while a same-channel teammate is still working or the worktree pull request remains open; `"always"` applies the reflex to every eligible idle agent. `harness.idle_compact_after` overrides the threshold with a duration such as `"45m"` or `"2h"`.
+
+The reflex applies only to top-level agents whose adapter exposes a compact command and whose occupied context is at least 50,000 tokens. Working, waiting, parked, and already-compacting agents stay untouched, and durable delivery waits for an idle turn boundary. Each idle stretch compacts at most once: the pacing record suppresses repeated helper launches, the message record suppresses the same context fill, and a delivered compact remains the last-action guard until real work reaches the agent.
 
 ### Smart compaction
 

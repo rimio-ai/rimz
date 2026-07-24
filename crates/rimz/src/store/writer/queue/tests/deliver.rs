@@ -141,6 +141,50 @@ fn record_sent_then_turn_start_confirms_delivery() {
 }
 
 #[test]
+fn idle_compact_command_delivers_at_boundary_and_stamps_the_rollup() {
+    let q = Queue::new();
+    let observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-1")),
+        LifecycleSignal::Registered,
+    );
+    q.append_event(&EventEnvelope::agent_lifecycle(
+        q.workspace_id.clone(),
+        "session",
+        "claude",
+        "SessionStart",
+        &observation,
+    ))
+    .unwrap();
+    let command = q.queue_with(1, |message| {
+        message.text = "/compact".to_owned();
+        message.body = MessageBody::Command;
+        message.compacted_context_tokens = Some(80_000);
+    });
+    let claimed = q
+        .claim_message_for_delivery(&command.message_id, Timestamp::now())
+        .unwrap()
+        .expect("idle boundary claims command");
+    let sent = q
+        .record_sent_message(&claimed, "session")
+        .unwrap()
+        .expect("command sent");
+    let delivered = q
+        .confirm_delivered_for_card(
+            &sent.kind,
+            &sent.agent_id,
+            sent.agent_name.as_deref(),
+            MessageBody::Command,
+            "session",
+        )
+        .unwrap();
+    assert_eq!(delivered.len(), 1);
+
+    let (_, agents, _) = crate::store::snapshot::catch_up_rollup(&q.inner.paths).unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].last_compact_command_tokens, Some(80_000));
+}
+
+#[test]
 fn confirm_delivered_for_card_selects_oldest_matching_batch() {
     struct Case {
         name: &'static str,

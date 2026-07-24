@@ -261,6 +261,14 @@ Two paths, because the modes have different promises:
 
 A failed compaction fails the delivery through the same retry path as a failed send, which is the point of routing the command through a real record rather than typing it inline.
 
+## Idle compaction
+
+Idle compaction reuses the command-record half of smart compaction without attaching a following prompt. The elected sidebar producer checks top-level rollup agents against `[harness] idle_compact`, the idle threshold, the 50,000-token floor, adapter support, and the `auto` re-engagement signals, then spawns a detached `rimz agents idle-compact` helper so the sidebar import graph remains read-only on the store.
+
+The helper re-resolves the workspace, session, and pane, verifies that the agent is still idle and the configured threshold is still due, and validates the command against the adapter. It queues one automated system `MessageBody::Command` with `DeliveryGate::Done`, pins the pane, stamps `compacted_context_tokens` from the fresh context reading, and attempts `DeliveryPolicy::Boundary`. A closed boundary stays queued through the ordinary retry disposition rather than typing into a working, waiting, parked, or compacting pane.
+
+Three layers make the action once-per-idle-stretch. The producer's cache-class `(kind, agent_id)` record suppresses the same `last_activity` and throttles helper respawns; the live queue and `last_compact_command_tokens` suppress the same occupied reading; and the helper stops when the session's latest delivered record is already a compact command. A later delivered prompt breaks that final guard and begins a new eligible stretch once its own activity and context thresholds are reached.
+
 ## Reply waits
 
 `--wait[=DURATION]` turns a send into a synchronous scatter-gather. It stamps `reply_wait` on each durable record, then polls until every leg settles.

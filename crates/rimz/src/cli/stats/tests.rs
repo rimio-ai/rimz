@@ -1529,6 +1529,19 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             },
         },
         AssistRecord {
+            at: ts(4_150),
+            assist: Assist::IdleCompact {
+                kind: AgentKind::new_unchecked("claude"),
+                agent_id: AgentSessionId::from("session-2"),
+                label: Some("@planner".to_owned()),
+                idle_secs: 3_540,
+                occupied_tokens: 180_000,
+                message_id: "msg_4".to_owned(),
+                delivered: true,
+                error: None,
+            },
+        },
+        AssistRecord {
             at: ts(4_200),
             assist: Assist::AutoResume {
                 workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
@@ -1548,12 +1561,12 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             resets: 1,
             resumes: 1,
             recovered_secs: 3_600,
-            compacts: 1,
+            compacts: 2,
             restores: 1,
             restored_sessions: 2,
         }
     );
-    assert_eq!(stats.events.len(), 5, "every assist outcome stays forensic");
+    assert_eq!(stats.events.len(), 6, "every assist outcome stays forensic");
     let categories = category_rows(&stats.rollup)
         .into_iter()
         .map(|row| strip_ansi(&row))
@@ -1585,6 +1598,11 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             .iter()
             .any(|line| line.contains("@coder auto-compact — 210k ctx cleared before delivery"))
     );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("@planner idle compacted after 1.0h — 180k ctx"))
+    );
     assert!(lines.iter().any(|line| {
         line.contains("rebirth recovery — 2 agents restored after crash (@coder, @reviewer)")
     }));
@@ -1597,6 +1615,11 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         forensics
             .iter()
             .any(|line| line.contains("agent session-1 · message msg_3 · threshold 200k"))
+    );
+    assert!(
+        forensics
+            .iter()
+            .any(|line| line.contains("agent session-2 · message msg_4 · delivered true"))
     );
     assert!(forensics.iter().any(|line| {
         line.contains("workspace ws_0123456789abcdef01234567 · session rimz-test")

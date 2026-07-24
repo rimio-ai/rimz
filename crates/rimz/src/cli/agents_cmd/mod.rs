@@ -8,6 +8,7 @@ mod check;
 mod exec;
 mod fork;
 mod history;
+mod idle_compact;
 pub(in crate::cli) mod launch;
 mod list;
 mod logs;
@@ -65,6 +66,7 @@ use check::{CheckArgs, run_check};
 use exec::run_exec;
 use fork::{ForkArgs, run_fork};
 use history::history_agent;
+use idle_compact::{IdleCompactArgs, run_idle_compact};
 use launch::*;
 use list::list_agents;
 pub(crate) use list::render_agents_table;
@@ -423,6 +425,10 @@ enum AgentsSubcmd {
     /// condition is due (`sidebar::enrich` auto-continue).
     #[command(hide = true)]
     AutoContinue(AutoContinueArgs),
+    /// Hidden helper the producer spawns to compact an eligible idle agent
+    /// before its provider prompt cache expires.
+    #[command(hide = true)]
+    IdleCompact(IdleCompactArgs),
     /// Hidden helper the producer spawns to redeem an account-wide Codex reset
     /// credit after rechecking current provider state.
     #[command(hide = true)]
@@ -455,6 +461,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Register(args)) => return run_register(args),
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args),
+        Some(AgentsSubcmd::IdleCompact(args)) => return run_idle_compact(args),
         Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args),
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args),
         Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args, globals),

@@ -806,6 +806,8 @@ fn parse_edit_value(raw: &str) -> Value {
 
 fn parse_set_value(path: &[String], raw: &str) -> Value {
     if is_harness_smart_compact_edit(path)
+        || is_harness_idle_compact_edit(path)
+        || is_harness_idle_compact_after_edit(path)
         || is_harness_rtk_edit(path)
         || is_daily_budget_edit(path)
         || is_turn_budget_edit(path)
@@ -854,6 +856,22 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         };
         if let Err(err) = crate::message::AutoCompact::parse(threshold) {
             invalid_value!("{err}");
+        }
+    }
+    if is_harness_idle_compact_edit(path) {
+        let Some(mode) = value.as_str() else {
+            invalid_value!("harness.idle_compact must be a string");
+        };
+        if !matches!(mode, "off" | "auto" | "always") {
+            invalid_value!("harness.idle_compact must be one of off, auto, or always");
+        }
+    }
+    if is_harness_idle_compact_after_edit(path) {
+        let Some(duration) = value.as_str() else {
+            invalid_value!("harness.idle_compact_after must be a duration string");
+        };
+        if let Err(err) = super::harness::parse_idle_compact_after(duration) {
+            invalid_value!("harness.idle_compact_after {err}; use a duration such as 59m or 2h");
         }
     }
     if is_harness_rtk_edit(path) {
@@ -909,6 +927,14 @@ fn is_sidebar_theme_scheme_edit(path: &[String]) -> bool {
 
 fn is_harness_smart_compact_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "smart_compact")
+}
+
+fn is_harness_idle_compact_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "harness" && child == "idle_compact")
+}
+
+fn is_harness_idle_compact_after_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "harness" && child == "idle_compact_after")
 }
 
 fn is_harness_rtk_edit(path: &[String]) -> bool {
