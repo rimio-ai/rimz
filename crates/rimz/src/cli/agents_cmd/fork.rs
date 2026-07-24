@@ -59,8 +59,25 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         validate_agent_name(name)?;
     }
     let config = machine_config();
-    let adapter = rimz::agents::find_definition(seed.kind.as_str())
+    rimz::agents::find_definition(seed.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", seed.kind))?;
+    let effective = rimz::config::effective::load(
+        &config.agents,
+        &workspace.project_root,
+        &rimz::store::paths::config_home(),
+    )?;
+    let posture = fork_posture(&seed, &effective.profiles)?;
+    if let Some(reason) = &posture.degraded {
+        writeln!(
+            crate::cli::render::err(),
+            "rimz: {reason}; forking bare {}",
+            seed.kind
+        )?;
+    }
+    seed.launch.mode = posture.mode;
+    seed.launch.model.clone_from(&posture.model);
+    seed.launch.effort.clone_from(&posture.effort);
+    seed.launch.budget.clone_from(&posture.budget);
     rimz::harness::launch::preflight_agent_process(
         &workspace.project_root,
         config.harness.rtk,
@@ -68,7 +85,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             kind: seed.kind.clone(),
             action: rimz::harness::launch::ExecAction::Fork {
                 session_id: seed.source_session_id.to_string(),
-                extra_args: Vec::new(),
+                extra_args: posture.args.clone(),
             },
             provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
@@ -111,18 +128,13 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         },
     )?;
     let launch = launch_batch.single_identity()?;
-    let permission_args = launch
-        .launch
-        .mode
-        .map(|mode| adapter.spec().launch.permission_args(mode))
-        .unwrap_or_default();
     let argv = rimz::harness::launch::exec_argv(
         &rimz::proc::rimz_exe(),
         &rimz::harness::launch::ExecRequest {
             kind: seed.kind.clone(),
             action: rimz::harness::launch::ExecAction::Fork {
                 session_id: seed.source_session_id.to_string(),
-                extra_args: permission_args,
+                extra_args: posture.args,
             },
             provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
@@ -176,6 +188,26 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         report_fork(&seed, &source_name, &launch.name);
     }
     Ok(())
+}
+
+/// The posture this fork replays, from the same seam restart and resume use.
+///
+/// A fork stays on the source session's provider, so a profile that now
+/// resolves to a different provider refuses here. Every other degrade is
+/// carried on `degraded`; the caller prints it and the fork proceeds bare.
+fn fork_posture(seed: &ForkSeed, profiles: &rimz::config::ProfilesConfig) -> Result<ResumePosture> {
+    let posture = rimz::harness::resume::resolve_posture(
+        rimz::harness::resume::PostureRequest {
+            profile: seed.launch.profile.as_deref(),
+            kind: &seed.kind,
+            stamped_mode: seed.launch.mode,
+        },
+        profiles,
+    );
+    if let Some(reason @ PostureDegrade::KindChanged { .. }) = &posture.degraded {
+        bail!("{reason}; a fork stays on the source provider — fix the profile and retry");
+    }
+    Ok(posture)
 }
 
 fn resolve_fork_source(
@@ -267,11 +299,109 @@ fn report_fork(seed: &ForkSeed, source_name: &str, new_name: &str) {
 mod tests {
     use super::*;
     use rimz::agents::AgentStatus;
+    use rimz::config::{Profile, ProfilesConfig};
 
     fn source(id: &str) -> AgentState {
         let mut agent = AgentState::stub("codex", id, AgentStatus::Success);
         agent.worktree_path = Some("/repo/worktree".to_owned());
         agent
+    }
+
+    fn seed(kind: &str, profile: Option<&str>, mode: Option<PermissionMode>) -> ForkSeed {
+        ForkSeed {
+            kind: AgentKind::new_unchecked(kind),
+            source_session_id: AgentSessionId::from("session-1"),
+            cwd: PathBuf::from("/repo/worktree"),
+            launch: rimz::agents::LaunchParams {
+                profile: profile.map(ToOwned::to_owned),
+                mode,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn profiles(name: &str, profile: Profile) -> ProfilesConfig {
+        ProfilesConfig(BTreeMap::from([(name.to_owned(), profile)]))
+    }
+
+    fn profile(agent: &str) -> Profile {
+        toml::from_str(&format!("agent = {agent:?}")).expect("profile fixture")
+    }
+
+    #[test]
+    fn fork_posture_replays_full_profile_argv() {
+        let prompt = tempfile::NamedTempFile::new().expect("temp prompt file");
+        let profiles = profiles(
+            "planner",
+            Profile {
+                agent: "claude".to_owned(),
+                mode: Some(PermissionMode::Yolo),
+                model: Some("opus".to_owned()),
+                effort: Some("high".to_owned()),
+                append_system_prompt_file: Some(prompt.path().to_path_buf()),
+                args: Some("--plugin-dir '/tmp/plugin dir'".to_owned()),
+                ..profile("claude")
+            },
+        );
+
+        let posture =
+            fork_posture(&seed("claude", Some("planner"), None), &profiles).expect("posture");
+
+        assert_eq!(
+            posture.args,
+            vec![
+                "--model",
+                "opus",
+                "--effort",
+                "high",
+                "--append-system-prompt-file",
+                prompt.path().to_str().expect("utf-8 prompt path"),
+                "--dangerously-skip-permissions",
+                "--plugin-dir",
+                "/tmp/plugin dir",
+            ]
+        );
+        assert_eq!(posture.mode, Some(PermissionMode::Yolo));
+        assert_eq!(posture.model.as_deref(), Some("opus"));
+        assert_eq!(posture.effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn fork_posture_refuses_provider_change() {
+        let profiles = profiles("planner", profile("codex"));
+
+        let err = fork_posture(&seed("claude", Some("planner"), None), &profiles)
+            .expect_err("provider change");
+
+        assert!(
+            err.to_string()
+                .contains("a fork stays on the source provider")
+        );
+    }
+
+    #[test]
+    fn fork_posture_degrades_missing_profile_to_bare() {
+        let seed = seed("claude", Some("retired"), Some(PermissionMode::Yolo));
+
+        let posture =
+            fork_posture(&seed, &ProfilesConfig::default()).expect("bare degraded posture");
+
+        assert_eq!(posture.args, vec!["--dangerously-skip-permissions"]);
+        assert!(matches!(
+            posture.degraded,
+            Some(PostureDegrade::Unresolved { .. })
+        ));
+    }
+
+    #[test]
+    fn fork_posture_keeps_bare_source_permission_argv() {
+        let seed = seed("claude", None, Some(PermissionMode::Yolo));
+
+        let posture = fork_posture(&seed, &ProfilesConfig::default()).expect("bare posture");
+
+        assert_eq!(posture.args, vec!["--dangerously-skip-permissions"]);
+        assert_eq!(posture.mode, Some(PermissionMode::Yolo));
+        assert_eq!(posture.degraded, None);
     }
 
     #[test]

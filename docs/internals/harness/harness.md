@@ -143,7 +143,7 @@ The compile path is the seam the whole harness hangs off, and it runs in a fixed
 4. **Identify.** Each cell becomes a launch request with a name, a channel, and its cohort stamps, and the store mints provisional rows before any pane opens.
 5. **Compile.** Each cell becomes a `LayoutPanes` entry. An agent cell compiles to the exec-wrapper argv, a command cell to its raw argv, and an empty argv reserves the pane for the user's shell.
 
-Restart and resume stop after step 1 and replay only profile-declared settings, through the shared posture seam under [Resume](#resume-and-rebirth).
+Restart, fork, and resume stop after step 1 and replay only profile-declared settings, through the shared posture seam under [Resume](#resume-and-rebirth).
 
 A trailing launch prompt attaches to exactly one agent identity: a named team's configured `leader` role, its first declared role by default, or otherwise the first unambiguous agent cell. Team and multi-cell launches stamp each member's cohort and order (`launch_group` and `launch_ordinal`, exported as `RIMZ_LAUNCH_GROUP` and `RIMZ_LAUNCH_ORDINAL`), so the sidebar keeps cards in definition order and resume can match a cohort later.
 
@@ -284,7 +284,7 @@ A resumed pane runs `rimz agents exec <kind>` with a `Resume` action carrying th
 
 Team restore and cohort resume read posture straight off the layout cell their team or role binding already resolved. Flat and lane resume resolve the stored profile name against the effective config. The launch event's recorded permission mode fills in when the profile declares none.
 
-Degradation is deliberate and asymmetric. A profile that is gone, broken, or now names a different provider degrades to a bare resume with a warning, because rebirth runs unattended and a recovery must never refuse. Interactive `restart` escalates the same provider switch to the user instead, since changing providers under a running agent is a decision, not a fallback.
+Degradation is deliberate and asymmetric. A profile that is gone, broken, or now names a different provider degrades to a bare resume with a warning, because rebirth runs unattended and a recovery must never refuse. Interactive `restart` and `fork` escalate the same provider switch to the user instead, since changing providers under a running agent is a decision, not a fallback.
 
 Resume leaves one-off launch values out: the prompt, an explicit `--model` or `--effort` typed at the original launch, and passthrough argv were a single invocation's choice, not durable configuration. `--resume` and `--continue` conflict with those launch-shaping flags for the same reason, and take cwd and channel from the matched store cohort. `--worktree` in this mode is a resume scope, not a worktree-creation flag.
 
