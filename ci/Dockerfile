@@ -1,6 +1,8 @@
 FROM node:26-trixie
 
 ARG ZELLIJ_VERSION=0.44.3
+ARG TTYD_VERSION=1.7.7
+ARG TTYD_SHA256=8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55
 ARG TMUX_VERSION=3.7
 ARG TMUX_SHA256=2344f191501b8a73eb71dd6c5fd5dcf8c765f5066f34ab46f04b3013dc7bc1a5
 ARG PYTHON_VERSION=3.14
@@ -33,8 +35,14 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git gh curl ca-certificates xz-utils \
       build-essential pkg-config libssl-dev \
-      libevent-dev libncurses-dev bison ttyd chromium \
+      libevent-dev libncurses-dev bison chromium \
  && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fL --retry 5 --retry-delay 2 --retry-all-errors \
+      "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64" -o /tmp/ttyd \
+ && printf '%s  /tmp/ttyd\n' "$TTYD_SHA256" | sha256sum -c - \
+ && install -m 0755 /tmp/ttyd /usr/local/bin/ttyd \
+ && rm -f /tmp/ttyd
 
 RUN curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://sh.rustup.rs | \
       sh -s -- -y --no-modify-path --default-toolchain stable \
