@@ -20,6 +20,7 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 /// location does not follow XDG.
 pub(crate) struct HostSandbox {
     _root: TempDir,
+    _temp_root: TempDir,
     env: BTreeMap<&'static str, PathBuf>,
 }
 
@@ -44,7 +45,21 @@ impl HostSandbox {
             .prefix("rimz-sandbox-")
             .tempdir_in("/tmp")
             .context("creating short test sandbox")?;
+        let temp_parent = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir())
+            .or_else(|| {
+                Path::new("/var/tmp")
+                    .is_dir()
+                    .then(|| PathBuf::from("/var/tmp"))
+            })
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
+        let temp_root = tempfile::Builder::new()
+            .prefix("rz")
+            .tempdir_in(temp_parent)
+            .context("creating marker-isolated test temp root")?;
         let env = BTreeMap::from([
+            ("GIT_CEILING_DIRECTORIES", temp_root.path().to_path_buf()),
             ("HOME", root.path().join("home")),
             ("TMUX_TMPDIR", root.path().join("tmux")),
             ("XDG_CACHE_HOME", root.path().join("cache")),
@@ -52,7 +67,7 @@ impl HostSandbox {
             ("XDG_DATA_HOME", root.path().join("data")),
             ("XDG_RUNTIME_DIR", root.path().join("runtime")),
             ("XDG_STATE_HOME", root.path().join("state")),
-            ("TMPDIR", root.path().join("tmp")),
+            ("TMPDIR", temp_root.path().to_path_buf()),
             (
                 "ZELLIJ_CONFIG_DIR",
                 root.path().join("config").join("zellij"),
@@ -68,7 +83,11 @@ impl HostSandbox {
         )
         .context("writing sandbox Zellij config")?;
         std::fs::write(env["HOME"].join(".zshrc"), "").context("writing sandbox zsh config")?;
-        Ok(Self { _root: root, env })
+        Ok(Self {
+            _root: root,
+            _temp_root: temp_root,
+            env,
+        })
     }
 
     fn trust_workspace_for_git(&self, workspace_root: &Path) -> Result<()> {
@@ -298,6 +317,10 @@ mod tests {
         ] {
             assert!(sandbox.env[key].starts_with(sandbox.root()), "{key}");
         }
+        assert_eq!(
+            sandbox.env["GIT_CEILING_DIRECTORIES"],
+            sandbox.env["TMPDIR"]
+        );
         assert_eq!(
             sandbox.env["RTK_TEE_DIR"],
             workspace.path().join("target/xtask/rtk"),

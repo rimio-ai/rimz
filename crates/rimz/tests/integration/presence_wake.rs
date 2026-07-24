@@ -63,7 +63,7 @@ impl WakeEnv {
     fn new() -> Self {
         let tempdir = tempfile::Builder::new()
             .prefix("rw")
-            .tempdir_in("/tmp")
+            .tempdir()
             .expect("short tempdir");
         let project_root = tempdir.path().join("project");
         let state_root = tempdir.path().join("state");

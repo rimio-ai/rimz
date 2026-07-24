@@ -86,7 +86,7 @@ fn assert_trace_shim_exists(trace_bin: &Path) {
 fn wakeup_fixture() -> Option<WakeupFixture> {
     let tempdir = tempfile::Builder::new()
         .prefix("wp")
-        .tempdir_in("/tmp")
+        .tempdir()
         .expect("short tempdir");
     let project_root = tempdir.path().join("project");
     let state_root = tempdir.path().join("state");
