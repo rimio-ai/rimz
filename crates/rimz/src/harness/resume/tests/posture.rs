@@ -158,8 +158,8 @@ fn a_profile_prompt_file_that_vanished_degrades_instead_of_refusing() {
 
 #[test]
 fn posture_reports_a_provider_switch_rather_than_refusing() {
-    // Restart escalates this; unattended resume degrades on it. Either way the
-    // resolver reports rather than fails.
+    // Restart and fork escalate this; unattended resume degrades on it. Either
+    // way the resolver reports rather than fails.
     let profiles = profiles("planner", profile("codex"));
 
     let posture = posture_for("claude", Some("planner"), None, &profiles);

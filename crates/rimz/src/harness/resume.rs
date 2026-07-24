@@ -265,7 +265,7 @@ pub struct ResumePosture {
     pub effort: Option<String>,
     pub budget: Option<String>,
     /// Set when the profile no longer applies and the session comes back bare.
-    /// Unattended recovery prints it and continues; restart escalates
+    /// Unattended recovery prints it and continues; restart and fork escalate
     /// [`PostureDegrade::KindChanged`] because switching providers under a
     /// running agent is a decision the user makes, not a fallback.
     pub degraded: Option<PostureDegrade>,
