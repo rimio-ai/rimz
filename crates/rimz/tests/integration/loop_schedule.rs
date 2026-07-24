@@ -211,6 +211,15 @@ fn agent_budget_edits_and_views_use_local_day() {
         let output = loop_ok(&env, args);
         assert!(output.contains("$10.00"), "rimz {args:?}: {output}");
     }
+
+    let show: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["agents", "show", "@claude", "--json"]))
+            .expect("show JSON");
+    let budget = &show["agent"]["budget"];
+    assert_eq!(budget["cap"], "$20.00/day");
+    assert_eq!(budget["spent_usd"], 10.0);
+    assert_eq!(budget["parked"], false);
+    assert_eq!(budget["park"], serde_json::Value::Null);
 }
 
 #[test]

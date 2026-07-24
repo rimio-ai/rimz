@@ -2,7 +2,8 @@ use super::*;
 
 use super::list::agent_pr;
 use super::report::{
-    AgentReportEntry, PrInfo, SelfIdentity, build_entry, context_cell, row_for_agent, status_style,
+    AgentReportEntry, PrInfo, ReportOverrides, SelfIdentity, build_entry, context_cell,
+    row_for_agent, status_style,
 };
 use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent, print_run_line};
 use crate::cli::render;
@@ -96,17 +97,18 @@ fn collect_show_report(
     let me = SelfIdentity::from_env().resolve(snapshot);
     let report_agent = agent.as_ref().map(|agent| {
         let session_cost = cost.as_ref().and_then(|cost| cost.total_cost_usd);
-        let mut entry = build_entry(
+        build_entry(
             agent,
             row_for_agent(snapshot, agent),
             agent_pr(snapshot, agent),
             &peers,
             me.as_ref(),
             jiff::Timestamp::now(),
-            session_cost,
-        );
-        entry.budget.summary = rimz::harness::budget::spend_summary(runtime, agent, session_cost);
-        entry
+            ReportOverrides {
+                runtime: Some(runtime),
+                cost_usd: session_cost,
+            },
+        )
     });
     Ok((
         ShowReport {
@@ -396,20 +398,23 @@ fn render_context_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::
     );
     kv.push(
         "budget",
-        render::cell(
-            agent
-                .budget
-                .summary
-                .as_deref()
-                .or(agent.budget.park.as_deref())
-                .or(agent.budget.cap.as_deref())
-                .unwrap_or("-"),
-        )
-        .dash()
-        .fg(render::palette::money()),
+        render::cell(budget_summary(&agent.budget))
+            .dash()
+            .fg(render::palette::money()),
     );
     kv.render(w)?;
     writeln!(w)
+}
+
+fn budget_summary(budget: &super::report::BudgetReport) -> String {
+    match (budget.spent_usd, budget.cap.as_deref()) {
+        (Some(spent_usd), Some(cap)) => format!("${spent_usd:.2} of {cap}"),
+        _ => budget
+            .park
+            .clone()
+            .or_else(|| budget.cap.clone())
+            .unwrap_or_else(|| "-".to_owned()),
+    }
 }
 
 fn format_tool_calls(tool_calls: &std::collections::BTreeMap<String, u32>) -> String {
@@ -718,7 +723,10 @@ mod tests {
                 &peers,
                 None,
                 jiff::Timestamp::UNIX_EPOCH,
-                Some(0.42),
+                ReportOverrides {
+                    cost_usd: Some(0.42),
+                    ..ReportOverrides::default()
+                },
             )),
             agent_state: Some(state),
             stale: true,

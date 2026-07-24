@@ -130,10 +130,9 @@ pub(super) struct PrInfo {
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct BudgetReport {
     pub cap: Option<String>,
+    pub spent_usd: Option<f64>,
     pub parked: bool,
     pub park: Option<String>,
-    #[serde(skip)]
-    pub summary: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -145,6 +144,12 @@ pub(super) struct SubAgentReport {
     pub model: Option<String>,
     pub total_tokens: Option<u64>,
     pub elapsed_secs: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct ReportOverrides<'a> {
+    pub runtime: Option<&'a rimz::RuntimePaths>,
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -197,6 +202,7 @@ pub(super) fn build_list_report(
     snapshot: &rimz::SidebarSnapshot,
     agents: &[&AgentState],
     now: Timestamp,
+    runtime: Option<&rimz::RuntimePaths>,
 ) -> AgentListReport {
     let identity = SelfIdentity::from_env();
     let me = identity.resolve(snapshot);
@@ -219,7 +225,10 @@ pub(super) fn build_list_report(
                     peers,
                     me,
                     now,
-                    None,
+                    ReportOverrides {
+                        runtime,
+                        ..ReportOverrides::default()
+                    },
                 )
             })
         })
@@ -237,7 +246,7 @@ pub(super) fn build_entry(
     peers: &[&AgentState],
     me: Option<&AgentSessionId>,
     now: Timestamp,
-    cost_override: Option<f64>,
+    overrides: ReportOverrides<'_>,
 ) -> AgentReportEntry {
     let card = row.and_then(rimz::SidebarRow::as_agent);
     let (status, phase) = card
@@ -264,8 +273,8 @@ pub(super) fn build_entry(
         .and_then(|card| card.context.as_ref())
         .and_then(|context| context.cost.as_ref())
         .and_then(|cost| cost.total_cost_usd)
-        .or(cost_override);
-    let park = agent.budget_park.as_ref();
+        .or(overrides.cost_usd);
+    let budget = budget_report(overrides.runtime, agent, overrides.cost_usd);
 
     AgentReportEntry {
         id: agent.agent_id.clone(),
@@ -323,14 +332,7 @@ pub(super) fn build_entry(
             pane,
             pr,
         },
-        budget: BudgetReport {
-            cap: agent.budget.clone(),
-            parked: park.is_some(),
-            park: park.map(rimz::harness::budget::BudgetPark::label),
-            summary: park
-                .map(rimz::harness::budget::BudgetPark::summary)
-                .or_else(|| agent.budget.clone()),
-        },
+        budget,
         sub_agents: card
             .map(|card| {
                 card.sub_agents
@@ -347,6 +349,47 @@ pub(super) fn build_entry(
                     .collect()
             })
             .unwrap_or_default(),
+    }
+}
+
+fn budget_report(
+    runtime: Option<&rimz::RuntimePaths>,
+    agent: &AgentState,
+    session_cost: Option<f64>,
+) -> BudgetReport {
+    let park = agent.budget_park.as_ref();
+    let fallback_cap = park
+        .map(|park| rimz::harness::budget::BudgetSpec {
+            cap_usd: park.cap_usd,
+            window: park.window,
+        })
+        .or_else(|| {
+            agent
+                .budget
+                .as_deref()
+                .and_then(|raw| raw.parse::<rimz::harness::budget::BudgetSpec>().ok())
+        });
+    let (cap, spent_usd) = match runtime {
+        Some(runtime) => {
+            let spend = rimz::harness::budget::agent_budget_spend(runtime, agent, session_cost);
+            (spend.cap, spend.spent_usd)
+        }
+        None => {
+            let spent_usd = park.map(|park| park.spend_usd).or_else(|| {
+                fallback_cap.and_then(|cap| {
+                    rimz::harness::budget::total_cost_usd(agent)
+                        .or(session_cost)
+                        .map(|total| rimz::harness::budget::BudgetLedger::new(cap).spend_usd(total))
+                })
+            });
+            (fallback_cap, spent_usd)
+        }
+    };
+    BudgetReport {
+        cap: cap.map(|cap| cap.to_string()),
+        spent_usd,
+        parked: park.is_some(),
+        park: park.map(rimz::harness::budget::BudgetPark::label),
     }
 }
 
@@ -564,11 +607,29 @@ mod tests {
         let peers = [&state];
 
         assert_eq!(
-            build_entry(&state, Some(&row), None, &peers, None, now, None).status,
+            build_entry(
+                &state,
+                Some(&row),
+                None,
+                &peers,
+                None,
+                now,
+                ReportOverrides::default(),
+            )
+            .status,
             AgentStatus::Paused
         );
         assert_eq!(
-            build_entry(&state, None, None, &peers, None, now, None).status,
+            build_entry(
+                &state,
+                None,
+                None,
+                &peers,
+                None,
+                now,
+                ReportOverrides::default(),
+            )
+            .status,
             AgentStatus::Failed
         );
     }
@@ -656,7 +717,7 @@ mod tests {
             &peers,
             Some(&state.agent_id),
             now,
-            None,
+            ReportOverrides::default(),
         );
 
         insta::assert_json_snapshot!("full_agent_report", entry);
@@ -673,9 +734,79 @@ mod tests {
             &peers,
             None,
             Timestamp::UNIX_EPOCH,
-            None,
+            ReportOverrides::default(),
         );
 
         insta::assert_json_snapshot!("sparse_agent_report", entry);
+    }
+
+    #[test]
+    fn budget_projection_uses_effective_ledger_cap_and_live_spend() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace_id = rimz::ids::WorkspaceId::from_project_root(dir.path());
+        let runtime = rimz::RuntimePaths::under(workspace_id, dir.path()).expect("runtime");
+        runtime.ensure_dirs().expect("runtime dirs");
+        let now = Timestamp::from_second(2_000).unwrap();
+        let mut state = agent("budget");
+        state.budget = Some("$9.00".to_owned());
+        let mut context = rimz::agents::AgentContext::new("codex", now);
+        context.cost = Some(rimz::agents::AgentCost {
+            total_cost_usd: Some(7.25),
+            ..rimz::agents::AgentCost::default()
+        });
+        state.context = Some(context);
+        let mut ledger = rimz::harness::budget::BudgetLedger::new("5/day".parse().expect("spec"));
+        ledger.raised_cap_usd = Some(6.0);
+        ledger.day_baseline = Some(rimz::harness::budget::DayBaseline {
+            date: "2026-06-01".parse().expect("date"),
+            cost_usd: 2.0,
+        });
+        rimz::harness::budget::write_ledger(&runtime, &state.kind, &state.agent_id, &ledger)
+            .expect("write ledger");
+        let peers = [&state];
+
+        let entry = build_entry(
+            &state,
+            None,
+            None,
+            &peers,
+            None,
+            now,
+            ReportOverrides {
+                runtime: Some(&runtime),
+                cost_usd: Some(100.0),
+            },
+        );
+
+        assert_eq!(entry.budget.cap.as_deref(), Some("$6.00/day"));
+        assert_eq!(entry.budget.spent_usd, Some(5.25));
+
+        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+            rimz::WorkspaceId::from_project_root(dir.path()),
+            vec![state.clone()],
+            now,
+        );
+        let agents = snapshot.root_agents().collect::<Vec<_>>();
+        let list = build_list_report(&snapshot, &agents, now, Some(&runtime));
+        assert_eq!(list.agents[0].budget.cap.as_deref(), Some("$6.00/day"));
+        assert_eq!(list.agents[0].budget.spent_usd, Some(5.25));
+
+        ledger.disabled = true;
+        rimz::harness::budget::write_ledger(&runtime, &state.kind, &state.agent_id, &ledger)
+            .expect("disable ledger");
+        let entry = build_entry(
+            &state,
+            None,
+            None,
+            &peers,
+            None,
+            now,
+            ReportOverrides {
+                runtime: Some(&runtime),
+                ..ReportOverrides::default()
+            },
+        );
+        assert_eq!(entry.budget.cap, None);
+        assert_eq!(entry.budget.spent_usd, None);
     }
 }

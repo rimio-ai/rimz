@@ -1,8 +1,8 @@
 use super::*;
 
 use super::report::{
-    AgentReportEntry, PrInfo, build_entry, build_list_report, context_cell, row_for_agent,
-    status_style,
+    AgentReportEntry, PrInfo, ReportOverrides, build_entry, build_list_report, context_cell,
+    row_for_agent, status_style,
 };
 use crate::cli::render;
 use rimz::config::{GlyphRole, ThemeConfig};
@@ -21,7 +21,7 @@ pub(super) fn list_agents(
     let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
     let snapshot = rimz::sidebar::consumer::PublishedSnapshotReader::new(
-        runtime,
+        runtime.clone(),
         workspace.session_name.clone(),
         None,
     )
@@ -43,7 +43,7 @@ pub(super) fn list_agents(
         .collect();
     let now = jiff::Timestamp::now();
     if json {
-        return render::json_pretty(&build_list_report(&snapshot, &agents, now));
+        return render::json_pretty(&build_list_report(&snapshot, &agents, now, Some(&runtime)));
     }
 
     let machine_config = crate::cli::machine_config();
@@ -133,7 +133,7 @@ pub(crate) fn render_agents_table(
                 &ordered_agents,
                 me.as_ref(),
                 now,
-                None,
+                ReportOverrides::default(),
             );
             let detail = report
                 .description
@@ -414,7 +414,7 @@ mod tests {
         );
 
         let refs = snapshot.agents.iter().collect::<Vec<_>>();
-        let entries = build_list_report(&snapshot, &refs, now);
+        let entries = build_list_report(&snapshot, &refs, now, None);
         let linked = entries
             .agents
             .iter()
