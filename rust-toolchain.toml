@@ -1,7 +1,7 @@
 [toolchain]
-channel = "stable"
+channel = "1.97.1"
 components = ["rustfmt", "clippy", "llvm-tools-preview"]
-# The Zellij presence plugin (`crates/rimz-presence-zellij`) compiles to WASI;
-# rustup auto-installs the target from this list, so contributors and CI need
-# no extra provisioning step.
+# This exact pin, the vendored presence wasm, and its provenance sidecar move
+# together; a pin bump runs `cargo xtask plugin-refresh` in the same commit.
+# The plugin compiles to WASI, and rustup auto-installs every listed target.
 targets = ["wasm32-wasip1", "aarch64-apple-darwin", "x86_64-apple-darwin"]
