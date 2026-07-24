@@ -1,5 +1,102 @@
 use super::*;
 
+fn incident_lifecycle(
+    secs_ago: u64,
+    event_name: &str,
+    agent_id: &str,
+    signal: LifecycleSignal,
+    configure: impl FnOnce(&mut crate::agents::AgentLifecycleObservation),
+) -> crate::store::event::EventEnvelope {
+    let mut observation =
+        crate::agents::AgentLifecycleObservation::new(Some(agent_id.into()), signal);
+    observation.pane_id = Some(crate::ids::PaneId::parse("tmux:%1").unwrap());
+    observation.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "codex",
+        4242,
+        Some("process-start".to_owned()),
+    ));
+    observation.worktree_path = Some("/repo/main".to_owned());
+    configure(&mut observation);
+    let mut event = crate::store::event::EventEnvelope::agent_lifecycle(
+        workspace(),
+        "session",
+        "codex",
+        event_name,
+        &observation,
+    );
+    event.timestamp = epoch() - std::time::Duration::from_secs(secs_ago);
+    event
+}
+
+fn compact_incident(with_side_fork: bool) -> SidebarSnapshot {
+    let mut events = vec![incident_lifecycle(
+        4,
+        "Stop",
+        "predecessor",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+        },
+        |observation| observation.origin = Some(crate::agents::SessionOrigin::Fresh),
+    )];
+    if with_side_fork {
+        events.push(incident_lifecycle(
+            3,
+            "SessionStart",
+            "side",
+            LifecycleSignal::Registered,
+            |observation| observation.origin = Some(crate::agents::SessionOrigin::Forked),
+        ));
+    }
+    events.push(incident_lifecycle(
+        2,
+        "SessionStart",
+        "continuation",
+        LifecycleSignal::CompactionEnded { auto: None },
+        |observation| {
+            observation.origin = Some(crate::agents::SessionOrigin::Forked);
+            observation.compacted_from = Some("predecessor".into());
+        },
+    ));
+    events.push(incident_lifecycle(
+        1,
+        "UserPromptSubmit",
+        "continuation",
+        LifecycleSignal::TurnStarted,
+        |observation| {
+            observation.prompt = Some("continue".to_owned());
+            observation.usage.total_tokens = Some(123);
+        },
+    ));
+
+    let mut snapshot = room(reduce_agent_states(&events));
+    snapshot.reap_stale_sessions();
+    snapshot.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None)
+}
+
+#[test]
+fn codex_compaction_fork_promotes_the_continuation() {
+    let snapshot = compact_incident(false);
+
+    assert_eq!(snapshot.agents.len(), 1);
+    let continuation = rollup_agent(&snapshot, "continuation");
+    assert_eq!(continuation.status, AgentStatus::Running);
+    assert_eq!(continuation.prompt.as_deref(), Some("continue"));
+    assert_eq!(continuation.usage.total_tokens, Some(123));
+    assert_eq!(rows(&snapshot).len(), 1);
+    assert_eq!(rows(&snapshot)[0].id, "continuation");
+}
+
+#[test]
+fn codex_compaction_continuation_keeps_primacy_over_an_older_side_fork() {
+    let snapshot = compact_incident(true);
+
+    assert_eq!(snapshot.agents.len(), 2, "the side fork remains durable");
+    assert_eq!(rows(&snapshot).len(), 1);
+    assert_eq!(rows(&snapshot)[0].id, "continuation");
+}
+
 #[test]
 fn compacting_marker_lights_the_head_then_expires() {
     // A fresh compaction marker pulses the head; one older than the window

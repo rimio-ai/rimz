@@ -26,6 +26,7 @@ use crate::agents::{
     FieldPatch, LocalContextPatch, LocalContextRefresh, LocalSpendFold, LocalTokenPatch,
     ProviderCapacity, SessionOrigin, TranscriptStat, optional_payload_string, read_transcript_tail,
 };
+use crate::ids::AgentSessionId;
 
 /// Refresh Codex's local transcript-derived context for one session, skipping the
 /// tail read when the persisted transcript stat still matches and its fold is current.
@@ -113,6 +114,14 @@ pub fn session_origin(session_id: &str) -> Option<SessionOrigin> {
     } else {
         SessionOrigin::Fresh
     })
+}
+
+/// Read the predecessor id named by a forked Codex rollout.
+pub(super) fn session_forked_from(session_id: &str) -> Option<AgentSessionId> {
+    let path = find_session_transcript(session_id)?;
+    read_rollout_header(&path)?
+        .forked_from_id
+        .map(AgentSessionId::from)
 }
 
 /// Context-window usage derived from a Codex rollout tail.

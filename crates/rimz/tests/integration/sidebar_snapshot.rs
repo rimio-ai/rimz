@@ -26,6 +26,7 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
         description: None,
         transcript_path: None,
         origin: None,
+        compacted_from: None,
         usage: rimz::agents::AgentUsageSummary::default(),
         pane_id: None,
         pane_stamp: None,

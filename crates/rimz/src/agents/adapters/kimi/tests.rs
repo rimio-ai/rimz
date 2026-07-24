@@ -472,6 +472,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
             "[session]/agents/agent-0/wire.jsonl",
         ),
         origin: None,
+        compacted_from: None,
         usage: AgentUsageSummary {
             context_pct: None,
             context_window: None,

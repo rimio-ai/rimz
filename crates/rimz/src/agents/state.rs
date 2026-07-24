@@ -457,6 +457,10 @@ pub struct AgentState {
     /// superseded same-pane `/clear` conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::agents::SessionOrigin>,
+    /// The predecessor root condensed into this session, carried forward from
+    /// provider compact evidence so the predecessor can be superseded exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted_from: Option<AgentSessionId>,
     /// Recent user prompts for this session, newest last, capped by the rollup.
     /// The sidebar row keeps only `prompt`; snapshot JSON exposes the history on
     /// `agents[]` for diagnostics and future panes.
@@ -600,6 +604,8 @@ struct AgentStateWire {
     transcript_path: Option<String>,
     origin: Option<crate::agents::SessionOrigin>,
     #[serde(default)]
+    compacted_from: Option<AgentSessionId>,
+    #[serde(default)]
     recent_prompts: Vec<String>,
     model: Option<String>,
     effort: Option<String>,
@@ -667,6 +673,7 @@ impl From<AgentStateWire> for AgentState {
             description: wire.description,
             transcript_path: wire.transcript_path,
             origin: wire.origin,
+            compacted_from: wire.compacted_from,
             recent_prompts: wire.recent_prompts,
             model: wire.model,
             effort: wire.effort,
@@ -732,6 +739,7 @@ impl AgentState {
             description: None,
             transcript_path: None,
             origin: None,
+            compacted_from: None,
             recent_prompts: Vec::new(),
             model: None,
             effort: None,

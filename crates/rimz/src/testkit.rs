@@ -312,6 +312,7 @@ pub mod fleet {
             description: None,
             transcript_path: None,
             origin: None,
+            compacted_from: None,
             usage: crate::agents::AgentUsageSummary::default(),
             pane_id: None,
             pane_stamp: None,
