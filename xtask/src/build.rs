@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::files::{copy_atomically, remove_stale_file, sha256_file, target_dir, write_atomically};
@@ -19,6 +20,7 @@ const PROFILING_RUSTFLAGS: &str = "-C force-frame-pointers=yes -C symbol-manglin
 const BUILD_PROFILE_OVERRIDE_ENV: &str = "RIMZ_BUILD_PROFILE_OVERRIDE";
 const STABLE_CHECKOUT_BUILD_ATTEMPTS: usize = 3;
 pub(crate) const WASM_MAGIC: [u8; 4] = *b"\0asm";
+const ENCODED_RUSTFLAGS_SEPARATOR: &str = "\x1f";
 const DARWIN_COREFOUNDATION_TBD: &str = r#"--- !tapi-tbd
 tbd-version:     4
 targets:         [ x86_64-macos, arm64-macos ]
@@ -82,7 +84,8 @@ pub(crate) fn dist(root: &Path) -> Result<()> {
 /// this produces the `.wasm` Zellij actually loads.
 pub(crate) fn build_plugin(root: &Path) -> Result<()> {
     ensure_rust_target(root, PRESENCE_PLUGIN_TARGET)?;
-    run(
+    let rustflags = canonical_plugin_rustflags(root)?;
+    run_with_env(
         root,
         "cargo",
         [
@@ -94,6 +97,7 @@ pub(crate) fn build_plugin(root: &Path) -> Result<()> {
             "--release",
             "--locked",
         ],
+        &[("CARGO_ENCODED_RUSTFLAGS", PathBuf::from(rustflags))],
     )
 }
 
@@ -105,8 +109,12 @@ pub(crate) fn plugin_refresh(root: &Path) -> Result<()> {
         bail!("{} is not a wasm module", artifact.display());
     }
     copy_atomically(&artifact, &vendored_plugin_path(root))?;
-    let digest = presence_plugin_source_digest(root)?;
-    write_atomically(&vendored_srchash_path(root), digest.as_bytes())
+    let provenance = PluginProvenance {
+        source_sha256: presence_plugin_source_digest(root)?,
+        wasm_sha256: sha256_file(&vendored_plugin_path(root))?,
+        rustc: rustc_stdout(root, &["--version"])?,
+    };
+    write_vendored_plugin_provenance(root, &provenance)
 }
 
 pub(crate) fn vendored_plugin_path(root: &Path) -> PathBuf {
@@ -116,10 +124,99 @@ pub(crate) fn vendored_plugin_path(root: &Path) -> PathBuf {
         .join("rimz-presence-zellij.wasm")
 }
 
-pub(crate) fn vendored_srchash_path(root: &Path) -> PathBuf {
+pub(crate) fn vendored_provenance_path(root: &Path) -> PathBuf {
     let mut path = vendored_plugin_path(root).into_os_string();
-    path.push(".srchash");
+    path.push(".provenance.json");
     PathBuf::from(path)
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct PluginProvenance {
+    pub(crate) source_sha256: String,
+    pub(crate) wasm_sha256: String,
+    pub(crate) rustc: String,
+}
+
+pub(crate) fn read_vendored_plugin_provenance(root: &Path) -> Result<PluginProvenance> {
+    let path = vendored_provenance_path(root);
+    let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn write_vendored_plugin_provenance(root: &Path, provenance: &PluginProvenance) -> Result<()> {
+    let path = vendored_provenance_path(root);
+    let mut bytes =
+        serde_json::to_vec_pretty(provenance).context("serializing plugin provenance")?;
+    bytes.push(b'\n');
+    write_atomically(&path, &bytes)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PluginProvenanceDecision {
+    Compare,
+    Skip,
+    Fail,
+}
+
+fn plugin_provenance_decision(
+    recorded_rustc: &str,
+    current_rustc: &str,
+    is_ci: bool,
+) -> PluginProvenanceDecision {
+    if recorded_rustc == current_rustc {
+        PluginProvenanceDecision::Compare
+    } else if is_ci {
+        PluginProvenanceDecision::Fail
+    } else {
+        PluginProvenanceDecision::Skip
+    }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "a local provenance skip needs a visible contributor diagnostic"
+)]
+pub(crate) fn verify_vendored_plugin(root: &Path) -> Result<()> {
+    let provenance_path = vendored_provenance_path(root);
+    let provenance = read_vendored_plugin_provenance(root).with_context(|| {
+        format!(
+            "{} is missing or invalid; run `cargo xtask plugin-refresh`",
+            provenance_path.display()
+        )
+    })?;
+    let current_rustc = rustc_stdout(root, &["--version"])?;
+    match plugin_provenance_decision(
+        &provenance.rustc,
+        &current_rustc,
+        env::var_os("CI").is_some(),
+    ) {
+        PluginProvenanceDecision::Compare => {}
+        PluginProvenanceDecision::Skip => {
+            eprintln!(
+                "plugin-provenance: skipped rebuild comparison because the vendored plugin records `{}` and the current toolchain is `{current_rustc}`",
+                provenance.rustc
+            );
+            return Ok(());
+        }
+        PluginProvenanceDecision::Fail => {
+            bail!(
+                "vendored presence plugin provenance records `{}`, but CI uses `{current_rustc}`; run `cargo xtask plugin-refresh` with rustc `{current_rustc}`",
+                provenance.rustc
+            );
+        }
+    }
+
+    let artifact = plugin_artifact(root);
+    let rebuilt = fs::read(&artifact).with_context(|| format!("reading {}", artifact.display()))?;
+    let vendored_path = vendored_plugin_path(root);
+    let vendored =
+        fs::read(&vendored_path).with_context(|| format!("reading {}", vendored_path.display()))?;
+    if rebuilt != vendored {
+        bail!(
+            "vendored presence plugin does not match a rebuild from source; run `cargo xtask plugin-refresh`"
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn presence_plugin_source_digest(root: &Path) -> Result<String> {
@@ -167,6 +264,54 @@ fn plugin_artifact(root: &Path) -> PathBuf {
         .join(PRESENCE_PLUGIN_TARGET)
         .join("release")
         .join("rimz-presence-zellij.wasm")
+}
+
+fn canonical_plugin_rustflags(root: &Path) -> Result<OsString> {
+    let cargo_home = env::var_os("CARGO_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("HOME")
+                .filter(|path| !path.is_empty())
+                .map(|home| PathBuf::from(home).join(".cargo"))
+        })
+        .context("$CARGO_HOME or $HOME is required to build the presence plugin")?;
+    let sysroot = PathBuf::from(rustc_stdout(root, &["--print", "sysroot"])?);
+    let mut flags = OsString::new();
+    for (source, destination) in [
+        (cargo_home.as_path(), "/cargo"),
+        (sysroot.as_path(), "/rust-sysroot"),
+        (root, "/rimz"),
+    ] {
+        if !flags.is_empty() {
+            flags.push(ENCODED_RUSTFLAGS_SEPARATOR);
+        }
+        flags.push("--remap-path-prefix=");
+        flags.push(source.as_os_str());
+        flags.push("=");
+        flags.push(destination);
+    }
+    Ok(flags)
+}
+
+fn rustc_stdout(root: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new("rustc")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .with_context(|| format!("running `rustc {}`", args.join(" ")))?;
+    if !output.status.success() {
+        bail!(
+            "`rustc {}` failed with {}: {}",
+            args.join(" "),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8(output.stdout)
+        .with_context(|| format!("reading `rustc {}` output", args.join(" ")))?
+        .trim()
+        .to_owned())
 }
 
 fn ensure_rust_target(root: &Path, target: &str) -> Result<()> {

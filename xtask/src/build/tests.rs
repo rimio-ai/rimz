@@ -5,6 +5,49 @@ use std::{env, fs};
 use super::*;
 
 #[test]
+fn plugin_provenance_json_round_trips() {
+    let root = temp_path("plugin-provenance");
+    let provenance = PluginProvenance {
+        source_sha256: "source".to_owned(),
+        wasm_sha256: "wasm".to_owned(),
+        rustc: "rustc 1.97.0 (example 2026-01-01)".to_owned(),
+    };
+
+    write_vendored_plugin_provenance(&root, &provenance).unwrap();
+
+    assert_eq!(read_vendored_plugin_provenance(&root).unwrap(), provenance);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn plugin_provenance_decision_compares_matching_toolchains() {
+    assert_eq!(
+        plugin_provenance_decision("rustc current", "rustc current", false),
+        PluginProvenanceDecision::Compare
+    );
+    assert_eq!(
+        plugin_provenance_decision("rustc current", "rustc current", true),
+        PluginProvenanceDecision::Compare
+    );
+}
+
+#[test]
+fn plugin_provenance_decision_skips_local_toolchain_drift() {
+    assert_eq!(
+        plugin_provenance_decision("rustc recorded", "rustc current", false),
+        PluginProvenanceDecision::Skip
+    );
+}
+
+#[test]
+fn plugin_provenance_decision_fails_ci_toolchain_drift() {
+    assert_eq!(
+        plugin_provenance_decision("rustc recorded", "rustc current", true),
+        PluginProvenanceDecision::Fail
+    );
+}
+
+#[test]
 fn rustup_target_list_match_is_exact() {
     let installed = "wasm32-unknown-unknown\nwasm32-wasip1\n";
 

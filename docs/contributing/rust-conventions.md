@@ -242,7 +242,7 @@ Three deserve a note:
 Every PR gate runs in CI with warnings treated as errors; each has a local `cargo xtask` equivalent. Four composites cover the everyday flows:
 
 - `cargo xtask gate` — the pre-PR default: `cargo fmt --all` in fix mode, then invariants, docs-links, all-feature and install-host lint, and `cargo nextest run --profile gate --workspace --all-features --locked`. It captures each step's output, prints one compact success line per step, and fails fast with a trimmed excerpt plus a `NEXT:` hint.
-- `cargo xtask checks` — the registry-free non-test gates, ordered for speed: the instant text gates (`fmt` in check mode, `invariants`, `docs-links`) run first and fail fast; `deps` overlaps the compile gates on its own thread; the compile gates run sequentially (`build-plugin`, then `lint`) because concurrent cargo builds serialize on the target-dir lock. Prints a per-gate timing summary to stderr.
+- `cargo xtask checks` — the registry-free non-test gates, ordered for speed: the instant text gates (`fmt` in check mode, `invariants`, `docs-links`) run first and fail fast; `deps` overlaps the compile gates on its own thread; the compile gates run sequentially (`build-plugin`, its `plugin-provenance` byte comparison, then `lint`) because concurrent cargo builds serialize on the target-dir lock. Prints a per-gate timing summary to stderr.
 - `cargo xtask externals` — the gates that talk to the crates.io registry: `deny` and `vet`. Both run so a single pass reports every signal.
 - `cargo xtask ci` — `checks` plus plain `cargo nextest run --workspace --all-features --locked`; the local full stack when a change calls for full validation.
 
