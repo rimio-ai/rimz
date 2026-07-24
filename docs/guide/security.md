@@ -54,7 +54,7 @@ On Zellij, RimZ loads a small presence plugin into each session so the sidebar l
 - **Reconfigure**: it applies the room's mouse options and, if you set one, binds the [focus key](./configuration.md#sidebar-rendering), both at runtime without writing your `config.kdl`.
 - **Start web server**: added only when `[web] enabled`, so `rimz web open` can share a running session.
 
-The vendored plugin is reproducibly built from the checked-in source. Its source digest, wasm digest, and producing Rust toolchain are committed beside it; every vendored embed verifies the wasm checksum, and CI rebuilds the source with that toolchain and requires byte-for-byte equality.
+The vendored plugin is reproducibly built from the checked-in source on the repository's pinned Rust toolchain. Its source digest, wasm digest, and producing toolchain are committed beside it; every vendored embed verifies the wasm checksum, and CI rebuilds the source with that toolchain and requires byte-for-byte equality.
 
 The plugin's code, argv, and configuration are all RimZ-owned, never your `config.kdl`, and it ships no pane content anywhere. The grant lives in Zellij's own permission store, where its plugin manager can revoke it; revoking stops pane discovery until you restore it, and `rimz doctor` names the fix.
 
