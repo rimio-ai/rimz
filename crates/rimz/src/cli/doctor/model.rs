@@ -189,6 +189,7 @@ pub(super) enum RoomState {
 
 #[derive(Debug, Serialize)]
 pub(super) struct TtydWeb {
+    pub(super) backend: String,
     pub(super) path: String,
     pub(super) version: String,
 }

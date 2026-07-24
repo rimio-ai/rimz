@@ -27,20 +27,20 @@ enum WebSubcmd {
     Share(WebShareArgs),
     /// Stop sharing one room or every room.
     Unshare(WebUnshareArgs),
-    /// Report the shared ttyd daemon's status.
+    /// Report the shared web daemon's status.
     Status(WebStatusArgs),
-    /// Start the shared ttyd daemon.
+    /// Start the shared web daemon.
     Start,
-    /// Restart the shared ttyd daemon and apply the current config.
+    /// Restart the shared web daemon and apply the current config.
     Restart,
-    /// Stop the shared ttyd daemon.
+    /// Stop the shared web daemon.
     Stop,
     /// Manage the machine-wide browser credential.
     Token {
         #[command(subcommand)]
         command: WebTokenSubcmd,
     },
-    /// Resolve and attach a ttyd client to a managed RimZ room.
+    /// Resolve and attach a web client to a managed RimZ room.
     #[command(hide = true)]
     Exec {
         #[arg(value_name = "SESSION")]
@@ -48,7 +48,7 @@ enum WebSubcmd {
         #[arg(long)]
         share: bool,
     },
-    /// Restrict and forward connections to the shared ttyd daemon.
+    /// Restrict and forward connections to the shared web daemon.
     #[command(hide = true)]
     Gate {
         #[arg(long)]
@@ -75,7 +75,7 @@ struct WebOpenArgs {
     /// Print the URL without launching a browser.
     #[arg(long)]
     print: bool,
-    /// Require the shared ttyd daemon to already be online.
+    /// Require the shared web daemon to already be online.
     #[arg(long)]
     no_start: bool,
     /// Come up empty: skip recovering prior agents when the room is reborn.
@@ -227,7 +227,7 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
             .payload
             .credential
             .as_ref()
-            .context("shared ttyd daemon returned no credential")?,
+            .context("shared web daemon returned no credential")?,
     );
     if !args.print {
         open_browser_best_effort(&outcome.payload.url);
@@ -319,13 +319,13 @@ fn status(args: WebStatusArgs) -> Result<()> {
     if let Some(pid) = status.pid {
         writeln!(
             stdout,
-            "ttyd: online on {} (pid {pid})",
+            "web: online on {} (pid {pid})",
             listener_display(&status.interface, status.port)
         )?;
     } else {
         writeln!(
             stdout,
-            "ttyd: offline (configured listener {})",
+            "web: offline (configured listener {})",
             listener_display(&status.interface, status.port)
         )?;
     }
@@ -360,7 +360,7 @@ fn start() -> Result<()> {
     crate::cli::render::web_warnings(&outcome.warnings);
     writeln!(
         std::io::stdout().lock(),
-        "ttyd: online on {} (pid {})",
+        "web: online on {} (pid {})",
         listener_display(&outcome.interface, outcome.port),
         outcome.pid
     )?;
@@ -372,14 +372,14 @@ fn restart() -> Result<()> {
     crate::cli::render::web_warnings(&outcome.warnings);
     writeln!(
         std::io::stdout().lock(),
-        "ttyd: online on {} (pid {})",
+        "web: online on {} (pid {})",
         listener_display(&outcome.interface, outcome.port),
         outcome.pid
     )?;
     if !outcome.was_online {
         writeln!(
             std::io::stdout().lock(),
-            "ttyd: was offline; started a fresh daemon"
+            "web: was offline; started a fresh daemon"
         )?;
     }
     if let Some(share) = outcome.share {
@@ -398,7 +398,7 @@ fn stop() -> Result<()> {
     let stopped = rimz::web::stop_daemons()?;
     writeln!(
         std::io::stdout().lock(),
-        "stopped {} ttyd daemon{}",
+        "stopped {} web daemon{}",
         stopped,
         if stopped == 1 { "" } else { "s" }
     )?;
@@ -414,7 +414,7 @@ fn token(command: WebTokenSubcmd) -> Result<()> {
             write_web_credential(&outcome.credential);
             writeln!(
                 std::io::stdout().lock(),
-                "rotated ttyd credential and restarted {restarted} daemon(s)"
+                "rotated web credential and restarted {restarted} daemon(s)"
             )?;
         }
         WebTokenSubcmd::List => {
@@ -437,7 +437,7 @@ fn render_revoked(stopped: bool) -> Result<()> {
     let stopped = usize::from(stopped);
     writeln!(
         std::io::stdout().lock(),
-        "revoked ttyd credential and stopped {stopped} daemon(s)"
+        "revoked web credential and stopped {stopped} daemon(s)"
     )?;
     Ok(())
 }

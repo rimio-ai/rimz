@@ -451,7 +451,7 @@ enum Subcmd {
     Sessions(sessions::SessionsArgs),
     /// Manage and connect to SSH remote rooms.
     Remote(remote::RemoteArgs),
-    /// Open a Zellij room in the browser.
+    /// Open a room in the browser.
     Web(web::WebArgs),
     /// Workspace identity helpers.
     Workspace(workspace::WorkspaceArgs),

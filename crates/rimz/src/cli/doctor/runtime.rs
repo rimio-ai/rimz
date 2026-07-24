@@ -228,8 +228,10 @@ fn room_state_view(state: &rimz::room::session::BackendRoomState) -> model::Room
 }
 
 fn collect_ttyd() -> model::Probe<model::TtydWeb> {
-    match rimz::web::ttyd_diagnostic() {
+    let config = MachineConfig::load_lenient();
+    match rimz::web::web_diagnostic(&config) {
         Ok(diagnostic) => model::Probe::Ready(model::TtydWeb {
+            backend: diagnostic.backend,
             path: diagnostic.path.display().to_string(),
             version: diagnostic.version,
         }),

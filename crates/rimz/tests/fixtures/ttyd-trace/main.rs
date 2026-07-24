@@ -10,9 +10,19 @@ use std::time::Duration;
 const INDEX: &str = "<html><head></head><body></body></html>";
 
 fn main() {
-    let args = env::args().skip(1).collect::<Vec<_>>();
+    let mut process_args = env::args();
+    let program = process_args.next().unwrap_or_default();
+    let args = process_args.collect::<Vec<_>>();
     if args.first().is_some_and(|arg| arg == "--version") {
-        writeln!(std::io::stdout().lock(), "ttyd version 1.7.7").expect("write version");
+        let version = if std::path::Path::new(&program)
+            .file_name()
+            .is_some_and(|name| name == "gotty")
+        {
+            "gotty version v1.8.0"
+        } else {
+            "ttyd version 1.7.7"
+        };
+        writeln!(std::io::stdout().lock(), "{version}").expect("write version");
         return;
     }
     let log = env::var_os("RIMZ_TEST_TTYD_LOG").expect("RIMZ_TEST_TTYD_LOG unset");

@@ -373,7 +373,7 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     if let Some(ttyd) = &mux.ttyd {
         match ttyd {
             Probe::Ready(ttyd) => kv.push(
-                "ttyd web",
+                format!("{} web", ttyd.backend),
                 verdict(
                     tally,
                     Health::Ok,
@@ -381,7 +381,7 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
                 ),
             ),
             Probe::Unavailable { error } => kv.push(
-                "ttyd web",
+                "web daemon",
                 verdict(
                     tally,
                     Health::Warn,

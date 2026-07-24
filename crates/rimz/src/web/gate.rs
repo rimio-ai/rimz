@@ -1,4 +1,4 @@
-//! Source-address and trusted-header authorization gate for shared ttyd.
+//! Source-address and trusted-header authorization gate for the shared web daemon.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream};

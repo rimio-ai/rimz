@@ -1,4 +1,4 @@
-//! Durable room allowlist and unauthenticated read-only ttyd daemon.
+//! Durable room allowlist and unauthenticated read-only web daemon.
 
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::MachineConfig;
+use crate::config::{MachineConfig, WebBackend};
 use crate::mux::CommandSpec;
 use crate::store::{atomic, paths};
 
-use super::{Result, WebErr, WebWarning, ttyd};
+use super::{Result, WebErr, WebWarning, backend, ttyd};
 
 const ALLOWLIST_FILE: &str = "web-share.json";
 const DAEMON_FILE: &str = "web-ttyd-share.json";
@@ -26,6 +26,8 @@ struct Allowlist {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct DaemonRecord {
     pub(super) pid: u32,
+    #[serde(default)]
+    pub(super) backend: WebBackend,
     pub(super) port: u16,
     #[serde(default = "default_interface")]
     pub(super) interface: String,
@@ -37,6 +39,7 @@ pub(super) struct DaemonRecord {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DaemonSpec {
+    backend: WebBackend,
     port: u16,
     interface: String,
 }
@@ -192,13 +195,14 @@ fn desired_spec(config: &MachineConfig) -> Result<DaemonSpec> {
         })?
         .to_string();
     Ok(DaemonSpec {
+        backend: config.web.backend,
         port: config.web.share_port,
         interface,
     })
 }
 
 fn ensure_daemon_locked(config: &MachineConfig, desired: &DaemonSpec) -> Result<RunningDaemon> {
-    let (program, version) = ttyd::required_program_with_version()?;
+    let (program, version) = backend::required_program_with_version(desired.backend)?;
     let daemon = daemon_status_locked()?;
     let prepared = prepare_fresh_start(config, desired, daemon.as_ref(), program, &version)?;
     if let Some(record) = daemon.as_ref()
@@ -214,7 +218,7 @@ fn ensure_daemon_locked(config: &MachineConfig, desired: &DaemonSpec) -> Result<
 }
 
 fn restart_daemon_locked(config: &MachineConfig, desired: &DaemonSpec) -> Result<RunningDaemon> {
-    let (program, version) = ttyd::required_program_with_version()?;
+    let (program, version) = backend::required_program_with_version(desired.backend)?;
     let daemon = daemon_status_locked()?;
     let prepared = prepare_fresh_start(config, desired, daemon.as_ref(), program, &version)?;
     start_fresh_locked_prepared(desired, daemon, prepared)
@@ -225,7 +229,7 @@ fn start_fresh_locked(
     desired: &DaemonSpec,
     daemon: Option<DaemonRecord>,
 ) -> Result<RunningDaemon> {
-    let (program, version) = ttyd::required_program_with_version()?;
+    let (program, version) = backend::required_program_with_version(desired.backend)?;
     let prepared = prepare_fresh_start(config, desired, daemon.as_ref(), program, &version)?;
     start_fresh_locked_prepared(desired, daemon, prepared)
 }
@@ -245,7 +249,7 @@ fn prepare_fresh_start(
     }) {
         ensure_share_port_available(address)?;
     }
-    let profile = ttyd::client::profile(config, &program, version);
+    let profile = backend::client_profile(desired.backend, config, &program, version);
     Ok((program, address, profile))
 }
 
@@ -264,7 +268,13 @@ fn start_fresh_locked_prepared(
         .map_err(|_| WebErr::InvalidInterface {
             value: desired.interface.clone(),
         })?;
-    let spec = spawn_spec(&program, interface, desired.port, &profile.args)?;
+    let spec = spawn_spec(
+        desired.backend,
+        &program,
+        interface,
+        desired.port,
+        &profile.args,
+    )?;
     let pid = ttyd::spawn_detached(spec)?;
     let probe = ttyd::probe_address(address);
     if !ttyd::wait_for_address(probe, START_TIMEOUT) {
@@ -273,6 +283,7 @@ fn start_fresh_locked_prepared(
     }
     let record = DaemonRecord {
         pid,
+        backend: desired.backend,
         port: desired.port,
         interface: desired.interface.clone(),
         pixel_protocol: profile.pixel_protocol,
@@ -309,6 +320,7 @@ fn record_matches(
     profile: &ttyd::client::ClientProfile,
 ) -> bool {
     record.port == desired.port
+        && record.backend == desired.backend
         && record.interface == desired.interface
         && record.index_key == profile.index_key
 }
@@ -319,17 +331,19 @@ fn daemon_status_locked() -> Result<Option<DaemonRecord>> {
         return Ok(None);
     };
     let processes = crate::proc::list_processes();
-    let ttyd_live = processes
-        .iter()
-        .any(|process| process.pid == record.pid && ttyd::is_ttyd_process(process));
+    let daemon_live = processes.iter().any(|process| {
+        process.pid == record.pid
+            && crate::proc::command::program_label(&process.cmdline)
+                == backend::process_label(record.backend)
+    });
     let listening = ttyd::socket_address(&record.interface, record.port)
         .ok()
         .map(ttyd::probe_address)
         .is_some_and(|address| TcpStream::connect(address).is_ok());
-    if ttyd_live && listening {
+    if daemon_live && listening {
         return Ok(Some(record));
     }
-    if ttyd_live {
+    if daemon_live {
         ttyd::terminate_pids(&[record.pid]);
     }
     ttyd::remove_optional(&path)?;
@@ -355,6 +369,7 @@ fn stop_record(record: &DaemonRecord) -> Result<()> {
 }
 
 fn spawn_spec(
+    backend: WebBackend,
     program: &Path,
     interface: IpAddr,
     port: u16,
@@ -365,23 +380,19 @@ fn spawn_spec(
         source,
     })?;
     Ok(spawn_spec_for(
-        program, &rimz_exe, interface, port, extra_args,
+        backend, program, &rimz_exe, interface, port, extra_args,
     ))
 }
 
 fn spawn_spec_for(
+    backend: WebBackend,
     program: &Path,
     rimz_exe: &Path,
     interface: IpAddr,
     port: u16,
     extra_args: &[String],
 ) -> CommandSpec {
-    CommandSpec::new(program.display().to_string())
-        .args(["-O", "-a", "-i", &interface.to_string(), "-p"])
-        .arg(port.to_string())
-        .args(extra_args.iter().cloned())
-        .arg(rimz_exe.display().to_string())
-        .args(["web", "exec", "--share"])
+    backend::share_argv(backend, program, rimz_exe, interface, port, extra_args)
 }
 
 fn ensure_share_port_available(address: SocketAddr) -> Result<()> {
@@ -445,6 +456,7 @@ mod tests {
     #[test]
     fn broadcast_argv_has_no_write_or_auth_and_uses_share_shim() {
         let spec = spawn_spec_for(
+            WebBackend::Ttyd,
             Path::new("/tmp/ttyd"),
             Path::new("/opt/rimz/bin/rimz"),
             "127.0.0.1".parse().expect("IP"),
@@ -494,11 +506,13 @@ mod tests {
     #[test]
     fn daemon_reuse_requires_the_generated_index_key() {
         let desired = DaemonSpec {
+            backend: WebBackend::Ttyd,
             port: 8201,
             interface: "127.0.0.1".to_owned(),
         };
         let mut daemon = DaemonRecord {
             pid: 42,
+            backend: WebBackend::Ttyd,
             port: desired.port,
             interface: desired.interface.clone(),
             pixel_protocol: None,
@@ -523,5 +537,20 @@ mod tests {
             &desired,
             &profile_with_index(Some("current"))
         ));
+        daemon.index_key = None;
+        daemon.backend = WebBackend::Gotty;
+        assert!(!record_matches(
+            &daemon,
+            &desired,
+            &profile_with_index(None)
+        ));
+    }
+
+    #[test]
+    fn old_daemon_state_defaults_to_ttyd() {
+        let daemon: DaemonRecord =
+            serde_json::from_str(r#"{"pid":42,"port":8201}"#).expect("old record");
+
+        assert_eq!(daemon.backend, WebBackend::Ttyd);
     }
 }

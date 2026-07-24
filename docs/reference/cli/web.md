@@ -1,6 +1,6 @@
 # Web CLI
 
-`rimz web` opens any RimZ room in the browser through one machine-wide ttyd daemon.
+`rimz web` opens any RimZ room in the browser through one machine-wide web daemon. `[web] backend` defaults to ttyd and can select experimental gotty.
 
 ```sh
 rimz web open [PATH] [--session <name>] [--print] [--no-start] [--no-resume] [--json]
@@ -31,7 +31,7 @@ rimz web token revoke-all
 
 `url` requires an existing workspace record and inspects its route without birthing a room, starting the daemon, or creating a credential. A live daemon's port wins over a changed configured port; offline inspection uses `[web] port`. JSON output includes the saved credential when one exists and omits `credential` otherwise.
 
-`share` requires an existing live room, adds it to the broadcast allowlist, ensures the no-auth read-only daemon, and opens the viewer URL unless `--print` is present. Its JSON payload is `{"version":"rimz.web.share.v1","url":"http://127.0.0.1:8201/?room=rimz-project-a1b2c3","session":"rimz-project-a1b2c3","port":8201}`.
+`share` requires an existing live room, adds it to the broadcast allowlist, ensures the no-auth read-only daemon, and opens the viewer URL unless `--print` is present. With the default ttyd backend its JSON payload is `{"version":"rimz.web.share.v1","url":"http://127.0.0.1:8201/?room=rimz-project-a1b2c3","session":"rimz-project-a1b2c3","port":8201}`; gotty uses `?arg=` in the URL.
 
 `unshare` resolves a path to its session without requiring the room to remain live, or accepts an exact `--session`; `--all` conflicts with both target forms. Revoking one of several rooms restarts the broadcast daemon to disconnect existing viewers, while revoking the last room stops it.
 
@@ -43,13 +43,13 @@ The JSON `open` payload is:
 {"version":"rimz.web.v2","url":"http://127.0.0.1:8200/?room=rimz-project-a1b2c3","session":"rimz-project-a1b2c3","port":8200,"tunnel_port":8200,"auth":{"mode":"basic"},"credential":{"username":"rimz","secret":"..."}}
 ```
 
-The `url --json` payload has the same fields, with optional `credential` and `tunnel_port` while the daemon is offline. Trusted-header payloads use `"auth":{"mode":"trusted_header","header":"X-Authentik-Username"}` and still carry the Basic credential for the private ttyd upstream. A gated daemon reports that upstream as `tunnel_port`; a direct daemon reports the public `port` in both fields.
+The `url --json` payload has the same fields, with optional `credential` and `tunnel_port` while the daemon is offline. Trusted-header payloads use `"auth":{"mode":"trusted_header","header":"X-Authentik-Username"}` and still carry the Basic credential for the private web-daemon upstream. A gated daemon reports that upstream as `tunnel_port`; a direct daemon reports the public `port` in both fields.
 
 `status --json` keeps the writable daemon's `version`, `online`, `pid`, `interface`, and `port` fields and adds `share: {online, pid, interface, port, sessions}`.
 
 The one credential is named `rimz`. `create` rotates it and restarts the live daemon and gate in every auth mode, `list` prints its creation time, and either revoke verb stops the daemon before clearing it.
 
-`--read-only` is rejected because ttyd's read-only setting belongs to the whole process; the error points to `rimz web share`.
+`--read-only` is rejected because the selected backend's read-only setting belongs to the whole process; the error points to `rimz web share`.
 
 The hidden `rimz web exec --share <session>` shim re-reads the durable allowlist for every viewer connection, requires a workspace record and live mux session, and returns only `this room is not shared` for every rejected target.
 

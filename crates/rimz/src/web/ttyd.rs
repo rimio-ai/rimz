@@ -1,6 +1,5 @@
-//! Shared ttyd daemon for browser access to every RimZ room.
+//! Shared web daemon manager for the configured browser backend.
 
-use std::fmt;
 use std::fs;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
@@ -11,47 +10,23 @@ use std::time::{Duration, Instant};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::config::MachineConfig;
+use crate::config::{MachineConfig, WebBackend};
 use crate::mux::CommandSpec;
 use crate::store::{atomic, paths};
 
-use super::{CredentialSummary, Result, WebAuth, WebCredential, WebErr, WebWarning, gate::Cidr};
+use super::{
+    CredentialSummary, Result, WebAuth, WebCredential, WebErr, WebWarning, backend, gate::Cidr,
+};
 
 pub(super) mod client;
 
 use client::ClientProfile;
 
-const TTYD_BIN_ENV: &str = "RIMZ_TTYD_BIN";
 const CREDENTIAL_FILE: &str = "web-ttyd-credential.json";
 const DAEMON_FILE: &str = "web-ttyd.json";
 const DAEMON_LOCK_FILE: &str = "web-ttyd.lock";
 const LEGACY_INSTANCE_DIR: &str = "web-ttyd";
 const START_TIMEOUT: Duration = Duration::from_secs(5);
-pub(super) const MIN_TTYD_VERSION: TtydVersion = TtydVersion::new(1, 7, 5);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct TtydVersion {
-    major: u32,
-    minor: u32,
-    patch: u32,
-}
-
-impl TtydVersion {
-    const fn new(major: u32, minor: u32, patch: u32) -> Self {
-        Self {
-            major,
-            minor,
-            patch,
-        }
-    }
-}
-
-impl fmt::Display for TtydVersion {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}.{}.{}", self.major, self.minor, self.patch)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct TtydCredential {
     name: String,
@@ -62,6 +37,8 @@ pub(super) struct TtydCredential {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct DaemonRecord {
     pub(super) pid: u32,
+    #[serde(default)]
+    pub(super) backend: WebBackend,
     pub(super) port: u16,
     #[serde(default = "default_interface")]
     pub(super) interface: String,
@@ -91,6 +68,7 @@ impl DaemonRecord {
     pub(super) fn basic_loopback(pid: u32, port: u16) -> Self {
         Self {
             pid,
+            backend: WebBackend::Ttyd,
             port,
             interface: default_interface(),
             auth: WebAuth::Basic,
@@ -106,6 +84,7 @@ impl DaemonRecord {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DaemonSpec {
+    backend: WebBackend,
     port: u16,
     interface: String,
     auth: WebAuth,
@@ -115,6 +94,7 @@ struct DaemonSpec {
 
 pub(super) struct RunningDaemon {
     pub(super) pid: u32,
+    pub(super) backend: WebBackend,
     pub(super) port: u16,
     pub(super) interface: String,
     pub(super) auth: WebAuth,
@@ -124,6 +104,7 @@ pub(super) struct RunningDaemon {
 }
 
 pub(super) struct DaemonInspection {
+    pub(super) backend: WebBackend,
     pub(super) port: u16,
     pub(super) auth: WebAuth,
     pub(super) credential: Option<WebCredential>,
@@ -143,82 +124,6 @@ struct LegacyTtydInstance {
     port: u16,
 }
 
-pub(super) fn preflight() -> Result<()> {
-    required_program_with_version().map(|_| ())
-}
-
-pub(super) fn program() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os(TTYD_BIN_ENV) {
-        return Ok(PathBuf::from(path));
-    }
-    which::which("ttyd").map_err(|_| WebErr::MissingTtyd {
-        minimum: MIN_TTYD_VERSION.to_string(),
-    })
-}
-
-pub(super) fn version_at(program: &Path) -> Result<String> {
-    let output = std::process::Command::new(program)
-        .arg("--version")
-        .output()
-        .map_err(|source| WebErr::Io {
-            path: program.to_path_buf(),
-            source,
-        })?;
-    let text = if output.stdout.is_empty() {
-        &output.stderr
-    } else {
-        &output.stdout
-    };
-    Ok(String::from_utf8_lossy(text).trim().to_owned())
-}
-
-pub(super) fn required_program_with_version() -> Result<(PathBuf, String)> {
-    let program = program()?;
-    let reported = version_at(&program)?;
-    require_supported_version(&reported)?;
-    Ok((program, reported))
-}
-
-fn require_supported_version(reported: &str) -> Result<TtydVersion> {
-    let Some(found) = parse_version(reported) else {
-        return Err(WebErr::TtydTooOld {
-            found: reported.to_owned(),
-            minimum: MIN_TTYD_VERSION.to_string(),
-        });
-    };
-    if found < MIN_TTYD_VERSION {
-        return Err(WebErr::TtydTooOld {
-            found: found.to_string(),
-            minimum: MIN_TTYD_VERSION.to_string(),
-        });
-    }
-    Ok(found)
-}
-
-fn parse_version(reported: &str) -> Option<TtydVersion> {
-    let version = reported
-        .trim()
-        .strip_prefix("ttyd version ")?
-        .split_whitespace()
-        .next()?;
-    let mut components = version.splitn(3, '.');
-    let major = components.next()?.parse().ok()?;
-    let minor = components.next()?.parse().ok()?;
-    let patch_and_suffix = components.next()?;
-    let patch_len = patch_and_suffix
-        .bytes()
-        .take_while(u8::is_ascii_digit)
-        .count();
-    if patch_len == 0 {
-        return None;
-    }
-    let (patch, suffix) = patch_and_suffix.split_at(patch_len);
-    if !suffix.is_empty() && !matches!(suffix.as_bytes().first(), Some(b'-' | b'+')) {
-        return None;
-    }
-    Some(TtydVersion::new(major, minor, patch.parse().ok()?))
-}
-
 pub(super) fn open_daemon(config: &MachineConfig, may_start: bool) -> Result<RunningDaemon> {
     if may_start {
         ensure_daemon(config)
@@ -235,6 +140,9 @@ pub(super) fn open_daemon(config: &MachineConfig, may_start: bool) -> Result<Run
 pub(super) fn inspect_daemon(config: &MachineConfig) -> Result<DaemonInspection> {
     let _guard = acquire_daemon_lock()?;
     let daemon = daemon_status_locked()?;
+    let backend = daemon
+        .as_ref()
+        .map_or(config.web.backend, |record| record.backend);
     let port = daemon
         .as_ref()
         .map_or(config.web.port, |record| record.port);
@@ -244,6 +152,7 @@ pub(super) fn inspect_daemon(config: &MachineConfig) -> Result<DaemonInspection>
     let credential = read_credential()?.map(|credential| basic_auth(&credential));
     let tunnel_port = daemon.as_ref().map(tunnel_port);
     Ok(DaemonInspection {
+        backend,
         port,
         auth,
         credential,
@@ -295,7 +204,7 @@ fn clear_credential() -> Result<bool> {
 
 pub(super) fn ensure_daemon(config: &MachineConfig) -> Result<RunningDaemon> {
     let desired = desired_spec(config)?;
-    let (program, version) = required_program_with_version()?;
+    let (program, version) = backend::required_program_with_version(desired.backend)?;
     let _guard = acquire_daemon_lock()?;
     reap_legacy_instances();
     let daemon = daemon_status_locked()?;
@@ -320,6 +229,7 @@ fn running_daemon(
     let tunnel_port = tunnel_port(&record);
     RunningDaemon {
         pid: record.pid,
+        backend: record.backend,
         port: record.port,
         interface: record.interface,
         auth: record.auth,
@@ -378,6 +288,7 @@ fn desired_spec(config: &MachineConfig) -> Result<DaemonSpec> {
         return Err(WebErr::EmptyAuthUser);
     }
     Ok(DaemonSpec {
+        backend: config.web.backend,
         port: config.web.port,
         interface,
         auth,
@@ -388,6 +299,7 @@ fn desired_spec(config: &MachineConfig) -> Result<DaemonSpec> {
 
 fn record_matches(record: &DaemonRecord, desired: &DaemonSpec, profile: &ClientProfile) -> bool {
     record.basic_upstream
+        && record.backend == desired.backend
         && record.port == desired.port
         && record.interface == desired.interface
         && record.auth == desired.auth
@@ -545,6 +457,7 @@ fn start_daemon_with_profile(
     };
     let ttyd_address = SocketAddr::new(ttyd_interface, ttyd_port);
     let spec = spawn_spec(
+        desired.backend,
         program,
         ttyd_interface,
         ttyd_port,
@@ -584,6 +497,7 @@ fn start_daemon_with_profile(
     };
     let record = DaemonRecord {
         pid,
+        backend: desired.backend,
         port: desired.port,
         interface: desired.interface.clone(),
         auth: desired.auth.clone(),
@@ -650,7 +564,7 @@ fn rotate_credential_locked(config: &MachineConfig) -> Result<CredentialRotation
             warnings: Vec::new(),
         });
     };
-    let (program, version) = required_program_with_version()?;
+    let (program, version) = backend::required_program_with_version(desired.backend)?;
     let prepared = prepare_fresh_start(config, &desired, Some(&daemon), program, &version)?;
     let credential = mint_credential()?;
     let running = start_fresh_locked(&desired, Some(daemon), credential.clone(), prepared)?;
@@ -663,7 +577,7 @@ fn rotate_credential_locked(config: &MachineConfig) -> Result<CredentialRotation
 
 pub(super) fn restart_daemon(config: &MachineConfig) -> Result<(RunningDaemon, bool)> {
     let desired = desired_spec(config)?;
-    let (program, version) = required_program_with_version()?;
+    let (program, version) = backend::required_program_with_version(desired.backend)?;
     let _guard = acquire_daemon_lock()?;
     reap_legacy_instances();
     let daemon = daemon_status_locked()?;
@@ -680,7 +594,7 @@ pub(super) fn restart_if_online(config: &MachineConfig) -> Result<Option<Running
         return Ok(None);
     };
     let desired = desired_spec(config)?;
-    let (program, version) = required_program_with_version()?;
+    let (program, version) = backend::required_program_with_version(desired.backend)?;
     let prepared = prepare_fresh_start(config, &desired, Some(&daemon), program, &version)?;
     let credential = ensure_credential()?;
     start_fresh_locked(&desired, Some(daemon), credential, prepared).map(Some)
@@ -701,7 +615,7 @@ fn prepare_fresh_start(
     }) {
         ensure_port_available(public_address)?;
     }
-    let profile = client::profile(config, &program, version);
+    let profile = backend::client_profile(desired.backend, config, &program, version);
     Ok((program, public_address, profile))
 }
 
@@ -745,9 +659,11 @@ fn daemon_status_locked() -> Result<Option<DaemonRecord>> {
         return Ok(None);
     };
     let processes = crate::proc::list_processes();
-    let ttyd_live = processes
-        .iter()
-        .any(|process| process.pid == record.pid && is_ttyd_process(process));
+    let daemon_live = processes.iter().any(|process| {
+        process.pid == record.pid
+            && crate::proc::command::program_label(&process.cmdline)
+                == backend::process_label(record.backend)
+    });
     let gate_live = record.gate.as_ref().is_none_or(|gate| {
         processes
             .iter()
@@ -756,10 +672,10 @@ fn daemon_status_locked() -> Result<Option<DaemonRecord>> {
     let listening = record_public_address(&record)
         .ok()
         .is_some_and(|address| TcpStream::connect(address).is_ok());
-    if ttyd_live && gate_live && listening {
+    if daemon_live && gate_live && listening {
         return Ok(Some(record));
     }
-    terminate_live_record(&record, ttyd_live, gate_live);
+    terminate_live_record(&record, daemon_live, gate_live);
     remove_optional(&path)?;
     Ok(None)
 }
@@ -797,14 +713,14 @@ fn terminate_record(record: &DaemonRecord) {
     terminate_live_record(record, true, record.gate.is_some());
 }
 
-fn terminate_live_record(record: &DaemonRecord, ttyd_live: bool, gate_live: bool) {
+fn terminate_live_record(record: &DaemonRecord, daemon_live: bool, gate_live: bool) {
     #[cfg(unix)]
     {
         let mut pids = Vec::new();
         if gate_live && let Some(gate) = &record.gate {
             pids.push(gate.pid);
         }
-        if ttyd_live {
+        if daemon_live {
             pids.push(record.pid);
         }
         let terminated = !pids.is_empty();
@@ -814,7 +730,7 @@ fn terminate_live_record(record: &DaemonRecord, ttyd_live: bool, gate_live: bool
         }
     }
     #[cfg(not(unix))]
-    let _ = (record, ttyd_live, gate_live);
+    let _ = (record, daemon_live, gate_live);
 }
 
 #[cfg(unix)]
@@ -848,6 +764,7 @@ pub(super) fn terminate_pids(pids: &[u32]) {
 pub(super) fn terminate_pids(_pids: &[u32]) {}
 
 fn spawn_spec(
+    backend: WebBackend,
     program: &Path,
     interface: IpAddr,
     port: u16,
@@ -855,6 +772,7 @@ fn spawn_spec(
     extra_args: &[String],
 ) -> Result<CommandSpec> {
     spawn_spec_for(
+        backend,
         program,
         &std::env::current_exe().map_err(|source| WebErr::Io {
             path: PathBuf::from("/proc/self/exe"),
@@ -868,6 +786,7 @@ fn spawn_spec(
 }
 
 fn spawn_spec_for(
+    backend: WebBackend,
     program: &Path,
     rimz_exe: &Path,
     interface: IpAddr,
@@ -875,14 +794,15 @@ fn spawn_spec_for(
     credential: &TtydCredential,
     extra_args: &[String],
 ) -> Result<CommandSpec> {
-    let mut spec = CommandSpec::new(program.display().to_string()).args(["-W", "-O", "-a"]);
-    spec = spec.arg("-c").arg(format!("rimz:{}", credential.secret));
-    Ok(spec
-        .args(["-i", &interface.to_string(), "-p"])
-        .arg(port.to_string())
-        .args(extra_args.iter().cloned())
-        .arg(rimz_exe.display().to_string())
-        .args(["web", "exec"]))
+    Ok(backend::writable_argv(
+        backend,
+        program,
+        rimz_exe,
+        interface,
+        port,
+        &credential.secret,
+        extra_args,
+    ))
 }
 
 pub(super) fn spawn_detached(spec: CommandSpec) -> Result<u32> {
@@ -896,7 +816,7 @@ pub(super) fn spawn_detached(spec: CommandSpec) -> Result<u32> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    crate::child_process::spawn_detached_reaped(&mut command, "ttyd-web").map_err(|source| {
+    crate::child_process::spawn_detached_reaped(&mut command, "web-daemon").map_err(|source| {
         WebErr::Io {
             path: PathBuf::from(&spec.program),
             source,
@@ -1058,37 +978,9 @@ mod tests {
     }
 
     #[test]
-    fn ttyd_version_gate_accepts_the_minimum_and_rejects_the_previous_patch() {
-        assert!(matches!(
-            require_supported_version("ttyd version 1.7.4"),
-            Err(WebErr::TtydTooOld { found, minimum })
-                if found == "1.7.4" && minimum == "1.7.5"
-        ));
-        assert_eq!(
-            require_supported_version("ttyd version 1.7.5").expect("minimum ttyd version"),
-            MIN_TTYD_VERSION
-        );
-        assert_eq!(
-            require_supported_version("ttyd version 1.7.7-1+deb13u1")
-                .expect("packaged ttyd version"),
-            TtydVersion::new(1, 7, 7)
-        );
-    }
-
-    #[test]
-    fn malformed_ttyd_versions_fail_with_the_reported_value() {
-        for reported in ["", "ttyd 1.7.7", "ttyd version 1.7", "ttyd version current"] {
-            assert!(matches!(
-                require_supported_version(reported),
-                Err(WebErr::TtydTooOld { found, minimum })
-                    if found == reported && minimum == "1.7.5"
-            ));
-        }
-    }
-
-    #[test]
     fn argv_uses_loopback_auth_url_args_and_rimz_shim() {
         let spec = spawn_spec_for(
+            WebBackend::Ttyd,
             Path::new("/tmp/ttyd"),
             Path::new("/opt/rimz/bin/rimz"),
             IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -1121,6 +1013,7 @@ mod tests {
     #[test]
     fn argv_uses_basic_auth_for_a_trusted_header_daemon() {
         let spec = spawn_spec_for(
+            WebBackend::Ttyd,
             Path::new("/tmp/ttyd"),
             Path::new("/opt/rimz/bin/rimz"),
             "127.0.0.1".parse().expect("IP"),
@@ -1152,6 +1045,7 @@ mod tests {
             "/cache/index.html".to_owned(),
         ];
         let spec = spawn_spec_for(
+            WebBackend::Ttyd,
             Path::new("/tmp/ttyd"),
             Path::new("/opt/rimz/bin/rimz"),
             "127.0.0.1".parse().expect("IP"),
@@ -1206,6 +1100,7 @@ mod tests {
         let path = dir.path().join("daemon.json");
         let daemon = DaemonRecord {
             pid: u32::MAX,
+            backend: WebBackend::Gotty,
             port: 8200,
             interface: "0.0.0.0".to_owned(),
             auth: WebAuth::TrustedHeader {
@@ -1230,6 +1125,7 @@ mod tests {
         let daemon: DaemonRecord =
             serde_json::from_str(r#"{"pid":42,"port":8200}"#).expect("old record");
         assert_eq!(daemon.pid, 42);
+        assert_eq!(daemon.backend, WebBackend::Ttyd);
         assert_eq!(daemon.auth, WebAuth::Basic);
         assert!(daemon.auth_users.is_empty());
         assert!(daemon.gate.is_none());
@@ -1281,6 +1177,7 @@ mod tests {
     #[test]
     fn non_loopback_trusted_header_auth_warns_without_a_proxy_allowlist() {
         let spec = DaemonSpec {
+            backend: WebBackend::Ttyd,
             port: 8200,
             interface: "0.0.0.0".to_owned(),
             auth: WebAuth::TrustedHeader {
@@ -1331,6 +1228,9 @@ mod tests {
         profile.index_key = None;
         assert!(record_matches(&daemon, &desired, &profile));
         daemon.auth_users.push("alice".to_owned());
+        assert!(!record_matches(&daemon, &desired, &profile));
+        daemon.auth_users.clear();
+        daemon.backend = WebBackend::Gotty;
         assert!(!record_matches(&daemon, &desired, &profile));
     }
 

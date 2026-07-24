@@ -1,4 +1,4 @@
-//! Browser access through one machine-wide ttyd daemon.
+//! Browser access through one machine-wide web daemon.
 
 use std::io::{self, Write as _};
 use std::net::{SocketAddr, TcpListener};
@@ -10,12 +10,13 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::config::MachineConfig;
+use crate::config::{MachineConfig, WebBackend};
 use crate::ids::MuxName;
 use crate::mux::CommandSpec;
 use crate::room::session::{LiveRoom, LiveSessions, live_rooms_with, workspace_record_for_session};
 use crate::store::atomic;
 
+mod backend;
 mod gate;
 mod share;
 mod ttyd;
@@ -62,6 +63,14 @@ pub enum WebErr {
         "ttyd {found} is too old for browser access; RimZ requires ttyd {minimum} or newer; run `brew upgrade ttyd` or install ttyd {minimum}+ from a current apt repository or the ttyd release page"
     )]
     TtydTooOld { found: String, minimum: String },
+    #[error(
+        "gotty {minimum} or newer is required for browser access; install the release binary from https://github.com/sorenisanerd/gotty/releases or run `brew install sorenisanerd/gotty/gotty`"
+    )]
+    MissingGotty { minimum: String },
+    #[error(
+        "gotty {found} is too old for browser access; RimZ requires gotty {minimum} or newer; run `brew upgrade sorenisanerd/gotty/gotty` or install gotty {minimum}+ from https://github.com/sorenisanerd/gotty/releases"
+    )]
+    GottyTooOld { found: String, minimum: String },
     #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
@@ -78,13 +87,11 @@ pub enum WebErr {
     Atomic(#[from] atomic::AtomicErr),
     #[error(transparent)]
     DaemonLock(#[from] crate::store::lock::LockErr),
-    #[error("the shared ttyd daemon is offline; run `rimz web start` or omit `--no-start`")]
+    #[error("the shared web daemon is offline; run `rimz web start` or omit `--no-start`")]
     TtydOffline,
-    #[error(
-        "the shared ttyd daemon credential is missing; run `rimz web token create`, then retry"
-    )]
+    #[error("the shared web daemon credential is missing; run `rimz web token create`, then retry")]
     TtydCredentialMissing,
-    #[error("the shared ttyd daemon did not accept connections on {address} within 5 seconds")]
+    #[error("the shared web daemon did not accept connections on {address} within 5 seconds")]
     TtydStartTimeout { address: SocketAddr },
     #[error(
         "[web] port {port} is already in use by another process; choose a free port in `rimz config path`"
@@ -95,11 +102,11 @@ pub enum WebErr {
     )]
     ConfiguredSharePortInUse { port: u16 },
     #[error(
-        "the read-only broadcast ttyd daemon did not accept connections on {address} within 5 seconds"
+        "the read-only broadcast web daemon did not accept connections on {address} within 5 seconds"
     )]
     ShareStartTimeout { address: SocketAddr },
     #[error(
-        "ttyd read-only access is per process, not per credential; use `rimz web share` for a read-only broadcast"
+        "read-only web access is per process, not per credential; use `rimz web share` for a read-only broadcast"
     )]
     TtydReadOnlyCredential,
     #[error(
@@ -124,7 +131,7 @@ pub enum WebErr {
         #[source]
         source: io::Error,
     },
-    #[error("ttyd credential `{name}` does not exist (the single credential is `rimz`)")]
+    #[error("web credential `{name}` does not exist (the single credential is `rimz`)")]
     TtydCredentialNotFound { name: String },
     #[error(
         "{mux} session `{session}` is not addressable after web preparation. Run `rimz reset` from the workspace, then retry `rimz web open`."
@@ -187,6 +194,7 @@ pub struct WebOpenPayload {
 
 impl WebOpenPayload {
     pub fn for_session(
+        backend: WebBackend,
         session: impl Into<String>,
         base_url: impl Into<String>,
         port: u16,
@@ -196,7 +204,7 @@ impl WebOpenPayload {
     ) -> Self {
         let session = session.into();
         let base_url = base_url.into();
-        let url = join_session_url(&base_url, &session);
+        let url = join_session_url(backend, &base_url, &session);
         Self {
             version: WEB_SCHEMA_VERSION.to_owned(),
             url,
@@ -309,13 +317,14 @@ pub struct CredentialRotation {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TtydDiagnostic {
+pub struct WebDiagnostic {
+    pub backend: String,
     pub path: PathBuf,
     pub version: String,
 }
 
-pub fn preflight() -> Result<()> {
-    ttyd::preflight()
+pub fn preflight(config: &MachineConfig) -> Result<()> {
+    backend::required_program_with_version(config.web.backend).map(|_| ())
 }
 
 pub fn open_session(
@@ -327,6 +336,7 @@ pub fn open_session(
     let base_url = normalized_base_url(config.web.base_url.as_deref(), daemon.port);
     Ok(WebAccessOutcome {
         payload: WebOpenPayload::for_session(
+            daemon.backend,
             session,
             base_url,
             daemon.port,
@@ -342,6 +352,7 @@ pub fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebOpenP
     let daemon = ttyd::inspect_daemon(config)?;
     let base_url = normalized_base_url(config.web.base_url.as_deref(), daemon.port);
     Ok(WebOpenPayload::for_session(
+        daemon.backend,
         session,
         base_url,
         daemon.port,
@@ -472,7 +483,7 @@ pub fn share_session(session: &str, config: &MachineConfig) -> Result<WebShareOu
     Ok(WebShareOutcome {
         payload: WebSharePayload {
             version: "rimz.web.share.v1".to_owned(),
-            url: join_session_url(&base_url, session),
+            url: join_session_url(daemon.record.backend, &base_url, session),
             session: session.to_owned(),
             port: daemon.record.port,
         },
@@ -612,15 +623,24 @@ fn web_addressable_timeout() -> Duration {
         .unwrap_or(WEB_ADDRESSABLE_TIMEOUT)
 }
 
-pub fn ttyd_diagnostic() -> Result<TtydDiagnostic> {
-    let path = ttyd::program()?;
-    let version = ttyd::version_at(&path)?;
-    Ok(TtydDiagnostic { path, version })
+pub fn web_diagnostic(config: &MachineConfig) -> Result<WebDiagnostic> {
+    let selected = config.web.backend;
+    let path = backend::program(selected)?;
+    let version = backend::version_at(&path)?;
+    Ok(WebDiagnostic {
+        backend: backend::process_label(selected).to_owned(),
+        path,
+        version,
+    })
 }
 
-fn join_session_url(base_url: &str, session: &str) -> String {
+fn join_session_url(backend: WebBackend, base_url: &str, session: &str) -> String {
     let base = base_url.trim_end_matches('/');
-    format!("{base}/?room={}", encode_query_value(session))
+    let argument = match backend {
+        WebBackend::Ttyd => "room",
+        WebBackend::Gotty => "arg",
+    };
+    format!("{base}/?{argument}={}", encode_query_value(session))
 }
 
 fn normalized_base_url(configured: Option<&str>, port: u16) -> String {
@@ -662,20 +682,29 @@ mod tests {
     }
 
     #[test]
-    fn joins_base_url_and_session_as_browser_room() {
+    fn joins_base_url_and_session_for_each_backend() {
         assert_eq!(
-            join_session_url("http://127.0.0.1:8200", "rimz-terrain-a1b2c3"),
+            join_session_url(
+                WebBackend::Ttyd,
+                "http://127.0.0.1:8200",
+                "rimz-terrain-a1b2c3"
+            ),
             "http://127.0.0.1:8200/?room=rimz-terrain-a1b2c3"
         );
         assert_eq!(
-            join_session_url("https://devbox.example/rimz/", "rimz/a b"),
-            "https://devbox.example/rimz/?room=rimz%2Fa%20b"
+            join_session_url(
+                WebBackend::Gotty,
+                "https://devbox.example/rimz/",
+                "rimz/a b"
+            ),
+            "https://devbox.example/rimz/?arg=rimz%2Fa%20b"
         );
     }
 
     #[test]
     fn payload_constructor_roundtrips_v2_credential() {
         let payload = WebOpenPayload::for_session(
+            WebBackend::Ttyd,
             "rimz-test-a1b2c3",
             "http://127.0.0.1:8200/",
             8200,

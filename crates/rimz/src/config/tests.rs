@@ -98,6 +98,7 @@ fn assert_sentry_config(config: &MachineConfig) {
 }
 
 fn assert_web_config(config: &MachineConfig) {
+    assert_eq!(config.web.backend, WebBackend::Gotty);
     assert!(!config.web.enabled);
     assert_eq!(
         config.web.base_url.as_deref(),
@@ -1633,6 +1634,7 @@ fn notifications_parse_per_machine_preferences() {
 
 #[test]
 fn web_enabled_defaults_on_and_parses_off() {
+    assert_eq!(WebPrefs::default().backend, WebBackend::Ttyd);
     assert!(WebPrefs::default().enabled);
     assert_eq!(WebPrefs::default().port, 8200);
     assert_eq!(WebPrefs::default().share_port, 8201);
@@ -1657,6 +1659,7 @@ fn scalar_sections_parse_non_default_values() {
         ),
         (
             "[web]\n\
+             backend = \"gotty\"\n\
              enabled = false\n\
              port = 9123\n\
              share_port = 9124\n\
@@ -1687,11 +1690,13 @@ fn scalar_sections_parse_non_default_values() {
 }
 
 #[test]
-fn web_auth_users_round_trip() {
-    let prefs: WebPrefs = toml::from_str("auth_users = [\"alice\", \"bob\"]\n").expect("parse");
+fn web_backend_and_auth_users_round_trip() {
+    let prefs: WebPrefs =
+        toml::from_str("backend = \"gotty\"\nauth_users = [\"alice\", \"bob\"]\n").expect("parse");
     let encoded = toml::to_string(&prefs).expect("serialize");
     let round_tripped: WebPrefs = toml::from_str(&encoded).expect("parse serialized prefs");
 
     assert_eq!(round_tripped, prefs);
+    assert_eq!(round_tripped.backend, WebBackend::Gotty);
     assert_eq!(round_tripped.auth_users, ["alice", "bob"]);
 }

@@ -1,6 +1,6 @@
 # Web
 
-A terminal attach works well while you have the right terminal open. When you need the same room from a browser, RimZ can put its existing Zellij or tmux session behind one local ttyd address without moving the room, agents, or state into another service.
+A terminal attach works well while you have the right terminal open. When you need the same room from a browser, RimZ can put its existing Zellij or tmux session behind one local web-daemon address without moving the room, agents, or state into another service.
 
 <p align="center">
   <img src="../rimz-forge.png" alt="A RimZ room in the browser: the sidebar triaging a forge team beside the planner, coder, and reviewer panes" width="100%">
@@ -19,6 +19,21 @@ ttyd --version
 
 Run `brew upgrade ttyd` when Homebrew has an older build. On Debian or Ubuntu, check the apt candidate before installing and use a current repository or the ttyd release page when the distribution package is below 1.7.5. `rimz doctor` reports the resolved ttyd path and version. An explicit web command refuses a missing or older binary with this upgrade fix; a normal `rimz start` still opens the terminal room and prints the warning because browser startup is best-effort.
 
+### gotty backend (experimental)
+
+Set `backend = "gotty"` to A/B RimZ through [sorenisanerd/gotty](https://github.com/sorenisanerd/gotty) 1.8.0 or newer instead of the default ttyd transport:
+
+```sh
+brew install sorenisanerd/gotty/gotty
+gotty --version
+rimz config set web.backend gotty
+rimz web restart
+```
+
+Release binaries are also available from the [gotty releases](https://github.com/sorenisanerd/gotty/releases). RimZ resolves `RIMZ_GOTTY_BIN` before `PATH`, checks the 1.8.0 floor, and selects gotty for both the writable and broadcast daemons.
+
+Gotty links use `?arg=<session>` and serve gotty's stock client. The ttyd-only theme, `font`, `font_source`, pixel layer, mouse and keyboard compatibility fixes, OSC 7717 URL and title synchronization, and automatic reconnect page do not apply; reload the page after a disconnect. The broadcast listener stays unauthenticated and read-only because RimZ omits gotty's `-w` and `-c` flags.
+
 ## Serve a local room
 
 ```sh
@@ -34,11 +49,11 @@ rimz web stop       # stop both browser daemons
 
 `rimz web` is `rimz web open`.
 
-RimZ resolves or births the room first, confirms that its mux session is live, and ensures one ttyd daemon bound to `127.0.0.1:8200` by default. Every Zellij and tmux room on the machine shares that process.
+RimZ resolves or births the room first, confirms that its mux session is live, and ensures one selected web daemon bound to `127.0.0.1:8200` by default. Every Zellij and tmux room on the machine shares that process.
 
-The printed route is `http://127.0.0.1:8200/?room=<session>`. ttyd passes the selected session to a hidden RimZ shim, which accepts only a live session backed by a RimZ workspace record and attaches with the correct mux command. Changing the URL argument cannot run an arbitrary command. Links from older releases that use `?arg=` still attach to the same exact session.
+The default ttyd route is `http://127.0.0.1:8200/?room=<session>`; gotty uses `?arg=<session>`. The daemon passes the selected session to a hidden RimZ shim, which accepts only a live session backed by a RimZ workspace record and attaches with the correct mux command. Changing the URL argument cannot run an arbitrary command. ttyd links from older releases that use `?arg=` still attach to the same exact session.
 
-The browser shows a Basic-Auth prompt. Use the printed user `rimz` and password. Add `--no-start` when a supervisor owns ttyd and the command should fail rather than start it.
+The browser shows a Basic-Auth prompt. Use the printed user `rimz` and password. Add `--no-start` when a supervisor owns the web daemon and the command should fail rather than start it.
 
 Safari can load this direct local page but cannot attach the terminal because WebKit omits Basic credentials from WebSocket upgrades. Use `rimz remote connect --web`, put a trusted-header reverse proxy in front, or open the direct local URL in Chrome. The remote tunnel injects the credential locally and supports Safari without changing the always-on daemon topology.
 
@@ -71,17 +86,17 @@ rimz web unshare --session rimz-project-a1b2c3
 rimz web unshare --all
 ```
 
-`share` requires an already-live RimZ room, adds only that room to a durable allowlist, starts a second ttyd daemon on `127.0.0.1:8201` by default, and prints its viewer URL. The viewer daemon has no Basic-Auth prompt and drops all browser input; it cannot reach another live room by changing `?room=` because its shim accepts only allowlisted sessions and gives the same generic refusal for unknown, stopped, and unshared names.
+`share` requires an already-live RimZ room, adds only that room to a durable allowlist, starts a second daemon of the selected backend on `127.0.0.1:8201` by default, and prints its viewer URL. The viewer daemon has no Basic-Auth prompt and drops all browser input; it cannot reach another live room by changing its `?room=` or `?arg=` target because its shim accepts only allowlisted sessions and gives the same generic refusal for unknown, stopped, and unshared names.
 
 The viewer link is deliberately unauthenticated. Keep the listener on loopback for local viewing, or put HTTPS and any desired viewer authentication in a reverse proxy before exposing it. Set `share_base_url` to the proxy's public prefix; `auth_header`, `auth_users`, and `trusted_proxies` govern only the writable listener. A shared room on a non-loopback `interface` prints a warning that anyone who can reach `share_port` can watch.
 
 `unshare` restarts the broadcast daemon while other rooms remain shared, which disconnects every existing viewer and lets still-shared tabs reconnect. Removing the last room or using `--all` stops the daemon. The allowlist survives `rimz web stop`; `rimz web status` shows both its retained sessions and whether the broadcast daemon is online.
 
-tmux viewers attach read-only and with `ignore-size`, so they cannot type or resize the presenter's layout. Zellij has no read-only or size-isolated attach mode: ttyd still blocks viewer input, but a viewer window resize can influence the shared Zellij session geometry.
+tmux viewers attach read-only and with `ignore-size`, so they cannot type or resize the presenter's layout. Zellij has no read-only or size-isolated attach mode: the web daemon still blocks viewer input, but a viewer window resize can influence the shared Zellij session geometry.
 
 ## Browser appearance and input
 
-RimZ gives ttyd the active theme and configured browser font when the daemon starts. `JetBrainsMono Nerd Font Mono` and `CaskaydiaCove Nerd Font Mono` are built-in presets: RimZ downloads verified regular and bold faces and caches them under `$XDG_CACHE_HOME/rimz/web-fonts`.
+This section applies to the default ttyd backend. RimZ gives ttyd the active theme and configured browser font when the daemon starts. `JetBrainsMono Nerd Font Mono` and `CaskaydiaCove Nerd Font Mono` are built-in presets: RimZ downloads verified regular and bold faces and caches them under `$XDG_CACHE_HOME/rimz/web-fonts`.
 
 Set `font_source` to a local `.ttf`, `.otf`, `.woff`, or `.woff2` file, or to an HTTPS URL. A family with no preset and no source asks the browser to resolve an installed font. `style_client = false` keeps ttyd's browser colors while retaining keyboard, cursor, clipboard, and reconnect fixes.
 
@@ -97,7 +112,7 @@ rimz web restart
 
 ## Behind a reverse proxy
 
-A reverse proxy can terminate HTTPS and let an Authentik forward-auth decision identify the user while ttyd keeps its machine-wide Basic Auth behind that public edge. Set Authentik's Traefik forward-auth middleware to return `X-Authentik-Username` in its auth response headers, attach that middleware to the router serving RimZ, and make the proxy overwrite or remove any client-supplied copy of that header before forwarding.
+A reverse proxy can terminate HTTPS and let an Authentik forward-auth decision identify the user while the web daemon keeps its machine-wide Basic Auth behind that public edge. Set Authentik's Traefik forward-auth middleware to return `X-Authentik-Username` in its auth response headers, attach that middleware to the router serving RimZ, and make the proxy overwrite or remove any client-supplied copy of that header before forwarding.
 
 Bind an Authentik access policy to the RimZ application as the primary control over who reaches the proxy. RimZ's `auth_users` allowlist adds defense in depth at the writable terminal itself; list each allowed identity with the exact canonical username spelling Authentik emits.
 
@@ -121,7 +136,7 @@ interface = "0.0.0.0"
 trusted_proxies = ["172.18.0.0/16"]
 ```
 
-RimZ starts Basic-authenticated ttyd on an ephemeral loopback port and a small authorization gate on `0.0.0.0:8200`. The gate accepts only loopback or configured source CIDRs, requires exactly one non-empty `X-Authentik-Username` on every HTTP request, matches its trimmed value byte-for-byte and case-sensitively against `auth_users`, strips client-supplied `Authorization`, and presents ttyd's Basic credential upstream. An empty or absent `auth_users` allows any single non-empty identity for compatibility. Use the proxy host's address or subnet for a proxy on another LAN or VPC host. Keep the host firewall restricted to the same sources; `trusted_proxies` sees the TCP peer address, so configure the CIDR for the address that actually reaches RimZ after container and host networking.
+RimZ starts the selected Basic-authenticated web daemon on an ephemeral loopback port and a small authorization gate on `0.0.0.0:8200`. The gate accepts only loopback or configured source CIDRs, requires exactly one non-empty `X-Authentik-Username` on every HTTP request, matches its trimmed value byte-for-byte and case-sensitively against `auth_users`, strips client-supplied `Authorization`, and presents the daemon's Basic credential upstream. An empty or absent `auth_users` allows any single non-empty identity for compatibility. Use the proxy host's address or subnet for a proxy on another LAN or VPC host. Keep the host firewall restricted to the same sources; `trusted_proxies` sees the TCP peer address, so configure the CIDR for the address that actually reaches RimZ after container and host networking.
 
 Restart after changing the auth or listener shape:
 
@@ -129,9 +144,9 @@ Restart after changing the auth or listener shape:
 rimz web restart
 ```
 
-The gate rejects missing, empty, duplicated, and non-allowlisted identity headers after validating the peer address. An empty `trusted_proxies` list accepts only a proxy connecting from loopback. The gate admits loopback as a source but still requires exactly one identity header there; the private ttyd listener separately requires Basic Auth.
+The gate rejects missing, empty, duplicated, and non-allowlisted identity headers after validating the peer address. An empty `trusted_proxies` list accepts only a proxy connecting from loopback. The gate admits loopback as a source but still requires exactly one identity header there; the private web-daemon listener separately requires Basic Auth.
 
-The trusted-header decision applies only at the public gate. `rimz remote connect --web` tunnels through SSH directly to the private ttyd listener and injects the machine credential inside its local relay, so it works the same way in Basic and trusted-header configurations.
+The trusted-header decision applies only at the public gate. `rimz remote connect --web` tunnels through SSH directly to the private web-daemon listener and injects the machine credential inside its local relay, so it works the same way in Basic and trusted-header configurations.
 
 ## Open a remote room
 
@@ -140,7 +155,7 @@ rimz remote connect dev --web
 rimz remote connect dev --web --web-port 8443
 ```
 
-RimZ uses one SSH prep call to birth or resume the remote room, ensure its shared daemon, and return the credential plus the private tunnel target. It opens an ephemeral SSH forward to the remote ttyd listener, then serves `http://127.0.0.1:<local-port>/?room=<session>` through a local relay that injects the credential into page and WebSocket requests. The browser receives no password prompt, and Safari works despite WebKit omitting Basic credentials from WebSocket upgrades. This path is uniform whether the remote public edge uses Basic or trusted-header auth.
+RimZ uses one SSH prep call to birth or resume the remote room, ensure its shared daemon, and return the credential plus the private tunnel target. It opens an ephemeral SSH forward to the remote daemon listener, then serves `http://127.0.0.1:<local-port>/?room=<session>` for ttyd or `?arg=<session>` for gotty through a local relay that injects the credential into page and WebSocket requests. The browser receives no password prompt, and Safari works despite WebKit omitting Basic credentials from WebSocket upgrades. This path is uniform whether the remote public edge uses Basic or trusted-header auth.
 
 The tunnel stays in the foreground and follows the normal remote recovery policy. Recovery repeats prep, so a stopped daemon comes back and a rotated credential reaches the relay; the local URL stays stable. Without `--web-port`, the local port derives from the session in 8300–8399 and scans forward when busy.
 
@@ -155,7 +170,7 @@ rimz web token revoke-all
 
 One credential named `rimz` serves the whole machine in every auth mode. `create` rotates it and restarts the live daemon and gate. Either revoke command stops the daemon and clears the credential.
 
-ttyd read-only mode belongs to the whole process, so `rimz web token create --read-only` points to the separate `rimz web share` broadcast instead of presenting a misleading per-user permission.
+Read-only mode belongs to the whole daemon process, so `rimz web token create --read-only` points to the separate `rimz web share` broadcast instead of presenting a misleading per-user permission.
 
 Treat the password like an SSH private key. It stays out of the URL, logs, events, and workspace records.
 
@@ -163,6 +178,7 @@ Treat the password like an SSH private key. It stays out of the URL, logs, event
 
 ```toml
 [web]
+backend = "ttyd" # or experimental "gotty"
 enabled = true
 port = 8200
 share_port = 8201
@@ -177,7 +193,7 @@ font = "JetBrainsMono Nerd Font Mono"
 style_client = true
 ```
 
-`interface` selects the bind address for both daemons; `port` selects the writable listener and `share_port` selects the read-only broadcast listener. `base_url` and `share_base_url` change the respective prefixes RimZ prints when a reverse proxy fronts RimZ; the `/?room=<session>` query remains. `auth_header` puts a proxy-validated identity header at the writable authorization gate while ttyd retains Basic Auth, `auth_users` optionally restricts its exact canonical values, and non-empty `trusted_proxies` admits those source addresses to that gate.
+`backend` selects `ttyd` by default or experimental `gotty` for both daemons. `interface` selects the bind address for both daemons; `port` selects the writable listener and `share_port` selects the read-only broadcast listener. `base_url` and `share_base_url` change the respective prefixes RimZ prints when a reverse proxy fronts RimZ; ttyd appends `/?room=<session>` and gotty appends `/?arg=<session>`. `auth_header` puts a proxy-validated identity header at the writable authorization gate while the selected daemon retains Basic Auth, `auth_users` optionally restricts its exact canonical values, and non-empty `trusted_proxies` admits those source addresses to that gate. `font`, `font_source`, and `style_client` apply only to ttyd.
 
 ## Security boundary
 
@@ -185,12 +201,12 @@ By default, RimZ invokes ttyd with write access, origin checks, mandatory Basic 
 
 The one machine credential authenticates the shared listener, so it grants access to every live RimZ room on that machine rather than only the room named in the first URL. An authenticated client can submit another session argument, and a missing or rejected argument opens the live-room session manager. A remote `--web` tunnel forwards this same machine-wide surface through an unauthenticated loopback relay on the client machine, matching the local-user trust boundary of `ssh -L`; use host-level user isolation on a shared client machine.
 
-The broadcast listener is a separate process without `-W` or `-c`: ttyd drops input and admits connections without authentication, while RimZ's per-connection shim limits attachment to the durable room allowlist and never lists other rooms. Its output can still contain secrets. Bind it to loopback or place it behind a reverse proxy and firewall before public exposure.
+The broadcast listener is a separate process without ttyd's `-W` or gotty's `-w`, and without either backend's `-c`: the daemon drops input and admits connections without authentication, while RimZ's per-connection shim limits attachment to the durable room allowlist and never lists other rooms. Its output can still contain secrets. Bind it to loopback or place it behind a reverse proxy and firewall before public exposure.
 
 The browser session is shell access as the serving user, and terminal output can contain secrets. Treat either the credential or trusted-header boundary as machine-wide shell access. Put HTTPS and rate limiting in front before exposing the listener beyond loopback:
 
 ```text
-browser -> HTTPS authenticating proxy -> authorization gate -> Basic-authenticated loopback ttyd
+browser -> HTTPS authenticating proxy -> authorization gate -> Basic-authenticated loopback web daemon
 ```
 
 ## See also

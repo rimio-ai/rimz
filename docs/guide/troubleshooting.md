@@ -108,6 +108,8 @@ RimZ needs Zellij 0.44+ or tmux 3.5+ on the machine, and pixel-perfect pets add 
 
 Browser access for both Zellij and tmux requires ttyd 1.7.5 or newer on the serving machine. Run `ttyd --version`; use `brew install ttyd` or `brew upgrade ttyd` with Homebrew, and on Debian or Ubuntu install from a current apt repository or the ttyd release page when `apt` offers an older build. Explicit web commands refuse an older version, while normal room start prints the same fix and keeps the terminal room running.
 
+With experimental `[web] backend = "gotty"`, run `gotty --version` and require 1.8.0 or newer; install the release binary or use `brew install sorenisanerd/gotty/gotty`. `rimz doctor` reports the selected backend, path, and version.
+
 If ttyd is installed but `rimz web open` times out, run `rimz web status`, then `rimz web stop` and open again. Check that the exact `[web] port` (default `8200`) is available on loopback and change it when another process owns that port.
 
 ## An agent isn't showing as a card

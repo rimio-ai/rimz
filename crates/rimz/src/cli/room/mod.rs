@@ -338,7 +338,7 @@ fn workspace_record_for_web_session(session: &str, mux: MuxName) -> Result<Works
 }
 
 fn preflight_web_engine() -> Result<()> {
-    rimz::web::preflight()?;
+    rimz::web::preflight(&machine_config())?;
     Ok(())
 }
 

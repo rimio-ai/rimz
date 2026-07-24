@@ -494,7 +494,7 @@ fn parse_web_payload(
     let credential = payload
         .credential
         .clone()
-        .context("remote `rimz web open --json` omitted the ttyd credential")?;
+        .context("remote `rimz web open --json` omitted the web credential")?;
     Ok((payload, credential))
 }
 

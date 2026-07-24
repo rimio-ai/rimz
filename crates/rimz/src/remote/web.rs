@@ -40,8 +40,12 @@ pub fn reserve_forward_port() -> io::Result<u16> {
 }
 
 pub fn local_url(remote: &WebOpenPayload, local_port: u16) -> String {
+    let uses_gotty_argument = url::Url::parse(&remote.url)
+        .ok()
+        .is_some_and(|url| url.query_pairs().any(|(key, _)| key == "arg"));
+    let argument = if uses_gotty_argument { "arg" } else { "room" };
     format!(
-        "http://127.0.0.1:{local_port}/?room={}",
+        "http://127.0.0.1:{local_port}/?{argument}={}",
         crate::web::encode_query_value(&remote.session)
     )
 }
@@ -248,6 +252,7 @@ mod tests {
     #[test]
     fn local_url_percent_encodes_the_browser_room() {
         let payload = WebOpenPayload::for_session(
+            crate::config::WebBackend::Ttyd,
             "rimz/a b",
             "https://remote",
             8200,
@@ -258,6 +263,20 @@ mod tests {
         assert_eq!(
             local_url(&payload, 8301),
             "http://127.0.0.1:8301/?room=rimz%2Fa%20b"
+        );
+
+        let payload = WebOpenPayload::for_session(
+            crate::config::WebBackend::Gotty,
+            "rimz/a b",
+            "https://remote",
+            8200,
+            Some(8200),
+            crate::web::WebAuth::Basic,
+            None,
+        );
+        assert_eq!(
+            local_url(&payload, 8301),
+            "http://127.0.0.1:8301/?arg=rimz%2Fa%20b"
         );
     }
 

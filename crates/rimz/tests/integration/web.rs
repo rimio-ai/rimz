@@ -171,6 +171,7 @@ struct WebFixture {
     workspace: rimz::ResolvedWorkspace,
     bin_dir: PathBuf,
     ttyd_bin: PathBuf,
+    gotty_bin: PathBuf,
     web_port: u16,
     share_port: u16,
     tmux_log: PathBuf,
@@ -187,6 +188,8 @@ impl WebFixture {
         let (bin_dir, tmux_log) = tmux_shim(&env);
         let ttyd_bin = bin_dir.join("ttyd");
         std::os::unix::fs::symlink(ttyd_shim(), &ttyd_bin).expect("link named ttyd fixture");
+        let gotty_bin = bin_dir.join("gotty");
+        std::os::unix::fs::symlink(ttyd_shim(), &gotty_bin).expect("link named gotty fixture");
         let ttyd_log = env.project_root.join(log_name);
         let web_port = free_loopback_port();
         let share_port = free_loopback_port();
@@ -199,6 +202,7 @@ impl WebFixture {
             workspace,
             bin_dir,
             ttyd_bin,
+            gotty_bin,
             web_port,
             share_port,
             tmux_log,
@@ -215,6 +219,7 @@ impl WebFixture {
         command
             .env("PATH", &self.bin_dir)
             .env("RIMZ_TTYD_BIN", &self.ttyd_bin)
+            .env("RIMZ_GOTTY_BIN", &self.gotty_bin)
             .env("RIMZ_TEST_TTYD_LOG", &self.ttyd_log)
             .env("RIMZ_WEB_FONTS_OFFLINE", "1")
             .env("RIMZ_TEST_TMUX_LOG", &self.tmux_log)
@@ -342,7 +347,7 @@ fn offline_token_operations_keep_one_singular_credential() {
     assert_success(&create, "offline token creation");
     assert_eq!(
         String::from_utf8_lossy(&create.stdout),
-        "rotated ttyd credential and restarted 0 daemon(s)\n"
+        "rotated web credential and restarted 0 daemon(s)\n"
     );
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&credential_path).expect("saved credential"))
@@ -372,7 +377,7 @@ fn offline_token_operations_keep_one_singular_credential() {
     assert_success(&revoke_all, "offline revoke-all");
     assert_eq!(
         String::from_utf8_lossy(&revoke_all.stdout),
-        "revoked ttyd credential and stopped 0 daemon(s)\n"
+        "revoked web credential and stopped 0 daemon(s)\n"
     );
 
     assert_success(
@@ -411,7 +416,7 @@ fn web_restart_starts_offline_and_replaces_online_daemons_with_the_current_profi
         .expect("restart offline web daemon");
     assert_success(&offline, "offline web restart");
     let stdout = String::from_utf8_lossy(&offline.stdout);
-    assert!(stdout.contains("ttyd: was offline; started a fresh daemon"));
+    assert!(stdout.contains("web: was offline; started a fresh daemon"));
     let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
     let before: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("initial daemon record"))
@@ -459,6 +464,120 @@ fn web_restart_starts_offline_and_replaces_online_daemons_with_the_current_profi
         .bounded_output()
         .expect("stop restarted daemon");
     assert_success(&stop, "stop restarted daemon");
+}
+
+#[cfg(unix)]
+#[test]
+fn gotty_backend_starts_with_stock_client_argv_and_prints_argument_url() {
+    let _guard = daemon_test_guard();
+    let fixture = WebFixture::new("gotty-open.log");
+    write_machine_config(
+        &fixture.env,
+        &format!("[web]\nbackend = \"gotty\"\nport = {}\n", fixture.web_port),
+    );
+
+    let open = fixture
+        .command()
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .args(["--print", "--json"])
+        .bounded_output()
+        .expect("open gotty web daemon");
+    let payload = success_json(&open, "gotty web open");
+    assert_eq!(
+        payload["url"],
+        format!(
+            "http://127.0.0.1:{}/?arg={}",
+            fixture.web_port, fixture.workspace.session_name
+        )
+    );
+
+    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(daemon_path).expect("gotty daemon record"))
+            .expect("gotty daemon JSON");
+    assert_eq!(record["backend"], "gotty");
+
+    let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read gotty log");
+    let argv = log.lines().next().expect("gotty daemon argv");
+    assert!(argv.contains("-w\t--permit-arguments\t-c\trimz:"), "{argv}");
+    assert!(
+        argv.contains(&format!("\t-a\t127.0.0.1\t-p\t{}\t", fixture.web_port)),
+        "{argv}"
+    );
+    assert!(argv.contains("\t--title-format\tRimZ\t"), "{argv}");
+    assert!(!argv.contains("\t-W\t"), "{argv}");
+    assert!(!argv.contains("\t-O\t"), "{argv}");
+    assert!(!argv.contains("\t-I\t"), "{argv}");
+
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop gotty daemon");
+    assert_success(&stop, "stop gotty daemon");
+}
+
+#[cfg(unix)]
+#[test]
+fn web_restart_replaces_a_ttyd_record_after_switching_to_gotty() {
+    let _guard = daemon_test_guard();
+    let fixture = WebFixture::new("gotty-switch.log");
+    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    write_machine_config(
+        &fixture.env,
+        &format!(
+            "[web]\nbackend = \"ttyd\"\nport = {}\nstyle_client = false\n",
+            fixture.web_port
+        ),
+    );
+
+    let start = fixture
+        .command()
+        .args(["web", "start"])
+        .bounded_output()
+        .expect("start ttyd daemon");
+    assert_success(&start, "start ttyd daemon");
+    let before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("ttyd daemon record"))
+            .expect("ttyd daemon JSON");
+    assert_eq!(before["backend"], "ttyd");
+
+    write_machine_config(
+        &fixture.env,
+        &format!("[web]\nbackend = \"gotty\"\nport = {}\n", fixture.web_port),
+    );
+    let restart = fixture
+        .command()
+        .args(["web", "restart"])
+        .bounded_output()
+        .expect("restart with gotty backend");
+    assert_success(&restart, "restart with gotty backend");
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("gotty daemon record"))
+            .expect("gotty daemon JSON");
+    assert_eq!(after["backend"], "gotty");
+    assert_ne!(before["pid"], after["pid"]);
+
+    let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read backend switch log");
+    let daemons = log
+        .lines()
+        .filter(|line| line.contains("\tweb\texec"))
+        .collect::<Vec<_>>();
+    assert_eq!(daemons.len(), 2, "{log}");
+    assert!(daemons[0].starts_with("-W\t-O\t-a\t"), "{}", daemons[0]);
+    assert!(
+        daemons[1].starts_with("-w\t--permit-arguments\t"),
+        "{}",
+        daemons[1]
+    );
+
+    let stop = fixture
+        .command()
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop switched daemon");
+    assert_success(&stop, "stop switched daemon");
 }
 
 #[cfg(unix)]
@@ -568,7 +687,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     assert!(!bad_revoke.status.success());
     assert!(
         String::from_utf8_lossy(&bad_revoke.stderr)
-            .contains("ttyd credential `other` does not exist")
+            .contains("web credential `other` does not exist")
     );
     assert_eq!(
         std::fs::read(&credential_path).expect("credential after bad revoke"),
@@ -630,7 +749,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     assert_success(&rotate, "shared credential rotation");
     assert!(
         String::from_utf8_lossy(&rotate.stdout)
-            .contains("rotated ttyd credential and restarted 1 daemon(s)")
+            .contains("rotated web credential and restarted 1 daemon(s)")
     );
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read rotated log");
     assert_eq!(
@@ -647,7 +766,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     assert_success(&stop, "revoke shared credential");
     assert_eq!(
         String::from_utf8_lossy(&stop.stdout),
-        "revoked ttyd credential and stopped 1 daemon(s)\n"
+        "revoked web credential and stopped 1 daemon(s)\n"
     );
 }
 
@@ -854,7 +973,7 @@ fn web_stop_stops_writable_and_broadcast_daemons() {
     assert_success(&stop, "stop both daemons");
     assert_eq!(
         String::from_utf8_lossy(&stop.stdout),
-        "stopped 2 ttyd daemons\n"
+        "stopped 2 web daemons\n"
     );
     assert!(!fixture.env.state_root().join("rimz/web-ttyd.json").exists());
     assert!(
@@ -1001,7 +1120,7 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
     assert!(stderr.contains("user rimz, password "), "{stderr}");
     assert!(
         String::from_utf8_lossy(&token.stdout)
-            .contains("rotated ttyd credential and restarted 1 daemon(s)")
+            .contains("rotated web credential and restarted 1 daemon(s)")
     );
 
     let before: serde_json::Value =
@@ -1346,7 +1465,7 @@ fn no_start_requires_an_online_daemon() {
         .expect("open web without start");
 
     assert!(!output.status.success(), "offline ttyd should fail");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("shared ttyd daemon is offline"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("shared web daemon is offline"));
     assert!(!fixture.ttyd_log.exists(), "--no-start must not spawn ttyd");
 }
 
@@ -1381,7 +1500,7 @@ fn stale_daemon_record_never_signals_a_reused_non_ttyd_pid() {
         .bounded_output()
         .expect("stop stale daemon record");
     assert_success(&stop, "discard stale daemon record");
-    assert!(String::from_utf8_lossy(&stop.stdout).contains("stopped 0 ttyd daemons"));
+    assert!(String::from_utf8_lossy(&stop.stdout).contains("stopped 0 web daemons"));
     assert!(
         unrelated
             .try_wait()

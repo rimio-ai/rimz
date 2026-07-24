@@ -8,6 +8,7 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 
 ### Added
 
+- `[web] backend = "gotty"` selects an experimental gotty 1.8.0+ transport for writable rooms and read-only broadcasts while ttyd remains the default. → [web](./docs/guide/web.md#gotty-backend-experimental)
 - `harness.turn_budget` caps every agent turn at a configured dollar amount, parks a runaway turn without arming a midnight resume, and reopens with a fresh baseline on the next human prompt. → [budgets](./docs/guide/budget.md#cap-every-turn)
 - `rimz teams` discovers and validates effective team definitions, inspects live members and cost, installs release-matched GitHub bundles, and launches or resumes teams through the existing cohort engine; active and finished sidebar groups now carry the team's name even beside stray agents. → [teams](./docs/guide/teams.md#see-and-drive-your-teams)
 - Sidebar snapshot JSON exposes cumulative estimated active time for root sessions, excluding waits, idle spans, parked background work, and silence past a configurable grace.
