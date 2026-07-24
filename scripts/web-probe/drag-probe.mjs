@@ -3,7 +3,7 @@
 import { performance } from "node:perf_hooks";
 
 const usage = `Usage:
-  node scripts/web-drag-probe.mjs --url <page-url> [options]
+  node scripts/web-probe/drag-probe.mjs --url <page-url> [options]
 
 Options:
   --user <name>          HTTP Basic Auth username
@@ -103,7 +103,7 @@ async function run(options) {
   try {
     ({ chromium } = await import("playwright"));
   } catch {
-    throw new Error("playwright is required; see scripts/web-drag-probe.README.md");
+    throw new Error("playwright is required; see scripts/web-probe/README.md");
   }
 
   const target = pageTarget(options);
