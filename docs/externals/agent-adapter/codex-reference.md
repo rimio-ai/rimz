@@ -384,7 +384,7 @@ When no auth file exists, RimZ runs `codex login status` so keyring-backed login
 
 The app-server `account/rateLimits/read` `planType` is persisted with realtime credits even when plan is the only account field returned. A non-empty app-server plan replaces the cached OAuth plan; an absent app-server plan preserves it, so keyring-backed and idle sessions retain their last provider-authoritative label.
 
-The default usage URL is `GET https://chatgpt.com/backend-api/wham/usage`. A `chatgpt_base_url` value in `~/.codex/config.toml` overrides the base: bases ending in `/backend-api` append `/wham/usage`; other bases append `/api/codex/usage`. The parsed usage response shape:
+The default usage URL is `GET https://chatgpt.com/backend-api/wham/usage`. A `chatgpt_base_url` value in `~/.codex/config.toml` overrides the base: bases ending in `/backend-api` append `/wham/usage`; other bases append `/api/codex/usage`. RimZ refuses a base whose host is neither `chatgpt.com` nor loopback before reading credentials, and the probe reports the base as untrusted. The parsed usage response shape:
 
 ```jsonc
 {

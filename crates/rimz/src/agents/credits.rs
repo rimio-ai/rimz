@@ -66,6 +66,28 @@ pub(crate) fn url_host(url: &str) -> &str {
         .map_or(authority, |(_, host)| host)
 }
 
+/// True when `url` targets the provider's official endpoint (exact `https`
+/// origin on the default port) or a loopback host. Integration tests drive the
+/// probes against local stubs, and a loopback listener already implies local
+/// execution; every other origin is refused before a secret-bearing request is
+/// built.
+pub(crate) fn trusted_usage_url(url: &str, official_host: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    match parsed.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(domain)) if domain.eq_ignore_ascii_case("localhost") => true,
+        Some(url::Host::Domain(domain)) => {
+            parsed.scheme() == "https"
+                && parsed.port().is_none()
+                && domain.eq_ignore_ascii_case(official_host)
+        }
+        None => false,
+    }
+}
+
 pub(crate) const OAUTH_HTTP_TIMEOUT_SECS: u64 = 5;
 pub(crate) const OAUTH_HTTP_MAX_BYTES: u64 = 512 * 1024;
 const OAUTH_HTTP_ATTEMPTS: u32 = 3;
@@ -393,7 +415,8 @@ pub enum AccountUsageProbe {
 /// adapter's account-usage error so [`map_account_usage_probe`] can fold every
 /// adapter's result through one classifier instead of a hand-rolled match per
 /// adapter. The "report" set (HTTP/IO/parse faults) maps to `Failed`; the silent
-/// set (absent/api-key/expired credentials) maps to `NoCredentials`.
+/// set (absent/api-key/expired credentials and locally refused configuration)
+/// maps to `NoCredentials`.
 pub(crate) trait AccountUsageReportable {
     fn should_report(&self) -> bool;
 }
@@ -531,6 +554,28 @@ mod tests {
         assert!(!HttpErrKind::Status(401).is_transient());
         assert!(!HttpErrKind::Status(404).is_transient());
         assert!(!HttpErrKind::Status(429).is_transient());
+    }
+
+    #[test]
+    fn usage_urls_accept_only_the_official_https_origin_or_loopback() {
+        for url in [
+            "https://api.anthropic.com/api/oauth/usage",
+            "http://127.0.0.1:8080/x",
+            "http://[::1]:9/x",
+            "http://localhost:8080/x",
+        ] {
+            assert!(trusted_usage_url(url, "api.anthropic.com"), "{url}");
+        }
+        for url in [
+            "http://api.anthropic.com/api/oauth/usage",
+            "https://api.anthropic.com:8443/api/oauth/usage",
+            "https://api.anthropic.com.evil.example/api/oauth/usage",
+            "https://api.anthropic.com@evil.example/api/oauth/usage",
+            "https://evil.example/api/oauth/usage",
+            "not a URL",
+        ] {
+            assert!(!trusted_usage_url(url, "api.anthropic.com"), "{url}");
+        }
     }
 
     #[test]

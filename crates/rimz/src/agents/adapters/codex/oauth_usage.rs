@@ -13,7 +13,7 @@ use std::path::Path;
 
 use crate::agents::account::file_mtime_ms;
 use crate::agents::context::WindowSource;
-use crate::agents::credits::oauth_http_get;
+use crate::agents::credits::{oauth_http_get, trusted_usage_url, url_host};
 use crate::agents::payload::non_empty_trimmed;
 use crate::agents::{AccountUsageSnapshot, HttpErrKind, ResetCredits};
 
@@ -22,6 +22,7 @@ use super::account::{UsageCredits, UsageWindow, normalize_usage, parse_balance};
 use super::app_server::codex_home;
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
+const OFFICIAL_HOST: &str = "chatgpt.com";
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CodexOauthUsageErr {
@@ -33,24 +34,28 @@ pub(crate) enum CodexOauthUsageErr {
     Io(#[from] std::io::Error),
     #[error("parsing codex OAuth credentials, config, or usage response: {0}")]
     Parse(#[from] serde_json::Error),
+    #[error("codex chatgpt_base_url refused (host {host})")]
+    UntrustedBaseUrl { host: String },
     #[error("codex OAuth usage HTTP {kind} (host {host})")]
     Http { kind: HttpErrKind, host: String },
 }
 
 impl crate::agents::credits::AccountUsageReportable for CodexOauthUsageErr {
     /// Whether this failure is worth reporting off-box. Absent or API-key-only
-    /// credentials are the normal state for an app-server or logged-out account,
-    /// not a fault; provider 401 and 403 responses are settled auth verdicts
-    /// rather than RimZ faults. Parse and other HTTP failures are.
+    /// credentials and a locally refused base URL are settled states, not
+    /// faults; provider 401 and 403 responses are settled auth verdicts too.
+    /// Parse and other HTTP failures are.
     fn should_report(&self) -> bool {
-        !matches!(self, Self::NoCredentials | Self::ApiKeyOnly)
-            && !matches!(
-                self,
-                Self::Http {
-                    kind: HttpErrKind::Status(401 | 403),
-                    ..
-                }
-            )
+        !matches!(
+            self,
+            Self::NoCredentials | Self::ApiKeyOnly | Self::UntrustedBaseUrl { .. }
+        ) && !matches!(
+            self,
+            Self::Http {
+                kind: HttpErrKind::Status(401 | 403),
+                ..
+            }
+        )
     }
 }
 
@@ -114,6 +119,19 @@ pub(crate) fn probe_usage() -> crate::agents::AccountUsageProbe {
         return crate::agents::AccountUsageProbe::NoCredentials(Default::default());
     };
     let credentials_stamp = file_mtime_ms(&home.join("auth.json"));
+    let base_url = match configured_base_url(&home) {
+        Ok(base_url) => base_url,
+        Err(err) => {
+            return crate::agents::credits::map_account_usage_probe(
+                Err(err),
+                crate::agents::AccountUsageIdentity {
+                    credentials_stamp,
+                    ..Default::default()
+                },
+                "codex",
+            );
+        }
+    };
     let credentials = match load_credentials_from(&home.join("auth.json")) {
         Ok(credentials) => credentials,
         Err(err) => {
@@ -131,13 +149,11 @@ pub(crate) fn probe_usage() -> crate::agents::AccountUsageProbe {
         credentials_stamp,
         ..credentials.account_usage_identity()
     };
-    let result = configured_base_url(&home)
-        .map_err(CodexOauthUsageErr::Io)
-        .and_then(|base_url| {
-            let mut snapshot = fetch_usage_with_url(&usage_url(base_url.as_deref()), &credentials)?;
+    let result =
+        fetch_usage_with_url(&usage_url(base_url.as_deref()), &credentials).map(|mut snapshot| {
             snapshot.reset_credits =
                 fetch_reset_credits(&reset_credits_url(base_url.as_deref()), &credentials).ok();
-            Ok(snapshot)
+            snapshot
         });
     crate::agents::credits::map_account_usage_probe(result, identity, "codex")
 }
@@ -148,8 +164,8 @@ pub(crate) fn credentials_stamp() -> Option<u64> {
 
 pub(crate) fn load_configured_credentials() -> Result<(CodexOauthCredentials, Option<String>)> {
     let home = codex_home().ok_or(CodexOauthUsageErr::NoCredentials)?;
-    let credentials = load_credentials_from(&home.join("auth.json"))?;
     let base_url = configured_base_url(&home)?;
+    let credentials = load_credentials_from(&home.join("auth.json"))?;
     Ok((credentials, base_url))
 }
 
@@ -199,16 +215,24 @@ pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<CodexOauthCredentials> {
     })
 }
 
-pub(crate) fn configured_base_url(home: &Path) -> std::io::Result<Option<String>> {
+pub(crate) fn configured_base_url(home: &Path) -> Result<Option<String>> {
     let path = home.join("config.toml");
     match std::fs::read_to_string(path) {
         Ok(text) => {
             let config: CodexConfig = toml::from_str(&text)
                 .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-            Ok(config.chatgpt_base_url.filter(|url| !url.trim().is_empty()))
+            let base_url = config.chatgpt_base_url.filter(|url| !url.trim().is_empty());
+            if let Some(base_url) = base_url.as_deref()
+                && !trusted_usage_url(base_url, OFFICIAL_HOST)
+            {
+                return Err(CodexOauthUsageErr::UntrustedBaseUrl {
+                    host: url_host(base_url).to_owned(),
+                });
+            }
+            Ok(base_url)
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err),
+        Err(err) => Err(CodexOauthUsageErr::Io(err)),
     }
 }
 

@@ -70,7 +70,7 @@ The [web guide](./web.md#behind-a-reverse-proxy) configures Traefik and Authenti
 
 RimZ keeps your work local. Your prompts, transcripts, pane text, file paths, and credentials stay on the box. The network calls RimZ makes reuse logins you already hold and reach only services you already use:
 
-- **Provider usage.** To fill the cost and budget meters, RimZ reads each provider's usage endpoint with the OAuth login the agent already holds, contacting only the provider you are signed in to.
+- **Provider usage.** To fill the cost and budget meters, RimZ reads each provider's usage endpoint with the OAuth login the agent already holds. Usage endpoints stay pinned to each provider's official host; URL overrides are refused unless they target that host or loopback.
 - **Pull-request status.** The sidebar's PR marker runs your own `gh` (GitHub) or `tea` (Gitea, Forgejo, Codeberg) against your forge, on your existing login. It reads no RimZ secrets and adds no config field, so it stays off the trust hash.
 - **Pets.** Enabling `[theme.pets]` fetches a sprite sheet over HTTPS from the host you name (a built-in pet reaches the public Codex pets CDN; a local-path pet fetches nothing). `RIMZ_PETS_OFFLINE=1` makes the process tree cache-only. The request carries the asset URL and nothing else.
 - **Off-box error reporting.** Off by default and opt-in. See [Off-box error reporting](#off-box-error-reporting).

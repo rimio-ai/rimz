@@ -224,6 +224,60 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
 }
 
 #[test]
+fn claude_refresh_usage_refuses_an_untrusted_override_without_publishing_usage() {
+    let env = Env::new();
+    let claim_id = env.seed_usage_claim("claude");
+    let claude_home = env.home_root.join(".claude");
+    std::fs::create_dir_all(&claude_home).expect("mkdir claude home");
+    std::fs::write(
+        claude_home.join(".credentials.json"),
+        r#"{
+            "claudeAiOauth": {
+                "accessToken": "claude-token",
+                "expiresAt": 4102444800000,
+                "scopes": ["user:profile"]
+            }
+        }"#,
+    )
+    .expect("write claude credentials");
+
+    let output = env
+        .rimz()
+        .args([
+            "agents",
+            "refresh-usage",
+            "--kind",
+            "claude",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--claim-id",
+            &claim_id,
+            "--merge-windows",
+        ])
+        .env(
+            "RIMZ_CLAUDE_OAUTH_USAGE_URL",
+            "https://rimz-advisory.invalid/api/oauth/usage",
+        )
+        .bounded_output()
+        .expect("rimz agents refresh-usage claude");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runtime = env.runtime_paths();
+    let credits = read_json(runtime.shared_credits_path());
+    assert!(credits["entries"]["claude"]["oauth_read_at_ms"].as_u64() > Some(1));
+    assert_eq!(credits["entries"]["claude"]["auth_settled"], true);
+    assert!(credits["entries"]["claude"]["direct_query_claim"].is_null());
+    assert!(
+        std::fs::read(runtime.shared_rate_limits_path()).is_err(),
+        "an untrusted endpoint must not publish usage windows"
+    );
+}
+
+#[test]
 fn claude_refresh_usage_retries_transient_http_failures() {
     let env = Env::new();
     let claim_id = env.seed_usage_claim("claude");
