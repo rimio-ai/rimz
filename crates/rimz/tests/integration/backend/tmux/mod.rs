@@ -21,3 +21,5 @@ mod server_cwd;
 mod session;
 mod sidebar;
 mod support;
+
+pub(in crate::backend) use support::TmuxServer;

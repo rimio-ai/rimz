@@ -11,7 +11,7 @@ Local contract for `crates/rimz/tests/integration/` — the crate's single integ
 
 ## Placement
 
-- Subdirectory matches tier: `store/` durability and CAS, `backend/` live-mux parity, `examples/` the embedded and shipped script surfaces (the Pi extension, mux config samples), `journey/` rendered user flows, `performance/` bounded resource use. A new suite lands where its tier says, not beside a similar-looking file.
+- Subdirectory matches tier: `store/` durability and CAS, `backend/` live-mux parity plus the real-browser web suite (`backend/web/`: real ttyd + headless Chromium, self-skipping without them), `examples/` the embedded and shipped script surfaces (the Pi extension, mux config samples), `journey/` rendered user flows, `performance/` bounded resource use. A new suite lands where its tier says, not beside a similar-looking file.
 - Host dependencies self-skip: a test that needs `zellij`, `tmux`, or `python3` probes for the binary and skips when absent — CI never requires an installed mux.
 - External seams are faked with the [`tests/fixtures/`](../fixtures/) shims (`zellij-trace`, `git-trace`, `ssh-trace`, `codex-appserver-stub`); mux-driving tests route `rimz` invocations at an isolated tmux server env and a private Zellij runtime so a developer's live sessions stay untouched.
 - Time is deterministic: fixed-epoch fixtures, boundary-exact.

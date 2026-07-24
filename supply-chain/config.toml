@@ -19,6 +19,9 @@ url = "https://raw.githubusercontent.com/divviup/libprio-rs/main/supply-chain/au
 [imports.mozilla]
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
+[policy.rimz]
+audit-as-crates-io = true
+
 [policy.rimz-presence-zellij]
 criteria = "safe-to-run"
 
@@ -80,6 +83,10 @@ criteria = "safe-to-run"
 [[exemptions.atomic]]
 version = "0.6.1"
 criteria = "safe-to-deploy"
+
+[[exemptions.auto_generate_cdp]]
+version = "0.4.6"
+criteria = "safe-to-run"
 
 [[exemptions.autocfg]]
 version = "1.5.1"
@@ -202,6 +209,10 @@ version = "0.10.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.convert_case]]
+version = "0.8.0"
+criteria = "safe-to-run"
+
+[[exemptions.convert_case]]
 version = "0.10.0"
 criteria = "safe-to-deploy"
 
@@ -266,12 +277,24 @@ version = "0.4.87+curl-8.19.0"
 criteria = "safe-to-run"
 
 [[exemptions.darling]]
+version = "0.20.11"
+criteria = "safe-to-run"
+
+[[exemptions.darling]]
 version = "0.23.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.darling_core]]
+version = "0.20.11"
+criteria = "safe-to-run"
+
+[[exemptions.darling_core]]
 version = "0.23.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.darling_macro]]
+version = "0.20.11"
+criteria = "safe-to-run"
 
 [[exemptions.darling_macro]]
 version = "0.23.0"
@@ -296,6 +319,18 @@ criteria = "safe-to-deploy"
 [[exemptions.deltae]]
 version = "0.3.2"
 criteria = "safe-to-deploy"
+
+[[exemptions.derive_builder]]
+version = "0.20.2"
+criteria = "safe-to-run"
+
+[[exemptions.derive_builder_core]]
+version = "0.20.2"
+criteria = "safe-to-run"
+
+[[exemptions.derive_builder_macro]]
+version = "0.20.2"
+criteria = "safe-to-run"
 
 [[exemptions.derive_more]]
 version = "2.1.1"
@@ -456,6 +491,10 @@ criteria = "safe-to-deploy"
 [[exemptions.hashlink]]
 version = "0.12.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.headless_chrome]]
+version = "1.0.22"
+criteria = "safe-to-run"
 
 [[exemptions.hermit-abi]]
 version = "0.5.2"
@@ -973,6 +1012,10 @@ criteria = "safe-to-run"
 version = "0.8.11"
 criteria = "safe-to-deploy"
 
+[[exemptions.rimz]]
+version = "0.4.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.ring]]
 version = "0.17.14"
 criteria = "safe-to-deploy"
@@ -1075,6 +1118,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.serial2]]
 version = "0.2.37"
+criteria = "safe-to-run"
+
+[[exemptions.sha1]]
+version = "0.10.7"
 criteria = "safe-to-run"
 
 [[exemptions.sha1]]
@@ -1306,6 +1353,10 @@ version = "0.3.23"
 criteria = "safe-to-deploy"
 
 [[exemptions.tungstenite]]
+version = "0.29.0"
+criteria = "safe-to-run"
+
+[[exemptions.tungstenite]]
 version = "0.30.0"
 criteria = "safe-to-deploy"
 
@@ -1476,6 +1527,10 @@ criteria = "safe-to-deploy"
 [[exemptions.winnow]]
 version = "1.0.3"
 criteria = "safe-to-deploy"
+
+[[exemptions.winreg]]
+version = "0.56.0"
+criteria = "safe-to-run"
 
 [[exemptions.zellij-tile]]
 version = "0.44.3"

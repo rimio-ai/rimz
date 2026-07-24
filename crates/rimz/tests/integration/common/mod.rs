@@ -18,6 +18,9 @@ mod payloads;
 mod shim;
 mod zellij;
 
+#[cfg(unix)]
+use std::time::Duration;
+
 pub use command::{CommandTimeoutExt, ROOM_WORKFLOW_TIMEOUT, ScrubSessionEnvExt};
 pub use env::{Env, af_unix_bind_sandboxed, canonical, tmux_pane};
 pub use harness::Harness;
@@ -33,6 +36,17 @@ pub use shim::{
     write_fake_login_shell, write_hook_firing_agent,
 };
 pub use zellij::ZellijNamespace;
+
+#[cfg(unix)]
+pub fn daemon_test_guard() -> rimz::store::lock::WorkspaceLock {
+    // Nextest gives every test its own process, so an in-process mutex leaves
+    // the machine-wide listener and ttyd's ephemeral stock-index listener
+    // contended. `cargo xtask test` gives the whole run one shared TMPDIR,
+    // making this lock run-wide and isolated across runs.
+    let path = std::env::temp_dir().join("rimz-web-daemon-tests.lock");
+    rimz::store::lock::WorkspaceLock::acquire_with_timeout(&path, Duration::from_secs(120))
+        .unwrap_or_else(|err| panic!("acquire web daemon test lock {}: {err}", path.display()))
+}
 
 pub fn exec_args(request: &rimz::harness::launch::ExecRequest) -> Vec<String> {
     rimz::harness::launch::exec_argv(std::path::Path::new("rimz"), request)

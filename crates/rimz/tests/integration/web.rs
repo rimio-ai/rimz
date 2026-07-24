@@ -1,24 +1,7 @@
+use crate::common::{CommandTimeoutExt, Env, daemon_test_guard};
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-#[cfg(unix)]
-use std::time::Duration;
-
-use crate::common::{CommandTimeoutExt, Env};
-
-#[cfg(unix)]
-const DAEMON_TEST_LOCK_TIMEOUT: Duration = Duration::from_secs(120);
-
-#[cfg(unix)]
-fn daemon_test_guard() -> rimz::store::lock::WorkspaceLock {
-    // Nextest gives every test its own process, so an in-process mutex leaves
-    // the machine-wide listener and ttyd's ephemeral stock-index listener
-    // contended. `cargo xtask test` gives the whole run one shared TMPDIR,
-    // making this lock run-wide and isolated across runs.
-    let path = std::env::temp_dir().join("rimz-web-daemon-tests.lock");
-    rimz::store::lock::WorkspaceLock::acquire_with_timeout(&path, DAEMON_TEST_LOCK_TIMEOUT)
-        .unwrap_or_else(|err| panic!("acquire web daemon test lock {}: {err}", path.display()))
-}
 
 fn assert_success(output: &Output, action: &str) {
     assert!(

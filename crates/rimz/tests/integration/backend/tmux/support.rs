@@ -167,7 +167,7 @@ pub(super) struct PaneGeom {
 /// listens on the managed socket derived from a private runtime root, so it is
 /// the endpoint a `rimz` subprocess given the same `XDG_RUNTIME_DIR` resolves
 /// on its own. Drop tears it down with `kill-server`.
-pub(super) struct TmuxServer {
+pub(in crate::backend) struct TmuxServer {
     pub(super) backend: TmuxBackend,
     pub(super) socket: PathBuf,
     pub(super) _tempdir: TempDir,
@@ -189,7 +189,7 @@ impl TmuxServer {
     /// A server on `runtime_root`, for tests that pair with [`Env`] and let
     /// panes run `rimz`. Both sides derive the same endpoint from
     /// `XDG_RUNTIME_DIR`, which is what production does.
-    pub(super) fn in_runtime_root(runtime_root: &Path) -> Self {
+    pub(in crate::backend) fn in_runtime_root(runtime_root: &Path) -> Self {
         let socket = Self::prepare_socket(runtime_root);
         Self {
             backend: TmuxBackend::with_socket(&socket),
@@ -211,7 +211,7 @@ impl TmuxServer {
     pub(super) fn pane_current_path(&self, session: &str) -> String {
         self.display(session, "#{pane_current_path}")
     }
-    pub(super) fn output(&self, args: &[&str]) -> std::process::Output {
+    pub(in crate::backend) fn output(&self, args: &[&str]) -> std::process::Output {
         let output = Command::new("tmux")
             .scrub_session_env()
             .arg("-S")

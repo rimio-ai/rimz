@@ -1,9 +1,9 @@
-//! Live multiplexer backend suites. The mux suites self-skip when their
-//! binary is absent, so the matrix stays green on machines without tmux or
-//! Zellij; the shared `CommandSpec` engine suite needs only coreutils, so it
-//! never skips.
+//! Live backend suites. The mux suites self-skip when their binary is absent,
+//! and the browser suite self-skips without ttyd, Chromium, and its selected
+//! mux; the shared `CommandSpec` engine suite needs only coreutils.
 
 mod command;
 mod single_backend_room;
 mod tmux;
+mod web;
 mod zellij;
