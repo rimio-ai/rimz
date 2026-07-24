@@ -232,7 +232,13 @@ Bare `rimz agents` lists the live room's pane-backed root-agent cards in attenti
 
 Rows group under channel section headers: `⑂` marks a worktree-backed or isolated lane, `#` marks a plain lane, a bare label marks the room root, and a dim `external` tail holds agents outside the project. Header glyphs follow the configured theme glyph set, including Nerd Font presets, and a shared team appears in the header as `· <team> team`.
 
-`--json` keeps every serialized agent field and adds `pr` to agents whose lane has a linked pull request. The object carries optional `number`, required `state` (`open`, `closed`, or `merged`), and optional `ci` (`pending`, `passing`, or `failing`); absent or unknown PR data leaves the whole `pr` field out or omits its optional members.
+`--json` emits the versioned projection `{"schema":1,"agents":[...]}`. Each entry is the same card the table renders rather than the provider-shaped durable rollup: `id`, `kind`, `handle`, `name`, `name_explicit`, `profile`, `role`, `team`, `mode`, and `me` identify it; `status`, `phase`, `turn_error`, `ask`, `unread`, `attention_score`, and `description` describe its projected activity; and `model`, `context`, `stats`, `timeline`, `placement`, `budget`, and `sub_agents` carry the normalized detail.
+
+Nested fields are stable too. `model` carries `id`, `effort`, and the rendered `label`; `context` carries `fill_pct`, occupied `used_tokens`, `window`, `severity`, completed `compactions`, and current `compacting`; `stats` carries the token split, `cost_usd`, RimZ's provider-neutral `active_secs` estimate, and `tool_calls`; `timeline` carries registration, turn-start, activity, and observation timestamps; `placement` carries `channel`, `worktree`, `branch`, `pane`, and `pr`; and `budget` carries `cap`, `parked`, and the current `park` label. A PR carries `number`, `state` (`open`, `closed`, or `merged`), and `ci` (`pending`, `passing`, or `failing`).
+
+Every report key is present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty. The raw provider `AgentContext` is outside this schema.
+
+`me` marks at most one entry. RimZ first matches the caller's normalized `TMUX_PANE` or `ZELLIJ_PANE_ID` to the published pane binding, then falls back to the `RIMZ_AGENT_KIND`, `RIMZ_AGENT_NAME`, `RIMZ_AGENT_PROFILE`, and `RIMZ_AGENT_ROLE` launch identity; calls outside a recognized agent leave every entry false.
 
 | Column | What it shows |
 |---|---|
@@ -243,7 +249,9 @@ The activity description — the same field the sidebar card shows — renders u
 
 #### `show` / `inspect`
 
-`show` and its `inspect` alias print a describe-style report with Agent, Activity, Context, Placement, Run, Messages, and Recent transcript sections. The Context section includes transcript-priced session cost when a transcript path and cached price book can price it. `--capture` appends a Capture section that frames the bound pane's visible area with its pane id in the top border (an error when the agent has no bound pane), `--ansi` keeps colors inside that frame, and `--json` includes the same live agent fields plus additive `cost`, `messages`, and optional raw `capture` data. (Supervised `-p` runs shape their output with `--output-format` instead.)
+`show` and its `inspect` alias print a describe-style report with Agent, Activity, Context, Placement, Run, Messages, and Recent transcript sections. The Context section includes published or transcript-priced session cost and the provider-neutral active-time estimate when available. `--capture` appends a Capture section that frames the bound pane's visible area with its pane id in the top border (an error when the agent has no bound pane), and `--ansi` keeps colors inside that frame.
+
+`show --json` places the same projected agent entry under `agent`, with `stale`, rich `ask`, `run`, `messages`, and raw `capture` data as show-only siblings when applicable. A stopped audit agent keeps the full stable entry shape, with published-row fields such as context severity and active time set to `null`. Supervised `-p` runs shape their output with `--output-format` instead.
 
 #### `logs`
 

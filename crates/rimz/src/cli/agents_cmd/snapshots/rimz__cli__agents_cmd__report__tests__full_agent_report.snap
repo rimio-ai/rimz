@@ -1,0 +1,81 @@
+---
+source: crates/rimz/src/cli/agents_cmd/report.rs
+expression: entry
+---
+{
+  "id": "full",
+  "kind": "codex",
+  "handle": "@coder",
+  "name": null,
+  "name_explicit": true,
+  "profile": "builder",
+  "role": "coder",
+  "team": "forge",
+  "mode": "yolo",
+  "me": true,
+  "status": "running",
+  "phase": "acting",
+  "turn_error": null,
+  "ask": null,
+  "unread": true,
+  "attention_score": 42,
+  "description": "ship refresh",
+  "model": {
+    "id": "gpt-5.5",
+    "effort": "high",
+    "label": "GPT 5.5@high"
+  },
+  "context": {
+    "fill_pct": 20,
+    "used_tokens": 53700,
+    "window": 272000,
+    "severity": "yellow",
+    "compactions": 2,
+    "compacting": false
+  },
+  "stats": {
+    "total_tokens": 54210,
+    "fresh_input_tokens": 4180,
+    "cache_read_tokens": 47600,
+    "cache_write_tokens": 1920,
+    "output_tokens": 510,
+    "cost_usd": 0.87,
+    "active_secs": 754,
+    "tool_calls": {
+      "Bash": 12
+    }
+  },
+  "timeline": {
+    "registered_at": "1970-01-01T00:16:40Z",
+    "turn_started_at": "1970-01-01T00:31:40Z",
+    "last_activity": "1970-01-01T00:00:00Z",
+    "last_seen": "1970-01-01T00:00:00Z"
+  },
+  "placement": {
+    "channel": "auth",
+    "worktree": "/repo/auth",
+    "branch": "feature/auth",
+    "pane": null,
+    "pr": {
+      "number": 91,
+      "state": "open",
+      "ci": "passing"
+    }
+  },
+  "budget": {
+    "cap": "$5.00",
+    "parked": false,
+    "park": null
+  },
+  "sub_agents": [
+    {
+      "id": "child",
+      "name": "review",
+      "status": "running",
+      "phase": "reasoning",
+      "model": "sonnet@high",
+      "total_tokens": 1200,
+      "elapsed_secs": 12
+    }
+  ]
+}

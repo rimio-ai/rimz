@@ -1,25 +1,12 @@
 use super::*;
 
+use super::report::{
+    AgentReportEntry, PrInfo, build_entry, build_list_report, context_cell, row_for_agent,
+    status_style,
+};
 use crate::cli::render;
 use rimz::config::{GlyphRole, ThemeConfig};
 use rimz::theme::theme_glyphs;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-pub(super) struct PrInfo {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub number: Option<u64>,
-    pub state: rimz::WorktreePrState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ci: Option<rimz::WorktreePrCi>,
-}
-
-#[derive(serde::Serialize)]
-struct AgentListEntry<'a> {
-    #[serde(flatten)]
-    agent: &'a AgentState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pr: Option<PrInfo>,
-}
 
 pub(super) fn list_agents(
     json: bool,
@@ -54,8 +41,9 @@ pub(super) fn list_agents(
                 .is_none_or(|filter| rimz::harness::target::agent_in_worktree(agent, filter))
         })
         .collect();
+    let now = jiff::Timestamp::now();
     if json {
-        return render::json_pretty(&agent_list_entries(&snapshot, &agents));
+        return render::json_pretty(&build_list_report(&snapshot, &agents, now));
     }
 
     let machine_config = crate::cli::machine_config();
@@ -64,27 +52,11 @@ pub(super) fn list_agents(
         &mut out,
         &snapshot,
         &agents,
-        jiff::Timestamp::now(),
+        now,
         render::terminal_columns(120),
         &machine_config.theme,
     )?;
     Ok(())
-}
-
-fn agent_list_entries<'a>(
-    snapshot: &rimz::SidebarSnapshot,
-    agents: &[&'a AgentState],
-) -> Vec<AgentListEntry<'a>> {
-    rimz::store::snapshot::group_live_agents_by_worktree(agents, snapshot)
-        .into_iter()
-        .flat_map(|group| {
-            let pr = group_pr(snapshot, &group.key).and_then(pr_info);
-            group
-                .agents
-                .into_iter()
-                .map(move |agent| AgentListEntry { agent, pr })
-        })
-        .collect()
 }
 
 pub(super) fn agent_pr(snapshot: &rimz::SidebarSnapshot, agent: &AgentState) -> Option<PrInfo> {
@@ -110,7 +82,7 @@ pub(super) fn group_pr<'a>(
         .find(|group| group.key == key)
 }
 
-fn pr_info(group: &rimz::SidebarWorktreeGroup) -> Option<PrInfo> {
+pub(super) fn pr_info(group: &rimz::SidebarWorktreeGroup) -> Option<PrInfo> {
     let state = group.pr_state?;
     Some(PrInfo {
         number: group.pr_number,
@@ -144,17 +116,30 @@ pub(crate) fn render_agents_table(
         .iter()
         .flat_map(|group| group.agents.iter().copied())
         .collect();
+    let identity = super::report::SelfIdentity::from_env();
+    let me = identity.resolve(snapshot);
     let glyph = theme_glyphs(theme);
     let mut table = render::Table::new(["AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE"])
         .right(&[3, 4, 5])
         .max_width(max_width);
     for group in groups {
         table.section_cells(group_header_cells(&group, snapshot, &glyph));
+        let pr = group_pr(snapshot, &group.key).and_then(pr_info);
         for &agent in &group.agents {
-            let detail = agent
-                .activity_line()
+            let report = build_entry(
+                agent,
+                row_for_agent(snapshot, agent),
+                pr,
+                &ordered_agents,
+                me.as_ref(),
+                now,
+                None,
+            );
+            let detail = report
+                .description
+                .as_deref()
                 .map(|line| render::cell(line).fg(render::palette::muted()));
-            table.card(agent_row(agent, &ordered_agents, now), detail);
+            table.card(agent_row(&report, now), detail);
         }
     }
     table.render(w)
@@ -257,112 +242,31 @@ fn list_channel_filter_for_current(
     }
 }
 
-fn agent_row(agent: &AgentState, peers: &[&AgentState], now: jiff::Timestamp) -> Vec<render::Cell> {
-    vec![
-        render::cell(rimz::harness::target::agent_handle(agent, peers, false))
-            .fg(render::palette::identity(agent.kind.as_str())),
-        render::cell(agent_status_label(agent)).fg(agent_status_style(agent)),
-        model_cell(agent),
-        context_cell(agent),
-        render::cell(tokens_label(agent)).dash(),
-        render::cell(render::age_short(agent.last_seen, now)),
-    ]
-}
-
-/// Context fill warms as it climbs: gold past 75%, rose past 90%.
-pub(super) fn context_cell(agent: &AgentState) -> render::Cell {
-    let pct = agent.context_fill_pct();
-    let text = pct
-        .map(|pct| format!("{}%", pct.round() as u8))
-        .unwrap_or_else(|| "-".to_owned());
-    let c = render::cell(text);
-    match pct {
-        Some(pct) if pct >= 90.0 => c.fg(render::palette::alarm()),
-        Some(pct) if pct >= 75.0 => c.fg(render::palette::warn()),
-        Some(_) => c,
-        None => c.dash(),
-    }
-}
-
-pub(super) fn agent_status_label(agent: &AgentState) -> &'static str {
-    agent_status_projection(agent).0.as_str()
-}
-
-pub(super) fn agent_status_style(agent: &AgentState) -> anstyle::Style {
-    let (status, phase) = agent_status_projection(agent);
-    render::status::agent(status, phase)
-}
-
-pub(super) fn agent_status_projection(
-    agent: &AgentState,
-) -> (rimz::agents::AgentStatus, rimz::agents::TurnPhase) {
-    match agent.displayed_turn_error().map(|(class, _)| class) {
-        Some(rimz::agents::TurnErrorClass::PausedRateLimit)
-        | Some(rimz::agents::TurnErrorClass::PausedSpendLimit)
-        | Some(rimz::agents::TurnErrorClass::PausedOverloaded) => (
-            rimz::agents::AgentStatus::Paused,
-            rimz::agents::TurnPhase::Idle,
-        ),
-        Some(rimz::agents::TurnErrorClass::Unknown)
-        | Some(rimz::agents::TurnErrorClass::Failed) => (
-            rimz::agents::AgentStatus::Failed,
-            rimz::agents::TurnPhase::Idle,
-        ),
-        None => {
-            let status = agent.effective_status();
-            let phase = if status == rimz::agents::AgentStatus::Running {
-                agent.phase
-            } else {
-                rimz::agents::TurnPhase::Idle
-            };
-            (status, phase)
-        }
-    }
-}
-
-pub(super) fn model_label(agent: &AgentState) -> String {
-    let context = agent.context.as_ref();
-    let model = context
-        .and_then(|context| context.model_display_name.as_deref())
-        .or_else(|| context.and_then(|context| context.model_id.as_deref()))
-        .or(agent.model.as_deref());
-    let effort = context
-        .and_then(|context| context.effort.as_deref())
-        .or(agent.effort.as_deref());
-    match (model, effort) {
-        (Some(model), Some(effort)) => format!("{model}@{effort}"),
-        (Some(model), None) => model.to_owned(),
-        (None, Some(effort)) => format!("auto@{effort}"),
-        (None, None) => "-".to_owned(),
-    }
-}
-
-fn model_cell(agent: &AgentState) -> render::Cell {
-    let label = model_label(agent);
-    if label == "-" {
-        return render::cell(label).dash();
-    }
-    render::cell(label).fg(render::palette::muted())
-}
-
-fn tokens_label(agent: &AgentState) -> String {
-    agent
-        .usage
+fn agent_row(agent: &AgentReportEntry, now: jiff::Timestamp) -> Vec<render::Cell> {
+    let model = agent.model.label.as_deref().unwrap_or("-");
+    let model = if model == "-" {
+        render::cell(model).dash()
+    } else {
+        render::cell(model).fg(render::palette::muted())
+    };
+    let tokens = agent
+        .stats
         .total_tokens
         .map(render::compact_count)
-        .unwrap_or_else(|| "-".to_owned())
-}
-
-/// The agent's channel for display, dashed when it runs outside any worktree.
-/// The channel itself comes from [`rimz::harness::target::agent_channel`], the single
-/// source of truth; this only chooses the `-` placeholder over the resolver's
-/// prose label.
-pub(super) fn worktree_label(agent: &AgentState) -> String {
-    rimz::harness::target::agent_channel(agent).unwrap_or_else(|| "-".to_owned())
+        .unwrap_or_else(|| "-".to_owned());
+    vec![
+        render::cell(agent.handle.as_str()).fg(render::palette::identity(agent.kind.as_str())),
+        render::cell(agent.status.as_str()).fg(status_style(agent)),
+        model,
+        context_cell(agent.context.fill_pct),
+        render::cell(tokens).dash(),
+        render::cell(render::age_short(agent.timeline.last_seen, now)),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::report::model_report;
     use super::*;
 
     #[test]
@@ -440,19 +344,34 @@ mod tests {
         context.model_display_name = Some("Context Display".to_owned());
         context.effort = Some("high".to_owned());
         agent.context = Some(context);
-        assert_eq!(model_label(&agent), "Context Display@high");
+        assert_eq!(
+            model_report(&agent).label.as_deref(),
+            Some("Context Display@high")
+        );
 
         agent.context.as_mut().unwrap().model_display_name = None;
-        assert_eq!(model_label(&agent), "context-id@high");
+        assert_eq!(
+            model_report(&agent).label.as_deref(),
+            Some("context-id@high")
+        );
 
         agent.context.as_mut().unwrap().model_id = None;
-        assert_eq!(model_label(&agent), "launch-model@high");
+        assert_eq!(
+            model_report(&agent).label.as_deref(),
+            Some("launch-model@high")
+        );
 
         agent.context.as_mut().unwrap().effort = None;
-        assert_eq!(model_label(&agent), "launch-model@launch-effort");
+        assert_eq!(
+            model_report(&agent).label.as_deref(),
+            Some("launch-model@launch-effort")
+        );
 
         agent.context = None;
-        assert_eq!(model_label(&agent), "launch-model@launch-effort");
+        assert_eq!(
+            model_report(&agent).label.as_deref(),
+            Some("launch-model@launch-effort")
+        );
     }
 
     #[test]
@@ -495,23 +414,25 @@ mod tests {
         );
 
         let refs = snapshot.agents.iter().collect::<Vec<_>>();
-        let entries = agent_list_entries(&snapshot, &refs);
+        let entries = build_list_report(&snapshot, &refs, now);
         let linked = entries
+            .agents
             .iter()
-            .find(|entry| entry.agent.agent_id.as_str() == "linked")
+            .find(|entry| entry.id.as_str() == "linked")
             .unwrap();
         let plain = entries
+            .agents
             .iter()
-            .find(|entry| entry.agent.agent_id.as_str() == "plain")
+            .find(|entry| entry.id.as_str() == "plain")
             .unwrap();
 
         assert_eq!(
-            serde_json::to_value(linked).unwrap()["pr"],
+            serde_json::to_value(linked).unwrap()["placement"]["pr"],
             serde_json::json!({"number": 91, "state": "open", "ci": "passing"})
         );
         assert_eq!(
-            serde_json::to_value(plain).unwrap(),
-            serde_json::to_value(plain.agent).unwrap()
+            serde_json::to_value(plain).unwrap()["placement"]["pr"],
+            serde_json::Value::Null
         );
     }
 

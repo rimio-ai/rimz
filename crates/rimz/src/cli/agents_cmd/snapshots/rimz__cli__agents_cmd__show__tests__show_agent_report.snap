@@ -1,0 +1,68 @@
+---
+source: crates/rimz/src/cli/agents_cmd/show.rs
+expression: report
+---
+{
+  "agent": {
+    "id": "show",
+    "kind": "codex",
+    "handle": "@codex",
+    "name": null,
+    "name_explicit": false,
+    "profile": null,
+    "role": null,
+    "team": null,
+    "mode": null,
+    "me": false,
+    "status": "idle",
+    "phase": "idle",
+    "turn_error": null,
+    "ask": null,
+    "unread": false,
+    "attention_score": 0,
+    "description": null,
+    "model": {
+      "id": null,
+      "effort": null,
+      "label": null
+    },
+    "context": {
+      "fill_pct": null,
+      "used_tokens": null,
+      "window": 272000,
+      "severity": null,
+      "compactions": 0,
+      "compacting": false
+    },
+    "stats": {
+      "total_tokens": null,
+      "fresh_input_tokens": null,
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "output_tokens": null,
+      "cost_usd": 0.42,
+      "active_secs": null,
+      "tool_calls": {}
+    },
+    "timeline": {
+      "registered_at": "1970-01-01T00:00:00Z",
+      "turn_started_at": null,
+      "last_activity": "1970-01-01T00:00:00Z",
+      "last_seen": "1970-01-01T00:00:00Z"
+    },
+    "placement": {
+      "channel": null,
+      "worktree": null,
+      "branch": null,
+      "pane": null,
+      "pr": null
+    },
+    "budget": {
+      "cap": null,
+      "parked": false,
+      "park": null
+    },
+    "sub_agents": []
+  },
+  "stale": true
+}

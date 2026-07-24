@@ -1157,17 +1157,22 @@ mod render {
             Some("/repo/worktrees/feature"),
             None,
         );
-        let mut out = anstream::StripStream::new(Vec::new());
-        super::show::render_placement_section(
-            &mut out,
+        let peers = [&agent];
+        let report = super::report::build_entry(
             &agent,
-            Some(super::list::PrInfo {
+            None,
+            Some(super::report::PrInfo {
                 number: Some(91),
                 state: rimz::WorktreePrState::Open,
                 ci: Some(rimz::WorktreePrCi::Failing),
             }),
-        )
-        .unwrap();
+            &peers,
+            None,
+            Timestamp::UNIX_EPOCH,
+            None,
+        );
+        let mut out = anstream::StripStream::new(Vec::new());
+        super::show::render_placement_section(&mut out, &report).unwrap();
         let text = String::from_utf8(out.into_inner()).unwrap();
 
         assert!(
@@ -1183,6 +1188,12 @@ mod render {
             agent_with_status("active", AgentStatus::Running, TurnPhase::Acting, 1_000);
         active.description = Some("ship\nwide\tfix".to_owned());
         let idle = agent_with_status("idle", AgentStatus::Idle, TurnPhase::Idle, 1_000);
+        let report = |agent: &AgentState| {
+            let peers = [agent];
+            super::report::build_entry(agent, None, None, &peers, None, now, None)
+        };
+        let active = report(&active);
+        let idle = report(&idle);
 
         let mut active_out = anstream::StripStream::new(Vec::new());
         super::show::render_activity_section(&mut active_out, &active, None, false, now)
@@ -1218,6 +1229,7 @@ mod render {
             rimz::agents::TurnSettleOutcome::NativeWait,
         ));
         native_wait.context = Some(context);
+        let native_wait = report(&native_wait);
         let mut native_out = anstream::StripStream::new(Vec::new());
         super::show::render_activity_section(&mut native_out, &native_wait, None, false, now)
             .expect("render native wait activity");

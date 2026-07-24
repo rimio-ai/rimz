@@ -18,6 +18,7 @@ mod refresh;
 mod refresh_context;
 mod refresh_usage;
 mod register;
+mod report;
 mod restart;
 mod resume;
 mod runs_lookup;

@@ -21,6 +21,7 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 
 ### Changed
 
+- `rimz agents --json` and `rimz agents show --json` now publish one versioned, stable-key agent report instead of the provider-shaped store rollup. JSON and tables share projected status and normalized model, context, token, cost, active-time, compaction, attention, placement, budget, subagent, handle, and caller-identity fields; consumers must migrate to schema 1. → [agent control JSON](./docs/reference/cli/agents.md#list)
 - First-run consent prompts default to no: the project-trust grant for an untrusted clone and the hands-off automation opt-in both need an explicit yes, so pressing Enter never activates a cloned repo's command surface or unattended runs. Re-running setup still defaults the automation prompt to your current setting. → [security](./docs/guide/security.md#project-trust)
 - The vendored Zellij presence plugin is reproducibly bound to its checked-in source; builds verify its checksum before embedding, and CI rebuilds and compares the wasm byte for byte. → [security](./docs/guide/security.md#the-zellij-presence-plugin)
 
