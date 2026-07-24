@@ -613,6 +613,7 @@ pub(crate) enum CodexTimestamp<'a> {
 pub(crate) struct CodexRawUsage {
     pub(crate) input_tokens: u64,
     pub(crate) cached_input_tokens: u64,
+    pub(crate) cache_write_input_tokens: u64,
     pub(crate) output_tokens: u64,
     pub(crate) reasoning_output_tokens: u64,
     pub(crate) total_tokens: u64,
@@ -624,6 +625,7 @@ const INPUT_REPORTED: u8 = 1 << 0;
 const CACHED_REPORTED: u8 = 1 << 1;
 const OUTPUT_REPORTED: u8 = 1 << 2;
 const TOTAL_REPORTED: u8 = 1 << 3;
+const CACHE_WRITE_REPORTED: u8 = 1 << 4;
 
 impl CodexRawUsage {
     pub(crate) fn input_reported(self) -> bool {
@@ -632,6 +634,10 @@ impl CodexRawUsage {
 
     pub(crate) fn cached_reported(self) -> bool {
         self.reported & CACHED_REPORTED != 0
+    }
+
+    pub(crate) fn cache_write_reported(self) -> bool {
+        self.reported & CACHE_WRITE_REPORTED != 0
     }
 
     pub(crate) fn output_reported(self) -> bool {
@@ -657,6 +663,10 @@ struct CodexRawUsageFields {
     cache_read_input_tokens: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     cached_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
+    cache_write_input_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
+    cache_write_tokens: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     output_tokens: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
@@ -687,6 +697,10 @@ impl<'de> Deserialize<'de> for CodexRawUsage {
             .or(fields.cache_read_input_tokens)
             .or(fields.cached_tokens)
             .unwrap_or(0);
+        let cache_write = fields
+            .cache_write_input_tokens
+            .or(fields.cache_write_tokens)
+            .unwrap_or(0);
         let output = fields
             .output_tokens
             .or(fields.completion_tokens)
@@ -712,10 +726,14 @@ impl<'de> Deserialize<'de> for CodexRawUsage {
                     || fields.completion_tokens.is_some()
                     || fields.output.is_some(),
             ) * OUTPUT_REPORTED)
-            | (u8::from(fields.total_tokens.is_some()) * TOTAL_REPORTED);
+            | (u8::from(fields.total_tokens.is_some()) * TOTAL_REPORTED)
+            | (u8::from(
+                fields.cache_write_input_tokens.is_some() || fields.cache_write_tokens.is_some(),
+            ) * CACHE_WRITE_REPORTED);
         Ok(Self {
             input_tokens: input,
             cached_input_tokens: cached,
+            cache_write_input_tokens: cache_write,
             output_tokens: output,
             reasoning_output_tokens: reasoning,
             total_tokens: fields

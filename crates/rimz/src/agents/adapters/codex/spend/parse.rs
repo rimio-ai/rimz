@@ -345,6 +345,7 @@ fn visit_session_entry(
         model,
         input_tokens: raw.input_tokens,
         cached_input_tokens: raw.cached_input_tokens.min(raw.input_tokens),
+        cache_write_input_tokens: raw.cache_write_input_tokens.min(raw.input_tokens),
         output_tokens: raw.output_tokens,
         reasoning_output_tokens: raw.reasoning_output_tokens,
         total_tokens: raw.total_tokens,
@@ -377,6 +378,7 @@ fn visit_headless_entry(
         model,
         input_tokens: raw.input_tokens,
         cached_input_tokens: raw.cached_input_tokens.min(raw.input_tokens),
+        cache_write_input_tokens: raw.cache_write_input_tokens.min(raw.input_tokens),
         output_tokens: raw.output_tokens,
         reasoning_output_tokens: raw.reasoning_output_tokens,
         total_tokens: raw.total_tokens,
@@ -435,6 +437,7 @@ fn headless_usage(e: &CodexLogEntry<'_>) -> Option<CodexRawUsage> {
 fn is_zero_usage(u: &CodexRawUsage) -> bool {
     u.input_tokens == 0
         && u.cached_input_tokens == 0
+        && u.cache_write_input_tokens == 0
         && u.output_tokens == 0
         && u.reasoning_output_tokens == 0
 }
@@ -450,6 +453,9 @@ pub(super) fn subtract_raw_usage(
         cached_input_tokens: current
             .cached_input_tokens
             .saturating_sub(prev.cached_input_tokens),
+        cache_write_input_tokens: current
+            .cache_write_input_tokens
+            .saturating_sub(prev.cache_write_input_tokens),
         output_tokens: current.output_tokens.saturating_sub(prev.output_tokens),
         reasoning_output_tokens: current
             .reasoning_output_tokens

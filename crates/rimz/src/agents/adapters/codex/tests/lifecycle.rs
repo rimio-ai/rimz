@@ -396,7 +396,7 @@ fn v2_child_rollout_enriches_every_hook_without_parent_transcript_leakage() {
             "\n",
             r#"{"type":"turn_context","payload":{"model":"child-model","effort":"xhigh"}}"#,
             "\n",
-            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":300,"cached_input_tokens":200,"output_tokens":21,"total_tokens":321},"total_token_usage":{"input_tokens":9999,"output_tokens":9999},"model_context_window":1000}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":300,"cached_input_tokens":200,"cache_write_input_tokens":50,"output_tokens":21,"total_tokens":321},"total_token_usage":{"input_tokens":9999,"output_tokens":9999},"model_context_window":1000}}}"#,
             "\n",
             r#"{"timestamp":"2026-06-26T00:00:05Z","type":"event_msg","payload":{"type":"stream_error","message":"child failed"}}"#,
             "\n",
@@ -425,7 +425,8 @@ fn v2_child_rollout_enriches_every_hook_without_parent_transcript_leakage() {
     assert_eq!(start.usage.total_tokens, Some(321));
     assert_eq!(start.usage.context_window, Some(1000));
     assert_eq!(start.usage.cache_read_input_tokens, Some(200));
-    assert_eq!(start.usage.fresh_input_tokens, Some(100));
+    assert_eq!(start.usage.cache_write_input_tokens, Some(50));
+    assert_eq!(start.usage.fresh_input_tokens, Some(50));
     assert_eq!(start.usage.output_tokens, Some(21));
     assert_eq!(start.transcript_path.as_deref(), child_path.to_str());
 

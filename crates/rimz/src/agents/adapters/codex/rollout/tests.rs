@@ -17,14 +17,28 @@ fn raw_usage_normalizes_aliases_and_string_counts() {
             .unwrap();
     assert_eq!(usage.input_tokens, 200);
     assert_eq!(usage.cached_input_tokens, 80);
+    assert_eq!(usage.cache_write_input_tokens, 0);
     assert_eq!(usage.output_tokens, 30);
     assert_eq!(usage.total_tokens, 230);
+    assert!(!usage.cache_write_reported());
     assert!(!usage.total_reported());
 
     let usage: CodexRawUsage =
         serde_json::from_str(r#"{"input_tokens":"100","output_tokens":"50"}"#).unwrap();
     assert_eq!(usage.input_tokens, 100);
     assert_eq!(usage.output_tokens, 50);
+
+    let usage: CodexRawUsage = serde_json::from_str(
+        r#"{"input_tokens":100,"cache_write_input_tokens":60,"output_tokens":50}"#,
+    )
+    .unwrap();
+    assert_eq!(usage.cache_write_input_tokens, 60);
+    assert!(usage.cache_write_reported());
+
+    let usage: CodexRawUsage =
+        serde_json::from_str(r#"{"input_tokens":100,"cache_write_tokens":60}"#).unwrap();
+    assert_eq!(usage.cache_write_input_tokens, 60);
+    assert!(usage.cache_write_reported());
 }
 
 #[test]

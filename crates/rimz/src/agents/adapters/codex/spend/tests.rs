@@ -75,15 +75,17 @@ fn parse_codex_session_usage_shapes_and_cumulative_deltas() {
     let (_dir, path) = write_session(
         "session-b.jsonl",
         &[
-            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#,
-            r#"{"type":"event_msg","timestamp":"2026-01-01T10:01:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"output_tokens":120}}}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cache_write_input_tokens":40,"output_tokens":50}}}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:01:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"cache_write_input_tokens":90,"output_tokens":120}}}}"#,
         ],
     );
 
     let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].input_tokens, 100);
+    assert_eq!(events[0].cache_write_input_tokens, 40);
     assert_eq!(events[1].input_tokens, 200);
+    assert_eq!(events[1].cache_write_input_tokens, 50);
     assert_eq!(events[1].output_tokens, 70);
 
     let (_dir, path) = write_session(
@@ -231,12 +233,49 @@ fn codex_cached_input_bills_at_input_rate_without_explicit_cache_read_cost() {
 }
 
 #[test]
+fn codex_cache_write_is_priced_as_a_subset_of_input() {
+    let line = r#"{"model":"gpt-5.6-sol","timestamp":"2026-01-01T10:00:00.000Z","usage":{"input_tokens":100,"cached_input_tokens":20,"cache_write_input_tokens":30,"output_tokens":10}}"#;
+    let (_dir, path) = write_session("cache-write-rate.jsonl", &[line]);
+    let prices = PriceBook::embedded();
+
+    let entries = parse_codex_spend(&path, None, &prices).entries;
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].input, 50);
+    assert_eq!(entries[0].cache_write, 30);
+    assert_eq!(entries[0].cache_read, 20);
+    assert_eq!(entries[0].output, 10);
+    let price = prices.price("gpt-5.6-sol").unwrap();
+    let expected = 50.0 * price.input
+        + 30.0 * price.cache_create
+        + 20.0 * price.cache_read
+        + 10.0 * price.output;
+    assert!(
+        (entries[0].cost_usd - expected).abs() < 1e-15,
+        "cache-write cost was {}",
+        entries[0].cost_usd
+    );
+}
+
+#[test]
+fn implicit_cache_read_billing_preserves_cache_write() {
+    let price = Pricing::from_base_rates(1.0, 2.0, Some(1.25), None);
+    let split = TokenSplit::new(50, 10).cached(30, 20);
+
+    assert_eq!(
+        codex_billed_split(price, split),
+        TokenSplit::new(70, 10).cached(30, 0)
+    );
+}
+
+#[test]
 fn dedup_key_separates_events_differing_only_in_reasoning_or_total() {
     let base = wire::CodexTokenEvent {
         timestamp: "2026-01-01T10:00:00.000Z".to_string(),
         model: Some("gpt-5".to_string()),
         input_tokens: 100,
         cached_input_tokens: 10,
+        cache_write_input_tokens: 0,
         output_tokens: 50,
         reasoning_output_tokens: 5,
         total_tokens: 155,

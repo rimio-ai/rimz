@@ -1436,9 +1436,12 @@ fn build_codex_observation(
         payload_total_tokens(payload, usage.total_tokens)
     };
     observation.usage.cache_read_input_tokens = usage.last_cached_input_tokens;
-    observation.usage.fresh_input_tokens = usage
-        .last_input_tokens
-        .map(|input| input.saturating_sub(usage.last_cached_input_tokens.unwrap_or(0)));
+    observation.usage.cache_write_input_tokens = usage.last_cache_write_tokens;
+    observation.usage.fresh_input_tokens = usage.last_input_tokens.map(|input| {
+        input
+            .saturating_sub(usage.last_cached_input_tokens.unwrap_or(0))
+            .saturating_sub(usage.last_cache_write_tokens.unwrap_or(0))
+    });
     observation.usage.output_tokens = usage.last_output_tokens;
     observation
 }
