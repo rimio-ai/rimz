@@ -10,7 +10,7 @@ use crate::config::MachineConfig;
 use crate::mux::CommandSpec;
 use crate::store::{atomic, paths};
 
-use super::{Result, TTYD_PIXEL_PROTOCOL, WebErr, WebWarning, ttyd};
+use super::{Result, WebErr, WebWarning, ttyd};
 
 const ALLOWLIST_FILE: &str = "web-share.json";
 const DAEMON_FILE: &str = "web-ttyd-share.json";
@@ -31,6 +31,8 @@ pub(super) struct DaemonRecord {
     pub(super) interface: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) pixel_protocol: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) index_key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,20 +198,26 @@ fn desired_spec(config: &MachineConfig) -> Result<DaemonSpec> {
 }
 
 fn ensure_daemon_locked(config: &MachineConfig, desired: &DaemonSpec) -> Result<RunningDaemon> {
-    let program = ttyd::required_program()?;
+    let (program, version) = ttyd::required_program_with_version()?;
     let daemon = daemon_status_locked()?;
+    let prepared = prepare_fresh_start(config, desired, daemon.as_ref(), program, &version)?;
     if let Some(record) = daemon.as_ref()
-        && record_matches(record, desired)
+        && record_matches(record, desired, &prepared.2)
     {
-        return Ok(running_daemon(record.clone(), desired, Vec::new()));
+        return Ok(running_daemon(
+            record.clone(),
+            desired,
+            prepared.2.warnings.clone(),
+        ));
     }
-    start_fresh_locked_with_program(config, desired, daemon, &program)
+    start_fresh_locked_prepared(desired, daemon, prepared)
 }
 
 fn restart_daemon_locked(config: &MachineConfig, desired: &DaemonSpec) -> Result<RunningDaemon> {
-    let program = ttyd::required_program()?;
+    let (program, version) = ttyd::required_program_with_version()?;
     let daemon = daemon_status_locked()?;
-    start_fresh_locked_with_program(config, desired, daemon, &program)
+    let prepared = prepare_fresh_start(config, desired, daemon.as_ref(), program, &version)?;
+    start_fresh_locked_prepared(desired, daemon, prepared)
 }
 
 fn start_fresh_locked(
@@ -217,23 +225,35 @@ fn start_fresh_locked(
     desired: &DaemonSpec,
     daemon: Option<DaemonRecord>,
 ) -> Result<RunningDaemon> {
-    let program = ttyd::required_program()?;
-    start_fresh_locked_with_program(config, desired, daemon, &program)
+    let (program, version) = ttyd::required_program_with_version()?;
+    let prepared = prepare_fresh_start(config, desired, daemon.as_ref(), program, &version)?;
+    start_fresh_locked_prepared(desired, daemon, prepared)
 }
 
-fn start_fresh_locked_with_program(
+type FreshStart = (PathBuf, SocketAddr, ttyd::client::ClientProfile);
+
+fn prepare_fresh_start(
     config: &MachineConfig,
     desired: &DaemonSpec,
-    daemon: Option<DaemonRecord>,
-    program: &Path,
-) -> Result<RunningDaemon> {
+    daemon: Option<&DaemonRecord>,
+    program: PathBuf,
+    version: &str,
+) -> Result<FreshStart> {
     let address = ttyd::socket_address(&desired.interface, desired.port)?;
-    if daemon.as_ref().is_none_or(|record| {
+    if daemon.is_none_or(|record| {
         ttyd::socket_address(&record.interface, record.port).ok() != Some(address)
     }) {
         ensure_share_port_available(address)?;
     }
-    let profile = ttyd::client::profile(config, program);
+    let profile = ttyd::client::profile(config, &program, version);
+    Ok((program, address, profile))
+}
+
+fn start_fresh_locked_prepared(
+    desired: &DaemonSpec,
+    daemon: Option<DaemonRecord>,
+    (program, address, profile): FreshStart,
+) -> Result<RunningDaemon> {
     if let Some(record) = daemon {
         stop_record(&record)?;
     }
@@ -244,7 +264,7 @@ fn start_fresh_locked_with_program(
         .map_err(|_| WebErr::InvalidInterface {
             value: desired.interface.clone(),
         })?;
-    let spec = spawn_spec(program, interface, desired.port, &profile.args)?;
+    let spec = spawn_spec(&program, interface, desired.port, &profile.args)?;
     let pid = ttyd::spawn_detached(spec)?;
     let probe = ttyd::probe_address(address);
     if !ttyd::wait_for_address(probe, START_TIMEOUT) {
@@ -256,6 +276,7 @@ fn start_fresh_locked_with_program(
         port: desired.port,
         interface: desired.interface.clone(),
         pixel_protocol: profile.pixel_protocol,
+        index_key: profile.index_key,
     };
     if let Err(err) = write_daemon(&record) {
         let _ = stop_record(&record);
@@ -282,12 +303,14 @@ fn running_daemon(
     RunningDaemon { record, warnings }
 }
 
-fn record_matches(record: &DaemonRecord, desired: &DaemonSpec) -> bool {
+fn record_matches(
+    record: &DaemonRecord,
+    desired: &DaemonSpec,
+    profile: &ttyd::client::ClientProfile,
+) -> bool {
     record.port == desired.port
         && record.interface == desired.interface
-        && record
-            .pixel_protocol
-            .is_none_or(|protocol| protocol == TTYD_PIXEL_PROTOCOL)
+        && record.index_key == profile.index_key
 }
 
 fn daemon_status_locked() -> Result<Option<DaemonRecord>> {
@@ -412,6 +435,13 @@ fn default_interface() -> String {
 mod tests {
     use super::*;
 
+    fn profile_with_index(index_key: Option<&str>) -> ttyd::client::ClientProfile {
+        ttyd::client::ClientProfile {
+            index_key: index_key.map(str::to_owned),
+            ..ttyd::client::ClientProfile::default()
+        }
+    }
+
     #[test]
     fn broadcast_argv_has_no_write_or_auth_and_uses_share_shim() {
         let spec = spawn_spec_for(
@@ -459,5 +489,39 @@ mod tests {
                 sessions: vec!["rimz-a".to_owned(), "rimz-b".to_owned()]
             })
         );
+    }
+
+    #[test]
+    fn daemon_reuse_requires_the_generated_index_key() {
+        let desired = DaemonSpec {
+            port: 8201,
+            interface: "127.0.0.1".to_owned(),
+        };
+        let mut daemon = DaemonRecord {
+            pid: 42,
+            port: desired.port,
+            interface: desired.interface.clone(),
+            pixel_protocol: None,
+            index_key: None,
+        };
+
+        assert!(record_matches(&daemon, &desired, &profile_with_index(None)));
+        assert!(!record_matches(
+            &daemon,
+            &desired,
+            &profile_with_index(Some("current"))
+        ));
+        daemon.index_key = Some("current".to_owned());
+        assert!(record_matches(
+            &daemon,
+            &desired,
+            &profile_with_index(Some("current"))
+        ));
+        daemon.index_key = Some("stale".to_owned());
+        assert!(!record_matches(
+            &daemon,
+            &desired,
+            &profile_with_index(Some("current"))
+        ));
     }
 }

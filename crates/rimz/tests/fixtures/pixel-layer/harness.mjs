@@ -59,7 +59,19 @@ function createHarness({ cols, rows, width = cols * 10, height = rows * 10 }) {
   const ensureLine = (row) => {
     while (lines.length <= row) {
       const cells = Array.from({ length: cols }, () => blankCell);
-      lines.push({ length: cols, getCell: (column) => cells[column], cells });
+      lines.push({
+        length: cols,
+        getCellCalls: 0,
+        getCell(column) {
+          this.getCellCalls++;
+          return cells[column];
+        },
+        translateToString(trimRight) {
+          const value = cells.map((cell) => cell.getChars()).join("");
+          return trimRight ? value.trimEnd() : value;
+        },
+        cells,
+      });
     }
     return lines[row];
   };
@@ -87,7 +99,13 @@ function createHarness({ cols, rows, width = cols * 10, height = rows * 10 }) {
     rows,
     options: {},
     element: { querySelector: (selector) => selector === ".xterm-screen" ? screen : null },
-    buffer: { active: { viewportY: 0, getLine: (row) => lines[row] } },
+    buffer: {
+      active: {
+        viewportY: 0,
+        getLine: (row) => lines[row],
+        getNullCell: () => ({}),
+      },
+    },
     write(data, callback) {
       writes.push(data instanceof Uint8Array ? data.slice() : data);
       if (callback) callback();
@@ -141,6 +159,7 @@ function createHarness({ cols, rows, width = cols * 10, height = rows * 10 }) {
   };
   const takeOps = () => ops.splice(0);
   const takeWrites = () => writes.splice(0);
+  const getCellCallCounts = () => lines.map((line) => line.getCellCalls);
 
   pumpFrames();
   takeOps();
@@ -160,6 +179,7 @@ function createHarness({ cols, rows, width = cols * 10, height = rows * 10 }) {
     rejectNext,
     takeOps,
     takeWrites,
+    getCellCallCounts,
   };
 }
 
@@ -269,6 +289,7 @@ async function decodeLifecycle() {
   assert.equal(draws(harness.takeOps()).length, 0, "pending decode painted");
   await harness.rejectNext();
   harness.handlers.render();
+  harness.pumpFrames();
   assert.equal(draws(harness.takeOps()).length, 0, "failed decode painted");
 
   harness.transmit(id);
@@ -329,6 +350,7 @@ async function resizeAndScrollFollowViewport() {
 
   harness.term.buffer.active.viewportY = 1;
   harness.handlers.scroll();
+  harness.pumpFrames();
   let ops = harness.takeOps();
   assert.deepEqual(draws(ops)[0].args, [20, 0, 20, 20]);
   assert.equal(ops.filter(({ op }) => op === "clearRect").length, 1);
@@ -336,11 +358,13 @@ async function resizeAndScrollFollowViewport() {
   harness.screenRect.width = 160;
   harness.screenRect.height = 80;
   harness.resizeObservers[0].callback();
+  harness.pumpFrames();
   ops = harness.takeOps();
   assert.deepEqual(draws(ops)[0].args, [40, 0, 40, 40]);
   assert.ok(ops.filter(({ op }) => op === "clearRect").length >= 2, "ResizeObserver did not clear between frames");
 
   harness.handlers.resize();
+  harness.pumpFrames();
   ops = harness.takeOps();
   assert.equal(draws(ops).length, 1, "onResize did not redraw");
   assert.ok(ops.filter(({ op }) => op === "clearRect").length >= 2, "onResize did not clear between frames");
@@ -356,11 +380,82 @@ async function repeatedRenderReplacesFrame() {
   harness.pumpFrames();
   harness.takeOps();
   for (let index = 0; index < 3; index++) {
+    harness.setText(1, 1 + index, "");
+    harness.setText(1, 2 + index, "");
+    harness.setPlacementCells(id, 1, 2 + index, 1, 2);
     harness.handlers.render();
+    harness.pumpFrames();
     const ops = harness.takeOps();
     assert.equal(draws(ops).length, 1, `render ${index} accumulated image draws`);
     assert.equal(ops.filter(({ op }) => op === "clearRect").length, 1, `render ${index} did not replace the frame`);
   }
+}
+
+async function unchangedSceneDoesNotRepaintCanvas() {
+  const harness = createHarness({ cols: 196, rows: 53, width: 3840, height: 2160 });
+  const id = 8;
+  harness.setPlaceholder(26, 98, id, 0, 0);
+  harness.transmit(id);
+  harness.place(id, 1, 1);
+  await harness.resolveNext(10, 10);
+  harness.pumpFrames();
+  harness.takeOps();
+
+  harness.handlers.render();
+  harness.pumpFrames();
+  assert.deepEqual(
+    harness.takeOps(),
+    [],
+    "an unchanged placeholder scene should not touch the full-resolution canvas",
+  );
+
+  harness.setText(26, 98, "");
+  harness.setPlaceholder(26, 99, id, 0, 0);
+  harness.handlers.render();
+  harness.pumpFrames();
+  const ops = harness.takeOps();
+  assert.equal(draws(ops).length, 1, "a moved placeholder should redraw its image");
+  assert.equal(ops.filter(({ op }) => op === "clearRect").length, 1, "a moved placeholder should replace the canvas");
+}
+
+async function renderEventsCoalesce() {
+  const harness = createHarness({ cols: 6, rows: 3 });
+  const id = 9;
+  harness.setPlacementCells(id, 1, 1, 1, 2);
+  harness.transmit(id);
+  harness.place(id, 2, 1);
+  await harness.resolveNext(20, 10);
+  harness.pumpFrames();
+  harness.takeOps();
+  harness.setText(1, 1, "");
+  harness.setText(1, 2, "");
+  harness.setPlacementCells(id, 1, 2, 1, 2);
+
+  for (let index = 0; index < 3; index++) {
+    harness.handlers.render();
+    harness.handlers.scroll();
+  }
+  assert.equal(harness.takeOps().length, 0, "render events drew before the animation frame");
+  harness.pumpFrames();
+  const ops = harness.takeOps();
+  assert.equal(draws(ops).length, 1, "coalesced frame drew the image more than once");
+  assert.equal(ops.filter(({ op }) => op === "clearRect").length, 1, "coalesced frame cleared more than once");
+}
+
+async function scanSkipsPlaceholderFreeRows() {
+  const harness = createHarness({ cols: 12, rows: 10 });
+  const id = 10;
+  harness.setPlaceholder(6, 4, id, 0, 0);
+  harness.transmit(id);
+  harness.place(id, 1, 1);
+  await harness.resolveNext(10, 10);
+  harness.pumpFrames();
+
+  assert.deepEqual(
+    harness.getCellCallCounts().slice(0, 10),
+    [0, 0, 0, 0, 0, 0, 12, 0, 0, 0],
+    "only rows containing a pixel placeholder should scan cells",
+  );
 }
 
 const scenarios = [
@@ -372,6 +467,9 @@ const scenarios = [
   partialPlacementKeepsLogicalOrigin,
   resizeAndScrollFollowViewport,
   repeatedRenderReplacesFrame,
+  unchangedSceneDoesNotRepaintCanvas,
+  renderEventsCoalesce,
+  scanSkipsPlaceholderFreeRows,
 ];
 
 for (const scenario of scenarios) {

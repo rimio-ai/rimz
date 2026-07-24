@@ -22,7 +22,8 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 
 - `rimz agents fork` replays the source profile's launch posture, so its system prompt, tool configuration, model, effort, and permissions carry into the provider-native fork instead of reverting to defaults. → [agents](./docs/reference/cli/agents.md#fork)
 - Sidebar CI badges on merged GitHub pull requests track rerun verdicts, while each repository refresh normally uses one API request. → [sidebar state](./docs/internals/sidebar/state.md#enrichment-lanes)
-- Drag selection and heavy output stay responsive in Chromium-based browser rooms instead of freezing mid-repaint. → [web](./docs/guide/web.md#browser-appearance-and-input)
+- Continuous tmux drag selection and heavy output stay responsive in browser rooms: obsolete pointer positions coalesce behind a settled response paint at a viewport-scaled cadence, while pixel pets or context meters leave the full-resolution canvas untouched until their visible scene changes. → [web](./docs/guide/web.md#browser-appearance-and-input)
+- Writable and broadcast web daemons restart automatically at the next ensure when an upgrade, font change, or ttyd version changes the generated browser page. → [web internals](./docs/internals/web.md#daemon)
 - Browser panes opened with macOS Option chords no longer begin with the composed accent after xterm handles the Meta input, including in Safari and Chrome. → [web](./docs/guide/web.md#browser-appearance-and-input)
 - Closing a RimZ browser tab no longer asks for leave-site confirmation; reconnecting reattaches the same room.
 - Ctrl-C stops `rimz remote connect` without opening another recovery attempt, including while the remote host asks a setup, hook-installation, or trust question. → [remote](./docs/guide/remote.md#a-link-that-heals-itself)

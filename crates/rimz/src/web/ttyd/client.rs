@@ -16,7 +16,7 @@ use crate::store::{atomic, paths};
 
 use super::{
     DaemonRecord, START_TIMEOUT, choose_ephemeral_port, random_secret, spawn_detached,
-    terminate_record, version_at, wait_for_port,
+    terminate_record, wait_for_port,
 };
 use crate::sidebar_pane::pixel::{PLACEHOLDER, ROW_COLUMN_DIACRITICS};
 use crate::web::WebWarning;
@@ -36,9 +36,14 @@ pub(in crate::web) struct ClientProfile {
     pub(in crate::web) args: Vec<String>,
     pub(in crate::web) warnings: Vec<WebWarning>,
     pub(in crate::web) pixel_protocol: Option<u32>,
+    pub(in crate::web) index_key: Option<String>,
 }
 
-pub(in crate::web) fn profile(config: &MachineConfig, ttyd_program: &Path) -> ClientProfile {
+pub(in crate::web) fn profile(
+    config: &MachineConfig,
+    ttyd_program: &Path,
+    ttyd_version: &str,
+) -> ClientProfile {
     let mut profile = ClientProfile {
         args: vec![
             "-t".to_owned(),
@@ -52,6 +57,7 @@ pub(in crate::web) fn profile(config: &MachineConfig, ttyd_program: &Path) -> Cl
         ],
         warnings: Vec::new(),
         pixel_protocol: None,
+        index_key: None,
     };
     if !config.web.enabled {
         return profile;
@@ -93,20 +99,22 @@ pub(in crate::web) fn profile(config: &MachineConfig, ttyd_program: &Path) -> Cl
         }
     }
 
-    let index = version_at(ttyd_program)
-        .map_err(|err| err.to_string())
-        .and_then(|version| ensure_custom_index(ttyd_program, &version, font_family, &font_faces));
+    let index = ensure_custom_index(ttyd_program, ttyd_version, font_family, &font_faces);
     apply_custom_index(&mut profile, index);
     profile
 }
 
-fn apply_custom_index(profile: &mut ClientProfile, index: Result<Option<PathBuf>, String>) {
+fn apply_custom_index(
+    profile: &mut ClientProfile,
+    index: Result<Option<(PathBuf, String)>, String>,
+) {
     match index {
-        Ok(Some(path)) => {
+        Ok(Some((path, key))) => {
             profile
                 .args
                 .extend(["-I".to_owned(), path.display().to_string()]);
             profile.pixel_protocol = Some(crate::web::TTYD_PIXEL_PROTOCOL);
+            profile.index_key = Some(key);
         }
         Ok(None) => profile.warnings.push(WebWarning::BrowserClientSkipped(
             "stock ttyd index has no </head> or </body> marker".to_owned(),
@@ -120,13 +128,13 @@ fn ensure_custom_index(
     ttyd_version: &str,
     family: Option<&str>,
     faces: &[FontFace],
-) -> Result<Option<PathBuf>, String> {
+) -> Result<Option<(PathBuf, String)>, String> {
     let key = custom_index_key(ttyd_version, family, faces);
     let path = paths::cache_home()
         .join(INDEX_CACHE_DIR)
         .join(format!("index-{key}.html"));
     if path.is_file() {
-        return Ok(Some(path));
+        return Ok(Some((path, key)));
     }
 
     let stock = fetch_stock_index(program)?;
@@ -139,7 +147,7 @@ fn ensure_custom_index(
             path.display()
         )
     })?;
-    Ok(Some(path))
+    Ok(Some((path, key)))
 }
 
 fn fetch_stock_index(program: &Path) -> Result<String, String> {
@@ -908,7 +916,7 @@ mod tests {
     fn browser_safety_options_survive_disabled_web() {
         let mut config = MachineConfig::default();
         config.web.enabled = false;
-        let profile = profile(&config, Path::new("/missing-ttyd"));
+        let profile = profile(&config, Path::new("/missing-ttyd"), "ttyd version 1.7.5");
         assert_eq!(
             profile.args,
             [
@@ -953,9 +961,15 @@ mod tests {
         assert!(rendered.contains("installPixelLayer(term)"));
         assert!(rendered.contains("const HIGH=512*1024"));
         assert!(rendered.contains("const LOW=128*1024"));
+        assert!(rendered.contains("const MOUSE_SETTLE_MS=8"));
+        assert!(rendered.contains("const MOUSE_STALL_MS=250"));
+        assert!(rendered.contains("const MOUSE_CELLS_PER_MS=256"));
         assert!(rendered.contains("const installWebSocketGate=()=>"));
         assert!(rendered.contains("const installBacklogMeter=term=>"));
         assert!(rendered.contains("installBacklogMeter(term)"));
+        assert!(rendered.contains("const sendWithMouseFlow="));
+        assert!(rendered.contains("const updateMouseFrameMs="));
+        assert!(rendered.contains("term.onRender(releasePaintedMouseMotion)"));
         assert!(rendered.contains("new NativeWebSocketStream(rewriteWsUrl(url),{protocols})"));
         assert!(rendered.contains("value instanceof ArrayBuffer"));
         assert!(rendered.contains("this.finishStreamClose(closeCode,reason,true)"));
@@ -966,7 +980,9 @@ mod tests {
         assert!(rendered.contains("const suppressPlaceholderGlyphs=chunk=>"));
         assert!(rendered.contains("const hideGlyph=encoder.encode(\"\\x1b[8m\")"));
         assert!(rendered.contains("const showGlyph=encoder.encode(\"\\x1b[28m\")"));
-        assert!(rendered.contains("term.onRender(draw)"));
+        assert!(rendered.contains("term.onRender(scheduleDraw)"));
+        assert!(rendered.contains("let paintedScene=null"));
+        assert!(rendered.contains("if(sceneKey===paintedScene)return"));
         assert!(!rendered.contains("PLACEHOLDER_OVERHANG_COLS"));
         assert!(!rendered.contains("fillRect"));
         assert!(rendered.contains("const fittedImageRect="));
@@ -987,10 +1003,17 @@ mod tests {
             args: Vec::new(),
             warnings: Vec::new(),
             pixel_protocol: None,
+            index_key: None,
         };
 
         let mut capable = base();
-        apply_custom_index(&mut capable, Ok(Some(PathBuf::from("/cache/index.html"))));
+        apply_custom_index(
+            &mut capable,
+            Ok(Some((
+                PathBuf::from("/cache/index.html"),
+                "index-key".to_owned(),
+            ))),
+        );
         assert_eq!(
             capable.args,
             ["-I".to_owned(), "/cache/index.html".to_owned()]
@@ -999,10 +1022,12 @@ mod tests {
             capable.pixel_protocol,
             Some(crate::web::TTYD_PIXEL_PROTOCOL)
         );
+        assert_eq!(capable.index_key.as_deref(), Some("index-key"));
 
         let mut markerless = base();
         apply_custom_index(&mut markerless, Ok(None));
         assert_eq!(markerless.pixel_protocol, None);
+        assert_eq!(markerless.index_key, None);
         assert_eq!(markerless.warnings.len(), 1);
 
         let mut failed = base();
