@@ -71,6 +71,20 @@ pub(super) enum AssistEvent {
         occupied_tokens: Option<u64>,
         message_id: String,
     },
+    #[serde(rename = "idle_compact")]
+    IdleCompact {
+        at: Timestamp,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        idle_secs: u64,
+        occupied_tokens: u64,
+        message_id: String,
+        delivered: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     #[serde(rename = "auto_resume")]
     Resume {
         at: Timestamp,
@@ -116,6 +130,9 @@ impl AssistStats {
                     }
                 }
                 AssistEvent::Compact { .. } => rollup.compacts += 1,
+                AssistEvent::IdleCompact { delivered, .. } => {
+                    rollup.compacts += usize::from(*delivered);
+                }
                 AssistEvent::Resume { recovered, .. } => {
                     rollup.restores += 1;
                     rollup.restored_sessions += recovered;
@@ -195,6 +212,26 @@ impl AssistEvent {
                 occupied_tokens,
                 message_id,
             },
+            Assist::IdleCompact {
+                kind,
+                agent_id,
+                label,
+                idle_secs,
+                occupied_tokens,
+                message_id,
+                delivered,
+                error,
+            } => Self::IdleCompact {
+                at: record.at,
+                kind,
+                agent_id,
+                label,
+                idle_secs,
+                occupied_tokens,
+                message_id,
+                delivered,
+                error,
+            },
             Assist::AutoResume {
                 workspace_id,
                 session_name,
@@ -217,6 +254,7 @@ impl AssistEvent {
             Self::Redeem { at, .. }
             | Self::Continue { at, .. }
             | Self::Compact { at, .. }
+            | Self::IdleCompact { at, .. }
             | Self::Resume { at, .. } => *at,
         }
     }
@@ -385,6 +423,31 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 .unwrap_or_default();
             format!("{time} ⌁ {agent} auto-compact{detail}")
         }
+        AssistEvent::IdleCompact {
+            kind,
+            label,
+            idle_secs,
+            occupied_tokens,
+            delivered,
+            error,
+            ..
+        } => {
+            let agent = label.as_deref().unwrap_or(kind.as_str());
+            let outcome = if *delivered {
+                "compacted"
+            } else {
+                "compact held"
+            };
+            let error = error
+                .as_deref()
+                .map(|error| format!(" ({})", first_line(error)))
+                .unwrap_or_default();
+            format!(
+                "{time} ⌁ {agent} idle {outcome} after {} — {} ctx{error}",
+                format_hours(*idle_secs),
+                compact_token_count(*occupied_tokens),
+            )
+        }
         AssistEvent::Resume {
             cause,
             recovered,
@@ -441,6 +504,14 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         } => format!(
             "{at} {benefit} · agent {agent_id} · message {message_id} · threshold {}",
             compact_threshold(*threshold),
+        ),
+        AssistEvent::IdleCompact {
+            agent_id,
+            message_id,
+            delivered,
+            ..
+        } => format!(
+            "{at} {benefit} · agent {agent_id} · message {message_id} · delivered {delivered}"
         ),
         AssistEvent::Resume {
             workspace_id,

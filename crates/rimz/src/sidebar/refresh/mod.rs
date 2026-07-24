@@ -247,6 +247,7 @@ pub fn refresh_heavy_lanes(
         base.resume_outcomes.as_deref().unwrap_or_default(),
     );
     crate::harness::auto_continue::resume_parked(base, runtime, &config.resume, &resume_messages);
+    crate::harness::idle_compact::compact_idle_agents(base, runtime, &config.harness);
     crate::harness::auto_redeem::redeem_credits(
         &panels.providers,
         runtime,

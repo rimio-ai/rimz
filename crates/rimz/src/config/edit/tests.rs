@@ -66,6 +66,8 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "agents.worktree.base",
     "agents.placement",
     "harness.smart_compact",
+    "harness.idle_compact",
+    "harness.idle_compact_after",
     "harness.budget",
     "harness.rtk",
     "timezone",
@@ -253,6 +255,8 @@ fn validates_config_key_read_and_write_surfaces() {
         "notifications.title",
         "notifications.body",
         "harness.smart_compact",
+        "harness.idle_compact",
+        "harness.idle_compact_after",
         "harness.budget",
         "harness.turn_budget",
         "harness.rtk",
@@ -945,6 +949,15 @@ fn harness_smart_compact_values_are_parsed_as_strings() {
 }
 
 #[test]
+fn harness_idle_compact_values_are_parsed_as_strings() {
+    let mode = parse_key("harness.idle_compact").expect("mode key");
+    let after = parse_key("harness.idle_compact_after").expect("duration key");
+
+    assert_eq!(parse_set_value(&mode, "auto").as_str(), Some("auto"));
+    assert_eq!(parse_set_value(&after, "59m").as_str(), Some("59m"));
+}
+
+#[test]
 fn harness_turn_budget_values_are_validated_as_plain_amount_strings() {
     let key = parse_key("harness.turn_budget").expect("key");
 
@@ -985,6 +998,28 @@ fn harness_smart_compact_validation_rejects_bad_values() {
         err.contains("invalid auto-compact threshold `abc`"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+fn harness_idle_compact_validation_accepts_modes_and_duration() {
+    let mode = parse_key("harness.idle_compact").expect("mode key");
+    for value in ["off", "auto", "always"] {
+        validate_set_value(&mode, &Value::from(value)).expect("idle compact mode");
+    }
+    let err = validate_set_value(&mode, &Value::from("sometimes"))
+        .expect_err("invalid idle compact mode")
+        .to_string();
+    assert_eq!(
+        err,
+        "harness.idle_compact must be one of off, auto, or always"
+    );
+
+    let after = parse_key("harness.idle_compact_after").expect("duration key");
+    validate_set_value(&after, &Value::from("59m")).expect("idle compact duration");
+    let err = validate_set_value(&after, &Value::from("soon"))
+        .expect_err("invalid idle compact duration")
+        .to_string();
+    assert!(err.contains("use a duration such as 59m or 2h"), "{err}");
 }
 
 #[test]

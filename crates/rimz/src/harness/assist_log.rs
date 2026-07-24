@@ -64,6 +64,18 @@ pub enum Assist {
         occupied_tokens: Option<u64>,
         message_id: String,
     },
+    IdleCompact {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        idle_secs: u64,
+        occupied_tokens: u64,
+        message_id: String,
+        delivered: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     AutoResume {
         workspace_id: crate::ids::WorkspaceId,
         session_name: String,
@@ -181,12 +193,29 @@ mod tests {
         }
     }
 
+    fn idle_compacted(at: i64) -> AssistRecord {
+        AssistRecord {
+            at: ts(at),
+            assist: Assist::IdleCompact {
+                kind: AgentKind::new_unchecked("claude"),
+                agent_id: AgentSessionId::from("session-2"),
+                label: Some("@planner".to_owned()),
+                idle_secs: 3_540,
+                occupied_tokens: 180_000,
+                message_id: "msg_3".to_owned(),
+                delivered: true,
+                error: None,
+            },
+        }
+    }
+
     #[test]
     fn variants_round_trip_through_the_wire_shape() {
         for record in [
             redeem(20, "request-1"),
             resumed(20),
             compacted(20),
+            idle_compacted(20),
             restored(20),
         ] {
             let json = serde_json::to_string(&record).expect("serialize");

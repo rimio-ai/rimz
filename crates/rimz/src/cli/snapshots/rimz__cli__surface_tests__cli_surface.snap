@@ -174,6 +174,8 @@ rimz agents help help
 
 rimz agents help history
 
+rimz agents help idle-compact [hidden]
+
 rimz agents help list
 
 rimz agents help logs
@@ -207,6 +209,21 @@ rimz agents history
     --root <ROOT>  [action=set takes=1..=1 global]
     -n, --tail <TAIL>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents idle-compact [hidden]
+    --agent-id <AGENT_ID>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --command <COMMAND>  [action=set takes=1..=1 required]
+    -h, --help  [action=help takes=0..=0]
+    --kind <KIND>  [action=set takes=1..=1 required]
+    --label <LABEL>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --occupied-tokens <OCCUPIED_TOKENS>  [action=set takes=1..=1 required]
+    --pane <PANE>  [action=set takes=1..=1 required]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1 required]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz agents list (aliases: ls, ps)
@@ -669,6 +686,8 @@ rimz help agents focus
 rimz help agents fork
 
 rimz help agents history
+
+rimz help agents idle-compact [hidden]
 
 rimz help agents list
 

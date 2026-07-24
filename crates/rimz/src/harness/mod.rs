@@ -4,6 +4,7 @@ pub mod assist_log;
 pub(crate) mod auto_continue;
 pub mod auto_redeem;
 pub mod budget;
+pub mod idle_compact;
 pub mod launch;
 pub mod petname;
 pub mod plan;

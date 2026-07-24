@@ -1,5 +1,6 @@
 use std::fmt;
 use std::str::FromStr;
+use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -168,6 +169,39 @@ pub enum TurnCapParseError {
 
 use crate::message::AutoCompact;
 
+/// Default idle span before RimZ compacts a warm provider cache.
+pub const DEFAULT_IDLE_COMPACT_AFTER: Duration = Duration::from_secs(59 * 60);
+
+const IDLE_COMPACT_DURATION_UNITS: &[(&str, u64)] =
+    &[("s", 1), ("m", 60), ("h", 60 * 60), ("d", 24 * 60 * 60)];
+
+/// Automatic idle-compaction policy.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IdleCompactMode {
+    /// Leave idle agents untouched.
+    #[default]
+    Off,
+    /// Compact while a teammate still works or the worktree PR remains open.
+    Auto,
+    /// Compact every eligible idle agent.
+    Always,
+}
+
+impl IdleCompactMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::Always => "always",
+        }
+    }
+
+    fn is_off(&self) -> bool {
+        *self == Self::Off
+    }
+}
+
 /// rtk output compression mode for agent-run cargo commands in `cargo xtask`.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -209,9 +243,66 @@ pub struct HarnessConfig {
         with = "smart_compact_serde"
     )]
     pub smart_compact: Option<AutoCompact>,
+    /// Compact an idle agent before its provider prompt cache expires.
+    #[serde(default, skip_serializing_if = "IdleCompactMode::is_off")]
+    pub idle_compact: IdleCompactMode,
+    /// Idle span that triggers [`idle_compact`](Self::idle_compact).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "idle_compact_after_serde"
+    )]
+    pub idle_compact_after: Option<Duration>,
     /// rtk output compression for agent-run cargo commands in `cargo xtask`.
     #[serde(default)]
     pub rtk: RtkMode,
+}
+
+impl HarnessConfig {
+    pub fn idle_compact_after(&self) -> Duration {
+        self.idle_compact_after
+            .unwrap_or(DEFAULT_IDLE_COMPACT_AFTER)
+    }
+}
+
+pub(crate) fn parse_idle_compact_after(raw: &str) -> Result<Duration, String> {
+    crate::harness::schedule::parse_duration_units(raw, IDLE_COMPACT_DURATION_UNITS)
+}
+
+fn format_idle_compact_after(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    for (unit, factor) in [("d", 86_400), ("h", 3_600), ("m", 60)] {
+        if seconds >= factor && seconds.is_multiple_of(factor) {
+            return format!("{}{unit}", seconds / factor);
+        }
+    }
+    format!("{seconds}s")
+}
+
+mod idle_compact_after_serde {
+    use super::*;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<String>::deserialize(deserializer)?
+            .map(|raw| parse_idle_compact_after(&raw).map_err(serde::de::Error::custom))
+            .transpose()
+    }
+
+    pub fn serialize<S>(
+        idle_compact_after: &Option<Duration>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match idle_compact_after {
+            Some(duration) => serializer.serialize_str(&format_idle_compact_after(*duration)),
+            None => serializer.serialize_none(),
+        }
+    }
 }
 
 mod smart_compact_serde {
@@ -310,6 +401,53 @@ mod tests {
         let back: HarnessConfig = toml::from_str(&toml).expect("parse harness config");
 
         assert_eq!(back, config);
+    }
+
+    #[test]
+    fn idle_compact_defaults_off_after_fifty_nine_minutes() {
+        let config: HarnessConfig = toml::from_str("").expect("parse harness config");
+
+        assert_eq!(config.idle_compact, IdleCompactMode::Off);
+        assert_eq!(config.idle_compact_after(), DEFAULT_IDLE_COMPACT_AFTER);
+    }
+
+    #[test]
+    fn idle_compact_modes_and_duration_round_trip() {
+        for mode in [
+            IdleCompactMode::Off,
+            IdleCompactMode::Auto,
+            IdleCompactMode::Always,
+        ] {
+            let config = HarnessConfig {
+                idle_compact: mode,
+                idle_compact_after: Some(Duration::from_secs(59 * 60)),
+                ..Default::default()
+            };
+
+            let toml = toml::to_string(&config).expect("serialize harness config");
+            if mode == IdleCompactMode::Off {
+                assert!(!toml.contains("idle_compact ="));
+            } else {
+                assert!(toml.contains(&format!("idle_compact = \"{}\"", mode.as_str())));
+            }
+            assert!(toml.contains("idle_compact_after = \"59m\""));
+            let back: HarnessConfig = toml::from_str(&toml).expect("parse harness config");
+            assert_eq!(back, config);
+        }
+    }
+
+    #[test]
+    fn idle_compact_after_parses_supported_units() {
+        for (raw, expected) in [
+            ("30s", Duration::from_secs(30)),
+            ("59m", Duration::from_secs(59 * 60)),
+            ("2h", Duration::from_secs(2 * 60 * 60)),
+            ("1d", Duration::from_secs(24 * 60 * 60)),
+        ] {
+            let config: HarnessConfig = toml::from_str(&format!("idle_compact_after = \"{raw}\""))
+                .expect("parse idle compact duration");
+            assert_eq!(config.idle_compact_after, Some(expected));
+        }
     }
 
     #[test]
