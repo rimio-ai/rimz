@@ -19,11 +19,12 @@ use sha2::{Digest, Sha256};
 
 use crate::agents::account::file_mtime_ms;
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::credits::oauth_http_get;
+use crate::agents::credits::{oauth_http_get, trusted_usage_url, url_host};
 use crate::agents::payload::non_empty_trimmed;
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind, transcript_fs::home_dir};
 
 const DEFAULT_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const OFFICIAL_HOST: &str = "api.anthropic.com";
 const URL_ENV: &str = "RIMZ_CLAUDE_OAUTH_USAGE_URL";
 const USER_AGENT_FALLBACK_VERSION: &str = "unknown";
 const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/claude-oauth-account-key/v1";
@@ -42,19 +43,24 @@ pub(crate) enum ClaudeOauthUsageErr {
     Io(#[from] std::io::Error),
     #[error("parsing claude OAuth credentials or usage response: {0}")]
     Parse(#[from] serde_json::Error),
+    #[error("claude OAuth usage URL override refused (host {host})")]
+    UntrustedUsageUrl { host: String },
     #[error("claude OAuth usage HTTP {kind} (host {host})")]
     Http { kind: HttpErrKind, host: String },
 }
 
 impl crate::agents::credits::AccountUsageReportable for ClaudeOauthUsageErr {
     /// Whether this failure is worth reporting off-box. Absent credentials, an
-    /// expired token, and a missing usage scope are the normal state for an
-    /// account that does not feed RimZ its usage, not a fault; a provider 401
-    /// is the same settled auth verdict. Parse and other HTTP failures are.
+    /// expired token, a missing usage scope, and a locally refused URL are
+    /// settled states, not faults; a provider 401 is the same settled auth
+    /// verdict. Parse and other HTTP failures are.
     fn should_report(&self) -> bool {
         !matches!(
             self,
-            Self::NoCredentials | Self::TokenExpired | Self::MissingScope
+            Self::NoCredentials
+                | Self::TokenExpired
+                | Self::MissingScope
+                | Self::UntrustedUsageUrl { .. }
         ) && !matches!(
             self,
             Self::Http { kind, .. } if kind.is_auth_rejected()
@@ -110,9 +116,22 @@ struct ExtraUsageWire {
 
 pub(crate) fn probe_usage(cli_version: Option<&str>) -> crate::agents::AccountUsageProbe {
     let credentials_stamp = credentials_stamp();
+    let url = match usage_url() {
+        Ok(url) => url,
+        Err(err) => {
+            return crate::agents::credits::map_account_usage_probe(
+                Err(err),
+                crate::agents::AccountUsageIdentity {
+                    credentials_stamp,
+                    ..Default::default()
+                },
+                "claude",
+            );
+        }
+    };
     match load_credentials() {
         Ok(credentials) => crate::agents::credits::map_account_usage_probe(
-            fetch_usage_with_url(&usage_url(), &credentials, cli_version),
+            fetch_usage_with_url(&url, &credentials, cli_version),
             crate::agents::AccountUsageIdentity {
                 account_key: Some(credentials.account_key.clone()),
                 credentials_stamp,
@@ -136,7 +155,7 @@ pub(crate) fn fetch_usage_with_token(
     cli_version: Option<&str>,
 ) -> Result<AccountUsageSnapshot> {
     fetch_usage_with_url(
-        &usage_url(),
+        &usage_url()?,
         &ClaudeOauthCredentials {
             access_token: access_token.trim().to_owned(),
             account_key: account_key("access-token", access_token.trim()),
@@ -239,11 +258,21 @@ fn account_key(secret_kind: &str, secret: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn usage_url() -> String {
-    std::env::var(URL_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_USAGE_URL.to_owned())
+fn usage_url() -> Result<String> {
+    resolve_usage_url(std::env::var(URL_ENV).ok().as_deref())
+}
+
+fn resolve_usage_url(override_url: Option<&str>) -> Result<String> {
+    let Some(candidate) = override_url.filter(|value| !value.trim().is_empty()) else {
+        return Ok(DEFAULT_USAGE_URL.to_owned());
+    };
+    if trusted_usage_url(candidate, OFFICIAL_HOST) {
+        Ok(candidate.to_owned())
+    } else {
+        Err(ClaudeOauthUsageErr::UntrustedUsageUrl {
+            host: url_host(candidate).to_owned(),
+        })
+    }
 }
 
 fn http_get(url: &str, token: &str, cli_version: Option<&str>) -> Result<String> {

@@ -20,6 +20,29 @@ fn reportable_classifier_treats_unauthorized_as_settled_auth() {
 }
 
 #[test]
+fn usage_url_override_accepts_only_official_or_loopback_hosts() {
+    assert_eq!(resolve_usage_url(None).unwrap(), DEFAULT_USAGE_URL);
+    assert_eq!(resolve_usage_url(Some("")).unwrap(), DEFAULT_USAGE_URL);
+    for url in [
+        "https://api.anthropic.com/api/oauth/usage",
+        "http://127.0.0.1:8080/api/oauth/usage",
+    ] {
+        assert_eq!(resolve_usage_url(Some(url)).unwrap(), url);
+    }
+
+    let url = "https://evil.example/private/path";
+    let error = resolve_usage_url(Some(url)).unwrap_err();
+    assert!(matches!(
+        error,
+        ClaudeOauthUsageErr::UntrustedUsageUrl { .. }
+    ));
+    assert!(!error.should_report());
+    let display = error.to_string();
+    assert!(display.contains("evil.example"));
+    assert!(!display.contains("/private/path"));
+}
+
+#[test]
 fn credentials_parse_token_expiry_and_scope() {
     let credentials = parse_credentials(
         br#"{

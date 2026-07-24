@@ -131,6 +131,36 @@ fn credentials_distinguish_api_key_and_oauth_login() {
 }
 
 #[test]
+fn configured_base_url_accepts_only_official_or_loopback_hosts() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(configured_base_url(dir.path()).unwrap(), None);
+
+    for base_url in [
+        "https://chatgpt.com/backend-api",
+        "http://127.0.0.1:1234/backend-api",
+    ] {
+        std::fs::write(
+            dir.path().join("config.toml"),
+            format!("chatgpt_base_url = \"{base_url}\"\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            configured_base_url(dir.path()).unwrap().as_deref(),
+            Some(base_url)
+        );
+    }
+
+    std::fs::write(
+        dir.path().join("config.toml"),
+        "chatgpt_base_url = \"https://proxy.invalid/backend-api\"\n",
+    )
+    .unwrap();
+    let error = configured_base_url(dir.path()).unwrap_err();
+    assert!(matches!(error, CodexOauthUsageErr::UntrustedBaseUrl { .. }));
+    assert!(!error.should_report());
+}
+
+#[test]
 fn usage_url_respects_backend_api_base_and_codex_api_base() {
     assert_eq!(
         usage_url(None),
