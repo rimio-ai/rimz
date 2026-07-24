@@ -176,7 +176,8 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
             bail!("web tunnel exited before local port accepted connections");
         }
     }
-    let url = rimz::remote::web::local_url(&payload, local_port);
+    let url = rimz::remote::web::local_url(&payload, local_port)
+        .context("building local web tunnel URL")?;
     writeln!(std::io::stdout().lock(), "{url}")?;
     super::super::open_browser_best_effort(&url);
     report_web_tunnel_up(remote.target.host_display(), false);
@@ -371,7 +372,8 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
             round_target,
         );
         if first_round {
-            let url = rimz::remote::web::local_url(&payload, local_port);
+            let url = rimz::remote::web::local_url(&payload, local_port)
+                .context("building local web tunnel URL")?;
             writeln!(std::io::stdout().lock(), "{url}")?;
             super::super::open_browser_best_effort(&url);
             report_web_tunnel_up(host, true);

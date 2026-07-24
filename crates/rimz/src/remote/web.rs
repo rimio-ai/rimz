@@ -18,6 +18,18 @@ use super::{
 
 const LOCAL_PORT_RANGE: RangeInclusive<u16> = 8300..=8399;
 
+#[derive(Debug, thiserror::Error)]
+pub enum LocalUrlError {
+    #[error("remote web URL `{url}` is invalid: {source}")]
+    Parse {
+        url: String,
+        #[source]
+        source: url::ParseError,
+    },
+    #[error("remote web URL `{url}` is not an HTTP URL")]
+    NotHttp { url: String },
+}
+
 pub fn bind_local_relay(session: &str, override_port: Option<u16>) -> io::Result<TcpListener> {
     if let Some(port) = override_port {
         return TcpListener::bind(("127.0.0.1", port));
@@ -39,15 +51,21 @@ pub fn reserve_forward_port() -> io::Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
-pub fn local_url(remote: &WebOpenPayload, local_port: u16) -> String {
-    let uses_gotty_argument = url::Url::parse(&remote.url)
-        .ok()
-        .is_some_and(|url| url.query_pairs().any(|(key, _)| key == "arg"));
-    let argument = if uses_gotty_argument { "arg" } else { "room" };
-    format!(
-        "http://127.0.0.1:{local_port}/?{argument}={}",
-        crate::web::encode_query_value(&remote.session)
-    )
+pub fn local_url(remote: &WebOpenPayload, local_port: u16) -> Result<String, LocalUrlError> {
+    let remote_url = url::Url::parse(&remote.url).map_err(|source| LocalUrlError::Parse {
+        url: remote.url.clone(),
+        source,
+    })?;
+    if !matches!(remote_url.scheme(), "http" | "https") {
+        return Err(LocalUrlError::NotHttp {
+            url: remote.url.clone(),
+        });
+    }
+    let query = remote_url
+        .query()
+        .map(|query| format!("?{query}"))
+        .unwrap_or_default();
+    Ok(format!("http://127.0.0.1:{local_port}/{query}"))
 }
 
 fn derive_port(session: &str, range: &RangeInclusive<u16>) -> u16 {
@@ -250,32 +268,32 @@ mod tests {
     }
 
     #[test]
-    fn local_url_percent_encodes_the_browser_room() {
+    fn local_url_keeps_root_and_preserves_ttyd_and_gotty_queries() {
         let payload = WebOpenPayload::for_session(
             crate::config::WebBackend::Ttyd,
             "rimz/a b",
-            "https://remote",
+            "https://remote/rimz",
             8200,
             Some(8200),
             crate::web::WebAuth::Basic,
             None,
         );
         assert_eq!(
-            local_url(&payload, 8301),
+            local_url(&payload, 8301).expect("local ttyd URL"),
             "http://127.0.0.1:8301/?room=rimz%2Fa%20b"
         );
 
         let payload = WebOpenPayload::for_session(
             crate::config::WebBackend::Gotty,
             "rimz/a b",
-            "https://remote",
+            "https://remote/shell",
             8200,
             Some(8200),
             crate::web::WebAuth::Basic,
             None,
         );
         assert_eq!(
-            local_url(&payload, 8301),
+            local_url(&payload, 8301).expect("local gotty URL"),
             "http://127.0.0.1:8301/?arg=rimz%2Fa%20b"
         );
     }
