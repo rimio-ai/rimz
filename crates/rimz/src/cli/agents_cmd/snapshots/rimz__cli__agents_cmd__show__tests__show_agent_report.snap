@@ -59,6 +59,7 @@ expression: report
     },
     "budget": {
       "cap": null,
+      "spent_usd": null,
       "parked": false,
       "park": null
     },

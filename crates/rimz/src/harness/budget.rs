@@ -536,30 +536,69 @@ pub fn total_cost_usd(agent: &AgentState) -> Option<f64> {
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
 }
 
-/// Current spend and effective cap for one agent's inspection surface.
-pub fn spend_summary(
+/// Structured current spend and effective cap for one agent.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AgentBudgetSpend {
+    pub cap: Option<BudgetSpec>,
+    pub spent_usd: Option<f64>,
+}
+
+pub fn agent_budget_spend(
     runtime: &RuntimePaths,
     agent: &AgentState,
     session_cost: Option<f64>,
-) -> Option<String> {
+) -> AgentBudgetSpend {
     if let Some(park) = agent.budget_park.as_ref() {
-        return Some(park.summary());
+        return AgentBudgetSpend {
+            cap: Some(BudgetSpec {
+                cap_usd: park.cap_usd,
+                window: park.window,
+            }),
+            spent_usd: Some(park.spend_usd),
+        };
     }
     let ledger = read_ledger(runtime, &agent.kind, &agent.agent_id);
     let launched = agent
         .budget
         .as_deref()
         .and_then(|raw| raw.parse::<BudgetSpec>().ok());
-    let spec = ledger.as_ref().map(|ledger| ledger.spec).or(launched)?;
-    let cap = ledger
+    let Some(spec) = ledger.as_ref().map(|ledger| ledger.spec).or(launched) else {
+        return AgentBudgetSpend::default();
+    };
+    let Some(cap_usd) = ledger
         .as_ref()
-        .map_or(Some(spec.cap_usd), BudgetLedger::effective_cap_usd)?;
-    let total = total_cost_usd(agent).or(session_cost).unwrap_or(0.0);
-    let spend = ledger.as_ref().map_or_else(
-        || BudgetLedger::new(spec).spend_usd(total),
-        |ledger| ledger.spend_usd(total),
-    );
-    Some(fmt_spend(spend, cap, spec.window))
+        .map_or(Some(spec.cap_usd), BudgetLedger::effective_cap_usd)
+    else {
+        return AgentBudgetSpend::default();
+    };
+    let spent_usd = total_cost_usd(agent).or(session_cost).map(|total| {
+        ledger.as_ref().map_or_else(
+            || BudgetLedger::new(spec).spend_usd(total),
+            |ledger| ledger.spend_usd(total),
+        )
+    });
+    AgentBudgetSpend {
+        cap: Some(BudgetSpec {
+            cap_usd,
+            window: spec.window,
+        }),
+        spent_usd,
+    }
+}
+
+/// Current spend and effective cap for one agent's inspection surface.
+pub fn spend_summary(
+    runtime: &RuntimePaths,
+    agent: &AgentState,
+    session_cost: Option<f64>,
+) -> Option<String> {
+    let spend = agent_budget_spend(runtime, agent, session_cost);
+    let cap = spend.cap?;
+    Some(fmt_spend(
+        spend.spent_usd.unwrap_or(0.0),
+        cap.cap_usd,
+        cap.window,
+    ))
 }
 
 fn fmt_spend(spend_usd: f64, cap_usd: f64, window: BudgetWindow) -> String {

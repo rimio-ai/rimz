@@ -1169,7 +1169,7 @@ mod render {
             &peers,
             None,
             Timestamp::UNIX_EPOCH,
-            None,
+            super::report::ReportOverrides::default(),
         );
         let mut out = anstream::StripStream::new(Vec::new());
         super::show::render_placement_section(&mut out, &report).unwrap();
@@ -1190,7 +1190,15 @@ mod render {
         let idle = agent_with_status("idle", AgentStatus::Idle, TurnPhase::Idle, 1_000);
         let report = |agent: &AgentState| {
             let peers = [agent];
-            super::report::build_entry(agent, None, None, &peers, None, now, None)
+            super::report::build_entry(
+                agent,
+                None,
+                None,
+                &peers,
+                None,
+                now,
+                super::report::ReportOverrides::default(),
+            )
         };
         let active = report(&active);
         let idle = report(&idle);

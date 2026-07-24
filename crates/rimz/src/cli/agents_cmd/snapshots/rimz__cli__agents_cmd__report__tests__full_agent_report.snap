@@ -64,6 +64,7 @@ expression: entry
   },
   "budget": {
     "cap": "$5.00",
+    "spent_usd": 0.87,
     "parked": false,
     "park": null
   },
