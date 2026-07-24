@@ -122,7 +122,7 @@ rimz remote connect dev-box:~/code/query-engine
 
 On macOS, the default latest-release script install uses Homebrew automatically when `brew` is available.
 
-Hooks install on the first `rimz` run, with your consent and a diff preview. → [set up your machine](./docs/guide/setup.md) · [enable dynamic shell completion](./docs/guide/setup.md#shell-completion)
+Hooks install on the first `rimz` run, with your consent and a summary of every file it touches; run `rimz hooks install --dry-run` first for the exact per-agent diff. → [set up your machine](./docs/guide/setup.md) · [enable dynamic shell completion](./docs/guide/setup.md#shell-completion)
 
 ## Everyday moves
 
@@ -267,7 +267,7 @@ Prebuilt binaries and building from source are in the [installation guide](./doc
 
 For a self-contained room with RimZ, both multiplexers, ttyd, and the priority agent CLIs preinstalled, [run the Docker image](./docs/guide/installation.md#run-in-docker).
 
-Hooks are how agents report to the room. The first `rimz` run offers to install them with a diff preview, and `rimz hooks install` does the same on demand:
+Hooks are how agents report to the room. The first `rimz` run offers to install them with a summary and your consent, and `rimz hooks install` does the same on demand — pass `--dry-run` first for the exact per-agent diff:
 
 ```sh
 rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
