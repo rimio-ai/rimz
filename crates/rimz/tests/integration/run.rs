@@ -1372,7 +1372,7 @@ fn agents_show_retains_ended_pidless_audit_card_and_keeps_fresh_context() {
     );
     let before_reap: serde_json::Value =
         serde_json::from_slice(&before_reap.stdout).expect("show json before reap");
-    assert_eq!(before_reap["agent"]["agent_id"], "sess-stale");
+    assert_eq!(before_reap["agent"]["id"], "sess-stale");
     assert_eq!(before_reap["stale"], true);
 
     let mut fresh = rimz::agents::AgentLifecycleObservation::new(
@@ -1406,8 +1406,8 @@ fn agents_show_retains_ended_pidless_audit_card_and_keeps_fresh_context() {
     );
     let after_reap: serde_json::Value =
         serde_json::from_slice(&after_reap.stdout).expect("show json after reap");
-    assert_eq!(after_reap["agent"]["agent_id"], "sess-stale");
-    assert!(after_reap["agent"]["ended_at"].is_string());
+    assert_eq!(after_reap["agent"]["id"], "sess-stale");
+    assert!(after_reap["agent"]["stats"]["active_secs"].is_null());
     assert_eq!(after_reap["stale"], true);
 
     // A fresh session remains runtime-visible, and its rich statusline sidecar
@@ -1441,15 +1441,15 @@ fn agents_show_retains_ended_pidless_audit_card_and_keeps_fresh_context() {
         String::from_utf8_lossy(&out.stderr)
     );
     let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("show json");
-    assert_eq!(parsed["agent"]["agent_id"], "sess-fresh");
+    assert_eq!(parsed["agent"]["id"], "sess-fresh");
     assert!(parsed.get("stale").is_none());
     assert_eq!(
-        parsed["agent"]["context"]["tokens"]["context_window_size"], 1_000_000,
+        parsed["agent"]["context"]["window"], 1_000_000,
         "show --json folds the rich context window: {parsed}"
     );
     assert_eq!(
-        parsed["agent"]["context"]["tokens"]["current_usage"]["cache_read_input_tokens"], 300_000,
-        "folded usage reaches the payload: {parsed}"
+        parsed["agent"]["context"]["used_tokens"], 305_000,
+        "normalized context occupancy reaches the payload: {parsed}"
     );
 }
 
@@ -1656,11 +1656,13 @@ fn run_agents_json_list(env: &Env, session_name: &str, args: &[&str]) -> serde_j
 }
 
 fn assert_agent_ids(json: &serde_json::Value, expected: &[&str]) {
+    assert_eq!(json["schema"], 1);
     let actual: Vec<&str> = json
-        .as_array()
+        .get("agents")
+        .and_then(serde_json::Value::as_array)
         .expect("agent array")
         .iter()
-        .map(|agent| agent["agent_id"].as_str().expect("agent_id"))
+        .map(|agent| agent["id"].as_str().expect("id"))
         .collect();
     assert_eq!(actual, expected, "scoped list returned {json:#}");
 }

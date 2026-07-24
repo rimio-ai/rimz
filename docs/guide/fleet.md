@@ -104,7 +104,7 @@ query-engine
 ```console
 $ rimz agents show @coder
 Agent
-  handle:  @coder#auth-refresh
+  handle:  @coder
   kind:    codex
   role:    coder
   team:    forge
@@ -128,13 +128,13 @@ Context
   cache_write_tokens:  1920
   output_tokens:       510
   compactions:         0
+  active:              12m
   cost:                $0.87
 
 Placement
   channel:  auth-refresh
   worktree: ~/code/query-engine-auth-refresh
   pane:     tmux:%14
-  tab:      auth-refresh
 
 Recent transcript
 you  15:38

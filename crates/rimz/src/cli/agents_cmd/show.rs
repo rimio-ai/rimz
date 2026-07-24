@@ -1,8 +1,8 @@
 use super::*;
 
-use super::list::{
-    PrInfo, agent_pr, agent_status_label, agent_status_projection, agent_status_style,
-    context_cell, model_label, worktree_label,
+use super::list::agent_pr;
+use super::report::{
+    AgentReportEntry, PrInfo, SelfIdentity, build_entry, context_cell, row_for_agent, status_style,
 };
 use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent, print_run_line};
 use crate::cli::render;
@@ -10,15 +10,15 @@ use crate::cli::render;
 #[derive(serde::Serialize)]
 struct ShowReport {
     #[serde(skip_serializing_if = "Option::is_none")]
-    agent: Option<AgentState>,
+    agent: Option<AgentReportEntry>,
+    #[serde(skip)]
+    agent_state: Option<AgentState>,
     #[serde(skip_serializing_if = "is_false")]
     stale: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     run: Option<RunRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ask: Option<crate::cli::transcript::AskView>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cost: Option<rimz::agents::AgentCost>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     messages: Vec<ShowMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -92,13 +92,29 @@ fn collect_show_report(
         None => None,
     }
     .filter(|view| !view.entries.is_empty());
+    let peers: Vec<&AgentState> = snapshot.root_agents().collect();
+    let me = SelfIdentity::from_env().resolve(snapshot);
+    let report_agent = agent.as_ref().map(|agent| {
+        let session_cost = cost.as_ref().and_then(|cost| cost.total_cost_usd);
+        let mut entry = build_entry(
+            agent,
+            row_for_agent(snapshot, agent),
+            agent_pr(snapshot, agent),
+            &peers,
+            me.as_ref(),
+            jiff::Timestamp::now(),
+            session_cost,
+        );
+        entry.budget.summary = rimz::harness::budget::spend_summary(runtime, agent, session_cost);
+        entry
+    });
     Ok((
         ShowReport {
-            agent,
+            agent: report_agent,
+            agent_state: agent,
             stale,
             run,
             ask,
-            cost,
             messages,
             capture: pane_capture,
             recent_transcript,
@@ -110,8 +126,6 @@ fn collect_show_report(
 fn render_show_report(
     report: ShowReport,
     store: &rimz::Store,
-    snapshot: &rimz::SidebarSnapshot,
-    runtime: &rimz::RuntimePaths,
     deferred_error: Option<anyhow::Error>,
 ) -> Result<()> {
     let Some(agent) = report.agent.as_ref() else {
@@ -121,19 +135,17 @@ fn render_show_report(
         }
         return Err(deferred_error.unwrap_or_else(|| anyhow::anyhow!("agent resolution failed")));
     };
-    let peers: Vec<&AgentState> = snapshot
-        .agents
-        .iter()
-        .filter(|candidate| candidate.parent_agent_id.is_none())
-        .collect();
+    let Some(state) = report.agent_state.as_ref() else {
+        return Err(anyhow::anyhow!("agent report lost its source state"));
+    };
     let now = jiff::Timestamp::now();
     let mut out = render::out();
-    render_agent_section(&mut out, agent, &peers)?;
+    render_agent_section(&mut out, agent)?;
     render_activity_section(&mut out, agent, report.ask.as_ref(), report.stale, now)?;
-    render_context_section(&mut out, agent, report.cost.as_ref(), runtime)?;
-    render_placement_section(&mut out, agent, agent_pr(snapshot, agent))?;
+    render_context_section(&mut out, agent)?;
+    render_placement_section(&mut out, agent)?;
     let fallback_run = if report.run.is_none() {
-        newest_run_for_agent(store, agent).ok().flatten()
+        newest_run_for_agent(store, state).ok().flatten()
     } else {
         None
     };
@@ -166,9 +178,13 @@ pub(super) fn show_agent(
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let runtime = ctx.runtime();
-    let snapshot = ctx
-        .alive_snapshot()?
-        .with_agent_context(rimz::store::agent_context::read_all(runtime));
+    let snapshot = rimz::sidebar::consumer::PublishedSnapshotReader::new(
+        runtime.clone(),
+        ctx.workspace.session_name.clone(),
+        None,
+    )
+    .read(ctx.store.paths())
+    .context("reading the room snapshot")?;
     let (report, deferred_error) = collect_show_report(
         &ctx.store,
         &ctx.workspace,
@@ -181,7 +197,7 @@ pub(super) fn show_agent(
     if json {
         return render::json_pretty(&report);
     }
-    render_show_report(report, &ctx.store, &snapshot, runtime, deferred_error)
+    render_show_report(report, &ctx.store, deferred_error)
 }
 
 pub(super) fn resolve_audit_agent(
@@ -233,17 +249,12 @@ fn render_capture_section(
     render::pane_frame(w, &capture.pane_id.to_string(), &capture.raw_text)
 }
 
-fn render_agent_section(
-    w: &mut impl Write,
-    agent: &AgentState,
-    peers: &[&AgentState],
-) -> std::io::Result<()> {
+fn render_agent_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::io::Result<()> {
     section(w, "Agent")?;
     let mut kv = render::KeyVals::new().indent(2);
     kv.push(
         "handle",
-        render::cell(rimz::harness::target::agent_handle(agent, peers, true))
-            .fg(render::palette::identity(agent.kind.as_str())),
+        render::cell(agent.handle.as_str()).fg(render::palette::identity(agent.kind.as_str())),
     );
     kv.push(
         "kind",
@@ -261,8 +272,8 @@ fn render_agent_section(
     if let Some(name) = agent.name.as_deref() {
         kv.push("name", render::cell(name));
     }
-    kv.push("session", render::cell(agent.agent_id.to_string()));
-    if let Some(registered_at) = agent.registered_at {
+    kv.push("session", render::cell(agent.id.to_string()));
+    if let Some(registered_at) = agent.timeline.registered_at {
         kv.push("registered_at", render::cell(registered_at.to_string()));
     }
     kv.render(w)?;
@@ -271,7 +282,7 @@ fn render_agent_section(
 
 pub(super) fn render_activity_section(
     w: &mut impl Write,
-    agent: &AgentState,
+    agent: &AgentReportEntry,
     ask: Option<&crate::cli::transcript::AskView>,
     stale: bool,
     now: jiff::Timestamp,
@@ -280,28 +291,28 @@ pub(super) fn render_activity_section(
     let mut kv = render::KeyVals::new().indent(2);
     kv.push(
         "description",
-        render::cell(agent.activity_line().unwrap_or_else(|| "-".to_owned())).dash(),
+        render::cell(agent.description.as_deref().unwrap_or("-")).dash(),
     );
     kv.push(
         "status",
-        render::cell(agent_status_label(agent)).fg(agent_status_style(agent)),
+        render::cell(agent.status.as_str()).fg(status_style(agent)),
     );
-    let (_, phase) = agent_status_projection(agent);
-    if phase != rimz::agents::TurnPhase::Idle {
-        kv.push("phase", render::cell(phase.as_str()));
+    if agent.phase != rimz::agents::TurnPhase::Idle {
+        kv.push("phase", render::cell(agent.phase.as_str()));
     }
-    if let Some(started) = agent.turn_started_at {
+    if let Some(started) = agent.timeline.turn_started_at {
         kv.push("turn_started", render::cell(started.to_string()));
         kv.push("turn_elapsed", render::cell(render::rel_age(started, now)));
     }
     kv.push(
         "last_activity",
-        render::cell(render::rel_age(agent.last_activity, now)),
+        render::cell(render::rel_age(agent.timeline.last_activity, now)),
     );
-    if let Some((_, label)) = agent.displayed_turn_error() {
+    if let Some(error) = agent.turn_error.as_ref() {
         kv.push(
             "turn_error",
-            render::cell(label.unwrap_or("provider API error")).fg(render::palette::alarm()),
+            render::cell(error.label.as_deref().unwrap_or("provider API error"))
+                .fg(render::palette::alarm()),
         );
     }
     if let Some(ask) = ask {
@@ -317,26 +328,22 @@ pub(super) fn render_activity_section(
     writeln!(w)
 }
 
-fn render_context_section(
-    w: &mut impl Write,
-    agent: &AgentState,
-    cost: Option<&rimz::agents::AgentCost>,
-    runtime: &rimz::RuntimePaths,
-) -> std::io::Result<()> {
+fn render_context_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::io::Result<()> {
     section(w, "Context")?;
     let mut kv = render::KeyVals::new().indent(2);
     kv.push(
         "model",
-        render::cell(model_label(agent))
+        render::cell(agent.model.label.as_deref().unwrap_or("-"))
             .dash()
             .fg(render::palette::muted()),
     );
-    kv.push("fill", context_cell(agent));
+    kv.push("fill", context_cell(agent.context.fill_pct));
     kv.push(
         "window",
         render::cell(
             agent
-                .resolved_context_window()
+                .context
+                .window
                 .map(|tokens| tokens.to_string())
                 .unwrap_or_else(|| "-".to_owned()),
         )
@@ -344,51 +351,62 @@ fn render_context_section(
     );
     kv.push(
         "total_tokens",
-        render::cell(opt_count(agent.usage.total_tokens)).dash(),
+        render::cell(opt_count(agent.stats.total_tokens)).dash(),
     );
     kv.push(
         "fresh_input_tokens",
-        render::cell(opt_count(agent.usage.fresh_input_tokens)).dash(),
+        render::cell(opt_count(agent.stats.fresh_input_tokens)).dash(),
     );
     kv.push(
         "cache_read_tokens",
-        render::cell(opt_count(agent.usage.cache_read_input_tokens)).dash(),
+        render::cell(opt_count(agent.stats.cache_read_tokens)).dash(),
     );
     kv.push(
         "cache_write_tokens",
-        render::cell(opt_count(agent.usage.cache_write_input_tokens)).dash(),
+        render::cell(opt_count(agent.stats.cache_write_tokens)).dash(),
     );
     kv.push(
         "output_tokens",
-        render::cell(opt_count(agent.usage.output_tokens)).dash(),
+        render::cell(opt_count(agent.stats.output_tokens)).dash(),
     );
     kv.push(
         "compactions",
-        render::cell(agent.compaction_count.to_string()),
+        render::cell(agent.context.compactions.to_string()),
     );
-    if !agent.tool_calls.is_empty() {
-        kv.push("tools", render::cell(format_tool_calls(&agent.tool_calls)));
+    if !agent.stats.tool_calls.is_empty() {
+        kv.push(
+            "tools",
+            render::cell(format_tool_calls(&agent.stats.tool_calls)),
+        );
+    }
+    if let Some(active_secs) = agent.stats.active_secs {
+        kv.push("active", render::cell(render::age_label(active_secs)));
     }
     kv.push(
         "cost",
         render::cell(
-            cost.and_then(|cost| cost.total_cost_usd)
+            agent
+                .stats
+                .cost_usd
                 .map(fmt_cost)
                 .unwrap_or_else(|| "-".to_owned()),
         )
         .dash()
         .fg(render::palette::money()),
     );
-    let budget = rimz::harness::budget::spend_summary(
-        runtime,
-        agent,
-        cost.and_then(|cost| cost.total_cost_usd),
-    );
     kv.push(
         "budget",
-        render::cell(budget.unwrap_or_else(|| "-".to_owned()))
-            .dash()
-            .fg(render::palette::money()),
+        render::cell(
+            agent
+                .budget
+                .summary
+                .as_deref()
+                .or(agent.budget.park.as_deref())
+                .or(agent.budget.cap.as_deref())
+                .unwrap_or("-"),
+        )
+        .dash()
+        .fg(render::palette::money()),
     );
     kv.render(w)?;
     writeln!(w)
@@ -419,21 +437,33 @@ fn format_tool_calls(tool_calls: &std::collections::BTreeMap<String, u32>) -> St
 
 pub(super) fn render_placement_section(
     w: &mut impl Write,
-    agent: &AgentState,
-    pr: Option<PrInfo>,
+    agent: &AgentReportEntry,
 ) -> std::io::Result<()> {
     section(w, "Placement")?;
     let mut kv = render::KeyVals::new().indent(2);
-    kv.push("channel", render::cell(worktree_label(agent)).dash());
+    kv.push(
+        "channel",
+        render::cell(agent.placement.channel.as_deref().unwrap_or("-")).dash(),
+    );
     kv.push(
         "worktree",
-        render::cell(agent.worktree_path.as_deref().unwrap_or("-")).dash(),
+        render::cell(agent.placement.worktree.as_deref().unwrap_or("-")).dash(),
     );
     kv.push(
         "pr",
-        render::cell(pr.map(format_pr_info).unwrap_or_else(|| "-".to_owned())).dash(),
+        render::cell(
+            agent
+                .placement
+                .pr
+                .map(format_pr_info)
+                .unwrap_or_else(|| "-".to_owned()),
+        )
+        .dash(),
     );
-    push_pane_anchor(&mut kv, agent);
+    kv.push(
+        "pane",
+        render::cell(agent.placement.pane.as_deref().unwrap_or("-")).dash(),
+    );
     kv.render(w)?;
     writeln!(w)
 }
@@ -630,26 +660,6 @@ pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()
     Ok(())
 }
 
-fn push_pane_anchor(kv: &mut render::KeyVals, agent: &AgentState) {
-    let Some(pane) = agent.pane.as_ref() else {
-        kv.push("pane", render::cell("-").dash());
-        return;
-    };
-    kv.push("pane", render::cell(pane.pane_id.to_string()));
-    if let Some(view_id) = pane.view_id.as_deref() {
-        kv.push("tab", render::cell(view_id));
-    }
-    if let Some(cwd) = pane.cwd.as_deref() {
-        kv.push("pane_cwd", render::cell(cwd));
-    }
-    if let Some(pid) = pane.pane_pid {
-        kv.push("pane_pid", render::cell(pid.to_string()));
-    }
-    if let Some(start) = pane.pane_process_start {
-        kv.push("pane_process_start", render::cell(start.to_string()));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,6 +704,32 @@ mod tests {
             serde_json::to_string(&message).expect("serialize show message"),
             r#"{"id":"msg_1","status":"timed_out","from":"@planner","age":"2m ago","text":"check"}"#
         );
+    }
+
+    #[test]
+    fn show_json_wraps_the_projected_agent() {
+        let state = rimz::testkit::agent_state("codex", "show", jiff::Timestamp::UNIX_EPOCH);
+        let peers = [&state];
+        let report = ShowReport {
+            agent: Some(build_entry(
+                &state,
+                None,
+                None,
+                &peers,
+                None,
+                jiff::Timestamp::UNIX_EPOCH,
+                Some(0.42),
+            )),
+            agent_state: Some(state),
+            stale: true,
+            run: None,
+            ask: None,
+            messages: Vec::new(),
+            capture: None,
+            recent_transcript: None,
+        };
+
+        insta::assert_json_snapshot!("show_agent_report", report);
     }
 
     #[test]
