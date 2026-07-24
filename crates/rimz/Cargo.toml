@@ -37,6 +37,7 @@ include = [
     "/themes",
     "/pricing/litellm-pricing.json",
     "/presence/rimz-presence-zellij.wasm",
+    "/presence/rimz-presence-zellij.wasm.provenance.json",
     "/LICENSE",
 ]
 
@@ -199,6 +200,7 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 [build-dependencies]
 flate2.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true

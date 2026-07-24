@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use crate::build::build_plugin;
+use crate::build::{build_plugin, verify_vendored_plugin};
 use crate::docs_links::docs_links;
 use crate::invariants::invariants;
 use crate::runner::{ensure_success, run, run_streamed, run_with_env_and_removed};
@@ -344,7 +344,11 @@ pub(crate) fn checks(root: &Path) -> Result<()> {
     // wasm plugin compile is the cheapest compile gate; it fails fast before
     // the host lint build is paid for.
     let mut first_err: Option<anyhow::Error> = None;
-    for (name, gate) in [("build-plugin", build_plugin as Gate), ("lint", lint)] {
+    for (name, gate) in [
+        ("build-plugin", build_plugin as Gate),
+        ("plugin-provenance", verify_vendored_plugin),
+        ("lint", lint),
+    ] {
         let (name, elapsed, result) = timed(name, || gate(root));
         timings.push((name, elapsed));
         if let Err(err) = result {

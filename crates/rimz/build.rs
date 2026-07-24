@@ -19,6 +19,7 @@
 
 use std::collections::BTreeMap;
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -27,6 +28,7 @@ use std::process::Command;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 const GENERATED_SNAPSHOT: &str = "pricing/litellm-pricing.json";
 const THEME_CATALOG_DIR: &str = "themes/alacritty";
@@ -34,6 +36,7 @@ const PRESENCE_PLUGIN_ENV: &str = "RIMZ_EMBED_PRESENCE_PLUGIN";
 const BUILD_PROFILE_OVERRIDE_ENV: &str = "RIMZ_BUILD_PROFILE_OVERRIDE";
 const PRESENCE_PLUGIN_VENDOR_DIR: &str = "presence";
 const PRESENCE_PLUGIN_OUT: &str = "rimz-presence-zellij.wasm";
+const PRESENCE_PLUGIN_PROVENANCE: &str = "rimz-presence-zellij.wasm.provenance.json";
 const KEPT_FIELDS: [&str; 9] = [
     "input_cost_per_token",
     "output_cost_per_token",
@@ -238,10 +241,33 @@ fn write_presence_plugin_embed(out_dir: &std::path::Path) {
             let path = manifest
                 .join(PRESENCE_PLUGIN_VENDOR_DIR)
                 .join(PRESENCE_PLUGIN_OUT);
+            let provenance_path = manifest
+                .join(PRESENCE_PLUGIN_VENDOR_DIR)
+                .join(PRESENCE_PLUGIN_PROVENANCE);
             println!("cargo:rerun-if-changed={}", path.display());
             match fs::read(&path) {
-                Ok(bytes) => bytes,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Ok(bytes) => {
+                    println!("cargo:rerun-if-changed={}", provenance_path.display());
+                    verify_presence_plugin_provenance(&path, &provenance_path, &bytes);
+                    bytes
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    match fs::metadata(&provenance_path) {
+                        Err(provenance_err)
+                            if provenance_err.kind() == std::io::ErrorKind::NotFound =>
+                        {
+                            Vec::new()
+                        }
+                        Ok(_) => panic!(
+                            "vendored presence plugin {} is missing; run `cargo xtask plugin-refresh`",
+                            path.display()
+                        ),
+                        Err(provenance_err) => panic!(
+                            "presence plugin provenance {} is unreadable ({provenance_err}); run `cargo xtask plugin-refresh`",
+                            provenance_path.display()
+                        ),
+                    }
+                }
                 Err(err) => panic!(
                     "vendored presence plugin {} is unreadable ({err})",
                     path.display()
@@ -250,6 +276,41 @@ fn write_presence_plugin_embed(out_dir: &std::path::Path) {
         }
     };
     fs::write(&out_path, bytes).expect("write embedded presence plugin");
+}
+
+fn verify_presence_plugin_provenance(path: &Path, provenance_path: &Path, bytes: &[u8]) {
+    let raw = fs::read(provenance_path).unwrap_or_else(|err| {
+        panic!(
+            "presence plugin provenance {} is unreadable ({err}); run `cargo xtask plugin-refresh`",
+            provenance_path.display()
+        )
+    });
+    let provenance: Value = serde_json::from_slice(&raw).unwrap_or_else(|err| {
+        panic!(
+            "presence plugin provenance {} is invalid ({err}); run `cargo xtask plugin-refresh`",
+            provenance_path.display()
+        )
+    });
+    let expected = provenance
+        .get("wasm_sha256")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            panic!(
+                "presence plugin provenance {} has no wasm_sha256; run `cargo xtask plugin-refresh`",
+                provenance_path.display()
+            )
+        });
+    let digest = Sha256::digest(bytes);
+    let mut actual = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut actual, "{byte:02x}").expect("write digest to string");
+    }
+    assert!(
+        actual == expected,
+        "vendored presence plugin {} checksum does not match {}; run `cargo xtask plugin-refresh`",
+        path.display(),
+        provenance_path.display()
+    );
 }
 
 /// Resolve the raw LiteLLM-shaped document: a `RIMZ_PRICING_JSON_PATH` override,

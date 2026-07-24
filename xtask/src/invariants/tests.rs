@@ -21,11 +21,55 @@ fn vendored_presence_plugin_is_fresh_for_this_tree() {
 }
 
 #[test]
+fn presence_plugin_provenance_flags_source_mismatch() {
+    let provenance = crate::build::PluginProvenance {
+        source_sha256: "recorded-source".to_owned(),
+        wasm_sha256: "wasm".to_owned(),
+        rustc: "rustc".to_owned(),
+    };
+
+    let err = ensure_presence_plugin_provenance_matches(
+        &provenance,
+        "current-source",
+        "wasm",
+        Path::new("plugin.provenance.json"),
+        Path::new("plugin.wasm"),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("stale"));
+    assert!(err.to_string().contains("plugin-refresh"));
+}
+
+#[test]
+fn presence_plugin_provenance_flags_wasm_mismatch() {
+    let provenance = crate::build::PluginProvenance {
+        source_sha256: "source".to_owned(),
+        wasm_sha256: "recorded-wasm".to_owned(),
+        rustc: "rustc".to_owned(),
+    };
+
+    let err = ensure_presence_plugin_provenance_matches(
+        &provenance,
+        "source",
+        "current-wasm",
+        Path::new("plugin.provenance.json"),
+        Path::new("plugin.wasm"),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("plugin.wasm"));
+    assert!(err.to_string().contains("checksum"));
+    assert!(err.to_string().contains("plugin-refresh"));
+}
+
+#[test]
 fn package_include_list_covers_build_inputs() {
     let manifest = r#"
 [package]
 include = [
     "/presence/rimz-presence-zellij.wasm",
+    "/presence/rimz-presence-zellij.wasm.provenance.json",
     "/pricing/litellm-pricing.json",
 ]
 "#;
@@ -38,6 +82,7 @@ fn package_include_list_flags_missing_presence_wasm() {
     let manifest = r#"
 [package]
 include = [
+    "/presence/rimz-presence-zellij.wasm.provenance.json",
     "/pricing/litellm-pricing.json",
 ]
 "#;
@@ -50,11 +95,29 @@ include = [
 }
 
 #[test]
+fn package_include_list_flags_missing_presence_provenance() {
+    let manifest = r#"
+[package]
+include = [
+    "/presence/rimz-presence-zellij.wasm",
+    "/pricing/litellm-pricing.json",
+]
+"#;
+
+    let err = ensure_include_covers_build_inputs(manifest).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("/presence/rimz-presence-zellij.wasm.provenance.json")
+    );
+}
+
+#[test]
 fn package_include_list_flags_missing_pricing_snapshot() {
     let manifest = r#"
 [package]
 include = [
     "/presence/rimz-presence-zellij.wasm",
+    "/presence/rimz-presence-zellij.wasm.provenance.json",
 ]
 "#;
 

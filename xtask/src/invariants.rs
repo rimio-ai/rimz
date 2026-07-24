@@ -1094,26 +1094,22 @@ fn ensure_presence_plugin_vendored(root: &Path) -> Result<()> {
         );
     }
 
-    let srchash_path = crate::build::vendored_srchash_path(root);
-    let recorded = match fs::read_to_string(&srchash_path) {
-        Ok(recorded) => recorded,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            bail!(
-                "{} is missing; run `cargo xtask plugin-refresh`",
-                srchash_path.display()
-            )
-        }
-        Err(err) => {
-            return Err(err).with_context(|| format!("reading {}", srchash_path.display()));
-        }
-    };
-    let expected = crate::build::presence_plugin_source_digest(root)?;
-    if recorded != expected {
-        bail!(
-            "{} is stale for crates/rimz-presence-zellij; run `cargo xtask plugin-refresh`",
-            srchash_path.display()
-        );
-    }
+    let provenance_path = crate::build::vendored_provenance_path(root);
+    let provenance = crate::build::read_vendored_plugin_provenance(root).with_context(|| {
+        format!(
+            "{} is missing or invalid; run `cargo xtask plugin-refresh`",
+            provenance_path.display()
+        )
+    })?;
+    let source_sha256 = crate::build::presence_plugin_source_digest(root)?;
+    let wasm_sha256 = crate::files::sha256_file(&wasm_path)?;
+    ensure_presence_plugin_provenance_matches(
+        &provenance,
+        &source_sha256,
+        &wasm_sha256,
+        &provenance_path,
+        &wasm_path,
+    )?;
 
     let manifest_path = root.join("crates/rimz/Cargo.toml");
     let manifest_toml = fs::read_to_string(&manifest_path)
@@ -1122,8 +1118,32 @@ fn ensure_presence_plugin_vendored(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn ensure_presence_plugin_provenance_matches(
+    provenance: &crate::build::PluginProvenance,
+    source_sha256: &str,
+    wasm_sha256: &str,
+    provenance_path: &Path,
+    wasm_path: &Path,
+) -> Result<()> {
+    if provenance.source_sha256 != source_sha256 {
+        bail!(
+            "{} is stale for crates/rimz-presence-zellij; run `cargo xtask plugin-refresh`",
+            provenance_path.display()
+        );
+    }
+    if provenance.wasm_sha256 != wasm_sha256 {
+        bail!(
+            "{} checksum does not match {}; run `cargo xtask plugin-refresh`",
+            wasm_path.display(),
+            provenance_path.display()
+        );
+    }
+    Ok(())
+}
+
 const PACKAGED_BUILD_INPUTS: &[&str] = &[
     "/presence/rimz-presence-zellij.wasm",
+    "/presence/rimz-presence-zellij.wasm.provenance.json",
     "/pricing/litellm-pricing.json",
 ];
 

@@ -49,7 +49,7 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "plugin-refresh",
         summary: "Rebuild and vendor the Zellij presence plugin wasm for crates.io.",
-        runs: "build-plugin, then copy the wasm and source digest into crates/rimz/presence/",
+        runs: "build-plugin, then copy the wasm and write its source, blob, and rustc provenance into crates/rimz/presence/",
     },
     TaskInfo {
         name: "install",
@@ -184,7 +184,7 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "checks",
         summary: "Run the non-test CI gate stack.",
-        runs: "fmt, invariants, docs-links, deps, build-plugin, lint",
+        runs: "fmt, invariants, docs-links, deps, build-plugin, plugin-provenance, lint",
     },
     TaskInfo {
         name: "ci",
