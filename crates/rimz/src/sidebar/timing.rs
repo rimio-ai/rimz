@@ -224,6 +224,13 @@ pub const METRICS_FOCUSED_SAMPLE_TTL: Duration = Duration::from_secs(1);
 /// regardless of produce rate.
 pub const METRICS_BACKGROUND_SAMPLE_TTL: Duration = Duration::from_secs(3);
 
+/// How long one process must remain in uninterruptible sleep without advancing
+/// CPU or I/O counters before its pane reads as stuck. Healthy large-file
+/// copies and link steps can sit in `D` across several metric samples while the
+/// kernel completes one blocking syscall; the attention verdict belongs to a
+/// sustained stall rather than that ordinary I/O window.
+pub const PROCESS_D_STATE_STUCK_AFTER: Duration = Duration::from_secs(10);
+
 /// Maximum extra staleness a hidden consumer accepts for metrics-only pane
 /// publications. The consumer folds on the same cadence that produces the
 /// underlying background samples.

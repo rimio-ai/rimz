@@ -118,6 +118,7 @@ fn pane_tree_rates_on_stable_root_when_children_churn() {
             state: 'S',
             cpu_ticks: 1_300,
             io_bytes: Some(800),
+            d_stalled_since_ms: None,
         }],
     };
 
@@ -149,6 +150,7 @@ fn pane_tree_io_rate_waits_for_a_complete_prior_baseline() {
             state: 'S',
             cpu_ticks: 1_100,
             io_bytes: Some(10_000),
+            d_stalled_since_ms: None,
         }],
     };
 
@@ -166,37 +168,49 @@ fn tree_stuck_detection_tracks_pid_start_identity() {
         state: 'D',
         cpu_ticks: 10,
         io_bytes: Some(100),
+        d_stalled_since_ms: Some(1_000),
     }];
-    let still_d = [ProcessStateSample {
+    let mut still_d = [ProcessStateSample {
         pid: 20,
         start_ticks: 200,
         state: 'D',
         cpu_ticks: 10,
         io_bytes: Some(100),
+        d_stalled_since_ms: None,
     }];
-    let reused_pid = [ProcessStateSample {
+    let mut reused_pid = [ProcessStateSample {
         pid: 20,
         start_ticks: 201,
         state: 'D',
         cpu_ticks: 10,
         io_bytes: Some(100),
+        d_stalled_since_ms: None,
     }];
-    let zombie = [ProcessStateSample {
+    let mut zombie = [ProcessStateSample {
         pid: 30,
         start_ticks: 300,
         state: 'Z',
         cpu_ticks: 10,
         io_bytes: Some(100),
+        d_stalled_since_ms: None,
     }];
+    let now_ms = 1_000 + PROCESS_D_STATE_STUCK_AFTER.as_millis() as u64;
 
     assert_eq!(
-        process_state_from_tree(&still_d, &prior),
+        process_state_from_tree(&mut still_d, &prior, Some(1_000), now_ms),
         Some(ProcessState::Stuck)
     );
-    assert_eq!(process_state_from_tree(&reused_pid, &prior), None);
-    assert_eq!(process_state_from_tree(&zombie, &[]), None);
     assert_eq!(
-        process_state_from_tree(&zombie, &zombie),
+        process_state_from_tree(&mut reused_pid, &prior, Some(1_000), now_ms),
+        None
+    );
+    assert_eq!(
+        process_state_from_tree(&mut zombie, &[], None, now_ms),
+        None
+    );
+    let prior_zombie = zombie;
+    assert_eq!(
+        process_state_from_tree(&mut zombie, &prior_zombie, Some(1_000), now_ms),
         Some(ProcessState::Stuck)
     );
 }
@@ -209,42 +223,145 @@ fn tree_stuck_detection_requires_no_process_progress() {
         state: 'D',
         cpu_ticks: 10,
         io_bytes: Some(100),
+        d_stalled_since_ms: Some(1_000),
     };
-    let cpu_progress = ProcessStateSample {
+    let mut cpu_progress = [ProcessStateSample {
         cpu_ticks: 11,
         ..prior
-    };
-    let io_progress = ProcessStateSample {
+    }];
+    let mut io_progress = [ProcessStateSample {
         io_bytes: Some(101),
         ..prior
-    };
-    let missing_current_io = ProcessStateSample {
+    }];
+    let mut missing_current_io = [ProcessStateSample {
         io_bytes: None,
         ..prior
-    };
+    }];
     let prior_missing_io = ProcessStateSample {
         io_bytes: None,
         ..prior
     };
-    let zombie_with_progress = ProcessStateSample {
+    let prior_zombie = ProcessStateSample {
+        state: 'Z',
+        ..prior
+    };
+    let mut zombie_with_progress = [ProcessStateSample {
         state: 'Z',
         cpu_ticks: 11,
         io_bytes: Some(101),
         ..prior
-    };
+    }];
+    let now_ms = 1_000 + PROCESS_D_STATE_STUCK_AFTER.as_millis() as u64;
 
-    assert_eq!(process_state_from_tree(&[cpu_progress], &[prior]), None);
-    assert_eq!(process_state_from_tree(&[io_progress], &[prior]), None);
     assert_eq!(
-        process_state_from_tree(&[missing_current_io], &[prior]),
+        process_state_from_tree(&mut cpu_progress, &[prior], Some(1_000), now_ms),
+        None
+    );
+    assert_eq!(
+        process_state_from_tree(&mut io_progress, &[prior], Some(1_000), now_ms),
+        None
+    );
+    assert_eq!(
+        process_state_from_tree(&mut missing_current_io, &[prior], Some(1_000), now_ms),
+        Some(ProcessState::Stuck)
+    );
+    let mut prior_again = [prior];
+    assert_eq!(
+        process_state_from_tree(&mut prior_again, &[prior_missing_io], Some(1_000), now_ms),
         Some(ProcessState::Stuck)
     );
     assert_eq!(
-        process_state_from_tree(&[prior], &[prior_missing_io]),
+        process_state_from_tree(
+            &mut zombie_with_progress,
+            &[prior_zombie],
+            Some(1_000),
+            now_ms
+        ),
         Some(ProcessState::Stuck)
     );
+}
+
+#[test]
+fn tree_d_state_waits_for_a_sustained_stall() {
+    let prior = ProcessStateSample {
+        pid: 20,
+        start_ticks: 200,
+        state: 'D',
+        cpu_ticks: 10,
+        io_bytes: Some(100),
+        d_stalled_since_ms: Some(1_000),
+    };
+    let mut current = [ProcessStateSample {
+        d_stalled_since_ms: None,
+        ..prior
+    }];
+    let just_before = 1_000 + PROCESS_D_STATE_STUCK_AFTER.as_millis() as u64 - 1;
+
     assert_eq!(
-        process_state_from_tree(&[zombie_with_progress], &[prior]),
+        process_state_from_tree(&mut current, &[prior], Some(1_000), just_before),
+        None
+    );
+    assert_eq!(current[0].d_stalled_since_ms, Some(1_000));
+
+    let at_threshold = 1_000 + PROCESS_D_STATE_STUCK_AFTER.as_millis() as u64;
+    assert_eq!(
+        process_state_from_tree(&mut current, &[prior], Some(1_000), at_threshold),
         Some(ProcessState::Stuck)
     );
+}
+
+#[test]
+fn tree_d_state_progress_restarts_the_stall_clock() {
+    let prior = ProcessStateSample {
+        pid: 20,
+        start_ticks: 200,
+        state: 'D',
+        cpu_ticks: 10,
+        io_bytes: Some(100),
+        d_stalled_since_ms: Some(1_000),
+    };
+    let mut progressing = [ProcessStateSample {
+        cpu_ticks: 11,
+        d_stalled_since_ms: None,
+        ..prior
+    }];
+    let now_ms = 1_000 + PROCESS_D_STATE_STUCK_AFTER.as_millis() as u64;
+
+    assert_eq!(
+        process_state_from_tree(&mut progressing, &[prior], Some(1_000), now_ms),
+        None
+    );
+    assert_eq!(progressing[0].d_stalled_since_ms, Some(now_ms));
+
+    let mut paused = [ProcessStateSample {
+        d_stalled_since_ms: None,
+        ..progressing[0]
+    }];
+    assert_eq!(
+        process_state_from_tree(
+            &mut paused,
+            &progressing,
+            Some(now_ms),
+            now_ms + PROCESS_D_STATE_STUCK_AFTER.as_millis() as u64 - 1,
+        ),
+        None
+    );
+}
+
+#[test]
+fn cached_state_baseline_requires_the_same_foreground_tenant() {
+    let mut frame = frame_from_panes(vec![pane(
+        "terminal_1",
+        Some("xtask install-dev"),
+        Some("/repo"),
+    )]);
+    let pane = frame.pane_states_mut().next().unwrap();
+    pane.current.pid = Some(10);
+    let matching = fresh_entry(10, 100, "xtask install-dev", 1_000);
+    let other_command = fresh_entry(10, 100, "cargo build", 1_000);
+    let reused_root = fresh_entry(10, 101, "xtask install-dev", 1_000);
+
+    assert!(entry_matches_tenant(&matching, pane, 100));
+    assert!(!entry_matches_tenant(&other_command, pane, 100));
+    assert!(!entry_matches_tenant(&reused_root, pane, 100));
 }

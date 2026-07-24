@@ -9,7 +9,9 @@ use crate::ProcessState;
 use crate::ids::PaneId;
 use crate::sidebar::frame::{PaneFrame, PaneMetrics, PaneState};
 use crate::sidebar::timing::unix_now_ms;
-use crate::sidebar::timing::{METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMPLE_TTL};
+use crate::sidebar::timing::{
+    METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMPLE_TTL, PROCESS_D_STATE_STUCK_AFTER,
+};
 use crate::store::atomic;
 
 mod zellij;
@@ -18,7 +20,7 @@ mod zellij;
 use zellij::backfill_zellij_pane_pids;
 pub(super) use zellij::backfill_zellij_pane_pids_from_proc;
 
-const METRICS_SAMPLE_VERSION: u8 = 2;
+const METRICS_SAMPLE_VERSION: u8 = 3;
 
 /// Per-pane CPU and IO tick counters sampled by the producer on the previous
 /// tick, plus the pane's root-pid binding. Two consecutive readings plus the
@@ -27,8 +29,8 @@ const METRICS_SAMPLE_VERSION: u8 = 2;
 /// process-table walk that re-deriving it costs.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
 struct MetricsSampleEntry {
-    /// Cache shape for the sampled counters. Version 1 sampled one process
-    /// (`stats_pid`) and cannot seed pane-tree rates, so version mismatches
+    /// Cache shape for sampled counters and process-state tenure. Older shapes
+    /// cannot seed every current rate and stall baseline, so version mismatches
     /// force one warmup sample while still allowing guarded root-pid restore.
     #[serde(default)]
     sample_version: u8,
@@ -94,6 +96,10 @@ struct ProcessStateSample {
     cpu_ticks: u64,
     #[serde(default)]
     io_bytes: Option<u64>,
+    /// First sample time in the current no-progress `D` run. Progress resets
+    /// the clock even while the process remains in `D`.
+    #[serde(default)]
+    d_stalled_since_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -278,7 +284,7 @@ fn sample_due_pane(
     let Some(shell_pid) = pane.current.pid else {
         return unbound_entry(pane.current.command.clone(), now_ms);
     };
-    let Some(sample) = sample_pane_tree(
+    let Some(mut sample) = sample_pane_tree(
         shell_pid,
         children,
         needs_walk,
@@ -298,13 +304,19 @@ fn sample_due_pane(
     pane.children = sample.direct_children.clone();
     let (cpu_pct, io_bps) =
         rate_metrics(prior.entries.get(pane_key), pane, &sample, clk_tck, now_ms);
-    let prior_states = prior
+    let prior_entry = prior
         .entries
         .get(pane_key)
-        .filter(|entry| entry.sample_version == METRICS_SAMPLE_VERSION)
+        .filter(|entry| entry_matches_tenant(entry, pane, sample.root_start_ticks));
+    let prior_states = prior_entry
         .map(|entry| entry.state_samples.as_slice())
         .unwrap_or_default();
-    let process_state = process_state_from_tree(&sample.state_samples, prior_states);
+    let process_state = process_state_from_tree(
+        &mut sample.state_samples,
+        prior_states,
+        prior_entry.map(|entry| entry.sampled_at_ms),
+        now_ms,
+    );
     if display_metrics_ready(cpu_pct, io_bps, Some(sample.rss_kb)) {
         pane.metrics.rss_kb = Some(sample.rss_kb);
         pane.metrics.cpu_pct = cpu_pct;
@@ -402,40 +414,74 @@ fn add_process_to_sample(
         state: stat.state,
         cpu_ticks: stat.cpu_ticks,
         io_bytes: process_io_bytes,
+        d_stalled_since_ms: None,
     });
 }
 
-/// A repeated zombie is stuck; a repeated uninterruptible sleep is stuck only
-/// when the process made no CPU or I/O progress between samples.
+/// A repeated zombie is stuck. Uninterruptible sleep becomes stuck only after
+/// one same-tenant process remains there without CPU or I/O progress for the
+/// full stall window; ordinary large-file copies and link steps can spend
+/// several samples in `D` while one blocking syscall completes.
 fn process_state_from_tree(
-    current: &[ProcessStateSample],
+    current: &mut [ProcessStateSample],
     prior: &[ProcessStateSample],
+    prior_sampled_at_ms: Option<u64>,
+    now_ms: u64,
 ) -> Option<ProcessState> {
-    let prior_stuck: HashMap<(u32, u64), &ProcessStateSample> = prior
+    let prior_abnormal: HashMap<(u32, u64), &ProcessStateSample> = prior
         .iter()
         .filter(|sample| matches!(sample.state, 'Z' | 'D'))
         .map(|sample| ((sample.pid, sample.start_ticks), sample))
         .collect();
-    current
-        .iter()
-        .any(|sample| {
-            let Some(prior) = prior_stuck.get(&(sample.pid, sample.start_ticks)) else {
-                return false;
-            };
-            match sample.state {
-                'Z' => true,
-                'D' => {
-                    let cpu_progress = sample.cpu_ticks > prior.cpu_ticks;
-                    let io_progress = matches!(
-                        (sample.io_bytes, prior.io_bytes),
-                        (Some(current), Some(prior)) if current > prior
-                    );
-                    !cpu_progress && !io_progress
+    let mut stuck = false;
+    for sample in current {
+        let prior = prior_abnormal
+            .get(&(sample.pid, sample.start_ticks))
+            .copied();
+        let sample_stuck = match (sample.state, prior) {
+            ('Z', Some(prior)) => prior.state == 'Z',
+            ('D', Some(prior)) if prior.state == 'D' => {
+                let cpu_progress = sample.cpu_ticks > prior.cpu_ticks;
+                let io_progress = matches!(
+                    (sample.io_bytes, prior.io_bytes),
+                    (Some(current), Some(prior)) if current > prior
+                );
+                if cpu_progress || io_progress {
+                    sample.d_stalled_since_ms = Some(now_ms);
+                    false
+                } else {
+                    let stalled_since_ms = prior
+                        .d_stalled_since_ms
+                        .or(prior_sampled_at_ms)
+                        .unwrap_or(now_ms);
+                    sample.d_stalled_since_ms = Some(stalled_since_ms);
+                    now_ms.saturating_sub(stalled_since_ms)
+                        >= PROCESS_D_STATE_STUCK_AFTER.as_millis() as u64
                 }
-                _ => false,
             }
-        })
-        .then_some(ProcessState::Stuck)
+            ('D', _) => {
+                sample.d_stalled_since_ms = Some(now_ms);
+                false
+            }
+            _ => false,
+        };
+        stuck |= sample_stuck;
+    }
+    stuck.then_some(ProcessState::Stuck)
+}
+
+/// Whether a cached sample belongs to the pane tenant being sampled now.
+/// tmux keeps the shell pid stable while foreground commands come and go, so
+/// command identity is part of the guard alongside the pid and its starttime.
+fn entry_matches_tenant(
+    entry: &MetricsSampleEntry,
+    pane: &PaneState,
+    root_start_ticks: u64,
+) -> bool {
+    entry.sample_version == METRICS_SAMPLE_VERSION
+        && entry.command == pane.current.command
+        && entry.pane_pid == pane.current.pid
+        && entry.root_start_ticks == Some(root_start_ticks)
 }
 
 fn rate_metrics(
@@ -448,11 +494,7 @@ fn rate_metrics(
     let Some(prior_entry) = prior_entry else {
         return (None, None);
     };
-    if prior_entry.sample_version != METRICS_SAMPLE_VERSION
-        || prior_entry.command != pane.current.command
-        || prior_entry.pane_pid != pane.current.pid
-        || prior_entry.root_start_ticks != Some(sample.root_start_ticks)
-    {
+    if !entry_matches_tenant(prior_entry, pane, sample.root_start_ticks) {
         return (None, None);
     }
     let elapsed_ms = now_ms.saturating_sub(prior_entry.sampled_at_ms);
