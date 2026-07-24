@@ -9,13 +9,14 @@ const source = fs.readFileSync(flowControlPath, "utf8");
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-function createHarness({ cols = 196, rows = 53 } = {}) {
+function createHarness({ cols = 196, rows = 53, sendFailures = 0 } = {}) {
   const sent = [];
   const timers = new Map();
   const writeCallbacks = [];
   let nextTimer = 1;
   let now = 0;
   let render;
+  let remainingSendFailures = sendFailures;
 
   class NativeWebSocket extends EventTarget {
     static CONNECTING = 0;
@@ -31,6 +32,10 @@ function createHarness({ cols = 196, rows = 53 } = {}) {
     }
 
     send(data) {
+      if (remainingSendFailures > 0) {
+        remainingSendFailures--;
+        throw new Error("simulated send failure");
+      }
       const bytes = data instanceof ArrayBuffer
         ? new Uint8Array(data)
         : ArrayBuffer.isView(data)
@@ -230,24 +235,38 @@ function stalledPaintStillMakesBoundedProgress() {
   );
 }
 
-function laterOutputBandsResetTheSettleWindow() {
+function continuousOutputBandsDoNotStallTheDrag() {
   const harness = createHarness({ cols: 40, rows: 20 });
   harness.socket.send(sgrMouse(32, 2, 1));
   harness.socket.send(sgrMouse(32, 7, 1));
 
-  harness.paintOutput();
-  harness.advance(8);
-  assert.equal(harness.messages().length, 1);
-  harness.advance(2);
-  harness.paintOutput();
-  harness.advance(6);
-  assert.equal(
-    harness.messages().length,
-    1,
-    "the viewport pacing deadline should not release while a later output band is unsettled",
+  for (let elapsed = 0; elapsed < 16; elapsed += 4) {
+    harness.paintOutput();
+    harness.advance(4);
+  }
+  assert.deepEqual(
+    harness.messages(),
+    ["0\x1b[<32;2;1M", "0\x1b[<32;7;1M"],
+    "continuous output should release the queued coordinate at the 16 ms pace deadline",
   );
-  harness.advance(2);
-  assert.equal(harness.messages().at(-1), "0\x1b[<32;7;1M");
+}
+
+function throwingSendStillMakesBoundedProgress() {
+  const harness = createHarness({ sendFailures: 1 });
+  assert.throws(
+    () => harness.socket.send(sgrMouse(32, 2, 1)),
+    /simulated send failure/,
+  );
+  harness.socket.send(sgrMouse(32, 7, 1));
+
+  harness.advance(249);
+  assert.deepEqual(harness.messages(), []);
+  harness.advance(1);
+  assert.deepEqual(
+    harness.messages(),
+    ["0\x1b[<32;7;1M"],
+    "a throwing send should not strand the newest coordinate",
+  );
 }
 
 const scenarios = [
@@ -256,7 +275,8 @@ const scenarios = [
   keyboardInputDoesNotOvertakeQueuedMotion,
   defaultMouseEncodingAlsoCoalesces,
   stalledPaintStillMakesBoundedProgress,
-  laterOutputBandsResetTheSettleWindow,
+  continuousOutputBandsDoNotStallTheDrag,
+  throwingSendStillMakesBoundedProgress,
 ];
 
 for (const scenario of scenarios) {

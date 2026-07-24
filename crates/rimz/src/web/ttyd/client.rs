@@ -959,9 +959,9 @@ mod tests {
         assert!(rendered.contains("term.modes.mouseTrackingMode!==\"none\""));
         assert!(rendered.contains("const installPixelLayer=term=>"));
         assert!(rendered.contains("installPixelLayer(term)"));
-        assert!(rendered.contains("const HIGH=512*1024"));
-        assert!(rendered.contains("const LOW=128*1024"));
-        assert!(rendered.contains("const MOUSE_SETTLE_MS=8"));
+        assert!(rendered.contains("const HIGH=128*1024"));
+        assert!(rendered.contains("const LOW=32*1024"));
+        assert!(rendered.contains("const BACKLOG_STALL_MS=500"));
         assert!(rendered.contains("const MOUSE_STALL_MS=250"));
         assert!(rendered.contains("const MOUSE_CELLS_PER_MS=256"));
         assert!(rendered.contains("const installWebSocketGate=()=>"));

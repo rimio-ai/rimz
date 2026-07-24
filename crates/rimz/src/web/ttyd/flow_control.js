@@ -1,7 +1,6 @@
-const HIGH=512*1024;
-const LOW=128*1024;
-const BACKLOG_STALL_MS=2000;
-const MOUSE_SETTLE_MS=8;
+const HIGH=128*1024;
+const LOW=32*1024;
+const BACKLOG_STALL_MS=500;
 const MOUSE_STALL_MS=250;
 const MOUSE_MIN_FRAME_MS=16;
 const MOUSE_MAX_FRAME_MS=80;
@@ -16,11 +15,9 @@ const flow={
     inFlight:false,
     outputParsed:false,
     outputPainted:false,
-    outputSettled:false,
     paced:false,
     pending:null,
     paceTimer:0,
-    settleTimer:0,
     stallTimer:0,
     frameMs:MOUSE_MIN_FRAME_MS,
   },
@@ -37,15 +34,12 @@ const resetBacklog=()=>{
 };
 const clearMouseFlight=()=>{
   window.clearTimeout(flow.mouse.paceTimer);
-  window.clearTimeout(flow.mouse.settleTimer);
   window.clearTimeout(flow.mouse.stallTimer);
   flow.mouse.paceTimer=0;
-  flow.mouse.settleTimer=0;
   flow.mouse.stallTimer=0;
   flow.mouse.inFlight=false;
   flow.mouse.outputParsed=false;
   flow.mouse.outputPainted=false;
-  flow.mouse.outputSettled=false;
   flow.mouse.paced=false;
 };
 const resetMouseMotion=()=>{
@@ -92,7 +86,6 @@ const releaseReadyMouseMotion=()=>{
     flow.mouse.inFlight
     &&flow.mouse.outputParsed
     &&flow.mouse.outputPainted
-    &&flow.mouse.outputSettled
     &&flow.mouse.paced
   )releaseMouseMotion();
 };
@@ -108,10 +101,9 @@ const sendMouseMotion=(send,data)=>{
   flow.mouse.inFlight=true;
   flow.mouse.outputParsed=false;
   flow.mouse.outputPainted=false;
-  flow.mouse.outputSettled=false;
   flow.mouse.paced=false;
-  send(data);
   armMouseTimers();
+  send(data);
 };
 const sendPendingMouseMotion=()=>{
   const pending=flow.mouse.pending;
@@ -312,13 +304,6 @@ const installBacklogMeter=term=>{
       if(flow.mouse.inFlight){
         flow.mouse.outputParsed=true;
         flow.mouse.outputPainted=false;
-        flow.mouse.outputSettled=false;
-        window.clearTimeout(flow.mouse.settleTimer);
-        flow.mouse.settleTimer=window.setTimeout(()=>{
-          flow.mouse.settleTimer=0;
-          flow.mouse.outputSettled=true;
-          releaseReadyMouseMotion();
-        },MOUSE_SETTLE_MS);
       }
       if(flow.bytes<LOW)wakeFlowWaiters();
       if(typeof callback==="function")callback();
