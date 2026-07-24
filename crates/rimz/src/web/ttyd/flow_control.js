@@ -8,6 +8,19 @@ const MOUSE_CELLS_PER_MS=256;
 const MOUSE_NONE=0;
 const MOUSE_BOUNDARY=1;
 const MOUSE_MOTION=2;
+const DEBUG=(()=>{
+  try{
+    return new URLSearchParams(window.location.search).get("rimzdebug")==="1";
+  }catch(_){
+    return false;
+  }
+})();
+const debugDecisions=[];
+const debugNote=action=>{
+  if(!DEBUG)return;
+  debugDecisions.push({t:Date.now(),action});
+  if(debugDecisions.length>256)debugDecisions.shift();
+};
 const flow={
   bytes:0,
   waiters:[],
@@ -22,6 +35,7 @@ const flow={
     frameMs:MOUSE_MIN_FRAME_MS,
   },
 };
+if(DEBUG)window.__rimzWeb={flow,decisions:debugDecisions};
 
 const wakeFlowWaiters=()=>{
   const waiters=flow.waiters;
@@ -87,7 +101,10 @@ const releaseReadyMouseMotion=()=>{
     &&flow.mouse.outputParsed
     &&flow.mouse.outputPainted
     &&flow.mouse.paced
-  )releaseMouseMotion();
+  ){
+    debugNote("ready-release");
+    releaseMouseMotion();
+  }
 };
 const armMouseTimers=()=>{
   flow.mouse.paceTimer=window.setTimeout(()=>{
@@ -95,7 +112,10 @@ const armMouseTimers=()=>{
     flow.mouse.paced=true;
     releaseReadyMouseMotion();
   },flow.mouse.frameMs);
-  flow.mouse.stallTimer=window.setTimeout(releaseMouseMotion,MOUSE_STALL_MS);
+  flow.mouse.stallTimer=window.setTimeout(()=>{
+    debugNote("stall-release");
+    releaseMouseMotion();
+  },MOUSE_STALL_MS);
 };
 const sendMouseMotion=(send,data)=>{
   flow.mouse.inFlight=true;
@@ -103,6 +123,7 @@ const sendMouseMotion=(send,data)=>{
   flow.mouse.outputPainted=false;
   flow.mouse.paced=false;
   armMouseTimers();
+  debugNote("sent");
   send(data);
 };
 const sendPendingMouseMotion=()=>{
@@ -120,6 +141,7 @@ const sendWithMouseFlow=(send,data)=>{
   if(kind===MOUSE_MOTION){
     if(flow.mouse.inFlight){
       flow.mouse.pending={send,data};
+      debugNote("queued");
     }else{
       sendMouseMotion(send,data);
     }
@@ -128,13 +150,17 @@ const sendWithMouseFlow=(send,data)=>{
   if(kind===MOUSE_BOUNDARY){
     const pending=flow.mouse.pending;
     resetMouseMotion();
-    if(pending)pending.send(pending.data);
+    if(pending){
+      debugNote("boundary-flush");
+      pending.send(pending.data);
+    }
     send(data);
     return;
   }
   if(flow.mouse.pending){
     const pending=flow.mouse.pending;
     flow.mouse.pending=null;
+    debugNote("input-flush");
     pending.send(pending.data);
   }
   send(data);

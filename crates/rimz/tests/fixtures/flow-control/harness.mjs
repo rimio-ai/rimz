@@ -9,7 +9,13 @@ const source = fs.readFileSync(flowControlPath, "utf8");
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-function createHarness({ cols = 196, rows = 53, sendFailures = 0 } = {}) {
+// This idealized harness completes write callbacks before the render that paints them; real xterm interleaves writes and renders.
+function createHarness({
+  cols = 196,
+  rows = 53,
+  search = "?room=room-a",
+  sendFailures = 0,
+} = {}) {
   const sent = [];
   const timers = new Map();
   const writeCallbacks = [];
@@ -48,7 +54,7 @@ function createHarness({ cols = 196, rows = 53, sendFailures = 0 } = {}) {
   globalThis.window = {
     WebSocket: NativeWebSocket,
     WebSocketStream: undefined,
-    location: new URL("https://rimz.test/?room=room-a"),
+    location: new URL(search, "https://rimz.test/"),
     setTimeout(callback, delay = 0) {
       const id = nextTimer++;
       timers.set(id, { callback, due: now + delay });
@@ -59,8 +65,8 @@ function createHarness({ cols = 196, rows = 53, sendFailures = 0 } = {}) {
     },
   };
 
-  const { installWebSocketGate, installBacklogMeter } = new Function(
-    `${source}\nreturn {installWebSocketGate,installBacklogMeter};`,
+  const { flow, installWebSocketGate, installBacklogMeter } = new Function(
+    `${source}\nreturn {flow,installWebSocketGate,installBacklogMeter};`,
   )();
   installWebSocketGate();
 
@@ -112,6 +118,7 @@ function createHarness({ cols = 196, rows = 53, sendFailures = 0 } = {}) {
   };
 
   return {
+    flow,
     socket,
     messages,
     paintOutput,
@@ -269,6 +276,29 @@ function throwingSendStillMakesBoundedProgress() {
   );
 }
 
+function debugHookExposesGateStateOnlyWhenFlagged() {
+  createHarness();
+  assert.equal(window.__rimzWeb, undefined, "the debug hook should be absent without the flag");
+
+  const harness = createHarness({ search: "?room=room-a&rimzdebug=1" });
+  const debug = window.__rimzWeb;
+  assert.equal(debug.flow, harness.flow, "the debug hook should expose the live gate state");
+
+  harness.socket.send(sgrMouse(32, 2, 1));
+  harness.socket.send(sgrMouse(32, 7, 1));
+  assert.equal(debug.flow.mouse.pending.data, harness.flow.mouse.pending.data);
+  harness.advance(250);
+  harness.socket.send(sgrMouse(32, 9, 1));
+  harness.socket.send(sgrMouse(0, 9, 1, "m"));
+
+  assert.deepEqual(
+    debug.decisions.map(({ action }) => action),
+    ["sent", "queued", "stall-release", "sent", "queued", "boundary-flush"],
+    "the hook should record each mouse send decision in order",
+  );
+  assert.equal(debug.flow.mouse.inFlight, false, "the exposed flow state should stay live");
+}
+
 const scenarios = [
   continuousDragKeepsOnlyTheLatestCoordinate,
   releaseFlushesTheFinalCoordinateInOrder,
@@ -277,6 +307,7 @@ const scenarios = [
   stalledPaintStillMakesBoundedProgress,
   continuousOutputBandsDoNotStallTheDrag,
   throwingSendStillMakesBoundedProgress,
+  debugHookExposesGateStateOnlyWhenFlagged,
 ];
 
 for (const scenario of scenarios) {
