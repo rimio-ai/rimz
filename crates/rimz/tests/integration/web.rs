@@ -100,6 +100,22 @@ fn ttyd_pixel_layer_clips_real_draws_to_placeholder_cells() {
 }
 
 #[test]
+fn ttyd_flow_control_coalesces_continuous_mouse_drag_motion() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new("node")
+        .arg(crate_root.join("tests/fixtures/flow-control/harness.mjs"))
+        .arg(crate_root.join("src/web/ttyd/flow_control.js"))
+        .output()
+        .expect("run ttyd flow-control Node harness");
+    assert!(
+        output.status.success(),
+        "ttyd flow-control Node harness failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn ttyd_input_guard_stops_macos_option_keypress_before_xterm() {
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let output = Command::new("node")
@@ -553,6 +569,12 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("read capable daemon record"))
             .expect("parse capable daemon record");
     assert_eq!(daemon["pixel_protocol"], 3);
+    assert!(
+        daemon["index_key"]
+            .as_str()
+            .is_some_and(|key| !key.is_empty()),
+        "{daemon}"
+    );
     let credential_before = std::fs::read(&credential_path).expect("credential before bad revoke");
     let daemon_before = std::fs::read(&daemon_path).expect("daemon before bad revoke");
     let bad_revoke = fixture
@@ -694,6 +716,12 @@ fn read_only_broadcast_allowlist_reuses_restarts_and_stops_its_daemon() {
     let first_daemon: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("first share record"))
             .expect("first share JSON");
+    assert!(
+        first_daemon["index_key"]
+            .as_str()
+            .is_some_and(|key| !key.is_empty()),
+        "{first_daemon}"
+    );
 
     let second_share = fixture
         .command_with_sessions(&sessions)
@@ -1200,6 +1228,7 @@ fn markerless_stock_index_keeps_daemon_pixel_incapable() {
     )
     .expect("parse markerless daemon record");
     assert!(daemon.get("pixel_protocol").is_none(), "{daemon}");
+    assert!(daemon.get("index_key").is_none(), "{daemon}");
     let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read markerless ttyd log");
     let daemon_argv = log
         .lines()

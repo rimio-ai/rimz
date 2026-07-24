@@ -9,7 +9,8 @@ const installPixelLayer=term=>{
   const UTF8_MINIMUMS=[0,0,0x80,0x800,0x10000];
   const encoder=new TextEncoder();
   const decoder=new TextDecoder();
-  const placeholderBytes=encoder.encode(String.fromCodePoint(RIMZ_PIXEL_PLACEHOLDER));
+  const placeholderString=String.fromCodePoint(RIMZ_PIXEL_PLACEHOLDER);
+  const placeholderBytes=encoder.encode(placeholderString);
   const hideGlyph=encoder.encode("\x1b[8m");
   const showGlyph=encoder.encode("\x1b[28m");
   const diacriticIndexes=new Map(RIMZ_PIXEL_DIACRITICS.map((value,index)=>[value.codePointAt(0),index]));
@@ -33,6 +34,8 @@ const installPixelLayer=term=>{
   if(!context){canvas.remove();return;}
   context.imageSmoothingEnabled=false;
   let canvasBlank=true;
+  let paintedScene=null;
+  let sceneRevision=0;
 
   const closeBitmap=bitmap=>{try{bitmap.close();}catch(_){}};
   const clearCanvas=()=>{
@@ -40,6 +43,7 @@ const installPixelLayer=term=>{
     context.setTransform(dpr,0,0,dpr,0,0);
     context.clearRect(0,0,canvas.width/dpr,canvas.height/dpr);
     canvasBlank=true;
+    paintedScene=null;
   };
   const resizeCanvas=()=>{
     const rect=screen.getBoundingClientRect();
@@ -51,17 +55,20 @@ const installPixelLayer=term=>{
       canvas.height=height;
       canvas.style.width=`${rect.width}px`;
       canvas.style.height=`${rect.height}px`;
+      canvasBlank=true;
+      paintedScene=null;
     }
-    context.setTransform(dpr,0,0,dpr,0,0);
     context.imageSmoothingEnabled=false;
     return rect;
   };
   const deleteImage=id=>{
+    const changed=images.has(id)||placements.has(id);
     pendingDecodes.delete(id);
     const image=images.get(id);
     if(image)closeBitmap(image);
     images.delete(id);
     placements.delete(id);
+    if(changed)sceneRevision++;
   };
   const clearImages=()=>{
     pendingDecodes.clear();
@@ -69,6 +76,7 @@ const installPixelLayer=term=>{
     images.clear();
     placements.clear();
     transfer=null;
+    sceneRevision++;
     clearCanvas();
   };
   const evictOldest=(map,onEvict)=>{
@@ -88,6 +96,7 @@ const installPixelLayer=term=>{
       evictOldest(images,(_id,image)=>closeBitmap(image));
     }
     images.set(id,bitmap);
+    sceneRevision++;
     scheduleDraw();
   };
   const decodeImage=(id,payload)=>{
@@ -116,9 +125,12 @@ const installPixelLayer=term=>{
     return fields;
   };
   const rememberPlacement=(id,cols,rows)=>{
+    const previous=placements.get(id);
+    const changed=!previous||previous.cols!==cols||previous.rows!==rows;
     if(!placements.has(id))evictOldest(placements,()=>{});
     else placements.delete(id);
     placements.set(id,{cols,rows});
+    if(changed)sceneRevision++;
     scheduleDraw();
   };
   const handleApc=bytes=>{
@@ -310,22 +322,29 @@ const installPixelLayer=term=>{
   const draw=()=>{
     if(placements.size===0&&images.size===0&&canvasBlank)return;
     const rect=resizeCanvas();
-    context.clearRect(0,0,rect.width,rect.height);
-    canvasBlank=true;
     const size=cellSize(rect);
     const buffer=term.buffer.active;
     const viewport=buffer.viewportY;
+    const workCell=buffer.getNullCell();
     const groups=new Map();
+    const scene=[];
     for(let row=0;row<term.rows;row++){
       const line=buffer.getLine(viewport+row);
-      if(!line)continue;
+      if(!line||line.translateToString(true).indexOf(placeholderString)<0)continue;
       for(let col=0;col<Math.min(term.cols,line.length);col++){
-        const cell=line.getCell(col);
+        const cell=line.getCell(col,workCell);
         if(!cell)continue;
-        const chars=Array.from(cell.getChars());
-        if(chars.length<3||chars[0].codePointAt(0)!==RIMZ_PIXEL_PLACEHOLDER)continue;
-        const sourceRow=diacriticIndexes.get(chars[1].codePointAt(0));
-        const sourceCol=diacriticIndexes.get(chars[2].codePointAt(0));
+        const chars=cell.getChars();
+        const first=chars.codePointAt(0);
+        if(first!==RIMZ_PIXEL_PLACEHOLDER)continue;
+        let offset=first>0xffff?2:1;
+        const rowMark=chars.codePointAt(offset);
+        if(rowMark===undefined)continue;
+        offset+=rowMark>0xffff?2:1;
+        const columnMark=chars.codePointAt(offset);
+        if(columnMark===undefined)continue;
+        const sourceRow=diacriticIndexes.get(rowMark);
+        const sourceCol=diacriticIndexes.get(columnMark);
         const id=cell.getFgColor()&0xffffff;
         const placement=placements.get(id);
         if(!placement||sourceRow===undefined||sourceCol===undefined||sourceRow>=placement.rows||sourceCol>=placement.cols)continue;
@@ -340,9 +359,16 @@ const installPixelLayer=term=>{
           groups.set(key,group);
         }
         group.cells.push({x,y});
+        scene.push(id,originCol,originRow,col,row);
       }
     }
     const dpr=window.devicePixelRatio||1;
+    const sceneKey=`${rect.width}:${rect.height}:${dpr}:${sceneRevision}:${scene.join(",")}`;
+    if(sceneKey===paintedScene)return;
+    context.setTransform(dpr,0,0,dpr,0,0);
+    context.imageSmoothingEnabled=false;
+    context.clearRect(0,0,rect.width,rect.height);
+    canvasBlank=true;
     const snap=value=>Math.round(value*dpr)/dpr;
     for(const {image,placement,x,y,cells} of groups.values()){
       if(!image)continue;
@@ -365,6 +391,7 @@ const installPixelLayer=term=>{
       context.restore();
       canvasBlank=false;
     }
+    paintedScene=sceneKey;
   };
   let drawQueued=false;
   function scheduleDraw(){
@@ -381,10 +408,10 @@ const installPixelLayer=term=>{
     if(forwarded.length)return write(forwarded,callback);
     if(typeof callback==="function")queueMicrotask(callback);
   };
-  term.onRender(draw);
-  term.onScroll(draw);
-  term.onResize(()=>{clearCanvas();draw();});
-  new ResizeObserver(()=>{clearCanvas();draw();}).observe(screen);
+  term.onRender(scheduleDraw);
+  term.onScroll(scheduleDraw);
+  term.onResize(()=>{clearCanvas();scheduleDraw();});
+  new ResizeObserver(()=>{clearCanvas();scheduleDraw();}).observe(screen);
   const reset=term.reset.bind(term);
   term.reset=(...args)=>{clearImages();const result=reset(...args);scheduleDraw();return result;};
   scheduleDraw();

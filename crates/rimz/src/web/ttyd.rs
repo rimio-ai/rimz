@@ -77,6 +77,8 @@ pub(super) struct DaemonRecord {
     pub(super) basic_upstream: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) pixel_protocol: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) index_key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +99,7 @@ impl DaemonRecord {
             gate: None,
             basic_upstream: true,
             pixel_protocol: None,
+            index_key: None,
         }
     }
 }
@@ -141,7 +144,7 @@ struct LegacyTtydInstance {
 }
 
 pub(super) fn preflight() -> Result<()> {
-    required_program().map(|_| ())
+    required_program_with_version().map(|_| ())
 }
 
 pub(super) fn program() -> Result<PathBuf> {
@@ -169,11 +172,11 @@ pub(super) fn version_at(program: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(text).trim().to_owned())
 }
 
-pub(super) fn required_program() -> Result<PathBuf> {
+pub(super) fn required_program_with_version() -> Result<(PathBuf, String)> {
     let program = program()?;
     let reported = version_at(&program)?;
     require_supported_version(&reported)?;
-    Ok(program)
+    Ok((program, reported))
 }
 
 fn require_supported_version(reported: &str) -> Result<TtydVersion> {
@@ -292,21 +295,19 @@ fn clear_credential() -> Result<bool> {
 
 pub(super) fn ensure_daemon(config: &MachineConfig) -> Result<RunningDaemon> {
     let desired = desired_spec(config)?;
-    let program = required_program()?;
+    let (program, version) = required_program_with_version()?;
     let _guard = acquire_daemon_lock()?;
     reap_legacy_instances();
     let daemon = daemon_status_locked()?;
+    let prepared = prepare_fresh_start(config, &desired, daemon.as_ref(), program, &version)?;
     if let Some(record) = &daemon
-        && record_matches(record, &desired)
+        && record_matches(record, &desired, &prepared.2)
     {
         let credential = required_credential()?;
-        return Ok(running_daemon(
-            record.clone(),
-            credential,
-            auth_warnings(&desired),
-        ));
+        let mut warnings = auth_warnings(&desired);
+        warnings.extend(prepared.2.warnings.clone());
+        return Ok(running_daemon(record.clone(), credential, warnings));
     }
-    let prepared = prepare_fresh_start(config, &desired, daemon.as_ref(), program)?;
     let credential = ensure_credential()?;
     start_fresh_locked(&desired, daemon, credential, prepared)
 }
@@ -385,7 +386,7 @@ fn desired_spec(config: &MachineConfig) -> Result<DaemonSpec> {
     })
 }
 
-fn record_matches(record: &DaemonRecord, desired: &DaemonSpec) -> bool {
+fn record_matches(record: &DaemonRecord, desired: &DaemonSpec, profile: &ClientProfile) -> bool {
     record.basic_upstream
         && record.port == desired.port
         && record.interface == desired.interface
@@ -393,9 +394,7 @@ fn record_matches(record: &DaemonRecord, desired: &DaemonSpec) -> bool {
         && record.auth_users == desired.auth_users
         && record.trusted_proxies == desired.trusted_proxies
         && record.gate.is_some() == gated(desired)
-        && record
-            .pixel_protocol
-            .is_none_or(|protocol| protocol == crate::web::TTYD_PIXEL_PROTOCOL)
+        && record.index_key == profile.index_key
 }
 
 fn auth_warnings(desired: &DaemonSpec) -> Vec<WebWarning> {
@@ -593,6 +592,7 @@ fn start_daemon_with_profile(
         gate,
         basic_upstream: true,
         pixel_protocol: profile.pixel_protocol,
+        index_key: profile.index_key.clone(),
     };
     let public_address = record_public_address(&record)?;
     if !wait_for_address(public_address, START_TIMEOUT) {
@@ -650,8 +650,8 @@ fn rotate_credential_locked(config: &MachineConfig) -> Result<CredentialRotation
             warnings: Vec::new(),
         });
     };
-    let program = required_program()?;
-    let prepared = prepare_fresh_start(config, &desired, Some(&daemon), program)?;
+    let (program, version) = required_program_with_version()?;
+    let prepared = prepare_fresh_start(config, &desired, Some(&daemon), program, &version)?;
     let credential = mint_credential()?;
     let running = start_fresh_locked(&desired, Some(daemon), credential.clone(), prepared)?;
     Ok(CredentialRotation {
@@ -663,12 +663,12 @@ fn rotate_credential_locked(config: &MachineConfig) -> Result<CredentialRotation
 
 pub(super) fn restart_daemon(config: &MachineConfig) -> Result<(RunningDaemon, bool)> {
     let desired = desired_spec(config)?;
-    let program = required_program()?;
+    let (program, version) = required_program_with_version()?;
     let _guard = acquire_daemon_lock()?;
     reap_legacy_instances();
     let daemon = daemon_status_locked()?;
     let was_online = daemon.is_some();
-    let prepared = prepare_fresh_start(config, &desired, daemon.as_ref(), program)?;
+    let prepared = prepare_fresh_start(config, &desired, daemon.as_ref(), program, &version)?;
     let credential = ensure_credential()?;
     start_fresh_locked(&desired, daemon, credential, prepared).map(|daemon| (daemon, was_online))
 }
@@ -680,8 +680,8 @@ pub(super) fn restart_if_online(config: &MachineConfig) -> Result<Option<Running
         return Ok(None);
     };
     let desired = desired_spec(config)?;
-    let program = required_program()?;
-    let prepared = prepare_fresh_start(config, &desired, Some(&daemon), program)?;
+    let (program, version) = required_program_with_version()?;
+    let prepared = prepare_fresh_start(config, &desired, Some(&daemon), program, &version)?;
     let credential = ensure_credential()?;
     start_fresh_locked(&desired, Some(daemon), credential, prepared).map(Some)
 }
@@ -693,6 +693,7 @@ fn prepare_fresh_start(
     desired: &DaemonSpec,
     daemon: Option<&DaemonRecord>,
     program: PathBuf,
+    version: &str,
 ) -> Result<FreshStart> {
     let public_address = socket_address(&desired.interface, desired.port)?;
     if daemon.is_none_or(|record| {
@@ -700,7 +701,7 @@ fn prepare_fresh_start(
     }) {
         ensure_port_available(public_address)?;
     }
-    let profile = client::profile(config, &program);
+    let profile = client::profile(config, &program, version);
     Ok((program, public_address, profile))
 }
 
@@ -1218,6 +1219,7 @@ mod tests {
             }),
             basic_upstream: true,
             pixel_protocol: Some(crate::web::TTYD_PIXEL_PROTOCOL),
+            index_key: Some("generated-index-key".to_owned()),
         };
         write_daemon_at(&path, &daemon).expect("write daemon state");
         assert_eq!(read_json_optional(&path).expect("read state"), Some(daemon));
@@ -1232,6 +1234,7 @@ mod tests {
         assert!(daemon.auth_users.is_empty());
         assert!(daemon.gate.is_none());
         assert!(!daemon.basic_upstream);
+        assert_eq!(daemon.index_key, None);
     }
 
     #[test]
@@ -1300,25 +1303,35 @@ mod tests {
         assert_eq!(daemon.pid, 42);
         assert_eq!(daemon.port, 8200);
         assert_eq!(daemon.pixel_protocol, None);
+        assert_eq!(daemon.index_key, None);
     }
 
     #[test]
-    fn daemon_reuse_requires_the_current_pixel_protocol() {
+    fn daemon_reuse_requires_the_generated_index_key() {
         let config = MachineConfig::default();
         let desired = desired_spec(&config).expect("desired daemon");
         let mut daemon = DaemonRecord::basic_loopback(42, config.web.port);
+        let mut profile = ClientProfile::default();
 
-        assert!(record_matches(&daemon, &desired));
+        assert!(record_matches(&daemon, &desired, &profile));
         daemon.basic_upstream = false;
-        assert!(!record_matches(&daemon, &desired));
+        assert!(!record_matches(&daemon, &desired, &profile));
         daemon.basic_upstream = true;
-        daemon.pixel_protocol = Some(crate::web::TTYD_PIXEL_PROTOCOL);
-        assert!(record_matches(&daemon, &desired));
+        profile.index_key = Some("current".to_owned());
+        assert!(!record_matches(&daemon, &desired, &profile));
+        daemon.index_key = profile.index_key.clone();
+        assert!(record_matches(&daemon, &desired, &profile));
+        daemon.index_key = Some("stale".to_owned());
+        assert!(!record_matches(&daemon, &desired, &profile));
+        daemon.index_key = profile.index_key.clone();
         daemon.pixel_protocol = Some(crate::web::TTYD_PIXEL_PROTOCOL - 1);
-        assert!(!record_matches(&daemon, &desired));
+        assert!(record_matches(&daemon, &desired, &profile));
+        daemon.index_key = None;
         daemon.pixel_protocol = None;
+        profile.index_key = None;
+        assert!(record_matches(&daemon, &desired, &profile));
         daemon.auth_users.push("alice".to_owned());
-        assert!(!record_matches(&daemon, &desired));
+        assert!(!record_matches(&daemon, &desired, &profile));
     }
 
     #[test]
