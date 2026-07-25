@@ -1122,19 +1122,43 @@ impl TurnErrorClass {
     }
 }
 
-/// The HTTP status a provider error text reports, when the text reads like an
-/// HTTP failure at all. The marker requirement keeps an incidental three-digit
-/// number — a `cf-ray` fragment or token count — from casting a verdict.
+/// The HTTP status a provider error text reports. The status must immediately
+/// follow a marker so an unrelated URL, source line, or token count cannot cast
+/// a verdict.
 fn http_error_status(lower: &str) -> Option<u16> {
-    const MARKERS: [&str; 4] = ["status", "http", "gateway", "error code"];
-    if !MARKERS.iter().any(|marker| lower.contains(marker)) {
-        return None;
+    const MARKERS: [&str; 3] = ["status", "gateway", "error code"];
+    for marker in MARKERS {
+        for (offset, _) in lower.match_indices(marker) {
+            if lower[..offset]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric())
+            {
+                continue;
+            }
+            let suffix = &lower[offset + marker.len()..];
+            let digits = suffix.trim_start_matches(|ch: char| {
+                ch.is_ascii_whitespace() || matches!(ch, ':' | '/' | '=')
+            });
+            if digits.len() == suffix.len() {
+                continue;
+            }
+            let bytes = digits.as_bytes();
+            if bytes.len() < 3
+                || !bytes[..3].iter().all(u8::is_ascii_digit)
+                || bytes.get(3).is_some_and(u8::is_ascii_digit)
+            {
+                continue;
+            }
+            let code = u16::from(bytes[0] - b'0') * 100
+                + u16::from(bytes[1] - b'0') * 10
+                + u16::from(bytes[2] - b'0');
+            if (400..600).contains(&code) {
+                return Some(code);
+            }
+        }
     }
-    lower
-        .split(|c: char| !c.is_ascii_digit())
-        .filter(|run| run.len() == 3)
-        .filter_map(|run| run.parse::<u16>().ok())
-        .find(|code| (400..600).contains(code))
+    None
 }
 
 fn is_transient_server_error(lower: &str) -> bool {
@@ -1621,6 +1645,15 @@ mod tests {
             ("unexpected status 429", TurnErrorClass::PausedRateLimit),
             ("unexpected status 400 Bad Request", TurnErrorClass::Failed),
             ("cf-ray a20a1d2aca20f069-503x", TurnErrorClass::Failed),
+            (
+                "fetched https://example.com/a in 512ms",
+                TurnErrorClass::Failed,
+            ),
+            ("src/http.rs:512:    let x = 1;", TurnErrorClass::Failed),
+            (
+                "compacted 1200 tokens, http request ok, 540 remaining",
+                TurnErrorClass::Failed,
+            ),
             ("API Error: Bad Request", TurnErrorClass::Failed),
         ] {
             assert_eq!(

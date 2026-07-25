@@ -326,11 +326,12 @@ fn turn_error_detector_maps_known_error_shapes() {
         ),
     ] {
         for kind in [camel, snake] {
-            assert_eq!(
-                class_from_kind(kind, "API Error: Bad Request"),
-                class,
-                "{kind}"
-            );
+            let contrary_label = if class == crate::agents::TurnErrorClass::Failed {
+                "Service Unavailable"
+            } else {
+                "API Error: Bad Request"
+            };
+            assert_eq!(class_from_kind(kind, contrary_label), class, "{kind}");
         }
     }
     assert_eq!(
@@ -939,6 +940,24 @@ again at 6:35 AM.
     refine_turn_death_from_frame(&mut unknown, "⚠ Provider ended turn early\n› \n");
     assert_eq!(unknown.class, crate::agents::TurnErrorClass::Failed);
     assert_eq!(unknown.label.as_deref(), Some("Provider ended turn early"));
+
+    let mut numeric_pane_line = crate::agents::AgentTurnError {
+        class: crate::agents::TurnErrorClass::Unknown,
+        at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
+        label: Some("turn ended with no final message".to_owned()),
+    };
+    refine_turn_death_from_frame(
+        &mut numeric_pane_line,
+        "fetched https://example.com/a in 512ms\n› \n",
+    );
+    assert_eq!(
+        numeric_pane_line.class,
+        crate::agents::TurnErrorClass::Unknown
+    );
+    assert_eq!(
+        numeric_pane_line.label.as_deref(),
+        Some("turn ended with no final message")
+    );
 }
 
 #[test]
