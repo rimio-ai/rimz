@@ -108,8 +108,22 @@ fn open_delivery(
     let check = deliver::explain(record, live_messages, &snapshot, now);
     let agents: Vec<&AgentState> = snapshot.root_agents().collect();
     let target = message_target(message, &agents);
+    let verdict = check.verdict();
+    let audit_receiver = if verdict == deliver::DeliveryVerdict::ReceiverGone {
+        ctx.store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .ok()
+            .and_then(|projection| {
+                projection
+                    .agents
+                    .into_iter()
+                    .find(|agent| agent.kind == record.kind && agent.agent_id == record.agent_id)
+            })
+    } else {
+        None
+    };
     Ok(Some(MessageDeliveryJson {
-        verdict: render_verdict(&check.verdict(), &target, now),
+        verdict: render_verdict(&verdict, &target, audit_receiver.as_ref(), now),
         check,
     }))
 }
@@ -315,7 +329,7 @@ pub(super) fn steer_failure(
             "{message_id} has a recent delivery attempt in progress; retry in a few seconds"
         );
     }
-    render_verdict(&check.verdict(), target, Timestamp::now())
+    render_verdict(&check.verdict(), target, None, Timestamp::now())
 }
 
 pub(super) fn time_with_absolute(ts: Timestamp, now: Timestamp) -> String {
@@ -551,6 +565,7 @@ pub(super) fn condition_cell(ok: bool, text: String) -> render::Cell {
 pub(super) fn render_verdict(
     verdict: &deliver::DeliveryVerdict,
     target: &str,
+    audit_receiver: Option<&AgentState>,
     now: Timestamp,
 ) -> String {
     match verdict {
@@ -603,7 +618,15 @@ pub(super) fn render_verdict(
             .as_ref()
             .map(|blocker| format!("blocked: behind {blocker}"))
             .unwrap_or_else(|| "blocked: FIFO head unavailable".to_owned()),
-        deliver::DeliveryVerdict::ReceiverGone => format!("stuck: receiver {target} is gone"),
+        deliver::DeliveryVerdict::ReceiverGone => audit_receiver.map_or_else(
+            || format!("stuck: receiver {target} is gone"),
+            |receiver| {
+                format!(
+                    "stuck: receiver {target} is gone; its session record survives (last seen {}), but no live process claims it; try `rimz agents resume`",
+                    time_with_absolute(receiver.last_seen, now)
+                )
+            },
+        ),
         deliver::DeliveryVerdict::Compacting => {
             format!("waiting: {target} is compacting its context")
         }
@@ -714,7 +737,7 @@ mod tests {
         });
         assert!(!check.passes());
         assert_eq!(
-            render_verdict(&check.verdict(), "@claude", Timestamp::now()),
+            render_verdict(&check.verdict(), "@claude", None, Timestamp::now()),
             "waiting on @planner to finish (@planner not running)"
         );
 
@@ -725,6 +748,35 @@ mod tests {
         assert_eq!(
             delivery_action_hint(&check.verdict(), &message_id),
             Some("force now: rimz message steer msg_0000000000000001".to_owned())
+        );
+    }
+
+    #[test]
+    fn receiver_gone_names_a_surviving_audit_record() {
+        let now = Timestamp::from_second(120).expect("fixed now");
+        let receiver = rimz::testkit::agent_state(
+            "codex",
+            "sess-resumed",
+            Timestamp::from_second(60).expect("fixed last seen"),
+        );
+
+        assert_eq!(
+            render_verdict(
+                &deliver::DeliveryVerdict::ReceiverGone,
+                "@coder#lane",
+                Some(&receiver),
+                now,
+            ),
+            "stuck: receiver @coder#lane is gone; its session record survives (last seen 1m ago (1970-01-01T00:01:00Z)), but no live process claims it; try `rimz agents resume`"
+        );
+        assert_eq!(
+            render_verdict(
+                &deliver::DeliveryVerdict::ReceiverGone,
+                "@coder#lane",
+                None,
+                now,
+            ),
+            "stuck: receiver @coder#lane is gone"
         );
     }
 }

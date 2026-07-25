@@ -168,6 +168,8 @@ A genuine no-match, after the durable fallback, writes a terminal `message.error
 
 All ten pass and the verdict is `Ready`.
 
+`rimz message show` diagnoses `ReceiverGone` against the audit rollup. When the durable receiver card survives but runtime projection expelled it, the verdict names the card's last-seen time, says that no live process claims it, and points at `rimz agents resume`; the delivery verdict and JSON check vocabulary stay unchanged.
+
 Two clarifications the table cannot carry:
 
 **Hook installation is an enqueue check, not a delivery check.** A parked record needs hooks because hooks are the trigger, so dispatch refuses the send up front rather than accepting text it could never release.

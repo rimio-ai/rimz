@@ -98,9 +98,9 @@ pub struct PaneRef {
     /// views such as the remote-control host. Never a correctness signal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_name: Option<String>,
-    /// Pane title/name as reported by the multiplexer. Managed Zellij panes
-    /// use an explicit title as advisory launch identity because their
-    /// foreground command can change after spawning a child.
+    /// Pane title/name as reported by the multiplexer. Advisory classification
+    /// metadata for sidebar chrome and managed background panes; agent binding
+    /// never reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Whether this pane is a floating overlay rather than part of the tiled

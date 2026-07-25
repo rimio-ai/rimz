@@ -362,6 +362,16 @@ impl SidebarSnapshot {
             .filter(|agent| agent.parent_agent_id.is_none())
     }
 
+    /// Top-level agent sessions bound to one of this frame's live agent panes.
+    /// Historical rollup roots stay out of peer-set handle disambiguation.
+    pub fn pane_bound_roots(&self) -> impl Iterator<Item = &AgentState> {
+        self.root_agents().filter(|agent| {
+            self.agent_panes
+                .iter()
+                .any(|pane| pane.agent_id.as_ref() == Some(&agent.agent_id))
+        })
+    }
+
     /// Every row across every worktree group, in group order.
     pub fn rows(&self) -> impl Iterator<Item = &SidebarRow> {
         self.worktree_groups
