@@ -174,6 +174,25 @@ START             DUR  TOKENS       COST     OUTCOME  PROMPT
 3 turns · 54k tokens · $0.7390
 ```
 
+**Credit the people and models behind the change.** A pull request usually opens after the first teammate has already exited, so live agent cards cannot supply a complete byline. `rimz agents attribution` reads the lane's audit records and provider transcripts instead; `--md` prints a collapsed block ready to append to the pull-request body, while the default panel is useful before you ship:
+
+```console
+$ rimz agents attribution
+AGENT      PROVIDER  MODEL                ACTIVE  TOOLS    COST
+
+forge team · 3 agents · 36m active · $29.39
+@planner   Claude    claude-opus-5@xhigh     15m     84  $16.72
+  11k in · 148k out · 16m cache · 1 session · 0 compactions
+
+@coder     Codex     gpt-5.6-sol@xhigh       21m    106  $12.67
+  294k in · 41k out · 19m cache · 1 session · 0 compactions
+
+@reviewer  Claude    claude-opus-5@xhigh       -      0       -
+  0 in · 0 out · 0 cache · 1 session · 0 compactions
+
+Total · 3 agents · 36m active · $29.39
+```
+
 **Find what is burning CPU or tokens.** When the machine gets loud, `rimz agents top` ranks the live fleet by the resources each agent's pane process tree is using. It streams by default; `--once` takes a sample and exits for a script:
 
 ```console

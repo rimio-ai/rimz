@@ -203,6 +203,7 @@ rimz agents show swift-otter --capture   # report plus the pane's visible text
 rimz agents logs swift-otter -n 20       # one agent's transcript tail
 rimz agents logs swift-otter -f          # follow new transcript lines
 rimz agents history swift-otter -n 10    # per-turn tokens, cost, and outcome
+rimz agents attribution --md             # durable lane credit for a pull request
 rimz agents top --once -w auth-refresh   # one lane's resource-ranked fleet table
 rimz agents focus @claude-2#cli-docs     # jump to the pane
 rimz agents fork @coder --name twin      # branch a conversation into a new agent
@@ -223,6 +224,7 @@ rimz agents stop @claude --all           # stop every matching Claude in scope
 | `show` (`inspect` alias) | one agent | describe-style report: activity, context, cost, messages, transcript tail |
 | `logs` | one agent | transcript tail; `-f` follows |
 | `history` | one live or stopped agent | per-turn duration, tokens, cost, and outcome |
+| `attribution` | the current lane; `--all` for the room | durable agent, model, time, token, and cost credit |
 | `top` | live root agents | resource-ranked fleet table |
 | `focus` | one agent | jumps to its pane |
 | `fork` | one live or stopped root agent | branches its full conversation into a new agent |
@@ -232,7 +234,7 @@ rimz agents stop @claude --all           # stop every matching Claude in scope
 | `restart` | one live agent | replaces its pane and resumes its provider session |
 | `resume` | one lane | focuses a whole live lane or restores its closed members |
 
-`list`, `show`, `logs`, `history`, `top`, `focus`, `wait`, and `refresh` read state and change no agent. `fork` starts a new agent without changing its source, `stop` ends an agent, `restart` deliberately ends and replaces one, and `resume` restores the closed portion of a lane.
+`list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `wait`, and `refresh` read state and change no agent. `fork` starts a new agent without changing its source, `stop` ends an agent, `restart` deliberately ends and replaces one, and `resume` restores the closed portion of a lane.
 
 #### `list`
 
@@ -268,6 +270,18 @@ The activity description — the same field the sidebar card shows — renders u
 #### `history`
 
 `history <ref>` groups the provider transcript at each user message and assigns the session's API-call spend rows to those time spans. The table reports local start time, duration, fresh-input and output tokens, price, best-effort outcome, and prompt preview; `-n/--tail N` keeps the newest turns and `--json` emits the full records including cache-read tokens, cache-write tokens, and API-call count. `done` means an assistant reply closed the turn, `open` is the live in-flight final turn, and `cut` means the turn or session ended without an assistant reply. Live resolution falls back to the audit rollup, so stopped sessions remain readable while their provider transcript exists. Per-turn grouping requires an adapter with normalized transcript and spend coverage; see [agent support](../agent-support.md) for the current per-adapter surface.
+
+#### `attribution`
+
+`attribution [SCOPE]` credits the root agents that worked the selected lane even after their panes and processes exit. `SCOPE` accepts the same `#channel`, worktree, branch, directory name, and path spellings as `list`; the default is the caller's current lane, and `--all` covers every lane in the room. It reads durable and local provider state without requiring a live multiplexer.
+
+The default panel groups members by team and shows provider, model and effort, estimated active time, tool calls, transcript-priced cost, token detail, session count, and compactions. `--md` emits a collapsed `<details>` block with native Markdown tables for a pull-request body; an empty scope emits no Markdown. `--json` emits a schema 1 document, and `--json` conflicts with `--md`.
+
+The JSON document carries `schema`, `generated_at`, `rimz_version`, `scope`, `groups`, and `totals`. `scope` has `selector`, `channel`, `branch`, and `worktree`; each group has `team`, `totals`, and `members`; a team has `name` and launch-ordered `roles`. A member has `handle`, `role`, `name`, `kind`, `provider`, `model`, `effort`, `presence`, `me`, `launch_ordinal`, `sessions`, `registered_at`, `last_activity`, `active_secs`, `tool_calls`, `compactions`, `tokens`, and `cost_usd`. `presence` is `live` or `exited`; `tokens` has `input`, `output`, `cache_write`, and `cache_read`. Group and document totals have `agents`, `active_secs`, `wall_clock_secs`, `cost_usd`, `tool_calls`, `compactions`, and the same token split. A missing active-time or cost figure is `null`, never a wall-clock or zero substitute.
+
+One contributor can own several provider sessions: compaction continuation and `/clear` start fresh session ids while keeping the same team role, launch cohort cell, explicit name, or pane seat. Attribution folds those records into one member in that order of identity strength, keeps provider kind in the key, and publishes `sessions` so the fold stays auditable.
+
+Identity, presence, tool calls, compactions, and clocks come from the store's audit rollup, which retains ended sessions. Tokens and dollars come together from the adapter's historical spend parser and the shared price book. Estimated active time comes from the per-session runtime sidecar; `rimz gc` removes stale sidecars after its runtime retention (24 hours by default), so old credit keeps its agent and transcript figures while `active_secs` becomes `null`.
 
 #### `top`
 

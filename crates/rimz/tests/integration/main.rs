@@ -11,6 +11,7 @@ mod common;
 mod agent_launch;
 mod agent_plugin;
 mod asks;
+mod attribution;
 mod backend;
 mod budget;
 mod channel;
