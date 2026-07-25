@@ -282,7 +282,7 @@ fn client_bootstrap(family: Option<&str>) -> String {
         .collect::<Vec<_>>();
     let diacritics = serde_json::to_string(&diacritics)
         .expect("serializing the static pixel diacritic table cannot fail");
-    let flow_control = include_str!("flow_control.js");
+    let ws_url = include_str!("ws_url.js");
     let pixel_layer = include_str!("pixel_layer.js");
     let input_guard = include_str!("input_guard.js");
     let pixel_protocol = crate::web::TTYD_PIXEL_PROTOCOL;
@@ -295,8 +295,8 @@ const fontFamily={family};
 const RIMZ_PIXEL_PROTOCOL={pixel_protocol};
 const RIMZ_PIXEL_PLACEHOLDER={placeholder};
 const RIMZ_PIXEL_DIACRITICS={diacritics};
-{flow_control}
-installWebSocketGate();
+{ws_url}
+installRoomWebSocketUrl();
 {pixel_layer}
 {input_guard}
 const waitForTerminal=()=>new Promise(resolve=>{{
@@ -312,7 +312,6 @@ const loadFont=fontFamily&&document.fonts
   :Promise.resolve();
 waitForTerminal().then(term=>{{
   installPixelLayer(term);
-  installBacklogMeter(term);
   const sendInput=data=>{{
     if(typeof term.input==="function"){{term.input(data,true);return true;}}
     const core=term._core&&term._core.coreService;
@@ -959,22 +958,12 @@ mod tests {
         assert!(rendered.contains("term.modes.mouseTrackingMode!==\"none\""));
         assert!(rendered.contains("const installPixelLayer=term=>"));
         assert!(rendered.contains("installPixelLayer(term)"));
-        assert!(rendered.contains("const HIGH=128*1024"));
-        assert!(rendered.contains("const LOW=32*1024"));
-        assert!(rendered.contains("const BACKLOG_STALL_MS=500"));
-        assert!(rendered.contains("const MOUSE_STALL_MS=250"));
-        assert!(rendered.contains("const MOUSE_CELLS_PER_MS=256"));
-        assert!(rendered.contains("const installWebSocketGate=()=>"));
-        assert!(rendered.contains("const installBacklogMeter=term=>"));
-        assert!(rendered.contains("installBacklogMeter(term)"));
-        assert!(rendered.contains("const sendWithMouseFlow="));
-        assert!(rendered.contains("const updateMouseFrameMs="));
-        assert!(rendered.contains("term.onRender(releasePaintedMouseMotion)"));
-        assert!(rendered.contains("new NativeWebSocketStream(rewriteWsUrl(url),{protocols})"));
-        assert!(rendered.contains("value instanceof ArrayBuffer"));
-        assert!(rendered.contains("this.finishStreamClose(closeCode,reason,true)"));
-        assert!(rendered.contains("this.dispatchClose(1006,\"\",false)"));
-        assert!(rendered.contains("new CloseEvent(\"close\",{code,reason,wasClean})"));
+        assert!(rendered.contains("const installRoomWebSocketUrl=()=>"));
+        assert!(rendered.contains("installRoomWebSocketUrl()"));
+        assert!(rendered.contains("window.WebSocket=class extends NativeWebSocket"));
+        assert!(!rendered.contains("WebSocketStream"));
+        assert!(!rendered.contains("installBacklogMeter"));
+        assert!(!rendered.contains("sendWithMouseFlow"));
         assert!(rendered.contains("const RIMZ_PIXEL_PLACEHOLDER=1109742"));
         assert!(rendered.contains("const RIMZ_PIXEL_DIACRITICS=[\"̅\",\"̍\",\"̎\""));
         assert!(rendered.contains("const suppressPlaceholderGlyphs=chunk=>"));
@@ -1123,7 +1112,6 @@ mod tests {
         assert!(rendered.contains("decodeURIComponent(value)"));
         assert!(rendered.contains("document.title=name?name+\" · RimZ\":\"RimZ\""));
         assert!(rendered.contains("window.history.replaceState"));
-        assert!(rendered.contains("window.WebSocket=class extends EventTarget"));
         assert!(rendered.contains("window.WebSocket=class extends NativeWebSocket"));
         assert!(rendered.contains("const search=new URLSearchParams(window.location.search)"));
         assert!(rendered.contains("if(search.has(\"room\"))"));

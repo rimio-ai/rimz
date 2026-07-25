@@ -83,22 +83,6 @@ fn ttyd_pixel_layer_clips_real_draws_to_placeholder_cells() {
 }
 
 #[test]
-fn ttyd_flow_control_coalesces_continuous_mouse_drag_motion() {
-    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let output = Command::new("node")
-        .arg(crate_root.join("tests/fixtures/flow-control/harness.mjs"))
-        .arg(crate_root.join("src/web/ttyd/flow_control.js"))
-        .output()
-        .expect("run ttyd flow-control Node harness");
-    assert!(
-        output.status.success(),
-        "ttyd flow-control Node harness failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
 fn ttyd_input_guard_stops_macos_option_keypress_before_xterm() {
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let output = Command::new("node")
@@ -521,7 +505,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         .find(|line| line.contains("\tweb\texec"))
         .expect("shared daemon argv");
     assert!(
-        daemon_argv.contains("-W\t-O\t-a\t-c\trimz:"),
+        daemon_argv.contains("-W\t-O\t-a\t-P\t3600\t-c\trimz:"),
         "{daemon_argv}"
     );
     assert!(!daemon_argv.contains("\t-b\t"), "{daemon_argv}");

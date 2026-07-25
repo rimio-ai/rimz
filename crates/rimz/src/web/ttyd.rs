@@ -875,7 +875,8 @@ fn spawn_spec_for(
     credential: &TtydCredential,
     extra_args: &[String],
 ) -> Result<CommandSpec> {
-    let mut spec = CommandSpec::new(program.display().to_string()).args(["-W", "-O", "-a"]);
+    let mut spec =
+        CommandSpec::new(program.display().to_string()).args(["-W", "-O", "-a", "-P", "3600"]);
     spec = spec.arg("-c").arg(format!("rimz:{}", credential.secret));
     Ok(spec
         .args(["-i", &interface.to_string(), "-p"])
@@ -1103,6 +1104,8 @@ mod tests {
                 "-W",
                 "-O",
                 "-a",
+                "-P",
+                "3600",
                 "-c",
                 "rimz:secret",
                 "-i",
@@ -1116,6 +1119,7 @@ mod tests {
                 "exec"
             ]
         );
+        assert!(spec.args.windows(2).any(|args| args == ["-P", "3600"]));
     }
 
     #[test]

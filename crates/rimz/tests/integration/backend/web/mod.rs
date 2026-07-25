@@ -56,6 +56,51 @@ fn attach_round_trips_output_and_keystrokes() {
 }
 
 #[test]
+fn continuous_output_keeps_websocket_attached() {
+    let stack = require_web_stack!("tmux");
+    let fixture = LiveWebFixture::new(&stack);
+    let opened = fixture.open();
+    let browser = BrowserHandle::launch(&stack.browser);
+    let (tab, frames) =
+        browser.tab_with_websocket_capture(&opened.url, Some(&opened.secret), false);
+
+    frames.wait_url_contains(
+        &format!("arg={}", fixture.workspace.session_name),
+        ATTACH_TIMEOUT,
+    );
+    frames.wait_until_sent(ATTACH_TIMEOUT);
+    wait_until_attached(&tab, &fixture.workspace.session_name, ATTACH_TIMEOUT);
+    let received_before_output = frames.received();
+    fixture.send_line("yes RIMZ_CONTINUOUS_OUTPUT");
+    fixture.wait_capture_contains("RIMZ_CONTINUOUS_OUTPUT", ATTACH_TIMEOUT);
+    let output_deadline = Instant::now() + ATTACH_TIMEOUT;
+    while frames.received() == received_before_output {
+        assert!(
+            Instant::now() < output_deadline,
+            "browser received no WebSocket frames from continuous terminal output"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(Duration::from_secs(20));
+
+    let received = frames.received();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        frames.received() > received,
+        "browser stopped receiving continuous terminal output"
+    );
+    assert_eq!(
+        frames.closes(),
+        0,
+        "ttyd closed the browser WebSocket under continuous output"
+    );
+
+    fixture.interrupt();
+    fixture.send_line("printf '\\nRIMZ_AFTER_CONTINUOUS_OUTPUT\\n'");
+    fixture.wait_capture_contains("RIMZ_AFTER_CONTINUOUS_OUTPUT", ATTACH_TIMEOUT);
+}
+
+#[test]
 fn wrong_credential_is_refused() {
     let stack = require_web_stack!("tmux");
     let fixture = LiveWebFixture::new(&stack);
@@ -148,11 +193,11 @@ fn share_broadcast_views_without_auth_and_drops_input() {
     fixture.assert_capture_absent("RIMZ_VIEWER_INPUT", Duration::from_secs(3));
 
     let second = fixture.add_room("unshared");
-    let (_refused, frames) = browser.tab_with_websocket_capture(&format!(
-        "{}?room={}",
-        fixture.share_base_url(),
-        second.session_name
-    ));
+    let (_refused, frames) = browser.tab_with_websocket_capture(
+        &format!("{}?room={}", fixture.share_base_url(), second.session_name),
+        None,
+        true,
+    );
     frames.wait_contains("this room is not shared", ATTACH_TIMEOUT);
 }
 
