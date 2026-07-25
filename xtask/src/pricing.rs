@@ -12,7 +12,6 @@ pub(crate) fn pricing_refresh(root: &Path, args: &[String]) -> Result<()> {
     if args.iter().any(|arg| arg != "--check") || args.len() > 1 {
         bail!("pricing-refresh accepts only --check");
     }
-    let out = root.join(GENERATED_SNAPSHOT);
     let mut command = vec![
         "run".to_owned(),
         "-p".to_owned(),
@@ -22,9 +21,14 @@ pub(crate) fn pricing_refresh(root: &Path, args: &[String]) -> Result<()> {
         "--locked".to_owned(),
         "--".to_owned(),
         "pricing-refresh".to_owned(),
-        "--out".to_owned(),
-        out.display().to_string(),
     ];
-    command.extend(args.iter().cloned());
+    // `--check` validates coverage in place; a destination is what turns the
+    // same projection into a snapshot write.
+    if args.is_empty() {
+        command.push("--out".to_owned());
+        command.push(root.join(GENERATED_SNAPSHOT).display().to_string());
+    } else {
+        command.extend(args.iter().cloned());
+    }
     run(root, "cargo", command)
 }

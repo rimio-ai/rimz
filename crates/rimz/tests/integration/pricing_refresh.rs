@@ -30,3 +30,28 @@ fn pricing_refresh_uses_local_documents_and_writes_the_projected_snapshot() {
         Some(272_000)
     );
 }
+
+#[test]
+fn pricing_refresh_check_names_the_missing_models_dev_override() {
+    let env = Env::new();
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fixtures = manifest.join("src/agents/pricing/tests/fixtures");
+
+    // A LiteLLM-only override projects a deliberately partial table, so
+    // coverage has to report the missing document rather than eight renames.
+    let output = env
+        .rimz()
+        .args(["pricing-refresh", "--check"])
+        .env("RIMZ_PRICING_JSON_PATH", fixtures.join("litellm.json"))
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr).to_string();
+    assert!(
+        stderr.contains("RIMZ_PRICING_MODELS_DEV_JSON_PATH"),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("has no priced models"),
+        "unexpected stderr: {stderr}"
+    );
+}

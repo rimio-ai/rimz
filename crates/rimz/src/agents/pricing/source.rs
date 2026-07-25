@@ -20,7 +20,10 @@ use super::PriceBook;
 const LITELLM_URL: &str = "https://raw.githubusercontent.com/BerriAI/litellm/refs/heads/main/model_prices_and_context_window.json";
 /// models.dev's aggregate model catalogue.
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
-const RUNTIME_TIMEOUT_SECS: u64 = 5;
+/// Per-document budget for the weekly runtime refresh. Generous enough for a
+/// slow link to pull both documents (1.6MB and 3.1MB today), because a refresh
+/// that times out leaves the table untouched for another hour.
+const RUNTIME_TIMEOUT_SECS: u64 = 15;
 const REFRESH_TIMEOUT_SECS: u64 = 30;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MIN_LITELLM_MODELS: usize = 1_000;
@@ -51,11 +54,14 @@ const MODELS_DEV_PROVIDERS: [&str; 8] = [
     "moonshotai",
 ];
 
-/// Direct-provider prefixes whose LiteLLM rows may safely gain a bare alias.
+/// Provider-namespaced prefixes whose LiteLLM rows may gain a bare alias.
 ///
-/// Exact bare rows are installed before aliases, so they always win. Regional
-/// and gateway prefixes do not begin with one of these complete tokens and
-/// therefore remain addressable only by their full upstream key.
+/// Exact bare rows are installed before aliases, so they always win, and an
+/// undated alias prefers a direct dated row over a namespaced one — LiteLLM
+/// files Bedrock's Anthropic catalogue under `anthropic.`, and a few of those
+/// rows carry a markup over the direct row. Regional and gateway prefixes do
+/// not begin with one of these complete tokens and therefore remain
+/// addressable only by their full upstream key.
 const OFFICIAL_PREFIXES: [&str; 18] = [
     "anthropic.",
     "anthropic/",
@@ -129,9 +135,12 @@ pub struct RefreshReport {
     pub provider_model_counts: BTreeMap<&'static str, usize>,
 }
 
-/// Resolve both upstream documents and either atomically write the compacted
-/// snapshot or validate its coverage without writing.
-pub fn refresh(out: &Path, check: bool) -> Result<RefreshReport> {
+/// Resolve both upstream documents and project them into one snapshot.
+///
+/// `out` names the destination to write atomically; `None` validates coverage
+/// and leaves the filesystem alone.
+pub fn refresh(out: Option<&Path>) -> Result<RefreshReport> {
+    let check = out.is_none();
     let litellm_override = env::var_os("RIMZ_PRICING_JSON_PATH");
     let litellm = match litellm_override.as_ref() {
         Some(path) => read_override("RIMZ_PRICING_JSON_PATH", path)?,
@@ -139,17 +148,28 @@ pub fn refresh(out: &Path, check: bool) -> Result<RefreshReport> {
     };
     let models_dev = match env::var_os("RIMZ_PRICING_MODELS_DEV_JSON_PATH") {
         Some(path) => Some(read_override("RIMZ_PRICING_MODELS_DEV_JSON_PATH", &path)?),
+        // A LiteLLM-only override projects a partial table on purpose, which
+        // coverage would then report as eight provider renames. Say what is
+        // actually missing instead.
+        None if litellm_override.is_some() && check => {
+            return Err(SourceErr::Coverage(
+                "RIMZ_PRICING_JSON_PATH is set without RIMZ_PRICING_MODELS_DEV_JSON_PATH; \
+                 --check needs both documents"
+                    .to_owned(),
+            ));
+        }
         None if litellm_override.is_some() => None,
         None => Some(fetch_required("models.dev", MODELS_DEV_URL)?),
     };
 
     let (snapshot, report) = project_sources(&litellm, models_dev.as_deref())?;
-    if check {
-        check_coverage(&snapshot, &report)?;
-    } else {
-        let mut bytes = serde_json::to_vec(&snapshot).map_err(SourceErr::Serialize)?;
-        bytes.push(b'\n');
-        crate::store::atomic::write_bytes_atomically(out, &bytes)?;
+    match out {
+        Some(out) => {
+            let mut bytes = serde_json::to_vec(&snapshot).map_err(SourceErr::Serialize)?;
+            bytes.push(b'\n');
+            crate::store::atomic::write_bytes_atomically(out, &bytes)?;
+        }
+        None => check_coverage(&snapshot, &report)?,
     }
     Ok(report)
 }
@@ -261,17 +281,41 @@ fn compact_litellm(json: &str) -> Result<BTreeMap<String, Value>> {
             continue;
         };
         if let Some(alias) = official_alias(&model) {
-            aliases.push((alias.clone(), compact.clone()));
-            if let Some(undated) = strip_date_suffix(&alias) {
-                aliases.push((undated.to_owned(), compact.clone()));
-            }
+            aliases.push((alias, compact.clone()));
         }
         out.insert(model, Value::Object(compact));
     }
+
+    let direct_undated = direct_undated_rows(&out);
     for (alias, fields) in aliases {
-        out.entry(alias).or_insert(Value::Object(fields));
+        let undated = strip_date_suffix(&alias).map(str::to_owned);
+        out.entry(alias)
+            .or_insert_with(|| Value::Object(fields.clone()));
+        // A direct dated row states the model's own price; the namespaced row
+        // may state a marked-up resale of it, so the direct fields win here.
+        if let Some(undated) = undated {
+            let fields = direct_undated.get(&undated).unwrap_or(&fields).clone();
+            out.entry(undated).or_insert(Value::Object(fields));
+        }
     }
     Ok(out)
+}
+
+/// Undated bases published directly, keyed to the newest dated row's fields.
+///
+/// Sorted iteration reaches the newest date last, so it takes the entry.
+fn direct_undated_rows(rows: &BTreeMap<String, Value>) -> BTreeMap<String, Map<String, Value>> {
+    let mut out = BTreeMap::new();
+    for (model, fields) in rows {
+        if is_namespaced(model) {
+            continue;
+        }
+        let (Some(base), Some(fields)) = (strip_date_suffix(model), fields.as_object()) else {
+            continue;
+        };
+        out.insert(base.to_owned(), fields.clone());
+    }
+    out
 }
 
 fn compact_litellm_fields(fields: &Map<String, Value>) -> Option<Map<String, Value>> {
@@ -340,12 +384,27 @@ fn compact_provider_specific_entry(fields: &Map<String, Value>) -> Option<Value>
     Some(Value::Object(out))
 }
 
+/// The bare model id an official-prefixed LiteLLM key stands for.
+///
+/// An alias has to keep a version or date token of its own: `claude-v2:1`
+/// spends its only version on the Bedrock revision suffix, and the bare
+/// `claude` it would leave behind is a boundary-prefix of every Claude id, so
+/// it would price the whole family at one 2023 row and hide unknown models
+/// from the chase.
+fn is_namespaced(model: &str) -> bool {
+    OFFICIAL_PREFIXES
+        .iter()
+        .any(|prefix| model.starts_with(prefix))
+}
+
 fn official_alias(model: &str) -> Option<String> {
     let bare = OFFICIAL_PREFIXES
         .iter()
         .find_map(|prefix| model.strip_prefix(prefix))?;
-    let bare = strip_revision_suffix(bare);
-    Some(bare.to_owned())
+    let stripped = strip_revision_suffix(bare);
+    let consumed_the_only_version =
+        stripped.len() < bare.len() && !stripped.bytes().any(|byte| byte.is_ascii_digit());
+    (!consumed_the_only_version).then(|| stripped.to_owned())
 }
 
 fn strip_revision_suffix(model: &str) -> &str {
@@ -592,20 +651,17 @@ mod tests {
         assert!(table.contains_key("claude-sonnet-4"));
         assert!(table.contains_key("grok-4.5"));
         assert!(table.contains_key("glm-4.6"));
-        for forbidden in [
-            "regional-claude",
-            "gateway-vertex",
-            "gateway-azure",
-            "gateway-openrouter",
-            "gateway-bedrock",
-            "gateway-baseten",
-            "gateway-deepinfra",
-            "gateway-vercel",
+        for upstream in [
+            "eu.anthropic.regional-claude-v1:0",
+            "vertex_ai/gateway-vertex",
+            "azure_ai/gateway-azure",
+            "openrouter/gateway-openrouter",
+            "bedrock/gateway-bedrock",
+            "baseten/gateway-baseten",
+            "deepinfra/gateway-deepinfra",
+            "vercel_ai_gateway/gateway-vercel",
         ] {
-            assert!(
-                !table.contains_key(forbidden),
-                "{forbidden} must not gain a bare alias"
-            );
+            assert_eq!(official_alias(upstream), None, "{upstream}");
         }
         assert_eq!(
             price_field(
@@ -613,6 +669,43 @@ mod tests {
                 "input_cost_per_token"
             ),
             0.8e-6
+        );
+    }
+
+    #[test]
+    fn litellm_refuses_an_alias_that_spends_its_only_version_on_the_revision() {
+        let table = compact_litellm(LITELLM_FIXTURE).unwrap();
+
+        assert_eq!(official_alias("anthropic.claude-v2:1"), None);
+        assert!(
+            !table.contains_key("claude"),
+            "a bare `claude` row is a boundary-prefix of every Claude id"
+        );
+        assert!(table.contains_key("anthropic.claude-v2:1"));
+    }
+
+    #[test]
+    fn undated_alias_takes_the_direct_row_over_the_bedrock_one() {
+        let table = compact_litellm(LITELLM_FIXTURE).unwrap();
+
+        // `anthropic.` is Bedrock's namespace and its 3.7 Sonnet row is 20% up
+        // on the direct one, so the undated alias has to read the direct row.
+        let alias = fields(&table, "claude-3-7-sonnet");
+        assert_eq!(price_field(alias, "input_cost_per_token"), 3e-6);
+        assert_eq!(price_field(alias, "output_cost_per_token"), 15e-6);
+        assert_eq!(price_field(alias, "cache_read_input_token_cost"), 0.3e-6);
+        assert_eq!(
+            price_field(alias, "cache_creation_input_token_cost"),
+            3.75e-6
+        );
+
+        // The dated Bedrock id stays reachable at its own price.
+        assert_eq!(
+            price_field(
+                fields(&table, "claude-3-7-sonnet-20240620"),
+                "input_cost_per_token"
+            ),
+            3.6e-6
         );
     }
 
@@ -657,25 +750,46 @@ mod tests {
         let json = serde_json::to_string(&snapshot).unwrap();
         let book = PriceBook::from_litellm_json(&json);
 
-        for (model, input, output) in [
-            ("gpt-5.6-sol", 5e-6, 30e-6),
-            ("gpt-5.6-terra", 2.5e-6, 15e-6),
-            ("gpt-5.6-luna", 1e-6, 6e-6),
-            ("glm-4.5", 0.6e-6, 2.2e-6),
-            ("glm-4.6", 0.6e-6, 2.2e-6),
-            ("glm-4.7", 0.6e-6, 2.2e-6),
-            ("glm-5", 1e-6, 3.2e-6),
-            ("glm-5-turbo", 1.2e-6, 4e-6),
-            ("glm-5.1", 1.4e-6, 4.4e-6),
-            ("qwen3-coder-plus", 1e-6, 5e-6),
-            ("qwen3-coder-flash", 0.3e-6, 1.5e-6),
-            ("moonshot/kimi-k2.5", 0.6e-6, 3e-6),
-            ("moonshot/kimi-k2.6", 0.95e-6, 4e-6),
+        // Base and cache rates every deleted builtin published, per family.
+        for (model, input, output, cache_create, cache_read) in [
+            ("gpt-5", 1.25e-6, 10e-6, 1.25e-6, 0.125e-6),
+            ("gpt-5.5", 5e-6, 30e-6, 5e-6, 0.5e-6),
+            ("gpt-5.6-sol", 5e-6, 30e-6, 6.25e-6, 0.5e-6),
+            ("gpt-5.6-terra", 2.5e-6, 15e-6, 3.125e-6, 0.25e-6),
+            ("gpt-5.6-luna", 1e-6, 6e-6, 1.25e-6, 0.1e-6),
+            ("glm-4.5", 0.6e-6, 2.2e-6, 0.0, 0.11e-6),
+            ("glm-4.6", 0.6e-6, 2.2e-6, 0.0, 0.11e-6),
+            ("glm-4.7", 0.6e-6, 2.2e-6, 0.0, 0.11e-6),
+            ("glm-5", 1e-6, 3.2e-6, 0.0, 0.2e-6),
+            ("glm-5-turbo", 1.2e-6, 4e-6, 0.0, 0.24e-6),
+            ("glm-5.1", 1.4e-6, 4.4e-6, 0.0, 0.26e-6),
+            // Qwen reports no cache writes, so its create rate stays the
+            // ccusage default and only the read rate is ever billed.
+            ("qwen3-coder-plus", 1e-6, 5e-6, 1.25e-6, 0.2e-6),
+            ("qwen3-coder-flash", 0.3e-6, 1.5e-6, 0.375e-6, 0.06e-6),
+            ("moonshot/kimi-k2.5", 0.6e-6, 3e-6, 0.75e-6, 0.1e-6),
+            ("moonshot/kimi-k2.6", 0.95e-6, 4e-6, 1.1875e-6, 0.16e-6),
         ] {
             let price = book.price(model).unwrap_or_else(|| panic!("{model} price"));
             assert!((price.input - input).abs() < 1e-18, "{model} input");
             assert!((price.output - output).abs() < 1e-18, "{model} output");
+            assert!(
+                (price.cache_create - cache_create).abs() < 1e-18,
+                "{model} cache create: {} wanted {cache_create}",
+                price.cache_create
+            );
+            assert!(
+                (price.cache_read - cache_read).abs() < 1e-18,
+                "{model} cache read: {} wanted {cache_read}",
+                price.cache_read
+            );
         }
+
+        // The Qwen read rate above comes from a declared ratio, so it has to
+        // count as explicit — an implicit rate bills the cached slice at full
+        // input in the Codex-shaped spend paths.
+        assert!(book.price("qwen3-coder-plus").unwrap().cache_read_explicit);
+        assert!(book.price("qwen3-coder-flash").unwrap().cache_read_explicit);
 
         let sol = book.price("gpt-5.6-sol").unwrap();
         assert_eq!(sol.long_context_threshold, Some(272_000));
