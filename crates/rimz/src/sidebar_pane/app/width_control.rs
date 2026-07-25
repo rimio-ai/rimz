@@ -209,6 +209,7 @@ pub(super) struct WidthController {
     width: crate::mux::SidebarWidth,
     convergence: WidthControl,
     last_classified: Option<(u16, usize)>,
+    baseline_probe_deadline: Option<Instant>,
     classification_deadline: Option<Instant>,
 }
 
@@ -220,6 +221,7 @@ impl WidthController {
         mux: MuxName,
         width: crate::mux::SidebarWidth,
     ) -> Self {
+        let baseline_probe_deadline = own_pane.as_ref().map(|_| Instant::now());
         Self {
             runtime,
             session_name,
@@ -228,18 +230,23 @@ impl WidthController {
             width,
             convergence: WidthControl::new(None),
             last_classified: None,
+            baseline_probe_deadline,
             classification_deadline: None,
         }
     }
 
     pub(super) fn feedback_deadline(&self) -> Option<Instant> {
-        match (
+        [
             self.convergence.feedback_deadline(),
+            self.last_classified
+                .is_none()
+                .then_some(self.baseline_probe_deadline)
+                .flatten(),
             self.classification_deadline,
-        ) {
-            (Some(left), Some(right)) => Some(left.min(right)),
-            (left, right) => left.or(right),
-        }
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     pub(super) fn max_legit_cols(&self) -> u16 {
@@ -264,9 +271,6 @@ impl WidthController {
             )
             .cols
         });
-        if let Some(target) = target {
-            spawn_width_default_record(self.mux, &self.session_name, target.get());
-        }
         self.convergence.retarget(target);
         if let Some(cols) = measured_cols {
             self.observe(cols, SidebarWidthControlTrigger::Retarget, diag);
@@ -292,19 +296,6 @@ impl WidthController {
             pane,
         ) {
             Ok(step) => step,
-            Err(err) if dir == WidthAdjust::Wider && self.mux == MuxName::Zellij => {
-                let view_cols = own_cols.saturating_mul(4);
-                let cols = u16::try_from(crate::mux::width::zellij_resize_step_cols(u64::from(
-                    view_cols,
-                )))
-                .unwrap_or(u16::MAX);
-                debug!(error = %err, own_cols, step_cols = cols, "sidebar wider intent using conservative topology fallback");
-                crate::mux::WidthStep {
-                    cols,
-                    exact: false,
-                    view_cols,
-                }
-            }
             Err(err) => {
                 diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
                     trigger,
@@ -440,9 +431,16 @@ impl WidthController {
         diag: &DiagSink,
     ) {
         if self.last_classified.is_none()
-            && let (Some(cols), Some(siblings)) = (measured_cols, sibling_count)
+            && self
+                .baseline_probe_deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
         {
-            self.capture_classification_baseline(cols, siblings, diag);
+            self.baseline_probe_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
+            if let (Some(cols), Some(siblings)) = (measured_cols, sibling_count)
+                && self.capture_classification_baseline(cols, siblings, diag)
+            {
+                self.baseline_probe_deadline = None;
+            }
         }
         if self
             .convergence
@@ -474,9 +472,9 @@ impl WidthController {
         measured_cols: u16,
         sibling_count: usize,
         diag: &DiagSink,
-    ) {
+    ) -> bool {
         let Some(pane) = self.own_pane.as_ref() else {
-            return;
+            return false;
         };
         if let Ok(step) = crate::mux::backend_for(self.mux).sidebar_width_step(
             &self.runtime,
@@ -491,10 +489,11 @@ impl WidthController {
                 self.mux,
                 Some(step.view_cols),
             );
-            spawn_width_default_record(self.mux, &self.session_name, target.cols.get());
             self.convergence.retarget(Some(target.cols));
             self.observe(measured_cols, SidebarWidthControlTrigger::Backstop, diag);
+            return true;
         }
+        false
     }
 
     fn classify_settled_resize(
@@ -525,26 +524,27 @@ impl WidthController {
                 return;
             }
         };
-        if step.view_cols == 0 {
+        let Some(view_cols) = NonZeroU16::new(step.view_cols) else {
             self.observe(
                 measured_cols,
                 SidebarWidthControlTrigger::Classification,
                 diag,
             );
             return;
-        }
+        };
 
         let previous = self
             .last_classified
-            .replace((step.view_cols, sibling_count));
-        let view_changed = previous.is_none_or(|(view_cols, _)| view_cols != step.view_cols);
+            .replace((view_cols.get(), sibling_count));
+        let view_changed =
+            previous.is_none_or(|(previous_cols, _)| previous_cols != view_cols.get());
         let siblings_changed = previous.is_some_and(|(_, siblings)| siblings != sibling_count);
         if view_changed {
             let target = crate::sidebar::width_target::resolve(
                 &self.runtime,
                 self.width,
                 self.mux,
-                Some(step.view_cols),
+                Some(view_cols.get()),
             );
             spawn_width_default_record(self.mux, &self.session_name, target.cols.get());
             self.convergence.retarget(Some(target.cols));
@@ -575,7 +575,7 @@ impl WidthController {
             &self.runtime,
             measured,
             self.mux,
-            step.view_cols,
+            view_cols.get(),
         ) {
             Ok(permille) => permille,
             Err(err) => {
@@ -583,7 +583,7 @@ impl WidthController {
                 return;
             }
         };
-        let target = permille.cols(NonZeroU16::new(step.view_cols).unwrap_or(NonZeroU16::MIN));
+        let target = permille.cols(view_cols);
         diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
             trigger: SidebarWidthIntentTrigger::MouseAdopt,
             own_cols: measured_cols,
@@ -775,17 +775,14 @@ mod tests {
     }
 
     #[test]
-    fn zellij_wider_falls_back_without_topology_while_narrower_rejects() {
+    fn zellij_intent_without_topology_never_pins_a_phantom_share() {
         let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
         let diag = crate::diag::DiagSink::disabled();
 
         controller.adjust(80, WidthAdjust::Narrower, &diag);
         assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
         controller.adjust(80, WidthAdjust::Wider, &diag);
-        assert_eq!(
-            crate::sidebar::width_target::load(&runtime),
-            Some(crate::mux::WidthPermille::from_percent(30)),
-        );
+        assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
     }
 
     #[test]
@@ -819,6 +816,37 @@ mod tests {
 
         assert_eq!(controller.convergence.target(), Some(target(50)));
         assert_eq!(controller.last_classified, Some((200, 1)));
+    }
+
+    #[test]
+    fn missing_backend_geometry_retries_the_baseline_at_most_once_per_second() {
+        let (_dir, _runtime, mut controller) = controller(MuxName::Zellij);
+        let diag = crate::diag::DiagSink::disabled();
+
+        controller.backstop(Some(80), Some(1), &diag);
+        let retry = controller
+            .baseline_probe_deadline
+            .expect("failed baseline re-arms the probe");
+        assert!(retry > Instant::now());
+
+        controller.backstop(Some(80), Some(1), &diag);
+        assert_eq!(
+            controller.baseline_probe_deadline,
+            Some(retry),
+            "an immediate render iteration does not probe again",
+        );
+        assert_eq!(controller.last_classified, None);
+    }
+
+    #[test]
+    fn legitimate_paint_width_tracks_the_target_or_falls_back_to_the_cap() {
+        let (_dir, _runtime, mut controller) = controller(MuxName::Zellij);
+
+        assert_eq!(controller.max_legit_cols(), controller.width.max_cols.get(),);
+        controller.convergence.retarget(Some(target(50)));
+        assert_eq!(controller.max_legit_cols(), 50);
+        controller.convergence.retarget(Some(target(90)));
+        assert_eq!(controller.max_legit_cols(), 90);
     }
 
     #[test]
