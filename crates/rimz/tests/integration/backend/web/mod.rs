@@ -56,6 +56,10 @@ fn attach_round_trips_output_and_keystrokes() {
 }
 
 #[test]
+/// Smoke-checks that an attached room keeps delivering output for 20 seconds under saturation.
+///
+/// The writable and broadcast argv unit tests deterministically guard the ping interval; whether
+/// Chromium falls far enough behind to expose the old interval is renderer-dependent.
 fn continuous_output_keeps_websocket_attached() {
     let stack = require_web_stack!("tmux");
     let fixture = LiveWebFixture::new(&stack);
