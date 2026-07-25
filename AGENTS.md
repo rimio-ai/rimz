@@ -66,6 +66,7 @@ rimz loop logs <task>                # full forensics for recent runs
 - Rust unless the task targets docs, tests, scripts, examples, or build glue.
 - Root docs stay short and authoritative; detail lives in `docs/` and is linked.
 - Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
+- Write [CHANGELOG.md](./CHANGELOG.md) as a standalone change once the work it describes is merged and before the version release. Pull requests leave the file untouched, so concurrent branches never contend over the same lines.
 - Contributor automation lives in `xtask/`; command surface and gate stack in [rust-conventions.md](./docs/contributing/rust-conventions.md).
 - Use `uv` for Python helpers.
 
@@ -106,7 +107,7 @@ RimZ ships as one Rust binary: the `rimz` crate is CLI, domain library, and nati
 
 Every other document is a leaf from here, grouped by purpose: **guide** (use it), **interface** (see it), **reference** (look it up), **internals** (how it works), **externals** (upstream surfaces), **contributing** (work on it).
 
-**Root** — [README.md](./README.md) (product entry), [docs/README.md](./docs/README.md) (user documentation index, the README's Docs link), [DESIGN.md](./DESIGN.md) (the attention problem, design pillars, invariants, non-goals), [ARCHITECTURE.md](./ARCHITECTURE.md) (runtime shape, on-disk state, code-map rationale), [CHANGELOG.md](./CHANGELOG.md) (user-visible change per release, one section per git tag; the unreleased section accrues as work lands).
+**Root** — [README.md](./README.md) (product entry), [docs/README.md](./docs/README.md) (user documentation index, the README's Docs link), [DESIGN.md](./DESIGN.md) (the attention problem, design pillars, invariants, non-goals), [ARCHITECTURE.md](./ARCHITECTURE.md) (runtime shape, on-disk state, code-map rationale), [CHANGELOG.md](./CHANGELOG.md) (user-visible change per release, one section per git tag; each section is generated from merged history ahead of its tag).
 
 **Guide** — `docs/guide/`
 - [installation.md](./docs/guide/installation.md) — prerequisites and every install path: Homebrew, prebuilt binaries, Cargo, source.
