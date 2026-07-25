@@ -492,6 +492,35 @@ mod parse {
             );
         }
 
+        let resume = minimal_exec_request(
+            "codex",
+            ExecAction::Resume {
+                session_id: "sess-resume".to_owned(),
+                extra_args: Vec::new(),
+            },
+        );
+        assert_eq!(
+            super::exec::exec_attach_target(&resume),
+            Some((
+                AgentKind::new_unchecked("codex"),
+                AgentSessionId::from("sess-resume"),
+            ))
+        );
+        for action in [
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+            ExecAction::Fork {
+                session_id: "sess-source".to_owned(),
+                extra_args: Vec::new(),
+            },
+        ] {
+            assert!(
+                super::exec::exec_attach_target(&minimal_exec_request("codex", action)).is_none()
+            );
+        }
+
         let mut orphan = minimal_exec_request(
             "claude",
             ExecAction::Launch {

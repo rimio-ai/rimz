@@ -282,6 +282,8 @@ Each observation spans `[created_at, last_activity]`. Transitive interval overla
 
 A resumed pane runs `rimz agents exec <kind>` with a `Resume` action carrying the provider session id and the prior RimZ identity (name, profile, role, team, launch group, launch ordinal, channel). Its **posture** comes from `resume::resolve_posture`, the one seam every relaunch path shares: the argv the agent's profile renders, meaning model, effort, system-prompt files, permission mode, budget, and profile `args`. A session that launched as `@planner` comes back as a planner.
 
+Once the provider process stage is ready, the resident exec wrapper appends `agent.attached` before it starts or execs the provider. That placement record binds the exact resumed session to the wrapper's pane and live process owner, so a reborn agent is addressable before a lazily-registering provider emits its first hook.
+
 Team restore and cohort resume read posture straight off the layout cell their team or role binding already resolved. Flat and lane resume resolve the stored profile name against the effective config. The launch event's recorded permission mode fills in when the profile declares none.
 
 Degradation is deliberate and asymmetric. A profile that is gone, broken, or now names a different provider degrades to a bare resume with a warning, because rebirth runs unattended and a recovery must never refuse. Interactive `restart` and `fork` escalate the same provider switch to the user instead, since changing providers under a running agent is a decision, not a fallback.
