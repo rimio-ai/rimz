@@ -11,7 +11,7 @@ use rimz::forge::Forge;
 use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::run_wake::{ExpectedRunFrame, RunWakeOutcome};
-use rimz::ids::{AgentKind, AgentSessionId, WorkspaceId};
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -562,9 +562,15 @@ mod parse {
 #[test]
 fn refresh_targets_honor_channel_filter() {
     let now = Timestamp::from_second(2_000).unwrap();
+    let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let mut auth = rimz::testkit::agent_state("claude", "auth", now);
     auth.channel = Some("auth-refresh".to_owned());
     auth.worktree_path = Some("/repo/worktrees/auth-refresh".to_owned());
+    auth.pane = Some(rimz::pane::PaneRef::from_id(pane_id.clone()));
+    let mut auth_shadow = rimz::testkit::agent_state("claude", "auth-shadow", now);
+    auth_shadow.channel = auth.channel.clone();
+    auth_shadow.worktree_path = auth.worktree_path.clone();
+    auth_shadow.pane = auth.pane.clone();
     let mut docs = rimz::testkit::agent_state("codex", "docs", now);
     docs.channel = Some("docs".to_owned());
     docs.worktree_path = Some("/repo/main".to_owned());
@@ -573,11 +579,27 @@ fn refresh_targets_honor_channel_filter() {
     child.parent_agent_id = Some(AgentSessionId::from("auth"));
     let mut unknown = rimz::testkit::agent_state("ghost", "unknown", now);
     unknown.channel = auth.channel.clone();
-    let snapshot = rimz::SidebarSnapshot::build_with_agents(
+    let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/repo/main")),
-        vec![auth, docs, child, unknown],
+        vec![auth, auth_shadow, docs, child, unknown],
         now,
     );
+    let owner = &snapshot.agents[0];
+    let owner_pane = rimz::PaneAgent {
+        kind: owner.kind.clone(),
+        kind_ordinal: owner.kind_ordinal,
+        name: owner.name.clone(),
+        name_explicit: owner.name_explicit,
+        profile: owner.profile.clone(),
+        role: owner.role.clone(),
+        channel: owner.channel.clone(),
+        agent_id: Some(owner.agent_id.clone()),
+        pane_id,
+        pane_pid: None,
+        worktree_path: owner.worktree_path.clone(),
+        worktree_branch: owner.worktree_branch.clone(),
+    };
+    snapshot.agent_panes = vec![owner_pane];
 
     let scoped: Vec<&str> = super::refresh::refresh_targets(&snapshot, Some("auth-refresh"))
         .into_iter()

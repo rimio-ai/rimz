@@ -129,7 +129,7 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let channel = ctx.channel();
-    let peers = root_peers(&snapshot);
+    let peers = rimz::harness::target::addressable_agents(&snapshot);
     let mut views = snapshot
         .agents
         .iter()
@@ -169,7 +169,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
-    let peers = root_peers(&snapshot);
+    let peers = rimz::harness::target::addressable_agents(&snapshot);
     let agent = if target.starts_with("ask_") {
         let ask_id = AskId::parse(target)?;
         snapshot
@@ -267,10 +267,6 @@ fn view_for_agent(
         },
         detail,
     })
-}
-
-fn root_peers(snapshot: &rimz::SidebarSnapshot) -> Vec<&AgentState> {
-    rimz::harness::target::addressable_agents(snapshot)
 }
 
 fn first_line(view: &OpenAskView) -> &str {

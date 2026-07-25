@@ -92,10 +92,8 @@ pub(super) fn refresh_targets<'a>(
     snapshot: &'a rimz::SidebarSnapshot,
     channel: Option<&str>,
 ) -> Vec<&'a AgentState> {
-    snapshot
-        .agents
-        .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
+    rimz::harness::target::addressable_agents(snapshot)
+        .into_iter()
         .filter(|agent| !agent.agent_id.is_empty())
         .filter(|agent| rimz::agents::find_definition(agent.kind.as_str()).is_some())
         .filter(|agent| {

@@ -68,15 +68,11 @@ fn select<'a>(
     bail!("team `{team}` has live cohorts in {lanes}; select one with `-w <worktree>`")
 }
 
-fn root_peers(snapshot: &rimz::SidebarSnapshot) -> Vec<&AgentState> {
-    rimz::harness::target::addressable_agents(snapshot)
-}
-
 pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.alive_snapshot()?;
     let cohort = select(team, worktree, ctx.channel(), &snapshot.agents)?;
-    let peers = root_peers(&snapshot);
+    let peers = rimz::harness::target::addressable_agents(&snapshot);
     let mut failed = false;
     let mut out = render::out();
     for agent in cohort.members.iter().copied() {
@@ -155,7 +151,7 @@ pub(super) fn restart(team: &str, worktree: Option<&str>, globals: &GlobalFlags)
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.alive_snapshot()?;
     let mut cohort = select(team, worktree, ctx.channel(), &snapshot.agents)?;
-    let peers = root_peers(&snapshot);
+    let peers = rimz::harness::target::addressable_agents(&snapshot);
     cohort
         .members
         .sort_by_key(|agent| agent.launch_ordinal.unwrap_or(u32::MAX));
@@ -266,7 +262,7 @@ mod tests {
             vec![team_member, ad_hoc],
             jiff::Timestamp::UNIX_EPOCH,
         );
-        let peers = root_peers(&snapshot);
+        let peers = rimz::harness::target::addressable_agents(&snapshot);
 
         assert_eq!(
             rimz::harness::target::agent_handle(peers[0], &peers, true),

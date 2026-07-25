@@ -58,7 +58,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
-    let peers = root_peers(&snapshot);
+    let peers = rimz::harness::target::addressable_agents(&snapshot);
     let agent = resolve_current_agent(&snapshot, &args.target, ctx.channel())
         .unwrap_or_else(|message| answer_exit(2, &message));
     let detail = rimz::agents::read_open_ask(store.paths(), agent)
@@ -460,10 +460,6 @@ fn transcript_has_answer(paths: &rimz::StatePaths, ask_id: &AskId) -> Result<boo
     Ok(rimz::transcript::read_all(paths)?
         .into_iter()
         .any(|entry| entry.entry == TranscriptKind::Answer && entry.id.as_ref() == Some(ask_id)))
-}
-
-fn root_peers(snapshot: &rimz::SidebarSnapshot) -> Vec<&rimz::agents::AgentState> {
-    rimz::harness::target::addressable_agents(snapshot)
 }
 
 fn parse_wait(raw: &str) -> std::result::Result<Duration, String> {
