@@ -439,7 +439,11 @@ fn refresh_cache(
     if chasing {
         note_chase_attempt(cache, now, pending);
     }
-    if let (Some(litellm), Some(models_dev)) = (fetch_litellm(), fetch_models_dev())
+    // Both documents or none: a LiteLLM-only table drops the authoritative
+    // families and tiers models.dev alone carries. Fetching lazily keeps a
+    // LiteLLM outage from also paying for the 3MB models.dev download.
+    if let Some(litellm) = fetch_litellm()
+        && let Some(models_dev) = fetch_models_dev()
         && let Ok((snapshot, _)) = source::project_sources(&litellm, Some(&models_dev))
         && let Ok(json) = serde_json::to_string(&snapshot)
     {
@@ -910,6 +914,24 @@ mod tests {
             book.price("grok-4.5").unwrap().long_context_threshold,
             Some(200_000)
         );
+
+        // A LiteLLM outage already rules the attempt out, so the 3MB
+        // models.dev download never starts.
+        let skipped = Cell::new(0);
+        refresh_cache(
+            &mut cache,
+            failed_at + RETRY_BACKOFF_SECS + 1,
+            BTreeSet::new(),
+            &BTreeSet::new(),
+            || None,
+            || {
+                skipped.set(skipped.get() + 1);
+                Some(include_str!("tests/fixtures/models-dev.json").to_owned())
+            },
+        );
+
+        assert_eq!(skipped.get(), 0);
+        assert_eq!(cache.models, previous_models);
     }
 
     #[test]

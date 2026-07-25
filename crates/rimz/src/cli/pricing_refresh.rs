@@ -11,18 +11,15 @@ use crate::cli::render;
 #[derive(Debug, Args)]
 pub struct PricingRefreshArgs {
     /// Destination for the compacted LiteLLM-shaped snapshot.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", required_unless_present = "check")]
     out: Option<PathBuf>,
     /// Validate upstream coverage without writing the snapshot.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "out")]
     check: bool,
 }
 
 pub fn run(args: PricingRefreshArgs) -> Result<()> {
-    let out_path = args.out.unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("pricing/litellm-pricing.json")
-    });
-    let report = rimz::agents::pricing::source::refresh(&out_path, args.check)?;
+    let report = rimz::agents::pricing::source::refresh(args.out.as_deref())?;
     let providers = report
         .provider_model_counts
         .iter()
@@ -30,19 +27,18 @@ pub fn run(args: PricingRefreshArgs) -> Result<()> {
         .collect::<Vec<_>>()
         .join(", ");
     let mut out = render::out();
-    if args.check {
-        writeln!(
-            out,
-            "pricing coverage ok: {} models (LiteLLM {}, {providers})",
-            report.model_count, report.litellm_model_count
-        )?;
-    } else {
-        writeln!(
+    match args.out {
+        Some(path) => writeln!(
             out,
             "wrote {} models to {}",
             report.model_count,
-            out_path.display()
-        )?;
+            path.display()
+        )?,
+        None => writeln!(
+            out,
+            "pricing coverage ok: {} models (LiteLLM {}, {providers})",
+            report.model_count, report.litellm_model_count
+        )?,
     }
     Ok(())
 }

@@ -1,0 +1,7 @@
+{
+	"normalized_prefix": {
+		"gpt-5": {"cache_write": 1.0},
+		"qwen3-coder-plus": {"cache_read": 0.2},
+		"qwen3-coder-flash": {"cache_read": 0.2}
+	}
+}

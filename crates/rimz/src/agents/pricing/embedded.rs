@@ -34,8 +34,10 @@ pub(super) fn load() -> HashMap<String, Pricing> {
 ///
 /// Each top-level key is a model id; its object carries per-token costs. An
 /// entry is kept only when both input and output per-token costs are present,
-/// mirroring the upstream schema's required fields. Missing cache-create and
-/// cache-read costs follow ccusage defaults: 1.25× input and 0.1× input.
+/// mirroring the upstream schema's required fields. A missing cache-create or
+/// cache-read cost takes the model's declared ratio against input where
+/// [`overrides`] states one, and otherwise the ccusage defaults: 1.25× input
+/// and 0.1× input.
 pub(super) fn parse(json: &str) -> HashMap<String, Pricing> {
     let mut out = HashMap::new();
     let Ok(Value::Object(models)) = serde_json::from_str::<Value>(json) else {
@@ -51,7 +53,11 @@ pub(super) fn parse(json: &str) -> HashMap<String, Pricing> {
         else {
             continue;
         };
-        let cache_read = num("cache_read_input_token_cost");
+        let ratios = overrides::cache_ratios_for(&model);
+        let cache_read = num("cache_read_input_token_cost")
+            .or_else(|| ratios.cache_read.map(|ratio| input * ratio));
+        let cache_create = num("cache_creation_input_token_cost")
+            .or_else(|| ratios.cache_write.map(|ratio| input * ratio));
         let fast = fields
             .get("provider_specific_entry")
             .and_then(Value::as_object)
@@ -75,12 +81,7 @@ pub(super) fn parse(json: &str) -> HashMap<String, Pricing> {
                     .get("max_input_tokens")
                     .and_then(Value::as_u64)
                     .filter(|tokens| *tokens > 0),
-                ..Pricing::from_base_rates(
-                    input,
-                    output,
-                    num("cache_creation_input_token_cost"),
-                    cache_read,
-                )
+                ..Pricing::from_base_rates(input, output, cache_create, cache_read)
             },
         );
     }
