@@ -242,6 +242,24 @@ fn sidebar_widths_converge_per_window_and_refresh_future_births() {
         Some(55),
         "future windows inherit the refreshed absolute override",
     );
+    let _client = AttachedTmuxClient::attach(&server.socket, "verdict", 340, 50);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !server.client_widths("verdict").contains(&340) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        server.client_widths("verdict").contains(&340),
+        "the wide client must register before per-window reconcile",
+    );
+    server.tmux(&["resize-window", "-t", "verdict:0", "-x", "120", "-y", "50"]);
+    assert_eq!(server.display("verdict:0", "#{window_width}"), "120");
+    for window in 1..=3 {
+        assert_eq!(
+            server.display(&format!("verdict:{window}"), "#{window_width}"),
+            "340",
+            "the fixture must retain a wide view for window {window}",
+        );
+    }
 
     let mut reload_opts = opts;
     reload_opts.target = rimz::mux::SidebarTarget {
@@ -252,10 +270,30 @@ fn sidebar_widths_converge_per_window_and_refresh_future_births() {
         pinned: true,
         ..reload_opts.target
     };
+    let liveness = rimz::mux::SidebarLiveness {
+        claimed_panes: (0..=3)
+            .map(|window| {
+                left_pane_id(&server, &format!("verdict:{window}")).expect("left sidebar pane")
+            })
+            .collect(),
+        ..Default::default()
+    };
     server
         .backend
-        .reconcile_sidebars(&reload_opts, &rimz::mux::SidebarLiveness::default())
+        .reconcile_sidebars(&reload_opts, &liveness)
         .expect("reconcile_sidebars");
+    assert_eq!(
+        left_pane_width(&server, "verdict:0"),
+        Some(24),
+        "the pinned share floors at the minimum on the original 120-column window",
+    );
+    for window in 1..=3 {
+        assert_eq!(
+            left_pane_width(&server, &format!("verdict:{window}")),
+            Some(55),
+            "the pinned share renders independently on 340-column window {window}",
+        );
+    }
 }
 
 #[test]
