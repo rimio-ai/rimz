@@ -164,8 +164,12 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
             cohort::stop(&args.name, args.worktree.as_deref(), globals)
         }
         Some(TeamsSubcmd::Focus(args)) => {
-            ensure_defined(&args.name, globals)?;
-            cohort::focus(&args.name, args.worktree.as_deref(), globals)
+            let teams = ensure_defined(&args.name, globals)?;
+            let leader = teams
+                .0
+                .get(&args.name)
+                .and_then(|team| team.leader.as_deref());
+            cohort::focus(&args.name, args.worktree.as_deref(), leader, globals)
         }
         Some(TeamsSubcmd::Restart(args)) => {
             ensure_defined(&args.name, globals)?;
@@ -212,9 +216,10 @@ fn reject_launch_flags_without_name(
     Ok(())
 }
 
-fn ensure_defined(name: &str, globals: &GlobalFlags) -> Result<()> {
+fn ensure_defined(name: &str, globals: &GlobalFlags) -> Result<rimz::config::TeamsConfig> {
     let teams = list::effective_teams(globals)?;
-    validate_team_name(name, &teams)
+    validate_team_name(name, &teams)?;
+    Ok(teams)
 }
 
 fn validate_team_name(name: &str, teams: &rimz::config::TeamsConfig) -> Result<()> {
