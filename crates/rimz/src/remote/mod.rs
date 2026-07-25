@@ -39,6 +39,10 @@ pub const REMOTE_RECONNECT_ENV: &str = "RIMZ_REMOTE_RECONNECT";
 /// Requests the in-band green attach marker from a compatible remote RimZ.
 pub const ATTACH_MARK_ENV: &str = "RIMZ_ATTACH_MARK";
 
+/// Marks a remote room launch whose SSH parent already owns the terminal's
+/// alternate-scroll bracket.
+pub const OUTER_SCROLL_BRACKET_ENV: &str = "RIMZ_OUTER_SCROLL_BRACKET";
+
 /// Stable per-device identity carried to the remote attach so a replacement
 /// can retire an orphaned predecessor before entering the multiplexer.
 pub const REMOTE_LINEAGE_ENV: &str = "RIMZ_REMOTE_LINEAGE";
@@ -556,9 +560,6 @@ fn guarded_snippet(
     if let Some(mux) = options.mux {
         rimz.push_str(&format!(" --mux {mux}"));
     }
-    if outer_scroll_bracket {
-        rimz.push_str(" --outer-scroll-bracket");
-    }
     let mut env_setup = String::new();
     env_setup.push_str(&format!(
         "export {REMOTE_LINEAGE_ENV}={}; ",
@@ -576,6 +577,9 @@ fn guarded_snippet(
     }
     if mark {
         env_setup.push_str(&format!("export {ATTACH_MARK_ENV}=1; "));
+    }
+    if outer_scroll_bracket {
+        env_setup.push_str(&format!("export {OUTER_SCROLL_BRACKET_ENV}=1; "));
     }
     if options.truecolor {
         env_setup.push_str("export COLORTERM=truecolor; ");

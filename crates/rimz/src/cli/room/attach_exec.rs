@@ -25,7 +25,6 @@ pub(super) fn run_attach_action(
     mux: MuxName,
     session_name: &str,
     workspace_id: Option<&WorkspaceId>,
-    bracket_alternate_scroll: bool,
 ) -> Result<()> {
     match attach_action(
         mode,
@@ -39,7 +38,12 @@ pub(super) fn run_attach_action(
         }
         AttachAction::Launch => {
             reap_remote_zellij_predecessors(mux, session_name, workspace_id);
-            launch_attach_command_with_bracket(spec, bracket_alternate_scroll)
+            launch_attach_command_with_bracket(
+                spec,
+                alternate_scroll_bracket_enabled(
+                    std::env::var_os(rimz::remote::OUTER_SCROLL_BRACKET_ENV).as_deref(),
+                ),
+            )
         }
     }
 }
@@ -260,7 +264,12 @@ fn attach_mark_enabled(value: Option<&OsStr>, stdout_is_terminal: bool) -> bool 
 fn attach_command(spec: &rimz::mux::CommandSpec) -> std::process::Command {
     let mut command = spec.to_command();
     command.env_remove(rimz::remote::ATTACH_MARK_ENV);
+    command.env_remove(rimz::remote::OUTER_SCROLL_BRACKET_ENV);
     command
+}
+
+fn alternate_scroll_bracket_enabled(outer_bracket: Option<&OsStr>) -> bool {
+    outer_bracket.is_none_or(OsStr::is_empty)
 }
 
 fn print_attach_command(spec: &rimz::mux::CommandSpec) {
@@ -316,12 +325,22 @@ mod tests {
     }
 
     #[test]
-    fn attach_marker_does_not_reach_the_multiplexer_environment() {
+    fn attach_markers_do_not_reach_the_multiplexer_environment() {
         let command = attach_command(&rimz::mux::CommandSpec::new("mux"));
 
         assert!(command.get_envs().any(|(key, value)| {
             key == OsStr::new(rimz::remote::ATTACH_MARK_ENV) && value.is_none()
         }));
+        assert!(command.get_envs().any(|(key, value)| {
+            key == OsStr::new(rimz::remote::OUTER_SCROLL_BRACKET_ENV) && value.is_none()
+        }));
+    }
+
+    #[test]
+    fn outer_scroll_marker_suppresses_a_nested_bracket() {
+        assert!(alternate_scroll_bracket_enabled(None));
+        assert!(alternate_scroll_bracket_enabled(Some(OsStr::new(""))));
+        assert!(!alternate_scroll_bracket_enabled(Some(OsStr::new("1"))));
     }
 
     #[test]
