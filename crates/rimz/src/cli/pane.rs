@@ -597,7 +597,7 @@ mod tests {
     use super::*;
     use jiff::Timestamp;
     use rimz::agents::AgentStatus;
-    use rimz::ids::{AgentKind, AgentSessionId, MuxName};
+    use rimz::ids::{AgentSessionId, MuxName};
 
     #[test]
     fn classify_pane_target_accepts_ids_and_agent_addresses() {
