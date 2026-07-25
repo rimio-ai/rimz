@@ -1,6 +1,6 @@
 # Guide writing contract
 
-Local contract for `docs/guide/`, the user guides. Extends the root [AGENTS.md](../../AGENTS.md); it never restates parent rules. It governs new guides and every edit to an existing one.
+Local contract for `docs/guide/`, the user guides. Extends the root [AGENTS.md](../../AGENTS.md). It governs new guides and every edit to an existing one.
 
 ## The reader
 
@@ -32,6 +32,6 @@ Each topic has one owning guide; every other page links there with a half-line o
 
 - Guide filenames are lowercase topic words. Never name a guide `agents.md`: it collides with the `AGENTS.md` contract files on case-insensitive filesystems and with the reference and internals files of that name.
 - `sh` blocks are copy-runnable; `console` blocks carry output as the command actually printed it, captured, never invented.
-- Every guide ends with a "See also" list, each link carrying the reason to follow it.
+- A guide that leaves the reader with an obvious next step ends in a `## See also` list, each link carrying the reason to follow it. Most do; a terminal page like `installation.md` or `security.md` reasonably stops instead.
 - A moved or reworded heading breaks inbound anchors silently. After changing one, grep for the old anchor across the repo and run `cargo xtask docs-links`, which validates file targets and `#anchors` together.
 - A new guide is not done until [docs/README.md](../README.md) and the root documentation map list it; an unlinked page is invisible.

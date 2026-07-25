@@ -1,6 +1,6 @@
 # Multiplexer backends
 
-Local contract for `crates/rimz/src/mux/` — the Zellij/tmux seam. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules. Backend behaviour — selection, session birth, layouts, focus, recovery — lives in [docs/internals/multiplexers.md](../../../../docs/internals/multiplexers.md).
+Local contract for `crates/rimz/src/mux/` — the Zellij/tmux seam. Extends [crates/rimz/AGENTS.md](../../AGENTS.md). Backend behaviour — selection, session birth, layouts, focus, recovery — lives in [docs/internals/multiplexers.md](../../../../docs/internals/multiplexers.md).
 
 ## The seam
 

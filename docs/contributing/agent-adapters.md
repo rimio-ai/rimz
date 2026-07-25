@@ -105,7 +105,7 @@ Conformance, definition validation, and registry uniqueness tests enroll the ada
 
 ## Step 11 — Gate it
 
-Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, fast tests); `rimz coverage` shows the kind's six capability marks reading true and `rimz coverage --wiring` its concern and lifecycle-hook rows; `rimz doctor` reports the hook install state; and `rimz agents <kind>` launches the stock CLI into a pane whose row registers, runs, asks, and settles in the sidebar. Escalate to the journey and live-backend tiers when the change touches their surfaces ([AGENTS.md → Testing requirements](../../AGENTS.md#testing-requirements)).
+Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, fast tests); `rimz coverage` shows the kind's six capability marks reading true and `rimz coverage --wiring` its concern and lifecycle-hook rows; `rimz doctor` reports the hook install state; and `rimz agents <kind>` launches the stock CLI into a pane whose row registers, runs, asks, and settles in the sidebar. Escalate to the journey and live-backend tiers when the change touches their surfaces ([AGENTS.md → Testing](../../AGENTS.md#testing)).
 
 ## The deliverables checklist
 
