@@ -38,6 +38,16 @@
 # the Zellij group already absorbs. The deep journey tmux smoke joins the group
 # too, mirroring its Zellij twin, so an under-load blip retries instead of
 # failing the run outright.
+#
+# Every test also carries a per-test wall clock. The slowest legitimate waits in
+# the suite are the live spawn and lock deadlines (a Zellij presence poll at
+# 150s, the workspace lock at 120s), so a test still running at 6m is wedged,
+# not slow: nextest terminates it and names it in the summary. That bounds one
+# hung test to a named failure inside the run, while `cargo xtask`'s own budget
+# bounds the run as a whole (xtask/src/deadline.rs).
+[profile.default]
+slow-timeout = { period = "120s", terminate-after = 3 }
+
 [test-groups]
 live-zellij = { max-threads = 2 }
 live-tmux = { max-threads = 4 }

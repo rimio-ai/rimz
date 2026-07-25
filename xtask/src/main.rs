@@ -6,6 +6,7 @@
 mod brew;
 mod build;
 mod complexity;
+mod deadline;
 mod docs_links;
 mod files;
 mod gates;
@@ -204,6 +205,7 @@ fn main() -> Result<()> {
     match parse_args(&args)? {
         Action::Run { task, args } => {
             let root = runner::workspace_root()?;
+            deadline::arm(task)?;
             run_task(task, args, &root)
         }
         Action::Help(None) => {
@@ -323,6 +325,10 @@ fn print_xtask_help() {
     println!("  cargo xtask              # run ci");
     println!("  cargo xtask <task>");
     println!("  cargo xtask <task> --help");
+    println!();
+    println!("Every task runs under a wall-clock budget (15m; 45m for full");
+    println!("compile-and-suite passes). Set RIMZ_XTASK_TIMEOUT=45m or =off to");
+    println!("change it for one run.");
     println!();
     println!("Tasks:");
     for task in TASKS {
