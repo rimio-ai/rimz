@@ -29,12 +29,8 @@ pub(super) fn list_agents(
     .context("reading the room snapshot")?;
 
     let channel = list_channel_filter(all, scope.as_deref(), &workspace);
-    let in_room = in_room_agent_ids(&snapshot);
     let agents: Vec<&AgentState> = snapshot
-        .agents
-        .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
-        .filter(|agent| in_room.contains(&agent.agent_id))
+        .pane_bound_roots()
         .filter(|agent| {
             channel
                 .as_deref()
@@ -91,16 +87,6 @@ pub(super) fn pr_info(group: &rimz::SidebarWorktreeGroup) -> Option<PrInfo> {
             .then_some(group.pr_ci)
             .flatten(),
     })
-}
-
-fn in_room_agent_ids(
-    snapshot: &rimz::SidebarSnapshot,
-) -> std::collections::HashSet<&AgentSessionId> {
-    snapshot
-        .agent_panes
-        .iter()
-        .filter_map(|pane_agent| pane_agent.agent_id.as_ref())
-        .collect()
 }
 
 pub(crate) fn render_agents_table(
@@ -293,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn in_room_agent_ids_keeps_only_pane_bound_sessions() {
+    fn pane_bound_roots_keeps_only_live_handle_peers() {
         let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
             rimz::WorkspaceId::parse("ws_000000000000000000000000").expect("workspace id"),
             vec![
@@ -322,16 +308,30 @@ mod tests {
             },
         ];
 
-        let in_room = in_room_agent_ids(&snapshot);
         let kept: Vec<&str> = snapshot
-            .agents
-            .iter()
-            .filter(|agent| agent.parent_agent_id.is_none())
-            .filter(|agent| in_room.contains(&agent.agent_id))
+            .pane_bound_roots()
             .map(|agent| agent.agent_id.as_str())
             .collect();
 
         assert_eq!(kept, ["sess-one", "sess-two"]);
+    }
+
+    #[test]
+    fn agent_list_role_handle_ignores_historical_roots() {
+        let mut live = test_agent("sess-live");
+        live.role = Some("coder".to_owned());
+        let mut historical = test_agent("sess-historical");
+        historical.role = Some("coder".to_owned());
+        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+            rimz::WorkspaceId::parse("ws_000000000000000000000000").expect("workspace id"),
+            vec![live, historical],
+            jiff::Timestamp::UNIX_EPOCH,
+        );
+        snapshot.agent_panes = vec![test_pane_agent("sess-live", "terminal_1")];
+
+        let peers: Vec<&AgentState> = snapshot.pane_bound_roots().collect();
+        let report = build_list_report(&snapshot, &peers, jiff::Timestamp::UNIX_EPOCH, None);
+        assert_eq!(report.agents[0].handle, "@coder");
     }
 
     #[test]

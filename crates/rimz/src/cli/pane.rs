@@ -254,13 +254,7 @@ fn list(
         .and_then(load_agent_overlay);
     let agents: Vec<&AgentState> = overlay
         .as_ref()
-        .map(|snapshot| {
-            snapshot
-                .agents
-                .iter()
-                .filter(|agent| agent.parent_agent_id.is_none())
-                .collect()
-        })
+        .map(|snapshot| snapshot.pane_bound_roots().collect())
         .unwrap_or_default();
     // Bind through the snapshot so the overlay matches the room the sidebar
     // renders: the same stamped-id + process-start guard, never a bare pane-id
@@ -600,7 +594,7 @@ mod tests {
     use super::*;
     use jiff::Timestamp;
     use rimz::agents::AgentStatus;
-    use rimz::ids::MuxName;
+    use rimz::ids::{AgentKind, AgentSessionId, MuxName};
 
     #[test]
     fn classify_pane_target_accepts_ids_and_agent_addresses() {
@@ -682,6 +676,39 @@ mod tests {
         let serialized = serde_json::to_value(&json).expect("pane JSON");
         assert!(serialized.get("focused").is_none());
         assert_eq!(json.pane_id, "zellij:terminal_1");
+    }
+
+    #[test]
+    fn pane_list_role_handle_ignores_historical_roots() {
+        let mut live = agent_on("terminal_1", "codex", "main");
+        live.role = Some("coder".to_owned());
+        let mut historical =
+            rimz::testkit::agent_state("codex", "sess-historical", Timestamp::now());
+        historical.role = Some("coder".to_owned());
+        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+            rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-pane-test")),
+            vec![live, historical],
+            Timestamp::now(),
+        );
+        snapshot.agent_panes = vec![rimz::PaneAgent {
+            kind: AgentKind::new_unchecked("codex"),
+            kind_ordinal: Some(1),
+            name: None,
+            name_explicit: false,
+            profile: None,
+            role: Some("coder".to_owned()),
+            channel: None,
+            agent_id: Some(AgentSessionId::from("sess-1")),
+            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+            pane_pid: None,
+            worktree_path: Some("/repo/main".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+        }];
+
+        let peers: Vec<&AgentState> = snapshot.pane_bound_roots().collect();
+        let pane = pane("terminal_1", "tab_0", "#main", "codex", "/repo/main");
+        let json = pane_json(&pane, Some(peers[0]), &peers);
+        assert_eq!(json.agent.expect("bound agent").handle, "@coder#main");
     }
 
     #[test]

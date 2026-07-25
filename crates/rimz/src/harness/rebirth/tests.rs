@@ -501,6 +501,11 @@ fn team_recovery_allocates_fresh_role_and_keeps_other_tabs_after_team_failure() 
     };
     let planner = decode_request(argvs[0]);
     assert_eq!(planner.identity.name.as_deref(), Some("planner"));
+    assert!(matches!(
+        planner.action,
+        crate::harness::launch::ExecAction::Resume { ref session_id, .. }
+            if session_id == "planner"
+    ));
     let coder = decode_request(argvs[1]);
     assert_eq!(coder.identity.params.role.as_deref(), Some("coder"));
     let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).expect("store");
