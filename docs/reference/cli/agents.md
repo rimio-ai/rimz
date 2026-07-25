@@ -68,6 +68,7 @@ A `<SPEC>` is a shape, and the optional `PROMPT` goes to exactly one leader: a n
 
 ```sh
 rimz agents peer                                    # built-in claude,codex side by side
+rimz agents launch peer                             # explicit launch verb, same payload
 rimz agents claude,codex+term                       # Claude | Codex tiled over a shell
 rimz agents claude/codex/term                       # one Zellij stack; tmux tiles rows
 rimz agents claude,codex --channel=design "Draft the API shape."  # prompt Claude, the first cell
@@ -80,7 +81,13 @@ rimz agents claude --worktree "Take one approach."   # parallel attempts, each i
 rimz agents claude --worktree "Take another approach."
 ```
 
+The bare spec and `launch` verb are equivalent: use whichever reads better in a command chain.
+
 The spec is a named [team](../../guide/configuration.md#agent-profiles-commands-and-teams), one declared role of a team as `<team>.<role>`, or an inline grammar: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is `term`, an agent kind, a virtual `<kind>-<mode>` cell, a configured profile, or a configured command; an agent cell may use `<cell>:<role>` for an ad-hoc role handle. Use `rimz agents <team>.<role>` to re-add one role of a running or stopped team with the same role handle and stamped team lane. Inside that team's channel the bare role is enough — `rimz agents planner` in `#forge` means `rimz agents forge.planner`, and the role joins the lane it resolved from. RimZ reads the lane's team from the stamps its agents carry, so the shorthand works in a worktree lane and an in-place `<dir>/<team>` lane alike. A bare role that also names a profile or command resolving to a different agent is ambiguous and refuses; launch `<team>.<role>` or rename one of them. The built-in `peer` team is the roleless `claude,codex`. The full grammar and how cells compile to panes are in [harness.md → The layout IR](../../internals/harness/harness.md#the-layout-ir).
+
+`rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend.
+`rimz agents` sets what an agent is — model, effort, prompts, permission posture, name, pane placement, supervised runs.
+The configured-team doorway and team lifecycle verbs are in [`rimz teams`](./teams.md).
 
 Permission-mode cells set the launch posture: `-ask`, `-plan`, `-auto`, and `-yolo`. Every registered kind has `-ask` and `-plan`. `-auto` and `-yolo` exist wherever the adapter declares argv for them, which is every kind except `droid` (no `-yolo`), `opencode` (no `-auto`), and `amp`, `kiro`, and `pi`, which carry `-ask` and `-plan` alone. A posture the agent expresses through no launch flag still resolves as a cell and simply adds no argv, so `codex-plan` and `grok-plan` keep the default posture while `claude-plan` and `antigravity-plan` pass native plan mode. Grok Ask maps to `--permission-mode default`, Auto to `--permission-mode auto`, and Yolo to `--yolo`. On the command line, `--ask` keeps native prompts and `--yolo` passes the adapter's bypass flags; with neither, each provider keeps its own prompting.
 
@@ -114,6 +121,7 @@ Because resume takes identity from the store, it conflicts with `PROMPT`, `--fro
 ```sh
 rimz agents resume '#docs'        # resume the docs lane
 rimz agents resume pr-69          # resume by worktree name
+rimz agents resume -w pr-69       # flag spelling of the same worktree scope
 rimz agents resume --from-pr 69   # resume the local worktree created from PR 69
 rimz agents resume                # inside a worktree: that lane; at project root: list lanes
 ```
@@ -189,13 +197,13 @@ rimz agents                              # room root-agent cards, current channe
 rimz agents '#auth-refresh'              # one lane's cards
 rimz agents ps --all                     # every room channel; alias for list
 rimz agents list '#auth-refresh'         # same lane filter through the list verb
-rimz agents list --worktree auth-refresh # one room branch / worktree / dir
+rimz agents list -w auth-refresh         # one room branch / worktree / dir
 rimz agents inspect swift-otter          # describe-style card, cost, messages, transcript tail
 rimz agents show swift-otter --capture   # report plus the pane's visible text
 rimz agents logs swift-otter -n 20       # one agent's transcript tail
 rimz agents logs swift-otter -f          # follow new transcript lines
 rimz agents history swift-otter -n 10    # per-turn tokens, cost, and outcome
-rimz agents top --once                   # one resource-ranked fleet table
+rimz agents top --once -w auth-refresh   # one lane's resource-ranked fleet table
 rimz agents focus @claude-2#cli-docs     # jump to the pane
 rimz agents fork @coder --name twin      # branch a conversation into a new agent
 rimz agents restart @claude-2#cli-docs   # replace its pane and resume it
@@ -228,7 +236,7 @@ rimz agents stop @claude --all           # stop every matching Claude in scope
 
 #### `list`
 
-Bare `rimz agents` lists the live room's pane-backed root-agent cards in attention order, scoped to the current channel and widened with `list --all`; run it inside a live room or enter one with `rimz start` or `rimz attach`. `ps` is an alias for `list`, and `--json` selects JSON output for both.
+Bare `rimz agents` lists the live room's pane-backed root-agent cards in attention order, scoped to the current channel and widened with `list --all`; run it inside a live room or enter one with `rimz start` or `rimz attach`. `ps` is an alias for `list`, `-w/--worktree` selects one lane, and `--json` selects JSON output for both.
 
 Rows group under channel section headers: `⑂` marks a worktree-backed or isolated lane, `#` marks a plain lane, a bare label marks the room root, and a dim `external` tail holds agents outside the project. Header glyphs follow the configured theme glyph set, including Nerd Font presets, and a shared team appears in the header as `· <team> team`.
 
@@ -263,7 +271,7 @@ The activity description — the same field the sidebar card shows — renders u
 
 #### `top`
 
-`top` ranks live root agents by pane process-tree resources: CPU, memory, I/O per second, process count, context fill, tokens, and age. It streams by default; `--once` takes two samples 500 ms apart and exits for scripts. Resource columns read `-` on platforms or panes where process metrics are unavailable, while context and token columns still render.
+`top` ranks live root agents by pane process-tree resources: CPU, memory, I/O per second, process count, context fill, tokens, and age. It streams by default; `--once` takes two samples 500 ms apart and exits for scripts, while `-w/--worktree` selects one lane. Resource columns read `-` on platforms or panes where process metrics are unavailable, while context and token columns still render.
 
 #### `focus`
 

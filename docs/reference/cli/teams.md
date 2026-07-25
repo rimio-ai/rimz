@@ -1,6 +1,6 @@
 # Teams
 
-`rimz teams` discovers, inspects, installs, launches, and resumes named teams.
+`rimz teams` discovers, inspects, installs, launches, resumes, and drives named teams.
 
 A team is a configured set of role bindings and a layout.
 Each role keeps its own model, prompt, context window, and address while the team shares one lane.
@@ -11,9 +11,11 @@ The [teams guide](../../guide/teams.md) explains how to design a team; this page
 ```sh
 rimz teams
 rimz teams --json
+rimz teams list
+rimz teams ls --json
 ```
 
-The human table merges the effective team definitions with live team instances.
+The bare command and `list`/`ls` merge the effective team definitions with live team instances.
 It shows the resolved role, model, and effort summary, each live lane and member count, and either the live state or the definition error.
 Live instances remain visible when their definition has since been removed.
 
@@ -25,31 +27,38 @@ An unreadable or invalid effective config fails at entry with the source error.
 
 ```sh
 rimz teams show forge
+rimz teams inspect forge
 rimz teams show forge --json
 ```
 
-`show` names the best-effort definition source, layout, leader, and validation result, then lists each resolved role's profile or kind, model, effort, mode, and prompt files.
+`show` and its `inspect` alias name the best-effort definition source, layout, leader, and validation result, then list each resolved role's profile or kind, model, effort, mode, and prompt files.
 Live instances include the lane, member handle and status, context fill, and tracked session cost.
 The report ends with copy-ready launch and resume forms.
 
 ## Launch a team
 
 ```sh
+rimz teams forge
 rimz teams launch forge
-rimz teams launch forge -w feat-rate-limits "add rate limiting"
-rimz teams launch forge --channel triage
-rimz teams launch forge --from-pr 91 --bg
+rimz teams forge -w feat-rate-limits "add rate limiting"
+rimz teams forge --channel triage
+rimz teams forge --from-pr 91 --bg
 ```
 
-`launch` accepts a configured team name and sends an optional trailing prompt to its configured leader.
+The bare-name form and `launch` verb accept a configured team name and send an optional trailing prompt to its configured leader.
 It uses the same launch and relaunch-reconciliation path as `rimz agents <team>`, including worktree creation, channel placement, pull-request checkout, and existing-cohort focus or recovery.
 
-The team surface carries only cohort-level controls:
+`rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend.
+`rimz agents` sets what an agent is — model, effort, prompts, permission posture, name, pane placement, supervised runs.
+
+The team surface carries these cohort-level controls:
 
 - `-w, --worktree [NAME]` creates or reuses a RimZ-owned worktree; a bare `-w` chooses a fresh name.
 - `--channel NAME` launches in a durable named lane instead of a worktree.
 - `--from-pr PR` creates or reuses a worktree from a pull-request number or URL.
 - `--description TEXT` seeds the member-card description until agents name their sessions.
+- `--resume` reopens a matching closed cohort instead of launching a fresh one.
+- `--budget AMOUNT[/day]` caps each member separately; it is not a pooled team cap.
 - `--bg` leaves focus where it is.
 - `--new-tab` opens the launch in a new tab or window.
 
@@ -61,11 +70,29 @@ Put stable role-specific choices in the team definition.
 ```sh
 rimz teams resume forge
 rimz teams resume forge -w feat-rate-limits
+rimz teams resume forge -w --bg
 ```
 
 `resume` reopens the newest matching closed cohort with the same identity, directory, and lane from durable state.
 Current role profiles supply the launch configuration.
-`-w NAME` limits selection to one worktree.
+`-w NAME` limits selection to one worktree, while bare `-w` uses the current worktree.
+`--bg` leaves focus where it is.
+
+## Drive a live team
+
+```sh
+rimz teams focus forge
+rimz teams stop forge
+rimz teams restart forge
+rimz teams stop forge -w feat-rate-limits
+```
+
+`focus` jumps to the selected cohort member that needs attention, falling back to the configured leader and then the first member.
+`stop` closes every live member and reports one result per role.
+`restart` relaunches every live member in declared role order, resuming its provider session where supported.
+
+When one team has live cohorts in several lanes, RimZ prefers the cohort in the current lane.
+From outside those lanes, select one with `-w NAME`.
 
 ## Install a team bundle
 
@@ -85,14 +112,5 @@ An existing destination is preserved unless `--force` is present.
 Bundle files use durable temp-file-plus-rename writes.
 Network, API, validation, and filesystem failures stop the install with the failing URL or path and a recovery cue.
 
-## Compatibility forms
-
-The existing agent forms remain equivalent:
-
-```sh
-rimz agents forge -w feat-rate-limits
-rimz agents forge --resume
-```
-
-Use `rimz teams` when the intent is team discovery or lifecycle control.
-Use `rimz agents` for inline layouts, one role from a team, or per-agent launch controls.
+Use `rimz teams` for configured-cohort placement, resume, spend caps, and lifecycle control.
+Use [`rimz agents`](./agents.md) for inline layouts, one role from a team, or per-agent launch shaping.
