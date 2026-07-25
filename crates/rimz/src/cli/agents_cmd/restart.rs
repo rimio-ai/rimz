@@ -70,7 +70,7 @@ pub(in crate::cli) fn restart_resolved(
             &cwd,
         )
         .is_ok();
-    let session_present = rimz::harness::resume::resume_session_present(&agent);
+    let session_present = rimz::harness::resume::resume_session_present(agent);
     let fresh_reason = fresh_reason(resume_support, session_present);
     let fresh_batch = if fresh_reason.is_some() {
         Some(append_fresh_launch(
