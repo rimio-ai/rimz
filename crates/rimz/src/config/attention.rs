@@ -13,6 +13,10 @@ pub struct AttentionConfig {
     /// Seconds a `running` agent may record no completed tool or turn activity
     /// before the sidebar projects it to the actionable `!` attention bucket.
     pub stalled_after_secs: NonZeroU32,
+    /// Consecutive identical tool calls before the sidebar annotates the card.
+    pub tool_repeat_warn_after: NonZeroU32,
+    /// Consecutive identical tool calls before the sidebar routes attention.
+    pub tool_repeat_attention_after: NonZeroU32,
     /// Seconds a row may record no activity before the sidebar treats it as
     /// inactive and sinks it beneath every live row, whatever its status — one
     /// hour by default, the boundary the agent's own prompt cache crosses, so a
@@ -32,6 +36,12 @@ impl Default for AttentionConfig {
                 .expect("non-zero default active-time grace"),
             stalled_after_secs: NonZeroU32::new(crate::agents::DEFAULT_STALL_AFTER_SECS)
                 .expect("non-zero default stall window"),
+            tool_repeat_warn_after: NonZeroU32::new(crate::agents::DEFAULT_TOOL_REPEAT_WARN_AFTER)
+                .expect("non-zero default tool-repeat warning threshold"),
+            tool_repeat_attention_after: NonZeroU32::new(
+                crate::agents::DEFAULT_TOOL_REPEAT_ATTENTION_AFTER,
+            )
+            .expect("non-zero default tool-repeat attention threshold"),
             inactive_after_secs: NonZeroU32::new(crate::agents::DEFAULT_INACTIVE_AFTER_SECS)
                 .expect("non-zero default inactive window"),
             archive_after_secs: NonZeroU32::new(crate::agents::DEFAULT_ARCHIVE_AFTER_SECS)

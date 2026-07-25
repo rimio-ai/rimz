@@ -41,7 +41,8 @@ expression: entry
     "output_tokens": null,
     "cost_usd": null,
     "active_secs": null,
-    "tool_calls": {}
+    "tool_calls": {},
+    "tool_repeat": null
   },
   "timeline": {
     "registered_at": "1970-01-01T00:00:00Z",

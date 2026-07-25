@@ -1,6 +1,66 @@
 use super::*;
 
 #[test]
+fn repeated_tool_loop_escalates_and_self_clears() {
+    let mut session = agent("claude", "live-claude", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    session.last_activity = ago(1);
+    let repeat = crate::agent_activity::ToolRepeat {
+        digest: "digest".to_owned(),
+        tool: "Bash".to_owned(),
+        count: 20,
+        since: ago(20),
+    };
+    let touch = AgentActivity {
+        kind: session.kind.clone(),
+        agent_id: session.agent_id.clone(),
+        at: epoch(),
+        repeat: Some(repeat),
+    };
+
+    let looping = room(vec![session.clone()])
+        .with_agent_activity(&[touch])
+        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+    let row = &looping.worktree_groups[0].rows[0];
+    assert_eq!(row.status(), Some(AgentStatus::Failed));
+    assert_eq!(row.turn_error_label(), Some("loop: Bash ×20"));
+
+    session.tool_repeat = None;
+    let recovered =
+        room(vec![session]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+    let row = &recovered.worktree_groups[0].rows[0];
+    assert_eq!(row.status(), Some(AgentStatus::Running));
+    assert_eq!(row.turn_error_label(), None);
+}
+
+#[test]
+fn stale_activity_repeat_does_not_override_a_newer_turn_boundary() {
+    let session = agent("claude", "live-claude", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(0);
+    let stale_touch = AgentActivity {
+        kind: session.kind.clone(),
+        agent_id: session.agent_id.clone(),
+        at: ago(1),
+        repeat: Some(crate::agent_activity::ToolRepeat {
+            digest: "stale".to_owned(),
+            tool: "Bash".to_owned(),
+            count: 20,
+            since: ago(21),
+        }),
+    };
+
+    let snapshot = room(vec![session])
+        .with_agent_activity(&[stale_touch])
+        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+    let row = &snapshot.worktree_groups[0].rows[0];
+    assert_eq!(row.status(), Some(AgentStatus::Running));
+    assert_eq!(row.turn_error_label(), None);
+}
+
+#[test]
 fn stalled_running_agent_recovers_when_activity_resumes() {
     // The stall escalation is self-healing: once the agent's next completed
     // tool touches the activity heartbeat, the fold readvances
@@ -17,6 +77,7 @@ fn stalled_running_agent_recovers_when_activity_resumes() {
         kind: AgentKind::new_unchecked("claude"),
         agent_id: "live-claude".into(),
         at: epoch(),
+        repeat: None,
     };
     let snapshot = room(vec![session])
         .with_agent_activity(&[touch])

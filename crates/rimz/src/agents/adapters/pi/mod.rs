@@ -85,6 +85,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
     // without editing, so the reasoning phase survives it. The rpiv
     // questionnaire extension contributes the one blocking ask tool.
     tools: ToolClassification {
+        input_key: Some("input"),
         mutating: &["bash", "edit", "write"],
         editing: &["edit", "write"],
         blocking: &[("ask_user_question", AskKind::Question)],

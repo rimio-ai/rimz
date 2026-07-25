@@ -47,6 +47,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {
+        input_key: None,
         mutating: &["fs_write"],
         editing: &["fs_write"],
         blocking: &[],

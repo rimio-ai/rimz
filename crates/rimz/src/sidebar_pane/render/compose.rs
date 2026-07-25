@@ -823,6 +823,7 @@ pub(super) fn scroll_lines(
             width,
             tier: Tier::for_width(content_width(width)),
             bands: &snapshot.theme.display.context_meter,
+            tool_repeat_warn_after: snapshot.attention.tool_repeat_warn_after.get(),
             card_density: snapshot.theme.display.card_density,
             selected_index: ui.selected_index,
             animation_phase: ui.animation_phase,

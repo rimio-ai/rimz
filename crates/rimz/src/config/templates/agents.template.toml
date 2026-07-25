@@ -21,6 +21,8 @@
 [agents.attention]
 # active_grace_secs = 180              # silence credited to active time before the estimate pauses
 # stalled_after_secs = 1800            # silent running agent becomes actionable after this many seconds
+# tool_repeat_warn_after = 3            # identical calls before the card gains a warning marker
+# tool_repeat_attention_after = 20      # identical calls before the agent becomes actionable
 # inactive_after_secs = 3600           # a card idle this many seconds sinks below live work (the prompt-cache window)
 # archive_after_secs = 86400           # a card idle this many seconds parks below hot and warm work
 

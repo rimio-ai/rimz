@@ -142,7 +142,7 @@ Producer and consumer run one ordered spine in [`enrich.rs`](../../../crates/rim
 `enrich_workspace` is the renderer-independent half. Its order is load-bearing in three places, and the rest follows from those:
 
 - Adapter wiring is set before any pane-backed projection, because wiring is what gates idle-agent synthesis.
-- Activity sidecars land before the pane overlay, so row age, ranking, waiting guards, and the stall window all see the per-tool timestamp rather than the coarser turn-grained event time.
+- Activity sidecars land before the pane overlay, so row age, ranking, waiting guards, and the stall window all see the per-tool timestamp rather than the coarser turn-grained event time. The same record carries the open run of consecutive identical tool-name-and-argument signatures; a differing tool or any other progress event clears it, and adapters without structured tool input leave detection off.
 - The pane overlay admits the cards, and everything after it (process metrics, provider panels, git and PR facts, spend tallies, the presentation sort) enriches only panes the frame already holds.
 
 Worktree-group construction stamps `SidebarWorktreeGroup.team` in this renderer-independent fold.

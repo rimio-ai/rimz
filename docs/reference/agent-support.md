@@ -122,6 +122,8 @@ A cell reads **wired** (✓, the concern reaches a user-complete state), **parti
 
 What each concern drives: `turn` live status (session start and every turn boundary), `perm` permission prompts routed to your keyboard, `plan` a plan-approval gate raising a waiting row, `ask` the agent's ask-the-user tool raising a waiting row, `answer` structured answers driving supported native prompt actions, `compact` context compaction on the card, `sub` the subagent tree as nested rows, `bg` a turn parked on background work, `end` the card tombstoning when the session closes, `idle` an idle nudge when the agent goes quiet, `usage` context-window fill and token counts, `live$` the live dollar figure, `rich` provider extras (official model labels, account windows), `install` RimZ installing the reporting hooks, `spend` account spend for the [token-insight](../guide/insight.md) dashboard, `tools` live and historical named tool-call counts, and `remote` driving or spawning a session with no local pane.
 
+Identical-tool loop detection extends `tools` only when the adapter also exposes structured tool arguments, because a name-only run would misclassify legitimate reads. Grok emits unnamed tool observations and Kiro exposes no tool-input key, so both keep tool-loop detection off.
+
 ### Notes on the alpha and experimental set
 
 The gaps you will actually feel, per agent. Each agent's [mapping doc](#per-agent-mappings) carries the full rationale.

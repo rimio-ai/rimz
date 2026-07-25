@@ -144,7 +144,7 @@ fn render_show_report(
     let mut out = render::out();
     render_agent_section(&mut out, agent)?;
     render_activity_section(&mut out, agent, report.ask.as_ref(), report.stale, now)?;
-    render_context_section(&mut out, agent)?;
+    render_context_section(&mut out, agent, now)?;
     render_placement_section(&mut out, agent)?;
     let fallback_run = if report.run.is_none() {
         newest_run_for_agent(store, state).ok().flatten()
@@ -330,7 +330,11 @@ pub(super) fn render_activity_section(
     writeln!(w)
 }
 
-fn render_context_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::io::Result<()> {
+fn render_context_section(
+    w: &mut impl Write,
+    agent: &AgentReportEntry,
+    now: jiff::Timestamp,
+) -> std::io::Result<()> {
     section(w, "Context")?;
     let mut kv = render::KeyVals::new().indent(2);
     kv.push(
@@ -379,6 +383,25 @@ fn render_context_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::
         kv.push(
             "tools",
             render::cell(format_tool_calls(&agent.stats.tool_calls)),
+        );
+    }
+    if let Some(repeat) = agent.stats.tool_repeat.as_ref().filter(|repeat| {
+        repeat.count
+            >= crate::cli::machine_config()
+                .agents
+                .attention
+                .tool_repeat_warn_after
+                .get()
+    }) {
+        let age_secs = now.duration_since(repeat.since).as_secs().max(0) as u64;
+        kv.push(
+            "repeat",
+            render::cell(format!(
+                "{} ×{}, {}",
+                repeat.tool,
+                repeat.count,
+                render::age_label(age_secs)
+            )),
         );
     }
     if let Some(active_secs) = agent.stats.active_secs {

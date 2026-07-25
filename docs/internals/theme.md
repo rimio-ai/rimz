@@ -91,7 +91,7 @@ Every derived tone — ladder steps, ramp blends, the amber warm, the highlight 
 
 ## Glyphs
 
-One catalog row per `GlyphRole` carries a Unicode glyph and an optional Nerd Font icon. `None` means the role keeps its Unicode shape in both presets — the drawn gauges, box-drawing chrome, spines, spinner and clock heads, and the compacting wave all take this path, because the terminal grid draws them more precisely than any icon can.
+One catalog row per `GlyphRole` carries a Unicode glyph and an optional Nerd Font icon. `None` means the role keeps its Unicode shape in both presets — the drawn gauges, box-drawing chrome, spines, spinner and clock heads, and the compacting wave all take this path, because the terminal grid draws them more precisely than any icon can. `ToolRepeat` resolves the card's `⟲` identical-call marker through the same catalog and can be overridden as `theme.glyphs.<set>.status.tool_repeat`.
 
 `GlyphSet::resolve` runs one pass: `[theme.glyphs] set` wins, else `style = "modern"` selects `nerd_font`, else Unicode; the preset fills every role; matching inline overrides land last. Renderers read glyphs through `theme.glyph(GlyphRole::…)` in the sidebar or `theme_glyphs(&ThemeConfig)` elsewhere, and the catalog is the only place a shipped glyph literal exists.
 

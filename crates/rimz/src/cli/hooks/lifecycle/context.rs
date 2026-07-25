@@ -19,6 +19,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
         model_hint,
         transcript_path,
         turn_ended,
+        tool_run,
     } = context;
     // Remove the session's statusline context sidecar before the normal
     // activity, merge, and refresh fall-through. Refresh-capable adapters can
@@ -37,10 +38,17 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     // Refresh the activity heartbeat on progress-proving events so the
     // sidebar's `last_activity` advances per tool call, not just per turn.
     if decoded.records_progress() || parent_agent_id.is_some() {
-        touch_agent_activity(store, agent, event_name, agent_id);
+        touch_agent_activity(workspace, store, agent, event_name, agent_id, tool_run);
     }
     if let Some(parent_agent_id) = parent_activity_id {
-        touch_agent_activity(store, agent, event_name, parent_agent_id);
+        touch_agent_activity(
+            workspace,
+            store,
+            agent,
+            event_name,
+            parent_agent_id,
+            rimz::agent_activity::ToolRun::Reset,
+        );
     }
     // Child details travel on the durable child observation. Provider payloads
     // can repeat root model/transcript fields, so root-scoped sidecars and
@@ -78,16 +86,47 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     }
 }
 
-fn touch_agent_activity(store: &Store, agent: &AgentDefinition, event_name: &str, agent_id: &str) {
-    if let Err(err) =
-        rimz::agent_activity::touch(store.runtime_paths(), agent.spec().kind, agent_id)
-    {
-        warn!(
-            agent = agent.spec().kind,
-            event = %event_name,
-            error = %err,
-            "lifecycle: failed to touch the agent activity heartbeat",
-        );
+fn touch_agent_activity(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &AgentDefinition,
+    event_name: &str,
+    agent_id: &str,
+    run: rimz::agent_activity::ToolRun<'_>,
+) {
+    match rimz::agent_activity::touch(store.runtime_paths(), agent.spec().kind, agent_id, run) {
+        Ok(count)
+            if count
+                == crate::cli::machine_config()
+                    .agents
+                    .attention
+                    .tool_repeat_attention_after
+                    .get() =>
+        {
+            let rimz::agent_activity::ToolRun::Call { tool, .. } = run else {
+                return;
+            };
+            rimz::diag::DiagSink::for_workspace(
+                workspace.workspace_id.clone(),
+                workspace.session_name.clone(),
+                None,
+            )
+            .emit(rimz::diag::record::DiagEvent::ToolLoopEscalated {
+                agent_kind: agent.spec().kind_id(),
+                agent_id: agent_id.into(),
+                tool: tool.to_owned(),
+                count,
+            });
+        }
+        Ok(_) => {}
+        Err(err) => {
+            warn!(
+                agent = agent.spec().kind,
+                event = %event_name,
+                error = %err,
+                "lifecycle: failed to touch the agent activity heartbeat",
+            );
+        }
     }
 }
 
@@ -415,6 +454,7 @@ mod tests {
                 model_hint: None,
                 transcript_path: None,
                 turn_ended: false,
+                tool_run: rimz::agent_activity::ToolRun::Reset,
             },
         });
 
@@ -470,6 +510,7 @@ mod tests {
                 model_hint: None,
                 transcript_path: None,
                 turn_ended: false,
+                tool_run: rimz::agent_activity::ToolRun::Reset,
             },
         });
 

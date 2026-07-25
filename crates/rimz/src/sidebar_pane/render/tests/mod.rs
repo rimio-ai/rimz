@@ -451,6 +451,7 @@ fn test_row_ctx<'a>(
         width,
         tier: Tier::for_width(content_width(width)),
         bands: &snapshot.theme.display.context_meter,
+        tool_repeat_warn_after: snapshot.attention.tool_repeat_warn_after.get(),
         card_density: snapshot.theme.display.card_density,
         selected_index,
         animation_phase,

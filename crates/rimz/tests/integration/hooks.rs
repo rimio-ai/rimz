@@ -46,7 +46,14 @@ fn lifecycle_event_count(env: &Env) -> usize {
 
 fn run_claude_lifecycle(env: &Env, payload: Value) {
     let payload = serde_json::to_string(&payload).expect("payload");
-    let output = env.run_hook("claude", &payload);
+    let mut command = env.hook_command("claude");
+    command
+        .env("RIMZ_WORKSPACE_ID", env.workspace_id.as_str())
+        .env("RIMZ_PROJECT_ROOT", &env.project_root);
+    let output = env
+        .spawn_payload(command, &payload)
+        .wait_with_output()
+        .expect("wait Claude hook");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -1048,7 +1055,14 @@ fn cursor_progress_hook_touches_activity_by_conversation_id() {
         "duration": 12,
     }))
     .expect("payload");
-    let output = env.run_hook("cursor", &payload);
+    let mut command = env.hook_command("cursor");
+    command
+        .env("RIMZ_WORKSPACE_ID", env.workspace_id.as_str())
+        .env("RIMZ_PROJECT_ROOT", &env.project_root);
+    let output = env
+        .spawn_payload(command, &payload)
+        .wait_with_output()
+        .expect("wait cursor hook");
     assert!(
         output.status.success(),
         "cursor stderr: {}",
@@ -1060,6 +1074,119 @@ fn cursor_progress_hook_touches_activity_by_conversation_id() {
     assert_eq!(touches.len(), 1, "progress hook writes one heartbeat");
     assert_eq!(touches[0].kind.as_str(), "cursor");
     assert_eq!(touches[0].agent_id.as_str(), "conv-cursor-progress");
+}
+
+#[test]
+fn repeated_tool_payload_updates_and_restarts_the_activity_run() {
+    let env = Env::new();
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "sess-repeat",
+        }),
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-repeat",
+            "prompt": "check the project",
+        }),
+    );
+    let payload = |command: &str| {
+        json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess-repeat",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        })
+    };
+
+    for _ in 0..3 {
+        run_claude_lifecycle(&env, payload("cargo check"));
+    }
+    let runtime = env.runtime_paths();
+    let repeated = rimz::agent_activity::read_for_keys(&runtime, [("claude", "sess-repeat")])
+        .pop()
+        .and_then(|activity| activity.repeat)
+        .expect("open repeated-tool run");
+    assert_eq!(repeated.tool, "Bash");
+    assert_eq!(repeated.count, 3);
+
+    for _ in 3..rimz::agents::DEFAULT_TOOL_REPEAT_ATTENTION_AFTER {
+        run_claude_lifecycle(&env, payload("cargo check"));
+    }
+    let escalated = rimz::agent_activity::read_for_keys(&runtime, [("claude", "sess-repeat")])
+        .pop()
+        .and_then(|activity| activity.repeat)
+        .expect("escalated repeated-tool run");
+    assert_eq!(
+        escalated.count,
+        rimz::agents::DEFAULT_TOOL_REPEAT_ATTENTION_AFTER
+    );
+    let pane = tmux_pane("%0", "claude", &env.project_root);
+    let looping = env.snapshot_json_with_panes(std::slice::from_ref(&pane));
+    let looping_row = looping["worktree_groups"]
+        .as_array()
+        .expect("worktree groups")
+        .iter()
+        .flat_map(|group| group["rows"].as_array().expect("rows"))
+        .find(|row| row["id"] == "sess-repeat")
+        .expect("repeated-tool row");
+    assert_eq!(looping_row["status"], "failed");
+
+    let state_root = env.store().paths().root.clone();
+    let diag_path =
+        rimz::diag::DiagSink::under(state_root, env.workspace_id.clone(), "rimz-test", None)
+            .log_path()
+            .expect("diagnostic log path");
+    let diagnostics = std::fs::read_to_string(diag_path).expect("tool-loop diagnostic");
+    let escalations = diagnostics
+        .lines()
+        .filter_map(|line| {
+            serde_json::from_str::<rimz::diag::record::DiagEnvelope>(line)
+                .ok()
+                .filter(|record| {
+                    matches!(
+                        record.event,
+                        rimz::diag::record::DiagEvent::ToolLoopEscalated { .. }
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(escalations.len(), 1, "attention crossing diagnoses once");
+    assert!(matches!(
+        &escalations[0].event,
+        rimz::diag::record::DiagEvent::ToolLoopEscalated {
+            agent_kind,
+            agent_id,
+            tool,
+            count,
+        } if agent_kind.as_str() == "claude"
+            && agent_id.as_str() == "sess-repeat"
+            && tool == "Bash"
+            && *count == rimz::agents::DEFAULT_TOOL_REPEAT_ATTENTION_AFTER
+    ));
+
+    run_claude_lifecycle(&env, payload("cargo test"));
+    let restarted =
+        rimz::agent_activity::read_for_keys(&env.runtime_paths(), [("claude", "sess-repeat")])
+            .pop()
+            .and_then(|activity| activity.repeat)
+            .expect("restarted tool run");
+    assert_eq!(restarted.tool, "Bash");
+    assert_eq!(restarted.count, 1);
+    assert_ne!(restarted.digest, repeated.digest);
+    let recovered = env.snapshot_json_with_panes(std::slice::from_ref(&pane));
+    let recovered_row = recovered["worktree_groups"]
+        .as_array()
+        .expect("worktree groups")
+        .iter()
+        .flat_map(|group| group["rows"].as_array().expect("rows"))
+        .find(|row| row["id"] == "sess-repeat")
+        .expect("recovered repeated-tool row");
+    assert_eq!(recovered_row["status"], "running");
 }
 
 #[test]

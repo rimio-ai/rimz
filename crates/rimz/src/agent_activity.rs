@@ -40,6 +40,28 @@ pub struct AgentActivity {
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
     pub at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<ToolRepeat>,
+}
+
+/// One open run of consecutive identical tool calls.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolRepeat {
+    pub digest: String,
+    /// Display name carried into the sidebar and `agents show`.
+    pub tool: String,
+    /// Consecutive identical calls, counting the first.
+    pub count: u32,
+    pub since: Timestamp,
+}
+
+/// How a progress event affects the open identical-tool run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolRun<'a> {
+    /// Extend a matching run or open a new run at one.
+    Call { tool: &'a str, digest: &'a str },
+    /// Close the run on any other progress event.
+    Reset,
 }
 
 fn activity_path(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> PathBuf {
@@ -55,18 +77,49 @@ fn activity_path(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> PathBuf 
     runtime.agent_activity_dir.join(format!("{name}.json"))
 }
 
-/// Record that `(kind, agent_id)` just made progress. Cache-class atomic
-/// rename, like every other runtime liveness file: the sidecar is rewritten
-/// on the next heartbeat, so crash-durability buys nothing. Best-effort: a
-/// failed write only degrades the liveness hint, never correctness, so
-/// callers log and continue.
-pub fn touch(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> Result<(), atomic::AtomicErr> {
+/// Record that `(kind, agent_id)` just made progress and update its consecutive
+/// identical-tool run. Cache-class atomic rename, like every other runtime
+/// liveness file: the sidecar is rewritten on the next heartbeat, so
+/// crash-durability buys nothing. Best-effort: a failed write only degrades the
+/// liveness hint, never correctness, so callers log and continue.
+///
+/// Parallel tool calls in one assistant message can race their hook processes
+/// and lose an increment. That undercounts and delays detection, which matches
+/// this sidecar's best-effort posture; no correctness path reads the run.
+pub fn touch(
+    runtime: &RuntimePaths,
+    kind: &str,
+    agent_id: &str,
+    run: ToolRun<'_>,
+) -> Result<u32, atomic::AtomicErr> {
+    let path = activity_path(runtime, kind, agent_id);
+    let now = Timestamp::now();
+    let prior = read_one(path.clone());
+    let repeat = match run {
+        ToolRun::Call { tool, digest } => match prior.and_then(|record| record.repeat) {
+            Some(mut repeat) if repeat.digest == digest => {
+                repeat.count = repeat.count.saturating_add(1);
+                repeat.tool = tool.to_owned();
+                Some(repeat)
+            }
+            _ => Some(ToolRepeat {
+                digest: digest.to_owned(),
+                tool: tool.to_owned(),
+                count: 1,
+                since: now,
+            }),
+        },
+        ToolRun::Reset => None,
+    };
+    let count = repeat.as_ref().map_or(0, |repeat| repeat.count);
     let record = AgentActivity {
         kind: AgentKind::new_unchecked(kind),
         agent_id: agent_id.into(),
-        at: Timestamp::now(),
+        at: now,
+        repeat,
     };
-    atomic::write_temp_then_rename_cache(&activity_path(runtime, kind, agent_id), &record)
+    atomic::write_temp_then_rename_cache(&path, &record)?;
+    Ok(count)
 }
 
 fn read_one(path: PathBuf) -> Option<AgentActivity> {
@@ -188,11 +241,50 @@ mod tests {
     #[test]
     fn touch_then_read_round_trips_the_identity() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-1").expect("touch");
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset).expect("touch");
         let all = read_all(&runtime);
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].kind, "claude");
         assert_eq!(all[0].agent_id, "sess-1");
+        assert_eq!(all[0].repeat, None);
+    }
+
+    #[test]
+    fn tool_run_extends_restarts_and_resets() {
+        let (_dir, runtime) = runtime();
+        let call = ToolRun::Call {
+            tool: "Bash",
+            digest: "same",
+        };
+        assert_eq!(touch(&runtime, "claude", "sess-1", call).unwrap(), 1);
+        assert_eq!(touch(&runtime, "claude", "sess-1", call).unwrap(), 2);
+        let repeated = read_all(&runtime).pop().unwrap().repeat.unwrap();
+        assert_eq!(repeated.tool, "Bash");
+        assert_eq!(repeated.digest, "same");
+        assert_eq!(repeated.count, 2);
+
+        assert_eq!(
+            touch(
+                &runtime,
+                "claude",
+                "sess-1",
+                ToolRun::Call {
+                    tool: "Read",
+                    digest: "different",
+                },
+            )
+            .unwrap(),
+            1
+        );
+        let restarted = read_all(&runtime).pop().unwrap().repeat.unwrap();
+        assert_eq!(restarted.tool, "Read");
+        assert_eq!(restarted.count, 1);
+
+        assert_eq!(
+            touch(&runtime, "claude", "sess-1", ToolRun::Reset).unwrap(),
+            0
+        );
+        assert_eq!(read_all(&runtime).pop().unwrap().repeat, None);
     }
 
     #[test]
@@ -210,26 +302,27 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].kind, "claude");
         assert_eq!(all[0].agent_id, "sess-1");
+        assert_eq!(all[0].repeat, None);
     }
 
     #[test]
     fn touch_overwrites_in_place_per_identity() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-1").expect("touch");
-        touch(&runtime, "claude", "sess-1").expect("touch again");
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset).expect("touch");
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset).expect("touch again");
         // One file per (kind, agent_id): the second touch overwrites the first.
         assert_eq!(read_all(&runtime).len(), 1);
         // A different identity gets its own file.
-        touch(&runtime, "codex", "sess-1").expect("touch codex");
+        touch(&runtime, "codex", "sess-1", ToolRun::Reset).expect("touch codex");
         assert_eq!(read_all(&runtime).len(), 2);
     }
 
     #[test]
     fn read_for_keys_reads_only_requested_identities() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-live").expect("touch live");
-        touch(&runtime, "claude", "sess-stale").expect("touch stale");
-        touch(&runtime, "codex", "sess-stale").expect("touch other stale");
+        touch(&runtime, "claude", "sess-live", ToolRun::Reset).expect("touch live");
+        touch(&runtime, "claude", "sess-stale", ToolRun::Reset).expect("touch stale");
+        touch(&runtime, "codex", "sess-stale", ToolRun::Reset).expect("touch other stale");
 
         let all = read_for_keys(&runtime, [("claude", "sess-live")]);
         assert_eq!(all.len(), 1);
@@ -240,7 +333,7 @@ mod tests {
     #[test]
     fn keyed_read_serves_an_unchanged_stat_from_cache() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-1").expect("touch");
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset).expect("touch");
         let first = read_for_keys(&runtime, [("claude", "sess-1")]);
         assert_eq!(first.len(), 1);
         let original_at = first[0].at;
@@ -278,8 +371,8 @@ mod tests {
     #[test]
     fn keyed_read_prunes_cache_entries_for_keys_no_longer_queried() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-dead").expect("touch dead");
-        touch(&runtime, "claude", "sess-live").expect("touch live");
+        touch(&runtime, "claude", "sess-dead", ToolRun::Reset).expect("touch dead");
+        touch(&runtime, "claude", "sess-live", ToolRun::Reset).expect("touch live");
         // Prime the cache with both keys, then drop the dead one from the
         // queried set — a dead agent leaving the snapshot.
         read_for_keys(&runtime, [("claude", "sess-dead"), ("claude", "sess-live")]);
@@ -310,7 +403,7 @@ mod tests {
     #[test]
     fn read_all_skips_interrupted_write_temp_siblings() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-1").expect("touch");
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset).expect("touch");
         let canonical = read_all(&runtime);
         assert_eq!(canonical.len(), 1);
         // An interrupted atomic write can leave a fully-valid-JSON
@@ -334,7 +427,7 @@ mod tests {
     #[test]
     fn read_all_skips_unreadable_files() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-1").expect("touch");
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset).expect("touch");
         std::fs::write(
             runtime.agent_activity_dir.join("garbage.json"),
             b"{ not json",

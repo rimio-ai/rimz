@@ -42,6 +42,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {
+        input_key: None,
         mutating: &[
             "search_replace",
             "hashline_edit",

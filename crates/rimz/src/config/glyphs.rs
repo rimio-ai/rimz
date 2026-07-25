@@ -53,6 +53,7 @@ glyph_roles! {
         StatusDelegating => "delegating",
         StatusResolving => "resolving",
         StatusCompacting => "compacting",
+        ToolRepeat => "tool_repeat",
     }
     "cockpit" {
         CockpitWorkspace => "workspace",

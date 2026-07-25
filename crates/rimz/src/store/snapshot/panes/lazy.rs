@@ -805,6 +805,7 @@ fn idle_agent_row(
             compacting: false,
             compaction_count: 0,
             tool_calls: BTreeMap::new(),
+            tool_repeat: None,
             turn_error_label: None,
         })),
     }

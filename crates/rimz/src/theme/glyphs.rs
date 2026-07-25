@@ -37,6 +37,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(StatusDelegating, "⢄", None),
     glyph!(StatusResolving, "⠙", None),
     glyph!(StatusCompacting, "▇", None),
+    glyph!(ToolRepeat, "⟲", Some("\u{f0453}")),
     glyph!(CockpitWorkspace, "⌘", Some("\u{eda7}")),
     glyph!(CockpitSessions, "◎", Some("\u{ee83}")),
     glyph!(CockpitAgents, "¤", Some("\u{ee9c}")),

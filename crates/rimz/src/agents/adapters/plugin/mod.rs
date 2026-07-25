@@ -407,6 +407,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
         sub_providers: &[],
         expected_windows: &[],
         tools: ToolClassification {
+            input_key: None,
             mutating: leak_strings(&manifest.tools.mutating),
             editing: leak_strings(&manifest.tools.editing),
             blocking: &[],
