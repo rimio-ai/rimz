@@ -1230,6 +1230,7 @@ fn classify_diagnostic(
         | DiagEvent::SidebarWidthNudge { .. }
         | DiagEvent::SidebarWidthSettle { .. }
         | DiagEvent::FetchFoldStats { .. }
+        | DiagEvent::ToolLoopEscalated { .. }
         | DiagEvent::ProducerElected { .. }
         | DiagEvent::ProducerDemoted { .. }
         | DiagEvent::GroupMigration { .. } => model::DoctorState::Expected,
@@ -1255,7 +1256,6 @@ fn classify_diagnostic(
             recovered_after_ms: None,
             ..
         }
-        | DiagEvent::ToolLoopEscalated { .. }
         | DiagEvent::RowConflict { .. }
         | DiagEvent::DuplicatePaneId { .. }
         | DiagEvent::ForeignSessionPane { .. }

@@ -45,7 +45,7 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {
-        input_key: Some("input"),
+        input_key: None,
         mutating: &["shell_command", "apply_patch", "create_file", "edit_file"],
         editing: &["apply_patch", "create_file", "edit_file"],
         blocking: &[],

@@ -637,6 +637,16 @@ fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
             model::DoctorImpact::Info,
         ),
         (
+            DiagEvent::ToolLoopEscalated {
+                agent_kind: rimz::ids::AgentKind::new_unchecked("claude"),
+                agent_id: "sess-loop".into(),
+                tool: "Bash".to_owned(),
+                count: 20,
+            },
+            model::DoctorState::Expected,
+            model::DoctorImpact::Info,
+        ),
+        (
             hosted(HostedCarryDropReason::ProbeReportsAbsent),
             model::DoctorState::Expected,
             model::DoctorImpact::Info,

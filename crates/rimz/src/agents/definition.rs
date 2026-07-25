@@ -1026,7 +1026,10 @@ impl AgentSpec {
     /// carries neither a name nor input there, keeping repeat detection off
     /// instead of falling back to an imprecise name-only key.
     pub fn tool_signature(&self, payload: &Value) -> Option<String> {
-        let name = payload.get("tool_name").and_then(Value::as_str)?;
+        let name = payload.get("tool_name").and_then(Value::as_str)?.trim();
+        if name.is_empty() {
+            return None;
+        }
         let input = payload.get(self.tools.input_key?)?;
         let mut hasher = Sha256::new();
         hasher.update(name.as_bytes());
@@ -1185,45 +1188,52 @@ mod tests {
     }
 
     #[test]
-    fn tool_signature_covers_each_declared_input_key_shape() {
+    fn tool_signature_covers_each_reachable_adapter() {
         for (kind, payload, expected) in [
+            (
+                "claude",
+                json!({
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "cargo check", "timeout": 30}
+                }),
+                "b5b6f4d3b2a47915",
+            ),
             (
                 "codex",
                 json!({"tool_name": "exec_command", "tool_input": {"cmd": "cargo check"}}),
                 "934fb6c158c4e4bb",
-            ),
-            (
-                "opencode",
-                json!({"tool_name": "bash", "input": {"command": "cargo check"}}),
-                "b3a522bf71a0647b",
-            ),
-            (
-                "cursor",
-                json!({"tool_name": "Shell", "args": {"command": "cargo check"}}),
-                "575d06c0294ef4dd",
-            ),
-            (
-                "copilot",
-                json!({"tool_name": "bash", "toolInput": "{\"command\":\"cargo check\"}"}),
-                "2e690e85400b7508",
             ),
         ] {
             let spec = crate::agents::registry::spec_by_kind(kind).unwrap();
             assert_eq!(
                 spec.tool_signature(&payload).as_deref(),
                 Some(expected),
-                "{kind} input-key shape"
+                "{kind} hook payload"
             );
         }
 
-        let kiro = crate::agents::registry::spec_by_kind("kiro").unwrap();
+        let opencode = crate::agents::registry::spec_by_kind("opencode").unwrap();
         assert_eq!(
-            kiro.tool_signature(&json!({
-                "tool_name": "fs_write",
-                "tool_input": {"path": "src/main.rs"}
+            opencode.tool_signature(&json!({
+                "tool_name": "bash",
+                "input": {"command": "cargo check"}
             })),
             None
         );
+    }
+
+    #[test]
+    fn tool_signature_rejects_empty_names() {
+        let claude = crate::agents::registry::spec_by_kind("claude").unwrap();
+        for name in ["", "   "] {
+            assert_eq!(
+                claude.tool_signature(&json!({
+                    "tool_name": name,
+                    "tool_input": {"command": "cargo check"}
+                })),
+                None
+            );
+        }
     }
 
     #[test]

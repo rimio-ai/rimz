@@ -86,10 +86,14 @@ pub(crate) fn handle_lifecycle_hook(
         else {
             return None;
         };
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
         agent
             .spec()
             .tool_signature(payload)
-            .map(|digest| (name.as_str(), digest))
+            .map(|digest| (name, digest))
     });
     let tool_run = tool_call
         .as_ref()

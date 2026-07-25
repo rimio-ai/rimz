@@ -54,7 +54,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {
-        input_key: Some("tool_input"),
+        input_key: None,
         mutating: &[
             "edit",
             "write_file",
