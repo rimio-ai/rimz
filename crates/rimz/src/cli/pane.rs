@@ -251,7 +251,7 @@ fn list(
     let overlay = workspace
         .as_ref()
         .filter(|workspace| workspace.session_name == session)
-        .and_then(load_agent_overlay);
+        .and_then(|workspace| load_agent_overlay(workspace, &panes));
     let agents: Vec<&AgentState> = overlay
         .as_ref()
         .map(|snapshot| snapshot.pane_bound_roots().collect())
@@ -299,12 +299,15 @@ fn list(
 
 /// Best-effort snapshot for the agent overlay: the cached rollup the sidebar
 /// reads, or `None` when no store is reachable.
-fn load_agent_overlay(workspace: &ResolvedWorkspace) -> Option<rimz::SidebarSnapshot> {
+fn load_agent_overlay(
+    workspace: &ResolvedWorkspace,
+    panes: &[PaneRef],
+) -> Option<rimz::SidebarSnapshot> {
     let store = crate::cli::open_store(workspace).ok()?;
     let mut snapshot = store.snapshot_cached().ok()?;
     let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone()).ok()?;
     snapshot = snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
-    Some(snapshot)
+    Some(snapshot.with_live_panes(panes.to_vec(), None))
 }
 
 /// One native tab/window and the panes inside it, in listing order.
@@ -685,30 +688,57 @@ mod tests {
         let mut historical =
             rimz::testkit::agent_state("codex", "sess-historical", Timestamp::now());
         historical.role = Some("coder".to_owned());
-        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let pane = pane("terminal_1", "tab_0", "#main", "codex", "/repo/main");
+        let snapshot = rimz::SidebarSnapshot::build_with_agents(
             rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-pane-test")),
             vec![live, historical],
             Timestamp::now(),
-        );
-        snapshot.agent_panes = vec![rimz::PaneAgent {
-            kind: AgentKind::new_unchecked("codex"),
-            kind_ordinal: Some(1),
-            name: None,
-            name_explicit: false,
-            profile: None,
-            role: Some("coder".to_owned()),
-            channel: None,
-            agent_id: Some(AgentSessionId::from("sess-1")),
-            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
-            pane_pid: None,
-            worktree_path: Some("/repo/main".to_owned()),
-            worktree_branch: Some("main".to_owned()),
-        }];
+        )
+        .with_live_panes(vec![pane.clone()], None);
 
         let peers: Vec<&AgentState> = snapshot.pane_bound_roots().collect();
-        let pane = pane("terminal_1", "tab_0", "#main", "codex", "/repo/main");
         let json = pane_json(&pane, Some(peers[0]), &peers);
         assert_eq!(json.agent.expect("bound agent").handle, "@coder#main");
+    }
+
+    #[test]
+    fn pane_list_live_overlay_keeps_ordinal_disambiguation() {
+        let mut first = agent_on("terminal_1", "codex", "main");
+        first.agent_id = AgentSessionId::from("sess-1");
+        first.kind_ordinal = Some(1);
+        let mut second = agent_on("terminal_2", "codex", "main");
+        second.agent_id = AgentSessionId::from("sess-2");
+        second.kind_ordinal = Some(2);
+        let first_pane = pane("terminal_1", "tab_0", "#main", "codex", "/repo/main");
+        let second_pane = pane("terminal_2", "tab_0", "#main", "codex", "/repo/main");
+        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+            rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-pane-test")),
+            vec![first, second],
+            Timestamp::now(),
+        )
+        .with_live_panes(vec![first_pane.clone(), second_pane.clone()], None);
+        let peers: Vec<&AgentState> = snapshot.pane_bound_roots().collect();
+
+        let first = snapshot
+            .agent_bound_to_pane(&first_pane)
+            .expect("first pane bound");
+        let second = snapshot
+            .agent_bound_to_pane(&second_pane)
+            .expect("second pane bound");
+        assert_eq!(
+            pane_json(&first_pane, Some(first), &peers)
+                .agent
+                .expect("first agent")
+                .handle,
+            "@codex-1#main"
+        );
+        assert_eq!(
+            pane_json(&second_pane, Some(second), &peers)
+                .agent
+                .expect("second agent")
+                .handle,
+            "@codex-2#main"
+        );
     }
 
     #[test]
