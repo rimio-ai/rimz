@@ -515,13 +515,7 @@ fn extract_test_summary(output: &str) -> Option<String> {
 // crate, `CARGO_PKG_NAME=xtask` is inherited and machete treats argv[1]
 // ("machete") as a path. Clear it for the spawn.
 pub(crate) fn deps(root: &Path) -> Result<()> {
-    let status = Command::new("cargo")
-        .arg("machete")
-        .current_dir(root)
-        .env_remove("CARGO_PKG_NAME")
-        .status()
-        .context("running `cargo`")?;
-    ensure_success("cargo", &["machete"], status)
+    run_with_env_and_removed(root, "cargo", ["machete"], &[], &["CARGO_PKG_NAME"])
 }
 
 pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {

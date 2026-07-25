@@ -248,6 +248,11 @@ Every PR gate runs in CI with warnings treated as errors; each has a local `carg
 
 Escalate past `gate` when the change touches the matching surface: `cargo xtask test -P live` for live-backend and deep-mux-smoke coverage, `cargo xtask test -P journey` for rendered journeys, `cargo xtask externals` when dependencies change, and `cargo xtask ci` for both checks and the full suite.
 
+Two wall clocks bound a run, so a wedged compile, test process, or multiplexer costs a bounded wait instead of the caller's patience:
+
+- **The run** — every task carries a budget armed at startup ([xtask/src/deadline.rs](../../xtask/src/deadline.rs)): 15 minutes for `gate` and the fast tasks, 45 minutes for the tasks that pay a whole build plus every test tier (`ci`, `checks`, `lint`, `test`, `test-archive`, `coverage`, `perf`, and the release builds), and no bound for the operator-driven `sandbox` and `screenshot`. On overrun the running child gets `SIGTERM`, then `SIGKILL` five seconds later, and the task fails naming the command and its elapsed time. `RIMZ_XTASK_TIMEOUT` sets the budget for one run — `45m`, `900s`, a bare `900` for seconds, or `off` to lift it — which is the escape hatch when a cold tree needs a full compile inside the gate.
+- **One test** — `slow-timeout` in [.config/nextest.toml](../../.config/nextest.toml) warns every two minutes and terminates a test at six, so a hung test fails by name in the run summary while the tiers around it keep going. The suite's slowest legitimate waits are the live spawn and lock deadlines at 150s and 120s.
+
 The individual gates:
 
 - Long-running human-facing phases show a TTY-gated stderr status line with the live phase and elapsed time; `xtask/src/spinner.rs` is a deliberate lightweight copy of the RimZ CLI spinner that keeps xtask independent of the runtime crate.

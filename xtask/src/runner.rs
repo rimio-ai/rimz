@@ -3,10 +3,20 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+
+use crate::deadline;
+
+/// How often a waiting task checks its child and its budget.
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// How long a terminated child gets to reap its own children before the kill.
+/// `cargo` and `nextest` both tear down their spawned processes on `SIGTERM`.
+const TERMINATE_GRACE: Duration = Duration::from_secs(5);
 
 pub(crate) struct Captured {
     pub(crate) status: ExitStatus,
@@ -46,10 +56,10 @@ where
     S: AsRef<OsStr>,
 {
     let args: Vec<_> = args.into_iter().collect();
-    let mut command = build_command(root, program, &args, envs, removed_envs);
-    let status = command
-        .status()
+    let mut child = build_command(root, program, &args, envs, removed_envs)
+        .spawn()
         .with_context(|| format!("running `{program}`"))?;
+    let status = wait_bounded(&mut child, program, &args, &mut || {})?;
     ensure_success(program, &args, status)
 }
 
@@ -78,14 +88,28 @@ where
         let mut stdout = stdout;
         stdout.read_to_end(&mut output).map(|_| output)
     });
+    // Stderr streams on its own thread and hands lines back over a channel, so
+    // the waiting thread stays free to watch the child and its budget.
+    let (lines_tx, lines_rx) = mpsc::channel();
+    let stderr_worker = thread::spawn(move || {
+        capture_lines_lossy(BufReader::new(stderr), &mut |line| {
+            let _ = lines_tx.send(line.to_owned());
+        })
+    });
 
-    let stderr_result = capture_lines_lossy(BufReader::new(stderr), on_line);
-    let status = child.wait().context("waiting for command")?;
+    let status = wait_bounded(&mut child, program, &args, &mut || {
+        while let Ok(line) = lines_rx.try_recv() {
+            on_line(&line);
+        }
+    })?;
     let stdout = stdout_worker
         .join()
         .map_err(|_| anyhow::anyhow!("command stdout reader panicked"))?
         .context("reading command stdout")?;
-    let stderr_output = stderr_result.context("reading command stderr")?;
+    let stderr_output = stderr_worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("command stderr reader panicked"))?
+        .context("reading command stderr")?;
 
     let mut combined = String::from_utf8_lossy(&stdout).into_owned();
     combined.push_str(&stderr_output);
@@ -93,6 +117,56 @@ where
         status,
         output: combined,
     })
+}
+
+/// Wait for `child`, terminating it once the run spends its wall-clock budget.
+/// `on_tick` runs between polls so a streaming caller keeps draining output.
+fn wait_bounded<S: AsRef<OsStr>>(
+    child: &mut Child,
+    program: &str,
+    args: &[S],
+    on_tick: &mut dyn FnMut(),
+) -> Result<ExitStatus> {
+    loop {
+        on_tick();
+        if let Some(status) = child.try_wait().context("waiting for command")? {
+            return Ok(status);
+        }
+        if let Some(overrun) = deadline::overrun() {
+            terminate(child);
+            bail!(
+                "{overrun}: terminated `{program} {}`\n{}",
+                rendered_args(args),
+                overrun.next_step(),
+            );
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Ask the child to stop, then insist. `SIGTERM` first gives `cargo` and
+/// `nextest` their own chance to tear down compiles and test processes; the
+/// kill covers a child that ignores it.
+fn terminate(child: &mut Child) {
+    signal_child(child.id(), "-TERM");
+    let deadline = Instant::now() + TERMINATE_GRACE;
+    while Instant::now() < deadline {
+        if child.try_wait().is_ok_and(|status| status.is_some()) {
+            return;
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn signal_child(pid: u32, signal: &str) {
+    let _ = Command::new("kill")
+        .args([signal, "--", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn capture_lines_lossy(
@@ -146,12 +220,14 @@ pub(crate) fn ensure_success<S: AsRef<OsStr>>(
     if status.success() {
         return Ok(());
     }
-    let rendered_args = args
-        .iter()
+    bail!("command failed: {program} {}", rendered_args(args));
+}
+
+fn rendered_args<S: AsRef<OsStr>>(args: &[S]) -> String {
+    args.iter()
         .map(|arg| arg.as_ref().to_string_lossy())
         .collect::<Vec<_>>()
-        .join(" ");
-    bail!("command failed: {program} {rendered_args}");
+        .join(" ")
 }
 
 pub(crate) fn workspace_root() -> Result<PathBuf> {
@@ -178,6 +254,27 @@ fn manifest_declares_workspace(manifest: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The budget arms once per process; nextest runs each test in its own, so
+    // this test owns the armed budget for the whole process.
+    #[test]
+    fn a_spent_budget_terminates_the_child_and_names_the_next_step() {
+        crate::deadline::arm_with("gate", Some(Duration::from_millis(200)));
+        let started = Instant::now();
+
+        let err = run(Path::new("."), "sleep", ["120"])
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("exceeded its 200ms budget"), "{err}");
+        assert!(err.contains("terminated `sleep 120`"), "{err}");
+        assert!(err.contains("RIMZ_XTASK_TIMEOUT="), "{err}");
+        assert!(
+            started.elapsed() < TERMINATE_GRACE,
+            "child outlived its budget by {:?}",
+            started.elapsed()
+        );
+    }
 
     #[test]
     fn streamed_capture_preserves_lines_with_lossy_utf8() {
