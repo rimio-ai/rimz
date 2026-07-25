@@ -36,6 +36,20 @@ pub(super) fn sidebar_opts(
     detected_cols: Option<u16>,
 ) -> SidebarPaneOptions {
     let workspace_root = PathBuf::from(format!("/tmp/rimz-{session}"));
+    let width = SidebarWidth::default();
+    let share = detected_cols
+        .and_then(std::num::NonZeroU16::new)
+        .map_or_else(
+            || rimz::mux::WidthPermille::from_percent(width.percent.resolve(None)),
+            |view_cols| {
+                let target_cols = std::num::NonZeroU16::new(
+                    u16::try_from(width.target_cols(u64::from(view_cols.get())))
+                        .expect("test target"),
+                )
+                .expect("nonzero test target");
+                rimz::mux::WidthPermille::from_cols(target_cols, view_cols)
+            },
+        );
     SidebarPaneOptions {
         session_name: session.to_owned(),
         workspace_id: WorkspaceId::from_project_root(&workspace_root),
@@ -46,13 +60,9 @@ pub(super) fn sidebar_opts(
         )]),
         cwd: std::env::temp_dir(),
         target: rimz::mux::SidebarTarget {
-            cols: detected_cols
-                .and_then(|cols| {
-                    u16::try_from(SidebarWidth::default().target_cols(u64::from(cols))).ok()
-                })
-                .and_then(std::num::NonZeroU16::new)
-                .unwrap_or_else(|| std::num::NonZeroU16::new(72).expect("nonzero test width")),
-            percent: 25,
+            share,
+            max_cols: width.max_cols,
+            pinned: false,
         },
         detected_view_size: detected_cols.map(|cols| (cols, 50)),
         rimz_bin: stub,

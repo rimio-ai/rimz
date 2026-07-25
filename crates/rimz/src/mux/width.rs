@@ -155,16 +155,36 @@ impl<'de> Deserialize<'de> for WidthPermille {
     }
 }
 
-/// One resolved sidebar target in the spellings each backend requires.
-///
-/// With known view geometry, `cols` and `percent` describe the same share rung.
-/// Without geometry, columns use the configured cap while the percentage keeps
-/// the stored share for a detached Zellij layout; those answers necessarily
-/// describe different eventual view widths.
+/// One resolved room-wide share rendered against each backend view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SidebarTarget {
-    pub cols: NonZeroU16,
-    pub percent: u16,
+    pub share: WidthPermille,
+    pub max_cols: NonZeroU16,
+    pub pinned: bool,
+}
+
+impl SidebarTarget {
+    /// Render the target for one view, applying the configured cap only to an
+    /// unpinned default. Without geometry the cap is the safe birth seed.
+    pub fn cols(self, view_cols: Option<u16>) -> NonZeroU16 {
+        let Some(view_cols) = view_cols.and_then(NonZeroU16::new) else {
+            return self.max_cols;
+        };
+        let cols = self.share.cols(view_cols);
+        if self.pinned {
+            cols
+        } else {
+            // `MIN_ADJUSTABLE_WIDTH` is a nonzero pane-width constant.
+            let floor =
+                NonZeroU16::new(MIN_ADJUSTABLE_WIDTH).expect("minimum pane width is nonzero");
+            cols.min(self.max_cols).max(floor)
+        }
+    }
+
+    /// Spell the resolved share as a whole percentage for Zellij layout KDL.
+    pub fn percent(self) -> u16 {
+        self.share.to_percent_rounded()
+    }
 }
 
 /// Sidebar pane width: the configured percentage policy for each live view,
@@ -392,6 +412,34 @@ mod tests {
         );
         assert_eq!(share.snap_to_rung(MuxName::Tmux), share);
         assert_eq!(share.snap_to_rung(MuxName::Zellij).to_percent_rounded(), 40,);
+    }
+
+    #[test]
+    fn sidebar_target_renders_each_view_and_applies_only_the_default_cap() {
+        let target = SidebarTarget {
+            share: WidthPermille::from_percent(25),
+            max_cols: NonZeroU16::new(72).expect("nonzero"),
+            pinned: false,
+        };
+        assert_eq!(target.cols(Some(120)), NonZeroU16::new(30).unwrap());
+        assert_eq!(target.cols(Some(400)), NonZeroU16::new(72).unwrap());
+        assert_eq!(target.cols(None), NonZeroU16::new(72).unwrap());
+
+        let pinned = SidebarTarget {
+            pinned: true,
+            ..target
+        };
+        assert_eq!(pinned.cols(Some(400)), NonZeroU16::new(100).unwrap());
+        assert_eq!(pinned.percent(), 25);
+
+        let below_floor = SidebarTarget {
+            max_cols: NonZeroU16::new(3).unwrap(),
+            ..target
+        };
+        assert_eq!(
+            below_floor.cols(Some(120)),
+            NonZeroU16::new(MIN_ADJUSTABLE_WIDTH).unwrap(),
+        );
     }
 
     #[test]

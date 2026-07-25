@@ -93,8 +93,9 @@ impl TestRoom {
             extra_env: Default::default(),
             cwd: self.project_root.path().to_path_buf(),
             target: crate::mux::SidebarTarget {
-                cols: share.cols(view_cols),
-                percent: share.to_percent_rounded(),
+                share,
+                max_cols: width.max_cols,
+                pinned: false,
             },
             detected_view_size: None,
             rimz_bin: "rimz".into(),
@@ -636,10 +637,17 @@ exit 0
     );
     let (temp, shim) = zellij_shim(&script);
     let backend = room.backend(&shim);
+    let target_cols = std::num::NonZeroU16::new(target).expect("target");
+    let view_cols = std::num::NonZeroU16::new(u16::try_from(view).expect("test view"))
+        .expect("nonzero test view");
     let width = WidthSyncOptions {
         session_name: "rimz-test".to_owned(),
         workspace_id: room.workspace_id.clone(),
-        target_cols: std::num::NonZeroU16::new(target).expect("target"),
+        target: crate::mux::SidebarTarget {
+            share: crate::mux::WidthPermille::from_cols(target_cols, view_cols),
+            max_cols: target_cols,
+            pinned: true,
+        },
     };
     let (floor, resized) = backend.converge_sidebar_widths_stepwise(&width, 1, 8, None);
     assert!(resized, "{name}: expected resize");
@@ -664,7 +672,7 @@ exit 0
         .find(|pane| pane.is_terminal() && pane.id == 8)
         .and_then(|pane| pane.pane_columns)
         .expect("sidebar columns");
-    let target = u64::from(width.target_cols.get());
+    let target = u64::from(width.target.cols(Some(view_cols.get())).get());
     assert!(
         !crate::mux::width::sidebar_width_off_spec(
             final_cols,
@@ -720,10 +728,16 @@ exit 0
     );
     let (temp, shim) = zellij_shim(&script);
     let backend = room.backend(&shim);
+    let target_cols = std::num::NonZeroU16::new(72).expect("target");
+    let view_cols = std::num::NonZeroU16::new(380).expect("view");
     let width = WidthSyncOptions {
         session_name: "rimz-test".to_owned(),
         workspace_id: room.workspace_id.clone(),
-        target_cols: std::num::NonZeroU16::new(72).expect("target"),
+        target: crate::mux::SidebarTarget {
+            share: crate::mux::WidthPermille::from_cols(target_cols, view_cols),
+            max_cols: target_cols,
+            pinned: true,
+        },
     };
     assert!(
         backend

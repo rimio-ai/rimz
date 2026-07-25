@@ -8,24 +8,22 @@ fn sidebar_opts(
     detected_cols: Option<u16>,
 ) -> SidebarPaneOptions {
     let width = SidebarWidth::default();
-    let target = detected_cols.and_then(std::num::NonZeroU16::new).map_or(
-        crate::mux::SidebarTarget {
-            cols: width.max_cols,
-            percent: width.percent.resolve(None),
-        },
+    let share = detected_cols.and_then(std::num::NonZeroU16::new).map_or(
+        crate::mux::WidthPermille::from_percent(width.percent.resolve(None)),
         |view_cols| {
             let requested_cols = std::num::NonZeroU16::new(
                 u16::try_from(width.target_cols(u64::from(view_cols.get()))).expect("test target"),
             )
             .expect("nonzero test target");
-            let share = crate::mux::WidthPermille::from_cols(requested_cols, view_cols)
-                .snap_to_rung(crate::MuxName::Zellij);
-            crate::mux::SidebarTarget {
-                cols: share.cols(view_cols),
-                percent: share.to_percent_rounded(),
-            }
+            crate::mux::WidthPermille::from_cols(requested_cols, view_cols)
+                .snap_to_rung(crate::MuxName::Zellij)
         },
     );
+    let target = crate::mux::SidebarTarget {
+        share,
+        max_cols: width.max_cols,
+        pinned: false,
+    };
     SidebarPaneOptions {
         session_name: session_name.to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/proj/root")),

@@ -218,7 +218,7 @@ pub(super) fn sidebar_geometry_off_spec(
     pane: &PaneTopologyPane,
     panes: &[PaneTopologyPane],
     excluded: &HashSet<u64>,
-    target_cols: std::num::NonZeroU16,
+    target: crate::mux::SidebarTarget,
 ) -> bool {
     let Some(verdict) = sidebar_dock_verdict(pane, panes, excluded) else {
         return false;
@@ -226,9 +226,12 @@ pub(super) fn sidebar_geometry_off_spec(
     matches!(verdict, SidebarDock::SwapReachable | SidebarDock::NestedRow)
         || pane.pane_columns.is_some_and(|cols| {
             tab_view_cols(panes, pane.tab_position).is_some_and(|view_cols| {
+                let target_cols = target
+                    .cols(Some(u16::try_from(view_cols).unwrap_or(u16::MAX)))
+                    .get();
                 sidebar_width_off_spec(
                     cols,
-                    u64::from(target_cols.get()),
+                    u64::from(target_cols),
                     zellij_resize_step_cols(view_cols),
                 )
             })

@@ -59,7 +59,8 @@ impl TmuxBackend {
             if !only.contains(&geometry.pane_id) {
                 continue;
             }
-            let target = u64::from(opts.target_cols.get());
+            let view_cols = u16::try_from(geometry.window_width).unwrap_or(u16::MAX);
+            let target = u64::from(opts.target.cols(Some(view_cols)).get());
             // tmux's absolute resize converges to the exact requested width.
             if !sidebar_width_off_spec(geometry.pane_width, target, 1) {
                 continue;
@@ -472,8 +473,11 @@ impl MuxBackend for TmuxBackend {
         // sidebar left and focus on the new window's terminal. The split reads
         // an absolute-column session option so syncs can refresh future births
         // without reconstructing the renderer command.
+        let birth_cols = opts
+            .target
+            .cols(opts.detected_view_size.map(|(cols, _)| cols));
         let set_hook = after_new_window_hook_set_cmd(opts);
-        let set_width = sidebar_width_option_set_cmd(&opts.session_name, opts.target.cols);
+        let set_width = sidebar_width_option_set_cmd(&opts.session_name, birth_cols);
         if opts.pristine_birth {
             let sidebar_pane = self
                 .sole_current_window_pane(&opts.session_name)
@@ -483,7 +487,7 @@ impl MuxBackend for TmuxBackend {
             if let (Some(sidebar_pane), Some(window_width)) = (sidebar_pane, window_width) {
                 let mut commands = birth_split_commands(
                     &sidebar_pane,
-                    opts.target.cols,
+                    birth_cols,
                     window_width,
                     &opts.cwd,
                     &command,
@@ -524,7 +528,7 @@ impl MuxBackend for TmuxBackend {
             );
         }
 
-        let size = opts.target.cols.to_string();
+        let size = birth_cols.to_string();
         let mut split = vec![
             "split-window".to_owned(),
             "-d".to_owned(),
@@ -559,10 +563,11 @@ impl MuxBackend for TmuxBackend {
             }),
         };
         let mut hook_commands = Vec::new();
-        if view_cols.is_some() {
+        if let Some(view_cols) = view_cols {
             hook_commands.push(sidebar_width_option_set_cmd(
                 &opts.session_name,
-                opts.target.cols,
+                opts.target
+                    .cols(Some(u16::try_from(view_cols).unwrap_or(u16::MAX))),
             ));
         }
         hook_commands.push(after_new_window_hook_set_cmd(opts));
@@ -654,7 +659,7 @@ impl MuxBackend for TmuxBackend {
                     let sync = WidthSyncOptions {
                         session_name: opts.session_name.clone(),
                         workspace_id: opts.workspace_id.clone(),
-                        target_cols: opts.target.cols,
+                        target: opts.target,
                     };
                     report.redocked +=
                         self.converge_live_sidebar_geometries(&sync, &geometries, &kept);
@@ -699,6 +704,9 @@ impl MuxBackend for TmuxBackend {
             &first_content.cwd,
             &first_content.argv,
         )?;
+        let view_cols = self
+            .window_width(&opened.window_id)
+            .map(|cols| u16::try_from(cols).unwrap_or(u16::MAX));
         let first_content = opened.first_pane;
         let mut first_daemon_pane = None;
         let runtime = opts
@@ -708,7 +716,7 @@ impl MuxBackend for TmuxBackend {
             .chain(std::iter::once(&opts.view.loop_panel))
             .collect::<Vec<_>>();
         if let Some((first, rest)) = runtime.split_first() {
-            let size = opts.sidebar.target.cols.to_string();
+            let size = opts.sidebar.target.cols(view_cols).to_string();
             let first_daemon = self.split_printed_with_reason(
                 "-h",
                 &first_content,

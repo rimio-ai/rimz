@@ -113,7 +113,7 @@ pub(super) fn render_session_layout(
     // The explicit tabs instantiate on the detached background session at
     // birth; only the `new_tab_template` waits for an attached client. Both
     // carry the same seed derived from the launch probe.
-    let sidebar = sidebar_pane_kdl(opts, None, opts.target.percent)?;
+    let sidebar = sidebar_pane_kdl(opts, None, opts.target.percent())?;
 
     // The daemon tab leads, when present.
     let daemon_tab = match daemon {
@@ -124,7 +124,7 @@ pub(super) fn render_session_layout(
                 &daemon.content,
                 &daemon.hosts,
                 &daemon.loop_panel,
-                opts.target.percent,
+                opts.target.percent(),
                 8,
             )?;
             format!(
@@ -222,14 +222,14 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
     let sidebar = sidebar_pane_kdl(
         &opts.sidebar,
         Some(&opts.sidebar.cwd),
-        opts.sidebar.target.percent,
+        opts.sidebar.target.percent(),
     )?;
     let body = render_daemon_columns(
         &sidebar,
         &opts.view.content,
         &opts.view.hosts,
         &opts.view.loop_panel,
-        opts.sidebar.target.percent,
+        opts.sidebar.target.percent(),
         4,
     )?;
     // The body (sidebar + work area) is a nested vertical split above the

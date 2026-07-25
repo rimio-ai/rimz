@@ -635,7 +635,12 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
         .iter()
         .find(|pane| pane.left == 0)
         .expect("the hook-docked sidebar");
-    let cap = u64::from(sidebar.target.cols.get());
+    let cap = u64::from(
+        sidebar
+            .target
+            .cols(sidebar.detected_view_size.map(|(cols, _)| cols))
+            .get(),
+    );
     let lower = cap.saturating_sub(2);
     assert!(
         sidebar_pane.width >= lower && sidebar_pane.width <= cap,
