@@ -1101,6 +1101,7 @@ impl TurnErrorClass {
             return Self::Failed;
         };
         let lower = label.to_ascii_lowercase();
+        let status = http_error_status(&lower);
         if lower.contains("spend limit") {
             Self::PausedSpendLimit
         } else if lower.contains("usage limit")
@@ -1108,9 +1109,12 @@ impl TurnErrorClass {
             || lower.contains("rate limit")
             || lower.contains("quota")
             || lower.contains("too many requests")
+            || status == Some(429)
         {
             Self::PausedRateLimit
-        } else if is_transient_server_error(&lower) {
+        } else if is_transient_server_error(&lower)
+            || status.is_some_and(|code| (500..600).contains(&code))
+        {
             Self::PausedOverloaded
         } else {
             Self::Failed
@@ -1118,9 +1122,25 @@ impl TurnErrorClass {
     }
 }
 
+/// The HTTP status a provider error text reports, when the text reads like an
+/// HTTP failure at all. The marker requirement keeps an incidental three-digit
+/// number — a `cf-ray` fragment or token count — from casting a verdict.
+fn http_error_status(lower: &str) -> Option<u16> {
+    const MARKERS: [&str; 4] = ["status", "http", "gateway", "error code"];
+    if !MARKERS.iter().any(|marker| lower.contains(marker)) {
+        return None;
+    }
+    lower
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|run| run.len() == 3)
+        .filter_map(|run| run.parse::<u16>().ok())
+        .find(|code| (400..600).contains(code))
+}
+
 fn is_transient_server_error(lower: &str) -> bool {
     lower.contains("overloaded")
         || lower.contains("at capacity")
+        || lower.contains("high demand")
         || lower.contains("server is busy")
         || lower.contains("internal server error")
         || lower.contains("server error")
@@ -1590,6 +1610,17 @@ mod tests {
                 "Selected model is at capacity. Please try a different model.",
                 TurnErrorClass::PausedOverloaded,
             ),
+            (
+                "unexpected status 503 Service Unavailable: Service Unavailable, url: https://chatgpt.com/backend-api/codex/responses, cf-ray: a20a1d2aca20f069-DFW, auth error: 503, auth error code: biscuit_baker_service_me_circuit_open",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "We're currently experiencing high demand, which may cause temporary errors.",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            ("unexpected status 429", TurnErrorClass::PausedRateLimit),
+            ("unexpected status 400 Bad Request", TurnErrorClass::Failed),
+            ("cf-ray a20a1d2aca20f069-503x", TurnErrorClass::Failed),
             ("API Error: Bad Request", TurnErrorClass::Failed),
         ] {
             assert_eq!(
