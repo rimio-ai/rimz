@@ -383,7 +383,6 @@ pub(super) fn enable(args: ScopeArgs, globals: &GlobalFlags) -> Result<()> {
         let already_enabled = ArmState::resolve(record, task.source(), now) == ArmState::Live
             && record.is_none_or(|record| record.enabled && record.strikes.is_none());
         if already_enabled {
-            arming::clear_expired_pause(&key, now)?;
             strikes::clear(&key)?;
             writeln!(out, "loop `{name}`: already enabled")?;
             continue;
