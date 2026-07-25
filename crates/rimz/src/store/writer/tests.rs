@@ -139,6 +139,42 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
 }
 
 #[test]
+fn attach_agent_pane_records_process_owned_placement() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+    let runtime_paths =
+        RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
+    let store = Store::open(paths, runtime_paths).expect("open store");
+    let kind = AgentKind::new_unchecked("codex");
+    let agent_id = AgentSessionId::from("sess-resumed");
+    let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%4");
+
+    store
+        .attach_agent_pane(&kind, &agent_id, "rimz-test", &pane_id)
+        .expect("attach resumed agent");
+
+    let events = store.read_events().expect("read attach");
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.workspace_id, workspace_id);
+    assert_eq!(event.session_name, "rimz-test");
+    assert_eq!(event.source, "codex");
+    assert_eq!(event.source_kind, "agent");
+    assert_eq!(event.method, "agent.attached");
+    let crate::store::event::EventKind::AgentAttach(payload) = event.kind() else {
+        panic!("agent attach event")
+    };
+    assert_eq!(payload.agent_id, agent_id);
+    assert_eq!(payload.pane_id, pane_id);
+    assert_eq!(payload.pane_pid, Some(std::process::id()));
+    assert_eq!(
+        payload.runtime_owner,
+        runtime::current_process_owner(RuntimeOwnerKind::Agent, "sess-resumed")
+    );
+}
+
+#[test]
 fn launch_event_builder_uses_scope_channel_and_omits_blank_text() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = WorkspaceId::from_project_root(dir.path());

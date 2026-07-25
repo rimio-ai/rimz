@@ -11,7 +11,9 @@ use std::time::Duration;
 #[cfg(test)]
 use crate::agents::LaunchParams;
 use crate::pane::RuntimeOwnerKind;
-use crate::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+use crate::store::event::{
+    AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, EventEnvelope,
+};
 use crate::workspace::ResolvedWorkspace;
 
 use super::{
@@ -372,6 +374,33 @@ impl Store {
                 None,
                 None,
                 Some(pane_id),
+            ))
+        })
+    }
+
+    /// Bind one resumed session to the pane its wrapper occupies. Placement
+    /// evidence only: the fold moves `pane` and `runtime_owner` and nothing else.
+    #[must_use = "durability barrier; check the result"]
+    pub fn attach_agent_pane(
+        &self,
+        kind: &crate::ids::AgentKind,
+        agent_id: &crate::ids::AgentSessionId,
+        session_name: &str,
+        pane_id: &crate::ids::PaneId,
+    ) -> Result<()> {
+        let runtime_owner =
+            runtime::current_process_owner(RuntimeOwnerKind::Agent, agent_id.as_str());
+        self.commit(|txn| {
+            txn.append(&EventEnvelope::agent_attached(
+                self.inner.paths.workspace_id.clone(),
+                session_name,
+                kind,
+                AgentAttachPayload {
+                    agent_id: agent_id.clone(),
+                    pane_id: pane_id.clone(),
+                    pane_pid: Some(std::process::id()),
+                    runtime_owner,
+                },
             ))
         })
     }

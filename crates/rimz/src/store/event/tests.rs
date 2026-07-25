@@ -291,6 +291,60 @@ fn launch_event_uses_flat_compact_wire_shape() {
 }
 
 #[test]
+fn attach_event_uses_typed_compact_wire_shape() {
+    let pane_id = PaneId::from_parts(MuxName::Tmux, "%4");
+    let payload = AgentAttachPayload {
+        agent_id: AgentSessionId::from("sess-1"),
+        pane_id: pane_id.clone(),
+        pane_pid: Some(84),
+        runtime_owner: RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "sess-1",
+            84,
+            Some("67890".to_owned()),
+        ),
+    };
+    let event = EventEnvelope::agent_attached(
+        workspace(),
+        "session",
+        &AgentKind::new_unchecked("codex"),
+        payload.clone(),
+    );
+
+    assert_eq!(event.source, "codex");
+    assert_eq!(event.source_kind, "agent");
+    assert_eq!(event.method, "agent.attached");
+    assert_eq!(
+        params_value(&event),
+        json!({
+            "agent_id": "sess-1",
+            "pane_id": "tmux:%4",
+            "pane_pid": 84,
+            "runtime_owner": {
+                "kind": "agent",
+                "subject_id": "sess-1",
+                "pid": 84,
+                "process_start": "67890",
+            },
+        })
+    );
+    let EventKind::AgentAttach(decoded) = event.kind() else {
+        panic!("agent attach event decodes to its typed kind");
+    };
+    assert_eq!(decoded, payload);
+
+    let malformed = EventEnvelope::new(
+        workspace(),
+        "session",
+        "codex",
+        "agent",
+        "agent.attached",
+        json!({"agent_id": "sess-1"}),
+    );
+    assert!(matches!(malformed.kind(), EventKind::Other { .. }));
+}
+
+#[test]
 fn session_boundaries_decode_to_typed_kinds() {
     let rebirth = EventEnvelope::session_rebirth(workspace(), "session");
     assert_eq!(rebirth.method, "session.rebirth");

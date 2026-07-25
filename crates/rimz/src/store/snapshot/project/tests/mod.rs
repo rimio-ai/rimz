@@ -6,7 +6,10 @@ use super::super::view::{attach_sub_agents, row_from_agent, sub_agent_from_state
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentStatus, LaunchParams, SessionOrigin};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
-use crate::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
+use crate::store::event::{
+    AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, EventEnvelope,
+};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::store::snapshot::testkit::*;
 use jiff::Timestamp;
@@ -67,6 +70,31 @@ fn launch_event(kind: &str, payload: AgentLaunchPayload) -> EventEnvelope {
     )
 }
 
+fn attach_event(
+    kind: &str,
+    agent_id: &str,
+    pane_id: &str,
+    pane_pid: Option<u32>,
+    owner_pid: u32,
+) -> EventEnvelope {
+    EventEnvelope::agent_attached(
+        workspace(),
+        "session",
+        &AgentKind::new_unchecked(kind),
+        AgentAttachPayload {
+            agent_id: AgentSessionId::from(agent_id),
+            pane_id: PaneId::parse(pane_id).expect("pane id"),
+            pane_pid,
+            runtime_owner: RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                agent_id,
+                owner_pid,
+                Some(format!("start-{owner_pid}")),
+            ),
+        },
+    )
+}
+
 fn raw_launch(
     state: AgentLaunchState,
     agent_id: &str,
@@ -102,6 +130,114 @@ mod prompt_task;
 mod subagents;
 mod timestamps;
 mod tool_stats;
+
+#[test]
+fn attach_moves_only_pane_and_runtime_owner() {
+    let prior = reduce_agent_states(&[raw_lifecycle_at(
+        "codex",
+        1,
+        json!({
+            "agent_id": "sess-resumed",
+            "agent_name": "steady-coder",
+            "kind_ordinal": 4,
+            "signal": { "signal": "turn_started" },
+            "pane_id": "tmux:%1",
+            "runtime_owner": {
+                "kind": "agent",
+                "subject_id": "sess-resumed",
+                "pid": 40,
+                "process_start": "start-40",
+            },
+            "prompt": "keep the lifecycle intact",
+        }),
+    )])
+    .pop()
+    .expect("prior card");
+    let attached = reduce_agent_states_seeded(
+        BTreeMap::from([((prior.kind.clone(), prior.agent_id.clone()), prior.clone())]),
+        &[attach_event(
+            "codex",
+            "sess-resumed",
+            "tmux:%4",
+            Some(84),
+            84,
+        )],
+    )
+    .into_values()
+    .next()
+    .expect("attached card");
+
+    assert_eq!(attached.registered_at, prior.registered_at);
+    assert_eq!(attached.status, prior.status);
+    assert_eq!(attached.phase, prior.phase);
+    assert_eq!(attached.last_activity, prior.last_activity);
+    assert_eq!(attached.turn_started_at, prior.turn_started_at);
+    assert_eq!(attached.kind_ordinal, prior.kind_ordinal);
+    assert_eq!(attached.name, prior.name);
+    let mut expected = prior;
+    expected.pane = Some(PaneRef {
+        pane_pid: Some(84),
+        ..PaneRef::from_id(PaneId::parse("tmux:%4").expect("pane id"))
+    });
+    expected.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "sess-resumed",
+        84,
+        Some("start-84".to_owned()),
+    ));
+    assert_eq!(attached, expected);
+}
+
+#[test]
+fn attach_for_unknown_session_mints_no_card() {
+    assert!(
+        reduce_agent_states(&[attach_event("codex", "unknown", "tmux:%4", Some(84), 84,)])
+            .is_empty()
+    );
+}
+
+#[test]
+fn later_registration_in_attached_pane_supersedes_resumed_card() {
+    let events = vec![
+        raw_lifecycle_at(
+            "codex",
+            1,
+            json!({
+                "agent_id": "sess-resumed",
+                "agent_name": "steady-coder",
+                "signal": { "signal": "registered" },
+                "runtime_owner": {
+                    "kind": "agent",
+                    "subject_id": "sess-resumed",
+                    "pid": 40,
+                    "process_start": "start-40",
+                },
+            }),
+        ),
+        attach_event("codex", "sess-resumed", "tmux:%4", Some(84), 84),
+        raw_lifecycle_at(
+            "codex",
+            2,
+            json!({
+                "agent_id": "sess-new",
+                "agent_name": "new-coder",
+                "signal": { "signal": "registered" },
+                "pane_id": "tmux:%4",
+                "runtime_owner": {
+                    "kind": "agent",
+                    "subject_id": "sess-new",
+                    "pid": 85,
+                    "process_start": "start-85",
+                },
+            }),
+        ),
+    ];
+    let mut snapshot = room(reduce_agent_states(&events));
+    snapshot.reap_stale_sessions();
+
+    assert_eq!(snapshot.agents.len(), 1);
+    assert_eq!(snapshot.agents[0].agent_id.as_str(), "sess-new");
+}
 
 #[test]
 fn serialized_lifecycle_event_folds_like_constructed_event() {

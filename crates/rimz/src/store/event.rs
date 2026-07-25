@@ -61,6 +61,15 @@ pub struct AgentLaunchPayload {
     pub description: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentAttachPayload {
+    pub agent_id: AgentSessionId,
+    pub pane_id: PaneId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_pid: Option<u32>,
+    pub runtime_owner: RuntimeOwner,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionDeathCause {
@@ -279,6 +288,7 @@ impl AgentLifecyclePayload {
 #[derive(Clone, Debug)]
 pub enum EventKind<'a> {
     AgentLifecycle(Box<AgentLifecyclePayload>),
+    AgentAttach(AgentAttachPayload),
     AgentLaunch(AgentLaunchPayload),
     Message {
         method: MessageEventMethod,
@@ -299,6 +309,7 @@ impl PartialEq for EventKind<'_> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::AgentLifecycle(left), Self::AgentLifecycle(right)) => left == right,
+            (Self::AgentAttach(left), Self::AgentAttach(right)) => left == right,
             (Self::AgentLaunch(left), Self::AgentLaunch(right)) => left == right,
             (
                 Self::Message {
@@ -443,6 +454,24 @@ impl EventEnvelope {
         )
     }
 
+    pub fn agent_attached(
+        workspace_id: WorkspaceId,
+        session_name: impl Into<String>,
+        kind: &AgentKind,
+        payload: AgentAttachPayload,
+    ) -> Self {
+        let params = serde_json::to_value(&payload)
+            .expect("AgentAttachPayload contains only JSON-serializable fields");
+        Self::new(
+            workspace_id,
+            session_name,
+            kind.as_str(),
+            "agent",
+            "agent.attached",
+            params,
+        )
+    }
+
     pub fn kind(&self) -> EventKind<'_> {
         match self.method.as_str() {
             AGENT_LIFECYCLE_METHOD => {
@@ -457,6 +486,12 @@ impl EventEnvelope {
             }
             "agent.launched" => serde_json::from_str(self.params.get())
                 .map(EventKind::AgentLaunch)
+                .unwrap_or(EventKind::Other {
+                    method: self.method.as_str(),
+                    params: &self.params,
+                }),
+            "agent.attached" => serde_json::from_str(self.params.get())
+                .map(EventKind::AgentAttach)
                 .unwrap_or(EventKind::Other {
                     method: self.method.as_str(),
                     params: &self.params,

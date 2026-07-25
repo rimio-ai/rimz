@@ -15,8 +15,8 @@ use crate::ids::{AgentKind, AgentSessionId};
 use crate::message::{MessageBody, MessageStatus};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
-    AgentLaunchPayload, AgentLaunchState, AgentLifecyclePayload, EventEnvelope, EventKind,
-    MessageEventPayload,
+    AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, AgentLifecyclePayload, EventEnvelope,
+    EventKind, MessageEventPayload,
 };
 
 mod identity;
@@ -134,6 +134,10 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                 let kind = AgentKind::new_unchecked(envelope.source.clone());
                 reduce_agent_launch(&mut map, &mut identity, envelope, &kind, payload);
             }
+            EventKind::AgentAttach(payload) => {
+                let kind = AgentKind::new_unchecked(envelope.source.clone());
+                reduce_agent_attach(&mut map, &kind, payload);
+            }
             EventKind::AgentLifecycle(payload) => {
                 reduce_lifecycle_event(&mut map, &mut identity, envelope, payload);
             }
@@ -155,6 +159,29 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
         }
     }
     (map, identity.state())
+}
+
+fn reduce_agent_attach(
+    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    kind: &AgentKind,
+    payload: &AgentAttachPayload,
+) {
+    let key = (kind.clone(), payload.agent_id.clone());
+    let Some(state) = map.get_mut(&key) else {
+        debug!(
+            target: "rimz::agent::binding",
+            kind = %kind,
+            agent_id = %payload.agent_id,
+            pane_id = %payload.pane_id,
+            "agent.attached event for unknown session ignored",
+        );
+        return;
+    };
+    state.pane = Some(PaneRef {
+        pane_pid: payload.pane_pid,
+        ..PaneRef::from_id(payload.pane_id.clone())
+    });
+    state.runtime_owner = Some(payload.runtime_owner.clone());
 }
 
 fn reduce_lifecycle_event(
