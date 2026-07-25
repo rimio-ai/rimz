@@ -364,9 +364,9 @@ pub struct MessageRecord {
     /// this as the `MAX_DELIVERY_ATTEMPTS` guard.
     #[serde(default)]
     pub attempts: u32,
-    /// Sends that reached a pane but were not confirmed by a lifecycle hook.
-    /// Stale-`Sent` reconciliation uses this as the
-    /// `DEFAULT_MAX_DELIVERY_ATTEMPTS` guard.
+    /// Prompt sends that reached a pane but were not confirmed by a lifecycle
+    /// hook. Stale-`Sent` prompt reconciliation uses this as the
+    /// `DEFAULT_MAX_DELIVERY_ATTEMPTS` guard; commands are never resent.
     #[serde(default)]
     pub unconfirmed_sends: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -667,7 +667,7 @@ impl MessageRecord {
             && self.unconfirmed_sends > 0
             && self
                 .last_sent_at
-                .is_some_and(|sent_at| now <= sent_at + self.body.delivery_window())
+                .is_some_and(|sent_at| now <= sent_at + self.body.delivery_window() * 2)
     }
 
     /// Next time the elder should sweep this record, or `None` if it arms nothing.

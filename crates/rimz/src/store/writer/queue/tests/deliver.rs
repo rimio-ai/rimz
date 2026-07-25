@@ -123,7 +123,7 @@ fn record_sent_then_turn_start_confirms_delivery() {
             &sent.agent_id,
             None,
             DeliveryAck::TurnStarted {
-                segments: &["next".to_owned()],
+                prompt: Some("next"),
             },
             "session",
         )
@@ -240,7 +240,7 @@ fn confirm_delivered_for_card_selects_oldest_matching_batch() {
         let ids = |ids: &[u64]| ids.iter().copied().map(message_id).collect::<Vec<_>>();
 
         let ack = match case.confirmed {
-            MessageBody::Prompt => DeliveryAck::TurnStarted { segments: &[] },
+            MessageBody::Prompt => DeliveryAck::TurnStarted { prompt: None },
             MessageBody::Command => DeliveryAck::Compaction,
         };
         let delivered = q
@@ -300,7 +300,7 @@ fn correlated_ack_confirms_matching_prompt_instead_of_oldest_sent() {
             &matching.agent_id,
             None,
             DeliveryAck::TurnStarted {
-                segments: &["rimz prompt".to_owned()],
+                prompt: Some("rimz prompt"),
             },
             "session",
         )
@@ -309,6 +309,58 @@ fn correlated_ack_confirms_matching_prompt_instead_of_oldest_sent() {
     assert_eq!(delivered.len(), 1);
     assert_eq!(delivered[0].message_id, matching.message_id);
     assert_eq!(q.live(), vec![oldest]);
+}
+
+#[test]
+fn correlated_ack_aligns_unprefixed_and_mixed_batches() {
+    for (first_sender, prompt) in [
+        (MessageSender::Human, "first\n\nsecond"),
+        (
+            MessageSender::Agent {
+                kind: AgentKind::new_unchecked("codex"),
+                name: None,
+                profile: None,
+                role: Some("planner".to_owned()),
+                channel: None,
+            },
+            "from @planner: first\n\nsecond",
+        ),
+    ] {
+        let q = Queue::new();
+        let first = q.queue_with(1, |message| {
+            message.text = "first".to_owned();
+            message.sender = first_sender;
+        });
+        q.queue_with(2, |message| message.text = "second".to_owned());
+        let claimed = q
+            .claim_delivery_batch(&first.message_id, AgentStatus::Idle, Timestamp::now())
+            .unwrap()
+            .expect("batch claimed");
+        let sent = q.record_sent_batch(&claimed, "session").unwrap();
+
+        let delivered = q
+            .confirm_delivered_for_card(
+                &first.kind,
+                &first.agent_id,
+                None,
+                DeliveryAck::TurnStarted {
+                    prompt: Some(prompt),
+                },
+                "session",
+            )
+            .unwrap();
+
+        assert_eq!(
+            delivered
+                .iter()
+                .map(|message| message.message_id.clone())
+                .collect::<Vec<_>>(),
+            sent.iter()
+                .map(|message| message.message_id.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(q.live().is_empty());
+    }
 }
 
 #[test]
@@ -322,7 +374,7 @@ fn correlated_ack_ignores_unmatched_reported_text() {
             &sent.agent_id,
             None,
             DeliveryAck::TurnStarted {
-                segments: &["human prompt".to_owned()],
+                prompt: Some("human prompt"),
             },
             "session",
         )
@@ -335,18 +387,15 @@ fn correlated_ack_ignores_unmatched_reported_text() {
 #[test]
 fn correlated_ack_absorbs_queued_late_ack_but_not_a_claimed_record() {
     let q = Queue::new();
-    let now = Timestamp::now();
-    let queued = q.queue_with(1, |message| {
-        message.text = "late prompt".to_owned();
-        message.unconfirmed_sends = 1;
-        message.last_sent_at = Some(now);
-    });
-    let claimed = q.queue_with(2, |message| {
-        message.text = "claimed prompt".to_owned();
-        message.unconfirmed_sends = 1;
-        message.last_sent_at = Some(now);
-    });
-    q.claim_message_for_steer(&claimed.message_id, now)
+    let queued = q.sent_with(1, |message| message.text = "late prompt".to_owned());
+    let claimed = q.sent_with(2, |message| message.text = "claimed prompt".to_owned());
+    let reconcile_at =
+        claimed.last_sent_at.expect("sent timestamp") + MessageBody::Prompt.delivery_window();
+    let report = q
+        .reconcile_stale_sent_messages("session", reconcile_at, 3, |_| false)
+        .unwrap();
+    assert_eq!(report.requeued, 2);
+    q.claim_message_for_steer(&claimed.message_id, reconcile_at)
         .unwrap()
         .expect("claimed");
 
@@ -356,7 +405,7 @@ fn correlated_ack_absorbs_queued_late_ack_but_not_a_claimed_record() {
             &queued.agent_id,
             None,
             DeliveryAck::TurnStarted {
-                segments: &["late prompt".to_owned()],
+                prompt: Some("late prompt"),
             },
             "session",
         )
@@ -367,7 +416,7 @@ fn correlated_ack_absorbs_queued_late_ack_but_not_a_claimed_record() {
             &claimed.agent_id,
             None,
             DeliveryAck::TurnStarted {
-                segments: &["claimed prompt".to_owned()],
+                prompt: Some("claimed prompt"),
             },
             "session",
         )

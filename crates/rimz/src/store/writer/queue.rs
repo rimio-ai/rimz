@@ -24,12 +24,23 @@ pub struct ReconcileReport {
 }
 
 pub enum DeliveryAck<'a> {
-    /// A turn started. Segments are the submitted prompt's record texts in
-    /// order; an empty slice means the adapter reported no usable text.
+    /// A turn started. `None` means the adapter reported no usable prompt text.
     TurnStarted {
-        segments: &'a [String],
+        prompt: Option<&'a str>,
     },
     Compaction,
+}
+
+fn same_submitted_batch(first: &MessageRecord, candidate: &MessageRecord) -> bool {
+    if first.message_id == candidate.message_id {
+        return true;
+    }
+    if let Some(batch_id) = first.batch_id.as_ref() {
+        return candidate.batch_id.as_ref() == Some(batch_id);
+    }
+    first.last_sent_at.is_some()
+        && candidate.batch_id.is_none()
+        && candidate.last_sent_at == first.last_sent_at
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -735,23 +746,35 @@ impl Store {
                     .collect()
             };
             let selected = match ack {
-                DeliveryAck::TurnStarted { segments } if !segments.is_empty() => {
+                DeliveryAck::TurnStarted {
+                    prompt: Some(prompt),
+                } if !prompt.trim().is_empty() => {
+                    let mut confirmable = queue
+                        .live()
+                        .iter()
+                        .filter(|message| {
+                            message.body == MessageBody::Prompt
+                                && message.same_card(card)
+                                && (message.status == MessageStatus::Sent
+                                    || message.awaiting_late_ack(now))
+                        })
+                        .collect::<Vec<_>>();
+                    confirmable.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
                     let mut selected = BTreeSet::new();
-                    for segment in segments {
-                        if let Some(message) = queue
-                            .live()
+                    for first in &confirmable {
+                        let batch = confirmable
                             .iter()
-                            .filter(|message| {
-                                message.body == MessageBody::Prompt
-                                    && message.same_card(card)
-                                    && (message.status == MessageStatus::Sent
-                                        || message.awaiting_late_ack(now))
-                                    && message.text.trim() == segment.trim()
-                                    && !selected.contains(message.message_id.as_str())
-                            })
-                            .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+                            .copied()
+                            .filter(|message| same_submitted_batch(first, message))
+                            .collect::<Vec<_>>();
+                        if crate::harness::target::align_submitted_prompt(prompt, &batch).is_some()
                         {
-                            selected.insert(message.message_id.as_str().to_owned());
+                            selected.extend(
+                                batch
+                                    .iter()
+                                    .map(|message| message.message_id.as_str().to_owned()),
+                            );
+                            break;
                         }
                     }
                     selected

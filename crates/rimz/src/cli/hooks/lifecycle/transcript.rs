@@ -233,7 +233,12 @@ pub(super) fn record_conversation(
                 .map(str::trim)
                 .filter(|prompt| !prompt.is_empty())
             {
-                for segment in rimz::harness::target::split_batched_prompt(prompt) {
+                let delivered_refs = delivered.iter().collect::<Vec<_>>();
+                let aligned =
+                    rimz::harness::target::align_submitted_prompt(prompt, &delivered_refs);
+                let segments =
+                    aligned.unwrap_or_else(|| rimz::harness::target::split_batched_prompt(prompt));
+                for segment in segments {
                     let segment = segment.trim();
                     if segment.is_empty() {
                         continue;
