@@ -210,7 +210,7 @@ mod tests {
     fn until(stamp: Timestamp) -> Arming {
         Arming {
             enabled: true,
-            at: Timestamp::from_second(0).expect("timestamp"),
+            at: Timestamp::from_second(0).ok(),
             pause_until: Some(stamp),
             strikes: None,
         }
@@ -286,7 +286,7 @@ mod tests {
         let prior = seconds_before(stamp, 600);
         let manual = Arming {
             enabled: false,
-            at: stamp,
+            at: Some(stamp),
             pause_until: None,
             strikes: Some(3),
         };
@@ -403,7 +403,7 @@ mod tests {
         );
         let enabled = Arming {
             enabled: true,
-            at: now.timestamp(),
+            at: Some(now.timestamp()),
             pause_until: None,
             strikes: None,
         };

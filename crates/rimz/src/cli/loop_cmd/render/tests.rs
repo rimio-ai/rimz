@@ -736,19 +736,19 @@ fn task_timing_maps_to_existing_list_and_watch_labels() {
     let now = Timestamp::from_second(10_000).unwrap();
     let manual = Arming {
         enabled: false,
-        at: now,
+        at: Some(now),
         pause_until: None,
         strikes: None,
     };
     let strikes = Arming {
         enabled: false,
-        at: now,
+        at: Some(now),
         pause_until: None,
         strikes: Some(3),
     };
     let timed = Arming {
         enabled: true,
-        at: now,
+        at: Some(now),
         pause_until: Timestamp::from_second(10_300).ok(),
         strikes: None,
     };
@@ -839,7 +839,7 @@ fn show_headline_keeps_blocked_before_pause() {
     let now = Timestamp::from_second(10_000).unwrap();
     let pause = Arming {
         enabled: true,
-        at: Timestamp::MIN,
+        at: None,
         pause_until: Timestamp::from_second(10_300).ok(),
         strikes: None,
     };
@@ -859,7 +859,7 @@ fn running_watch_row_retains_next_fire_through_pause_overlay() {
     let now = Timestamp::from_second(10_000).unwrap();
     let pause = Arming {
         enabled: true,
-        at: Timestamp::MIN,
+        at: None,
         pause_until: Timestamp::from_second(10_300).ok(),
         strikes: None,
     };

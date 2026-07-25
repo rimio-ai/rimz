@@ -111,9 +111,12 @@ impl TaskCatalog {
             .transpose()?
             .flatten()
             .map(|project| (project.tasks, project.state));
-        let mut catalog = Self::from_layers(instances, machine_tasks, project);
-        catalog.project_root = project_root.map(Path::to_path_buf);
-        Ok(catalog)
+        Ok(Self::from_layers(
+            instances,
+            machine_tasks,
+            project,
+            project_root,
+        ))
     }
 
     /// Best-effort load for elder, doctor, and maintenance reads.
@@ -126,12 +129,15 @@ impl TaskCatalog {
                 .flatten()
                 .map(|project| (project.tasks, project.state))
         });
-        let mut catalog = Self::from_layers(instances, machine.tasks, project);
-        catalog.project_root = project_root.map(Path::to_path_buf);
-        catalog
+        Self::from_layers(instances, machine.tasks, project, project_root)
     }
 
-    fn from_layers(instances: Tasks, machine: Tasks, project: Option<(Tasks, TrustState)>) -> Self {
+    fn from_layers(
+        instances: Tasks,
+        machine: Tasks,
+        project: Option<(Tasks, TrustState)>,
+        project_root: Option<&Path>,
+    ) -> Self {
         let mut overlay_keys = instances
             .0
             .iter()
@@ -153,10 +159,6 @@ impl TaskCatalog {
         }
         let mut runnable = merge_base(instances, machine);
         let mut visible = runnable.clone();
-        let project_root = project
-            .as_ref()
-            .and_then(|(tasks, _)| tasks.0.values().next())
-            .map(|entry| entry.root.clone());
         if let Some((project, state)) = project {
             let project = project.0.into_iter().map(|(name, entry)| {
                 let task = LoadedTask::new(&name, entry, TaskSource::Project { state });
@@ -177,7 +179,7 @@ impl TaskCatalog {
             visible,
             runnable,
             overlay_keys,
-            project_root,
+            project_root: project_root.map(Path::to_path_buf),
         }
     }
 
@@ -212,7 +214,11 @@ impl TaskCatalog {
             instances::remove(name)?;
             config_edit::set_entry(config_edit::TaskStore::Machine, name, entry)?;
         }
-        clear_overlays(name, TaskSource::from_entry(entry), None)
+        let source = TaskSource::from_entry(entry);
+        clear_overlays(
+            &TaskKey::for_task(name, source, &entry.resolved_root()),
+            source,
+        )
     }
 
     pub fn replace_project(
@@ -276,7 +282,7 @@ impl TaskCatalog {
         })
     }
 
-    /// Remove only the definition selected by catalog precedence. Pause and
+    /// Remove only the definition selected by catalog precedence. Arming and
     /// strike overlays stay untouched because this is scheduled consumption,
     /// not an interactive edit.
     pub fn consume_scheduled(&self, name: &str) -> Result<TaskMutation> {
@@ -296,7 +302,7 @@ impl TaskCatalog {
         let scopes = TaskKey::known_scopes(self.project_root.as_deref());
         Ok(arming::prune_orphans(&self.overlay_keys, &scopes)?
             + strikes::prune_orphans(&self.overlay_keys, &scopes)?
-            + usize::from(arming::remove_legacy_pauses()?))
+            + arming::remove_legacy_pauses()?)
     }
 
     pub fn reap_dead_deliveries() -> Result<usize> {
@@ -391,18 +397,13 @@ fn merge_base(instances: Tasks, machine: Tasks) -> BTreeMap<String, LoadedTask> 
     tasks
 }
 
-fn clear_overlays(
-    name: &str,
-    source: TaskSource,
-    project_root: Option<PathBuf>,
-) -> Result<TaskMutation> {
-    let key = TaskKey::for_task(name, source, Path::new(""));
+fn clear_overlays(key: &str, source: TaskSource) -> Result<TaskMutation> {
     Ok(TaskMutation {
         changed: true,
         source: Some(source),
-        project_root,
-        cleared_arming: arming::remove(&key)?,
-        cleared_strikes: strikes::clear(&key)?,
+        project_root: None,
+        cleared_arming: arming::remove(key)?,
+        cleared_strikes: strikes::clear(key)?,
     })
 }
 
@@ -486,6 +487,7 @@ mod tests {
                 ])),
                 TrustState::Untrusted,
             )),
+            Some(Path::new("/repo")),
         );
 
         assert_eq!(
@@ -513,6 +515,7 @@ mod tests {
                 Tasks(BTreeMap::from([("same".to_owned(), task("project"))])),
                 TrustState::Trusted,
             )),
+            Some(Path::new("/repo")),
         );
 
         assert_eq!(
@@ -534,12 +537,25 @@ mod tests {
     }
 
     #[test]
+    fn empty_project_layer_keeps_its_overlay_scope() {
+        let catalog = TaskCatalog::from_layers(
+            Tasks::default(),
+            Tasks::default(),
+            Some((Tasks::default(), TrustState::Trusted)),
+            Some(Path::new("/repo")),
+        );
+
+        assert_eq!(catalog.project_root.as_deref(), Some(Path::new("/repo")));
+    }
+
+    #[test]
     fn malformed_schedule_stays_visible_with_valid_action() {
         let mut entry = task("still runnable manually");
         entry.at = Some("07:00".to_owned());
         let catalog = TaskCatalog::from_layers(
             Tasks::default(),
             Tasks(BTreeMap::from([("broken".to_owned(), entry)])),
+            None,
             None,
         );
         let loaded = &catalog.visible()["broken"];

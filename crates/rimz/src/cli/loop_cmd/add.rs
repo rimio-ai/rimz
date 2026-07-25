@@ -374,25 +374,24 @@ pub(super) fn pause(args: PauseArgs, globals: &GlobalFlags) -> Result<()> {
 pub(super) fn enable(args: ScopeArgs, globals: &GlobalFlags) -> Result<()> {
     let tasks = scoped_tasks(args, globals)?;
     let now = Timestamp::now();
+    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let entries = arming::load();
     let mut out = ui::out();
     for (name, task) in tasks {
         let key = task_key(&name, &task);
         let record = entries.get(&key);
         let already_enabled = ArmState::resolve(record, task.source(), now) == ArmState::Live
-            && record.is_none_or(|record| {
-                record.enabled && record.pause_until.is_none() && record.strikes.is_none()
-            });
+            && record.is_none_or(|record| record.enabled && record.strikes.is_none());
         if already_enabled {
+            arming::clear_expired_pause(&key, now)?;
             strikes::clear(&key)?;
             writeln!(out, "loop `{name}`: already enabled")?;
             continue;
         }
-        arming::enable(&key)?;
+        let enabled = arming::enable(&key)?;
         strikes::clear(&key)?;
-        let current = arming::load();
         write!(out, "loop `{name}`: enabled")?;
-        if let Some(next) = task_next_fire_text(&name, &task, current.get(&key), now) {
+        if let Some(next) = task_next_fire_text(&name, &task, Some(&enabled), &now_zoned) {
             write!(out, " · next {next}")?;
         }
         writeln!(out)?;
