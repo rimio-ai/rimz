@@ -496,19 +496,19 @@ fn task_timing_state_precedence_and_classification() {
     let stale = crate::trust::TrustState::Stale;
     let manual = arming::Arming {
         enabled: false,
-        at: now.timestamp(),
+        at: Some(now.timestamp()),
         pause_until: None,
         strikes: Some(3),
     };
     let timed = arming::Arming {
         enabled: true,
-        at: now.timestamp(),
+        at: Some(now.timestamp()),
         pause_until: Some(after(&now, 5 * 60)),
         strikes: None,
     };
     let ended = arming::Arming {
         enabled: true,
-        at: before(&now, 20 * 60),
+        at: Some(before(&now, 20 * 60)),
         pause_until: Some(before(&now, 5 * 60)),
         strikes: None,
     };

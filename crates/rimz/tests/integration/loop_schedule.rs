@@ -598,6 +598,27 @@ fn loop_enable_disable_pause_workflow() {
     assert!(!loop_ok(&env, &["loop", "list"]).contains("paused ·"));
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("already enabled"));
 
+    let key = machine_task_key("probe");
+    let prior_enable = Timestamp::now() - SignedDuration::from_secs(60);
+    let expired = BTreeMap::from([(
+        key.clone(),
+        Arming {
+            enabled: true,
+            at: Some(prior_enable),
+            pause_until: Some(Timestamp::now() - SignedDuration::from_secs(1)),
+            strikes: None,
+        },
+    )]);
+    std::fs::write(
+        arming::path(&env.state_root()),
+        serde_json::to_vec(&expired).expect("serialize expired pause"),
+    )
+    .expect("write expired pause");
+    assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("already enabled"));
+    let enabled = read_loop_arming(&env)[&key];
+    assert_eq!(enabled.at, Some(prior_enable));
+    assert_eq!(enabled.pause_until, None);
+
     loop_ok(
         &env,
         &["loop", "add", "second", "--check", "true", "--every", "15m"],

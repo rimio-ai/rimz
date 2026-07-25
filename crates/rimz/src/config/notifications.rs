@@ -226,6 +226,7 @@ pub enum NotificationKind {
     Waiting,
     Failed,
     Paused,
+    #[serde(alias = "loop_paused")]
     LoopDisabled,
     Success,
     Coalesced,
@@ -523,6 +524,17 @@ when = { kind = ["waiting"], worktree = ["feat/*"], handle = ["@planner"] }
         assert_eq!(prefs.handler.len(), 1);
         assert_eq!(prefs.effective_handlers().len(), 2);
         assert!(prefs.has_handlers());
+    }
+
+    #[test]
+    fn legacy_loop_paused_condition_deserializes_as_loop_disabled() {
+        let condition: NotifyCondition =
+            toml::from_str(r#"kind = ["loop_paused"]"#).expect("legacy condition");
+
+        assert_eq!(condition.kind, vec![NotificationKind::LoopDisabled]);
+        let encoded = toml::to_string(&condition).expect("canonical condition");
+        assert!(encoded.contains("loop_disabled"), "{encoded}");
+        assert!(!encoded.contains("loop_paused"), "{encoded}");
     }
 
     #[test]

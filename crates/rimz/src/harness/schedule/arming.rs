@@ -17,6 +17,7 @@ use crate::ids::WorkspaceId;
 use crate::store::paths::state_home;
 
 const STORE: OverlayStore = OverlayStore::new("loop-arming.json", "loop-arming.lock");
+const LEGACY_PAUSE_STORE: OverlayStore = OverlayStore::new("loop-pauses.json", "loop-pauses.lock");
 const MACHINE_SCOPE: &str = "machine::";
 
 #[derive(Debug, thiserror::Error)]
@@ -50,7 +51,8 @@ type Result<T> = std::result::Result<T, ArmingError>;
 pub struct Arming {
     pub enabled: bool,
     /// When this enable or disable took effect.
-    pub at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pause_until: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -131,7 +133,7 @@ pub fn load() -> BTreeMap<String, Arming> {
     load_from(&state_home())
 }
 
-pub fn enable(key: &str) -> Result<()> {
+pub fn enable(key: &str) -> Result<Arming> {
     enable_in(&state_home(), key, Timestamp::now())
 }
 
@@ -146,8 +148,17 @@ pub fn pause(key: &str, source: TaskSource, until: Timestamp) -> Result<()> {
     pause_in(&state_home(), key, source, until)
 }
 
-pub fn disable_if_live(key: &str, strikes: Option<u32>, now: Timestamp) -> Result<bool> {
-    disable_if_live_in(&state_home(), key, strikes, now)
+pub fn clear_expired_pause(key: &str, now: Timestamp) -> Result<bool> {
+    clear_expired_pause_in(&state_home(), key, now)
+}
+
+pub fn disable_if_live(
+    key: &str,
+    source: TaskSource,
+    strikes: Option<u32>,
+    now: Timestamp,
+) -> Result<bool> {
+    disable_if_live_in(&state_home(), key, source, strikes, now)
 }
 
 pub fn remove(key: &str) -> Result<bool> {
@@ -162,20 +173,15 @@ pub fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Res
     prune_orphans_in(&state_home(), known, scopes)
 }
 
-pub fn remove_legacy_pauses() -> Result<bool> {
-    let path = state_home().join("rimz").join("loop-pauses.json");
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(true),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(err) => Err(err.into()),
-    }
+pub fn remove_legacy_pauses() -> Result<usize> {
+    remove_legacy_pauses_in(&state_home())
 }
 
 pub fn effective_last_fire(stamp: Timestamp, record: Option<&Arming>, now: Timestamp) -> Timestamp {
     let Some(record) = record else {
         return stamp;
     };
-    let enabled_at = record.enabled.then_some(record.at);
+    let enabled_at = record.enabled.then_some(record.at).flatten();
     let ended_pause = record.pause_until.filter(|until| *until <= now);
     enabled_at
         .into_iter()
@@ -187,17 +193,15 @@ fn load_from(state_root: &Path) -> BTreeMap<String, Arming> {
     STORE.load(state_root)
 }
 
-fn enable_in(state_root: &Path, key: &str, now: Timestamp) -> Result<()> {
-    set_in(
-        state_root,
-        key,
-        Arming {
-            enabled: true,
-            at: now,
-            pause_until: None,
-            strikes: None,
-        },
-    )
+fn enable_in(state_root: &Path, key: &str, now: Timestamp) -> Result<Arming> {
+    let entry = Arming {
+        enabled: true,
+        at: Some(now),
+        pause_until: None,
+        strikes: None,
+    };
+    set_in(state_root, key, entry)?;
+    Ok(entry)
 }
 
 fn disable_in(state_root: &Path, key: &str, strikes: Option<u32>, now: Timestamp) -> Result<()> {
@@ -206,7 +210,7 @@ fn disable_in(state_root: &Path, key: &str, strikes: Option<u32>, now: Timestamp
         key,
         Arming {
             enabled: false,
-            at: now,
+            at: Some(now),
             pause_until: None,
             strikes,
         },
@@ -218,9 +222,7 @@ fn pause_in(state_root: &Path, key: &str, source: TaskSource, until: Timestamp) 
         .mutate(state_root, |entries: &mut BTreeMap<String, Arming>| {
             let entry = entries.entry(key.to_owned()).or_insert(Arming {
                 enabled: !matches!(source, TaskSource::Project { .. }),
-                // A pause of an implicitly-live machine task is not an enable
-                // edge; the ended pause supplies its own anti-replay edge.
-                at: Timestamp::MIN,
+                at: None,
                 pause_until: None,
                 strikes: None,
             });
@@ -231,9 +233,25 @@ fn pause_in(state_root: &Path, key: &str, source: TaskSource, until: Timestamp) 
         .map_err(Into::into)
 }
 
+fn clear_expired_pause_in(state_root: &Path, key: &str, now: Timestamp) -> Result<bool> {
+    STORE
+        .mutate(state_root, |entries: &mut BTreeMap<String, Arming>| {
+            let Some(entry) = entries.get_mut(key) else {
+                return (false, false);
+            };
+            if !entry.pause_until.is_some_and(|until| until <= now) {
+                return (false, false);
+            }
+            entry.pause_until = None;
+            (true, true)
+        })
+        .map_err(Into::into)
+}
+
 fn disable_if_live_in(
     state_root: &Path,
     key: &str,
+    source: TaskSource,
     strikes: Option<u32>,
     now: Timestamp,
 ) -> Result<bool> {
@@ -244,12 +262,12 @@ fn disable_if_live_in(
             }) {
                 return (false, false);
             }
-            if entries.get(key).is_none() && !key.starts_with(MACHINE_SCOPE) {
+            if entries.get(key).is_none() && matches!(source, TaskSource::Project { .. }) {
                 return (false, false);
             }
             let entry = Arming {
                 enabled: false,
-                at: now,
+                at: Some(now),
                 pause_until: None,
                 strikes,
             };
@@ -258,6 +276,21 @@ fn disable_if_live_in(
             (true, changed)
         })
         .map_err(Into::into)
+}
+
+fn remove_legacy_pauses_in(state_root: &Path) -> Result<usize> {
+    let mut removed = 0;
+    for path in [
+        LEGACY_PAUSE_STORE.path(state_root),
+        LEGACY_PAUSE_STORE.lock_path(state_root),
+    ] {
+        match std::fs::remove_file(path) {
+            Ok(()) => removed += 1,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(removed)
 }
 
 fn set_in(state_root: &Path, key: &str, entry: Arming) -> Result<()> {
@@ -308,7 +341,7 @@ mod tests {
     fn record(enabled: bool) -> Arming {
         Arming {
             enabled,
-            at: ts(10),
+            at: Some(ts(10)),
             pause_until: None,
             strikes: None,
         }
@@ -383,19 +416,19 @@ mod tests {
         .expect("project pause");
         let entries = load_from(dir.path());
         assert!(entries["machine::nightly"].enabled);
-        assert_eq!(entries["machine::nightly"].at, Timestamp::MIN);
+        assert_eq!(entries["machine::nightly"].at, None);
         assert!(!entries["ws_0123456789abcdef01234567::nightly"].enabled);
     }
 
     #[test]
     fn effective_stamp_uses_only_live_enable_and_ended_pause_edges() {
         let enabled = Arming {
-            at: ts(20),
+            at: Some(ts(20)),
             pause_until: Some(ts(30)),
             ..record(true)
         };
         let disabled = Arming {
-            at: ts(40),
+            at: Some(ts(40)),
             pause_until: None,
             ..record(false)
         };
@@ -411,12 +444,24 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         pause_in(dir.path(), "machine::nightly", TaskSource::Config, ts(30)).expect("pause");
         assert!(
-            !disable_if_live_in(dir.path(), "machine::nightly", Some(3), ts(20))
-                .expect("active pause")
+            !disable_if_live_in(
+                dir.path(),
+                "machine::nightly",
+                TaskSource::Config,
+                Some(3),
+                ts(20)
+            )
+            .expect("active pause")
         );
         assert!(
-            disable_if_live_in(dir.path(), "machine::nightly", Some(3), ts(30))
-                .expect("ended pause")
+            disable_if_live_in(
+                dir.path(),
+                "machine::nightly",
+                TaskSource::Config,
+                Some(3),
+                ts(30)
+            )
+            .expect("ended pause")
         );
         assert_eq!(
             ArmState::resolve(
@@ -426,5 +471,73 @@ mod tests {
             ),
             ArmState::Disabled(DisabledReason::Strikes(3))
         );
+    }
+
+    #[test]
+    fn automatic_disable_respects_missing_record_source_defaults() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(
+            !disable_if_live_in(
+                dir.path(),
+                "ws_0123456789abcdef01234567::nightly",
+                project(),
+                Some(3),
+                ts(20),
+            )
+            .expect("project default")
+        );
+        assert!(
+            disable_if_live_in(
+                dir.path(),
+                "machine::nightly",
+                TaskSource::Config,
+                Some(3),
+                ts(20),
+            )
+            .expect("machine default")
+        );
+    }
+
+    #[test]
+    fn clearing_an_expired_pause_preserves_the_enable_edge() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let key = "machine::nightly";
+        set_in(
+            dir.path(),
+            key,
+            Arming {
+                enabled: true,
+                at: Some(ts(10)),
+                pause_until: Some(ts(20)),
+                strikes: None,
+            },
+        )
+        .expect("seed arming");
+
+        assert!(clear_expired_pause_in(dir.path(), key, ts(20)).expect("clear pause"));
+        assert_eq!(
+            load_from(dir.path())[key],
+            Arming {
+                enabled: true,
+                at: Some(ts(10)),
+                pause_until: None,
+                strikes: None,
+            }
+        );
+    }
+
+    #[test]
+    fn legacy_pause_cleanup_removes_data_and_lock() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data = LEGACY_PAUSE_STORE.path(dir.path());
+        let lock = LEGACY_PAUSE_STORE.lock_path(dir.path());
+        std::fs::create_dir_all(data.parent().expect("legacy parent")).expect("state dir");
+        std::fs::write(&data, "{}").expect("legacy data");
+        std::fs::write(&lock, "").expect("legacy lock");
+
+        assert_eq!(remove_legacy_pauses_in(dir.path()).expect("cleanup"), 2);
+        assert!(!data.exists());
+        assert!(!lock.exists());
+        assert_eq!(remove_legacy_pauses_in(dir.path()).expect("idempotent"), 0);
     }
 }

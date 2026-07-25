@@ -35,7 +35,7 @@ impl OverlayStore {
         state_root.join("rimz").join(self.data_name)
     }
 
-    fn lock_path(&self, state_root: &Path) -> PathBuf {
+    pub(super) fn lock_path(&self, state_root: &Path) -> PathBuf {
         state_root.join("rimz").join(self.lock_name)
     }
 

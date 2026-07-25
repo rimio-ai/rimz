@@ -61,7 +61,7 @@ pub fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> RunTransi
     if signal != strikes::Signal::Strike || count < max {
         return RunTransition::Recorded;
     }
-    match arming::disable_if_live(&key, Some(count), Timestamp::now()) {
+    match arming::disable_if_live(&key, task.source(), Some(count), Timestamp::now()) {
         Ok(true) => RunTransition::AutoDisabled { strikes: count },
         Ok(false) => RunTransition::Recorded,
         Err(err) => {

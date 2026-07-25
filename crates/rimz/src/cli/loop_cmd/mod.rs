@@ -345,14 +345,13 @@ fn task_next_fire_text(
     name: &str,
     task: &LoadedTask,
     arming: Option<&Arming>,
-    now: Timestamp,
+    now: &jiff::Zoned,
 ) -> Option<String> {
     let runtime = runtime_for_root(&task.entry().resolved_root())?;
     let stamps = schedule::last_stamps(&runtime);
-    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    observe_task_timing(name, task, &stamps, arming, &now_zoned)
+    observe_task_timing(name, task, &stamps, arming, now)
         .next_timestamp()
-        .map(|next| ui::rel_until(next, now))
+        .map(|next| ui::rel_until(next, now.timestamp()))
 }
 
 fn finish_project_mutation(
