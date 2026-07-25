@@ -34,6 +34,7 @@ const GENERATED_SNAPSHOT: &str = "pricing/litellm-pricing.json";
 const THEME_CATALOG_DIR: &str = "themes/alacritty";
 const PRESENCE_PLUGIN_ENV: &str = "RIMZ_EMBED_PRESENCE_PLUGIN";
 const BUILD_PROFILE_OVERRIDE_ENV: &str = "RIMZ_BUILD_PROFILE_OVERRIDE";
+const BUILD_VERSION_OVERRIDE_ENV: &str = "RIMZ_BUILD_VERSION_OVERRIDE";
 const PRESENCE_PLUGIN_VENDOR_DIR: &str = "presence";
 const PRESENCE_PLUGIN_OUT: &str = "rimz-presence-zellij.wasm";
 const PRESENCE_PLUGIN_PROVENANCE: &str = "rimz-presence-zellij.wasm.provenance.json";
@@ -88,6 +89,14 @@ fn emit_build_version() {
     // might be, so skip the git walk and use the crate version verbatim.
     if vcs_info.exists() {
         println!("cargo:rustc-env=RIMZ_VERSION={package_version}");
+        return;
+    }
+    println!("cargo:rerun-if-env-changed={BUILD_VERSION_OVERRIDE_ENV}");
+    if let Some(version) = env::var(BUILD_VERSION_OVERRIDE_ENV)
+        .ok()
+        .filter(|version| !version.is_empty())
+    {
+        println!("cargo:rustc-env=RIMZ_VERSION={version}");
         return;
     }
     emit_git_rerun_paths(&manifest);

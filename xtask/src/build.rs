@@ -18,6 +18,7 @@ const PRESENCE_PLUGIN_TARGET: &str = "wasm32-wasip1";
 const DARWIN_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 const PROFILING_RUSTFLAGS: &str = "-C force-frame-pointers=yes -C symbol-mangling-version=v0";
 const BUILD_PROFILE_OVERRIDE_ENV: &str = "RIMZ_BUILD_PROFILE_OVERRIDE";
+const BUILD_VERSION_OVERRIDE_ENV: &str = "RIMZ_BUILD_VERSION_OVERRIDE";
 const STABLE_CHECKOUT_BUILD_ATTEMPTS: usize = 3;
 pub(crate) const WASM_MAGIC: [u8; 4] = *b"\0asm";
 const ENCODED_RUSTFLAGS_SEPARATOR: &str = "\x1f";
@@ -611,12 +612,12 @@ fn stage_host_rimz(
     features: &[&str],
     rustflags: Option<&'static str>,
 ) -> Result<PathBuf> {
-    let envs = host_build_envs(root, profile, rustflags);
     let profile_dir = profile.target_dir();
     let stage = stage_bin_dir(root);
     build_at_stable_checkout(
         || git_head(root),
         || {
+            let envs = host_build_envs(root, profile, rustflags);
             build_plugin(root)?;
             run_with_env(root, "cargo", host_build_args(profile, features), &envs)?;
             fs::create_dir_all(&stage).with_context(|| format!("creating {}", stage.display()))?;
@@ -736,7 +737,79 @@ fn profiling_build_args() -> Vec<String> {
 }
 
 fn presence_plugin_embed_env(root: &Path) -> Vec<(&'static str, PathBuf)> {
-    vec![("RIMZ_EMBED_PRESENCE_PLUGIN", plugin_artifact(root))]
+    presence_plugin_embed_env_with_version(
+        root,
+        workspace_build_version(root, env!("CARGO_PKG_VERSION")),
+    )
+}
+
+fn presence_plugin_embed_env_with_version(
+    root: &Path,
+    version: Option<String>,
+) -> Vec<(&'static str, PathBuf)> {
+    let mut envs = vec![("RIMZ_EMBED_PRESENCE_PLUGIN", plugin_artifact(root))];
+    if let Some(version) = version {
+        envs.push((BUILD_VERSION_OVERRIDE_ENV, PathBuf::from(version)));
+    }
+    envs
+}
+
+/// Resolve the version already embedded by `rimz`'s build script so xtask host
+/// builds invalidate on semantic Git state rather than mutable ref/index files.
+fn workspace_build_version(root: &Path, package_version: &str) -> Option<String> {
+    let exact_release_tag = git_stdout(
+        root,
+        &[
+            "describe",
+            "--tags",
+            "--exact-match",
+            "--match",
+            "v[0-9]*",
+            "HEAD",
+        ],
+    )
+    .is_some();
+    let short_revision = git_stdout(root, &["rev-parse", "--short=12", "HEAD"])?;
+    let status = git_stdout(root, &["status", "--porcelain"])?;
+    workspace_build_version_from_git(
+        package_version,
+        exact_release_tag,
+        Some(&short_revision),
+        Some(&status),
+    )
+}
+
+fn workspace_build_version_from_git(
+    package_version: &str,
+    exact_release_tag: bool,
+    short_revision: Option<&str>,
+    status: Option<&str>,
+) -> Option<String> {
+    let short_revision = short_revision.filter(|revision| !revision.is_empty())?;
+    let dirty = !status?.is_empty();
+    if exact_release_tag && !dirty {
+        Some(package_version.to_owned())
+    } else {
+        Some(format!(
+            "{package_version}+g{short_revision}{}",
+            if dirty { ".dirty" } else { "" }
+        ))
+    }
+}
+
+fn git_stdout(root: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        // Reading the semantic state must not rewrite the index Cargo would
+        // otherwise consider an input on direct, non-xtask builds.
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 fn rustc_host_target(root: &Path) -> Result<String> {

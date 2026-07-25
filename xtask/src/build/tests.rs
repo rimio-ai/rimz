@@ -169,6 +169,57 @@ fn release_install_tells_build_script_it_is_release() {
     assert_eq!(env_value(&envs, "RUSTFLAGS"), None);
 }
 
+#[test]
+fn workspace_build_version_tracks_only_semantic_git_state() {
+    assert_eq!(
+        workspace_build_version_from_git("1.2.3", false, Some("abc123def456"), Some("")),
+        Some("1.2.3+gabc123def456".to_owned())
+    );
+    assert_eq!(
+        workspace_build_version_from_git(
+            "1.2.3",
+            false,
+            Some("abc123def456"),
+            Some(" M src/main.rs")
+        ),
+        Some("1.2.3+gabc123def456.dirty".to_owned())
+    );
+    assert_eq!(
+        workspace_build_version_from_git("1.2.3", true, Some("abc123def456"), Some("")),
+        Some("1.2.3".to_owned())
+    );
+    assert_eq!(
+        workspace_build_version_from_git(
+            "1.2.3",
+            true,
+            Some("abc123def456"),
+            Some(" M src/main.rs")
+        ),
+        Some("1.2.3+gabc123def456.dirty".to_owned())
+    );
+    assert_eq!(
+        workspace_build_version_from_git("1.2.3", false, None, Some("")),
+        None
+    );
+    assert_eq!(
+        workspace_build_version_from_git("1.2.3", false, Some("abc123def456"), None),
+        None
+    );
+}
+
+#[test]
+fn host_build_passes_the_semantic_version_to_the_build_script() {
+    let envs = presence_plugin_embed_env_with_version(
+        Path::new("/workspace"),
+        Some("1.2.3+gabc123def456.dirty".to_owned()),
+    );
+
+    assert_eq!(
+        env_value(&envs, BUILD_VERSION_OVERRIDE_ENV),
+        Some(Path::new("1.2.3+gabc123def456.dirty"))
+    );
+}
+
 fn env_value<'a>(envs: &'a [(&str, PathBuf)], key: &str) -> Option<&'a Path> {
     envs.iter()
         .find_map(|(env_key, value)| (*env_key == key).then_some(value.as_path()))
