@@ -32,7 +32,7 @@ pub use lifecycle::{
     DerivedLifecycleKind, DerivedLifecycleOutcome, LifecycleAppendOutcome,
 };
 pub(crate) use queue::DeliverySweepUpdate;
-pub use queue::{DeliveryFailureDisposition, EditOutcome, MessageEdit};
+pub use queue::{DeliveryAck, DeliveryFailureDisposition, EditOutcome, MessageEdit};
 
 pub(super) struct Txn<'a> {
     pub(super) paths: &'a StatePaths,

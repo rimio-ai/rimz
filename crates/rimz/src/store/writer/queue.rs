@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+#[cfg(test)]
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -20,6 +21,15 @@ use super::Txn;
 pub struct ReconcileReport {
     pub requeued: usize,
     pub timed_out: usize,
+}
+
+pub enum DeliveryAck<'a> {
+    /// A turn started. Segments are the submitted prompt's record texts in
+    /// order; an empty slice means the adapter reported no usable text.
+    TurnStarted {
+        segments: &'a [String],
+    },
+    Compaction,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -538,6 +548,7 @@ impl Store {
                     None => supplied.clone(),
                 };
                 message.status = MessageStatus::Sent;
+                message.last_sent_at = Some(now);
                 message.updated_at = now;
                 message.last_error = None;
                 queue.upsert(message.clone());
@@ -690,36 +701,69 @@ impl Store {
         kind: &AgentKind,
         agent_id: &AgentSessionId,
         agent_name: Option<&str>,
-        body: MessageBody,
+        ack: DeliveryAck<'_>,
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
         self.commit_queue(|queue| {
-            let Some(oldest) = queue
-                .live()
-                .iter()
-                .filter(|message| {
-                    message.status == MessageStatus::Sent
-                        && message.body == body
-                        && message.same_card(card)
-                })
-                .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
-                .cloned()
-            else {
-                return Ok(Vec::new());
-            };
             let now = Timestamp::now();
-            let delivered = queue.apply_all(session_name, now, |message| {
-                let selected = if message.message_id == oldest.message_id {
-                    true
-                } else {
-                    oldest.batch_id.is_some()
-                        && message.status == MessageStatus::Sent
-                        && message.body == body
-                        && message.same_card(card)
-                        && message.batch_id == oldest.batch_id
+            let oldest_sent_batch = |body| {
+                let Some(oldest) = queue
+                    .live()
+                    .iter()
+                    .filter(|message| {
+                        message.status == MessageStatus::Sent
+                            && message.body == body
+                            && message.same_card(card)
+                    })
+                    .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+                else {
+                    return BTreeSet::new();
                 };
-                if !selected {
+                queue
+                    .live()
+                    .iter()
+                    .filter(|message| {
+                        message.message_id == oldest.message_id
+                            || (oldest.batch_id.is_some()
+                                && message.status == MessageStatus::Sent
+                                && message.body == body
+                                && message.same_card(card)
+                                && message.batch_id == oldest.batch_id)
+                    })
+                    .map(|message| message.message_id.as_str().to_owned())
+                    .collect()
+            };
+            let selected = match ack {
+                DeliveryAck::TurnStarted { segments } if !segments.is_empty() => {
+                    let mut selected = BTreeSet::new();
+                    for segment in segments {
+                        if let Some(message) = queue
+                            .live()
+                            .iter()
+                            .filter(|message| {
+                                message.body == MessageBody::Prompt
+                                    && message.same_card(card)
+                                    && (message.status == MessageStatus::Sent
+                                        || message.awaiting_late_ack(now))
+                                    && message.text.trim() == segment.trim()
+                                    && !selected.contains(message.message_id.as_str())
+                            })
+                            .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+                        {
+                            selected.insert(message.message_id.as_str().to_owned());
+                        }
+                    }
+                    selected
+                }
+                DeliveryAck::TurnStarted { .. } => oldest_sent_batch(MessageBody::Prompt),
+                DeliveryAck::Compaction => oldest_sent_batch(MessageBody::Command),
+            };
+            if selected.is_empty() {
+                return Ok(Vec::new());
+            }
+            let delivered = queue.apply_all(session_name, now, |message| {
+                if !selected.contains(message.message_id.as_str()) {
                     return MessageUpdate::Keep;
                 }
                 MessageUpdate::Finalize {
@@ -762,7 +806,6 @@ impl Store {
         &self,
         session_name: &str,
         now: Timestamp,
-        window: Duration,
         max_attempts: u32,
         defer: impl Fn(&MessageRecord) -> bool,
     ) -> Result<ReconcileReport> {
@@ -772,15 +815,25 @@ impl Store {
                 if message.status != MessageStatus::Sent {
                     return MessageUpdate::Keep;
                 }
-                let age = now.duration_since(message.updated_at);
-                if !age.is_negative() && age.as_millis() < window.as_millis() as i128 {
+                let Some(deadline) = message.sent_reconcile_deadline() else {
+                    return MessageUpdate::Keep;
+                };
+                if now < deadline {
                     return MessageUpdate::Keep;
                 }
                 if defer(message) {
-                    message.retry_after = Some(now + window);
+                    message.retry_after = Some(now + message.body.delivery_window());
                     return MessageUpdate::SilentRewrite;
                 }
-                if message.unconfirmed_sends < max_attempts {
+                if !message.body.resends_unconfirmed() {
+                    message.last_error =
+                        Some("delivery unconfirmed; command not resent".to_owned());
+                    report.timed_out += 1;
+                    MessageUpdate::Finalize {
+                        status: MessageStatus::TimedOut,
+                        reason: Some("reconcile".to_owned()),
+                    }
+                } else if message.unconfirmed_sends < max_attempts {
                     message.status = MessageStatus::Queued;
                     message.pane_id = None;
                     message.batch_id = None;
@@ -812,14 +865,10 @@ impl Store {
         })
     }
 
-    pub fn earliest_message_wake(
-        &self,
-        now: Timestamp,
-        window: Duration,
-    ) -> Result<Option<Timestamp>> {
+    pub fn earliest_message_wake(&self, now: Timestamp) -> Result<Option<Timestamp>> {
         let next = message_store::list(&self.inner.paths.messages_dir)?
             .into_iter()
-            .filter_map(|message| message.wake_deadline(now, window))
+            .filter_map(|message| message.wake_deadline(now))
             .min();
         Ok(next)
     }

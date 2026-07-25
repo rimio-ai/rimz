@@ -9,7 +9,9 @@ Topic detail lives in [messaging.md](../../../../docs/internals/harness/messagin
 - **The record is the message.** Every send persists a `MessageRecord` before a byte reaches a pane. A pane write is an attempt against that record, never the message itself.
 - **`Sent` precedes the submit.** `write_batch` records the batch as `Sent` after the paste lands and before it presses Enter, so a submitted message always has a durable record and audit event behind it.
 - **One card, one FIFO queue.** Records key on `(kind, agent_id)` with `agent_name` folding a provisional `launch_*` id into the session it registers as. `msg_` id string order is FIFO order.
-- **Two counters, two caps.** `attempts` guards pre-send claim failures (`MAX_DELIVERY_ATTEMPTS`); `unconfirmed_sends` guards writes a lifecycle hook never confirmed (`DEFAULT_MAX_DELIVERY_ATTEMPTS`, overridable per run through the `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` environment variable). Keep them separate.
+- **Acknowledgements follow submitted text.** A turn-start acknowledgement confirms the record text the agent submitted; reported text that is not RimZ's confirms nothing.
+- **Commands reach the pane at most once.** An unconfirmed command times out without a resend because duplicate commands such as `/compact` can destroy context.
+- **Two counters, two caps.** `attempts` guards pre-send claim failures (`MAX_DELIVERY_ATTEMPTS`); for prompts, `unconfirmed_sends` guards writes a lifecycle hook never confirmed (`DEFAULT_MAX_DELIVERY_ATTEMPTS`, overridable per run through the `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` environment variable). Keep them separate.
 - **Delivery reads store state.** Gates evaluate the rollup and the message queue. Focused-pane state and captured composer contents never decide a delivery.
 - **`retry_after` is a wake hint.** It schedules the elder's next look and never affects `is_ready`, FIFO position, claim leases, or hook-driven delivery.
 

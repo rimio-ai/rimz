@@ -575,7 +575,7 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
     let wake: Option<jiff::Timestamp> =
         serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
             .expect("wake stamp json");
-    assert_eq!(wake, sent.sent_reconcile_deadline(Duration::from_secs(30)));
+    assert_eq!(wake, sent.sent_reconcile_deadline());
 }
 
 #[test]
@@ -1080,8 +1080,8 @@ fn message_wait_gathers_fanout_replies_in_completion_order() {
         .spawn()
         .expect("spawn fanout wait");
     wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
-    first.start(&env, "fanout question");
-    second.start(&env, "fanout question");
+    first.start(&env, "@all, status?");
+    second.start(&env, "@all, status?");
     second.finish(&env, "second finished", false);
     std::thread::sleep(Duration::from_millis(600));
     first.finish(&env, "first finished", false);
@@ -1112,8 +1112,8 @@ fn message_wait_json_emits_one_fanout_map() {
         .spawn()
         .expect("spawn JSON fanout wait");
     wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
-    first.start(&env, "fanout question");
-    second.start(&env, "fanout question");
+    first.start(&env, "@all, status?");
+    second.start(&env, "@all, status?");
     first.finish(&env, "first JSON reply", false);
     second.finish(&env, "second JSON reply", false);
 
@@ -1155,8 +1155,8 @@ fn message_wait_gathers_other_replies_after_one_leg_fails() {
         .spawn()
         .expect("spawn partial fanout wait");
     wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
-    failed.start(&env, "fanout question");
-    completed.start(&env, "fanout question");
+    failed.start(&env, "@all, try it");
+    completed.start(&env, "@all, try it");
     failed.finish(&env, "partial answer", true);
     std::thread::sleep(Duration::from_millis(600));
     completed.finish(&env, "surviving reply", false);
@@ -1190,8 +1190,8 @@ fn message_wait_any_returns_only_the_first_terminal_leg() {
         .spawn()
         .expect("spawn any fanout wait");
     wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
-    first.start(&env, "fanout question");
-    second.start(&env, "fanout question");
+    first.start(&env, "@all, first?");
+    second.start(&env, "@all, first?");
     second.finish(&env, "winner", false);
 
     let out = child.wait_with_output().expect("wait any fanout");
@@ -1600,6 +1600,7 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
 #[test]
 fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
     let env = Env::new();
+    env.write_config(&env.project_root, "");
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-reconcile", "feature-reconcile", pane_env);
@@ -1623,6 +1624,10 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
     );
     let message_id = sent_id_from_stdout(&out.stdout);
     assert_text_then_enter(&first_trace, "recover me");
+    let first_last_sent_at =
+        message_by_id(&env, &MessageId::parse(&message_id).expect("message id"))
+            .last_sent_at
+            .expect("first send timestamp");
 
     let second_trace = env.project_root.join("zellij-reconcile-second-trace.log");
     run_success(
@@ -1644,6 +1649,10 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
     assert_eq!(sent.status, MessageStatus::Sent);
     assert_eq!(sent.attempts, 1, "redelivery claim counted attempts");
     assert_eq!(sent.unconfirmed_sends, 1);
+    assert!(
+        sent.last_sent_at.is_some_and(|at| at >= first_last_sent_at),
+        "redelivery stamps the latest pane write"
+    );
 
     run_hook(
         &env,
@@ -1669,6 +1678,86 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
             .any(|event| event.method == "message.delivered"),
         "delivery confirmation records a terminal event"
     );
+}
+
+#[test]
+fn shortened_reconcile_window_preserves_prompt_for_late_correlated_ack() {
+    let env = Env::new();
+    env.write_config(&env.project_root, "");
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-late-ack", "feature-late-ack", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-late-ack",
+            "worktree_branch": "feature-late-ack",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let first_trace = env.project_root.join("zellij-late-ack-first-trace.log");
+    let sent = run_success(
+        traced_rimz(&env, "zellij-late-ack-first-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "@claude", "--", "arrived once"]),
+        "send prompt",
+    );
+    let message_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).expect("message id");
+    let first_live = env.store().list_messages().expect("messages");
+    let first_record = first_live
+        .iter()
+        .find(|message| message.message_id == message_id)
+        .expect("sent prompt");
+    let last_sent_at = first_record.last_sent_at.expect("send timestamp");
+    assert_text_then_enter(&first_trace, "arrived once");
+
+    let empty_panes = env.write_pane_fixture(&[]);
+    let retry_trace = env.project_root.join("zellij-late-ack-retry-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-late-ack-retry-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &empty_panes)
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
+            .args(["message", "sweep"]),
+        "requeue unconfirmed prompt",
+    );
+    assert!(trace_lines(&retry_trace).is_empty());
+    let live = env.store().list_messages().expect("messages");
+    let queued = live
+        .iter()
+        .find(|message| message.message_id == message_id)
+        .expect("requeued prompt");
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(queued.unconfirmed_sends, 1);
+    assert_eq!(queued.last_sent_at, Some(last_sent_at));
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-late-ack",
+            "prompt": "arrived once",
+            "worktree_branch": "feature-late-ack",
+        }),
+        pane_env,
+    );
+
+    assert!(
+        env.store()
+            .list_messages()
+            .expect("messages")
+            .iter()
+            .all(|message| message.message_id != message_id)
+    );
+    let delivered = env
+        .store()
+        .list_message_history()
+        .expect("history")
+        .into_iter()
+        .find(|message| message.message_id == message_id)
+        .expect("delivered prompt");
+    assert_eq!(delivered.status, MessageStatus::Delivered);
 }
 
 #[test]
@@ -2026,6 +2115,72 @@ fn steer_auto_compact_runs_before_a_full_window() {
             ..
         } if kind.as_str() == "claude" && agent_id == "sess-ac" && label == "@claude"
     ));
+}
+
+#[test]
+fn sweep_times_out_unconfirmed_compact_without_writing_it_twice() {
+    let env = Env::new();
+    env.write_config(&env.project_root, "");
+    register_running_agent(
+        &env,
+        "sess-compact-once",
+        "feature-compact-once",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_context_fill(&env, "sess-compact-once", 80);
+
+    let first_trace = env.project_root.join("zellij-compact-once-first-trace.log");
+    run_traced_smart_compact(&env, &first_trace, "after compact");
+    let command = env
+        .store()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| message.body == MessageBody::Command)
+        .expect("compact command");
+    assert_eq!(
+        trace_lines(&first_trace)
+            .iter()
+            .filter(|line| is_compact_command(line))
+            .count(),
+        1
+    );
+
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let retry_trace = env.project_root.join("zellij-compact-once-retry-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-compact-once-retry-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_COMMAND_DELIVERY_WINDOW_MS", "0")
+            .args(["message", "sweep"]),
+        "compact reconciliation sweep",
+    );
+
+    assert!(
+        trace_lines(&retry_trace)
+            .iter()
+            .all(|line| !is_compact_command(line)),
+        "an unconfirmed compact command must not be resent"
+    );
+    assert!(
+        env.store()
+            .list_messages()
+            .expect("messages")
+            .iter()
+            .all(|message| message.message_id != command.message_id)
+    );
+    let timed_out = env
+        .store()
+        .list_message_history()
+        .expect("history")
+        .into_iter()
+        .find(|message| message.message_id == command.message_id)
+        .expect("timed-out command");
+    assert_eq!(timed_out.status, MessageStatus::TimedOut);
+    assert_eq!(
+        timed_out.last_error.as_deref(),
+        Some("delivery unconfirmed; command not resent")
+    );
 }
 
 #[test]

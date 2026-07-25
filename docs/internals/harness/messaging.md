@@ -65,21 +65,22 @@ A record is keyed on a **card**, the logical agent identity the rollup tracks: a
 | `after`, `when` | cross-agent conditions, each with a durable `met_at` stamp |
 | `auto_compact` | context-fill threshold that fires a `/compact` ahead of the text |
 | `compacted_context_tokens` | the reading a compaction fired on, so a stale gauge cannot fire it twice |
-| `batch_id` | shared by records written in one paste; one turn start confirms them all |
+| `batch_id` | shared by records written in one paste; an uncorrelated turn start confirms the batch together |
 | `retry_after` | wake-only backoff hint set by the sweep; it never gates FIFO or delivery |
 | `attempts`, `last_attempt_at` | pre-send claim bookkeeping; caps at `Abandoned` |
-| `unconfirmed_sends` | writes that reached a pane but were never confirmed; caps at `TimedOut` |
+| `last_sent_at` | last pane write; survives a prompt requeue so a correlated late acknowledgement can settle it |
+| `unconfirmed_sends` | prompt writes that reached a pane but were never confirmed; caps at `TimedOut` |
 | `last_error` | the most recent delivery or reconciliation failure |
 | `enqueued_at`, `updated_at`, `delivered_at` | timestamps |
 
-Two counters, two caps, two meanings. `attempts` counts claims that failed before any byte was written and caps at `MAX_DELIVERY_ATTEMPTS` (5). `unconfirmed_sends` counts writes that landed and were never acknowledged and caps at `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` (3). A claim bumps only the first; a stale-`Sent` requeue bumps only the second. Conflating them is the classic bug here.
+Two counters, two caps, two meanings. `attempts` counts claims that failed before any byte was written and caps at `MAX_DELIVERY_ATTEMPTS` (5). For prompts, `unconfirmed_sends` counts writes that landed and were never acknowledged and caps at `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` (3). A claim bumps only the first; a stale-`Sent` prompt requeue bumps only the second. Commands do not use the unconfirmed-send cap because they are never resent after reaching a pane.
 
 ## Status lifecycle
 
 ```text
 Queued ──► Claimed ──► Sent ──► Delivered
    │          │          │
-   │          │          └──► TimedOut   (unconfirmed-send cap)
+   │          │          └──► TimedOut   (unconfirmed delivery)
    │          ├──► (back to Queued on pre-send failure)
    │          └──► Abandoned   (pre-send retry cap)
    │
@@ -98,8 +99,9 @@ The six terminal states are final. A terminal transition appends the full record
 
 | Trigger | Terminal status |
 | --- | --- |
-| A lifecycle hook confirms the body | `Delivered` |
-| An unconfirmed `Sent` record hits the unconfirmed-send cap | `TimedOut` |
+| A lifecycle hook correlates with the submitted record | `Delivered` |
+| An unconfirmed command reaches its delivery deadline | `TimedOut` |
+| An unconfirmed prompt hits the resend cap | `TimedOut` |
 | The address resolved to no agent, after the durable fallback | `Errored` |
 | `message cancel` or `message clear` | `Canceled` |
 | Pre-send retries exhausted | `Abandoned` |
@@ -210,13 +212,19 @@ The batch lands as one paste and one submit. Each member keeps its own `from @se
 
 ### Confirmation and retry
 
-The agent's next body-matching lifecycle hook confirms the oldest `Sent` record for that card. Batched records share a `batch_id`, so the first matching `TurnStarted` confirms all of them at once.
+A `TurnStarted` hook projects the submitted paste back to record text by splitting batched sections and stripping each `from @sender:` prefix. Each segment confirms the oldest matching `Prompt` record for that card, in segment order. Reported text that matches no record is human input and confirms nothing. The correlated path also accepts a requeued prompt whose `last_sent_at` is still inside its delivery window, so an acknowledgement racing reconciliation settles the original record instead of allowing another write.
+
+When a turn-start adapter reports no usable prompt text, confirmation falls back to the oldest `Sent` prompt and its `batch_id`, preserving hookless-text compatibility. A `Compacting` hook uses the same oldest-`Sent` fallback for `Command` records. Correlation never selects a `Claimed` record because its deliverer owns an in-progress pane write.
 
 Failure has three shapes:
 
 **Pre-send failure** (pane gone, gate closed, an ask reserving input). Shared recovery keeps or returns the record to `Queued` with `last_error` set and pane affinity cleared, so the next boundary re-resolves a pane. A claim increments `attempts`; an initial send-now failure records the error before any claim exists. An immediate steer rejected on Waiting is terminal and reports the skipped target.
 
-**Unconfirmed send** (bytes landed, no hook arrived). The sweep reconciler clears `pane_id` and `batch_id`, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. A requeued batch member reforms with whatever prefix is ready next time. While the receiver is compacting the reconciler instead holds the record in place and pushes its wake hint one window ahead: confirmation is delayed, not lost, and requeuing text the composer already holds would guarantee a duplicate paste. Past the cap the record becomes `TimedOut`.
+**Unconfirmed prompt** (bytes landed, no hook arrived for 30 seconds by default). The sweep reconciler clears `pane_id` and `batch_id`, preserves `last_sent_at`, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. A requeued batch member reforms with whatever prefix is ready next time. Past the cap the record becomes `TimedOut`.
+
+**Unconfirmed command** (bytes landed, no hook arrived for 3 minutes by default). The sweep settles the record `TimedOut` with `delivery unconfirmed; command not resent`. A command reaches the pane at most once because a duplicate `/compact` can discard context and no missing acknowledgement proves the first submit failed.
+
+While the receiver is compacting, the reconciler holds either body in place and pushes its wake hint one body-specific window ahead: confirmation is delayed rather than discarded.
 
 **Neither.** A record whose agent simply has not reached a qualifying boundary is not a failure. It stays `Queued` with no counter moving.
 
@@ -380,7 +388,7 @@ Confirmation polls until the ask leaves the rollup or a matching transcript `Ans
 
 A parked message needs someone to notice it came due. That someone is the room's elected sidebar elder, and the handoff is deliberately thin.
 
-1. The CLI writes `message-wake.json` under the runtime root with the earliest interesting future timestamp: a `not_before`, a `Queued` retry floor, a ready-queued backstop, or an unconfirmed `Sent` reconcile deadline.
+1. The CLI writes `message-wake.json` under the runtime root with the earliest interesting future timestamp: a `not_before`, a `Queued` retry floor, a ready-queued backstop, or an unconfirmed `Sent` reconcile deadline. Prompt deadlines use `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` (30 s by default); command deadlines use `RIMZ_MESSAGE_COMMAND_DELIVERY_WINDOW_MS` (3 minutes by default).
 2. The elder reads only that file. When the stamp comes due it spawns a detached `rimz message sweep` ([`fire.rs`](../../../crates/rimz/src/message/fire.rs)). No store reads, no store writes, no message logic in the elder.
 3. The sweep reconciles stale `Sent` records, evaluates unmet conditions, delivers ready FIFO heads, then rewrites the wake stamp or removes it.
 

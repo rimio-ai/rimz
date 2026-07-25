@@ -22,6 +22,8 @@ pub const DEFAULT_MESSAGE_INTERVAL: Duration = Duration::from_secs(1);
 pub const MESSAGE_INTERVAL_ENV: &str = "RIMZ_MESSAGE_INTERVAL_MS";
 pub const DEFAULT_DELIVERY_WINDOW: Duration = Duration::from_secs(30);
 pub const DELIVERY_WINDOW_ENV: &str = "RIMZ_MESSAGE_DELIVERY_WINDOW_MS";
+pub const DEFAULT_COMMAND_DELIVERY_WINDOW: Duration = Duration::from_secs(180);
+pub const COMMAND_DELIVERY_WINDOW_ENV: &str = "RIMZ_MESSAGE_COMMAND_DELIVERY_WINDOW_MS";
 /// Default cap for unconfirmed `Sent` reconciliation attempts.
 pub const DEFAULT_MAX_DELIVERY_ATTEMPTS: u32 = 3;
 pub const MAX_DELIVERY_ATTEMPTS_ENV: &str = "RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS";
@@ -248,6 +250,24 @@ impl MessageBody {
             Self::Command => "command",
         }
     }
+
+    pub fn delivery_window(self) -> Duration {
+        match self {
+            Self::Prompt => env_ms(DELIVERY_WINDOW_ENV).unwrap_or(DEFAULT_DELIVERY_WINDOW),
+            Self::Command => {
+                env_ms(COMMAND_DELIVERY_WINDOW_ENV).unwrap_or(DEFAULT_COMMAND_DELIVERY_WINDOW)
+            }
+        }
+    }
+
+    /// Whether an unconfirmed pane write may be repeated. Duplicate prompts are
+    /// recoverable; duplicate commands such as `/compact` can destroy context.
+    pub const fn resends_unconfirmed(self) -> bool {
+        match self {
+            Self::Prompt => true,
+            Self::Command => false,
+        }
+    }
 }
 
 impl std::fmt::Display for MessageBody {
@@ -351,6 +371,11 @@ pub struct MessageRecord {
     pub unconfirmed_sends: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_attempt_at: Option<Timestamp>,
+    /// Last pane write for this record. Unlike pane and batch identity, this
+    /// survives an unconfirmed-send requeue so a correlated late
+    /// acknowledgement can still settle the record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_sent_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -452,6 +477,7 @@ impl MessageRecord {
             attempts: 0,
             unconfirmed_sends: 0,
             last_attempt_at: None,
+            last_sent_at: None,
             last_error: None,
             delivered_at: None,
             not_before: None,
@@ -631,12 +657,21 @@ impl MessageRecord {
         self.is_ready(now) && self.conditions_met()
     }
 
-    pub fn sent_reconcile_deadline(&self, window: Duration) -> Option<Timestamp> {
-        (self.status == MessageStatus::Sent).then_some(self.updated_at + window)
+    pub fn sent_reconcile_deadline(&self) -> Option<Timestamp> {
+        (self.status == MessageStatus::Sent)
+            .then_some(self.last_sent_at.unwrap_or(self.updated_at) + self.body.delivery_window())
+    }
+
+    pub fn awaiting_late_ack(&self, now: Timestamp) -> bool {
+        self.status == MessageStatus::Queued
+            && self.unconfirmed_sends > 0
+            && self
+                .last_sent_at
+                .is_some_and(|sent_at| now <= sent_at + self.body.delivery_window())
     }
 
     /// Next time the elder should sweep this record, or `None` if it arms nothing.
-    pub fn wake_deadline(&self, now: Timestamp, window: Duration) -> Option<Timestamp> {
+    pub fn wake_deadline(&self, now: Timestamp) -> Option<Timestamp> {
         match self.status {
             MessageStatus::Queued => Some(
                 self.not_before
@@ -644,9 +679,7 @@ impl MessageRecord {
                     .or(self.retry_after)
                     .unwrap_or(self.updated_at),
             ),
-            MessageStatus::Sent => self
-                .retry_after
-                .or_else(|| self.sent_reconcile_deadline(window)),
+            MessageStatus::Sent => self.retry_after.or_else(|| self.sent_reconcile_deadline()),
             _ => None,
         }
     }
@@ -880,7 +913,7 @@ pub fn message_interval_from_env() -> Duration {
 }
 
 pub fn delivery_window_from_env() -> Duration {
-    env_ms(DELIVERY_WINDOW_ENV).unwrap_or(DEFAULT_DELIVERY_WINDOW)
+    MessageBody::Prompt.delivery_window()
 }
 
 pub fn max_delivery_attempts_from_env() -> u32 {

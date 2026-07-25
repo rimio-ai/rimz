@@ -42,13 +42,7 @@ fn no_op_queue_transaction_changes_no_durable_surface() {
     let _ = std::fs::remove_file(&q.inner.paths.latest_snapshot);
 
     let report = q
-        .reconcile_stale_sent_messages(
-            "session",
-            Timestamp::now(),
-            Duration::from_secs(30),
-            3,
-            |_| false,
-        )
+        .reconcile_stale_sent_messages("session", Timestamp::now(), 3, |_| false)
         .unwrap();
 
     assert_eq!(report, ReconcileReport::default());
@@ -90,6 +84,7 @@ fn sent_batch_persists_identity_and_events_in_source_order() {
         sent.iter()
             .all(|message| message.batch_id.as_ref() == Some(&first.message_id))
     );
+    assert!(sent.iter().all(|message| message.last_sent_at.is_some()));
     // The batch identity reaches the durable record, not just the return value.
     assert!(
         q.live()
@@ -127,7 +122,9 @@ fn record_sent_then_turn_start_confirms_delivery() {
             &sent.kind,
             &sent.agent_id,
             None,
-            MessageBody::Prompt,
+            DeliveryAck::TurnStarted {
+                segments: &["next".to_owned()],
+            },
             "session",
         )
         .unwrap()
@@ -173,7 +170,7 @@ fn idle_compact_command_delivers_at_boundary_and_stamps_the_rollup() {
             &sent.kind,
             &sent.agent_id,
             sent.agent_name.as_deref(),
-            MessageBody::Command,
+            DeliveryAck::Compaction,
             "session",
         )
         .unwrap();
@@ -242,8 +239,12 @@ fn confirm_delivered_for_card_selects_oldest_matching_batch() {
         let head = head.expect("at least one sent record");
         let ids = |ids: &[u64]| ids.iter().copied().map(message_id).collect::<Vec<_>>();
 
+        let ack = match case.confirmed {
+            MessageBody::Prompt => DeliveryAck::TurnStarted { segments: &[] },
+            MessageBody::Command => DeliveryAck::Compaction,
+        };
         let delivered = q
-            .confirm_delivered_for_card(&head.kind, &head.agent_id, None, case.confirmed, "session")
+            .confirm_delivered_for_card(&head.kind, &head.agent_id, None, ack, "session")
             .unwrap();
 
         assert_eq!(
@@ -288,14 +289,112 @@ fn confirm_delivered_for_card_selects_oldest_matching_batch() {
 }
 
 #[test]
+fn correlated_ack_confirms_matching_prompt_instead_of_oldest_sent() {
+    let q = Queue::new();
+    let oldest = q.sent_with(1, |message| message.text = "human typed this".to_owned());
+    let matching = q.sent_with(2, |message| message.text = "rimz prompt".to_owned());
+
+    let delivered = q
+        .confirm_delivered_for_card(
+            &matching.kind,
+            &matching.agent_id,
+            None,
+            DeliveryAck::TurnStarted {
+                segments: &["rimz prompt".to_owned()],
+            },
+            "session",
+        )
+        .unwrap();
+
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].message_id, matching.message_id);
+    assert_eq!(q.live(), vec![oldest]);
+}
+
+#[test]
+fn correlated_ack_ignores_unmatched_reported_text() {
+    let q = Queue::new();
+    let sent = q.sent_with(1, |message| message.text = "rimz prompt".to_owned());
+
+    let delivered = q
+        .confirm_delivered_for_card(
+            &sent.kind,
+            &sent.agent_id,
+            None,
+            DeliveryAck::TurnStarted {
+                segments: &["human prompt".to_owned()],
+            },
+            "session",
+        )
+        .unwrap();
+
+    assert!(delivered.is_empty());
+    assert_eq!(q.live(), vec![sent]);
+}
+
+#[test]
+fn correlated_ack_absorbs_queued_late_ack_but_not_a_claimed_record() {
+    let q = Queue::new();
+    let now = Timestamp::now();
+    let queued = q.queue_with(1, |message| {
+        message.text = "late prompt".to_owned();
+        message.unconfirmed_sends = 1;
+        message.last_sent_at = Some(now);
+    });
+    let claimed = q.queue_with(2, |message| {
+        message.text = "claimed prompt".to_owned();
+        message.unconfirmed_sends = 1;
+        message.last_sent_at = Some(now);
+    });
+    q.claim_message_for_steer(&claimed.message_id, now)
+        .unwrap()
+        .expect("claimed");
+
+    let late = q
+        .confirm_delivered_for_card(
+            &queued.kind,
+            &queued.agent_id,
+            None,
+            DeliveryAck::TurnStarted {
+                segments: &["late prompt".to_owned()],
+            },
+            "session",
+        )
+        .unwrap();
+    let claimed_ack = q
+        .confirm_delivered_for_card(
+            &claimed.kind,
+            &claimed.agent_id,
+            None,
+            DeliveryAck::TurnStarted {
+                segments: &["claimed prompt".to_owned()],
+            },
+            "session",
+        )
+        .unwrap();
+
+    assert_eq!(late.len(), 1);
+    assert_eq!(late[0].message_id, queued.message_id);
+    assert!(claimed_ack.is_empty());
+    assert_eq!(q.live()[0].message_id, claimed.message_id);
+    assert_eq!(q.live()[0].status, MessageStatus::Claimed);
+}
+
+#[test]
 fn stale_sent_message_requeues_before_attempt_cap() {
     let q = Queue::new();
-    q.sent_with(1, |message| {
+    let sent = q.sent_with(1, |message| {
         message.batch_id = Some(message.message_id.clone());
     });
+    let last_sent_at = sent.last_sent_at.expect("last sent");
 
     let report = q
-        .reconcile_stale_sent_messages("session", Timestamp::now(), Duration::ZERO, 3, |_| false)
+        .reconcile_stale_sent_messages(
+            "session",
+            last_sent_at + sent.body.delivery_window(),
+            3,
+            |_| false,
+        )
         .unwrap();
 
     assert_eq!(report.requeued, 1);
@@ -308,6 +407,7 @@ fn stale_sent_message_requeues_before_attempt_cap() {
     // Pinned by 94f521220: unconfirmed sends count separately from attempts.
     assert_eq!(messages[0].unconfirmed_sends, 1);
     assert_eq!(messages[0].last_attempt_at, None);
+    assert_eq!(messages[0].last_sent_at, Some(last_sent_at));
     assert_eq!(
         messages[0].last_error.as_deref(),
         Some("delivery unconfirmed; re-queued")
@@ -316,14 +416,46 @@ fn stale_sent_message_requeues_before_attempt_cap() {
 }
 
 #[test]
-fn stale_sent_message_is_deferred_while_receiver_compacts() {
+fn stale_command_times_out_without_resend_regardless_of_counter() {
     let q = Queue::new();
-    q.sent(1);
-    let now = Timestamp::now() + Duration::from_secs(60);
-    let window = Duration::from_secs(30);
+    let sent = q.sent_with(1, |message| {
+        message.body = MessageBody::Command;
+        message.text = "/compact".to_owned();
+        message.unconfirmed_sends = 99;
+    });
+    let now = sent.last_sent_at.expect("last sent") + sent.body.delivery_window();
 
     let report = q
-        .reconcile_stale_sent_messages("session", now, window, 3, |_| true)
+        .reconcile_stale_sent_messages("session", now, 3, |_| false)
+        .unwrap();
+
+    assert_eq!(
+        report,
+        ReconcileReport {
+            requeued: 0,
+            timed_out: 1
+        }
+    );
+    assert!(q.live().is_empty());
+    let history = q.history();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].status, MessageStatus::TimedOut);
+    assert_eq!(history[0].unconfirmed_sends, 99);
+    assert_eq!(
+        history[0].last_error.as_deref(),
+        Some("delivery unconfirmed; command not resent")
+    );
+}
+
+#[test]
+fn stale_sent_message_is_deferred_while_receiver_compacts() {
+    let q = Queue::new();
+    let sent = q.sent(1);
+    let window = sent.body.delivery_window();
+    let now = sent.last_sent_at.expect("last sent") + window;
+
+    let report = q
+        .reconcile_stale_sent_messages("session", now, 3, |_| true)
         .unwrap();
 
     assert_eq!(report, ReconcileReport::default());
@@ -331,16 +463,17 @@ fn stale_sent_message_is_deferred_while_receiver_compacts() {
     assert_eq!(messages[0].status, MessageStatus::Sent);
     assert_eq!(messages[0].unconfirmed_sends, 0);
     assert_eq!(messages[0].retry_after, Some(now + window));
-    assert_eq!(messages[0].wake_deadline(now, window), Some(now + window));
+    assert_eq!(messages[0].wake_deadline(now), Some(now + window));
 }
 
 #[test]
 fn stale_sent_message_times_out_at_attempt_cap() {
     let q = Queue::new();
-    q.sent_with(1, |message| message.unconfirmed_sends = 3);
+    let sent = q.sent_with(1, |message| message.unconfirmed_sends = 3);
+    let now = sent.last_sent_at.expect("last sent") + sent.body.delivery_window();
 
     let report = q
-        .reconcile_stale_sent_messages("session", Timestamp::now(), Duration::ZERO, 3, |_| false)
+        .reconcile_stale_sent_messages("session", now, 3, |_| false)
         .unwrap();
 
     assert_eq!(report.requeued, 0);
@@ -352,10 +485,15 @@ fn stale_sent_message_times_out_at_attempt_cap() {
 #[test]
 fn stale_sent_reconcile_preserves_cross_message_event_order() {
     let q = Queue::new();
-    q.sent_with(1, |message| message.unconfirmed_sends = 3);
-    q.sent(2);
+    let first = q.sent_with(1, |message| message.unconfirmed_sends = 3);
+    let second = q.sent(2);
+    let now = [first, second]
+        .into_iter()
+        .filter_map(|message| message.sent_reconcile_deadline())
+        .max()
+        .expect("deadline");
 
-    q.reconcile_stale_sent_messages("session", Timestamp::now(), Duration::ZERO, 3, |_| false)
+    q.reconcile_stale_sent_messages("session", now, 3, |_| false)
         .unwrap();
 
     let methods = q.methods();
@@ -371,13 +509,7 @@ fn fresh_sent_message_waits_for_reconcile_deadline() {
     q.sent(1);
 
     let report = q
-        .reconcile_stale_sent_messages(
-            "session",
-            Timestamp::now(),
-            Duration::from_secs(60),
-            3,
-            |_| false,
-        )
+        .reconcile_stale_sent_messages("session", Timestamp::now(), 3, |_| false)
         .unwrap();
 
     assert_eq!(report, ReconcileReport::default());
@@ -392,9 +524,7 @@ fn earliest_message_wake_includes_sent_reconcile_deadline() {
         scheduled.not_before = Some(sent.updated_at + Duration::from_secs(120));
     });
 
-    let wake = q
-        .earliest_message_wake(sent.updated_at, Duration::from_secs(30))
-        .unwrap();
+    let wake = q.earliest_message_wake(sent.updated_at).unwrap();
 
-    assert_eq!(wake, Some(sent.updated_at + Duration::from_secs(30)));
+    assert_eq!(wake, sent.sent_reconcile_deadline());
 }

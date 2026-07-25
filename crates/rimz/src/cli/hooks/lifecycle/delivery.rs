@@ -8,9 +8,17 @@ pub(super) fn confirm_sent_message_for_lifecycle(
     recorded: &RecordedLifecycle,
     session_name: &str,
 ) -> Vec<rimz::message::MessageRecord> {
-    let body = match recorded.observation.signal {
-        LifecycleSignal::TurnStarted => rimz::message::MessageBody::Prompt,
-        LifecycleSignal::Compacting => rimz::message::MessageBody::Command,
+    let segments = match recorded.observation.signal {
+        LifecycleSignal::TurnStarted => rimz::harness::target::submitted_record_texts(
+            recorded.observation.prompt.as_deref().unwrap_or_default(),
+        ),
+        _ => Vec::new(),
+    };
+    let ack = match recorded.observation.signal {
+        LifecycleSignal::TurnStarted => rimz::store::DeliveryAck::TurnStarted {
+            segments: &segments,
+        },
+        LifecycleSignal::Compacting => rimz::store::DeliveryAck::Compaction,
         _ => return Vec::new(),
     };
     let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
@@ -21,7 +29,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
         &kind,
         agent_id,
         recorded.observation.agent_name.as_deref(),
-        body,
+        ack,
         session_name,
     ) {
         Ok(delivered) => delivered,

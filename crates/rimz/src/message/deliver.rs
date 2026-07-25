@@ -363,7 +363,6 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
     store.reconcile_stale_sent_messages(
         &workspace.session_name,
         now,
-        delivery_window,
         max_delivery_attempts_from_env(),
         |message| {
             snapshot.as_ref().is_some_and(|snapshot| {
@@ -902,7 +901,7 @@ pub fn register_message_wake(workspace: &ResolvedWorkspace, store: &Store) -> Re
 
 pub fn refresh_wake_stamp(runtime: &RuntimePaths, store: &Store, now: Timestamp) -> Result<()> {
     let path = wake_stamp_path(runtime);
-    let next = store.earliest_message_wake(now, delivery_window_from_env())?;
+    let next = store.earliest_message_wake(now)?;
     match next {
         Some(not_before) => {
             crate::store::atomic::write_temp_then_rename_cache(&path, &Some(not_before))?;
