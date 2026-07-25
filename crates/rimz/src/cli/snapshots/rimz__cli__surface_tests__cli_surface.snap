@@ -176,6 +176,8 @@ rimz agents help history
 
 rimz agents help idle-compact [hidden]
 
+rimz agents help launch
+
 rimz agents help list
 
 rimz agents help logs
@@ -226,6 +228,43 @@ rimz agents idle-compact [hidden]
     --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1 required]
     --zellij  [action=set-true takes=0..=0 global]
 
+rimz agents launch
+    <passthrough>  [action=append takes=1..=inf]
+    <prompt>  [action=set takes=1..=1]
+    <spec>  [action=set takes=1..=1]
+    --append-system-prompt-file <PATH>  [action=set takes=1..=1]
+    --ask  [action=set-true takes=0..=0]
+    --bg  [action=set-true takes=0..=0]
+    --budget <AMOUNT[/day]>  [action=set takes=1..=1]
+    --channel <NAME>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --description <TEXT>  [action=set takes=1..=1]
+    --effort <LEVEL>  [action=set takes=1..=1]
+    --from-pr <PR>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --input-format <FORMAT>  [action=set takes=1..=1 values=text|stream-json]
+    --keep  [action=set-true takes=0..=0]
+    --max-attempts <N>  [action=set takes=1..=1]
+    --max-turns <N>  [action=set takes=1..=1]
+    --model <MODEL>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    -n, --name <NAME>  [action=set takes=1..=1]
+    --new-pane  [action=set-true takes=0..=0]
+    --new-tab  [action=set-true takes=0..=0]
+    --output-format <FORMAT>  [action=set takes=1..=1 values=text|json|stream-json]
+    -p, --print  [action=set-true takes=0..=0]
+    --resume  [action=set-true takes=0..=0 long-aliases=continue]
+    --retries <N>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --stdin  [action=set-true takes=0..=0]
+    --system-prompt-file <PATH>  [action=set takes=1..=1]
+    --timeout <TIMEOUT>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --verify <CMD>  [action=set takes=1..=1]
+    -w, --worktree <NAME>  [action=set takes=0..=1]
+    --yolo  [action=set-true takes=0..=0]
+    --zellij  [action=set-true takes=0..=0 global]
+
 rimz agents list (aliases: ls, ps)
     <scope>  [action=set takes=1..=1]
     --all  [action=set-true takes=0..=0]
@@ -235,7 +274,7 @@ rimz agents list (aliases: ls, ps)
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
-    --worktree <WORKTREE>  [action=set takes=1..=1]
+    -w, --worktree <WORKTREE>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz agents logs
@@ -314,6 +353,7 @@ rimz agents resume
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
+    -w, --worktree <NAME>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz agents show (aliases: inspect)
@@ -347,7 +387,7 @@ rimz agents top
     --once  [action=set-true takes=0..=0]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
-    --worktree <WORKTREE>  [action=set takes=1..=1]
+    -w, --worktree <WORKTREE>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz agents wait
@@ -689,6 +729,8 @@ rimz help agents history
 
 rimz help agents idle-compact [hidden]
 
+rimz help agents launch
+
 rimz help agents list
 
 rimz help agents logs
@@ -913,13 +955,21 @@ rimz help statusline feed [hidden]
 
 rimz help teams
 
+rimz help teams focus
+
 rimz help teams install
 
 rimz help teams launch
 
+rimz help teams list
+
+rimz help teams restart
+
 rimz help teams resume
 
 rimz help teams show
+
+rimz help teams stop
 
 rimz help transcript
 
@@ -1956,15 +2006,37 @@ rimz statusline help feed [hidden]
 rimz statusline help help
 
 rimz teams
+    <name>  [action=set takes=1..=1]
+    <prompt>  [action=set takes=1..=1]
+    --bg  [action=set-true takes=0..=0]
+    --budget <AMOUNT[/day]>  [action=set takes=1..=1]
+    --channel <NAME>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --description <TEXT>  [action=set takes=1..=1]
+    --from-pr <PR>  [action=set takes=1..=1]
     -h, --help  [action=help takes=0..=0]
     --json  [action=set-true takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
+    --new-tab  [action=set-true takes=0..=0]
+    --resume  [action=set-true takes=0..=0 long-aliases=continue]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
+    -w, --worktree <NAME>  [action=set takes=0..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz teams focus
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    -w, --worktree <NAME>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz teams help
+
+rimz teams help focus
 
 rimz teams help help
 
@@ -1972,9 +2044,15 @@ rimz teams help install
 
 rimz teams help launch
 
+rimz teams help list
+
+rimz teams help restart
+
 rimz teams help resume
 
 rimz teams help show
+
+rimz teams help stop
 
 rimz teams install
     <name>  [action=set takes=1..=1]
@@ -1991,6 +2069,7 @@ rimz teams launch
     <name>  [action=set takes=1..=1 required]
     <prompt>  [action=set takes=1..=1]
     --bg  [action=set-true takes=0..=0]
+    --budget <AMOUNT[/day]>  [action=set takes=1..=1]
     --channel <NAME>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --description <TEXT>  [action=set takes=1..=1]
@@ -1998,12 +2077,22 @@ rimz teams launch
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
     --new-tab  [action=set-true takes=0..=0]
+    --resume  [action=set-true takes=0..=0 long-aliases=continue]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
     -w, --worktree <NAME>  [action=set takes=0..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
-rimz teams resume
+rimz teams list (aliases: ls)
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz teams restart
     <name>  [action=set takes=1..=1 required]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
@@ -2013,7 +2102,18 @@ rimz teams resume
     -w, --worktree <NAME>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
-rimz teams show
+rimz teams resume
+    <name>  [action=set takes=1..=1 required]
+    --bg  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    -w, --worktree <NAME>  [action=set takes=0..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz teams show (aliases: inspect)
     <name>  [action=set takes=1..=1 required]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
@@ -2021,6 +2121,16 @@ rimz teams show
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz teams stop
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    -w, --worktree <NAME>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz transcript

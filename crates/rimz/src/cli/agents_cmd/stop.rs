@@ -66,6 +66,14 @@ fn stop_live_agent(
     }
 }
 
+pub(in crate::cli) fn stop_resolved(
+    ctx: &Ctx,
+    globals: &GlobalFlags,
+    agent: &AgentState,
+) -> Result<()> {
+    stop_live_agent(&ctx.workspace, &ctx.store, globals, agent)
+}
+
 fn close_agent_pane(workspace: &rimz::ResolvedWorkspace, agent: &AgentState) -> Result<()> {
     let pane = agent
         .pane

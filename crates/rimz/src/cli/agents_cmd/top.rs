@@ -34,6 +34,7 @@ pub(super) struct TopArgs {
     /// Filter to a worktree/channel.
     #[arg(
         long,
+        short = 'w',
         conflicts_with = "all",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::scope_names)
     )]

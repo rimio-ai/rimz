@@ -649,6 +649,10 @@ pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.cached_snapshot()?;
     let agent = crate::cli::resolve_agent_one(&snapshot, &reference, None, ctx.channel())?;
+    focus_resolved(&ctx, agent)
+}
+
+pub(in crate::cli) fn focus_resolved(ctx: &Ctx, agent: &AgentState) -> Result<()> {
     let pane = agent
         .pane
         .as_ref()

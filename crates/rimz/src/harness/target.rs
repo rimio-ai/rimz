@@ -24,6 +24,7 @@
 //! addressing the room from a bare directory workspace still reaches every
 //! agent.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::agents::AgentState;
@@ -794,6 +795,40 @@ pub fn agent_channel(agent: &AgentState) -> Option<String> {
             .as_deref()
             .and_then(|path| path.rsplit('/').next()),
     )
+}
+
+/// One live launch of a configured team in a lane.
+#[derive(Clone, Debug)]
+pub struct TeamCohort<'a> {
+    pub team: &'a str,
+    pub channel: String,
+    pub members: Vec<&'a AgentState>,
+}
+
+/// Group live root team members by team and lane.
+///
+/// Agents launched outside a named lane share the `external` fallback, matching
+/// the teams catalogue.
+pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
+    let mut grouped: BTreeMap<(&str, String), Vec<&AgentState>> = BTreeMap::new();
+    for agent in agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_none() && agent.ended_at.is_none())
+    {
+        let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
+            continue;
+        };
+        let channel = agent_channel(agent).unwrap_or_else(|| "external".to_owned());
+        grouped.entry((team, channel)).or_default().push(agent);
+    }
+    grouped
+        .into_iter()
+        .map(|((team, channel), members)| TeamCohort {
+            team,
+            channel,
+            members,
+        })
+        .collect()
 }
 
 /// The team whose members occupy this lane, from the durable rollup.

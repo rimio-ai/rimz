@@ -17,10 +17,21 @@ impl FreshReason {
 
 pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
-    let workspace = &ctx.workspace;
-    let store = &ctx.store;
     let snapshot = ctx.alive_snapshot()?;
     let agent = crate::cli::resolve_agent_one(&snapshot, &reference, None, ctx.channel())?.clone();
+    let peers = snapshot.root_agents().collect::<Vec<_>>();
+    let message = restart_resolved(&ctx, &agent, &peers)?;
+    writeln!(crate::cli::render::out(), "{message}")?;
+    Ok(())
+}
+
+pub(in crate::cli) fn restart_resolved(
+    ctx: &Ctx,
+    agent: &AgentState,
+    peers: &[&AgentState],
+) -> Result<String> {
+    let workspace = &ctx.workspace;
+    let store = &ctx.store;
     let old_pane = agent
         .pane
         .as_ref()
@@ -32,8 +43,8 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.worktree_root.clone());
     let machine_config = crate::cli::machine_config();
-    let posture = restart_posture(&agent, workspace, &machine_config)?;
-    let cell = restart_cell(&agent, &posture);
+    let posture = restart_posture(agent, workspace, &machine_config)?;
+    let cell = restart_cell(agent, &posture);
     let extra_args = posture.args.clone();
 
     // Fail at the entry point if this project's configured launch environment
@@ -65,7 +76,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         Some(append_fresh_launch(
             store,
             workspace,
-            &agent,
+            agent,
             &cwd,
             cell,
             posture.mode,
@@ -162,28 +173,19 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         .close_pane(&workspace.session_name, &old_pane)
         .context("closing the replaced agent pane")?;
 
-    let mut out = crate::cli::render::out();
     if let (Some(identity), Some(reason)) = (fresh_identity, fresh_reason) {
-        writeln!(
-            out,
+        Ok(format!(
             "restarted fresh as @{} — {}",
             identity.name,
             reason.as_str()
-        )?;
+        ))
     } else {
-        let peers = snapshot
-            .agents
-            .iter()
-            .filter(|candidate| candidate.parent_agent_id.is_none())
-            .collect::<Vec<_>>();
-        let handle = rimz::harness::target::agent_handle(&agent, &peers, true);
-        writeln!(
-            out,
+        let handle = rimz::harness::target::agent_handle(agent, peers, true);
+        Ok(format!(
             "restarted {handle} (resumed session {})",
             agent.agent_id
-        )?;
+        ))
     }
-    Ok(())
 }
 
 /// The posture this restart replays, from the same seam resume uses.

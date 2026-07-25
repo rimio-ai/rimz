@@ -26,9 +26,14 @@ pub(super) fn launch_layout(
     // `reviewer` means `forge.reviewer`. The lane's agents carry the team, since
     // the channel string alone does not name it. An explicit `--channel` picks
     // the lane to infer from, so the inference works from outside the tab too.
-    let lane = args.channel.as_deref().or_else(|| ctx.channel());
+    let lane = args
+        .launch
+        .cohort
+        .channel
+        .as_deref()
+        .or_else(|| ctx.channel());
     let mut inferred_lane = None;
-    if let (Some(spec), Some(channel)) = (args.spec.as_deref(), lane) {
+    if let (Some(spec), Some(channel)) = (args.launch.spec.as_deref(), lane) {
         let snapshot = ctx.cached_snapshot()?;
         if let Some(team) = rimz::harness::target::channel_team(&snapshot.agents, channel) {
             let qualified = rimz::harness::spec::qualify_spec_in_channel(
@@ -40,7 +45,7 @@ pub(super) fn launch_layout(
                 &machine_config.agents.commands,
             )?;
             if let Cow::Owned(qualified) = qualified {
-                args.spec = Some(qualified);
+                args.launch.spec = Some(qualified);
                 inferred_lane = Some(channel.to_owned());
             }
         }
@@ -48,7 +53,7 @@ pub(super) fn launch_layout(
     let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
         &machine_config.agents.commands,
-        args.spec.as_deref(),
+        args.launch.spec.as_deref(),
     )?;
     let preset = validate_resolved_launch_inputs(
         &args,
@@ -60,11 +65,14 @@ pub(super) fn launch_layout(
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            permission_mode: interactive_permission_mode_from_flags(args.ask, args.yolo)?,
+            permission_mode: interactive_permission_mode_from_flags(
+                args.launch.ask,
+                args.launch.yolo,
+            )?,
             preset: &preset,
-            passthrough: &args.passthrough,
-            budget: args.budget,
-            max_turns: args.max_turns,
+            passthrough: &args.launch.passthrough,
+            budget: args.launch.cohort.budget,
+            max_turns: args.launch.max_turns,
         },
     )
     .inspect_err(|err| {
@@ -81,6 +89,7 @@ pub(super) fn launch_layout(
         team_name,
     } = resolved;
     let prompt = args
+        .launch
         .prompt
         .as_deref()
         .filter(|prompt| !prompt.trim().is_empty());
@@ -112,9 +121,12 @@ pub(super) fn launch_layout(
         .map(|column| column.rows.len())
         .sum::<usize>()
         == 1;
-    if args.resume {
-        let worktree_filter =
-            resume_worktree_scope(args.worktree.as_deref(), workspace, &machine_config)?;
+    if args.launch.cohort.resume {
+        let worktree_filter = resume_worktree_scope(
+            args.launch.cohort.worktree.as_deref(),
+            workspace,
+            &machine_config,
+        )?;
         return launch_resume_layout(
             args,
             globals,
@@ -128,18 +140,19 @@ pub(super) fn launch_layout(
             worktree_filter.as_deref(),
         );
     }
-    let worktree_launch = args.worktree.is_some() || args.from_pr.is_some();
-    let channel_launch = args.channel.is_some();
+    let worktree_launch =
+        args.launch.cohort.worktree.is_some() || args.launch.cohort.from_pr.is_some();
+    let channel_launch = args.launch.cohort.channel.is_some();
     let placement = apply_in_place_downgrade(
         resolve_placement(
-            args.new_tab,
-            args.new_pane,
+            args.launch.cohort.new_tab,
+            args.launch.new_pane,
             machine_config.agents.placement,
             worktree_launch || channel_launch,
             single_cell,
             rimz::mux::ambient_pane_id().is_some(),
         )?,
-        args.bg,
+        args.launch.cohort.bg,
         allow_in_place,
     );
     let in_place = placement == Placement::SamePane;
@@ -154,6 +167,8 @@ pub(super) fn launch_layout(
     rimz::room::require_live_session(backend, &workspace.session_name)?;
 
     let explicit_worktree_name = args
+        .launch
+        .cohort
         .worktree
         .as_deref()
         .map(str::trim)
@@ -162,10 +177,10 @@ pub(super) fn launch_layout(
         .transpose()?;
     let cells = cohort_cells(&layout);
     if let Some(name) = explicit_worktree_name.as_deref()
-        && args.from_pr.is_none()
+        && args.launch.cohort.from_pr.is_none()
         && (team_name.is_some() || cells.len() >= 2)
     {
-        let spec_display = args.spec.as_deref().unwrap_or("<spec>");
+        let spec_display = args.launch.spec.as_deref().unwrap_or("<spec>");
         match reconcile::reconcile_cohort_launch(
             workspace,
             &machine_config,
@@ -198,8 +213,8 @@ pub(super) fn launch_layout(
     let launch = rimz::worktree::resolve_launch_checkout(
         workspace,
         &machine_config.agents.worktree,
-        args.worktree.as_deref(),
-        args.from_pr.as_ref(),
+        args.launch.cohort.worktree.as_deref(),
+        args.launch.cohort.from_pr.as_ref(),
     )?;
     if let Some(reason) = launch.review_only_reason.as_deref() {
         writeln!(
@@ -207,7 +222,7 @@ pub(super) fn launch_layout(
             "review-only checkout ({reason}); pushes are not configured — install gh/tea for a pushable checkout"
         )?;
     }
-    if let Some(channel) = args.channel.as_deref() {
+    if let Some(channel) = args.launch.cohort.channel.as_deref() {
         crate::cli::channel::ensure_named_channel_available(workspace, channel)?;
         rimz::channel::register(store.paths(), channel)?;
     }
@@ -218,11 +233,15 @@ pub(super) fn launch_layout(
         &workspace.project_root,
         &launch.cwd,
         team_name.as_deref(),
-        args.channel.as_deref().or(inferred_lane.as_deref()),
+        args.launch
+            .cohort
+            .channel
+            .as_deref()
+            .or(inferred_lane.as_deref()),
     );
     let launch_requests = launch_identity_requests(
         &layout,
-        args.name.as_deref(),
+        args.launch.name.as_deref(),
         launch.generated_name(),
         team_name.as_deref(),
         team_name
@@ -240,7 +259,7 @@ pub(super) fn launch_layout(
             cwd: launch.cwd.clone(),
             worktree_name: launch.worktree_name.clone(),
             channel: room_channel.clone(),
-            description: args.description.clone(),
+            description: args.launch.cohort.description.clone(),
         },
     )?;
     let worktree_name = launch.worktree_name.clone();
@@ -283,7 +302,7 @@ pub(super) fn launch_layout(
                 room_channel.as_deref(),
                 !worktree_launch,
             ),
-            background: args.bg,
+            background: args.launch.cohort.bg,
             errors: PlacementErrors {
                 new_tab: "opening agent tab",
                 new_pane: "splitting the agent into a new pane",
@@ -321,7 +340,7 @@ fn launch_resume_layout(
         None => projection.agents,
     };
     let cells = cohort_cells(&layout);
-    let spec = args.spec.as_deref().unwrap_or("<spec>");
+    let spec = args.launch.spec.as_deref().unwrap_or("<spec>");
     let scope = worktree_filter.and_then(worktree_scope_label);
     let mut plan = rimz::harness::resume::plan_cohort_resume(
         &agents,
@@ -331,7 +350,7 @@ fn launch_resume_layout(
         |path| path.is_dir(),
         rimz::harness::resume::resume_session_present,
     )
-    .map_err(|err| cohort_resume_error(err, spec, scope.as_deref(), &agents))?;
+    .map_err(|err| cohort_resume_error(err, spec, scope.as_deref(), &agents, teams))?;
     let cwd = plan
         .cwd
         .clone()
@@ -353,14 +372,14 @@ fn launch_resume_layout(
     let placement = if single_cell {
         apply_in_place_downgrade(
             resolve_placement(
-                args.new_tab,
-                args.new_pane,
+                args.launch.cohort.new_tab,
+                args.launch.new_pane,
                 machine_config.agents.placement,
                 scoped_resume,
                 single_cell,
                 rimz::mux::ambient_pane_id().is_some(),
             )?,
-            args.bg,
+            args.launch.cohort.bg,
             allow_in_place,
         )
     } else {
@@ -435,7 +454,7 @@ fn launch_resume_layout(
             panes,
             sidebar,
             identity_env: rimz::room::pane_identity_env(workspace, channel.as_deref(), false),
-            background: args.bg,
+            background: args.launch.cohort.bg,
             errors: PlacementErrors {
                 new_tab: "opening agent tab",
                 new_pane: "splitting the agent into a new pane",
@@ -519,6 +538,7 @@ fn cohort_resume_error(
     spec: &str,
     scope: Option<&str>,
     agents: &[AgentState],
+    teams: &rimz::config::TeamsConfig,
 ) -> anyhow::Error {
     let subject = cohort_resume_subject(spec, scope);
     match err {
@@ -528,10 +548,17 @@ fn cohort_resume_error(
                 rimz::store::runtime::agent_liveness,
             );
             match resumable.first() {
-                Some(first) => anyhow::anyhow!(
-                    "nothing to resume for {subject}; resumable here: {} — retry with `rimz agents {first} --resume`",
-                    resumable.join(", ")
-                ),
+                Some(first) => {
+                    let retry = if teams.0.contains_key(first) {
+                        format!("rimz teams resume {first}")
+                    } else {
+                        format!("rimz agents {first} --resume")
+                    };
+                    anyhow::anyhow!(
+                        "nothing to resume for {subject}; resumable here: {} — retry with `{retry}`",
+                        resumable.join(", ")
+                    )
+                }
                 None => {
                     anyhow::anyhow!("nothing to resume for {subject}; launch without `--resume`")
                 }
@@ -608,36 +635,36 @@ pub(super) fn supervised_permission_mode_from_flags(
 }
 
 pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> {
-    if !args.passthrough.is_empty() {
+    if !args.launch.passthrough.is_empty() {
         bail!("missing agent spec before `--`");
     }
-    if args.worktree.is_some() {
+    if args.launch.cohort.worktree.is_some() {
         bail!(
             "--worktree requires an agent spec; use `rimz agents list --worktree <name>` to filter cards"
         );
     }
-    if args.channel.is_some() {
+    if args.launch.cohort.channel.is_some() {
         bail!("--channel requires an agent spec; use `rimz channel list` to inspect channels");
     }
-    if args.from_pr.is_some() {
+    if args.launch.cohort.from_pr.is_some() {
         bail!("--from-pr requires an agent spec");
     }
-    if args.name.is_some()
-        || args.bg
-        || args.new_pane
-        || args.new_tab
-        || args.resume
-        || args.ask
-        || args.yolo
-        || args.print
-        || args.effort.is_some()
-        || args.budget.is_some()
-        || args.model.is_some()
-        || args.description.is_some()
-        || args.system_prompt_file.is_some()
-        || args.append_system_prompt_file.is_some()
-        || args.max_turns.is_some()
-        || args.retries.is_some()
+    if args.launch.name.is_some()
+        || args.launch.cohort.bg
+        || args.launch.new_pane
+        || args.launch.cohort.new_tab
+        || args.launch.cohort.resume
+        || args.launch.ask
+        || args.launch.yolo
+        || args.launch.print
+        || args.launch.effort.is_some()
+        || args.launch.cohort.budget.is_some()
+        || args.launch.model.is_some()
+        || args.launch.cohort.description.is_some()
+        || args.launch.system_prompt_file.is_some()
+        || args.launch.append_system_prompt_file.is_some()
+        || args.launch.max_turns.is_some()
+        || args.launch.retries.is_some()
     {
         bail!("agent launch options require an agent spec");
     }
@@ -648,15 +675,17 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
 /// resolved to absolute paths and required to exist here, at the entry point,
 /// rather than downstream in the agent.
 pub(super) fn launch_override_preset(args: &AgentsArgs) -> Result<rimz::agents::LaunchPreset> {
-    let system_prompt_file =
-        resolve_launch_prompt_file(args.system_prompt_file.as_deref(), "--system-prompt-file")?;
+    let system_prompt_file = resolve_launch_prompt_file(
+        args.launch.system_prompt_file.as_deref(),
+        "--system-prompt-file",
+    )?;
     let append_system_prompt_file = resolve_launch_prompt_file(
-        args.append_system_prompt_file.as_deref(),
+        args.launch.append_system_prompt_file.as_deref(),
         "--append-system-prompt-file",
     )?;
     Ok(rimz::agents::LaunchPreset {
-        model: rimz::harness::plan::normalized_preset_value(args.model.as_deref()),
-        effort: rimz::harness::plan::normalized_preset_value(args.effort.as_deref()),
+        model: rimz::harness::plan::normalized_preset_value(args.launch.model.as_deref()),
+        effort: rimz::harness::plan::normalized_preset_value(args.launch.effort.as_deref()),
         system_prompt_file,
         append_system_prompt_file,
     })
@@ -687,14 +716,14 @@ pub(super) fn validate_resolved_launch_inputs(
     enforce_name_cardinality: bool,
 ) -> Result<rimz::agents::LaunchPreset> {
     rimz::harness::plan::reject_prompt_that_looks_like_spec(
-        args.spec.as_deref(),
-        args.prompt.as_deref(),
+        args.launch.spec.as_deref(),
+        args.launch.prompt.as_deref(),
         &effective.profiles,
         commands,
         &effective.teams,
     )?;
     rimz::harness::plan::validate_profile_prompt_files(layout)?;
-    if enforce_name_cardinality && args.name.is_some() && layout.agent_kinds().count() != 1 {
+    if enforce_name_cardinality && args.launch.name.is_some() && layout.agent_kinds().count() != 1 {
         bail!("--name requires a layout with exactly one agent cell");
     }
     launch_override_preset(args)
