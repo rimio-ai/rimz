@@ -32,6 +32,7 @@ That flag stack is what `rimz agents` bottles. A [profile](#profiles-shape-an-ag
 
 ```sh
 rimz agents claude            # the flag stack above, as one word — and a @claude handle
+rimz agents launch claude     # explicit launch verb, same agent payload
 rimz agents claude,codex      # two agents, side by side in one line
 rimz agents forge -w feat-x   # a whole team, isolated in its own worktree
 ```

@@ -10,7 +10,7 @@ A team launches several agents as one unit, each in a named role with its own co
 Define the roles once in `agents.toml`, then launch the whole set with one name; each member answers to its own role handle. For a one-off pairing, put [roles directly in the layout spec](./fleet.md#compose-a-layout) with `cell:role`; a role set earns a named team when it recurs. You compose the roles the way the work splits — the shipped `forge` team, one split that works really well, pairs a planner, a coder, and a reviewer on one feature.
 
 ```sh
-rimz teams launch forge -w feat-complex   # planner, coder, reviewer on one feature
+rimz teams forge -w feat-complex          # planner, coder, reviewer on one feature
 rimz message @planner "ship the plan"     # each member answers to its role handle
 rimz teams resume forge                   # reopen the newest closed forge team
 ```
@@ -47,7 +47,7 @@ Install the release-matched bundle from GitHub, then launch it into a worktree:
 
 ```sh
 rimz teams install forge
-rimz teams launch forge -w feat-complex     # the whole team, one isolated worktree
+rimz teams forge -w feat-complex            # the whole team, one isolated worktree
 ```
 
 From a repository checkout, copy the fragment instead when you want to edit that checkout's version directly:
@@ -72,12 +72,16 @@ The team catalogue merges configured definitions with the cohorts alive in this 
 ```sh
 rimz teams                              # every definition and live instance
 rimz teams show forge                   # roles, models, validation, and live members
-rimz teams launch forge -w feat-query   # launch or reconcile one cohort
+rimz teams forge -w feat-query          # launch or reconcile one cohort
 rimz teams resume forge                 # reopen its newest closed cohort
+rimz teams focus forge                  # jump to the role that needs attention
+rimz teams restart forge                # restart every role in declared order
+rimz teams stop forge                   # close the whole live cohort
 ```
 
 Add `--json` to `rimz teams` or `show` for the structured report.
-`launch` and `resume` use the same reconciliation and recovery engine as their `rimz agents` equivalents, while keeping the common team lifecycle together.
+The bare team name and the longer `launch` form use the same reconciliation engine as `rimz agents <team>`, while `resume`, `focus`, `restart`, and `stop` keep the cohort lifecycle together.
+When the same team is live in several lanes, run the lifecycle command inside the lane you mean or select it with `-w NAME`.
 The full flag surface lives in the [teams CLI reference](../reference/cli/teams.md).
 
 ## Define your own team
@@ -118,7 +122,7 @@ args = "--strict-mcp-config --tools 'Bash,Read,Edit,Write,WebFetch,WebSearch,Ski
 system-prompt-file = "reviewer.md"
 ```
 
-Launching the team name opens every member in that layout, and each answers to its role handle: `@reviewer` inside the team's channel, `forge.reviewer` from anywhere in the workspace. The optional `leader` names the role that receives a trailing launch prompt; without it, the first declared role leads. `rimz teams launch forge -w feat-x "task"` therefore seeds the planner directly, while the rest of the team starts ready for its hand-offs. `rimz agents forge.reviewer` launches or re-adds that one role with the same identity it has inside the full team, and from a pane in the team's own channel the bare `rimz agents reviewer` means the same thing.
+Launching the team name opens every member in that layout, and each answers to its role handle: `@reviewer` inside the team's channel, `forge.reviewer` from anywhere in the workspace. The optional `leader` names the role that receives a trailing launch prompt; without it, the first declared role leads. `rimz teams forge -w feat-x "task"` therefore seeds the planner directly, while the rest of the team starts ready for its hand-offs. `rimz agents forge.reviewer` launches or re-adds that one role with the same identity it has inside the full team, and from a pane in the team's own channel the bare `rimz agents reviewer` means the same thing.
 
 Start from the forge directory or from scratch: rename the roles, add or drop some, swap the models and prompts — a pair, a trio, or a whole bench of specialists. The role prompts do the heavy lifting: each one states the role's craft, how the roles hand work to each other, and who owns which decision, which is what turns co-launched agents into a team instead of a row of panes. The full config shape, override fields included, is in [configuration → agent profiles, commands, and teams](./configuration.md#agent-profiles-commands-and-teams).
 
@@ -149,5 +153,5 @@ The room treats a team as a single line of work: the sidebar names the active gr
 - [Messaging](./messaging.md) — reach a role by handle: park, steer, schedule, and channels.
 - [Examples → forge](../../examples/README.md) — the shipped forge fragment: install, prerequisites, and try-before-install.
 - [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
-- [Teams CLI reference](../reference/cli/teams.md) — discover, inspect, install, launch, and resume named teams.
+- [Teams CLI reference](../reference/cli/teams.md) — discover, inspect, install, launch, resume, and drive named teams.
 - [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents`, `worktree`, and `gc` surface.

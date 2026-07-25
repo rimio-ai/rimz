@@ -48,6 +48,9 @@ rimz agents restart @coder           # bounce in place and resume the session
 rimz agents resume '#docs'           # restore every closed place in one lane
 rimz teams                           # configured teams and their live instances
 rimz teams show forge                # resolved roles, validation, and live members
+rimz teams forge -w feat-x           # launch one configured cohort in a worktree
+rimz teams resume forge              # reopen a configured team cohort
+rimz teams focus|restart|stop forge  # drive one live team cohort
 rimz message @coder "rebase first"   # park for the next turn boundary
 rimz message @coder --wait "did the migration land? one line" # ask and print the reply
 rimz message --steer @coder "stop"   # interrupt the live turn now
