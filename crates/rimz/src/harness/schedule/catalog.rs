@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use super::{
-    ParsedSchedule, ScheduleErr, TaskAction, TaskActionErr, TaskShape, config_edit, instances,
-    pauses, strikes,
+    ParsedSchedule, ScheduleErr, TaskAction, TaskActionErr, TaskShape,
+    arming::{self, TaskKey},
+    config_edit, instances, strikes,
 };
 use crate::Store;
 use crate::config::{MachineConfig, TaskEntry, Tasks};
@@ -94,6 +95,8 @@ impl LoadedTask {
 pub struct TaskCatalog {
     visible: BTreeMap<String, LoadedTask>,
     runnable: BTreeMap<String, LoadedTask>,
+    overlay_keys: BTreeSet<String>,
+    project_root: Option<PathBuf>,
 }
 
 impl TaskCatalog {
@@ -108,7 +111,9 @@ impl TaskCatalog {
             .transpose()?
             .flatten()
             .map(|project| (project.tasks, project.state));
-        Ok(Self::from_layers(instances, machine_tasks, project))
+        let mut catalog = Self::from_layers(instances, machine_tasks, project);
+        catalog.project_root = project_root.map(Path::to_path_buf);
+        Ok(catalog)
     }
 
     /// Best-effort load for elder, doctor, and maintenance reads.
@@ -121,12 +126,37 @@ impl TaskCatalog {
                 .flatten()
                 .map(|project| (project.tasks, project.state))
         });
-        Self::from_layers(instances, machine.tasks, project)
+        let mut catalog = Self::from_layers(instances, machine.tasks, project);
+        catalog.project_root = project_root.map(Path::to_path_buf);
+        catalog
     }
 
     fn from_layers(instances: Tasks, machine: Tasks, project: Option<(Tasks, TrustState)>) -> Self {
+        let mut overlay_keys = instances
+            .0
+            .iter()
+            .map(|(name, entry)| {
+                TaskKey::for_task(name, TaskSource::Instance, &entry.resolved_root())
+            })
+            .chain(machine.0.iter().map(|(name, entry)| {
+                TaskKey::for_task(name, TaskSource::Config, &entry.resolved_root())
+            }))
+            .collect::<BTreeSet<_>>();
+        if let Some((tasks, state)) = &project {
+            overlay_keys.extend(tasks.0.iter().map(|(name, entry)| {
+                TaskKey::for_task(
+                    name,
+                    TaskSource::Project { state: *state },
+                    &entry.resolved_root(),
+                )
+            }));
+        }
         let mut runnable = merge_base(instances, machine);
         let mut visible = runnable.clone();
+        let project_root = project
+            .as_ref()
+            .and_then(|(tasks, _)| tasks.0.values().next())
+            .map(|entry| entry.root.clone());
         if let Some((project, state)) = project {
             let project = project.0.into_iter().map(|(name, entry)| {
                 let task = LoadedTask::new(&name, entry, TaskSource::Project { state });
@@ -143,7 +173,12 @@ impl TaskCatalog {
                 }
             }
         }
-        Self { visible, runnable }
+        Self {
+            visible,
+            runnable,
+            overlay_keys,
+            project_root,
+        }
     }
 
     pub fn visible(&self) -> &BTreeMap<String, LoadedTask> {
@@ -187,13 +222,10 @@ impl TaskCatalog {
         entry: &TaskEntry,
     ) -> Result<TaskMutation> {
         config_edit::set_entry(config_edit::TaskStore::Project(project_root), name, entry)?;
-        clear_overlays(
-            name,
-            TaskSource::Project {
-                state: crate::trust::status(project_root)?.state,
-            },
-            Some(project_root.to_path_buf()),
-        )
+        let source = TaskSource::Project {
+            state: crate::trust::status(project_root)?.state,
+        };
+        enable_project_overlays(name, source, project_root)
     }
 
     pub fn remove(&self, name: &str) -> Result<TaskMutation> {
@@ -201,13 +233,14 @@ impl TaskCatalog {
             return Ok(TaskMutation::unchanged());
         };
         let changed = remove_definition(name, task)?;
-        let cleared_pause = pauses::remove(name)?;
-        let cleared_strikes = strikes::clear(name)?;
+        let key = task_key(name, task);
+        let cleared_arming = arming::remove(&key)?;
+        let cleared_strikes = strikes::clear(&key)?;
         Ok(TaskMutation {
             changed,
             source: Some(task.source()),
             project_root: project_root(task),
-            cleared_pause,
+            cleared_arming,
             cleared_strikes,
         })
     }
@@ -230,13 +263,15 @@ impl TaskCatalog {
                 new_name,
             )?,
         };
-        let cleared_pause = pauses::rename(name, new_name)?;
-        let cleared_strikes = strikes::rename(name, new_name)?;
+        let old_key = task_key(name, task);
+        let new_key = task_key(new_name, task);
+        let cleared_arming = arming::rename(&old_key, &new_key)?;
+        let cleared_strikes = strikes::rename(&old_key, &new_key)?;
         Ok(TaskMutation {
             changed,
             source: Some(task.source()),
             project_root: project_root(task),
-            cleared_pause,
+            cleared_arming,
             cleared_strikes,
         })
     }
@@ -252,14 +287,16 @@ impl TaskCatalog {
             changed: remove_definition(name, task)?,
             source: Some(task.source()),
             project_root: project_root(task),
-            cleared_pause: false,
+            cleared_arming: false,
             cleared_strikes: false,
         })
     }
 
     pub fn prune_orphan_overlays(&self) -> Result<usize> {
-        let known = self.visible.keys().cloned().collect::<BTreeSet<_>>();
-        Ok(pauses::prune_orphans(&known)? + strikes::prune_orphans(&known)?)
+        let scopes = TaskKey::known_scopes(self.project_root.as_deref());
+        Ok(arming::prune_orphans(&self.overlay_keys, &scopes)?
+            + strikes::prune_orphans(&self.overlay_keys, &scopes)?
+            + usize::from(arming::remove_legacy_pauses()?))
     }
 
     pub fn reap_dead_deliveries() -> Result<usize> {
@@ -304,7 +341,7 @@ pub struct TaskMutation {
     changed: bool,
     source: Option<TaskSource>,
     project_root: Option<PathBuf>,
-    cleared_pause: bool,
+    cleared_arming: bool,
     cleared_strikes: bool,
 }
 
@@ -325,8 +362,8 @@ impl TaskMutation {
         self.project_root.as_deref()
     }
 
-    pub const fn cleared_pause(&self) -> bool {
-        self.cleared_pause
+    pub const fn cleared_arming(&self) -> bool {
+        self.cleared_arming
     }
 
     pub const fn cleared_strikes(&self) -> bool {
@@ -334,7 +371,7 @@ impl TaskMutation {
     }
 
     pub const fn cleared_overlays(&self) -> bool {
-        self.cleared_pause || self.cleared_strikes
+        self.cleared_arming || self.cleared_strikes
     }
 }
 
@@ -359,13 +396,35 @@ fn clear_overlays(
     source: TaskSource,
     project_root: Option<PathBuf>,
 ) -> Result<TaskMutation> {
+    let key = TaskKey::for_task(name, source, Path::new(""));
     Ok(TaskMutation {
         changed: true,
         source: Some(source),
         project_root,
-        cleared_pause: pauses::remove(name)?,
-        cleared_strikes: strikes::clear(name)?,
+        cleared_arming: arming::remove(&key)?,
+        cleared_strikes: strikes::clear(&key)?,
     })
+}
+
+fn enable_project_overlays(
+    name: &str,
+    source: TaskSource,
+    project_root: &Path,
+) -> Result<TaskMutation> {
+    let key = TaskKey::for_task(name, source, project_root);
+    let cleared_arming = arming::load().contains_key(&key);
+    arming::enable(&key)?;
+    Ok(TaskMutation {
+        changed: true,
+        source: Some(source),
+        project_root: Some(project_root.to_path_buf()),
+        cleared_arming,
+        cleared_strikes: strikes::clear(&key)?,
+    })
+}
+
+fn task_key(name: &str, task: &LoadedTask) -> String {
+    TaskKey::for_task(name, task.source(), &task.entry().resolved_root())
 }
 
 fn project_root(task: &LoadedTask) -> Option<PathBuf> {
@@ -464,6 +523,14 @@ mod tests {
             catalog.for_run("same").unwrap().entry.prompt.as_deref(),
             Some("project")
         );
+        assert!(catalog.overlay_keys.contains("machine::same"));
+        assert!(catalog.overlay_keys.contains(&TaskKey::for_task(
+            "same",
+            TaskSource::Project {
+                state: TrustState::Trusted,
+            },
+            Path::new("/repo"),
+        )));
     }
 
     #[test]

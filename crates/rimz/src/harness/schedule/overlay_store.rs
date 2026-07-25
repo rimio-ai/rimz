@@ -89,17 +89,21 @@ impl OverlayStore {
         })
     }
 
-    pub(super) fn prune_orphans<V>(
+    pub(super) fn prune_orphans_in_scopes<V>(
         &self,
         state_root: &Path,
         known: &BTreeSet<String>,
+        scopes: &BTreeSet<String>,
     ) -> Result<usize>
     where
         V: DeserializeOwned + Serialize,
     {
         self.mutate(state_root, |entries: &mut BTreeMap<String, V>| {
             let before = entries.len();
-            entries.retain(|name, _| known.contains(name));
+            entries.retain(|name, _| {
+                known.contains(name)
+                    || (name.contains("::") && !scopes.iter().any(|scope| name.starts_with(scope)))
+            });
             let removed = before - entries.len();
             (removed, removed > 0)
         })
@@ -157,7 +161,11 @@ mod tests {
 
         set(dir.path(), "orphan", 3);
         let removed = STORE
-            .prune_orphans::<u32>(dir.path(), &BTreeSet::from(["new".to_owned()]))
+            .prune_orphans_in_scopes::<u32>(
+                dir.path(),
+                &BTreeSet::from(["new".to_owned()]),
+                &BTreeSet::from([String::new()]),
+            )
             .expect("prune");
         assert_eq!(removed, 1);
         assert_eq!(
@@ -181,6 +189,32 @@ mod tests {
         assert_eq!(
             std::fs::read(STORE.path(dir.path())).expect("read unchanged data"),
             b"not json"
+        );
+    }
+
+    #[test]
+    fn scoped_prune_preserves_foreign_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        set(dir.path(), "machine::known", 1);
+        set(dir.path(), "machine::gone", 2);
+        set(dir.path(), "ws_foreign::keep", 3);
+        set(dir.path(), "legacy-unscoped", 4);
+
+        let removed = STORE
+            .prune_orphans_in_scopes::<u32>(
+                dir.path(),
+                &BTreeSet::from(["machine::known".to_owned()]),
+                &BTreeSet::from(["machine::".to_owned(), "ws_here::".to_owned()]),
+            )
+            .expect("scoped prune");
+
+        assert_eq!(removed, 2);
+        assert_eq!(
+            STORE.load(dir.path()),
+            BTreeMap::from([
+                ("machine::known".to_owned(), 1),
+                ("ws_foreign::keep".to_owned(), 3),
+            ])
         );
     }
 }

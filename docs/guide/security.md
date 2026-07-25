@@ -39,7 +39,7 @@ The hashed surface is every field that can cause a process to run:
 
 Room layout stays out of a repo's reach: a project config carrying a `[layout]` table (including tmux status `#(...)` and popup commands) is refused, with the fix to move it to your per-machine config. Any field RimZ can execute must enter this hash, and a unit test fails if one slips out. The mechanics, the grant record, and the diff are in [the trust internals](../internals/harness/trust.md); the command is in [the trust reference](../reference/cli/hooks-trust.md#project-trust).
 
-Per-machine loop schedules are separate: a `check = "<shell>"` line in your own `~/.config/rimz/loop.toml` is your command, not a repo's. A clone can supply only project `[tasks]`, and those stay inert until you grant, unless a same-named machine task is already the one that runs.
+Per-machine loop schedules are separate: a `check = "<shell>"` line in your own `~/.config/rimz/loop.toml` is your command, not a repo's. A clone can supply only project `[tasks]`, and those need both a trust grant for the config and a machine-local `rimz loop enable <name>` before they run unattended. Until trust, a same-named machine task remains the runnable definition; after trust, the project definition is visible but defaults disabled here.
 
 ### Notification handlers
 

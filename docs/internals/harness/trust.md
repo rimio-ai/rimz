@@ -47,10 +47,12 @@ Four surfaces apply today; the rest are hashed but not yet consumed at launch.
 | `[[agents]]` `env` | injected into the agent process | launch refuses with the `rimz trust grant` fix |
 | `[profiles]` | overlaid over machine profiles, winning name collisions | a spec that references a repo profile refuses |
 | `[agents.teams]` | overlaid over machine teams | a spec that references a repo team refuses |
-| `[tasks]` | overlaid over machine loop tasks and state instances | the project task stays inert; a same-named machine task keeps running |
+| `[tasks]` | overlaid over machine loop tasks and state instances, then gated by machine-local task enablement | the project task stays inert; a same-named machine task keeps running |
 | `[[agents]]` `launch_command`, `[[hooks]]`, top-level `[env]` | hashed only | hashed only |
 
 Applying the declared hooks, agent launch command, and top-level env is planned project-config behavior; those fields are covered by the hash today so that turning them on later needs no re-grant.
+
+Trust and loop enablement are independent decisions. Trust approves the commands in the project config; `rimz loop enable <name>` records that one trusted task may run unattended on this machine. A cloned project task therefore remains disabled after grant until it has a local arming record.
 
 Project config uses one `agents` shape at a time: `[[agents]]` for env entries, or `[agents.teams]` for shared teams. [`agent_env`](../../../crates/rimz/src/trust.rs) resolves the `[[agents]]` env for one kind under the trust gate: entries sharing a name merge in declaration order, later entries win key collisions, and values pass literally with no shell expansion. It returns `Blocked` on an untrusted or stale workspace, and `launch::trusted_agent_env` turns that into a `BlockedEnv` compile error carrying the grant fix, so the launch fails before any pane opens. The profile, team, and task overlays live in [`config::effective`](../../../crates/rimz/src/config/effective.rs); `block_untrusted_reference` refuses only a launch spec that would actually consume a repo profile or team, so machine profiles and built-in kinds keep launching in an untrusted checkout that merely declares project config.
 

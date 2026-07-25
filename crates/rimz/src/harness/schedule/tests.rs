@@ -420,13 +420,22 @@ fn schedule_next_after_reports_the_following_occurrence() {
     );
 }
 
-/// Inputs to one [`TaskTiming::evaluate`] call. Defaults are the unblocked,
-/// never-fired, unpaused case, so a row states only what it is testing.
-#[derive(Default)]
+/// Inputs to one [`TaskTiming::evaluate`] call. Defaults are a machine task
+/// that has never fired and has no arming record.
 struct Timing {
-    blocked: Option<crate::trust::TrustState>,
+    source: catalog::TaskSource,
     last_fire: Option<Timestamp>,
-    pause: Option<pauses::PauseEntry>,
+    arming: Option<arming::Arming>,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Self {
+            source: catalog::TaskSource::Config,
+            last_fire: None,
+            arming: None,
+        }
+    }
 }
 
 impl Timing {
@@ -440,14 +449,23 @@ impl Timing {
 
     fn blocked(self, state: crate::trust::TrustState) -> Self {
         Self {
-            blocked: Some(state),
+            source: catalog::TaskSource::Project { state },
             ..self
         }
     }
 
-    fn paused(self, pause: pauses::PauseEntry) -> Self {
+    fn project(self) -> Self {
         Self {
-            pause: Some(pause),
+            source: catalog::TaskSource::Project {
+                state: crate::trust::TrustState::Trusted,
+            },
+            ..self
+        }
+    }
+
+    fn held(self, arming: arming::Arming) -> Self {
+        Self {
+            arming: Some(arming),
             ..self
         }
     }
@@ -455,35 +473,43 @@ impl Timing {
     fn state(self, entry: &TaskEntry, now: &Zoned) -> TaskTimingState {
         TaskTiming::evaluate(
             &parse_schedule("task", entry),
-            self.blocked,
+            self.source,
             self.last_fire,
-            self.pause.as_ref(),
+            self.arming.as_ref(),
             now,
         )
         .state()
     }
 }
 
-/// Display state resolves blocked ▸ active pause ▸ schedule, and an ended pause
-/// becomes the effective last-fire edge so a resumed task does not replay.
+/// Display state resolves blocked ▸ disabled ▸ paused ▸ schedule, and an ended
+/// hold becomes the effective last-fire edge so a task does not replay.
 #[test]
 fn task_timing_state_precedence_and_classification() {
-    use TaskTimingState::{Blocked, Due, Invalid, NoOccurrence, Paused, Unarmed, Upcoming};
+    use TaskTimingState::{
+        Blocked, Disabled, Due, Invalid, NoOccurrence, Paused, Unarmed, Upcoming,
+    };
 
     let now = zdt(2026, 6, 24, 8, 10, 0);
     let interval = entry(None, Some("15m"), None);
     let invalid = entry(None, None, None);
     let stale = crate::trust::TrustState::Stale;
-    let manual = pauses::PauseEntry {
-        until: None,
+    let manual = arming::Arming {
+        enabled: false,
+        at: now.timestamp(),
+        pause_until: None,
         strikes: Some(3),
     };
-    let timed = pauses::PauseEntry {
-        until: Some(after(&now, 5 * 60)),
+    let timed = arming::Arming {
+        enabled: true,
+        at: now.timestamp(),
+        pause_until: Some(after(&now, 5 * 60)),
         strikes: None,
     };
-    let ended = pauses::PauseEntry {
-        until: Some(before(&now, 5 * 60)),
+    let ended = arming::Arming {
+        enabled: true,
+        at: before(&now, 20 * 60),
+        pause_until: Some(before(&now, 5 * 60)),
         strikes: None,
     };
 
@@ -491,11 +517,21 @@ fn task_timing_state_precedence_and_classification() {
     // over whatever the schedule half would have said.
     let overlay = |timing: Timing| timing.state(&invalid, &now);
     assert_eq!(
-        overlay(Timing::default().blocked(stale).paused(manual)),
+        overlay(Timing::default().blocked(stale).held(manual)),
         Blocked(stale)
     );
-    assert_eq!(overlay(Timing::default().paused(manual)), Paused(manual));
-    assert_eq!(overlay(Timing::default().paused(timed)), Paused(timed));
+    assert_eq!(
+        overlay(Timing::default().held(manual)),
+        Disabled(arming::DisabledReason::Strikes(3))
+    );
+    assert_eq!(
+        overlay(Timing::default().project()),
+        Disabled(arming::DisabledReason::NotEnabledHere)
+    );
+    assert_eq!(
+        overlay(Timing::default().held(timed)),
+        Paused(after(&now, 5 * 60))
+    );
     assert_eq!(overlay(Timing::fired(0, &now)), Invalid);
 
     assert_eq!(Timing::default().state(&interval, &now), Unarmed);
@@ -507,7 +543,7 @@ fn task_timing_state_precedence_and_classification() {
     // the pause lifted 5 minutes ago, so the next 15m occurrence is 10m out.
     assert_eq!(
         Timing::fired(20 * 60, &now)
-            .paused(ended)
+            .held(ended)
             .state(&interval, &now),
         Upcoming(after(&now, 10 * 60)),
     );

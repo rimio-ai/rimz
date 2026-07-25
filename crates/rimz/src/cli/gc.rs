@@ -95,7 +95,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
             .map(|workspace| workspace.project_root);
         rimz::harness::schedule::catalog::TaskCatalog::load(project_root.as_deref())?
             .prune_orphan_overlays()
-            .context("pruning orphan loop pauses")?;
+            .context("pruning orphan loop arming state")?;
         reaped
     };
     spinner.set("pruning dead workspaces…");

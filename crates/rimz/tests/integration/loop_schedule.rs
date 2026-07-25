@@ -14,7 +14,7 @@ use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLi
 use rimz::config::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
 use rimz::harness::budget::{BudgetLedger, DayBaseline, write_ledger};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
-use rimz::harness::schedule::pauses::{self, PauseEntry};
+use rimz::harness::schedule::arming::{self, Arming};
 use rimz::harness::schedule::run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult};
 use rimz::harness::schedule::runner::RunLockInfo;
 use rimz::harness::schedule::strikes;
@@ -313,11 +313,10 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
         list.contains("repo-check")
             && list.contains("project · untrusted")
             && list.contains("blocked · trust")
+            && list.contains("project task(s) disabled")
             && list.contains("rimz trust grant"),
         "{list}"
     );
-    loop_ok(&env, &["loop", "pause", "repo-check"]);
-    assert!(read_loop_pauses(&env).contains_key("repo-check"));
     let (_stdout, error) = loop_fail(&env, &["loop", "run", "repo-check"]);
     assert!(
         error.contains("loop task `repo-check` is blocked — project trust is untrusted")
@@ -332,12 +331,55 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
             .is_some_and(|check| check.output.contains("machine"))
     );
     grant_project_trust(&env);
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        list.contains("repo-check") && list.contains("disabled · enable to arm"),
+        "{list}"
+    );
+    let runs_before = read_loop_run_records(&env).len();
+    loop_ok(&env, &["loop", "run", "shared"]);
+    assert_eq!(read_loop_run_records(&env).len(), runs_before);
+    loop_ok(&env, &["loop", "enable", "shared"]);
     loop_ok(&env, &["loop", "run", "shared"]);
     assert!(
         last_loop_record(&env)
             .check
             .is_some_and(|check| check.output.contains("project"))
     );
+}
+
+#[test]
+fn project_task_enablement_is_scoped_by_project_root() {
+    let env = Env::new();
+    let other = env.home_root.join("other-project");
+    std::fs::create_dir_all(&other).expect("other project");
+    write_project_config_at(
+        &env.project_root,
+        "[tasks.nightly]\ncheck = \"true\"\nevery = \"15m\"\n",
+    );
+    write_project_config_at(
+        &other,
+        "[tasks.nightly]\ncheck = \"true\"\nevery = \"15m\"\n",
+    );
+    loop_ok_root(&env, &env.project_root, &["trust", "grant"]);
+    loop_ok_root(&env, &other, &["trust", "grant"]);
+
+    assert!(
+        loop_ok_root(&env, &env.project_root, &["loop", "list"])
+            .contains("disabled · enable to arm")
+    );
+    assert!(loop_ok_root(&env, &other, &["loop", "list"]).contains("disabled · enable to arm"));
+
+    loop_ok_root(&env, &env.project_root, &["loop", "enable", "nightly"]);
+    assert!(
+        !loop_ok_root(&env, &env.project_root, &["loop", "list"])
+            .contains("disabled · enable to arm")
+    );
+    assert!(loop_ok_root(&env, &other, &["loop", "list"]).contains("disabled · enable to arm"));
+
+    let arming = read_loop_arming(&env);
+    assert!(arming[&project_task_key(&env.project_root, "nightly")].enabled);
+    assert!(!arming.contains_key(&project_task_key(&other, "nightly")));
 }
 
 #[test]
@@ -360,17 +402,19 @@ fn trusted_project_task_edits_repin_trust() {
         ],
     );
     assert!(
-        added.contains("trust: granted — task fires on schedule")
+        added.contains("trust: granted — task enabled and fires on schedule")
             && !added.contains("stay inert")
             && !added.contains("grant trust now"),
         "{added}"
     );
     assert!(loop_ok(&env, &["trust"]).contains("trust: trusted"));
+    assert!(read_loop_arming(&env)[&project_task_key(&env.project_root, "second")].enabled);
     loop_ok(&env, &["loop", "run", "second"]);
 
     let renamed = loop_ok(&env, &["loop", "rename", "second", "renamed"]);
     assert!(renamed.contains("trust: kept"), "{renamed}");
     assert!(loop_ok(&env, &["trust"]).contains("trust: trusted"));
+    assert!(read_loop_arming(&env)[&project_task_key(&env.project_root, "renamed")].enabled);
     loop_ok(&env, &["loop", "run", "renamed"]);
 
     let removed = loop_ok(&env, &["loop", "remove", "renamed"]);
@@ -398,10 +442,17 @@ fn first_project_task_grants_fresh_config() {
         ],
     );
     assert!(
-        added.contains("trust: granted — task fires on schedule"),
+        added.contains("trust: granted — task enabled and fires on schedule"),
         "{added}"
     );
     assert!(loop_ok(&env, &["trust"]).contains("trust: trusted"));
+    let arming = read_loop_arming(&env);
+    assert!(
+        arming
+            .get(&project_task_key(&env.project_root, "fresh"))
+            .is_some_and(|entry| entry.enabled),
+        "{arming:?}"
+    );
 }
 
 #[test]
@@ -515,44 +566,60 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
 }
 
 #[test]
-fn loop_pause_fire_resume_workflow() {
+fn loop_enable_disable_pause_workflow() {
     let env = Env::new();
     loop_ok(
         &env,
         &["loop", "add", "probe", "--check", "true", "--every", "15m"],
     );
-    let paused = loop_ok(&env, &["loop", "pause", "probe"]);
-    assert!(paused.contains("resume with `rimz loop resume probe`"));
-    assert_eq!(
-        read_loop_pauses(&env).get("probe"),
-        Some(&PauseEntry {
-            until: None,
-            strikes: None,
-        })
+    let (_stdout, error) = loop_fail(&env, &["loop", "pause", "probe"]);
+    assert!(
+        error.contains("--for") && error.contains("required"),
+        "{error}"
     );
-    assert!(loop_ok(&env, &["loop", "show", "probe"]).contains("· paused"));
+    assert!(loop_ok(&env, &["loop", "disable", "probe"]).contains("disabled"));
+    assert!(loop_ok(&env, &["loop", "list"]).contains("disabled"));
+    let fired = loop_ok(&env, &["loop", "fire", "probe"]);
+    assert!(fired.contains("task is disabled; firing anyway") && fired.contains("check passed"));
+    assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("enabled"));
 
     let timed = loop_ok(&env, &["loop", "pause", "probe", "--for", "2h"]);
     assert!(
         timed.contains("resumes in 2h")
-            && read_loop_pauses(&env)
-                .get("probe")
-                .is_some_and(|entry| entry.until.is_some()),
+            && read_loop_arming(&env)
+                .get(&machine_task_key("probe"))
+                .is_some_and(|entry| entry.pause_until.is_some()),
         "{timed}"
     );
+    assert!(loop_ok(&env, &["loop", "show", "probe"]).contains("· paused"));
     let fired = loop_ok(&env, &["loop", "fire", "probe"]);
     assert!(fired.contains("task is paused; firing anyway") && fired.contains("check passed"));
-    assert!(loop_ok(&env, &["loop", "resume", "probe"]).contains("resumed"));
+    assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("enabled"));
     assert!(!loop_ok(&env, &["loop", "list"]).contains("paused ·"));
-    assert!(loop_ok(&env, &["loop", "resume", "probe"]).contains("not paused"));
+    assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("already enabled"));
+
+    loop_ok(
+        &env,
+        &["loop", "add", "second", "--check", "true", "--every", "15m"],
+    );
+    let disabled = loop_ok(&env, &["loop", "disable", "--all"]);
+    assert!(
+        disabled.contains("loop `probe`: disabled") && disabled.contains("loop `second`: disabled"),
+        "{disabled}"
+    );
+    let enabled = loop_ok(&env, &["loop", "enable", "--all"]);
+    assert!(
+        enabled.contains("loop `probe`: enabled") && enabled.contains("loop `second`: enabled"),
+        "{enabled}"
+    );
 }
 
 #[test]
-fn loop_repeated_failures_auto_pause_notify_once_and_resume() {
+fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-strikes", "feature-loop");
-    let notify_log = env.project_root.join("loop-paused-notify.log");
+    let notify_log = env.project_root.join("loop-disabled-notify.log");
     let config_path = env.config_root().join("rimz/config.toml");
     std::fs::create_dir_all(config_path.parent().expect("config parent")).expect("mkdir config");
     std::fs::write(
@@ -585,31 +652,34 @@ fn loop_repeated_failures_auto_pause_notify_once_and_resume() {
     }
     let third = loop_ok(&env, &["loop", "run", "watchdog"]);
     assert!(
-        third.contains("paused after 3 consecutive failed fires"),
+        third.contains("disabled after 3 consecutive failed fires"),
         "{third}"
     );
     assert_eq!(
-        read_loop_pauses(&env)
-            .get("watchdog")
-            .and_then(|pause| pause.strikes),
+        read_loop_arming(&env)
+            .get(&machine_task_key("watchdog"))
+            .and_then(|arming| arming.strikes),
         Some(3)
     );
 
     let fire = loop_ok(&env, &["loop", "fire", "watchdog"]);
-    assert!(fire.contains("task is paused; firing anyway") && fire.contains("delivered"));
-    assert_eq!(read_loop_strikes(&env).get("watchdog"), Some(&4));
+    assert!(fire.contains("task is disabled; firing anyway") && fire.contains("delivered"));
     assert_eq!(
-        read_loop_pauses(&env)
-            .get("watchdog")
-            .and_then(|pause| pause.strikes),
+        read_loop_strikes(&env).get(&machine_task_key("watchdog")),
+        Some(&4)
+    );
+    assert_eq!(
+        read_loop_arming(&env)
+            .get(&machine_task_key("watchdog"))
+            .and_then(|arming| arming.strikes),
         Some(3),
-        "manual fire must not replace active pause"
+        "manual fire must not replace an existing disable"
     );
 
     let deadline = Instant::now() + Duration::from_secs(2);
     let notification = loop {
         let text = std::fs::read_to_string(&notify_log).unwrap_or_default();
-        if text.contains("loop_paused|RimZ: loop watchdog paused") {
+        if text.contains("loop_disabled|RimZ: loop watchdog disabled") {
             break text;
         }
         assert!(Instant::now() < deadline, "notification missing: {text}");
@@ -617,12 +687,14 @@ fn loop_repeated_failures_auto_pause_notify_once_and_resume() {
     };
     assert_eq!(notification.lines().count(), 1, "{notification}");
 
-    loop_ok(&env, &["loop", "resume", "watchdog"]);
-    assert!(!read_loop_strikes(&env).contains_key("watchdog"));
+    loop_ok(&env, &["loop", "enable", "watchdog"]);
+    assert!(!read_loop_strikes(&env).contains_key(&machine_task_key("watchdog")));
     assert!(
-        read_loop_pauses(&env)
-            .get("watchdog")
-            .is_some_and(|pause| pause.until.is_some() && pause.strikes.is_none())
+        read_loop_arming(&env)
+            .get(&machine_task_key("watchdog"))
+            .is_some_and(|arming| arming.enabled
+                && arming.pause_until.is_none()
+                && arming.strikes.is_none())
     );
 }
 
@@ -638,8 +710,9 @@ fn loop_task_mutations_move_and_clear_overlays() {
             env.project_root.display()
         ),
     );
-    loop_ok(&env, &["loop", "pause", "old"]);
-    std::fs::write(strikes::path(&env.state_root()), r#"{"old":2}"#).expect("write loop strikes");
+    loop_ok(&env, &["loop", "pause", "old", "--for", "2h"]);
+    std::fs::write(strikes::path(&env.state_root()), r#"{"machine::old":2}"#)
+        .expect("write loop strikes");
     loop_ok(&env, &["loop", "rename", "old", "new"]);
     let text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
@@ -647,8 +720,11 @@ fn loop_task_mutations_move_and_clear_overlays() {
             && text.contains("[tasks.new]")
             && !text.contains("[tasks.old]")
     );
-    assert!(read_loop_pauses(&env).contains_key("new"));
-    assert_eq!(read_loop_strikes(&env).get("new"), Some(&2));
+    assert!(read_loop_arming(&env).contains_key(&machine_task_key("new")));
+    assert_eq!(
+        read_loop_strikes(&env).get(&machine_task_key("new")),
+        Some(&2)
+    );
 
     loop_ok(
         &env,
@@ -662,28 +738,31 @@ fn loop_task_mutations_move_and_clear_overlays() {
             "07:00",
         ],
     );
-    loop_ok(&env, &["loop", "pause", "old-state"]);
+    loop_ok(&env, &["loop", "pause", "old-state", "--for", "2h"]);
     loop_ok(&env, &["loop", "rename", "old-state", "new-state"]);
     let instances = read_loop_instances(&env);
     assert!(
         !instances.0.contains_key("old-state")
             && instances.0.contains_key("new-state")
-            && read_loop_pauses(&env).contains_key("new-state")
+            && read_loop_arming(&env).contains_key(&machine_task_key("new-state"))
     );
 
     loop_ok(&env, &["loop", "remove", "new"]);
-    assert!(!read_loop_pauses(&env).contains_key("new"));
-    assert!(!read_loop_strikes(&env).contains_key("new"));
+    assert!(!read_loop_arming(&env).contains_key(&machine_task_key("new")));
+    assert!(!read_loop_strikes(&env).contains_key(&machine_task_key("new")));
     loop_ok(
         &env,
         &["loop", "add", "swap", "--check", "true", "--every", "15m"],
     );
-    loop_ok(&env, &["loop", "pause", "swap"]);
+    loop_ok(&env, &["loop", "pause", "swap", "--for", "2h"]);
     let replaced = loop_ok(
         &env,
         &["loop", "add", "swap", "--check", "true", "--every", "30m"],
     );
-    assert!(replaced.contains("pause: cleared") && !read_loop_pauses(&env).contains_key("swap"));
+    assert!(
+        replaced.contains("arming: reset")
+            && !read_loop_arming(&env).contains_key(&machine_task_key("swap"))
+    );
     assert!(
         std::fs::read_to_string(loop_config_path(&env))
             .unwrap()
@@ -1691,6 +1770,23 @@ fn loop_ok(env: &Env, args: &[&str]) -> String {
     String::from_utf8(output.stdout).expect("stdout")
 }
 
+fn loop_ok_root(env: &Env, root: &Path, args: &[&str]) -> String {
+    let output = env
+        .rimz()
+        .arg("--root")
+        .arg(root)
+        .args(args)
+        .output()
+        .expect("rimz loop at root");
+    assert!(
+        output.status.success(),
+        "rimz --root {} {args:?} failed: {}",
+        root.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("stdout")
+}
+
 fn qwen_loop_ok(env: &Env, settings: &Path, args: &[&str]) -> String {
     let output = env
         .rimz()
@@ -1813,7 +1909,11 @@ fn write_loop_config(env: &Env, text: &str) {
 }
 
 fn write_project_config(env: &Env, text: &str) {
-    let path = env.project_root.join(".rimz/config.toml");
+    write_project_config_at(&env.project_root, text);
+}
+
+fn write_project_config_at(project_root: &Path, text: &str) {
+    let path = project_root.join(".rimz/config.toml");
     std::fs::create_dir_all(path.parent().expect("project config dir"))
         .expect("mkdir project config");
     std::fs::write(path, text).expect("write project config");
@@ -1848,12 +1948,23 @@ fn read_loop_instances(env: &Env) -> Tasks {
     serde_json::from_str(&text).expect("loop instances")
 }
 
-fn read_loop_pauses(env: &Env) -> BTreeMap<String, PauseEntry> {
-    let path = pauses::path(&env.state_root());
+fn read_loop_arming(env: &Env) -> BTreeMap<String, Arming> {
+    let path = arming::path(&env.state_root());
     let Ok(text) = std::fs::read_to_string(path) else {
         return BTreeMap::new();
     };
-    serde_json::from_str(&text).expect("loop pauses")
+    serde_json::from_str(&text).expect("loop arming")
+}
+
+fn machine_task_key(name: &str) -> String {
+    format!("machine::{name}")
+}
+
+fn project_task_key(project_root: &Path, name: &str) -> String {
+    format!(
+        "{}::{name}",
+        rimz::ids::WorkspaceId::from_project_root(project_root)
+    )
 }
 
 fn read_loop_strikes(env: &Env) -> BTreeMap<String, u32> {

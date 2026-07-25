@@ -26,7 +26,7 @@ struct ObservedTaskGroup<'a> {
 
 fn grouped_tasks<'a>(
     tasks: &'a BTreeMap<String, LoadedTask>,
-    pauses: &BTreeMap<String, PauseEntry>,
+    arming_entries: &BTreeMap<String, Arming>,
     now_zoned: &jiff::Zoned,
 ) -> Vec<ObservedTaskGroup<'a>> {
     let mut entries_by_root: BTreeMap<PathBuf, Vec<(&str, &LoadedTask)>> = BTreeMap::new();
@@ -53,9 +53,8 @@ fn grouped_tasks<'a>(
                     timing: observe_task_timing(
                         name,
                         task,
-                        task.source().blocked_state(),
                         &stamps,
-                        pauses.get(name),
+                        arming_entries.get(&task_key(name, task)),
                         now_zoned,
                     ),
                 })
@@ -74,7 +73,7 @@ fn grouped_tasks<'a>(
 pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     let catalog = task_catalog(globals)?;
     let tasks = catalog.visible();
-    let pause_entries = pauses::load();
+    let arming_entries = arming::load();
     let mut out = ui::out();
     if tasks.is_empty() {
         writeln!(out, "no loop tasks; add one with `rimz loop add`")?;
@@ -84,7 +83,8 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&state_home(), &now_zoned);
     let mut blocked_count = 0;
-    let groups = grouped_tasks(tasks, &pause_entries, &now_zoned);
+    let mut not_enabled_count = 0;
+    let groups = grouped_tasks(tasks, &arming_entries, &now_zoned);
     for (idx, group) in groups.into_iter().enumerate() {
         if idx > 0 {
             writeln!(out)?;
@@ -98,6 +98,10 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
         let context = ListRowContext { stats: &stats, now };
         for task in group.tasks {
             blocked_count += usize::from(task.task.source().blocked_state().is_some());
+            not_enabled_count += usize::from(matches!(
+                task.timing.arm_state(),
+                ArmState::Disabled(DisabledReason::NotEnabledHere)
+            ));
             table.row(task_row(&task, &context));
         }
         table.render(&mut out)?;
@@ -105,6 +109,12 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     if blocked_count > 0 {
         writeln!(out)?;
         write_blocked_footer(&mut out, blocked_count)?;
+    }
+    if not_enabled_count > 0 {
+        if blocked_count == 0 {
+            writeln!(out)?;
+        }
+        write_disabled_footer(&mut out, not_enabled_count)?;
     }
     Ok(())
 }
@@ -145,17 +155,18 @@ fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Ce
 fn next_cell(timing: &schedule::TaskTiming, now: Timestamp) -> ui::Cell {
     match timing.state() {
         schedule::TaskTimingState::Blocked(state) => blocked_next_cell(state),
-        schedule::TaskTimingState::Paused(PauseEntry {
-            until: None,
-            strikes: Some(strikes),
-        }) => ui::cell(format!("paused · {strikes} strikes")).fg(ui::palette::muted()),
-        schedule::TaskTimingState::Paused(PauseEntry {
-            until: None,
-            strikes: None,
-        }) => ui::cell("paused").fg(ui::palette::muted()),
-        schedule::TaskTimingState::Paused(PauseEntry {
-            until: Some(until), ..
-        }) => ui::cell(format!("paused · {}", ui::rel_until(until, now))).fg(ui::palette::muted()),
+        schedule::TaskTimingState::Disabled(DisabledReason::NotEnabledHere) => {
+            ui::cell("disabled · enable to arm").fg(ui::palette::muted())
+        }
+        schedule::TaskTimingState::Disabled(DisabledReason::Manual) => {
+            ui::cell("disabled").fg(ui::palette::muted())
+        }
+        schedule::TaskTimingState::Disabled(DisabledReason::Strikes(strikes)) => {
+            ui::cell(format!("disabled · {strikes} strikes")).fg(ui::palette::muted())
+        }
+        schedule::TaskTimingState::Paused(until) => {
+            ui::cell(format!("paused · {}", ui::rel_until(until, now))).fg(ui::palette::muted())
+        }
         schedule::TaskTimingState::Upcoming(next) | schedule::TaskTimingState::Due(next) => {
             ui::cell(ui::rel_until(next, now))
         }
@@ -186,6 +197,17 @@ fn write_blocked_footer(out: &mut impl Write, count: usize) -> std::io::Result<(
             &format!(
                 "{count} task(s) blocked by project trust — review with `rimz trust`, approve with `rimz trust grant`"
             )
+        )
+    )
+}
+
+fn write_disabled_footer(out: &mut impl Write, count: usize) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{}",
+        ui::paint(
+            ui::palette::muted(),
+            &format!("{count} project task(s) disabled — arm with `rimz loop enable <name>`")
         )
     )
 }
@@ -238,11 +260,11 @@ fn repaint_watch(project_root: Option<&Path>, hold: bool) -> Result<()> {
 fn render_watch_frame(out: &mut impl Write, project_root: Option<&Path>, hold: bool) -> Result<()> {
     let catalog = TaskCatalog::load(project_root)?;
     let now = Timestamp::now();
-    let pause_entries = pauses::load();
+    let arming_entries = arming::load();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&state_home(), &now_zoned);
     let context = ListRowContext { stats: &stats, now };
-    let groups = grouped_tasks(catalog.visible(), &pause_entries, &now_zoned)
+    let groups = grouped_tasks(catalog.visible(), &arming_entries, &now_zoned)
         .into_iter()
         .map(|group| WatchGroup {
             root: group.root,
@@ -270,7 +292,7 @@ fn render_watch_frame(out: &mut impl Write, project_root: Option<&Path>, hold: b
 enum RowState {
     Running,
     Due,
-    Paused,
+    Held,
     Blocked,
     Upcoming(Timestamp),
     NeverRun,
@@ -293,7 +315,7 @@ struct WatchRow {
 enum WatchBand {
     Running,
     Failed,
-    Paused,
+    Held,
     Ok,
 }
 
@@ -303,8 +325,8 @@ impl WatchRow {
             WatchBand::Running
         } else if self.failed {
             WatchBand::Failed
-        } else if matches!(self.state, RowState::Paused | RowState::Blocked) {
-            WatchBand::Paused
+        } else if matches!(self.state, RowState::Held | RowState::Blocked) {
+            WatchBand::Held
         } else {
             WatchBand::Ok
         }
@@ -318,9 +340,9 @@ impl WatchRow {
                 RowState::Due => 2,
                 RowState::Upcoming(_) => 3,
                 RowState::NeverRun => 5,
-                RowState::Running | RowState::Paused | RowState::Blocked => 0,
+                RowState::Running | RowState::Held | RowState::Blocked => 0,
             },
-            WatchBand::Paused => 4,
+            WatchBand::Held => 4,
         };
         let next = match self.state {
             RowState::Upcoming(next) => Some(next),
@@ -330,7 +352,7 @@ impl WatchRow {
     }
 
     fn eligible_next(&self) -> Option<Timestamp> {
-        (!matches!(self.state, RowState::Paused | RowState::Blocked))
+        (!matches!(self.state, RowState::Held | RowState::Blocked))
             .then_some(self.next_ts)
             .flatten()
     }
@@ -347,7 +369,7 @@ struct WatchSummary<'a> {
     total: usize,
     running: usize,
     failed: usize,
-    paused: usize,
+    held: usize,
     ok: usize,
     next: Option<(&'a WatchRow, Timestamp)>,
 }
@@ -360,7 +382,7 @@ impl<'a> WatchSummary<'a> {
             match row.band() {
                 WatchBand::Running => summary.running += 1,
                 WatchBand::Failed => summary.failed += 1,
-                WatchBand::Paused => summary.paused += 1,
+                WatchBand::Held => summary.held += 1,
                 WatchBand::Ok => summary.ok += 1,
             }
             if let Some(next) = row.eligible_next()
@@ -405,7 +427,7 @@ fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Wat
     );
     let next_text = match state {
         RowState::Running => "running now".to_owned(),
-        RowState::Paused => timing_next_text(&task.timing, context.now),
+        RowState::Held => timing_next_text(&task.timing, context.now),
         RowState::Blocked => "blocked · trust".to_owned(),
         RowState::Due => "due".to_owned(),
         RowState::Upcoming(next) => ui::until_label(next, context.now),
@@ -435,7 +457,9 @@ fn watch_next_timestamp(timing: &schedule::TaskTiming, running: bool) -> Option<
 fn row_state_for_timing(timing: &schedule::TaskTiming) -> RowState {
     match timing.state() {
         schedule::TaskTimingState::Blocked(_) => RowState::Blocked,
-        schedule::TaskTimingState::Paused(_) => RowState::Paused,
+        schedule::TaskTimingState::Disabled(_) | schedule::TaskTimingState::Paused(_) => {
+            RowState::Held
+        }
         schedule::TaskTimingState::Due(_) => RowState::Due,
         schedule::TaskTimingState::Upcoming(next) => RowState::Upcoming(next),
         schedule::TaskTimingState::Invalid
@@ -447,17 +471,16 @@ fn row_state_for_timing(timing: &schedule::TaskTiming) -> RowState {
 fn timing_next_text(timing: &schedule::TaskTiming, now: Timestamp) -> String {
     match timing.state() {
         schedule::TaskTimingState::Blocked(_) => "blocked · trust".to_owned(),
-        schedule::TaskTimingState::Paused(PauseEntry {
-            until: Some(until), ..
-        }) => format!("paused · {}", ui::rel_until(until, now)),
-        schedule::TaskTimingState::Paused(PauseEntry {
-            until: None,
-            strikes: Some(strikes),
-        }) => format!("paused · {strikes} strikes"),
-        schedule::TaskTimingState::Paused(PauseEntry {
-            until: None,
-            strikes: None,
-        }) => "paused".to_owned(),
+        schedule::TaskTimingState::Disabled(DisabledReason::NotEnabledHere) => {
+            "disabled · enable to arm".to_owned()
+        }
+        schedule::TaskTimingState::Disabled(DisabledReason::Manual) => "disabled".to_owned(),
+        schedule::TaskTimingState::Disabled(DisabledReason::Strikes(strikes)) => {
+            format!("disabled · {strikes} strikes")
+        }
+        schedule::TaskTimingState::Paused(until) => {
+            format!("paused · {}", ui::rel_until(until, now))
+        }
         schedule::TaskTimingState::Due(_) => "due".to_owned(),
         schedule::TaskTimingState::Upcoming(next) => ui::until_label(next, now),
         schedule::TaskTimingState::Invalid
@@ -532,7 +555,7 @@ fn render_watch_rows(out: &mut impl Write, rows: &[&WatchRow], cols: usize) -> s
     for row in rows {
         let next_style = match row.state {
             RowState::Running => ui::palette::cool(),
-            RowState::Paused | RowState::Blocked => ui::palette::muted(),
+            RowState::Held | RowState::Blocked => ui::palette::muted(),
             RowState::NeverRun => ui::palette::faint(),
             RowState::Due => ui::palette::warn(),
             RowState::Upcoming(_) => anstyle::Style::new(),
@@ -578,7 +601,7 @@ fn write_watch_band(
     for (count, glyph, noun, style) in [
         (summary.running, "▸", "running", ui::palette::cool()),
         (summary.failed, "✗", "failed", ui::palette::alarm()),
-        (summary.paused, "○", "paused", ui::palette::muted()),
+        (summary.held, "○", "held", ui::palette::muted()),
         (summary.ok, "●", "ok", ui::palette::good()),
     ] {
         if count > 0 {
@@ -904,7 +927,6 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         anyhow::anyhow!("no loop task named `{}`; see `rimz loop list`", args.name)
     })?;
     let entry = task.entry();
-    let source = task.source();
     let root = entry.resolved_root();
     let runtime = runtime_for_root(&root);
     let stamps = runtime
@@ -912,16 +934,10 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         .map(rimz::harness::schedule::last_stamps)
         .unwrap_or_default();
     let now = Timestamp::now();
-    let pause = pauses::load().remove(&args.name);
+    let key = task_key(&args.name, &task);
+    let arming = arming::load().remove(&key);
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    let timing = observe_task_timing(
-        &args.name,
-        &task,
-        source.blocked_state(),
-        &stamps,
-        pause.as_ref(),
-        &now_zoned,
-    );
+    let timing = observe_task_timing(&args.name, &task, &stamps, arming.as_ref(), &now_zoned);
     let records = run_log::task_records(&state_home(), &args.name);
     let show_agent_runs = has_agent_runs_section(&task);
     let lock_state = probe_run_lock(&args.name, entry).ok();
@@ -943,7 +959,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         &records,
         ShowFactsContext {
             now_zoned: &now_zoned,
-            is_paused: timing.active_pause().is_some(),
+            is_held: timing.arm_state() != ArmState::Live,
             lock_state: lock_state.as_ref(),
             active_run: active_run.as_ref(),
             full_spend: !show_agent_runs,
@@ -1041,21 +1057,22 @@ fn write_show_headline(
             " · next {}",
             ui::paint(ui::status::trust(state), "blocked · trust")
         )?,
-        schedule::TaskTimingState::Paused(PauseEntry {
-            until: None,
-            strikes: Some(strikes),
-        }) => write!(
+        schedule::TaskTimingState::Disabled(DisabledReason::NotEnabledHere) => write!(
             out,
-            " · paused after {strikes} strikes — resume with `rimz loop resume {}`",
+            " · disabled — enable to arm with `rimz loop enable {}`",
             name
         )?,
-        schedule::TaskTimingState::Paused(PauseEntry {
-            until: None,
-            strikes: None,
-        }) => write!(out, " · paused")?,
-        schedule::TaskTimingState::Paused(PauseEntry {
-            until: Some(until), ..
-        }) => write!(out, " · paused, resumes {}", pause_until_text(until, now))?,
+        schedule::TaskTimingState::Disabled(DisabledReason::Manual) => {
+            write!(out, " · disabled — enable with `rimz loop enable {name}`")?
+        }
+        schedule::TaskTimingState::Disabled(DisabledReason::Strikes(strikes)) => write!(
+            out,
+            " · disabled after {strikes} strikes — enable with `rimz loop enable {}`",
+            name
+        )?,
+        schedule::TaskTimingState::Paused(until) => {
+            write!(out, " · paused, resumes {}", pause_until_text(until, now))?
+        }
         schedule::TaskTimingState::Upcoming(next) | schedule::TaskTimingState::Due(next) => {
             write!(out, " · next {}", ui::rel_until(next, now))?;
         }
@@ -1064,21 +1081,12 @@ fn write_show_headline(
         | schedule::TaskTimingState::NoOccurrence => {}
     }
     writeln!(out)?;
-    if matches!(
-        timing.active_pause(),
-        Some(PauseEntry {
-            until: None,
-            strikes: None,
-        })
-    ) {
-        writeln!(out, "  resume with `rimz loop resume {name}`")?;
-    }
     Ok(())
 }
 
 struct ShowFactsContext<'a> {
     now_zoned: &'a jiff::Zoned,
-    is_paused: bool,
+    is_held: bool,
     lock_state: Option<&'a RunLockState>,
     active_run: Option<&'a RunRecord>,
     full_spend: bool,
@@ -1096,7 +1104,10 @@ fn write_show_facts(
     let root = entry.resolved_root();
     let room_is_open = room_open(&root);
     let blocked_state = source.blocked_state();
-    let strike_count = strikes::load().get(name).copied().unwrap_or(0);
+    let strike_count = strikes::load()
+        .get(&task_key(name, task))
+        .copied()
+        .unwrap_or(0);
     let run_id = context.active_run.map(|record| record.run_id.as_str());
     let active = match context.lock_state {
         Some(RunLockState::Held(Some(info))) => Some(format!(
@@ -1161,7 +1172,7 @@ fn write_show_facts(
     if let Some(spend) = spend_label(entry, records, context.now_zoned, context.full_spend) {
         kv.push("spend", ui::cell(spend));
     }
-    if !context.is_paused
+    if !context.is_held
         && strike_count > 0
         && let Some(max) = strikes::threshold(entry)
     {

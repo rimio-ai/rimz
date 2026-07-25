@@ -212,6 +212,7 @@ impl FireContext {
 /// One loop fire from ordered gates through exactly one history transition.
 pub struct TaskFire<'a> {
     name: String,
+    task: LoadedTask,
     entry: TaskEntry,
     catalog: &'a TaskCatalog,
     action: Option<TaskAction>,
@@ -248,12 +249,14 @@ impl<'a> TaskFire<'a> {
         let name = name.into();
         let action = task.action().cloned().map_err(Clone::clone)?;
         let entry = task.entry().clone();
+        let ephemeral = task.is_ephemeral();
         Ok(Self {
             name,
+            task,
             entry,
             catalog,
             action: Some(action),
-            ephemeral: task.is_ephemeral(),
+            ephemeral,
             context: None,
             mode,
             keep,
@@ -734,7 +737,7 @@ impl<'a> TaskFire<'a> {
         if let Some(at) = at {
             record.at = at;
         }
-        let transition = run_log::record_transition(&self.name, &self.entry, &record);
+        let transition = run_log::record_transition(&self.task, &record);
         self.finished = true;
         TaskFireFinished {
             record,

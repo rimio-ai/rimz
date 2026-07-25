@@ -78,46 +78,46 @@ pub fn load() -> BTreeMap<String, u32> {
     load_from(&state_home())
 }
 
-pub fn note(name: &str, signal: Signal) -> Result<u32> {
-    note_in(&state_home(), name, signal)
+pub fn note(key: &str, signal: Signal) -> Result<u32> {
+    note_in(&state_home(), key, signal)
 }
 
-pub fn clear(name: &str) -> Result<bool> {
-    clear_from(&state_home(), name)
+pub fn clear(key: &str) -> Result<bool> {
+    clear_from(&state_home(), key)
 }
 
 pub fn rename(old: &str, new: &str) -> Result<bool> {
     rename_in(&state_home(), old, new)
 }
 
-pub fn prune_orphans(known: &BTreeSet<String>) -> Result<usize> {
-    prune_orphans_in(&state_home(), known)
+pub fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Result<usize> {
+    prune_orphans_in(&state_home(), known, scopes)
 }
 
 fn load_from(state_root: &Path) -> BTreeMap<String, u32> {
     STORE.load(state_root)
 }
 
-fn note_in(state_root: &Path, name: &str, signal: Signal) -> Result<u32> {
+fn note_in(state_root: &Path, key: &str, signal: Signal) -> Result<u32> {
     if signal == Signal::Neutral {
-        return Ok(load_from(state_root).get(name).copied().unwrap_or(0));
+        return Ok(load_from(state_root).get(key).copied().unwrap_or(0));
     }
     STORE
         .mutate::<u32, _>(state_root, |strikes| match signal {
             Signal::Strike => {
-                let previous = strikes.get(name).copied().unwrap_or(0);
+                let previous = strikes.get(key).copied().unwrap_or(0);
                 let count = previous.saturating_add(1);
-                strikes.insert(name.to_owned(), count);
+                strikes.insert(key.to_owned(), count);
                 (count, count != previous)
             }
-            Signal::Reset => (0, strikes.remove(name).is_some()),
-            Signal::Neutral => (strikes.get(name).copied().unwrap_or(0), false),
+            Signal::Reset => (0, strikes.remove(key).is_some()),
+            Signal::Neutral => (strikes.get(key).copied().unwrap_or(0), false),
         })
         .map_err(Into::into)
 }
 
-fn clear_from(state_root: &Path, name: &str) -> Result<bool> {
-    STORE.remove::<u32>(state_root, name).map_err(Into::into)
+fn clear_from(state_root: &Path, key: &str) -> Result<bool> {
+    STORE.remove::<u32>(state_root, key).map_err(Into::into)
 }
 
 fn rename_in(state_root: &Path, old: &str, new: &str) -> Result<bool> {
@@ -126,9 +126,13 @@ fn rename_in(state_root: &Path, old: &str, new: &str) -> Result<bool> {
         .map_err(Into::into)
 }
 
-fn prune_orphans_in(state_root: &Path, known: &BTreeSet<String>) -> Result<usize> {
+fn prune_orphans_in(
+    state_root: &Path,
+    known: &BTreeSet<String>,
+    scopes: &BTreeSet<String>,
+) -> Result<usize> {
     STORE
-        .prune_orphans::<u32>(state_root, known)
+        .prune_orphans_in_scopes::<u32>(state_root, known, scopes)
         .map_err(Into::into)
 }
 
@@ -209,25 +213,17 @@ mod tests {
 
     #[test]
     fn counter_round_trips_and_resets() {
+        const KEY: &str = "machine::nightly";
         let dir = tempfile::tempdir().expect("tempdir");
-        assert_eq!(
-            note_in(dir.path(), "nightly", Signal::Strike).expect("strike"),
-            1
-        );
+        assert_eq!(note_in(dir.path(), KEY, Signal::Strike).expect("strike"), 1);
         let encoded: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path(dir.path())).expect("serialized strikes"))
                 .expect("strikes json");
-        assert_eq!(encoded, serde_json::json!({"nightly": 1}));
-        assert_eq!(
-            note_in(dir.path(), "nightly", Signal::Strike).expect("strike"),
-            2
-        );
-        assert_eq!(load_from(dir.path()).get("nightly"), Some(&2));
-        assert_eq!(
-            note_in(dir.path(), "nightly", Signal::Reset).expect("reset"),
-            0
-        );
-        assert!(!load_from(dir.path()).contains_key("nightly"));
+        assert_eq!(encoded, serde_json::json!({"machine::nightly": 1}));
+        assert_eq!(note_in(dir.path(), KEY, Signal::Strike).expect("strike"), 2);
+        assert_eq!(load_from(dir.path()).get(KEY), Some(&2));
+        assert_eq!(note_in(dir.path(), KEY, Signal::Reset).expect("reset"), 0);
+        assert!(!load_from(dir.path()).contains_key(KEY));
     }
 
     #[test]

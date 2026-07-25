@@ -46,21 +46,25 @@ pub(super) fn run_one(
     let entry = loaded.entry().clone();
     let source = loaded.source();
     gate_project_trust(name, &entry, source, mode)?;
+    let key = task_key(name, &loaded);
+    let arm_state = ArmState::resolve(arming::load().get(&key), source, Timestamp::now());
+    if mode == LoopRunMode::Scheduled && arm_state != ArmState::Live {
+        return Ok(());
+    }
     let action = loaded.action().cloned().map_err(Clone::clone)?;
     let started = Instant::now();
     if mode == LoopRunMode::Manual {
         write_manual_header(&mut ui::out(), name, &entry, &action)?;
     }
-    if mode == LoopRunMode::Manual
-        && pauses::load()
-            .get(name)
-            .is_some_and(|entry| pauses::is_active(entry, Timestamp::now()))
-    {
-        writeln!(
-            ui::out(),
-            "{}",
-            ui::paint(ui::palette::muted(), "  task is paused; firing anyway")
-        )?;
+    if mode == LoopRunMode::Manual {
+        let notice = match arm_state {
+            ArmState::Disabled(_) => Some("  task is disabled; firing anyway"),
+            ArmState::Paused(_) => Some("  task is paused; firing anyway"),
+            ArmState::Live => None,
+        };
+        if let Some(notice) = notice {
+            writeln!(ui::out(), "{}", ui::paint(ui::palette::muted(), notice))?;
+        }
     }
     let config = MachineConfig::load_lenient();
     let check_echo = match mode {
@@ -181,22 +185,22 @@ fn record_task_error(
 }
 
 fn handle_run_transition(name: &str, entry: &TaskEntry, transition: RunTransition) {
-    if let RunTransition::AutoPaused { strikes } = transition {
+    if let RunTransition::AutoDisabled { strikes } = transition {
         let _ = writeln!(
             ui::out(),
-            "loop `{name}`: paused after {strikes} consecutive failed fires; resume with `rimz loop resume {name}`"
+            "loop `{name}`: disabled after {strikes} consecutive failed fires; enable with `rimz loop enable {name}`"
         );
-        notify_loop_paused(name, entry, strikes);
+        notify_loop_disabled(name, entry, strikes);
     }
 }
 
-fn notify_loop_paused(name: &str, entry: &TaskEntry, count: u32) {
+fn notify_loop_disabled(name: &str, entry: &TaskEntry, count: u32) {
     let notification = rimz::sidebar::notify::Notification {
         agents: Vec::new(),
-        notification_kind: rimz::sidebar::notify::NotificationKind::LoopPaused,
-        title: format!("RimZ: loop {name} paused"),
+        notification_kind: rimz::sidebar::notify::NotificationKind::LoopDisabled,
+        title: format!("RimZ: loop {name} disabled"),
         body: format!(
-            "{count} consecutive failed fires; inspect with `rimz loop show {name}`, resume with `rimz loop resume {name}`"
+            "{count} consecutive failed fires; inspect with `rimz loop show {name}`, enable with `rimz loop enable {name}`"
         ),
         unread_count: None,
     };
@@ -207,7 +211,7 @@ fn notify_loop_paused(name: &str, entry: &TaskEntry, count: u32) {
     let runtime = match RuntimePaths::for_workspace(workspace_id) {
         Ok(runtime) => runtime,
         Err(err) => {
-            tracing::debug!(task = name, error = %err, "loop auto-pause runtime unavailable");
+            tracing::debug!(task = name, error = %err, "loop auto-disable runtime unavailable");
             return;
         }
     };
@@ -223,7 +227,7 @@ fn notify_loop_paused(name: &str, entry: &TaskEntry, count: u32) {
             notification_kind: Some(notification_kind),
         },
     ) {
-        tracing::debug!(task = name, error = %err, "loop auto-pause notification broadcast failed");
+        tracing::debug!(task = name, error = %err, "loop auto-disable notification broadcast failed");
     }
 }
 

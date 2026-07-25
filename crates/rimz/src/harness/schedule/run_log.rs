@@ -12,9 +12,10 @@ use std::path::{Path, PathBuf};
 use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
 
-use crate::config::TaskEntry;
 use crate::harness::run::RunStatus;
-use crate::harness::schedule::{pauses, strikes};
+use crate::harness::schedule::arming::{self, TaskKey};
+use crate::harness::schedule::catalog::LoadedTask;
+use crate::harness::schedule::strikes;
 use crate::store::paths::state_home;
 
 const NAME: &str = "loop-runs.log.jsonl";
@@ -37,39 +38,34 @@ pub struct LoopRunPresentation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunTransition {
     Recorded,
-    AutoPaused { strikes: u32 },
+    AutoDisabled { strikes: u32 },
 }
 
-/// Append first, then update strike and pause overlays. Overlay failures stay
+/// Append first, then update strike and arming overlays. Overlay failures stay
 /// best-effort because the terminal history row is durable truth.
-pub fn record_transition(name: &str, entry: &TaskEntry, record: &LoopRunRecord) -> RunTransition {
+pub fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> RunTransition {
     append(record);
+    let name = &record.task;
+    let key = TaskKey::for_task(name, task.source(), &task.entry().resolved_root());
     let signal = strikes::classify(record);
-    let count = match strikes::note(name, signal) {
+    let count = match strikes::note(&key, signal) {
         Ok(count) => count,
         Err(err) => {
             tracing::warn!(task = name, error = %err, "loop strike state update failed");
             return RunTransition::Recorded;
         }
     };
-    let Some(max) = strikes::threshold(entry) else {
+    let Some(max) = strikes::threshold(task.entry()) else {
         return RunTransition::Recorded;
     };
     if signal != strikes::Signal::Strike || count < max {
         return RunTransition::Recorded;
     }
-    match pauses::set_if_inactive(
-        name,
-        pauses::PauseEntry {
-            until: None,
-            strikes: Some(count),
-        },
-        Timestamp::now(),
-    ) {
-        Ok(true) => RunTransition::AutoPaused { strikes: count },
+    match arming::disable_if_live(&key, Some(count), Timestamp::now()) {
+        Ok(true) => RunTransition::AutoDisabled { strikes: count },
         Ok(false) => RunTransition::Recorded,
         Err(err) => {
-            tracing::warn!(task = name, error = %err, "loop auto-pause state update failed");
+            tracing::warn!(task = name, error = %err, "loop auto-disable state update failed");
             RunTransition::Recorded
         }
     }
