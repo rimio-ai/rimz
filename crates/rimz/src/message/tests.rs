@@ -687,6 +687,13 @@ fn delivery_policy_is_per_body_and_sent_time_survives_legacy_records() {
         sent.sent_reconcile_deadline(),
         Some(last_sent_at + MessageBody::Prompt.delivery_window())
     );
+    let mut queued = sent.clone();
+    queued.status = MessageStatus::Queued;
+    queued.unconfirmed_sends = 1;
+    let late_ack_deadline = last_sent_at + MessageBody::Prompt.delivery_window() * 2;
+    assert!(queued.awaiting_late_ack(last_sent_at + MessageBody::Prompt.delivery_window()));
+    assert!(queued.awaiting_late_ack(late_ack_deadline));
+    assert!(!queued.awaiting_late_ack(late_ack_deadline + Duration::from_nanos(1)));
 
     let mut value = serde_json::to_value(&sent).unwrap();
     value

@@ -208,11 +208,11 @@ When a queued head delivers, the helper extends the claim through the contiguous
 
 A member joins the batch only if it is a `Prompt` that submits with Enter, does not start with `/`, has its own gate open, matches the head's `force` flag, and shares the head's batch key (the sender's channel for an agent, the receiver's channel for a human, as if typed in the pane). A `Command` body, slash text, a no-enter draft, a force mismatch, a closed gate, or a cross-channel sender stops the batch. Resume control messages never batch.
 
-The batch lands as one paste and one submit. Each member keeps its own `from @sender:` prefix and sections are separated by a blank line. Claim, `Sent` recording, release, and pre-send failure each mutate the whole batch in one queue transaction, while audit events stay one per message in message order.
+The batch lands as one paste and one submit. Agent-authored members keep their own `from @sender:` prefix, human and system members stay unprefixed, and sections are separated by a blank line. Claim, `Sent` recording, release, and pre-send failure each mutate the whole batch in one queue transaction, while audit events stay one per message in message order.
 
 ### Confirmation and retry
 
-A `TurnStarted` hook projects the submitted paste back to record text by splitting batched sections and stripping each `from @sender:` prefix. Each segment confirms the oldest matching `Prompt` record for that card, in segment order. Reported text that matches no record is human input and confirms nothing. The correlated path also accepts a requeued prompt whose `last_sent_at` is still inside its delivery window, so an acknowledgement racing reconciliation settles the original record instead of allowing another write.
+A `TurnStarted` hook aligns the whole submitted paste against candidate `Prompt` batches for that card. Durable record text supplies the boundaries between adjacent unprefixed human messages, while agent-authored records consume their `from @sender:` prefix. The acknowledgement confirms a batch only when every record accounts for the reported paste; reported text that aligns with no batch is human input and confirms nothing. The correlated path also accepts a requeued prompt until twice its body window after `last_sent_at`, so the record keeps one additional window after reconciliation to absorb a racing acknowledgement instead of allowing another write.
 
 When a turn-start adapter reports no usable prompt text, confirmation falls back to the oldest `Sent` prompt and its `batch_id`, preserving hookless-text compatibility. A `Compacting` hook uses the same oldest-`Sent` fallback for `Command` records. Correlation never selects a `Claimed` record because its deliverer owns an in-progress pane write.
 
@@ -360,7 +360,7 @@ Hook and delivery paths append to fixed 7-day buckets at `transcript/<bucket-sta
 
 Two fields link entries into conversations, and both default empty so older JSONL lines decode unchanged.
 
-`message_id` stamps a delivered prompt with its queue record. Confirmation returns every record in the submitted batch; each parsed segment matches a returned record by exact body text, consuming matches in order. Hand-typed prompts and unmatched text carry no linkage.
+`message_id` stamps a delivered prompt with its queue record. Confirmation returns every record in the submitted batch; alignment restores each reported section from the durable record boundaries, then each section matches a returned record by exact body text in order. Hand-typed prompts and unmatched text carry no linkage.
 
 `reply_to` carries the parent message ids. The same turn-start replaces `AgentContext.turn_opened_by` with every matched id, including an empty vector that clears a prior turn. An agent-authored enqueue copies that current-turn vector into its new record's `in_reply_to`; a human sender, `--no-from`, an unnamed sender, or missing context starts a root. The turn's final `Assistant` entry and any mid-turn `Ask` copy `turn_opened_by` into `reply_to`. Requeue preserves `in_reply_to`, so retrying text keeps its causal position.
 

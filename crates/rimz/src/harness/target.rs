@@ -29,7 +29,7 @@ use std::path::Path;
 
 use crate::agents::AgentState;
 use crate::ids::PaneId;
-use crate::message::{MessageSender, identity_handle};
+use crate::message::{MessageRecord, MessageSender, identity_handle};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 
 pub use crate::store::snapshot::compose_channel;
@@ -939,19 +939,54 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
     }
 }
 
-/// Project a submitted pane paste back to the durable record texts it contains.
-pub fn submitted_record_texts(prompt: &str) -> Vec<String> {
-    split_batched_prompt(prompt)
-        .into_iter()
-        .filter_map(|segment| {
-            let segment = segment.trim_start();
-            let text = parse_sender_prefix(segment)
-                .map(|(_, body)| body)
-                .unwrap_or_else(|| segment.to_owned());
-            let text = text.trim();
-            (!text.is_empty()).then(|| text.to_owned())
-        })
-        .collect()
+/// Align one submitted pane paste with the records written as its batch.
+///
+/// Record text supplies the otherwise ambiguous boundaries between adjacent
+/// human-authored messages. Agent-authored records also consume their rendered
+/// `from @sender: ` attribution.
+pub fn align_submitted_prompt<'a>(
+    prompt: &'a str,
+    records: &[&MessageRecord],
+) -> Option<Vec<&'a str>> {
+    if records.is_empty() {
+        return None;
+    }
+    let mut remaining = prompt.trim();
+    let mut segments = Vec::with_capacity(records.len());
+    for (index, record) in records.iter().enumerate() {
+        let segment = remaining;
+        let mut body = trim_horizontal_start(segment);
+        if matches!(record.sender, MessageSender::Agent { .. }) {
+            let attributed = body.strip_prefix("from @")?;
+            let (handle, text) = attributed.split_once(": ")?;
+            if handle.is_empty() || handle.chars().any(char::is_whitespace) {
+                return None;
+            }
+            body = trim_horizontal_start(text);
+        }
+        let expected = record.text.trim();
+        if expected.is_empty() {
+            return None;
+        }
+        let after_text = body.strip_prefix(expected)?;
+        let after_text = trim_horizontal_start(after_text);
+        if index + 1 == records.len() {
+            if !after_text.is_empty() {
+                return None;
+            }
+            segments.push(segment.trim());
+            continue;
+        }
+        let after_join = after_text.strip_prefix("\n\n")?;
+        let segment_end = segment.len() - after_text.len();
+        segments.push(segment[..segment_end].trim());
+        remaining = after_join;
+    }
+    Some(segments)
+}
+
+fn trim_horizontal_start(text: &str) -> &str {
+    text.trim_start_matches([' ', '\t', '\r'])
 }
 
 /// The optional `from @sender: ` prefix for a peer-authored message. Human-authored

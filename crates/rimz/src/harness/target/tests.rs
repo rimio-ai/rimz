@@ -635,21 +635,6 @@ fn split_batched_prompt_splits_only_on_prefixed_sections() {
 }
 
 #[test]
-fn submitted_record_texts_strips_attribution_and_empty_segments() {
-    assert_eq!(
-        submitted_record_texts(
-            " from @planner: first \n\nfrom @coder#docs: second\nline 2\n\nfrom @reviewer:   "
-        ),
-        vec!["first", "second\nline 2"]
-    );
-    assert_eq!(
-        submitted_record_texts("  human prompt\nwith context  "),
-        vec!["human prompt\nwith context"]
-    );
-    assert!(submitted_record_texts(" \n ").is_empty());
-}
-
-#[test]
 fn channelless_handle_disambiguates_against_same_kind_elsewhere() {
     let mut snapshot = empty_snapshot();
     // A claude running outside any worktree, beside a claude in `main`. The

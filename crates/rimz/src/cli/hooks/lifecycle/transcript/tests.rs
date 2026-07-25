@@ -181,6 +181,52 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
 }
 
 #[test]
+fn unprefixed_batch_keeps_each_confirmed_message_causal() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let first = rimz::message::MessageRecord::new(
+        workspace.workspace_id.clone(),
+        &agent,
+        "first".to_owned(),
+        true,
+        rimz::message::DeliveryGate::Done,
+    );
+    let second = rimz::message::MessageRecord::new(
+        workspace.workspace_id.clone(),
+        &agent,
+        "second".to_owned(),
+        true,
+        rimz::message::DeliveryGate::Done,
+    );
+    let mut started = recorded(LifecycleSignal::TurnStarted);
+    started.observation.prompt = Some("first\n\nsecond".to_owned());
+
+    record_conversation(
+        &workspace,
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &started,
+        None,
+        &[],
+        &[first.clone(), second.clone()],
+    )
+    .unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].message_id.as_ref(), Some(&first.message_id));
+    assert_eq!(entries[1].message_id.as_ref(), Some(&second.message_id));
+    assert_eq!(
+        rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "sess-1")
+            .unwrap()
+            .context
+            .turn_opened_by,
+        vec![first.message_id, second.message_id]
+    );
+}
+
+#[test]
 fn cursor_response_hook_is_the_only_assistant_text_authority() {
     let (_dir, store) = store();
     let workspace = workspace();

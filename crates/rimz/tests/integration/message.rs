@@ -1685,7 +1685,10 @@ fn shortened_reconcile_window_preserves_prompt_for_late_correlated_ack() {
     let env = Env::new();
     env.write_config(&env.project_root, "");
     env.install_agent_hooks("claude");
-    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    let pane_env: &[(&str, &str)] = &[
+        ("ZELLIJ_PANE_ID", "3"),
+        ("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "5000"),
+    ];
     register_running_agent(&env, "sess-late-ack", "feature-late-ack", pane_env);
     run_hook(
         &env,
@@ -1713,12 +1716,13 @@ fn shortened_reconcile_window_preserves_prompt_for_late_correlated_ack() {
     let last_sent_at = first_record.last_sent_at.expect("send timestamp");
     assert_text_then_enter(&first_trace, "arrived once");
 
+    std::thread::sleep(Duration::from_millis(5_100));
     let empty_panes = env.write_pane_fixture(&[]);
     let retry_trace = env.project_root.join("zellij-late-ack-retry-trace.log");
     run_success(
         traced_rimz(&env, "zellij-late-ack-retry-trace.log")
             .env("RIMZ_TEST_PANE_LIST", &empty_panes)
-            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "5000")
             .args(["message", "sweep"]),
         "requeue unconfirmed prompt",
     );
@@ -1939,6 +1943,7 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
 #[test]
 fn queued_delivery_batches_compatible_prompts() {
     let env = Env::new();
+    env.write_config(&env.project_root, "");
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-batch", "feature-batch", pane_env);
@@ -1977,8 +1982,10 @@ fn queued_delivery_batches_compatible_prompts() {
         record.message_id = fixed_message_id(id);
         record
     };
-    let first = message(1, "first", "planner", "feature-batch");
-    let second = message(2, "second", "coder", "feature-batch");
+    let mut first = message(1, "first", "planner", "feature-batch");
+    first.sender = MessageSender::Human;
+    let mut second = message(2, "second", "coder", "feature-batch");
+    second.sender = MessageSender::Human;
     let third = message(3, "third", "reviewer", "docs");
     let first_id = first.message_id.clone();
     let second_id = second.message_id.clone();
@@ -1994,7 +2001,7 @@ fn queued_delivery_batches_compatible_prompts() {
         "batch delivery",
     );
 
-    let payload = "from @planner: first\n\nfrom @coder: second";
+    let payload = "first\n\nsecond";
     assert_text_then_enter(&trace_log, payload);
     let lines = trace_lines(&trace_log);
     assert_eq!(

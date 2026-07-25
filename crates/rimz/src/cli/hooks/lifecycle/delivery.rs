@@ -8,15 +8,14 @@ pub(super) fn confirm_sent_message_for_lifecycle(
     recorded: &RecordedLifecycle,
     session_name: &str,
 ) -> Vec<rimz::message::MessageRecord> {
-    let segments = match recorded.observation.signal {
-        LifecycleSignal::TurnStarted => rimz::harness::target::submitted_record_texts(
-            recorded.observation.prompt.as_deref().unwrap_or_default(),
-        ),
-        _ => Vec::new(),
-    };
     let ack = match recorded.observation.signal {
         LifecycleSignal::TurnStarted => rimz::store::DeliveryAck::TurnStarted {
-            segments: &segments,
+            prompt: recorded
+                .observation
+                .prompt
+                .as_deref()
+                .map(str::trim)
+                .filter(|prompt| !prompt.is_empty()),
         },
         LifecycleSignal::Compacting => rimz::store::DeliveryAck::Compaction,
         _ => return Vec::new(),
