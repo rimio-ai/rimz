@@ -72,7 +72,7 @@ pub(super) fn reconcile_cohort_launch(
                     &protections,
                 )
             } else {
-                resume_or_done(name, spec_display, &subject, &path)
+                resume_or_done(name, spec_display, team, &subject, &path)
             }
         }
     }
@@ -88,13 +88,18 @@ fn cohort_subject(spec_display: &str, team: Option<&str>) -> String {
 fn resume_or_done(
     name: &str,
     spec_display: &str,
+    team: Option<&str>,
     subject: &str,
     path: &Path,
 ) -> Result<Reconciled> {
     if !std::io::stdin().is_terminal() {
+        let command = team.map_or_else(
+            || format!("rimz agents {spec_display} -w {name} --resume"),
+            |team| format!("rimz teams resume {team} -w {name}"),
+        );
         writeln!(
             std::io::stderr().lock(),
-            "worktree `{name}` has work in progress; resume with `rimz agents {spec_display} -w {name} --resume`"
+            "worktree `{name}` has work in progress; resume with `{command}`"
         )?;
         return Ok(Reconciled::Done);
     }

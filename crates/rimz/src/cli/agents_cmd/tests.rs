@@ -46,45 +46,6 @@ fn parse_agents(argv: &[&str]) -> AgentsArgs {
         .args
 }
 
-#[test]
-fn team_launch_and_resume_forward_only_the_team_surface() {
-    let launch = AgentsArgs::team_launch(
-        "forge".to_owned(),
-        Some("ship it".to_owned()),
-        TeamLaunchOptions {
-            description: Some("team task".to_owned()),
-            worktree: Some("feat-x".to_owned()),
-            channel: None,
-            from_pr: Some(rimz::forge::PrTarget {
-                number: 91,
-                forge: None,
-                host: None,
-                repo: None,
-            }),
-            bg: true,
-            new_tab: true,
-        },
-    );
-    assert_eq!(launch.spec.as_deref(), Some("forge"));
-    assert_eq!(launch.prompt.as_deref(), Some("ship it"));
-    assert_eq!(launch.description.as_deref(), Some("team task"));
-    assert_eq!(launch.worktree.as_deref(), Some("feat-x"));
-    assert_eq!(launch.from_pr.as_ref().map(|pr| pr.number), Some(91));
-    assert!(launch.bg);
-    assert!(launch.new_tab);
-    assert!(!launch.resume);
-    assert!(!launch.print);
-    assert!(launch.model.is_none());
-    assert!(launch.passthrough.is_empty());
-
-    let resume = AgentsArgs::team_resume("forge".to_owned(), Some("feat-x".to_owned()));
-    assert_eq!(resume.spec.as_deref(), Some("forge"));
-    assert_eq!(resume.worktree.as_deref(), Some("feat-x"));
-    assert!(resume.resume);
-    assert!(resume.prompt.is_none());
-    assert!(!resume.bg);
-}
-
 fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
     let argv =
         rimz::harness::launch::exec_argv(Path::new("/bin/rimz"), input).expect("render exec argv");
@@ -167,13 +128,13 @@ mod parse {
         let args = parse_agents(&argv);
         assert_eq!(
             [
-                args.spec.as_deref(),
-                args.prompt.as_deref(),
-                args.worktree.as_deref()
+                args.launch.spec.as_deref(),
+                args.launch.prompt.as_deref(),
+                args.launch.cohort.worktree.as_deref()
             ],
             [Some("claude,codex+term"), Some("fix-tests"), Some("docs")]
         );
-        assert!(args.bg);
+        assert!(args.launch.cohort.bg);
 
         let argv: Vec<_> = "rimz claude fix-auth --from-pr https://gitlab.com/org/repo/-/merge_requests/12 --worktree review-12 --model opus --description port-auth --effort high --system-prompt-file /abs/prompt.md --append-system-prompt-file /abs/append.md -p --max-turns 3 --retries 2 --verify true --max-attempts 4 -n swift-otter"
             .split_ascii_whitespace()
@@ -181,15 +142,15 @@ mod parse {
         let args = parse_agents(&argv);
         assert_eq!(
             (
-                args.spec.as_deref(),
-                args.prompt.as_deref(),
-                args.worktree.as_deref(),
-                args.model.as_deref(),
-                args.description.as_deref(),
-                args.effort.as_deref(),
-                args.system_prompt_file.as_deref(),
-                args.append_system_prompt_file.as_deref(),
-                args.max_turns,
+                args.launch.spec.as_deref(),
+                args.launch.prompt.as_deref(),
+                args.launch.cohort.worktree.as_deref(),
+                args.launch.model.as_deref(),
+                args.launch.cohort.description.as_deref(),
+                args.launch.effort.as_deref(),
+                args.launch.system_prompt_file.as_deref(),
+                args.launch.append_system_prompt_file.as_deref(),
+                args.launch.max_turns,
             ),
             (
                 Some("claude"),
@@ -205,14 +166,17 @@ mod parse {
         );
         assert_eq!(
             (
-                args.retries,
-                args.verify.as_deref(),
-                args.max_attempts,
-                args.name.as_deref(),
+                args.launch.retries,
+                args.launch.verify.as_deref(),
+                args.launch.max_attempts,
+                args.launch.name.as_deref(),
             ),
             (Some(2), Some("true"), Some(4), Some("swift-otter"),)
         );
-        assert_eq!(args.from_pr.unwrap().forge, Some(Forge::GitLab));
+        assert_eq!(
+            args.launch.cohort.from_pr.unwrap().forge,
+            Some(Forge::GitLab)
+        );
 
         let resume = parse_agents(&["rimz", "forge", "--resume"]);
         let alias = parse_agents(&["rimz", "forge", "--continue"]);
@@ -222,8 +186,26 @@ mod parse {
             "--worktree=restore-living-team",
             "--resume",
         ]);
-        assert!(resume.resume && alias.resume && scoped.resume);
-        assert_eq!(scoped.worktree.as_deref(), Some("restore-living-team"));
+        assert!(
+            resume.launch.cohort.resume
+                && alias.launch.cohort.resume
+                && scoped.launch.cohort.resume
+        );
+        assert_eq!(
+            scoped.launch.cohort.worktree.as_deref(),
+            Some("restore-living-team")
+        );
+    }
+
+    #[test]
+    fn launch_verb_and_bare_form_parse_the_same_payload() {
+        let bare = parse_agents(&["rimz", "claude", "ship", "-p"]);
+        let verb = parse_agents(&["rimz", "launch", "claude", "ship", "-p"]);
+        let Some(AgentsSubcmd::Launch(verb)) = verb.command else {
+            panic!("launch verb");
+        };
+
+        assert_eq!(bare.launch, *verb);
     }
 
     #[test]
@@ -238,13 +220,19 @@ mod parse {
         ]);
         assert!(matches!(
             scoped.command,
-            Some(AgentsSubcmd::Resume { scope: Some(scope), from_pr: None, bg: false })
+            Some(AgentsSubcmd::Resume {
+                scope: Some(scope),
+                worktree: None,
+                from_pr: None,
+                bg: false
+            })
                 if scope == "#docs"
         ));
         assert!(matches!(
             pr.command,
             Some(AgentsSubcmd::Resume {
                 scope: None,
+                worktree: None,
                 from_pr: Some(rimz::forge::PrTarget { number: 69, .. }),
                 bg: true,
             })
@@ -260,6 +248,7 @@ mod parse {
         use clap::error::ErrorKind::{ArgumentConflict, MissingRequiredArgument};
 
         for (argv, kind) in [
+            (&["rimz", "launch"][..], MissingRequiredArgument),
             (&["rimz", "list", "#docs", "--all"][..], ArgumentConflict),
             (
                 &["rimz", "show", "swift-otter", "--ansi"],
@@ -608,7 +597,7 @@ mod launch_options {
         let resolved = rimz::harness::plan::resolve_launch(
             &effective,
             &machine.agents.commands,
-            args.spec.as_deref(),
+            args.launch.spec.as_deref(),
         )?;
         let preset = validate_resolved_launch_inputs(
             args,
@@ -737,7 +726,7 @@ mod launch_options {
         let resolved = rimz::harness::plan::resolve_launch(
             &effective,
             &machine.agents.commands,
-            args.spec.as_deref(),
+            args.launch.spec.as_deref(),
         )
         .expect("resolve warning-capable layout");
 

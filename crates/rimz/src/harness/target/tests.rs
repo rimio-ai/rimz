@@ -1322,3 +1322,34 @@ fn at_all_fans_to_in_channel_panes_only() {
     assert!(kinds.contains(&"claude".to_owned()));
     assert!(kinds.contains(&"codex".to_owned()));
 }
+
+#[test]
+fn team_cohorts_group_live_root_members_by_team_and_lane() {
+    let mut planner = agent("claude", "planner", Some("auth"), "terminal_1");
+    planner.team = Some("forge".to_owned());
+    planner.channel = Some("auth".to_owned());
+    let mut coder = agent("codex", "coder", Some("auth"), "terminal_2");
+    coder.team = Some("forge".to_owned());
+    coder.channel = Some("auth".to_owned());
+    let mut docs = agent("codex", "docs", Some("docs"), "terminal_3");
+    docs.team = Some("forge".to_owned());
+    docs.channel = Some("docs".to_owned());
+    let mut child = agent("codex", "child", Some("auth"), "terminal_4");
+    child.team = Some("forge".to_owned());
+    child.parent_agent_id = Some(planner.agent_id.clone());
+    let mut ended = agent("codex", "ended", Some("auth"), "terminal_5");
+    ended.team = Some("forge".to_owned());
+    ended.ended_at = Some(Timestamp::UNIX_EPOCH);
+
+    let agents = [planner, coder, docs, child, ended];
+    let cohorts = team_cohorts(&agents);
+
+    assert_eq!(cohorts.len(), 2);
+    assert_eq!(
+        cohorts
+            .iter()
+            .map(|cohort| (cohort.team, cohort.channel.as_str(), cohort.members.len()))
+            .collect::<Vec<_>>(),
+        vec![("forge", "auth", 2), ("forge", "docs", 1)]
+    );
+}

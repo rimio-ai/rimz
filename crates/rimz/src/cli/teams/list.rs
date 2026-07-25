@@ -288,24 +288,9 @@ fn cell_label(cell: &AgentCell) -> String {
 }
 
 fn live_instances(agents: &[AgentState]) -> BTreeMap<String, Vec<LiveInstance>> {
-    let roots = agents
-        .iter()
-        .filter(|agent| agent.parent_agent_id.is_none() && agent.ended_at.is_none())
-        .collect::<Vec<_>>();
-    let mut grouped: BTreeMap<(String, String), Vec<&AgentState>> = BTreeMap::new();
-    for agent in roots {
-        let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
-            continue;
-        };
-        let channel =
-            rimz::harness::target::agent_channel(agent).unwrap_or_else(|| "external".to_owned());
-        grouped
-            .entry((team.to_owned(), channel))
-            .or_default()
-            .push(agent);
-    }
     let mut by_team: BTreeMap<String, Vec<LiveInstance>> = BTreeMap::new();
-    for ((team, channel), members) in grouped {
+    for cohort in rimz::harness::target::team_cohorts(agents) {
+        let members = cohort.members;
         let mut status_counts = BTreeMap::new();
         for agent in &members {
             *status_counts
@@ -323,12 +308,15 @@ fn live_instances(agents: &[AgentState]) -> BTreeMap<String, Vec<LiveInstance>> 
                 cost_usd: rimz::harness::budget::total_cost_usd(agent),
             })
             .collect();
-        by_team.entry(team).or_default().push(LiveInstance {
-            channel,
-            state,
-            status_counts,
-            members,
-        });
+        by_team
+            .entry(cohort.team.to_owned())
+            .or_default()
+            .push(LiveInstance {
+                channel: cohort.channel,
+                state,
+                status_counts,
+                members,
+            });
     }
     by_team
 }

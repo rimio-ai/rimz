@@ -77,9 +77,12 @@ use refresh_context::RefreshContextArgs;
 use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
 use register::{RegisterArgs, run_register};
 use restart::restart_agent;
+pub(in crate::cli) use restart::restart_resolved;
 use resume::resume_lane;
+pub(in crate::cli) use show::focus_resolved;
 use show::{focus_agent, show_agent};
 use stop::stop_agent;
+pub(in crate::cli) use stop::stop_resolved;
 use supervised::OutputFormat;
 use supervised::run::run_print;
 #[cfg(test)]
@@ -96,24 +99,23 @@ static INTERRUPT_SIGNAL_RECEIVED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
 type LaunchIdentity = AgentLaunchIdentity;
 
-#[derive(Debug, Args)]
+#[derive(Debug, Default, Args)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct AgentsArgs {
     #[command(subcommand)]
     command: Option<AgentsSubcmd>,
-    /// Inline spec, named team, or team role (`claude,codex+term`, `forge.planner`).
-    #[arg(
-        value_name = "SPEC",
-        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_specs)
-    )]
-    spec: Option<String>,
-    /// Prompt delivered to the layout's leader agent (a team's `leader` role,
-    /// defaulting to its first role; otherwise the first agent cell).
-    #[arg(value_name = "PROMPT")]
-    prompt: Option<String>,
-    /// Seed the agent card's description line until the agent names its own session.
+    #[command(flatten)]
+    pub(crate) launch: AgentLaunchArgs,
+    /// Print JSON for `list` and bare `agents` card output.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Default, PartialEq, Args)]
+pub(crate) struct CohortLaunchArgs {
+    /// Seed launched cards' descriptions until agents name their own sessions.
     #[arg(long, value_name = "TEXT")]
-    description: Option<String>,
+    pub(crate) description: Option<String>,
     /// Use a RimZ-owned worktree. Bare flag creates one fresh worktree; NAME reuses or creates it.
     #[arg(
         long,
@@ -124,7 +126,7 @@ pub struct AgentsArgs {
         conflicts_with = "channel",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
     )]
-    worktree: Option<String>,
+    pub(crate) worktree: Option<String>,
     /// Launch into a durable named channel.
     #[arg(
         long,
@@ -132,122 +134,110 @@ pub struct AgentsArgs {
         conflicts_with = "worktree",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::channels)
     )]
-    channel: Option<String>,
+    pub(crate) channel: Option<String>,
     /// Create or reuse a RimZ-owned worktree from a pull request number or URL.
     #[arg(long = "from-pr", value_name = "PR", value_parser = parse_pr, conflicts_with = "channel")]
-    from_pr: Option<rimz::forge::PrTarget>,
-    /// Resume (alias --continue) a prior cohort matching SPEC, optionally scoped by -w or cwd.
+    pub(crate) from_pr: Option<rimz::forge::PrTarget>,
+    /// Resume (alias --continue) a matching prior cohort, optionally scoped by -w or cwd.
     #[arg(
         long,
         visible_alias = "continue",
-        conflicts_with_all = [
-            "prompt",
-            "channel",
-            "from_pr",
-            "name",
-            "description",
-            "model",
-            "effort",
-            "budget",
-            "ask",
-            "yolo",
-            "system_prompt_file",
-            "append_system_prompt_file",
-            "print",
-            "passthrough"
-        ]
+        conflicts_with_all = ["prompt", "channel", "from_pr", "description", "budget"]
     )]
-    resume: bool,
-    /// Durable name for a single launched agent.
-    #[arg(long, short = 'n')]
-    name: Option<String>,
-    /// Launch in the background, leaving focus on the launching pane; with `-p`, print the run's agent name and return immediately.
+    pub(crate) resume: bool,
+    /// Cap each member's spend for the session (`5`) or local day (`20/day`).
+    #[arg(long, value_name = "AMOUNT[/day]")]
+    pub(crate) budget: Option<rimz::harness::budget::BudgetSpec>,
+    /// Launch without taking focus; supervised runs print the agent name and return immediately.
     #[arg(long)]
-    bg: bool,
+    pub(crate) bg: bool,
+    /// Open the launch in a new tab/window instead of the current view.
+    #[arg(long)]
+    pub(crate) new_tab: bool,
+}
+
+#[derive(Debug, Default, PartialEq, Args)]
+pub(crate) struct AgentLaunchArgs {
+    /// Inline spec, named team, or team role (`claude,codex+term`, `forge.planner`).
+    #[arg(
+        value_name = "SPEC",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_specs)
+    )]
+    pub(crate) spec: Option<String>,
+    /// Prompt delivered to the layout's leader agent (a team's `leader` role,
+    /// defaulting to its first role; otherwise the first agent cell).
+    #[arg(value_name = "PROMPT")]
+    pub(crate) prompt: Option<String>,
+    #[command(flatten)]
+    pub(crate) cohort: CohortLaunchArgs,
+    /// Durable name for a single launched agent.
+    #[arg(long, short = 'n', conflicts_with = "resume")]
+    pub(crate) name: Option<String>,
     /// Split the agent into a new pane in the current tab instead of taking
     /// over the current pane. Single agent cell only.
-    #[arg(long)]
-    new_pane: bool,
-    /// Open the launch in a new tab/window instead of the current view.
-    #[arg(long, conflicts_with = "new_pane")]
-    new_tab: bool,
+    #[arg(long, conflicts_with = "new_tab")]
+    pub(crate) new_pane: bool,
     /// Let the agent ask before tool use where supported.
-    #[arg(long, conflicts_with = "yolo")]
-    ask: bool,
+    #[arg(long, conflicts_with_all = ["yolo", "resume"])]
+    pub(crate) ask: bool,
     /// Skip provider permission prompts where supported.
-    #[arg(long)]
-    yolo: bool,
+    #[arg(long, conflicts_with = "resume")]
+    pub(crate) yolo: bool,
     /// Model for the launched agents.
-    #[arg(long, value_name = "MODEL")]
-    model: Option<String>,
+    #[arg(long, value_name = "MODEL", conflicts_with = "resume")]
+    pub(crate) model: Option<String>,
     /// Replace each agent's base system prompt with a file's contents.
-    #[arg(long, value_name = "PATH")]
-    system_prompt_file: Option<PathBuf>,
+    #[arg(long, value_name = "PATH", conflicts_with = "resume")]
+    pub(crate) system_prompt_file: Option<PathBuf>,
     /// Append a file's contents to each agent's base system prompt where supported.
-    #[arg(long, value_name = "PATH")]
-    append_system_prompt_file: Option<PathBuf>,
+    #[arg(long, value_name = "PATH", conflicts_with = "resume")]
+    pub(crate) append_system_prompt_file: Option<PathBuf>,
     /// Reasoning effort for the launched agents (provider-specific levels).
-    #[arg(long, value_name = "LEVEL")]
-    effort: Option<String>,
-    /// Cap agent spend for the session (`5`) or local day (`20/day`).
-    #[arg(long, value_name = "AMOUNT[/day]")]
-    budget: Option<rimz::harness::budget::BudgetSpec>,
+    #[arg(long, value_name = "LEVEL", conflicts_with = "resume")]
+    pub(crate) effort: Option<String>,
     /// Run one supervised agent prompt and print its final answer.
-    #[arg(short = 'p', long = "print")]
-    print: bool,
+    #[arg(short = 'p', long = "print", conflicts_with = "resume")]
+    pub(crate) print: bool,
     /// Read stdin to EOF as prompt content. With a positional prompt, the
     /// instruction goes first and stdin follows inside `<stdin>` tags.
     #[arg(long, requires = "print")]
-    stdin: bool,
+    pub(crate) stdin: bool,
     /// Wait cap for `--print` or `wait`.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout, requires = "print")]
-    timeout: Option<Duration>,
+    pub(crate) timeout: Option<Duration>,
     /// Leave the supervised agent pane open after completion.
     #[arg(long, requires = "print")]
-    keep: bool,
-    /// Print JSON for `list` and bare `agents` card output.
-    #[arg(long)]
-    json: bool,
+    pub(crate) keep: bool,
     /// How `--print` renders the supervised run (text, json, stream-json).
     #[arg(long, value_name = "FORMAT", requires = "print")]
-    output_format: Option<OutputFormat>,
+    pub(crate) output_format: Option<OutputFormat>,
     #[arg(skip)]
-    stream_text: bool,
+    pub(crate) stream_text: bool,
     /// How `--print` reads the prompt (text positional plus explicit stdin, or
     /// stream-json on stdin).
     #[arg(long, value_name = "FORMAT", requires = "print")]
-    input_format: Option<InputFormat>,
+    pub(crate) input_format: Option<InputFormat>,
     /// Maximum agentic turns for one supervised print-mode prompt.
     #[arg(long, value_name = "N", requires = "print")]
-    max_turns: Option<u32>,
+    pub(crate) max_turns: Option<u32>,
     /// Retry a failed (exit 1) supervised run up to N more times, feeding the previous failure tail back into the prompt.
     #[arg(long, value_name = "N", requires = "print", conflicts_with = "bg")]
-    retries: Option<u32>,
+    pub(crate) retries: Option<u32>,
     /// Verify a completed supervised run with a shell command and re-prompt the same session on failure.
     #[arg(long, value_name = "CMD", requires = "print", conflicts_with = "bg")]
-    verify: Option<String>,
+    pub(crate) verify: Option<String>,
     /// Total agent turns allowed while making --verify pass.
     #[arg(long, value_name = "N", requires = "verify")]
-    max_attempts: Option<u32>,
+    pub(crate) max_attempts: Option<u32>,
     /// Internal loop-scheduler placement: target the rimzd loop zone.
     #[arg(skip)]
-    loop_zone: bool,
+    pub(crate) loop_zone: bool,
     /// Internal loop-task provenance for supervised run records.
     #[arg(skip)]
-    loop_task: Option<String>,
+    pub(crate) loop_task: Option<String>,
     /// Extra argv appended to every launched agent cell.
-    #[arg(last = true)]
-    passthrough: Vec<String>,
-}
-
-/// Team-command fields forwarded into the existing `rimz agents` launch path.
-pub(crate) struct TeamLaunchOptions {
-    pub(crate) description: Option<String>,
-    pub(crate) worktree: Option<String>,
-    pub(crate) channel: Option<String>,
-    pub(crate) from_pr: Option<rimz::forge::PrTarget>,
-    pub(crate) bg: bool,
-    pub(crate) new_tab: bool,
+    #[arg(last = true, conflicts_with = "resume")]
+    pub(crate) passthrough: Vec<String>,
 }
 
 /// Prompt source for a supervised `--print` run.
@@ -262,6 +252,13 @@ pub(super) enum InputFormat {
 }
 
 impl AgentsArgs {
+    pub(crate) fn from_launch(launch: AgentLaunchArgs) -> Self {
+        Self {
+            launch,
+            ..Default::default()
+        }
+    }
+
     /// The low-cardinality command label and, for a session-scoped helper, its
     /// session id and agent kind — for the Sentry command scope.
     pub(crate) fn scope(&self) -> (&'static str, Option<&str>, Option<&str>) {
@@ -278,6 +275,13 @@ impl AgentsArgs {
 
 #[derive(Debug, Subcommand)]
 enum AgentsSubcmd {
+    /// Launch an agent, inline layout, configured profile, or team.
+    #[command(
+        group = clap::ArgGroup::new("launch-spec")
+            .required(true)
+            .args(["spec"])
+    )]
+    Launch(Box<AgentLaunchArgs>),
     /// Validate one third-party plugin's manifest, probes, and envelopes.
     Check(CheckArgs),
     /// Scaffold or validate a machine-tier third-party agent plugin.
@@ -301,6 +305,7 @@ enum AgentsSubcmd {
         /// Filter to one lane by worktree name or path (flag spelling of SCOPE).
         #[arg(
             long,
+            short = 'w',
             conflicts_with = "all",
             add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
         )]
@@ -404,10 +409,19 @@ enum AgentsSubcmd {
         /// Lane to resume: `#channel`, worktree, branch, or directory name.
         #[arg(
             value_name = "SCOPE",
-            conflicts_with = "from_pr",
+            conflicts_with_all = ["from_pr", "worktree"],
             add = clap_complete::ArgValueCandidates::new(crate::cli::complete::scope_names)
         )]
         scope: Option<String>,
+        /// Filter to one lane by worktree name or path (flag spelling of SCOPE).
+        #[arg(
+            long,
+            short = 'w',
+            value_name = "NAME",
+            conflicts_with = "from_pr",
+            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
+        )]
+        worktree: Option<String>,
         /// Resume the lane developed from this pull request (number or URL).
         #[arg(long, value_name = "PR", value_parser = parse_pr)]
         from_pr: Option<rimz::forge::PrTarget>,
@@ -457,7 +471,27 @@ struct ExecArgs {
 }
 
 pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
-    match args.command {
+    let AgentsArgs {
+        command,
+        launch,
+        json,
+    } = args;
+    match command {
+        Some(AgentsSubcmd::Launch(launch)) => {
+            let Some(spec) = launch.spec.as_deref() else {
+                bail!("`rimz agents launch` requires an agent spec");
+            };
+            match top_level_spec_route(spec) {
+                TopLevelSpecRoute::ScopedList => bail!(
+                    "`rimz agents launch` requires a launch spec, not scope `{spec}`; use `rimz agents list {spec}`"
+                ),
+                TopLevelSpecRoute::Address => bail!(
+                    "`{spec}` is an agent address, not a launch spec; try `rimz agents show {spec}` or `rimz message {spec} \"…\"`"
+                ),
+                TopLevelSpecRoute::Launch => {}
+            }
+            return dispatch_launch(*launch, false, globals, true);
+        }
         Some(AgentsSubcmd::Check(args)) => return run_check(args),
         Some(AgentsSubcmd::Register(args)) => return run_register(args),
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
@@ -509,21 +543,36 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         Some(AgentsSubcmd::Stop { reference, all }) => return stop_agent(reference, all, globals),
         Some(AgentsSubcmd::Restart { reference }) => return restart_agent(reference, globals),
-        Some(AgentsSubcmd::Resume { scope, from_pr, bg }) => {
-            return resume_lane(scope, from_pr, bg, globals);
+        Some(AgentsSubcmd::Resume {
+            scope,
+            worktree,
+            from_pr,
+            bg,
+        }) => {
+            return resume_lane(scope.or(worktree), from_pr, bg, globals);
         }
         Some(AgentsSubcmd::Refresh(args)) => return run_refresh(args, globals),
         None => {}
     }
-    if args.spec.is_none() {
+    let args = AgentsArgs {
+        command: None,
+        launch,
+        json,
+    };
+    if args.launch.spec.is_none() {
         reject_launch_flags_without_spec(&args)?;
-        return list_agents(args.json, false, args.worktree, globals);
+        return list_agents(
+            args.json,
+            false,
+            args.launch.cohort.worktree.clone(),
+            globals,
+        );
     }
-    if let Some(spec) = args.spec.as_deref() {
+    if let Some(spec) = args.launch.spec.as_deref() {
         match top_level_spec_route(spec) {
             TopLevelSpecRoute::ScopedList => {
                 reject_launch_flags_without_spec(&args)?;
-                if args.prompt.is_some() {
+                if args.launch.prompt.is_some() {
                     bail!(
                         "scope `{spec}` takes no prompt; use `rimz agents {spec}` or `rimz agents list {spec}`"
                     );
@@ -536,7 +585,21 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             TopLevelSpecRoute::Launch => {}
         }
     }
-    if args.print {
+    dispatch_launch(args.launch, args.json, globals, true)
+}
+
+fn dispatch_launch(
+    launch: AgentLaunchArgs,
+    json: bool,
+    globals: &GlobalFlags,
+    allow_in_place: bool,
+) -> Result<()> {
+    let args = AgentsArgs {
+        command: None,
+        launch,
+        json,
+    };
+    if args.launch.print {
         let (request, presentation) = into_supervised_request(args)?;
         return match run_print(request, presentation, globals) {
             Ok(Some(record)) => std::process::exit(record.status.exit_code()),
@@ -544,12 +607,12 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             Err(err) => exit_print_usage_error(err),
         };
     }
-    if args.json {
+    if json {
         bail!(
             "--json is only supported with `rimz agents` and `rimz agents list`; on `-p`, choose output with `--output-format json`"
         );
     }
-    launch_layout(args, globals, true)
+    launch_layout(args, globals, allow_in_place)
 }
 
 fn into_supervised_request(
@@ -561,66 +624,71 @@ fn into_supervised_request(
     if args.json {
         bail!("on `-p`, choose output with `--output-format json` (`--json` is for `list`)");
     }
-    let output_format = args.output_format.unwrap_or_default();
+    let output_format = args.launch.output_format.unwrap_or_default();
     validate_supervised_output(&args, output_format)?;
-    let prompt = resolve_print_prompt(&args, args.input_format.unwrap_or_default())?;
-    let permission_mode = supervised_permission_mode_from_flags(args.ask, args.yolo)?;
-    let system_prompt_file =
-        resolve_launch_prompt_file(args.system_prompt_file.as_deref(), "--system-prompt-file")?;
+    let prompt = resolve_print_prompt(&args, args.launch.input_format.unwrap_or_default())?;
+    let permission_mode = supervised_permission_mode_from_flags(args.launch.ask, args.launch.yolo)?;
+    let system_prompt_file = resolve_launch_prompt_file(
+        args.launch.system_prompt_file.as_deref(),
+        "--system-prompt-file",
+    )?;
     let append_system_prompt_file = resolve_launch_prompt_file(
-        args.append_system_prompt_file.as_deref(),
+        args.launch.append_system_prompt_file.as_deref(),
         "--append-system-prompt-file",
     )?;
     let request = rimz::harness::run::SupervisedRunRequest {
-        spec: args.spec.context("supervised run requires an agent spec")?,
+        spec: args
+            .launch
+            .spec
+            .context("supervised run requires an agent spec")?,
         prompt,
-        description: args.description,
-        worktree: args.worktree,
-        from_pr: args.from_pr,
-        channel: args.channel,
-        name: args.name,
-        background: args.bg,
-        force_new_tab: args.new_tab,
+        description: args.launch.cohort.description,
+        worktree: args.launch.cohort.worktree,
+        from_pr: args.launch.cohort.from_pr,
+        channel: args.launch.cohort.channel,
+        name: args.launch.name,
+        background: args.launch.cohort.bg,
+        force_new_tab: args.launch.cohort.new_tab,
         permission_mode,
-        model: args.model,
+        model: args.launch.model,
         system_prompt_file,
         append_system_prompt_file,
-        effort: args.effort,
-        budget: args.budget,
-        max_turns: args.max_turns,
-        timeout: args.timeout,
-        keep: args.keep,
-        retries: args.retries.unwrap_or(0),
-        verify: args.verify,
-        max_attempts: args.max_attempts,
-        loop_zone: args.loop_zone,
-        loop_task: args.loop_task,
-        passthrough: args.passthrough,
+        effort: args.launch.effort,
+        budget: args.launch.cohort.budget,
+        max_turns: args.launch.max_turns,
+        timeout: args.launch.timeout,
+        keep: args.launch.keep,
+        retries: args.launch.retries.unwrap_or(0),
+        verify: args.launch.verify,
+        max_attempts: args.launch.max_attempts,
+        loop_zone: args.launch.loop_zone,
+        loop_task: args.launch.loop_task,
+        passthrough: args.launch.passthrough,
         managed_launch: rimz::agents::ManagedLaunchState::PendingResolution,
     };
     Ok((
         request,
         supervised::SupervisedPresentation {
             output_format,
-            stream_text: args.stream_text,
+            stream_text: args.launch.stream_text,
         },
     ))
 }
 
 fn validate_supervised_output(args: &AgentsArgs, output_format: OutputFormat) -> Result<()> {
-    if args.bg && output_format == OutputFormat::StreamJson {
+    if args.launch.cohort.bg && output_format == OutputFormat::StreamJson {
         bail!("--output-format stream-json cannot be combined with --bg");
     }
-    if args.retries.unwrap_or(0) > 0 && output_format == OutputFormat::StreamJson {
+    if args.launch.retries.unwrap_or(0) > 0 && output_format == OutputFormat::StreamJson {
         bail!("--retries cannot be combined with --output-format stream-json; choose text or json");
     }
-    if args.verify.is_some() && output_format == OutputFormat::StreamJson {
+    if args.launch.verify.is_some() && output_format == OutputFormat::StreamJson {
         bail!("--verify cannot be combined with --output-format stream-json; choose text or json");
     }
-    if args.max_attempts == Some(0) {
+    if args.launch.max_attempts == Some(0) {
         bail!("--max-attempts must be at least 1");
     }
-    if args.max_attempts.is_some() && args.verify.is_none() {
+    if args.launch.max_attempts.is_some() && args.launch.verify.is_none() {
         bail!("--max-attempts requires --verify");
     }
     Ok(())
@@ -629,13 +697,16 @@ fn validate_supervised_output(args: &AgentsArgs, output_format: OutputFormat) ->
 fn resolve_print_prompt(args: &AgentsArgs, input_format: InputFormat) -> Result<String> {
     match input_format {
         InputFormat::Text => {
-            let piped = if args.stdin {
+            let piped = if args.launch.stdin {
                 crate::cli::send::read_stdin_prompt()?
             } else {
                 crate::cli::send::warn_ignored_stdin();
                 None
             };
-            crate::cli::send::combine_text_prompt(args.prompt.as_deref(), piped.as_deref())
+            crate::cli::send::combine_text_prompt(
+                args.launch.prompt.as_deref(),
+                piped.as_deref(),
+            )
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "expected a prompt for `rimz agents <spec> -p` (positional PROMPT or `--stdin`)"
@@ -643,10 +714,15 @@ fn resolve_print_prompt(args: &AgentsArgs, input_format: InputFormat) -> Result<
                 })
         }
         InputFormat::StreamJson => {
-            if args.stdin {
+            if args.launch.stdin {
                 bail!("--input-format stream-json already reads stdin; drop --stdin");
             }
-            if args.prompt.as_deref().is_some_and(|p| !p.trim().is_empty()) {
+            if args
+                .launch
+                .prompt
+                .as_deref()
+                .is_some_and(|p| !p.trim().is_empty())
+            {
                 bail!(
                     "--input-format stream-json reads the prompt from stdin; drop the positional PROMPT"
                 );
@@ -695,60 +771,18 @@ impl AgentsArgs {
         channel: Option<String>,
     ) -> Self {
         Self {
-            command: None,
-            spec: Some(spec),
-            prompt,
-            description: None,
-            worktree,
-            channel,
-            from_pr: None,
-            resume: false,
-            name: None,
-            bg: false,
-            new_pane: false,
-            new_tab: false,
-            ask: false,
-            yolo: false,
-            model: None,
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            effort: None,
-            budget: None,
-            print: false,
-            stdin: false,
-            timeout: None,
-            keep: false,
-            json: false,
-            output_format: None,
-            stream_text: false,
-            input_format: None,
-            max_turns: None,
-            retries: None,
-            verify: None,
-            max_attempts: None,
-            loop_zone: false,
-            loop_task: None,
-            passthrough: Vec::new(),
+            launch: AgentLaunchArgs {
+                spec: Some(spec),
+                prompt,
+                cohort: CohortLaunchArgs {
+                    worktree,
+                    channel,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
         }
-    }
-
-    pub(crate) fn team_launch(
-        team: String,
-        prompt: Option<String>,
-        options: TeamLaunchOptions,
-    ) -> Self {
-        let mut args = Self::for_create(team, prompt, options.worktree, options.channel);
-        args.description = options.description;
-        args.from_pr = options.from_pr;
-        args.bg = options.bg;
-        args.new_tab = options.new_tab;
-        args
-    }
-
-    pub(crate) fn team_resume(team: String, worktree: Option<String>) -> Self {
-        let mut args = Self::for_create(team, None, worktree, None);
-        args.resume = true;
-        args
     }
 }
 
