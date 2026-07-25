@@ -387,12 +387,14 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
     if !definition.capabilities.registers_lazily {
         return true;
     }
-    if !pane_start_allows_bind(agent.last_activity, pane) {
+    let stamp_names_live_root = stamp_names_live_pane_root(stamped, pane);
+    if !stamp_names_live_root && !pane_start_allows_bind(agent.last_activity, pane) {
         return false;
     }
-    if pane
-        .hosted_agent_process_start
-        .is_some_and(|start| agent.last_activity < start)
+    if !stamp_names_live_root
+        && pane
+            .hosted_agent_process_start
+            .is_some_and(|start| agent.last_activity < start)
     {
         return false;
     }
@@ -414,6 +416,18 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
             .as_ref()
             .is_some_and(|kind| kind == &agent.kind),
     }
+}
+
+/// Whether the stamp was recorded by the process that is still this pane's
+/// root. The resume wrapper records its own pid, and that pid survives the
+/// exec into the provider, so a matching pane pid proves the stamp belongs to
+/// the pane's current tenancy rather than a carried-over incarnation. Hook
+/// stamps carry no pid, so they keep the activity-clock guard below.
+fn stamp_names_live_pane_root(stamped: &PaneRef, pane: &PaneRef) -> bool {
+    matches!(
+        (stamped.pane_pid, pane.pane_pid),
+        (Some(stamped), Some(live)) if stamped == live
+    )
 }
 
 /// Defensive guard for read-time binds: when the pane's process start is known,
@@ -617,6 +631,80 @@ mod tests {
         };
 
         assert!(stamped_agent_matches_live_pane(
+            &agent,
+            agent.pane.as_ref().expect("stamped pane"),
+            &live,
+        ));
+    }
+
+    #[test]
+    fn resumed_stamp_from_live_pane_root_binds_before_new_activity() {
+        let mut agent = agent("codex", "sess-resumed", AgentStatus::Idle, 1)
+            .worktree("/repo/main")
+            .active_ago(120)
+            .in_pane("%4");
+        agent.pane.as_mut().expect("stamped pane").pane_pid = Some(84);
+        let live = PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
+            command: Some("codex".to_owned()),
+            pane_pid: Some(84),
+            pane_process_start: Some(ago(60)),
+            hosted_agent_kind: Some(AgentKind::new_unchecked("codex")),
+            hosted_agent_process_start: Some(ago(60)),
+            ..pane_cmd("%4", "tab_0", "codex", None)
+        };
+
+        assert!(stamped_agent_matches_live_pane(
+            &agent,
+            agent.pane.as_ref().expect("stamped pane"),
+            &live,
+        ));
+    }
+
+    #[test]
+    fn carried_stamp_without_live_root_identity_keeps_clock_guard() {
+        for pane_pid in [None, Some(83)] {
+            let mut agent = agent("codex", "sess-stale", AgentStatus::Idle, 1)
+                .worktree("/repo/main")
+                .active_ago(120)
+                .in_pane("%4");
+            agent.pane.as_mut().expect("stamped pane").pane_pid = pane_pid;
+            let live = PaneRef {
+                pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
+                command: Some("codex".to_owned()),
+                pane_pid: Some(84),
+                pane_process_start: Some(ago(60)),
+                hosted_agent_kind: Some(AgentKind::new_unchecked("codex")),
+                hosted_agent_process_start: Some(ago(60)),
+                ..pane_cmd("%4", "tab_0", "codex", None)
+            };
+
+            assert!(!stamped_agent_matches_live_pane(
+                &agent,
+                agent.pane.as_ref().expect("stamped pane"),
+                &live,
+            ));
+        }
+    }
+
+    #[test]
+    fn live_root_stamp_still_rejects_a_different_hosted_kind() {
+        let mut agent = agent("codex", "sess-resumed", AgentStatus::Idle, 1)
+            .worktree("/repo/main")
+            .active_ago(120)
+            .in_pane("%4");
+        agent.pane.as_mut().expect("stamped pane").pane_pid = Some(84);
+        let live = PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
+            command: Some("node".to_owned()),
+            pane_pid: Some(84),
+            pane_process_start: Some(ago(60)),
+            hosted_agent_kind: Some(AgentKind::new_unchecked("claude")),
+            hosted_agent_process_start: Some(ago(60)),
+            ..pane_cmd("%4", "tab_0", "node", None)
+        };
+
+        assert!(!stamped_agent_matches_live_pane(
             &agent,
             agent.pane.as_ref().expect("stamped pane"),
             &live,
