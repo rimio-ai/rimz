@@ -86,6 +86,28 @@ fn team_roles_and_provider_kinds_keep_distinct_slots() {
 }
 
 #[test]
+fn identical_team_roles_in_different_lanes_keep_distinct_slots() {
+    let mut auth = agent("auth-coder", "codex", 10);
+    auth.team = Some("forge".to_owned());
+    auth.role = Some("coder".to_owned());
+    auth.channel = Some("auth".to_owned());
+    let mut docs = agent("docs-coder", "codex", 20);
+    docs.team = Some("forge".to_owned());
+    docs.role = Some("coder".to_owned());
+    docs.channel = Some("docs".to_owned());
+
+    let report = build_for(&[auth, docs]);
+    assert_eq!(report.groups[0].members.len(), 2);
+    assert_eq!(report.groups[0].totals.agents, 2);
+    assert!(
+        report.groups[0]
+            .members
+            .iter()
+            .all(|member| member.sessions == 1)
+    );
+}
+
+#[test]
 fn roleless_cohorts_and_reused_panes_fold() {
     let mut first = agent("one", "codex", 10);
     first.launch_group = Some("group".to_owned());

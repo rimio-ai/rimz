@@ -273,7 +273,7 @@ The activity description — the same field the sidebar card shows — renders u
 
 #### `attribution`
 
-`attribution [SCOPE]` credits the root agents that worked the selected lane even after their panes and processes exit. `SCOPE` accepts the same `#channel`, worktree, branch, directory name, and path spellings as `list`; the default is the caller's current lane, and `--all` covers every lane in the room. It reads durable and local provider state without requiring a live multiplexer.
+`attribution [SCOPE]` credits the root agents that worked the selected lane even after their panes and processes exit. `SCOPE` accepts the same `#channel`, worktree, branch, directory name, and path spellings as `list`; the default is the caller's current lane, and `--all` covers every lane in the room. Attribution covers the lane's retained history rather than inferring a commit or time window; JSON timestamps let callers apply their own window. It reads durable and local provider state without requiring a live multiplexer.
 
 The default panel groups members by team and shows provider, model and effort, estimated active time, tool calls, transcript-priced cost, token detail, and compactions as labelled lines. `--md` emits the same figures as grouped bullets inside a collapsed `<details>` block for a pull-request body; an empty scope emits no Markdown. `--json` emits a schema 1 document, and `--json` conflicts with `--md`.
 
