@@ -54,7 +54,7 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {
-        input_key: Some("args"),
+        input_key: None,
         mutating: &["Shell", "Write", "Delete"],
         editing: &["Write", "Delete"],
         blocking: &[],

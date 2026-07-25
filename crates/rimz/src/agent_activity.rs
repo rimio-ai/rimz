@@ -85,7 +85,9 @@ fn activity_path(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> PathBuf 
 ///
 /// Parallel tool calls in one assistant message can race their hook processes
 /// and lose an increment. That undercounts and delays detection, which matches
-/// this sidecar's best-effort posture; no correctness path reads the run.
+/// this sidecar's best-effort posture; no correctness path reads the run. Two
+/// hooks can also observe the attention threshold concurrently and emit the
+/// same escalation diagnostic twice; diagnostics remain best-effort evidence.
 pub fn touch(
     runtime: &RuntimePaths,
     kind: &str,

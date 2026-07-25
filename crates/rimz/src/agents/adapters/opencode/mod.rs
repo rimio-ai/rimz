@@ -65,7 +65,7 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {
-        input_key: Some("input"),
+        input_key: None,
         mutating: &["bash", "edit", "write", "apply_patch", "patch"],
         editing: &["edit", "write", "apply_patch", "patch"],
         blocking: &[],

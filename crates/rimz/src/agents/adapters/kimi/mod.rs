@@ -80,7 +80,7 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
     sub_providers: &[],
     expected_windows: &["5h", "7d"],
     tools: ToolClassification {
-        input_key: Some("tool_input"),
+        input_key: None,
         mutating: &["Bash", "Write", "Edit"],
         editing: &["Write", "Edit"],
         blocking: &[

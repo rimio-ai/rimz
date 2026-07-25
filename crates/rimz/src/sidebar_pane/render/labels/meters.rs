@@ -167,10 +167,13 @@ pub(in crate::sidebar_pane::render) fn context_compaction_spans(
 /// card at the warning threshold without changing status or attention rank.
 pub(in crate::sidebar_pane::render) fn context_tool_repeat_spans(
     theme: &Theme,
+    status: AgentStatus,
     repeat: Option<&crate::agent_activity::ToolRepeat>,
     warn_after: u32,
 ) -> Vec<Span<'static>> {
-    let Some(repeat) = repeat.filter(|repeat| repeat.count >= warn_after) else {
+    let Some(repeat) =
+        repeat.filter(|repeat| status == AgentStatus::Running && repeat.count >= warn_after)
+    else {
         return Vec::new();
     };
     vec![

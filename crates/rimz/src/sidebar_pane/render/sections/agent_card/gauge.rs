@@ -429,6 +429,7 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
     ));
     left.extend(context_tool_repeat_spans(
         theme,
+        row.status().unwrap_or(AgentStatus::Idle),
         agent(row).and_then(|agent| agent.tool_repeat.as_ref()),
         row_ctx.tool_repeat_warn_after,
     ));

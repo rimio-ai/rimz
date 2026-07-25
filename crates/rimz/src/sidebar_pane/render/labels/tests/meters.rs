@@ -960,10 +960,11 @@ fn tool_repeat_marker_starts_at_the_warning_threshold() {
         since: jiff::Timestamp::from_second(1_700_000_000).unwrap(),
     };
 
-    assert!(context_tool_repeat_spans(&theme, None, 3).is_empty());
+    assert!(context_tool_repeat_spans(&theme, AgentStatus::Running, None, 3).is_empty());
     assert!(
         context_tool_repeat_spans(
             &theme,
+            AgentStatus::Running,
             Some(&crate::agent_activity::ToolRepeat {
                 count: 2,
                 ..repeat.clone()
@@ -972,7 +973,11 @@ fn tool_repeat_marker_starts_at_the_warning_threshold() {
         )
         .is_empty()
     );
-    let spans = context_tool_repeat_spans(&theme, Some(&repeat), 3);
+    assert!(
+        context_tool_repeat_spans(&theme, AgentStatus::Failed, Some(&repeat), 3).is_empty(),
+        "a resting card does not keep the running-loop annotation"
+    );
+    let spans = context_tool_repeat_spans(&theme, AgentStatus::Running, Some(&repeat), 3);
     assert_eq!(text(&spans), " · ⟲ 3");
     assert_eq!(spans[0].style, theme.muted(), "seam");
     assert_eq!(spans[1].style, theme.warn(Modifier::empty()), "marker");
