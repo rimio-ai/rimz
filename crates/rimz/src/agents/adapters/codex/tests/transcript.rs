@@ -278,25 +278,82 @@ fn turn_error_detector_maps_known_error_shapes() {
         .to_string();
         detect_turn_error(&tail).expect("known error").class
     };
+    for (class, camel, snake) in [
+        (
+            crate::agents::TurnErrorClass::PausedRateLimit,
+            "usageLimitExceeded",
+            "usage_limit_exceeded",
+        ),
+        (
+            crate::agents::TurnErrorClass::PausedOverloaded,
+            "serverOverloaded",
+            "server_overloaded",
+        ),
+        (
+            crate::agents::TurnErrorClass::PausedOverloaded,
+            "internalServerError",
+            "internal_server_error",
+        ),
+        (
+            crate::agents::TurnErrorClass::Failed,
+            "contextWindowExceeded",
+            "context_window_exceeded",
+        ),
+        (
+            crate::agents::TurnErrorClass::Failed,
+            "unauthorized",
+            "unauthorized",
+        ),
+        (
+            crate::agents::TurnErrorClass::Failed,
+            "badRequest",
+            "bad_request",
+        ),
+        (
+            crate::agents::TurnErrorClass::Failed,
+            "sandboxError",
+            "sandbox_error",
+        ),
+        (
+            crate::agents::TurnErrorClass::Failed,
+            "cyberPolicy",
+            "cyber_policy",
+        ),
+        (
+            crate::agents::TurnErrorClass::Failed,
+            "threadRollbackFailed",
+            "thread_rollback_failed",
+        ),
+    ] {
+        for kind in [camel, snake] {
+            assert_eq!(
+                class_from_kind(kind, "API Error: Bad Request"),
+                class,
+                "{kind}"
+            );
+        }
+    }
     assert_eq!(
-        class_from_kind("internalServerError", "API Error: Server Error"),
+        class_from_kind("other", "Service Unavailable"),
         crate::agents::TurnErrorClass::PausedOverloaded
     );
-    for kind in [
-        "contextWindowExceeded",
-        "unauthorized",
-        "badRequest",
-        "sandboxError",
-        "cyberPolicy",
-        "threadRollbackFailed",
-        "other",
-    ] {
-        assert_eq!(
-            class_from_kind(kind, "API Error: Bad Request"),
-            crate::agents::TurnErrorClass::Failed,
-            "{kind}"
-        );
-    }
+    assert_eq!(
+        class_from_kind("other", "API Error: Bad Request"),
+        crate::agents::TurnErrorClass::Failed
+    );
+
+    let rollout_503 = r#"{"timestamp":"2026-07-25T09:24:51.105Z","type":"event_msg","payload":{"type":"task_complete","error":{"message":"unexpected status 503 Service Unavailable: Service Unavailable, url: https://chatgpt.com/backend-api/codex/responses, cf-ray: a20a1d2aca20f069-DFW, auth error: 503, auth error code: biscuit_baker_service_me_circuit_open","codex_error_info":"other"}}}"#;
+    assert_eq!(
+        detect_turn_error(rollout_503).expect("rollout 503").class,
+        crate::agents::TurnErrorClass::PausedOverloaded
+    );
+    let rollout_high_demand = r#"{"timestamp":"2026-07-25T09:25:09.577Z","type":"event_msg","payload":{"type":"task_complete","error":{"message":"We're currently experiencing high demand, which may cause temporary errors.","codex_error_info":"internal_server_error"}}}"#;
+    assert_eq!(
+        detect_turn_error(rollout_high_demand)
+            .expect("rollout high-demand error")
+            .class,
+        crate::agents::TurnErrorClass::PausedOverloaded
+    );
 
     let terminal = json!({
         "timestamp": "2026-06-11T07:19:00.000Z",

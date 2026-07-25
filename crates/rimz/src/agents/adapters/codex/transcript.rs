@@ -717,17 +717,26 @@ fn classify_turn_error(kinds: &[std::borrow::Cow<'_, str>], label: Option<&str>)
     TurnErrorClass::classify_label(label)
 }
 
+/// Map Codex's error-kind vocabulary to a display class. The app-server schema
+/// names kinds in camelCase and the rollout writes the same vocabulary in
+/// snake_case, so both fold to one key. Upstream's `other` catch-all carries no
+/// verdict and falls through to the label, where a 503 or capacity message can
+/// still identify itself.
 fn class_from_codex_error_kind(kind: &str) -> Option<TurnErrorClass> {
-    match kind {
-        "usageLimitExceeded" => Some(TurnErrorClass::PausedRateLimit),
-        "serverOverloaded" | "internalServerError" => Some(TurnErrorClass::PausedOverloaded),
-        "contextWindowExceeded"
+    let key: String = kind
+        .chars()
+        .filter(|c| *c != '_')
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    match key.as_str() {
+        "usagelimitexceeded" => Some(TurnErrorClass::PausedRateLimit),
+        "serveroverloaded" | "internalservererror" => Some(TurnErrorClass::PausedOverloaded),
+        "contextwindowexceeded"
         | "unauthorized"
-        | "badRequest"
-        | "sandboxError"
-        | "cyberPolicy"
-        | "threadRollbackFailed"
-        | "other" => Some(TurnErrorClass::Failed),
+        | "badrequest"
+        | "sandboxerror"
+        | "cyberpolicy"
+        | "threadrollbackfailed" => Some(TurnErrorClass::Failed),
         _ => None,
     }
 }
