@@ -202,6 +202,9 @@ enum Action<'a> {
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
+    if sandbox::run_reaper_mode(&args)? {
+        return Ok(());
+    }
     match parse_args(&args)? {
         Action::Run { task, args } => {
             let root = runner::workspace_root()?;

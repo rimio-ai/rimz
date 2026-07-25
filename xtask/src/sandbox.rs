@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11,6 +12,9 @@ use anyhow::{Context, Result, bail};
 use tempfile::TempDir;
 
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
+const REAPER_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+const SANDBOX_PREFIX: &str = "rimz-sandbox-";
+const REAPER_ARG: &str = "__sandbox-reaper";
 
 /// One short-lived filesystem namespace for host-facing test processes.
 ///
@@ -18,9 +22,12 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 /// keeps even a forgotten default `TmuxBackend` away from the user's server.
 /// Every sandbox also replaces `HOME`, covering agent configs whose upstream
 /// location does not follow XDG.
+///
+/// An independent keepalive reaper applies the same cleanup when the owner dies before `Drop`.
 pub(crate) struct HostSandbox {
     _root: TempDir,
     env: BTreeMap<&'static str, PathBuf>,
+    reaper: Option<SandboxReaper>,
 }
 
 impl HostSandbox {
@@ -41,23 +48,10 @@ impl HostSandbox {
 
     fn new() -> Result<Self> {
         let root = tempfile::Builder::new()
-            .prefix("rimz-sandbox-")
+            .prefix(SANDBOX_PREFIX)
             .tempdir_in("/tmp")
             .context("creating short test sandbox")?;
-        let env = BTreeMap::from([
-            ("HOME", root.path().join("home")),
-            ("TMUX_TMPDIR", root.path().join("tmux")),
-            ("XDG_CACHE_HOME", root.path().join("cache")),
-            ("XDG_CONFIG_HOME", root.path().join("config")),
-            ("XDG_DATA_HOME", root.path().join("data")),
-            ("XDG_RUNTIME_DIR", root.path().join("runtime")),
-            ("XDG_STATE_HOME", root.path().join("state")),
-            ("TMPDIR", root.path().join("tmp")),
-            (
-                "ZELLIJ_CONFIG_DIR",
-                root.path().join("config").join("zellij"),
-            ),
-        ]);
+        let env = sandbox_env(root.path());
         for path in env.values() {
             std::fs::create_dir_all(path)
                 .with_context(|| format!("creating sandbox directory {}", path.display()))?;
@@ -68,7 +62,12 @@ impl HostSandbox {
         )
         .context("writing sandbox Zellij config")?;
         std::fs::write(env["HOME"].join(".zshrc"), "").context("writing sandbox zsh config")?;
-        Ok(Self { _root: root, env })
+        let reaper = SandboxReaper::spawn(root.path())?;
+        Ok(Self {
+            _root: root,
+            env,
+            reaper,
+        })
     }
 
     fn trust_workspace_for_git(&self, workspace_root: &Path) -> Result<()> {
@@ -99,14 +98,7 @@ impl HostSandbox {
     }
 
     fn apply_to(&self, command: &mut Command, scrub_session: bool) {
-        if scrub_session {
-            for (key, _) in std::env::vars_os() {
-                if session_key(&key) {
-                    command.env_remove(key);
-                }
-            }
-        }
-        command.envs(&self.env);
+        apply_env(command, &self.env, scrub_session);
     }
 
     #[cfg(test)]
@@ -115,27 +107,150 @@ impl HostSandbox {
     }
 }
 
+fn sandbox_env(root: &Path) -> BTreeMap<&'static str, PathBuf> {
+    BTreeMap::from([
+        ("HOME", root.join("home")),
+        ("TMUX_TMPDIR", root.join("tmux")),
+        ("XDG_CACHE_HOME", root.join("cache")),
+        ("XDG_CONFIG_HOME", root.join("config")),
+        ("XDG_DATA_HOME", root.join("data")),
+        ("XDG_RUNTIME_DIR", root.join("runtime")),
+        ("XDG_STATE_HOME", root.join("state")),
+        ("TMPDIR", root.join("tmp")),
+        ("ZELLIJ_CONFIG_DIR", root.join("config").join("zellij")),
+    ])
+}
+
 impl Drop for HostSandbox {
     fn drop(&mut self) {
-        let tmux_started = std::fs::read_dir(&self.env["TMUX_TMPDIR"])
-            .is_ok_and(|mut entries| entries.next().is_some());
-        if tmux_started {
-            let mut command = Command::new("tmux");
-            self.apply_to(&mut command, true);
-            command.arg("kill-server");
-            reap_bounded(command);
+        if self.reaper.take().is_some_and(SandboxReaper::finish) {
+            return;
         }
-
-        if self.env["XDG_RUNTIME_DIR"].join("zellij").exists() {
-            let mut command = Command::new("zellij");
-            self.apply_to(&mut command, true);
-            command.args(["kill-all-sessions", "--yes"]);
-            reap_bounded(command);
-        }
-
-        reap_sandbox_processes(self._root.path());
-        remove_tree_bounded(self._root.path());
+        cleanup_sandbox(self._root.path(), &self.env);
     }
+}
+
+struct SandboxReaper {
+    child: Child,
+    keepalive: ChildStdin,
+}
+
+impl SandboxReaper {
+    #[cfg(not(test))]
+    fn spawn(root: &Path) -> Result<Option<Self>> {
+        let executable = std::env::current_exe().context("resolving xtask reaper executable")?;
+        let mut child = Command::new(executable)
+            .arg(REAPER_ARG)
+            .arg(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("starting sandbox cleanup reaper")?;
+        let keepalive = child
+            .stdin
+            .take()
+            .context("sandbox cleanup reaper has no keepalive pipe")?;
+        Ok(Some(Self { child, keepalive }))
+    }
+
+    #[cfg(test)]
+    fn spawn(root: &Path) -> Result<Option<Self>> {
+        validate_sandbox_root(root)?;
+        Ok(None)
+    }
+
+    fn finish(self) -> bool {
+        let Self {
+            mut child,
+            keepalive,
+        } = self;
+        drop(keepalive);
+        let deadline = Instant::now() + REAPER_WAIT_TIMEOUT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return status.success(),
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) | Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn run_reaper_mode(args: &[String]) -> Result<bool> {
+    if args.first().is_none_or(|arg| arg != REAPER_ARG) {
+        return Ok(false);
+    }
+    let [_, root] = args else {
+        bail!("{REAPER_ARG} requires exactly one sandbox root");
+    };
+    let root = Path::new(root);
+    validate_sandbox_root(root)?;
+    let mut buffer = [0_u8; 64];
+    let mut input = std::io::stdin().lock();
+    while input
+        .read(&mut buffer)
+        .context("reading reaper keepalive")?
+        != 0
+    {}
+    cleanup_sandbox(root, &sandbox_env(root));
+    Ok(true)
+}
+
+fn validate_sandbox_root(root: &Path) -> Result<()> {
+    let suffix = root
+        .parent()
+        .filter(|parent| *parent == Path::new("/tmp"))
+        .and_then(|_| root.file_name())
+        .and_then(OsStr::to_str)
+        .and_then(|name| name.strip_prefix(SANDBOX_PREFIX))
+        .filter(|suffix| {
+            suffix.len() == 6 && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        });
+    if suffix.is_none() {
+        bail!(
+            "sandbox reaper refuses root outside /tmp/{SANDBOX_PREFIX}<six alphanumeric characters>"
+        );
+    }
+    Ok(())
+}
+
+fn apply_env(command: &mut Command, env: &BTreeMap<&'static str, PathBuf>, scrub_session: bool) {
+    if scrub_session {
+        for (key, _) in std::env::vars_os() {
+            if session_key(&key) {
+                command.env_remove(key);
+            }
+        }
+    }
+    command.envs(env);
+}
+
+fn cleanup_sandbox(root: &Path, env: &BTreeMap<&'static str, PathBuf>) {
+    let tmux_started =
+        std::fs::read_dir(&env["TMUX_TMPDIR"]).is_ok_and(|mut entries| entries.next().is_some());
+    if tmux_started {
+        let mut command = Command::new("tmux");
+        apply_env(&mut command, env, true);
+        command.arg("kill-server");
+        reap_bounded(command);
+    }
+
+    if env["XDG_RUNTIME_DIR"].join("zellij").exists() {
+        let mut command = Command::new("zellij");
+        apply_env(&mut command, env, true);
+        command.args(["kill-all-sessions", "--yes"]);
+        reap_bounded(command);
+    }
+
+    reap_sandbox_processes(root);
+    remove_tree_bounded(root);
 }
 
 fn session_key(key: &OsStr) -> bool {
@@ -351,5 +466,19 @@ mod tests {
             environment,
             Path::new("/tmp/rimz-sandbox")
         ));
+    }
+
+    #[test]
+    fn reaper_accepts_only_generated_sandbox_roots() {
+        assert!(validate_sandbox_root(Path::new("/tmp/rimz-sandbox-aB123z")).is_ok());
+        for root in [
+            "/tmp/rimz-sandbox-short",
+            "/tmp/rimz-sandbox-aB_23z",
+            "/var/tmp/rimz-sandbox-aB123z",
+            "/tmp/other-aB123z",
+            "/tmp/rimz-sandbox-aB123z/child",
+        ] {
+            assert!(validate_sandbox_root(Path::new(root)).is_err(), "{root}");
+        }
     }
 }
