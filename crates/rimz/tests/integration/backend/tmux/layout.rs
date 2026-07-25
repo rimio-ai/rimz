@@ -550,7 +550,6 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
     require_tmux!();
     let server = TmuxServer::new();
     let cwd = TempDir::new().expect("cwd tempdir");
-    let width = SidebarWidth::default();
     server
         .backend
         .ensure_session(&session_opts(
@@ -597,8 +596,6 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
     let work_pane = || PaneCmd {
         argv: vec!["sleep".to_owned(), "600".to_owned()],
     };
-    let mut stale_sidebar = sidebar.clone();
-    stale_sidebar.birth_size = width.birth_size(Some(110));
     server
         .backend
         .open_tab(&TabOptions {
@@ -611,7 +608,7 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
             },
             focus: false,
             dock_sidebar: true,
-            sidebar: stale_sidebar,
+            sidebar: sidebar.clone(),
         })
         .expect("open_tab");
     drop(narrow);
@@ -634,14 +631,14 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
         3,
         "tab should be born with a sidebar and two work panes: {panes:?}",
     );
-    let sidebar = panes
+    let sidebar_pane = panes
         .iter()
         .find(|pane| pane.left == 0)
         .expect("the hook-docked sidebar");
-    let cap = width.target_cols(300);
+    let cap = u64::from(sidebar.target.cols.get());
     let lower = cap.saturating_sub(2);
     assert!(
-        sidebar.width >= lower && sidebar.width <= cap,
+        sidebar_pane.width >= lower && sidebar_pane.width <= cap,
         "sidebar should stay near capped {cap} cols instead of the stale caller width: {panes:?}",
     );
     let work: Vec<_> = panes.iter().filter(|pane| pane.left > 0).collect();

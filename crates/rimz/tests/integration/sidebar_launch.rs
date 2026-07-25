@@ -7,7 +7,7 @@ use std::time::Duration;
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::mux::{
     CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions,
-    SessionOptions, SidebarPaneOptions, SidebarWidth, SplitPaneOptions,
+    SessionOptions, SidebarPaneOptions, SplitPaneOptions,
 };
 use rimz::pane::PaneRef;
 use rimz::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION;
@@ -112,17 +112,17 @@ impl SidebarHarness {
     }
 
     fn sidebar_opts(&self) -> SidebarPaneOptions {
-        let width = SidebarWidth::default();
         SidebarPaneOptions {
             session_name: "session".to_owned(),
             workspace_id: self.workspace_id.clone(),
             project_root: self.cwd.clone(),
             extra_env: Default::default(),
             cwd: self.cwd.clone(),
-            width,
-            birth_size: width.birth_size(None),
+            target: rimz::mux::SidebarTarget {
+                cols: std::num::NonZeroU16::new(72).expect("nonzero test width"),
+                percent: 25,
+            },
             detected_view_size: None,
-            width_override: None,
             rimz_bin: std::env::current_exe().expect("test executable"),
             pristine_birth: false,
             config: rimz::config::MultiplexerConfig::default(),
@@ -257,6 +257,7 @@ impl MuxBackend for FakeBackend {
         Ok(rimz::mux::WidthStep {
             cols: 2,
             exact: true,
+            view_cols: 120,
         })
     }
 

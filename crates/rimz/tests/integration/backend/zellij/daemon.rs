@@ -2,9 +2,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use rimz::ids::WorkspaceId;
-use rimz::mux::{
-    DaemonView, HostPane, MuxBackend, SidebarPaneOptions, SidebarWidth, ZellijBackend,
-};
+use rimz::mux::{DaemonView, HostPane, MuxBackend, SidebarPaneOptions, ZellijBackend};
 use rimz::pane::PaneRef;
 use tempfile::TempDir;
 
@@ -38,10 +36,11 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
             project_root: std::env::temp_dir(),
             extra_env: Default::default(),
             cwd: std::env::temp_dir(),
-            width: SidebarWidth::default(),
-            birth_size: SidebarWidth::default().birth_size(Some(120)),
+            target: rimz::mux::SidebarTarget {
+                cols: std::num::NonZeroU16::new(30).expect("nonzero test width"),
+                percent: 25,
+            },
             detected_view_size: None,
-            width_override: None,
             rimz_bin: stub.to_path_buf(),
             pristine_birth: false,
             config: rimz::config::MultiplexerConfig::default(),
@@ -118,10 +117,11 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
         project_root: cwd.path().to_path_buf(),
         extra_env: Default::default(),
         cwd: cwd.path().to_path_buf(),
-        width: SidebarWidth::default(),
-        birth_size: SidebarWidth::default().birth_size(Some(120)),
+        target: rimz::mux::SidebarTarget {
+            cols: std::num::NonZeroU16::new(30).expect("nonzero test width"),
+            percent: 25,
+        },
         detected_view_size: None,
-        width_override: None,
         rimz_bin: stub,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),

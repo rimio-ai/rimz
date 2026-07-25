@@ -690,7 +690,11 @@ impl MuxBackend for ZellijBackend {
             })?;
         let cols = u16::try_from(crate::mux::width::zellij_resize_step_cols(view_cols))
             .unwrap_or(u16::MAX);
-        Ok(WidthStep { cols, exact: false })
+        Ok(WidthStep {
+            cols,
+            exact: false,
+            view_cols: u16::try_from(view_cols).unwrap_or(0),
+        })
     }
 
     fn nudge_sidebar_width(
@@ -941,7 +945,7 @@ impl MuxBackend for ZellijBackend {
         // Kept sidebars (not planned for closing) whose geometry sits off the
         // layout's dock — the residue of a mis-mounted add — converge in place
         // this pass, renderer untouched.
-        let off_spec = off_spec_sidebars(&panes, &planned_closes, opts.width, opts.width_override);
+        let off_spec = off_spec_sidebars(&panes, &planned_closes, opts.target.cols);
         if plan.is_empty() && off_spec.is_empty() {
             return Ok(SidebarRecovery::default());
         }
@@ -1082,7 +1086,7 @@ impl MuxBackend for ZellijBackend {
                 self.focus_restore_target(&opts.sidebar.session_name, &opts.sidebar.workspace_id)
             })
             .flatten();
-        let sidebar_percent = (|| {
+        let view_cols = (|| {
             let panes = self
                 .topology_panes(
                     &opts.sidebar.session_name,
@@ -1094,16 +1098,26 @@ impl MuxBackend for ZellijBackend {
                 .iter()
                 .find(|pane| pane.is_live_terminal())?
                 .tab_position;
-            let view_cols = tab_view_cols(&panes, tab)?;
-            let view_cols = u16::try_from(view_cols).ok()?;
-            Some(
-                opts.sidebar
-                    .width
-                    .birth_size_with_override(Some(view_cols), opts.sidebar.width_override)
-                    .percent,
-            )
-        })()
-        .unwrap_or_else(|| opts.sidebar.width.percent.resolve(None));
+            tab_view_cols(&panes, tab)
+                .and_then(|cols| u16::try_from(cols).ok())
+                .filter(|cols| *cols > 0)
+        })();
+        let runtime = match self.runtime_dir.as_deref() {
+            Some(root) => {
+                crate::store::RuntimePaths::under(opts.sidebar.workspace_id.clone(), root)
+            }
+            None => crate::store::RuntimePaths::for_workspace(opts.sidebar.workspace_id.clone()),
+        }
+        .map_err(|err| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!("cannot resolve sidebar runtime paths: {err}"),
+        })?;
+        let width = crate::mux::SidebarWidth::from_config(
+            &crate::config::MachineConfig::load_lenient().theme,
+        );
+        let sidebar_percent =
+            crate::sidebar::width_target::resolve(&runtime, width, MuxName::Zellij, view_cols)
+                .percent;
         let layout = TempLayoutFile::new(render_tab_layout(opts, sidebar_percent)?)?;
         let args = [
             "new-tab".to_owned(),
@@ -1192,15 +1206,14 @@ pub(super) fn reconcile_pane(pane: &PaneTopologyPane) -> Option<ReconcilePane> {
 fn off_spec_sidebars(
     panes: &[PaneTopologyPane],
     closing: &[PaneId],
-    width: crate::mux::SidebarWidth,
-    width_override: Option<std::num::NonZeroU16>,
+    target_cols: std::num::NonZeroU16,
 ) -> Vec<(u64, u64)> {
     let closing: HashSet<u64> = closing.iter().filter_map(parse_zellij_raw).collect();
     panes
         .iter()
         .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
         .filter(|pane| !closing.contains(&pane.id))
-        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, width, width_override))
+        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, target_cols))
         .map(|pane| (pane.tab_position, pane.id))
         .collect()
 }

@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
-use rimz::mux::{MuxBackend, SessionHealth, SidebarPaneOptions, SidebarWidth, ZellijBackend};
+use rimz::mux::{MuxBackend, SessionHealth, SidebarPaneOptions, ZellijBackend};
 use tempfile::TempDir;
 
 use super::support::*;
@@ -198,10 +198,11 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         project_root: cwd.path().to_path_buf(),
         extra_env: Default::default(),
         cwd: cwd.path().to_path_buf(),
-        width: SidebarWidth::default(),
-        birth_size: SidebarWidth::default().birth_size(Some(120)),
+        target: rimz::mux::SidebarTarget {
+            cols: std::num::NonZeroU16::new(30).expect("nonzero test width"),
+            percent: 25,
+        },
         detected_view_size: None,
-        width_override: None,
         rimz_bin: stub,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),

@@ -170,70 +170,28 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
 
 #[test]
 fn arm_paint_hold_on_grow_engages_only_beyond_the_legitimate_width() {
-    // (label, prev width, sibling seen, room width override, grow to, arms)
+    // (label, prev width, sibling seen, grow to, arms)
     let cases = [
-        (
-            "grow beyond the cap arms the hold",
-            60,
-            true,
-            None,
-            120,
-            true,
-        ),
+        ("grow beyond the cap arms the hold", 60, true, 120, true),
         (
             "same-width paint does not arm the hold",
             120,
             true,
-            None,
             120,
             false,
         ),
-        (
-            "shrink paint does not arm the hold",
-            120,
-            true,
-            None,
-            60,
-            false,
-        ),
+        ("shrink paint does not arm the hold", 120, true, 60, false),
         (
             "startup grow paints immediately before any sibling has been observed",
             60,
             false,
-            None,
             120,
             false,
         ),
-        (
-            "the room override is a legitimate width",
-            10,
-            true,
-            Some(90),
-            90,
-            false,
-        ),
-        (
-            "a grow beyond the override still arms the hold",
-            10,
-            true,
-            Some(90),
-            100,
-            true,
-        ),
     ];
 
-    for (label, prev_width, seen_sibling, override_cols, grow_to, arms) in cases {
+    for (label, prev_width, seen_sibling, grow_to, arms) in cases {
         let mut rig = Rig::new();
-        if let Some(cols) = override_cols {
-            crate::sidebar::width_override::write(
-                &rig.runtime,
-                std::num::NonZeroU16::new(cols).expect("nonzero width"),
-            )
-            .expect("write width override");
-            rig.state
-                .width_control
-                .reload_target(None, &crate::diag::DiagSink::disabled());
-        }
         rig.state.prev_width = Some(prev_width);
         rig.state.self_close.seen_sibling = seen_sibling;
 

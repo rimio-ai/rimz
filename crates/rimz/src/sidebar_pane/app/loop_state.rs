@@ -212,16 +212,15 @@ impl LoopState {
         let snapshot_now = Timestamp::now();
         let current = SidebarSnapshot::build_with_agents(workspace_id, Vec::new(), snapshot_now);
         let now = Instant::now();
-        let width_cap = crate::config::MachineConfig::load_lenient()
-            .theme
-            .display
-            .max_cols;
+        let width = crate::mux::SidebarWidth::from_config(
+            &crate::config::MachineConfig::load_lenient().theme,
+        );
         let width_control = WidthController::new(
             read_marks.runtime().clone(),
             session_name.clone(),
             own_pane.clone(),
             mux,
-            width_cap,
+            width,
         );
         let make_up_filter = crate::sidebar::body_filter::load(read_marks.runtime());
         Self {
@@ -585,7 +584,8 @@ impl LoopState {
             }
             SidebarEvent::WidthTargetChanged => {
                 let measured = terminal.size().ok().map(|size| size.width);
-                self.width_control.reload_target(measured, diag);
+                self.width_control
+                    .reload_target(&self.current.theme, measured, diag);
             }
             SidebarEvent::BodyFilterChanged => {
                 let filter = crate::sidebar::body_filter::load(self.read_marks.runtime());
@@ -905,8 +905,14 @@ impl LoopState {
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         diag: &crate::diag::DiagSink,
     ) {
-        self.width_control
-            .backstop(terminal.size().ok().map(|size| size.width), diag);
+        self.width_control.backstop(
+            terminal.size().ok().map(|size| size.width),
+            self.current
+                .own_view
+                .as_ref()
+                .map(|view| view.sibling_count),
+            diag,
+        );
     }
 
     #[cfg(test)]

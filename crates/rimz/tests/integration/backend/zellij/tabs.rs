@@ -2,9 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
-use rimz::mux::{
-    LayoutPanes, MuxBackend, PaneCmd, SidebarPaneOptions, SidebarWidth, TabOptions, ZellijBackend,
-};
+use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, SidebarPaneOptions, TabOptions, ZellijBackend};
 use tempfile::TempDir;
 
 use super::support::*;
@@ -25,10 +23,11 @@ fn open_tab_unfocused_routes_input_back_to_source() {
         project_root: cwd.path().to_path_buf(),
         extra_env: Default::default(),
         cwd: cwd.path().to_path_buf(),
-        width: SidebarWidth::default(),
-        birth_size: SidebarWidth::default().birth_size(Some(200)),
+        target: rimz::mux::SidebarTarget {
+            cols: std::num::NonZeroU16::new(50).expect("nonzero test width"),
+            percent: 25,
+        },
         detected_view_size: None,
-        width_override: None,
         rimz_bin: stub,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
@@ -125,10 +124,11 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
         project_root: cwd.path().to_path_buf(),
         extra_env: Default::default(),
         cwd: cwd.path().to_path_buf(),
-        width: SidebarWidth::default(),
-        birth_size: SidebarWidth::default().birth_size(Some(220)),
+        target: rimz::mux::SidebarTarget {
+            cols: std::num::NonZeroU16::new(55).expect("nonzero test width"),
+            percent: 25,
+        },
         detected_view_size: None,
-        width_override: None,
         rimz_bin: stub,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
@@ -183,17 +183,17 @@ fn native_focused_split_preserves_docked_sidebar() {
     let cwd = TempDir::new().expect("cwd tempdir");
 
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
-    let width = SidebarWidth::default();
     let sidebar = SidebarPaneOptions {
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-worksplit")),
         project_root: cwd.path().to_path_buf(),
         extra_env: Default::default(),
         cwd: cwd.path().to_path_buf(),
-        width,
-        birth_size: width.birth_size(Some(298)),
+        target: rimz::mux::SidebarTarget {
+            cols: std::num::NonZeroU16::new(75).expect("nonzero test width"),
+            percent: 25,
+        },
         detected_view_size: None,
-        width_override: None,
         rimz_bin: stub,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),

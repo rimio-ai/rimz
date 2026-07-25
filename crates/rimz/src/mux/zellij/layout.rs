@@ -57,7 +57,7 @@ fn sidebar_pane_kdl(
 ) -> Result<String> {
     let rimz_bin = kdl_string(&opts.rimz_bin.to_string_lossy())?;
     // Fixed-size layout panes are resize-pinned by Zellij, so every sidebar
-    // must use percentage spelling even when its live target began as columns.
+    // spells the shared view proportion as a percentage.
     let size = kdl_string(&format!("{}%", width_percent.clamp(1, 100)))?;
     let pane_name = kdl_string(SIDEBAR_CHROME_TITLE)?;
     let cwd_attr = match cwd {
@@ -113,7 +113,7 @@ pub(super) fn render_session_layout(
     // The explicit tabs instantiate on the detached background session at
     // birth; only the `new_tab_template` waits for an attached client. Both
     // carry the same seed derived from the launch probe.
-    let sidebar = sidebar_pane_kdl(opts, None, opts.birth_size.percent)?;
+    let sidebar = sidebar_pane_kdl(opts, None, opts.target.percent)?;
 
     // The daemon tab leads, when present.
     let daemon_tab = match daemon {
@@ -124,7 +124,7 @@ pub(super) fn render_session_layout(
                 &daemon.content,
                 &daemon.hosts,
                 &daemon.loop_panel,
-                opts.birth_size.percent,
+                opts.target.percent,
                 8,
             )?;
             format!(
@@ -222,14 +222,14 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
     let sidebar = sidebar_pane_kdl(
         &opts.sidebar,
         Some(&opts.sidebar.cwd),
-        opts.sidebar.birth_size.percent,
+        opts.sidebar.target.percent,
     )?;
     let body = render_daemon_columns(
         &sidebar,
         &opts.view.content,
         &opts.view.hosts,
         &opts.view.loop_panel,
-        opts.sidebar.birth_size.percent,
+        opts.sidebar.target.percent,
         4,
     )?;
     // The body (sidebar + work area) is a nested vertical split above the

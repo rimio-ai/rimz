@@ -410,7 +410,7 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     assert_eq!(report.failed, 0);
     assert_eq!(report.misdocked, 0);
     assert_sidebar_is_left_docked(&xdg, &name);
-    wait_for_sidebar_width_at_most(&xdg, &name, u64::from(opts.birth_size.cols.get()));
+    wait_for_sidebar_width_at_most(&xdg, &name, u64::from(opts.target.cols.get()));
     assert_sidebar_identity(
         &xdg,
         &name,
@@ -840,6 +840,18 @@ fn reconcile_opts(
     stub: PathBuf,
     detected_cols: u16,
 ) -> SidebarPaneOptions {
+    let width = SidebarWidth::default();
+    let view_cols = std::num::NonZeroU16::new(detected_cols).expect("nonzero test view");
+    let requested_cols = std::num::NonZeroU16::new(
+        u16::try_from(width.target_cols(u64::from(detected_cols))).expect("test target"),
+    )
+    .expect("nonzero test width");
+    let share = rimz::mux::WidthPermille::from_cols(requested_cols, view_cols)
+        .snap_to_rung(MuxName::Zellij);
+    let target = rimz::mux::SidebarTarget {
+        cols: share.cols(view_cols),
+        percent: share.to_percent_rounded(),
+    };
     SidebarPaneOptions {
         session_name: name.to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new(workspace_root)),
@@ -849,10 +861,8 @@ fn reconcile_opts(
             "1".to_owned(),
         )]),
         cwd: cwd.to_path_buf(),
-        width: SidebarWidth::default(),
-        birth_size: SidebarWidth::default().birth_size(Some(detected_cols)),
+        target,
         detected_view_size: None,
-        width_override: None,
         rimz_bin: stub,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),

@@ -45,10 +45,16 @@ pub(super) fn sidebar_opts(
             "1".to_owned(),
         )]),
         cwd: std::env::temp_dir(),
-        width: SidebarWidth::default(),
-        birth_size: SidebarWidth::default().birth_size(detected_cols),
+        target: rimz::mux::SidebarTarget {
+            cols: detected_cols
+                .and_then(|cols| {
+                    u16::try_from(SidebarWidth::default().target_cols(u64::from(cols))).ok()
+                })
+                .and_then(std::num::NonZeroU16::new)
+                .unwrap_or_else(|| std::num::NonZeroU16::new(72).expect("nonzero test width")),
+            percent: 25,
+        },
         detected_view_size: detected_cols.map(|cols| (cols, 50)),
-        width_override: None,
         rimz_bin: stub,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),

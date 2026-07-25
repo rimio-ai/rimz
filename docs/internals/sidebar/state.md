@@ -84,7 +84,7 @@ Attention, instrumentation, and constants:
 | [`unread.rs`](../../../crates/rimz/src/sidebar/unread.rs), [`read_marks.rs`](../../../crates/rimz/src/sidebar/read_marks.rs) | Durable unread episodes and the read receipts that clear them. |
 | [`notify.rs`](../../../crates/rimz/src/sidebar/notify.rs) | Notification policy over newly opened unread episodes ([notifications.md](./notifications.md)). |
 | [`observe.rs`](../../../crates/rimz/src/sidebar/observe.rs), [`meter.rs`](../../../crates/rimz/src/sidebar/meter.rs) | The frame-stream anomaly observer and the producer tick-budget meter ([diagnostics.md](../diagnostics.md)). |
-| [`width_override.rs`](../../../crates/rimz/src/sidebar/width_override.rs) | The room-runtime sidebar width the renderer settled on. |
+| [`width_target.rs`](../../../crates/rimz/src/sidebar/width_target.rs) | The room-runtime sidebar share and whether a user action pinned it. |
 | [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs) | Every sidebar cadence and TTL, as named constants with the reasoning on each. |
 
 On the renderer side, `render/` paints and `app/` runs the loop and the threads this doc describes:
@@ -277,7 +277,7 @@ The store keeps one slot per key: per pane per event kind, plus a single focus s
 | `PaneFramePublished` | publication kind (topology, metrics, or presence) | Fold the just-published pane frame from cache. The kind sets how long a hidden consumer may coalesce before folding. | Producer |
 | `FocusIntent` | target `pane_id`, nonce | Store-less nudge: fold the durable focus anchor now, so hidden peer tabs repaint before the mux switch reveals them. | Renderer jumps |
 | `FocusStranded` | owning sidebar `pane_id`, generation, client views | Renderer focus-repair action only. The matching renderer validates its baseline as a live visible work sibling or picks the deterministic leftmost sibling; distinct client views leave focus alone because `focus-pane-id` is session-global. Dropped past `FOCUS_STRANDED_EVENT_TTL` so late delivery cannot yank focus. | Shared host presence projector, from a Zellij settled generation or a tmux window switch |
-| `WidthTargetChanged` | none | Re-read the room-runtime width override and converge only this renderer's own pane. | The renderer that settled a new width |
+| `WidthTargetChanged` | none | Re-read the room-runtime width share, resolve it against this renderer's view, and converge only its own pane. | A resolver or renderer that published a new target |
 | `BodyFilterChanged` | none | Re-read the room-runtime cockpit lens and adopt it without a producer fetch. | A renderer that changed or auto-cleared the lens |
 | `Notify` | `title`, `body`, target panes, `recheck_unread`, kind | Renderer action only: raise the configured desktop, bell, or command notification, gated on row-unread when `recheck_unread`. Never fused into rows ([notifications.md](./notifications.md)). | The notification path |
 | `Reload` | none | Accelerate the supervisor's durable workspace-record poll; the worker hands off or hard-refreshes. | `rimz reload` |

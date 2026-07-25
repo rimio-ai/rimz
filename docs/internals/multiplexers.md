@@ -33,7 +33,7 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`selection.rs`](../../crates/rimz/src/mux/selection.rs) | Backend selection precedence. |
 | [`command.rs`](../../crates/rimz/src/mux/command.rs) | `CommandSpec`: the bounded subprocess engine every control command runs through. |
 | [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) | The sidebar repair planner and its transaction executor. |
-| [`width.rs`](../../crates/rimz/src/mux/width.rs) | Sidebar sizing: birth seeds and live targets. |
+| [`width.rs`](../../crates/rimz/src/mux/width.rs) | Sidebar sizing: share resolution, backend rungs, and target spellings. |
 | [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | Destructive teardown shared by `rimz reset` and attended auto-reset. |
 | [`domain.rs`](../../crates/rimz/src/mux/domain.rs) | `ProcessDomain`: the guard every heuristic process kill passes. |
 | [`focus_key.rs`](../../crates/rimz/src/mux/focus_key.rs) | Parsing the `[sidebar] focus_key` chord both backends bind. |
@@ -240,18 +240,18 @@ Replacement is add-before-close on purpose. `wait_for_sidebar_heartbeat` blocks 
 
 ### Width
 
-[`width.rs`](../../crates/rimz/src/mux/width.rs) is pure arithmetic with two jobs.
+[`width.rs`](../../crates/rimz/src/mux/width.rs) resolves one room target from configured policy and live geometry, then snaps its share of the view to the backend's reachable rung.
 
-**The birth seed** sizes panes that materialize before their view geometry is known. With no probed terminal it falls back to 30% when pets are enabled and 25% otherwise.
+The room-runtime record always contains `WidthPermille`, tenths of a percent of the full view, plus a pin flag. An unpinned target follows `theme.display.width_percent` and applies `theme.display.max_cols` whenever live view geometry is known. An `a`/`d` keypress or mouse drag pins the resulting share verbatim, so the explicit choice may exceed the configured cap and keeps its proportion when the terminal changes size. A genuinely new session clears the record and returns to configured policy.
 
-**The live target** is the canonical width for a pane in a sized view: the room-runtime override verbatim when present, otherwise the configured percentage capped at `theme.display.max_cols`. The percentage comes from `theme.display.width_percent`, or `Auto`, which resolves to 30% above 240 columns and 25% at or below. Pets force the wide default at any view width.
+Resolution produces the same share in the spelling each backend needs: columns for tmux and a whole percentage for Zellij layouts. With known geometry those spellings agree. Without geometry, columns use the bare cap while the percentage keeps the stored share—derived from configured policy when unpinned—because a detached layout's eventual view width is not known yet.
 
-An `a`/`d` keypress calculates and validates an absolute target, atomically replaces the room override, and broadcasts `WidthTargetChanged`. Every renderer, the initiator included, converges itself from its own terminal width without listing panes, with at most one mux resize in flight. The backends differ in how precisely they can land:
+Every target is pinned to the backend's reachable share rung before publication. tmux keeps the permille value unchanged; its 1‰ resolution is finer than its exact two-column key step at ordinary terminal widths. Zellij rounds to the nearest 5% rung, independent of view geometry, so every tab born or key-stepped from that share can land together. An `a`/`d` keypress moves exactly one backend column step, converts the result to a share, atomically pins it, and broadcasts `WidthTargetChanged`; every renderer resolves that share for its own live view and converges with at most one mux resize in flight.
 
 - **tmux** applies the absolute target in one command, so a narrower intent clamps to the 24-column floor.
-- **Zellij** derives a step of roughly 5% of the view from fresh presence topology and issues one relative step per resize-feedback event or one-second backstop, learning the observed step for its tolerance. It stops at the nearest reachable width, on no progress, or after a bounded step budget, and rejects a narrower intent whose next reachable width would cross the floor. A wider intent may use a conservative four-sidebar-width view estimate when topology is unavailable, because overshooting wider stays safe.
+- **Zellij** derives a step of 5% of the view from fresh presence topology and issues one relative step per resize-feedback event or one-second backstop, learning the observed step for its tolerance. It stops at the nearest reachable width, on no progress, or after a bounded step budget, and rejects a narrower intent whose next reachable width would cross the floor. A wider intent may use a conservative four-sidebar-width view estimate when topology is unavailable, because overshooting wider stays safe.
 
-Without a room override, a renderer only trims a pane wider than `max_cols`, so a native mouse resize below the cap persists until the next structural repair (attach or `rimz reload --repair`). With an override, native resizes snap back live. A genuinely new session birth clears the override and returns to the configured target.
+The one-second settled-resize pass distinguishes view changes by full view width and structural redistribution by sibling count. Either converges back to the resolved target. A resize with neither explanation is a mouse drag: RimZ converts the measured width to a share, snaps it to the backend rung, pins it room-wide, broadcasts it once, and converges the dragged tab to the nearest reachable result. Missing backend geometry never authorizes adoption.
 
 ## Session lifecycle
 
@@ -302,7 +302,7 @@ Several details in [`layout.rs`](../../crates/rimz/src/mux/zellij/layout.rs) are
 
 - The sidebar command names the workspace's stable room-bin path rather than one sweepable build generation, so the immutable `new_tab_template` keeps spawning working sidebars after reloads.
 - The sidebar pane is borderless and `close_on_exit`, so work-pane frames can be styled while sidebar hit-testing starts at row 0 and the pane disappears when its process exits.
-- Every sidebar width is spelled as a percentage, because Zellij resize-pins fixed-size layout panes. Detached birth tabs and the template carry the launch seed's nearest whole percentage of the probed width; explicit `rimz agents` tabs derive theirs from the current live target and view width.
+- Every sidebar width is spelled as a percentage, because Zellij resize-pins fixed-size layout panes. With known geometry the spelling names the resolved grid rung exactly; detached birth tabs and the template retain configured percentage policy until a live view exists.
 - Every tab is born with an explicit focused terminal rather than a `children` placeholder, which nested in a split is never auto-filled and would strand focus on the sidebar alone.
 - The layout file outlives the create call. Zellij parses `--default-layout` asynchronously, so the temp file stays on disk until the panes materialize.
 
@@ -594,14 +594,14 @@ When RimZ owns `pane-border-status`, it also writes a `pane-border-format` that 
 
 tmux has no tab template, so a hook supplies Zellij parity. `open_sidebar` splits a left sidebar into the initial window at the launch seed and installs a session-scoped `after-new-window` hook that re-runs the split in every later window.
 
-The hook reads an absolute-column session option initialized at launch. Two things refresh it: recording an `a`/`d` width target, and a reconcile pass that has an honest width basis. Future windows therefore start at the configured live target, or at the verbatim room override.
+The hook reads an absolute-column session option initialized from the resolved room share. Keypresses, adopted mouse drags, view changes, and reconcile passes refresh it, so future windows start at the share rendered for the current view.
 
 Two prompt-cleanliness details ride along, both specific to tmux because Zellij births terminals from the layout template at their final size:
 
 - Plain default-shell windows have an empty `pane_start_command`, so after the hook split establishes the final width, the hook respawns only that work pane as the user's shell, avoiding zsh's `PROMPT_SP` end-of-line marker.
 - Pristine birth installs a one-shot `client-attached` hook for the first work shell. The detached session can draw zsh's first prompt before the attaching client applies its final size, and a resize during that draw strands the `PROMPT_SP` `%` marker above the prompt. The hook skips control-mode clients, respawns the birth work pane after the first real client attach, then removes itself. A room born without a probed terminal is healed when the first later attach normalizes its detached geometry and records `default-size`.
 
-A quick tmux kill-and-restart still enters the pristine birth path: once the room transition proves the session absent, it purges sidebar heartbeat files and clears the width override from the prior incarnation before creating the replacement session. A fresh-but-dead heartbeat therefore cannot route the new shell through the later reconcile split that strands the `%` marker.
+A quick tmux kill-and-restart still enters the pristine birth path: once the room transition proves the session absent, it purges sidebar heartbeat files and clears the width target from the prior incarnation before creating the replacement session. A fresh-but-dead heartbeat therefore cannot route the new shell through the later reconcile split that strands the `%` marker.
 
 Reconcile converges widths only against an attached sized client's geometry or, while detached, the attaching terminal's probe. The detached path first aligns the session `default-size` and every window to that probe so the subsequent attach preserves the geometry, while a daemon reload with neither basis re-asserts structure without changing panes or the recorded width. When `open_tab` temporarily expands a freshly-born window to the widest attached client, it re-asserts the sidebar at that live target before splitting agent columns, then restores tmux autosizing. Layouts compile to tmux command sequences from the same layout IR Zellij uses.
 

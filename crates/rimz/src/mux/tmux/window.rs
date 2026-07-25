@@ -103,7 +103,7 @@ impl TmuxBackend {
         opts: &SidebarPaneOptions,
         window_id: &str,
     ) -> Result<PaneId> {
-        let size = opts.birth_size.cols.to_string();
+        let size = opts.target.cols.to_string();
         let mut args = vec![
             "split-window".to_owned(),
             "-d".to_owned(),
@@ -277,8 +277,7 @@ impl TmuxBackend {
         if let Some(sidebar_pane) = self.leftmost_pane(window_id)
             && sidebar_pane != first_pane
         {
-            let sidebar_cols =
-                crate::mux::width::live_target_cols(sidebar.width, sidebar.width_override, full_w);
+            let sidebar_cols = sidebar.target.cols.get();
             let _ = self
                 .cmd()
                 .args([

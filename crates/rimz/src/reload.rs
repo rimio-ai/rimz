@@ -605,16 +605,15 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
     }
 
     let width = SidebarWidth::from_config(&machine_config.theme);
+    let target = crate::sidebar::width_target::resolve(runtime, width, *mux, None);
     let opts = SidebarPaneOptions {
         session_name: ws.session_name.clone(),
         workspace_id: ws.workspace_id.clone(),
         project_root: ws.project_root.clone(),
         extra_env: crate::agents::registry::room_env(runtime),
         cwd: ws.project_root.clone(),
-        width,
-        birth_size: width.birth_size(None),
+        target,
         detected_view_size: None,
-        width_override: crate::sidebar::width_override::load(runtime),
         rimz_bin,
         pristine_birth: false,
         config: mux_config,
