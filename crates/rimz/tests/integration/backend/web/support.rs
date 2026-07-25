@@ -186,9 +186,6 @@ impl WebSocketCapture {
                 }
                 let payload = &event.params.response.payload_data;
                 let mut text = listener_text.lock().expect("lock WebSocket capture");
-                if text.len() > 1024 * 1024 {
-                    text.clear();
-                }
                 text.push_str(payload);
                 if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(payload) {
                     text.push_str(&String::from_utf8_lossy(&decoded));

@@ -33,7 +33,7 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 - Agent cards keep their activity and estimated active-time clocks current during Claude Code and Codex `/btw` side conversations.
 - `rimz agents fork` replays the source profile's launch posture, so its system prompt, tool configuration, model, effort, and permissions carry into the provider-native fork instead of reverting to defaults. → [agents](./docs/reference/cli/agents.md#fork)
 - Sidebar CI badges on merged GitHub pull requests track rerun verdicts, while each repository refresh normally uses one API request. → [sidebar state](./docs/internals/sidebar/state.md#enrichment-lanes)
-- Browser rooms stay attached during continuous output, so long tmux drags keep tracking and the terminal avoids reconnect clears and scroll jumps. → [web](./docs/guide/web.md#browser-appearance-and-input)
+- Continuous tmux drag selection and heavy output stay responsive in browser rooms: obsolete pointer positions coalesce behind the previous response paint at a viewport-scaled cadence, while pixel pets or context meters leave the full-resolution canvas untouched until their visible scene changes. → [web](./docs/guide/web.md#browser-appearance-and-input)
 - Writable and broadcast web daemons restart automatically at the next ensure when an upgrade, font change, or ttyd version changes the generated browser page. → [web internals](./docs/internals/web.md#daemon)
 - Browser panes opened with macOS Option chords no longer begin with the composed accent after xterm handles the Meta input, including in Safari and Chrome. → [web](./docs/guide/web.md#browser-appearance-and-input)
 - Closing a RimZ browser tab no longer asks for leave-site confirmation; reconnecting reattaches the same room.

@@ -99,6 +99,8 @@ rimz web restart
 
 A reverse proxy can terminate HTTPS and let an Authentik forward-auth decision identify the user while ttyd keeps its machine-wide Basic Auth behind that public edge. Set Authentik's Traefik forward-auth middleware to return `X-Authentik-Username` in its auth response headers, attach that middleware to the router serving RimZ, and make the proxy overwrite or remove any client-supplied copy of that header before forwarding.
 
+Set the proxy's idle read timeout above ttyd's one-hour ping interval so a genuinely idle browser tab remains attached. For nginx, set `proxy_read_timeout` above 3600 seconds. Cloudflare's 100-second timeout is not configurable on lower plans, so idle tabs behind those plans periodically reattach.
+
 Bind an Authentik access policy to the RimZ application as the primary control over who reaches the proxy. RimZ's `auth_users` allowlist adds defense in depth at the writable terminal itself; list each allowed identity with the exact canonical username spelling Authentik emits.
 
 Point RimZ at the public URL and name the header the proxy injects:
