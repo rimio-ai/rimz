@@ -939,6 +939,21 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
     }
 }
 
+/// Project a submitted pane paste back to the durable record texts it contains.
+pub fn submitted_record_texts(prompt: &str) -> Vec<String> {
+    split_batched_prompt(prompt)
+        .into_iter()
+        .filter_map(|segment| {
+            let segment = segment.trim_start();
+            let text = parse_sender_prefix(segment)
+                .map(|(_, body)| body)
+                .unwrap_or_else(|| segment.to_owned());
+            let text = text.trim();
+            (!text.is_empty()).then(|| text.to_owned())
+        })
+        .collect()
+}
+
 /// The optional `from @sender: ` prefix for a peer-authored message. Human-authored
 /// text stays verbatim; agent-authored text uses the shortest live handle when the
 /// sender is visible in the snapshot and falls back to the launch env identity.

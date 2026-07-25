@@ -58,7 +58,6 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                         .reconcile_stale_sent_messages(
                             &workspace.session_name,
                             jiff::Timestamp::now(),
-                            rimz::message::delivery_window_from_env(),
                             rimz::message::max_delivery_attempts_from_env(),
                             |_| false,
                         )

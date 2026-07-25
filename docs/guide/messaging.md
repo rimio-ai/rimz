@@ -167,7 +167,7 @@ rimz message cancel msg_01k…            # cancel a queued message — the reco
 rimz message clear @codex               # cancel every open message for one agent; targetless clears the channel
 ```
 
-Statuses read straight across: `queued` and `claimed` are still live, `sent` means the bytes reached the pane, `delivered` means the prompt's turn started, `canceled` means the user stopped delivery, and `archived` means the receiver or its channel ended. Use `message show` to diagnose a record that has not delivered. A durable file is the source of truth, so a missed notification or a crash between claim and send loses nothing.
+Statuses read straight across: `queued` and `claimed` are still live, `sent` means the bytes reached the pane, `delivered` means the prompt's turn started, `canceled` means the user stopped delivery, and `archived` means the receiver or its channel ended. An unconfirmed command times out without being resent, because repeating a command such as `/compact` can discard context. Use `message show` to diagnose a record that has not delivered. A durable file is the source of truth, so a missed notification or a crash between claim and send loses nothing.
 
 ## Agents message each other
 

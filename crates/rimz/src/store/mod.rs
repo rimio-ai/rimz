@@ -78,7 +78,7 @@ pub use crate::store::snapshot::{
 pub use crate::store::workspace_record::WorkspaceRecord;
 pub(crate) use crate::store::writer::DeliverySweepUpdate;
 pub use crate::store::writer::{
-    AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES,
+    AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES, DeliveryAck,
     DeliveryFailureDisposition, DerivedLifecycleKind, DerivedLifecycleOutcome, EditOutcome,
     LifecycleAppendOutcome, MessageEdit,
 };

@@ -584,6 +584,7 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     assert_eq!(requeued.attempts, 0);
     assert_eq!(requeued.unconfirmed_sends, 0);
     assert_eq!(requeued.last_attempt_at, None);
+    assert_eq!(requeued.last_sent_at, None);
     assert_eq!(requeued.last_error, None);
     assert_eq!(requeued.delivered_at, None);
     assert_eq!(requeued.retry_after, None);
@@ -604,7 +605,7 @@ fn wake_deadline_arms_queue_retry_schedule_and_sent_reconciliation() {
     let now = Timestamp::from_second(1_000).unwrap();
     let updated_at = now - jiff::SignedDuration::from_secs(5);
     let retry_after = now + jiff::SignedDuration::from_secs(30);
-    let window = Duration::from_secs(30);
+    let window = MessageBody::Prompt.delivery_window();
     let mut message = base.clone();
     message.updated_at = updated_at;
     let cases = [
@@ -649,8 +650,56 @@ fn wake_deadline_arms_queue_retry_schedule_and_sent_reconciliation() {
         ),
     ];
     for (message, expected) in cases {
-        assert_eq!(message.wake_deadline(now, window), expected);
+        assert_eq!(message.wake_deadline(now), expected);
     }
+}
+
+#[test]
+fn delivery_policy_is_per_body_and_sent_time_survives_legacy_records() {
+    assert_eq!(
+        MessageBody::Prompt.delivery_window(),
+        delivery_window_from_env()
+    );
+    assert_eq!(
+        MessageBody::Command.delivery_window(),
+        env_ms(COMMAND_DELIVERY_WINDOW_ENV).unwrap_or(DEFAULT_COMMAND_DELIVERY_WINDOW)
+    );
+    assert!(MessageBody::Prompt.resends_unconfirmed());
+    assert!(!MessageBody::Command.resends_unconfirmed());
+
+    let updated_at = Timestamp::from_second(1_000).unwrap();
+    let last_sent_at = updated_at + jiff::SignedDuration::from_secs(10);
+    let mut sent = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        &agent("legacy", None),
+        "next".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    sent.status = MessageStatus::Sent;
+    sent.updated_at = updated_at;
+    assert_eq!(
+        sent.sent_reconcile_deadline(),
+        Some(updated_at + MessageBody::Prompt.delivery_window())
+    );
+    sent.last_sent_at = Some(last_sent_at);
+    assert_eq!(
+        sent.sent_reconcile_deadline(),
+        Some(last_sent_at + MessageBody::Prompt.delivery_window())
+    );
+
+    let mut value = serde_json::to_value(&sent).unwrap();
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("last_sent_at")
+        .expect("serialized field");
+    let legacy: MessageRecord = serde_json::from_value(value).unwrap();
+    assert_eq!(legacy.last_sent_at, None);
+    assert_eq!(
+        legacy.sent_reconcile_deadline(),
+        Some(updated_at + MessageBody::Prompt.delivery_window())
+    );
 }
 
 #[test]
