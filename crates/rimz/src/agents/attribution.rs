@@ -126,7 +126,12 @@ enum Slot {
     Session(AgentSessionId),
 }
 
-type SlotKey = (AgentKind, Slot);
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct SlotKey {
+    channel: Option<String>,
+    kind: AgentKind,
+    slot: Slot,
+}
 
 pub fn build(request: AttributionRequest<'_>) -> Attribution {
     let folded = fold(request.agents);
@@ -240,7 +245,11 @@ fn slot(agent: &AgentState) -> SlotKey {
             _ => fallback_slot(agent),
         },
     };
-    (agent.kind.clone(), slot)
+    SlotKey {
+        channel: crate::harness::target::agent_channel(agent),
+        kind: agent.kind.clone(),
+        slot,
+    }
 }
 
 fn fallback_slot(agent: &AgentState) -> Slot {

@@ -29,13 +29,22 @@ pub(super) fn attribution(
     .with_agent_context(rimz::store::agent_context::read_all(ctx.runtime()));
     let peers = snapshot.root_agents().collect::<Vec<_>>();
     let channel = super::list::list_channel_filter(all, scope.as_deref(), &ctx.workspace);
+    let default_worktree =
+        (!all && channel.is_none()).then_some(ctx.workspace.worktree_root.as_path());
     let agents = peers
         .iter()
         .copied()
         .filter(|agent| {
-            channel
-                .as_deref()
-                .is_none_or(|filter| rimz::harness::target::agent_in_worktree(agent, filter))
+            if let Some(filter) = channel.as_deref() {
+                rimz::harness::target::agent_in_worktree(agent, filter)
+            } else if let Some(worktree) = default_worktree {
+                agent
+                    .worktree_path
+                    .as_deref()
+                    .is_some_and(|path| std::path::Path::new(path) == worktree)
+            } else {
+                true
+            }
         })
         .collect::<Vec<_>>();
     let me = super::report::SelfIdentity::from_env().resolve(&snapshot);
@@ -49,7 +58,7 @@ pub(super) fn attribution(
             .attention
             .active_grace_secs
             .get(),
-        scope: report_scope(scope, channel, &agents),
+        scope: report_scope(scope, channel, default_worktree, &agents),
         now: jiff::Timestamp::now(),
     });
 
@@ -66,6 +75,7 @@ pub(super) fn attribution(
 fn report_scope(
     selector: Option<String>,
     filter: Option<String>,
+    default_worktree: Option<&std::path::Path>,
     agents: &[&AgentState],
 ) -> AttributionScope {
     let channel = common_optional(
@@ -78,7 +88,9 @@ fn report_scope(
         selector,
         channel,
         branch: common_optional(agents.iter().map(|agent| agent.worktree_branch.clone())),
-        worktree: common_optional(agents.iter().map(|agent| agent.worktree_path.clone())),
+        worktree: default_worktree
+            .map(|path| path.display().to_string())
+            .or_else(|| common_optional(agents.iter().map(|agent| agent.worktree_path.clone()))),
     }
 }
 
@@ -227,12 +239,14 @@ fn identity_label(member: &AttributionMember) -> String {
     }
 }
 
+/// A code span renders its contents verbatim, so the span branch only flattens
+/// newlines; the backtick fallback is plain Markdown text and takes the full escape.
 fn markdown_model_label(member: &AttributionMember) -> String {
     let label = model_label(member);
     if label.contains('`') {
         markdown_escape(&label)
     } else {
-        format!("`{}`", markdown_escape(&label))
+        format!("`{}`", label.replace(['\r', '\n'], " "))
     }
 }
 
@@ -277,15 +291,32 @@ fn token_label(member: &AttributionMember) -> String {
 }
 
 fn token_count(value: u64) -> String {
-    let (divisor, suffix) = if value >= 1_000_000 {
-        (1_000_000_f64, "m")
-    } else if value >= 1_000 {
-        (1_000_f64, "k")
-    } else {
+    if value < 1_000 {
         return value.to_string();
-    };
-    let count = format!("{:.1}", value as f64 / divisor);
-    format!("{}{suffix}", count.strip_suffix(".0").unwrap_or(&count))
+    }
+    let units = [
+        (1_000_u64, "k"),
+        (1_000_000, "m"),
+        (1_000_000_000, "b"),
+        (1_000_000_000_000, "t"),
+        (1_000_000_000_000_000, "q"),
+        (1_000_000_000_000_000_000, "e"),
+    ];
+    let mut unit = 0;
+    while unit + 1 < units.len() && rounded_tenths(value, units[unit].0) >= 10_000 {
+        unit += 1;
+    }
+    let tenths = rounded_tenths(value, units[unit].0);
+    if tenths.is_multiple_of(10) {
+        format!("{}{}", tenths / 10, units[unit].1)
+    } else {
+        format!("{}.{}{}", tenths / 10, tenths % 10, units[unit].1)
+    }
+}
+
+fn rounded_tenths(value: u64, divisor: u64) -> u64 {
+    u64::try_from((u128::from(value) * 10 + u128::from(divisor / 2)) / u128::from(divisor))
+        .unwrap_or(u64::MAX)
 }
 
 fn totals_label(totals: &EffortTotals) -> String {
@@ -328,6 +359,11 @@ fn duration_label(seconds: u64) -> String {
 
 fn markdown_escape(value: &str) -> String {
     html_escape(value)
+        .replace('\\', "\\\\")
+        .replace('*', "\\*")
+        .replace('_', "\\_")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
 }
 
 fn html_escape(value: &str) -> String {
@@ -494,6 +530,33 @@ mod tests {
     }
 
     #[test]
+    fn markdown_escapes_emphasis_and_link_punctuation() {
+        let mut report = report();
+        report.groups[0].members[0].role = Some(r"plan*ner_[x]\tail".to_owned());
+        let mut output = Vec::new();
+
+        render_markdown(&mut output, &report).expect("render markdown");
+        let output = String::from_utf8(output).expect("utf8");
+
+        assert!(output.contains(r"- **plan\*ner\_\[x\]\\tail**"));
+    }
+
+    #[test]
+    fn markdown_model_code_span_keeps_punctuation_verbatim() {
+        let mut spanned = member("@coder", Some("coder"), "Qwen", "qwen2_5-coder");
+        assert_eq!(markdown_model_label(&spanned), "`qwen2_5-coder@high`");
+
+        spanned.model = Some("llama3*8b".to_owned());
+        assert_eq!(markdown_model_label(&spanned), "`llama3*8b@high`");
+
+        spanned.model = Some("a[1]".to_owned());
+        assert_eq!(markdown_model_label(&spanned), "`a[1]@high`");
+
+        spanned.model = Some("fable`2".to_owned());
+        assert_eq!(markdown_model_label(&spanned), "fable&#96;2@high");
+    }
+
+    #[test]
     fn identity_omits_a_role_already_carried_by_the_handle() {
         let matching = member("@planner#auth", Some("planner"), "Claude", "fable-2");
         let displaced = member("@quiet-fox", Some("planner"), "Claude", "fable-2");
@@ -520,7 +583,11 @@ mod tests {
         assert_eq!(token_count(999), "999");
         assert_eq!(token_count(1_000), "1k");
         assert_eq!(token_count(1_100), "1.1k");
+        assert_eq!(token_count(999_949), "999.9k");
+        assert_eq!(token_count(999_950), "1m");
         assert_eq!(token_count(1_000_000), "1m");
+        assert_eq!(token_count(999_949_999), "999.9m");
+        assert_eq!(token_count(999_950_000), "1b");
     }
 
     #[test]
