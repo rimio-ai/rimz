@@ -391,13 +391,14 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     client.press_alt_until('l', &focused_work, "rightmost work pane before redock");
 
     let project_root = std::env::temp_dir();
+    let view_cols = 240;
     let opts = reconcile_opts(
         &name,
         "/tmp/rimz-redock",
         &project_root,
         &project_root,
         stub,
-        240,
+        view_cols,
     );
     let liveness = claimed_liveness(sidebar_id);
     write_topology_cache_from_list_panes(&xdg, &opts.workspace_id, &name);
@@ -413,11 +414,7 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     wait_for_sidebar_width_at_most(
         &xdg,
         &name,
-        u64::from(
-            opts.target
-                .cols(opts.detected_view_size.map(|(cols, _)| cols))
-                .get(),
-        ),
+        u64::from(opts.target.cols(Some(view_cols)).get()),
     );
     assert_sidebar_identity(
         &xdg,
