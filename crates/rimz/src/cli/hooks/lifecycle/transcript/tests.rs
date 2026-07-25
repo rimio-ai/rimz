@@ -188,19 +188,19 @@ fn unprefixed_batch_keeps_each_confirmed_message_causal() {
     let first = rimz::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
-        "first".to_owned(),
+        "\nfirst\n".to_owned(),
         true,
         rimz::message::DeliveryGate::Done,
     );
     let second = rimz::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
-        "second".to_owned(),
+        "\nsecond\n".to_owned(),
         true,
         rimz::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted);
-    started.observation.prompt = Some("first\n\nsecond".to_owned());
+    started.observation.prompt = Some("first\n\n\n\nsecond".to_owned());
 
     record_conversation(
         &workspace,

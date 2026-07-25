@@ -313,8 +313,8 @@ fn correlated_ack_confirms_matching_prompt_instead_of_oldest_sent() {
 
 #[test]
 fn correlated_ack_aligns_unprefixed_and_mixed_batches() {
-    for (first_sender, prompt) in [
-        (MessageSender::Human, "first\n\nsecond"),
+    for (first_sender, first_text, second_text, prompt) in [
+        (MessageSender::Human, "first", "second", "first\n\nsecond"),
         (
             MessageSender::Agent {
                 kind: AgentKind::new_unchecked("codex"),
@@ -323,15 +323,35 @@ fn correlated_ack_aligns_unprefixed_and_mixed_batches() {
                 role: Some("planner".to_owned()),
                 channel: None,
             },
+            "first",
+            "second",
             "from @planner: first\n\nsecond",
+        ),
+        (
+            MessageSender::Human,
+            "first\n",
+            "second",
+            "first\n\n\nsecond",
+        ),
+        (
+            MessageSender::Human,
+            "first",
+            "\nsecond",
+            "first\n\n\nsecond",
+        ),
+        (
+            MessageSender::Human,
+            "\nfirst",
+            "second\n",
+            "first\n\nsecond",
         ),
     ] {
         let q = Queue::new();
         let first = q.queue_with(1, |message| {
-            message.text = "first".to_owned();
+            message.text = first_text.to_owned();
             message.sender = first_sender;
         });
-        q.queue_with(2, |message| message.text = "second".to_owned());
+        q.queue_with(2, |message| message.text = second_text.to_owned());
         let claimed = q
             .claim_delivery_batch(&first.message_id, AgentStatus::Idle, Timestamp::now())
             .unwrap()
