@@ -184,15 +184,18 @@ impl SelfIdentity {
         }
 
         let kind = self.kind.as_ref()?;
-        let mut matches = snapshot.root_agents().filter(|agent| {
-            launch_identity_matches(
-                agent,
-                kind,
-                self.name.as_deref(),
-                self.profile.as_deref(),
-                self.role.as_deref(),
-            )
-        });
+        let mut matches = snapshot
+            .root_agents()
+            .filter(|agent| agent.ended_at.is_none())
+            .filter(|agent| {
+                launch_identity_matches(
+                    agent,
+                    kind,
+                    self.name.as_deref(),
+                    self.profile.as_deref(),
+                    self.role.as_deref(),
+                )
+            });
         let agent_id = matches.next()?.agent_id.clone();
         matches.next().is_none().then_some(agent_id)
     }

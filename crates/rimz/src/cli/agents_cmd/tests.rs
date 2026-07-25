@@ -250,6 +250,7 @@ mod parse {
         for (argv, kind) in [
             (&["rimz", "launch"][..], MissingRequiredArgument),
             (&["rimz", "list", "#docs", "--all"][..], ArgumentConflict),
+            (&["rimz", "attribution", "--json", "--md"], ArgumentConflict),
             (
                 &["rimz", "show", "swift-otter", "--ansi"],
                 MissingRequiredArgument,

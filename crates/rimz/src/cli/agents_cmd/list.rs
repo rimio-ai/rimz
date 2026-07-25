@@ -222,7 +222,7 @@ fn channel_group_is_worktree_backed(
             .all(|agent| agent.worktree_path.as_deref() == Some(first))
 }
 
-fn list_channel_filter(
+pub(super) fn list_channel_filter(
     all: bool,
     worktree: Option<&str>,
     workspace: &rimz::ResolvedWorkspace,

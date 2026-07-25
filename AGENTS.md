@@ -59,6 +59,7 @@ rimz agents '#auth'                  # one lane's cards
 rimz agents show @coder              # card: activity, context, messages, transcript
 rimz agents logs @coder -n 20        # transcript tail (-f follows)
 rimz agents history @coder -n 10     # per-turn tokens, cost, and outcome
+rimz agents attribution --md         # credit the lane's agents in a PR footnote
 rimz agents restart @coder           # bounce in place and resume the session
 rimz agents resume '#docs'           # restore every closed place in one lane
 rimz teams                           # configured teams and their live instances

@@ -291,6 +291,14 @@ Address resolution enforces the same physical-instance boundary during convergen
 
 Worktree removal appends a durable `Ended` observation for every matching non-live root session and bypasses live-roster protection, because successful removal is affirmative evidence that the session can no longer run there. A later lifecycle event for the same session id, including native resume registration, clears the end stamp as usual.
 
+## Attribution
+
+`rimz agents attribution` reads `RuntimeScope::Audit`, so a teammate remains eligible after its pane exits and the runtime projection hides it from live cards. Lane filtering applies to root records before the attribution fold; no multiplexer observation participates in correctness.
+
+A logical member can span several session records. Provider compaction continuations and `/clear` conversations mint fresh session ids while the same contributor keeps its seat, so attribution folds by provider kind plus the first available stable slot: team and role, launch group and ordinal, explicit name, pane id, then session id. The newest record supplies identity and presence is live when any folded record remains unended; the session count exposes the fold.
+
+The figures keep their source boundaries. The audit rollup supplies identity, timestamps, tool calls, and compaction counts. Each session's adapter parses its provider transcript once, and the shared price book supplies the four-way token split and dollars from those same entries. Per-session active-time sidecars supply estimated active seconds under the configured silence grace. Runtime GC can remove those sidecars before the audit record or provider transcript disappears, so an unavailable active-time figure stays `null`; absent transcript pricing likewise stays `null` rather than becoming zero.
+
 ## Enrichment
 
 The store and explicit events decide routing, ranking, and state; enrichment paints the row. `task`, `context_pct`, `context_window`, and `total_tokens` are enrichment: display-only and redactable. A missing value means "the agent did not report it", never zero. The sidebar still paints a context bar for every observed agent, drawing an unreported gauge at a visible 0% baseline.

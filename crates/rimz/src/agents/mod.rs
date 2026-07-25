@@ -8,6 +8,7 @@
 
 pub mod account;
 mod adapters;
+pub mod attribution;
 pub mod capabilities;
 #[cfg(test)]
 pub(crate) mod conformance;

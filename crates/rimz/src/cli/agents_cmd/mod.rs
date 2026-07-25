@@ -1,5 +1,6 @@
 //! `rimz agents` — command parsing and agent-operation boundaries.
 
+mod attribution;
 mod auto_continue;
 mod auto_redeem;
 mod budget;
@@ -59,6 +60,7 @@ use rimz::store::{
 };
 use rimz::workspace::WorkspaceResolver;
 
+use attribution::attribution;
 use auto_continue::{AutoContinueArgs, run_auto_continue};
 use auto_redeem::{AutoRedeemArgs, run_auto_redeem};
 use budget::{BudgetArgs, run_budget};
@@ -357,6 +359,25 @@ enum AgentsSubcmd {
         #[arg(long)]
         json: bool,
     },
+    /// Credit the agents and models that worked a lane.
+    Attribution {
+        /// Scope to one lane: `#channel`, worktree, branch, or directory name.
+        #[arg(
+            value_name = "SCOPE",
+            conflicts_with = "all",
+            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::scope_names)
+        )]
+        scope: Option<String>,
+        /// Include every lane, not just the current channel.
+        #[arg(long)]
+        all: bool,
+        /// Emit JSON.
+        #[arg(long, conflicts_with = "md")]
+        json: bool,
+        /// Emit a markdown block for a pull-request body.
+        #[arg(long)]
+        md: bool,
+    },
     /// Show live agent resource usage.
     Top(TopArgs),
     /// Focus an agent pane.
@@ -530,6 +551,12 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             tail,
             json,
         }) => return history_agent(reference, tail, json, globals),
+        Some(AgentsSubcmd::Attribution {
+            scope,
+            all,
+            json,
+            md,
+        }) => return attribution(scope, all, json, md, globals),
         Some(AgentsSubcmd::Top(args)) => return run_top(args, globals),
         Some(AgentsSubcmd::Focus { reference }) => return focus_agent(reference, globals),
         Some(AgentsSubcmd::Fork(args)) => return run_fork(args, globals),
