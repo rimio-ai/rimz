@@ -25,6 +25,7 @@ mod list_themes;
 mod loop_cmd;
 mod message;
 mod pane;
+mod pricing_refresh;
 mod providers;
 mod reload;
 mod remote;
@@ -126,6 +127,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
+        Some(Subcmd::PricingRefresh(args)) => pricing_refresh::run(args),
         Some(Subcmd::Message(args)) => message::run(*args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
@@ -508,6 +510,9 @@ enum Subcmd {
     Reset(reset::ResetArgs),
     /// Pane primitives backed by the selected mux backend.
     Pane(pane::PaneArgs),
+    /// Pricing snapshot projection helper. Contributor automation calls this.
+    #[command(hide = true)]
+    PricingRefresh(pricing_refresh::PricingRefreshArgs),
     /// Message agents; list, edit, steer, requeue, cancel.
     ///
     /// Bare send routes now with `--steer`, or at the next safe turn boundary.

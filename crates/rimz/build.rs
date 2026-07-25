@@ -1,17 +1,15 @@
 //! Build-time embeds for generated data bundled into `rimz`.
 //!
-//! Compacts the generated pricing snapshot
+//! Gzips the generated, pre-compacted pricing snapshot
 //! (`pricing/litellm-pricing.json`) — or a `RIMZ_PRICING_JSON_PATH` override —
-//! down to the per-token fields the binary reads, and writes
-//! `$OUT_DIR/litellm-pricing.json.gz` for `include_bytes!` (see
+//! into `$OUT_DIR/litellm-pricing.json.gz` for `include_bytes!` (see
 //! `src/agents/pricing/embedded.rs`).
 //!
 //! The build never touches the network, so every build is hermetic for a given
 //! commit and worktree state. Release packaging runs `cargo xtask
 //! pricing-refresh` first, which fetches LiteLLM plus authoritative models.dev
 //! fillers and rewrites the ignored snapshot; the runtime refresh
-//! (`src/agents/pricing/remote.rs`) keeps prices fresh between releases. The
-//! compaction here mirrors `cargo xtask pricing-refresh` — keep the two in step.
+//! (`src/agents/pricing/source.rs`) keeps prices fresh between releases.
 //!
 //! The sidebar theme catalog is checked in under `themes/alacritty/`, compacted
 //! as a sorted JSON map, and written to `$OUT_DIR/alacritty-themes.json.gz` for
@@ -27,7 +25,7 @@ use std::process::Command;
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 const GENERATED_SNAPSHOT: &str = "pricing/litellm-pricing.json";
@@ -38,18 +36,6 @@ const BUILD_VERSION_OVERRIDE_ENV: &str = "RIMZ_BUILD_VERSION_OVERRIDE";
 const PRESENCE_PLUGIN_VENDOR_DIR: &str = "presence";
 const PRESENCE_PLUGIN_OUT: &str = "rimz-presence-zellij.wasm";
 const PRESENCE_PLUGIN_PROVENANCE: &str = "rimz-presence-zellij.wasm.provenance.json";
-const KEPT_FIELDS: [&str; 9] = [
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "cache_read_input_token_cost",
-    "cache_creation_input_token_cost",
-    "input_cost_per_token_above_200k_tokens",
-    "output_cost_per_token_above_200k_tokens",
-    "cache_read_input_token_cost_above_200k_tokens",
-    "cache_creation_input_token_cost_above_200k_tokens",
-    "max_input_tokens",
-];
-
 fn main() {
     println!("cargo:rerun-if-env-changed=RIMZ_PRICING_JSON_PATH");
     println!("cargo:rerun-if-env-changed={PRESENCE_PLUGIN_ENV}");
@@ -60,8 +46,7 @@ fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR set by cargo"));
     let out_path = out_dir.join("litellm-pricing.json.gz");
     let raw = resolve_raw_json();
-    let compact = compact(&raw).expect("compact pricing JSON");
-    let compressed = gzip(&compact).expect("gzip embedded pricing snapshot");
+    let compressed = gzip(&raw).expect("gzip embedded pricing snapshot");
     fs::write(&out_path, compressed).expect("write embedded pricing snapshot");
     write_themes_embed(&out_dir);
     write_presence_plugin_embed(&out_dir);
@@ -322,10 +307,10 @@ fn verify_presence_plugin_provenance(path: &Path, provenance_path: &Path, bytes:
     );
 }
 
-/// Resolve the raw LiteLLM-shaped document: a `RIMZ_PRICING_JSON_PATH` override,
+/// Resolve the compact LiteLLM-shaped document: a `RIMZ_PRICING_JSON_PATH` override,
 /// else the generated snapshot when present. No network — release packaging
 /// refreshes the ignored snapshot before it builds. A missing snapshot embeds an
-/// empty table; builtins and the runtime refresh still populate usable prices.
+/// empty table, and the runtime refresh later populates usable prices.
 fn resolve_raw_json() -> String {
     if let Some(path) = env::var_os("RIMZ_PRICING_JSON_PATH") {
         let path = PathBuf::from(path);
@@ -335,11 +320,12 @@ fn resolve_raw_json() -> String {
 
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let generated = manifest.join(GENERATED_SNAPSHOT);
+    // Register the path even before its first generation: pricing-refresh
+    // builds this helper binary, then creates the snapshot, so the next build
+    // must replace that run's empty embed.
+    println!("cargo:rerun-if-changed={}", generated.display());
     match fs::read_to_string(&generated) {
-        Ok(raw) => {
-            println!("cargo:rerun-if-changed={}", generated.display());
-            raw
-        }
+        Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => "{}".to_owned(),
         Err(err) => {
             panic!(
@@ -348,50 +334,6 @@ fn resolve_raw_json() -> String {
             )
         }
     }
-}
-
-/// Filter to the per-token fields RimZ reads; require both input and output
-/// costs. Sorted (`BTreeMap`), compact, and gzipped so the embedded full-model
-/// table stays small.
-fn compact(json: &str) -> Option<String> {
-    let Value::Object(raw) = serde_json::from_str::<Value>(json).ok()? else {
-        return None;
-    };
-    let mut out: BTreeMap<String, Value> = BTreeMap::new();
-    for (model, pricing) in raw {
-        let Value::Object(fields) = pricing else {
-            continue;
-        };
-        let mut kept = Map::new();
-        for field in KEPT_FIELDS {
-            if let Some(value) = fields.get(field)
-                && !value.is_null()
-            {
-                kept.insert(field.to_owned(), value.clone());
-            }
-        }
-        if let Some(provider_specific_entry) = compact_provider_specific_entry(&fields) {
-            kept.insert(
-                "provider_specific_entry".to_owned(),
-                provider_specific_entry,
-            );
-        }
-        if kept.contains_key("input_cost_per_token") && kept.contains_key("output_cost_per_token") {
-            out.insert(model, Value::Object(kept));
-        }
-    }
-    serde_json::to_string(&out).ok()
-}
-
-fn compact_provider_specific_entry(fields: &Map<String, Value>) -> Option<Value> {
-    let fast = fields
-        .get("provider_specific_entry")
-        .and_then(Value::as_object)
-        .and_then(|entry| entry.get("fast"))
-        .filter(|value| !value.is_null())?;
-    let mut out = Map::new();
-    out.insert("fast".to_owned(), fast.clone());
-    Some(Value::Object(out))
 }
 
 fn gzip(json: &str) -> Option<Vec<u8>> {

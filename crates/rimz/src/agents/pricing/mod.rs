@@ -6,29 +6,26 @@
 //! counts rather than a `costUSD`. Pi normally reports `costUSD` directly and
 //! consults the table only for token-bearing records where that value is absent.
 //!
-//! Ordered pricing passes feed one [`PriceBook`], with builtins acting as a
-//! fallback below the live LiteLLM refresh:
+//! Ordered pricing passes feed one [`PriceBook`]:
 //!
 //! 1. **Embedded snapshot** ([`embedded`]) — the generated LiteLLM table
-//!    `build.rs` compacts and gzips into release binaries. Fresh clones without
-//!    the generated file embed an empty table.
-//! 2. **Builtins** ([`builtins`]) — hardcoded fallback prices for models that
-//!    must price before a refresh.
-//! 3. **Remote refresh** ([`remote`]) — a weekly LiteLLM pull overwrites older
-//!    fallback rows; the models.dev catalogue is fetched only during an
-//!    unknown-model chase and fills models LiteLLM lacks.
+//!    `build.rs` gzips into release binaries. Fresh clones without the generated
+//!    file embed an empty table.
+//! 2. **Remote refresh** ([`source`]) — a weekly LiteLLM and models.dev
+//!    projection overwrites older embedded rows; an unknown-model chase can run
+//!    that same projection early.
 //!
 //! Lookups are pure and network-free: [`cached_book`] memoizes the merged
-//! embedded, builtin, and on-disk cache data by file stamp, and
-//! [`PriceBook::price`] resolves a model by exact match then a boundary-aware
-//! fuzzy scan. The only network is the gated refresh in [`load_for_spending`]:
-//! a weekly refresh, plus an escalating unknown-model chase when a transcript
-//! names a priceable model the current book cannot resolve.
+//! embedded and on-disk cache data by file stamp, and [`PriceBook::price`]
+//! resolves a model by exact match then a boundary-aware fuzzy scan. The only
+//! network is the gated refresh in [`load_for_spending`]: a weekly refresh,
+//! plus an escalating unknown-model chase when a transcript names a priceable
+//! model the current book cannot resolve.
 
-mod builtins;
 mod embedded;
 mod overrides;
-mod remote;
+#[doc(hidden)]
+pub mod source;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -42,7 +39,6 @@ use super::spending::is_priceable_model_name;
 
 pub(crate) const CACHE_CREATE_1H_INPUT_MULTIPLIER: f64 = 2.0;
 const DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 200_000;
-const OPENAI_LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 272_000;
 
 /// The token counts one priced request consumed. Providers fill the fields
 /// their wire exposes and leave the rest at zero; `cache_write_1h` and `fast`
@@ -257,11 +253,9 @@ pub struct PriceBook {
 }
 
 impl PriceBook {
-    /// The no-network book: embedded snapshot overlaid with builtins.
+    /// The no-network book from the embedded upstream snapshot.
     pub fn embedded() -> Self {
-        let mut entries = embedded::load();
-        builtins::put_builtins(&mut entries);
-        apply_builtin_long_context_rates(&mut entries);
+        let entries = embedded::load();
         Self {
             entries,
             fuzzy_cache: Arc::default(),
@@ -269,30 +263,38 @@ impl PriceBook {
     }
 
     /// Build a book from an arbitrary LiteLLM-shaped document (tests, tooling).
-    /// Builtins still win here, matching the embedded no-cache path.
     pub fn from_litellm_json(json: &str) -> Self {
-        let mut entries = embedded::parse(json);
-        builtins::put_builtins(&mut entries);
-        apply_builtin_long_context_rates(&mut entries);
+        let entries = embedded::parse(json);
         Self {
             entries,
             fuzzy_cache: Arc::default(),
         }
     }
 
-    /// Assemble the merged book: embedded snapshot, then builtins as ccusage's
-    /// fallback layer, then the LiteLLM refresh (overwriting), then models.dev
-    /// for models both sources lack.
+    #[cfg(test)]
+    pub(crate) fn fixture() -> Self {
+        Self::from_litellm_json(include_str!("tests/fixtures/prices.json"))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn write_fixture_cache(path: &Path) {
+        let fixture = Self::fixture();
+        write_cache(
+            path,
+            &PricingCache {
+                models: fixture.entries.into_iter().collect(),
+                ..PricingCache::default()
+            },
+        );
+    }
+
+    /// Assemble the merged book: embedded snapshot, then the latest projected
+    /// upstream table.
     fn assembled(cache: &PricingCache) -> Self {
         let mut entries = embedded::load();
-        builtins::put_builtins(&mut entries);
-        for (model, price) in &cache.litellm {
+        for (model, price) in &cache.models {
             entries.insert(model.clone(), *price);
         }
-        for (model, price) in &cache.models_dev {
-            entries.entry(model.clone()).or_insert(*price);
-        }
-        apply_builtin_long_context_rates(&mut entries);
         Self {
             entries,
             fuzzy_cache: Arc::default(),
@@ -372,14 +374,14 @@ pub fn load_for_spending(cache_path: &Path, unknown_models: &BTreeSet<String>) -
         write |= clear_unknown_chase(&mut cache);
     }
 
-    if should_refresh(&cache, now, remote::offline(), &pending) {
+    if should_refresh(&cache, now, source::offline(), &pending) {
         book = refresh_cache(
             &mut cache,
             now,
             pending,
             unknown_models,
-            remote::fetch_litellm,
-            remote::fetch_models_dev,
+            source::fetch_litellm,
+            source::fetch_models_dev,
         );
         write = true;
     }
@@ -393,9 +395,9 @@ type CachedBookMemo = Option<(PathBuf, Option<(u64, u64)>, Arc<PriceBook>)>;
 
 static CACHED_BOOK_MEMO: LazyLock<Mutex<CachedBookMemo>> = LazyLock::new(|| Mutex::new(None));
 
-/// Load the current read-only price book from the embedded snapshot, builtins,
-/// and persistent shared cache, without refreshing or writing. Spending
-/// fallbacks, agent-card costs, and hook reconciliation share this path.
+/// Load the current read-only price book from the embedded snapshot and
+/// persistent shared cache, without refreshing or writing. Spending fallbacks,
+/// agent-card costs, and hook reconciliation share this path.
 pub fn cached_book(cache_path: &Path) -> Arc<PriceBook> {
     let stamp = cache_stamp(cache_path);
     let mut memo = CACHED_BOOK_MEMO
@@ -437,22 +439,14 @@ fn refresh_cache(
     if chasing {
         note_chase_attempt(cache, now, pending);
     }
-    if let Some(json) = fetch_litellm() {
-        let table = embedded::parse(&json);
-        if !table.is_empty() {
-            cache.litellm = table.into_iter().collect();
+    if let (Some(litellm), Some(models_dev)) = (fetch_litellm(), fetch_models_dev())
+        && let Ok((snapshot, _)) = source::project_sources(&litellm, Some(&models_dev))
+        && let Ok(json) = serde_json::to_string(&snapshot)
+    {
+        let models = embedded::parse(&json);
+        if !models.is_empty() {
+            cache.models = models.into_iter().collect();
             cache.fetched_at_secs = now;
-        }
-    }
-    if chasing {
-        let book = PriceBook::assembled(cache);
-        if !unpriced_subset(&book, unknown_models).is_empty()
-            && let Some(json) = fetch_models_dev()
-        {
-            let table = remote::parse_models_dev(&json);
-            if !table.is_empty() {
-                cache.models_dev = table;
-            }
         }
     }
     let book = PriceBook::assembled(cache);
@@ -472,7 +466,7 @@ const RETRY_BACKOFF_SECS: u64 = 60 * 60;
 /// 24-hour cap while the same unknown set persists.
 const UNKNOWN_REFRESH_TTL_SECS: u64 = 30 * 60;
 const UNKNOWN_BACKOFF_CAP_SECS: u64 = 24 * 60 * 60;
-const PRICING_CACHE_SCHEMA: u32 = 3;
+const PRICING_CACHE_SCHEMA: u32 = 4;
 
 /// On-disk pricing cache at persistent shared `pricing-cache.json`. Sorted maps
 /// keep the file diff-stable.
@@ -485,9 +479,7 @@ struct PricingCache {
     #[serde(default)]
     last_attempt_secs: u64,
     #[serde(default)]
-    litellm: BTreeMap<String, Pricing>,
-    #[serde(default)]
-    models_dev: BTreeMap<String, Pricing>,
+    models: BTreeMap<String, Pricing>,
     #[serde(default)]
     unknown_attempt_secs: u64,
     #[serde(default)]
@@ -502,8 +494,7 @@ impl Default for PricingCache {
             schema: PRICING_CACHE_SCHEMA,
             fetched_at_secs: 0,
             last_attempt_secs: 0,
-            litellm: BTreeMap::new(),
-            models_dev: BTreeMap::new(),
+            models: BTreeMap::new(),
             unknown_attempt_secs: 0,
             unknown_backoff_secs: 0,
             unknown_seen: BTreeSet::new(),
@@ -522,76 +513,6 @@ pub(crate) fn tiered_cost(tokens: u64, base: f64, above: Option<f64>) -> f64 {
             + (tokens - DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS) as f64 * above;
     }
     tokens as f64 * base
-}
-
-#[derive(Clone, Copy)]
-struct LongContextRates {
-    input: f64,
-    output: f64,
-    cache_create: Option<f64>,
-    cache_read: Option<f64>,
-}
-
-fn apply_builtin_long_context_rates(entries: &mut HashMap<String, Pricing>) {
-    for (model, pricing) in entries {
-        if pricing.input_above_200k.is_some()
-            || pricing.output_above_200k.is_some()
-            || pricing.cache_create_above_200k.is_some()
-            || pricing.cache_read_above_200k.is_some()
-        {
-            continue;
-        }
-        let Some(rates) = builtin_long_context_rates(model_without_date_suffix(model)) else {
-            continue;
-        };
-        pricing.input_above_200k = Some(rates.input);
-        pricing.output_above_200k = Some(rates.output);
-        pricing.cache_create_above_200k = rates.cache_create;
-        pricing.cache_read_above_200k = rates.cache_read;
-        pricing.long_context_threshold = Some(OPENAI_LONG_CONTEXT_THRESHOLD_TOKENS);
-    }
-}
-
-fn builtin_long_context_rates(model: &str) -> Option<LongContextRates> {
-    let rates = |input, output, cache_create, cache_read| LongContextRates {
-        input,
-        output,
-        cache_create,
-        cache_read,
-    };
-    match model {
-        "gpt-5.6" | "gpt-5.6-sol" => Some(rates(10e-6, 45e-6, Some(12.5e-6), Some(1e-6))),
-        "gpt-5.6-terra" => Some(rates(5e-6, 22.5e-6, Some(6.25e-6), Some(0.5e-6))),
-        "gpt-5.6-luna" => Some(rates(2e-6, 9e-6, Some(2.5e-6), Some(0.2e-6))),
-        "gpt-5.5" => Some(rates(10e-6, 45e-6, Some(10e-6), Some(1e-6))),
-        "gpt-5.4" => Some(rates(5e-6, 22.5e-6, Some(5e-6), Some(0.5e-6))),
-        "gpt-5.5-pro" | "gpt-5.4-pro" => Some(rates(60e-6, 270e-6, None, None)),
-        _ => None,
-    }
-}
-
-fn model_without_date_suffix(model: &str) -> &str {
-    let bytes = model.as_bytes();
-    if bytes.len() >= 11 {
-        let start = bytes.len() - 11;
-        let suffix = &bytes[start..];
-        if suffix[0] == b'-'
-            && suffix[1..5].iter().all(u8::is_ascii_digit)
-            && suffix[5] == b'-'
-            && suffix[6..8].iter().all(u8::is_ascii_digit)
-            && suffix[8] == b'-'
-            && suffix[9..11].iter().all(u8::is_ascii_digit)
-        {
-            return &model[..start];
-        }
-    }
-    if bytes.len() >= 9 {
-        let start = bytes.len() - 9;
-        if bytes[start] == b'-' && bytes[start + 1..].iter().all(u8::is_ascii_digit) {
-            return &model[..start];
-        }
-    }
-    model
 }
 
 fn one() -> f64 {
@@ -779,10 +700,6 @@ mod tests {
         // `gpt-5-9` must not be priced as `gpt-5`.
         assert!(book().price("gpt-5-9").is_none());
         assert!(book().price("totally-unknown-model").is_none());
-        assert!(PriceBook::embedded().price("gpt-5").is_some());
-        assert!(PriceBook::embedded().price("gpt-5.5-codex").is_some());
-        assert!(PriceBook::embedded().price("gpt-5.6").is_some());
-        assert!(PriceBook::embedded().price("gpt-5.6-sol").is_some());
     }
 
     #[test]
@@ -810,11 +727,8 @@ mod tests {
 
     #[test]
     fn openai_long_context_pricing_switches_the_whole_request_above_272k() {
-        let price = PriceBook::embedded().price("gpt-5.6-sol").unwrap();
-        assert_eq!(
-            price.long_context_threshold,
-            Some(OPENAI_LONG_CONTEXT_THRESHOLD_TOKENS)
-        );
+        let price = PriceBook::fixture().price("gpt-5.6-sol").unwrap();
+        assert_eq!(price.long_context_threshold, Some(272_000));
 
         let short = price.cost_of(TokenSplit::new(100_000, 1_000).cached(0, 100));
         assert!((short - 0.53005).abs() < 1e-9, "short cost was {short}");
@@ -825,7 +739,7 @@ mod tests {
 
     #[test]
     fn session_cost_uses_base_rates_above_request_tier_boundaries() {
-        let price = PriceBook::embedded().price("gpt-5.6-sol").unwrap();
+        let price = PriceBook::fixture().price("gpt-5.6-sol").unwrap();
         let cost = price.session_cost(500_000, 10_000, 20_000, 400_000);
         let expected = 500_000.0 * price.input
             + 10_000.0 * price.output
@@ -834,38 +748,6 @@ mod tests {
         assert!((cost - expected).abs() < f64::EPSILON);
         let split = TokenSplit::new(500_000, 10_000).cached(20_000, 400_000);
         assert_ne!(cost, price.cost_of(split.fast(true)));
-    }
-
-    #[test]
-    fn openai_long_context_overlay_covers_date_pins_and_defers_to_upstream_tiers() {
-        let mut entries = HashMap::from([
-            (
-                "gpt-5.5-2026-04-23".to_owned(),
-                Pricing {
-                    input: 6e-6,
-                    output: 31e-6,
-                    ..Pricing::empty()
-                },
-            ),
-            (
-                "gpt-5.4".to_owned(),
-                Pricing {
-                    input: 3e-6,
-                    output: 18e-6,
-                    input_above_200k: Some(12e-6),
-                    ..Pricing::empty()
-                },
-            ),
-        ]);
-
-        apply_builtin_long_context_rates(&mut entries);
-
-        let dated = entries["gpt-5.5-2026-04-23"];
-        assert_eq!(dated.input_above_200k, Some(10e-6));
-        assert_eq!(dated.long_context_threshold, Some(272_000));
-        let upstream = entries["gpt-5.4"];
-        assert_eq!(upstream.input_above_200k, Some(12e-6));
-        assert_eq!(upstream.long_context_threshold, None);
     }
 
     #[test]
@@ -981,107 +863,53 @@ mod tests {
     }
 
     #[test]
-    fn refresh_fetches_models_dev_only_for_unknowns_litellm_still_lacks() {
+    fn runtime_refresh_projects_both_sources_and_keeps_the_last_good_table() {
         use std::cell::Cell;
 
-        fn litellm_json(model: &str) -> String {
-            format!(
-                r#"{{
-                    "{model}": {{
-                        "input_cost_per_token": 1e-6,
-                        "output_cost_per_token": 2e-6
-                    }}
-                }}"#
-            )
-        }
-
-        fn models_dev_json(model: &str) -> String {
-            format!(
-                r#"{{
-                    "openai": {{
-                        "models": {{
-                            "{model}": {{
-                                "cost": {{
-                                    "input": 1.0,
-                                    "output": 2.0
-                                }}
-                            }}
-                        }}
-                    }}
-                }}"#
-            )
-        }
-
         let now = REFRESH_TTL_SECS + RETRY_BACKOFF_SECS + 1;
-
         let litellm_fetches = Cell::new(0);
         let models_dev_fetches = Cell::new(0);
         let mut cache = PricingCache::default();
-        refresh_cache(
+        let book = refresh_cache(
             &mut cache,
             now,
             BTreeSet::new(),
             &BTreeSet::new(),
             || {
                 litellm_fetches.set(litellm_fetches.get() + 1);
-                Some(litellm_json("rimz-test-baseline-model"))
+                Some(include_str!("tests/fixtures/litellm.json").to_owned())
             },
             || {
                 models_dev_fetches.set(models_dev_fetches.get() + 1);
-                Some(models_dev_json("rimz-test-baseline-model"))
-            },
-        );
-
-        assert_eq!(litellm_fetches.get(), 1);
-        assert_eq!(models_dev_fetches.get(), 0);
-
-        let litellm_fetches = Cell::new(0);
-        let models_dev_fetches = Cell::new(0);
-        let mut cache = PricingCache::default();
-        let unknowns = set(&["rimz-test-litellm-chase-model"]);
-        let book = refresh_cache(
-            &mut cache,
-            now,
-            unknowns.clone(),
-            &unknowns,
-            || {
-                litellm_fetches.set(litellm_fetches.get() + 1);
-                Some(litellm_json("rimz-test-litellm-chase-model"))
-            },
-            || {
-                models_dev_fetches.set(models_dev_fetches.get() + 1);
-                Some(models_dev_json("rimz-test-litellm-chase-model"))
-            },
-        );
-
-        assert_eq!(litellm_fetches.get(), 1);
-        assert_eq!(models_dev_fetches.get(), 0);
-        assert!(book.price("rimz-test-litellm-chase-model").is_some());
-        assert!(cache.unknown_seen.is_empty());
-
-        let litellm_fetches = Cell::new(0);
-        let models_dev_fetches = Cell::new(0);
-        let mut cache = PricingCache::default();
-        let unknowns = set(&["rimz-test-models-dev-chase-model"]);
-        let book = refresh_cache(
-            &mut cache,
-            now,
-            unknowns.clone(),
-            &unknowns,
-            || {
-                litellm_fetches.set(litellm_fetches.get() + 1);
-                Some(litellm_json("rimz-test-other-model"))
-            },
-            || {
-                models_dev_fetches.set(models_dev_fetches.get() + 1);
-                Some(models_dev_json("rimz-test-models-dev-chase-model"))
+                Some(include_str!("tests/fixtures/models-dev.json").to_owned())
             },
         );
 
         assert_eq!(litellm_fetches.get(), 1);
         assert_eq!(models_dev_fetches.get(), 1);
-        assert!(book.price("rimz-test-models-dev-chase-model").is_some());
-        assert!(cache.unknown_seen.is_empty());
+        let grok = book.price("grok-4.5").unwrap();
+        assert_eq!(grok.long_context_threshold, Some(200_000));
+        assert_eq!(grok.max_input_tokens, Some(500_000));
+
+        let previous_models = cache.models.clone();
+        let previous_fetched_at = cache.fetched_at_secs;
+        let failed_at = now + RETRY_BACKOFF_SECS + 1;
+        let book = refresh_cache(
+            &mut cache,
+            failed_at,
+            BTreeSet::new(),
+            &BTreeSet::new(),
+            || Some(include_str!("tests/fixtures/litellm.json").to_owned()),
+            || None,
+        );
+
+        assert_eq!(cache.models, previous_models);
+        assert_eq!(cache.fetched_at_secs, previous_fetched_at);
+        assert_eq!(cache.last_attempt_secs, failed_at);
+        assert_eq!(
+            book.price("grok-4.5").unwrap().long_context_threshold,
+            Some(200_000)
+        );
     }
 
     #[test]
@@ -1109,22 +937,14 @@ mod tests {
     }
 
     #[test]
-    fn assembly_uses_builtins_as_fallback_under_litellm_and_models_dev_fill() {
+    fn assembly_overwrites_embedded_rows_with_the_projected_cache() {
         let cache = PricingCache {
-            litellm: BTreeMap::from([(
-                "gpt-5".to_owned(),
-                Pricing {
-                    input: 9e-6,
-                    output: 9e-6,
-                    ..Pricing::empty()
-                },
-            )]),
-            models_dev: BTreeMap::from([
+            models: BTreeMap::from([
                 (
                     "gpt-5".to_owned(),
                     Pricing {
-                        input: 8e-6,
-                        output: 8e-6,
+                        input: 9e-6,
+                        output: 9e-6,
                         ..Pricing::empty()
                     },
                 ),
@@ -1144,7 +964,6 @@ mod tests {
 
         assert!((book.price("gpt-5").unwrap().input - 9e-6).abs() < 1e-18);
         assert!((book.price("models-dev-only").unwrap().input - 7e-6).abs() < 1e-18);
-        assert!(book.price("claude-opus-4-8").is_some());
     }
 
     #[test]
@@ -1153,7 +972,7 @@ mod tests {
         let path = dir.path().join("pricing-cache.json");
         let model = "rimz-test-cached-model";
         let cache = PricingCache {
-            models_dev: BTreeMap::from([(
+            models: BTreeMap::from([(
                 model.to_owned(),
                 Pricing {
                     input: 3e-6,
@@ -1182,7 +1001,7 @@ mod tests {
         let path = dir.path().join("pricing-cache.json");
         let model = "rimz-test-changing-model";
         let mut cache = PricingCache {
-            litellm: BTreeMap::from([(
+            models: BTreeMap::from([(
                 model.to_owned(),
                 Pricing {
                     input: 3e-6,
@@ -1197,8 +1016,8 @@ mod tests {
         let first = cached_book(&path);
         assert!((first.price(model).unwrap().input - 3e-6).abs() < f64::EPSILON);
 
-        cache.litellm.get_mut(model).unwrap().input = 30e-6;
-        cache.litellm.insert(
+        cache.models.get_mut(model).unwrap().input = 30e-6;
+        cache.models.insert(
             "rimz-test-length-bump".to_owned(),
             Pricing {
                 input: 1e-6,
@@ -1213,19 +1032,18 @@ mod tests {
     }
 
     #[test]
-    fn schema_two_pricing_cache_drops_rows_without_runtime_capacity() {
+    fn schema_three_pricing_cache_drops_the_split_source_shape() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pricing-cache.json");
         std::fs::write(
             &path,
-            r#"{"schema":2,"litellm":{"rimz-test-stale-model":{"input":999.0,"output":999.0}}}"#,
+            r#"{"schema":3,"litellm":{"rimz-test-stale-model":{"input":999.0,"output":999.0}}}"#,
         )
         .unwrap();
 
         let cache = read_cache(&path);
 
         assert_eq!(cache.schema, PRICING_CACHE_SCHEMA);
-        assert!(cache.litellm.is_empty());
-        assert!(cache.models_dev.is_empty());
+        assert!(cache.models.is_empty());
     }
 }

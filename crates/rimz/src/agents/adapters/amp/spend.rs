@@ -130,15 +130,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("T-good.json");
         std::fs::write(&path, r#"{"id":"T-good","messages":[]}"#).unwrap();
-        let parsed = parse(&path, &PriceBook::embedded());
+        let parsed = parse(&path, &PriceBook::fixture());
         assert!(parsed.replace_entries);
         assert!(parsed.entries.is_empty());
         assert_eq!(parsed.cursor, SpendCursor::default());
 
         std::fs::write(&path, "{").unwrap();
-        assert!(!parse(&path, &PriceBook::embedded()).replace_entries);
+        assert!(!parse(&path, &PriceBook::fixture()).replace_entries);
         std::fs::write(&path, r#"{"id":"T-other","messages":[]}"#).unwrap();
-        assert!(!parse(&path, &PriceBook::embedded()).replace_entries);
+        assert!(!parse(&path, &PriceBook::fixture()).replace_entries);
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod tests {
             r#"{"id":"T-a","messages":[{"role":"assistant","messageId":"m1","content":"ok","usage":{"timestamp":"2026-01-01T00:00:00Z","model":"gpt-5","inputTokens":100,"outputTokens":20,"cacheCreationInputTokens":30,"cacheReadInputTokens":40}}]}"#,
         )
         .unwrap();
-        let (entries, unknown) = entries_from_thread(&current, &PriceBook::embedded());
+        let (entries, unknown) = entries_from_thread(&current, &PriceBook::fixture());
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].thread_id.as_deref(), Some("T-a"));
         assert_eq!(entries[0].input, 100);
@@ -158,7 +158,7 @@ mod tests {
             r#"{"id":"T-b","usageLedger":{"events":[{"id":1,"timestamp":"2026-01-01T00:00:00Z","model":"future-model","tokens":{"total":50}}]}}"#,
         )
         .unwrap();
-        let (entries, unknown) = entries_from_thread(&unknown_thread, &PriceBook::embedded());
+        let (entries, unknown) = entries_from_thread(&unknown_thread, &PriceBook::fixture());
         assert_eq!(entries[0].output, 50);
         assert_eq!(entries[0].cost_usd, 0.0);
         assert!(unknown.contains_key("future-model"));
@@ -176,8 +176,8 @@ mod tests {
             cache_read: 0,
         };
         let mut unknown = BTreeMap::new();
-        let a = entry_from_usage("T-a", &usage, &PriceBook::embedded(), &mut unknown);
-        let b = entry_from_usage("T-b", &usage, &PriceBook::embedded(), &mut unknown);
+        let a = entry_from_usage("T-a", &usage, &PriceBook::fixture(), &mut unknown);
+        let b = entry_from_usage("T-b", &usage, &PriceBook::fixture(), &mut unknown);
 
         assert_eq!(a.message_id, None);
         assert_eq!(a.dedup_key.as_deref(), Some("amp:T-a:1"));

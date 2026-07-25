@@ -236,7 +236,7 @@ fn codex_cached_input_bills_at_input_rate_without_explicit_cache_read_cost() {
 fn codex_cache_write_is_priced_as_a_subset_of_input() {
     let line = r#"{"model":"gpt-5.6-sol","timestamp":"2026-01-01T10:00:00.000Z","usage":{"input_tokens":100,"cached_input_tokens":20,"cache_write_input_tokens":30,"output_tokens":10}}"#;
     let (_dir, path) = write_session("cache-write-rate.jsonl", &[line]);
-    let prices = PriceBook::embedded();
+    let prices = PriceBook::fixture();
 
     let entries = parse_codex_spend(&path, None, &prices).entries;
 
@@ -354,7 +354,7 @@ fn append_live_total(path: &Path, index: usize, input: u64, cached: u64, output:
 fn live_fold_resume_matches_a_cold_full_fold() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("rollout.jsonl");
-    let prices = PriceBook::embedded();
+    let prices = PriceBook::fixture();
     write_live_rollout(&path, &[(200_000, 150_000, 1_000)]);
     let first = resume_live_fold(
         &path,
@@ -403,7 +403,7 @@ fn live_fold_resume_matches_a_cold_full_fold() {
 fn live_fold_resets_when_the_rollout_is_truncated() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("rollout.jsonl");
-    let prices = PriceBook::embedded();
+    let prices = PriceBook::fixture();
     write_live_rollout(
         &path,
         &[(200_000, 150_000, 1_000), (400_000, 300_000, 2_000)],
@@ -429,7 +429,7 @@ fn live_fold_resets_when_the_rollout_is_truncated() {
 fn live_fold_heals_a_pre_token_counter_sidecar() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("rollout.jsonl");
-    let prices = PriceBook::embedded();
+    let prices = PriceBook::fixture();
     write_live_rollout(&path, &[(200_000, 150_000, 1_000)]);
     let complete = resume_live_fold(
         &path,

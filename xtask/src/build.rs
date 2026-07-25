@@ -61,7 +61,7 @@ pub(crate) fn build(root: &Path) -> Result<()> {
 }
 
 pub(crate) fn dist(root: &Path) -> Result<()> {
-    pricing_refresh(root)?;
+    pricing_refresh(root, &[])?;
     build_plugin(root)?;
     let mut artifacts = BTreeMap::new();
     let host_target = rustc_host_target(root)?;

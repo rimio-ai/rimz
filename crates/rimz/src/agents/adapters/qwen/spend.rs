@@ -111,7 +111,7 @@ mod tests {
 {"uuid":"a2","parentUuid":"u2","sessionId":"s1","timestamp":"2026-06-02T10:01:00Z","type":"assistant","model":"qwen3-coder-plus","usageMetadata":{"promptTokenCount":200,"candidatesTokenCount":20}}"#,
         )
         .unwrap();
-        let first = parse_qwen_spend(&path, None, &PriceBook::embedded());
+        let first = parse_qwen_spend(&path, None, &PriceBook::fixture());
         assert_eq!(first.entries.len(), 2);
         assert!(
             first
@@ -149,7 +149,7 @@ mod tests {
             offset: 999,
             state: Some("ignored".into()),
         };
-        let second = parse_qwen_spend(&path, Some(&resumed), &PriceBook::embedded());
+        let second = parse_qwen_spend(&path, Some(&resumed), &PriceBook::fixture());
         assert!(second.replace_entries);
         assert_eq!(second.cursor, SpendCursor::default());
         assert_eq!(second.entries.len(), 2);
@@ -178,7 +178,7 @@ mod tests {
             r#"{"uuid":"a1","timestamp":"2026-06-02T10:00:00Z","type":"assistant","model":"qwen3-coder-plus","usageMetadata":{"totalTokenCount":100}}"#,
         )
         .unwrap();
-        let parsed = parse_qwen_spend(&path, None, &PriceBook::embedded());
+        let parsed = parse_qwen_spend(&path, None, &PriceBook::fixture());
         assert!(parsed.entries.is_empty());
         assert!(parsed.replace_entries);
     }
@@ -215,7 +215,7 @@ mod tests {
 {"uuid":"child","parentUuid":"a1","timestamp":"2026-06-02T10:01:00Z","type":"assistant","agentId":"child-1","model":"qwen3-coder-plus","usageMetadata":{"promptTokenCount":20}}"#,
         )
         .unwrap();
-        let parsed = parse_qwen_spend(&path, None, &PriceBook::embedded());
+        let parsed = parse_qwen_spend(&path, None, &PriceBook::fixture());
         assert_eq!(parsed.entries.len(), 2);
         assert!(!parsed.entries[0].is_sidechain);
         assert!(parsed.entries[1].is_sidechain);
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn unreadable_transcript_is_not_authoritative() {
         let dir = tempfile::tempdir().unwrap();
-        let parsed = parse_qwen_spend(dir.path(), None, &PriceBook::embedded());
+        let parsed = parse_qwen_spend(dir.path(), None, &PriceBook::fixture());
         assert!(!parsed.replace_entries);
     }
 }

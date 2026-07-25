@@ -366,6 +366,7 @@ fn local_refresh_publishes_latest_tokens_estimated_cost_and_stat_gate() {
     )
     .unwrap();
     let pricing = dir.path().join("pricing-cache.json");
+    PriceBook::write_fixture_cache(&pricing);
     let ctx = LocalContextRefreshCtx {
         agent_id: "T-live",
         model_hint: None,
@@ -453,7 +454,7 @@ fn transcript_and_spend_join_into_timestamped_session_turns() {
     )
     .unwrap();
     let messages = AmpAdapter.read_transcript_messages(&path, None).unwrap();
-    let spend = AmpAdapter.parse_spend(&path, None, &PriceBook::embedded());
+    let spend = AmpAdapter.parse_spend(&path, None, &PriceBook::fixture());
 
     let turns = crate::agents::turns::session_turns(&messages, &spend.entries, "T-turns", false);
     assert_eq!(turns.len(), 1);

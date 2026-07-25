@@ -126,7 +126,7 @@ mod tests {
         )
         .unwrap();
         let adapter = PiAdapter;
-        let prices = crate::agents::PriceBook::embedded();
+        let prices = crate::agents::PriceBook::fixture();
         let messages = adapter.read_transcript_messages(&path, None).unwrap();
         let spend = adapter.parse_spend(&path, None, &prices);
 

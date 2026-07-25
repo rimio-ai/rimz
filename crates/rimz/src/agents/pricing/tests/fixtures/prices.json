@@ -1,0 +1,13 @@
+{
+  "claude-haiku-4.5": {"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000005, "cache_creation_input_token_cost": 0.00000125, "cache_read_input_token_cost": 0.0000001},
+  "claude-sonnet-4-20250514": {"input_cost_per_token": 0.000003, "output_cost_per_token": 0.000015, "cache_creation_input_token_cost": 0.00000375, "cache_read_input_token_cost": 0.0000003},
+  "claude-sonnet-4-6": {"input_cost_per_token": 0.000003, "output_cost_per_token": 0.000015, "cache_creation_input_token_cost": 0.00000375, "cache_read_input_token_cost": 0.0000003},
+  "gemini-3-flash-preview": {"input_cost_per_token": 0.0000005, "output_cost_per_token": 0.000003, "cache_creation_input_token_cost": 0.000001, "cache_read_input_token_cost": 0.00000005},
+  "gpt-5": {"input_cost_per_token": 0.00000125, "output_cost_per_token": 0.00001, "cache_creation_input_token_cost": 0.00000125, "cache_read_input_token_cost": 0.000000125, "max_input_tokens": 400000},
+  "gpt-5.4": {"input_cost_per_token": 0.0000025, "output_cost_per_token": 0.000015, "cache_creation_input_token_cost": 0.0000025, "cache_read_input_token_cost": 0.00000025, "provider_specific_entry": {"fast": 2}},
+  "gpt-5.5": {"input_cost_per_token": 0.000005, "output_cost_per_token": 0.00003, "cache_creation_input_token_cost": 0.000005, "cache_read_input_token_cost": 0.0000005},
+  "gpt-5.6-sol": {"input_cost_per_token": 0.000005, "output_cost_per_token": 0.00003, "cache_creation_input_token_cost": 0.00000625, "cache_read_input_token_cost": 0.0000005, "input_cost_per_token_above_200k_tokens": 0.00001, "output_cost_per_token_above_200k_tokens": 0.000045, "cache_creation_input_token_cost_above_200k_tokens": 0.0000125, "cache_read_input_token_cost_above_200k_tokens": 0.000001, "long_context_threshold": 272000},
+  "grok-4.5": {"input_cost_per_token": 0.000002, "output_cost_per_token": 0.000006, "cache_creation_input_token_cost": 0.0000025, "cache_read_input_token_cost": 0.0000005, "input_cost_per_token_above_200k_tokens": 0.000004, "output_cost_per_token_above_200k_tokens": 0.000012, "cache_read_input_token_cost_above_200k_tokens": 0.000001, "long_context_threshold": 200000, "max_input_tokens": 500000},
+  "moonshot/kimi-k2.5": {"input_cost_per_token": 0.0000006, "output_cost_per_token": 0.000003, "cache_creation_input_token_cost": 0.00000075, "cache_read_input_token_cost": 0.0000001},
+  "qwen3-coder-plus": {"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000005, "cache_creation_input_token_cost": 0, "cache_read_input_token_cost": 0.0000002}
+}

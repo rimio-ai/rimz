@@ -2395,7 +2395,7 @@ fn statusline_feed_passes_json_through_to_wrapped_command() {
 }
 
 #[test]
-fn cursor_statusline_and_stop_hook_merge_rich_context_and_idempotent_cost() {
+fn cursor_statusline_and_stop_hook_merge_rich_context_and_leave_auto_unpriced() {
     let env = Env::new();
     let config = env.cursor_cli_config_path();
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
@@ -2488,8 +2488,7 @@ fn cursor_statusline_and_stop_hook_merge_rich_context_and_idempotent_cost() {
     assert_eq!(tokens.context_window_size, Some(200_000));
     assert_eq!(tokens.used_percentage, Some(9));
     assert_eq!(tokens.current_usage.unwrap().input_tokens, Some(14_021));
-    let cost = record.context.cost.unwrap().total_cost_usd.unwrap();
-    assert!((cost - 0.019_858_25).abs() < 1e-12, "{cost}");
+    assert_eq!(record.context.cost, None);
 }
 
 /// With no wrapped command, the feed prints nothing (Claude falls back to its
@@ -2544,6 +2543,13 @@ fn statusline_feed_with_no_wrap_captures_context_and_folds_snapshot() {
 #[test]
 fn qwen_statusline_and_hook_fold_into_snapshot() {
     let env = Env::new();
+    let pricing = env.runtime_paths().shared_pricing_cache_path();
+    std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
+    std::fs::write(
+        pricing,
+        r#"{"schema":4,"models":{"qwen3-coder-plus":{"input":0.000001,"output":0.000005,"cache_read":0.0000002,"cache_create":0.0,"cache_read_explicit":true,"fast_multiplier":1.0}}}"#,
+    )
+    .unwrap();
     env.install_agent_hooks("qwen");
     assert!(env.agent_hooks_installed("qwen"));
 

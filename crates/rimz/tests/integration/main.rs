@@ -37,6 +37,7 @@ mod message;
 mod oauth_usage;
 mod performance;
 mod presence_wake;
+mod pricing_refresh;
 mod proc;
 mod reload;
 mod remote_attach;

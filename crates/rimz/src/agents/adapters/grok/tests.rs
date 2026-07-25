@@ -406,6 +406,7 @@ fn completed_usage_replaces_mid_turn_scalar_and_estimates_missing_cost() {
     .map(|row| row.to_string())
     .join("\n");
     std::fs::write(&updates, format!("{lines}\n")).unwrap();
+    crate::agents::PriceBook::write_fixture_cache(&pricing);
     let ctx = LocalContextRefreshCtx {
         agent_id: "session-1",
         model_hint: Some("grok-4.5"),

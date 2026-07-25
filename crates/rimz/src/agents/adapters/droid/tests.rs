@@ -346,7 +346,7 @@ fn transcript_ask_user_projects_and_clears_a_native_wait() {
 }
 
 #[test]
-fn local_refresh_prices_exact_builtins_and_fills_gauge_from_last_call() {
+fn local_refresh_prices_exact_cache_rows_and_fills_gauge_from_last_call() {
     let dir = tempfile::tempdir().unwrap();
     let transcript_path = dir.path().join("priced.jsonl");
     let settings_path = dir.path().join("priced.settings.json");
@@ -366,7 +366,7 @@ fn local_refresh_prices_exact_builtins_and_fills_gauge_from_last_call() {
     let pricing_cache = dir.path().join("pricing-cache.json");
     std::fs::write(
         &pricing_cache,
-        r#"{"schema":3,"litellm":{"gpt-5":{"input":0.00000125,"output":0.00001,"cache_read":0.000000125,"cache_create":0.00000125,"cache_read_explicit":true,"fast_multiplier":1.0,"max_input_tokens":400000}}}"#,
+        r#"{"schema":4,"models":{"gpt-5":{"input":0.00000125,"output":0.00001,"cache_read":0.000000125,"cache_create":0.00000125,"cache_read_explicit":true,"fast_multiplier":1.0,"max_input_tokens":400000}}}"#,
     )
     .unwrap();
     let transcript_text = transcript_path.to_string_lossy().into_owned();

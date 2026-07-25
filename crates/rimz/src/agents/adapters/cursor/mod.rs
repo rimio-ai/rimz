@@ -329,7 +329,7 @@ impl crate::agents::capabilities::CoreCapability for CursorAdapter {
                 payload: test_json!({
                     "generation_id": "gen-1",
                     "status": "completed",
-                    "model_id": "default",
+                    "model_id": "gpt-5.4",
                     "input_tokens": 22_725,
                     "output_tokens": 26,
                     "cache_read_tokens": 8_704,
@@ -552,12 +552,7 @@ impl crate::agents::capabilities::ContextCapability for CursorAdapter {
         if model.is_empty() {
             return None;
         }
-        let price_key = if model.eq_ignore_ascii_case("default") {
-            "cursor-auto"
-        } else {
-            model
-        };
-        let price = prices.price(price_key)?;
+        let price = prices.price(model)?;
         // Each generation id identifies one turn, so one-request pricing applies.
         let cost_usd = price.cost_of(
             TokenSplit::new(usage.fresh_input.unwrap_or(0), usage.output.unwrap_or(0))

@@ -432,7 +432,7 @@ mod tests {
     #[test]
     fn captured_shutdowns_emit_exact_non_overlapping_deltas() {
         let (_dir, path) = transcript(FIXTURE);
-        let parsed = parse(&path, None, &PriceBook::embedded());
+        let parsed = parse(&path, None, &PriceBook::fixture());
 
         assert!(!parsed.replace_entries);
         assert_eq!(
@@ -490,17 +490,17 @@ mod tests {
         let lines = FIXTURE.lines().collect::<Vec<_>>();
         let initial = format!("{}\n{}\n", lines[0], lines[1]);
         let (_dir, path) = transcript(&initial);
-        let first = parse(&path, None, &PriceBook::embedded());
+        let first = parse(&path, None, &PriceBook::fixture());
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(&path)
             .unwrap();
         writeln!(file, "{}", lines[2]).unwrap();
         writeln!(file, "{}", lines[3]).unwrap();
-        let second = parse(&path, Some(&first.cursor), &PriceBook::embedded());
+        let second = parse(&path, Some(&first.cursor), &PriceBook::fixture());
         let mut incremental = first.entries;
         incremental.extend(second.entries);
-        let cold = parse(&path, None, &PriceBook::embedded());
+        let cold = parse(&path, None, &PriceBook::fixture());
 
         assert_eq!(incremental, cold.entries);
         assert!(!second.replace_entries);
@@ -560,7 +560,7 @@ mod tests {
             r#"{"type":"session.shutdown","timestamp":"2026-07-14T09:00:00Z","data":{"modelMetrics":{"m":{"usage":{"inputTokens":999"#,
         );
         let (_dir, path) = transcript(contents);
-        let first = parse(&path, None, &PriceBook::embedded());
+        let first = parse(&path, None, &PriceBook::fixture());
         assert_eq!(first.entries.len(), 2, "the pure regression emits no entry");
         assert_eq!(
             (
@@ -577,7 +577,7 @@ mod tests {
             .open(&path)
             .unwrap();
         file.write_all(b",\"outputTokens\":61}}}}}\n").unwrap();
-        let resumed = parse(&path, Some(&first.cursor), &PriceBook::embedded());
+        let resumed = parse(&path, Some(&first.cursor), &PriceBook::fixture());
         assert_eq!(resumed.entries.len(), 1);
         assert_eq!(resumed.entries[0].output, 1);
     }

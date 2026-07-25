@@ -1,6 +1,6 @@
 //! Tier 1: the build-time pricing snapshot embedded into the binary.
 //!
-//! `build.rs` compacts the generated, LiteLLM-shaped snapshot into
+//! `build.rs` gzips the generated, compact LiteLLM-shaped snapshot into
 //! `OUT_DIR/litellm-pricing.json.gz`; it is included as compressed bytes here.
 //! The same [`parse`] turns a LiteLLM-shaped document into a price table,
 //! including 200k tiers, cache defaults, and fast multipliers, so the runtime
@@ -66,7 +66,10 @@ pub(super) fn parse(json: &str) -> HashMap<String, Pricing> {
                 output_above_200k: num("output_cost_per_token_above_200k_tokens"),
                 cache_create_above_200k: num("cache_creation_input_token_cost_above_200k_tokens"),
                 cache_read_above_200k: num("cache_read_input_token_cost_above_200k_tokens"),
-                long_context_threshold: None,
+                long_context_threshold: fields
+                    .get("long_context_threshold")
+                    .and_then(Value::as_u64)
+                    .filter(|tokens| *tokens > 0),
                 fast_multiplier: fast,
                 max_input_tokens: fields
                     .get("max_input_tokens")

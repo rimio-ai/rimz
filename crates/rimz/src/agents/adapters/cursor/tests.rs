@@ -1282,31 +1282,34 @@ fn stop_input_total_subtracts_cache_without_underflow() {
 }
 
 #[test]
-fn turn_cost_prices_auto_explicit_and_fast_models() {
-    let prices = PriceBook::embedded();
-    let auto = CursorAdapter
-        .price_turn_locally(
-            "stop",
-            &json!({
-                "generation_id": " gen-1 ",
-                "status": "completed",
-                "model_id": "default",
-                "input_tokens": 22_725,
-                "output_tokens": 26,
-                "cache_read_tokens": 8_704,
-                "cache_write_tokens": 0
-            }),
-            &prices,
-        )
-        .unwrap();
-    assert_eq!(auto.turn_id, "gen-1");
-    assert!((auto.cost_usd - 0.019_858_25).abs() < 1e-12);
+fn turn_cost_leaves_auto_unpriced_and_prices_explicit_fast_models() {
+    let prices = PriceBook::fixture();
+    for event_name in ["stop", "afterAgentResponse"] {
+        assert!(
+            CursorAdapter
+                .price_turn_locally(
+                    event_name,
+                    &json!({
+                        "generation_id": " gen-1 ",
+                        "status": "completed",
+                        "model_id": "default",
+                        "input_tokens": 22_725,
+                        "output_tokens": 26,
+                        "cache_read_tokens": 8_704,
+                        "cache_write_tokens": 0
+                    }),
+                    &prices,
+                )
+                .is_none()
+        );
+    }
+
     let response = CursorAdapter
         .price_turn_locally(
             "afterAgentResponse",
             &json!({
                 "generation_id": "gen-1",
-                "model_id": "default",
+                "model_id": "gpt-5.4",
                 "input_tokens": 22_725,
                 "output_tokens": 26,
                 "cache_read_tokens": 8_704,
@@ -1315,7 +1318,8 @@ fn turn_cost_prices_auto_explicit_and_fast_models() {
             &prices,
         )
         .unwrap();
-    assert_eq!(response.cost_usd, auto.cost_usd);
+    assert_eq!(response.turn_id, "gen-1");
+    assert!(response.cost_usd > 0.0);
 
     let payload = |model: &str| {
         json!({
