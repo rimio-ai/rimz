@@ -1,7 +1,7 @@
 //! `rimz remote connect`: the SSH launcher and its reconnect supervisor.
 //!
 //! No real ssh or host anywhere: the print form needs no binary at all, and
-//! the exec form drives the `ssh-trace` shim through `RIMZ_SSH_BIN`,
+//! the attach form drives the `ssh-trace` shim through `RIMZ_SSH_BIN`,
 //! asserting the exact argv handed to ssh and scripting link drops via
 //! `$RIMZ_TEST_SSH_PLAN`. Quoting precision lives in `remote/mod.rs` unit tests;
 //! these prove the CLI surface end to end.
@@ -622,7 +622,7 @@ fn exec_downgrades_or_copies_terminal_at_the_cli_boundary() {
 }
 
 #[test]
-fn one_shot_connect_repairs_a_raw_tty_before_exec() {
+fn one_shot_connect_repairs_a_raw_tty_and_brackets_the_client() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let pair = remote_connect_pty();
@@ -636,12 +636,26 @@ fn one_shot_connect_repairs_a_raw_tty_before_exec() {
 
     let mut cmd = remote_connect_pty_command(&env, &log);
     cmd.arg("--no-reconnect");
+    cmd.env("RIMZ_TEST_SSH_STDERR", "child output");
     let (output, settings) = run_pty_command(pair, cmd);
 
     assert_shell_tty(&settings);
+    let disable = output
+        .find("\x1b[?1007l")
+        .expect("attach disables alternate scroll");
+    let child = output
+        .find("child output")
+        .expect("attach child writes while alternate scroll is disabled");
+    let restore = output
+        .rfind("\x1b[?1007h")
+        .expect("attach restores alternate scroll");
+    assert!(
+        disable < child && child < restore,
+        "alternate scroll brackets the client lifetime: {output:?}",
+    );
     assert!(
         !output.contains("attaching to"),
-        "one-shot exec leaves presentation to ssh: {output}"
+        "one-shot attach leaves presentation to ssh: {output}"
     );
 }
 

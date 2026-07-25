@@ -2,7 +2,7 @@
 //!
 //! [`CommandSpec`] builds a `zellij`/`tmux` invocation that either runs to
 //! completion under a deadline ([`CommandSpec::run`]) or hands itself back to
-//! the caller as a [`Command`] for `exec(3)` (the interactive attach). Pure
+//! the caller as a [`Command`] for an interactive attach. Pure
 //! process/thread/timeout machinery — no panes, no sessions, no backends.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,7 +24,7 @@ pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 /// paths such as room start and liveness checks.
 pub(crate) const LIST_SESSIONS_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// A built-up command we can run or hand back to `exec(3)`.
+/// A built-up command we can run or hand back to an interactive caller.
 #[derive(Clone, Debug, Default)]
 pub struct CommandSpec {
     pub program: String,
@@ -124,7 +124,8 @@ impl CommandSpec {
     /// would otherwise hang the caller (and `rimz start`) forever. On the bound
     /// the child is SIGKILLed and a [`MuxErr::Timeout`] returned, so callers — all
     /// of which treat these best-effort — degrade instead of blocking. The
-    /// interactive attach never comes through here (it `exec`s).
+    /// interactive attach never comes through here (the CLI waits on it
+    /// without a deadline).
     pub fn run(&self) -> Result<Output> {
         self.run_with_timeout(COMMAND_TIMEOUT)
     }
