@@ -62,6 +62,8 @@ The team surface carries these cohort-level controls:
 - `--bg` leaves focus where it is.
 - `--new-tab` opens the launch in a new tab or window.
 
+Because resume takes identity from the store, it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--description`, and `--budget`.
+
 Per-agent model, prompt-file, permission, supervised-run, and pane-placement overrides stay on [`rimz agents`](./agents.md).
 Put stable role-specific choices in the team definition.
 

@@ -478,9 +478,11 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     } = args;
     match command {
         Some(AgentsSubcmd::Launch(launch)) => {
-            let Some(spec) = launch.spec.as_deref() else {
-                bail!("`rimz agents launch` requires an agent spec");
-            };
+            // The required `launch-spec` Clap group guarantees an explicit launch spec.
+            let spec = launch
+                .spec
+                .as_deref()
+                .expect("required launch-spec group guarantees a spec");
             match top_level_spec_route(spec) {
                 TopLevelSpecRoute::ScopedList => bail!(
                     "`rimz agents launch` requires a launch spec, not scope `{spec}`; use `rimz agents list {spec}`"
@@ -490,7 +492,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
                 ),
                 TopLevelSpecRoute::Launch => {}
             }
-            return dispatch_launch(*launch, false, globals, true);
+            return dispatch_launch(*launch, false, globals);
         }
         Some(AgentsSubcmd::Check(args)) => return run_check(args),
         Some(AgentsSubcmd::Register(args)) => return run_register(args),
@@ -585,15 +587,10 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             TopLevelSpecRoute::Launch => {}
         }
     }
-    dispatch_launch(args.launch, args.json, globals, true)
+    dispatch_launch(args.launch, args.json, globals)
 }
 
-fn dispatch_launch(
-    launch: AgentLaunchArgs,
-    json: bool,
-    globals: &GlobalFlags,
-    allow_in_place: bool,
-) -> Result<()> {
+fn dispatch_launch(launch: AgentLaunchArgs, json: bool, globals: &GlobalFlags) -> Result<()> {
     let args = AgentsArgs {
         command: None,
         launch,
@@ -612,7 +609,7 @@ fn dispatch_launch(
             "--json is only supported with `rimz agents` and `rimz agents list`; on `-p`, choose output with `--output-format json`"
         );
     }
-    launch_layout(args, globals, allow_in_place)
+    launch_layout(args, globals, true)
 }
 
 fn into_supervised_request(
