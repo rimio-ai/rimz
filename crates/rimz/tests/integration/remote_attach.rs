@@ -640,6 +640,9 @@ fn one_shot_connect_repairs_a_raw_tty_and_brackets_the_client() {
     let (output, settings) = run_pty_command(pair, cmd);
 
     assert_shell_tty(&settings);
+    let save = output
+        .find("\x1b[?1007s")
+        .expect("attach saves alternate scroll");
     let disable = output
         .find("\x1b[?1007l")
         .expect("attach disables alternate scroll");
@@ -647,15 +650,91 @@ fn one_shot_connect_repairs_a_raw_tty_and_brackets_the_client() {
         .find("child output")
         .expect("attach child writes while alternate scroll is disabled");
     let restore = output
-        .rfind("\x1b[?1007h")
+        .rfind("\x1b[?1007r")
         .expect("attach restores alternate scroll");
     assert!(
-        disable < child && child < restore,
+        save < disable && disable < child && child < restore,
         "alternate scroll brackets the client lifetime: {output:?}",
     );
     assert!(
         !output.contains("attaching to"),
         "one-shot attach leaves presentation to ssh: {output}"
+    );
+}
+
+#[test]
+fn one_shot_connect_preserves_the_ssh_exit_code_without_dumping_argv() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    std::fs::write(&plan, "23\n").expect("write ssh plan");
+
+    let out = remote_connect_command(&env, &log)
+        .arg("--no-reconnect")
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .bounded_output()
+        .expect("run one-shot attach");
+
+    assert_eq!(out.status.code(), Some(23));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("attach command") && !stderr.contains("ServerAliveInterval"),
+        "the child owns its failure presentation: {stderr}",
+    );
+    assert!(
+        snippet(&shim_invocations(&log)[0]).contains("--outer-scroll-bracket"),
+        "the outer SSH launcher suppresses a nested remote bracket",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn one_shot_connect_mirrors_the_ssh_clients_suspend() {
+    use nix::sys::signal::{Signal, killpg};
+    use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+    use nix::unistd::Pid;
+
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let pair = remote_connect_pty();
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.arg("--no-reconnect");
+    cmd.env("RIMZ_TEST_SSH_SUSPEND", "1");
+
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
+    let pid = Pid::from_raw(
+        i32::try_from(child.process_id().expect("remote connect pid")).expect("pid fits i32"),
+    );
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        output
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match waitpid(pid, Some(WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED))
+            .expect("poll launcher job control")
+        {
+            WaitStatus::Stopped(stopped, Signal::SIGTSTP) if stopped == pid => break,
+            WaitStatus::StillAlive if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            status => panic!("launcher did not mirror the child stop: {status:?}"),
+        }
+    }
+
+    killpg(pid, Signal::SIGCONT).expect("foreground the attach process group");
+    let status = child.wait().expect("wait resumed remote connect");
+    drop(pair.master);
+    let output =
+        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    assert!(status.success(), "resumed attach failed: {output}");
+    assert!(
+        output.rfind("\x1b[?1007r").is_some(),
+        "resumed attach restores alternate scroll: {output:?}",
     );
 }
 

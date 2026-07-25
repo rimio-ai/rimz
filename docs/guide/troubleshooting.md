@@ -180,9 +180,9 @@ After an upgrade, `rimz start` and `rimz attach` also warn when a live room stil
 
 ### Scroll wheel sends arrow keys
 
-tmux disables outer mouse reporting while it repaints an attaching client. Terminals with alternate scroll enabled turn wheel ticks during that window into arrow keys, so scrolling immediately after attach can walk an agent's prompt history. RimZ disables alternate scroll for the life of every multiplexer attach it launches and restores it when the client exits. A bare `tmux attach` bypasses this bracket; attach through `rimz` to apply it.
+tmux disables outer mouse reporting while it repaints an attaching client. Terminals with alternate scroll enabled turn wheel ticks during that window into arrow keys, so scrolling immediately after attach can walk an agent's prompt history. RimZ saves and disables alternate scroll for the life of every multiplexer attach it launches, then restores the prior setting when the client exits. A bare `tmux attach` bypasses this bracket; attach through `rimz` to apply it.
 
-Run `reset` once at a shell prompt or open a new terminal tab when an older RimZ build has already left that tab converting wheel ticks to arrow keys. Reload an older browser tab after upgrading so it picks up the current client layer.
+Run `reset` once at a shell prompt or open a new terminal tab when an older RimZ build has already left that tab converting wheel ticks to arrow keys. RimZ's ttyd client also suppresses xterm.js's wheel-to-arrow fallback while no application owns the mouse; reload an older browser tab after upgrading so it picks up that client layer.
 
 ### Garbled terminal after a remote link death
 

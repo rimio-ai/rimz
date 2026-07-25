@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
 use super::{AttachFlags, GlobalFlags};
-use crate::cli::room::{AttachAction, AttachMode, attach_action, exec_attach_command};
+use crate::cli::room::{AttachAction, AttachMode, attach_action, launch_attach_command};
 use rimz::ids::MuxName;
 use rimz::remote::aliases::{RemoteAlias, RemoteAliases};
 use rimz::remote::{
@@ -441,7 +441,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             supervisor::print_remote_command(&plain_spec);
             Ok(())
         }
-        AttachAction::Exec => {
+        AttachAction::Launch => {
             let program = rimz::remote::ssh_program();
             which::which(&program).map_err(|_| {
                 anyhow::anyhow!(
@@ -474,9 +474,12 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                     remote.auto_forward,
                 )
             } else {
-                let plain_spec = plan.initial().plain();
+                // The local process owns the outer terminal bracket for a
+                // one-shot SSH attach. Tell a current remote RimZ not to nest
+                // XTSAVE/XTRESTORE, whose saved mode slot is not a stack.
+                let plain_spec = plan.initial().with_outer_scroll_bracket(true).plain();
                 tty::sanitize_local_tty();
-                exec_attach_command(&plain_spec)
+                launch_attach_command(&plain_spec)
             }
         }
     }
