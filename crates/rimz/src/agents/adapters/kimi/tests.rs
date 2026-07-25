@@ -646,6 +646,7 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
     assert_eq!(wire::usage_records(&records).len(), 3);
     let stat = TranscriptStat::from_path(&path).unwrap();
     let cache = dir.path().join("prices.json");
+    crate::agents::PriceBook::write_fixture_cache(&cache);
     let ctx = LocalContextRefreshCtx {
         agent_id: "s1",
         model_hint: None,
@@ -682,10 +683,10 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
     );
     assert_eq!(refresh.transcript_path.as_deref(), path.to_str());
 
-    let parsed = spend::parse(&path, None, &super::super::PriceBook::embedded());
+    let parsed = spend::parse(&path, None, &super::super::PriceBook::fixture());
     let snapshot = wire::WireSnapshot::read(&path).unwrap();
     let snapshot_parsed =
-        spend::parse_snapshot(&path, &snapshot, &super::super::PriceBook::embedded());
+        spend::parse_snapshot(&path, &snapshot, &super::super::PriceBook::fixture());
     assert_eq!(snapshot_parsed.entries, parsed.entries);
     assert_eq!(
         snapshot.consumed_offset(),
@@ -984,6 +985,7 @@ fn live_cost_prices_the_full_file_outside_the_bounded_tail() {
     std::fs::write(&path, format!("{early}{padding}")).unwrap();
     let stat = TranscriptStat::from_path(&path).unwrap();
     let cache = dir.path().join("prices.json");
+    crate::agents::PriceBook::write_fixture_cache(&cache);
     let ctx = LocalContextRefreshCtx {
         agent_id: "s1",
         model_hint: None,
@@ -1031,7 +1033,7 @@ fn unknown_alias_costs_zero_instead_of_guessing_k25() {
     )
     .unwrap();
 
-    let parsed = spend::parse(&path, None, &super::super::PriceBook::embedded());
+    let parsed = spend::parse(&path, None, &super::super::PriceBook::fixture());
     assert_eq!(parsed.entries.len(), 1);
     assert_eq!(parsed.entries[0].model.as_deref(), Some("future"));
     assert_eq!(parsed.entries[0].cost_usd, 0.0);
@@ -1057,7 +1059,7 @@ fn request_attribution_prices_alias_usage_and_history_groups_the_turn() {
     .unwrap();
 
     let messages = KimiAdapter.read_transcript_messages(&path, None).unwrap();
-    let parsed = spend::parse(&path, None, &super::super::PriceBook::embedded());
+    let parsed = spend::parse(&path, None, &super::super::PriceBook::fixture());
     assert_eq!(parsed.entries.len(), 1);
     assert_eq!(
         parsed.entries[0].model.as_deref(),

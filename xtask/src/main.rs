@@ -165,7 +165,7 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "pricing-refresh",
         summary: "Refresh the generated pricing snapshot.",
-        runs: "fetch LiteLLM pricing JSON plus authoritative models.dev fillers, compact them, and rewrite the ignored snapshot atomically",
+        runs: "cargo run -p rimz -- pricing-refresh, optionally with --check",
     },
     TaskInfo {
         name: "theme-refresh",
@@ -272,7 +272,13 @@ pub(crate) fn is_help_flag(arg: &str) -> bool {
 fn task_accepts_args(task: &str) -> bool {
     matches!(
         task,
-        "test" | "test-archive" | "sandbox" | "perf" | "complexity" | "screenshot"
+        "test"
+            | "test-archive"
+            | "sandbox"
+            | "perf"
+            | "complexity"
+            | "pricing-refresh"
+            | "screenshot"
     )
 }
 
@@ -305,7 +311,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "docs-links" => docs_links::docs_links(root),
         "gate" => gates::gate(root),
         "checks" => gates::checks(root),
-        "pricing-refresh" => pricing::pricing_refresh(root),
+        "pricing-refresh" => pricing::pricing_refresh(root, args),
         "theme-refresh" => theme::theme_refresh(root),
         "screenshot" => screenshot::screenshot(root, args),
         "ci" => gates::ci(root),

@@ -445,7 +445,7 @@ mod tests {
         std::fs::create_dir(&session).unwrap();
         let path = session.join("updates.jsonl");
         std::fs::write(&path, with_prompt(&row("p1", 2_500_000_000))).unwrap();
-        let parsed = parse(&path, None, &PriceBook::embedded());
+        let parsed = parse(&path, None, &PriceBook::fixture());
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(parsed.entries[0].input, 60);
         assert_eq!(parsed.entries[0].cache_read, 40);
@@ -453,7 +453,7 @@ mod tests {
         assert_eq!(parsed.entries[0].cost_usd, 0.25);
         let folded = transcript::read(&path).unwrap();
         assert_eq!(
-            cost_from_folded(&path, &folded, "s1", &PriceBook::embedded())
+            cost_from_folded(&path, &folded, "s1", &PriceBook::fixture())
                 .unwrap()
                 .total_cost_usd,
             Some(0.25)
@@ -493,7 +493,7 @@ mod tests {
         let path = dir.path().join("updates.jsonl");
         std::fs::write(&path, with_prompt(&completion)).unwrap();
 
-        let parsed = parse(&path, None, &PriceBook::embedded());
+        let parsed = parse(&path, None, &PriceBook::fixture());
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(
             parsed.entries[0].model.as_deref(),
@@ -505,7 +505,7 @@ mod tests {
 
         let unknown = completion.replace("grok-4.5-build-free", "grok-9-build-free");
         std::fs::write(&path, with_prompt(&unknown)).unwrap();
-        let parsed = parse(&path, None, &PriceBook::embedded());
+        let parsed = parse(&path, None, &PriceBook::fixture());
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(parsed.entries[0].cost_usd, 0.0);
         assert_eq!(
@@ -525,7 +525,7 @@ mod tests {
             row("p1", 1_000_000_000)
         );
         std::fs::write(&path, &first).unwrap();
-        let cold = parse(&path, None, &PriceBook::embedded());
+        let cold = parse(&path, None, &PriceBook::fixture());
         assert_eq!(cold.entries.len(), 1);
         let mut file = std::fs::OpenOptions::new()
             .append(true)
@@ -533,13 +533,13 @@ mod tests {
             .unwrap();
         file.write_all(format!("{}\n", row("p2", 2_000_000_000)).as_bytes())
             .unwrap();
-        let suffix = parse(&path, Some(&cold.cursor), &PriceBook::embedded());
+        let suffix = parse(&path, Some(&cold.cursor), &PriceBook::fixture());
         assert_eq!(suffix.entries.len(), 1);
         assert!(!suffix.replace_entries);
 
         file.write_all(b"{\"timestamp\":2,\"method\":\"_x.ai/session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"rewind_marker\",\"target_prompt_index\":0}}}\n")
             .unwrap();
-        let rewound = parse(&path, Some(&suffix.cursor), &PriceBook::embedded());
+        let rewound = parse(&path, Some(&suffix.cursor), &PriceBook::fixture());
         assert!(rewound.replace_entries);
         assert!(rewound.entries.is_empty());
     }
@@ -560,11 +560,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("updates.jsonl");
             std::fs::write(&path, with_prompt(&modified)).unwrap();
-            assert!(
-                parse(&path, None, &PriceBook::embedded())
-                    .entries
-                    .is_empty()
-            );
+            assert!(parse(&path, None, &PriceBook::fixture()).entries.is_empty());
         }
     }
 
@@ -577,7 +573,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("updates.jsonl");
         std::fs::write(&path, with_prompt(&completion)).unwrap();
-        let parsed = parse(&path, None, &PriceBook::embedded());
+        let parsed = parse(&path, None, &PriceBook::fixture());
         assert_eq!(parsed.entries.len(), 2);
         let cost = parsed
             .entries

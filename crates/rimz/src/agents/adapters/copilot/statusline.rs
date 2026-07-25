@@ -368,7 +368,7 @@ mod tests {
     fn modern_fixture_separates_live_window_and_session_totals() {
         let payload: Value =
             serde_json::from_str(include_str!("tests/fixtures/statusline-modern.json")).unwrap();
-        let prices = PriceBook::embedded();
+        let prices = PriceBook::fixture();
         let estimated_cost = StatuslinePayload::parse(&payload)
             .unwrap()
             .cost(&prices)
@@ -421,7 +421,7 @@ mod tests {
                 "total_reasoning_tokens": 0
             }
         });
-        let prices = PriceBook::embedded();
+        let prices = PriceBook::fixture();
         let price = prices.price("gpt-5.6-sol").unwrap();
         let actual = StatuslinePayload::parse(&payload)
             .unwrap()
@@ -552,7 +552,7 @@ mod tests {
 
     #[test]
     fn cost_prefers_concrete_ids_and_resolves_auto_display_targets() {
-        let prices = PriceBook::embedded();
+        let prices = PriceBook::fixture();
         for model in [
             json!({"id":"claude-haiku-4.5","display_name":"ignored"}),
             json!({"id":"auto","display_name":"Auto → claude-haiku-4.5 (1x) (medium)"}),

@@ -65,7 +65,9 @@ use super::aggregate::{
 /// ticks, so finalized sessions previously cached with no entries rebuild once.
 /// v21 records per-tool call counts, so finalized supported-provider sessions
 /// rebuild once to backfill their transcript history.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 21;
+/// v22 removes locally fabricated pricing fallbacks, so finalized token-priced
+/// sessions rebuild once against the upstream-only book.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 22;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///

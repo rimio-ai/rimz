@@ -1259,7 +1259,7 @@ fn refresh_transcript_context_prices_model_from_shared_cache() {
     .unwrap();
     std::fs::write(
         &pricing_cache_path,
-        r#"{"schema":3,"litellm":{"gpt-9.9-nova":{"input":0.000001,"output":0.000002,"cache_read":0.0000005}}}"#,
+        r#"{"schema":4,"models":{"gpt-9.9-nova":{"input":0.000001,"output":0.000002,"cache_read":0.0000005}}}"#,
     )
     .unwrap();
 
@@ -1305,6 +1305,7 @@ fn refresh_prices_each_request_before_cumulative_input_crosses_long_tier() {
         ),
     )
     .unwrap();
+    PriceBook::write_fixture_cache(&pricing_cache_path);
 
     let refresh = refresh_transcript_context(
         "sess-1",
@@ -1322,7 +1323,7 @@ fn refresh_prices_each_request_before_cumulative_input_crosses_long_tier() {
         .unwrap()
         .total_cost_usd
         .unwrap();
-    let price = PriceBook::embedded().price("gpt-5.6-sol").unwrap();
+    let price = PriceBook::fixture().price("gpt-5.6-sol").unwrap();
     let per_request = price.cost_of(TokenSplit::new(50_000, 1_000).cached(0, 150_000));
     let old_cumulative = price.cost_of(TokenSplit::new(100_000, 2_000).cached(0, 300_000));
 

@@ -1,0 +1,81 @@
+{
+  "anthropic.claude-3-5-haiku-20241022-v1:0": {
+    "input_cost_per_token": 0.0000008,
+    "output_cost_per_token": 0.000004
+  },
+  "anthropic.claude-sonnet-4-20250514-v1:0": {
+    "input_cost_per_token": 0.000003,
+    "output_cost_per_token": 0.000015,
+    "input_cost_per_token_above_200k_tokens": 0.000006,
+    "output_cost_per_token_above_200k_tokens": 0.0000225
+  },
+  "eu.anthropic.regional-claude-v1:0": {
+    "input_cost_per_token": 0.00000025,
+    "output_cost_per_token": 0.00000125
+  },
+  "au.anthropic.regional-claude-v1:0": {
+    "input_cost_per_token": 0.00000025,
+    "output_cost_per_token": 0.00000125
+  },
+  "apac.anthropic.regional-claude-v1:0": {
+    "input_cost_per_token": 0.00000025,
+    "output_cost_per_token": 0.00000125
+  },
+  "us.anthropic.regional-claude-v1:0": {
+    "input_cost_per_token": 0.0000008,
+    "output_cost_per_token": 0.000004
+  },
+  "global.anthropic.regional-claude-v1:0": {
+    "input_cost_per_token": 0.0000008,
+    "output_cost_per_token": 0.000004
+  },
+  "vertex_ai/gateway-vertex": {
+    "input_cost_per_token": 0.000001,
+    "output_cost_per_token": 0.000005
+  },
+  "azure_ai/gateway-azure": {
+    "input_cost_per_token": 0.000001,
+    "output_cost_per_token": 0.000005
+  },
+  "openrouter/gateway-openrouter": {
+    "input_cost_per_token": 0.000001,
+    "output_cost_per_token": 0.000005
+  },
+  "bedrock/gateway-bedrock": {
+    "input_cost_per_token": 0.000001,
+    "output_cost_per_token": 0.000005
+  },
+  "baseten/gateway-baseten": {
+    "input_cost_per_token": 0.000001,
+    "output_cost_per_token": 0.000005
+  },
+  "deepinfra/gateway-deepinfra": {
+    "input_cost_per_token": 0.000001,
+    "output_cost_per_token": 0.000005
+  },
+  "vercel_ai_gateway/gateway-vercel": {
+    "input_cost_per_token": 0.000001,
+    "output_cost_per_token": 0.000005
+  },
+  "xai/grok-4.5": {
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.000006,
+    "input_cost_per_token_above_200k_tokens": 0.000004,
+    "output_cost_per_token_above_200k_tokens": 0.000012
+  },
+  "zai/glm-4.6": {
+    "input_cost_per_token": 0.0000006,
+    "output_cost_per_token": 0.0000022,
+    "cache_read_input_token_cost": 0.00000011
+  },
+  "moonshot/kimi-k2.5": {
+    "input_cost_per_token": 0.0000006,
+    "output_cost_per_token": 0.000003,
+    "cache_read_input_token_cost": 0.0000001
+  },
+  "moonshot/kimi-k2.6": {
+    "input_cost_per_token": 0.00000095,
+    "output_cost_per_token": 0.000004,
+    "cache_read_input_token_cost": 0.00000016
+  }
+}

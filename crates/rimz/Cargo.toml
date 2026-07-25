@@ -19,8 +19,9 @@ autotests = false
 # git-tracked, but an `include` allowlist packages only its entries; dropping it
 # makes build.rs embed empty bytes and ships a Zellij poll-mode binary. The list
 # force-lists those build inputs plus the license bundle; the release workflow
-# refreshes the pricing snapshot before publish and passes `--allow-dirty` (the
-# included snapshot is gitignored, which cargo's dirty check otherwise rejects).
+# runs the hidden `rimz pricing-refresh` projection before publish and passes
+# `--allow-dirty` (the included snapshot is gitignored, which cargo's dirty
+# check otherwise rejects).
 include = [
     "/src",
     # Must stay AFTER `/src`; negation order decides whether nested docs stay out.
@@ -193,10 +194,9 @@ signal-hook.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
-# build.rs compacts the generated LiteLLM pricing snapshot into a gzipped
-# `OUT_DIR` artifact for embedding (tier 1). Network-free: release packaging
-# generates the ignored snapshot before building; `serde_json` filters fields
-# and `flate2` keeps the embedded table small.
+# build.rs gzips the pre-compacted pricing snapshot into an `OUT_DIR` artifact
+# for embedding (tier 1). Network-free: the hidden `rimz pricing-refresh`
+# command projects the ignored snapshot before release packaging.
 [build-dependencies]
 flate2.workspace = true
 serde_json.workspace = true

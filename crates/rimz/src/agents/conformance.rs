@@ -984,7 +984,7 @@ fn assert_compaction_hooks_match_concern(adapter: &AgentDefinition) {
 }
 
 fn realtime_cost_from_fixture(adapter: &AgentDefinition, conformance: &AdapterConformance) -> bool {
-    let prices = PriceBook::embedded();
+    let prices = PriceBook::fixture();
     if let Some(fixture) = conformance.context_cost.as_ref() {
         return adapter
             .context_cost(&fixture.payload, &prices)

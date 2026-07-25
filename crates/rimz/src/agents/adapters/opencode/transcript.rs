@@ -542,7 +542,7 @@ mod tests {
         let messages = adapter
             .read_transcript_messages(&path, Some(&session_id))
             .unwrap();
-        let spend = adapter.parse_spend(&path, None, &PriceBook::embedded());
+        let spend = adapter.parse_spend(&path, None, &PriceBook::fixture());
 
         let turns = crate::agents::turns::session_turns(
             &messages,
