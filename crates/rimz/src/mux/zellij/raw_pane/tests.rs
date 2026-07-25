@@ -323,7 +323,15 @@ fn sidebar_geometry_classifies_dock_shapes() {
            "pane_x": 86, "pane_columns": 212}
         ]"#;
     let panes: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
-    let target = std::num::NonZeroU16::new(72).expect("nonzero target");
+    let target_cols = std::num::NonZeroU16::new(72).expect("nonzero target");
+    let target = crate::mux::SidebarTarget {
+        share: crate::mux::WidthPermille::from_cols(
+            target_cols,
+            std::num::NonZeroU16::new(298).expect("nonzero view"),
+        ),
+        max_cols: target_cols,
+        pinned: true,
+    };
     let by_id = |id: u64| panes.iter().find(|pane| pane.id == id).unwrap();
     let excluded = HashSet::new();
     assert!(

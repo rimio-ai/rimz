@@ -46,8 +46,9 @@ pub(in crate::backend::zellij) fn sidebar_opts(
     let share =
         WidthPermille::from_cols(requested_cols, view_cols).snap_to_rung(rimz::MuxName::Zellij);
     let target = rimz::mux::SidebarTarget {
-        cols: share.cols(view_cols),
-        percent: share.to_percent_rounded(),
+        share,
+        max_cols: width.max_cols,
+        pinned: false,
     };
     SidebarPaneOptions {
         session_name: name.to_owned(),

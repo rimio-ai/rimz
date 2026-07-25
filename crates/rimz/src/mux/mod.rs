@@ -453,7 +453,7 @@ pub struct SidebarPaneOptions {
 pub struct WidthSyncOptions {
     pub session_name: String,
     pub workspace_id: WorkspaceId,
-    pub target_cols: std::num::NonZeroU16,
+    pub target: SidebarTarget,
 }
 
 /// The `rimz sidebar serve` argv after the program name — the one spelling

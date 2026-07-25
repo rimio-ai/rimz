@@ -211,6 +211,7 @@ pub(super) struct WidthController {
     last_classified: Option<(u16, usize)>,
     baseline_probe_deadline: Option<Instant>,
     classification_deadline: Option<Instant>,
+    classification_resize_at_ms: Option<u64>,
 }
 
 impl WidthController {
@@ -232,6 +233,7 @@ impl WidthController {
             last_classified: None,
             baseline_probe_deadline,
             classification_deadline: None,
+            classification_resize_at_ms: None,
         }
     }
 
@@ -269,7 +271,7 @@ impl WidthController {
                 self.mux,
                 Some(view_cols),
             )
-            .cols
+            .cols(Some(view_cols))
         });
         self.convergence.retarget(target);
         if let Some(cols) = measured_cols {
@@ -379,6 +381,7 @@ impl WidthController {
         if trigger == SidebarWidthControlTrigger::ResizeFeedback && !self.convergence.in_flight() {
             if self.convergence.needs_adjustment(measured_cols) {
                 self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
+                self.classification_resize_at_ms = Some(crate::sidebar::timing::unix_now_ms());
             }
             return;
         }
@@ -428,6 +431,7 @@ impl WidthController {
         &mut self,
         measured_cols: Option<u16>,
         sibling_count: Option<usize>,
+        panes_observed_at_ms: Option<u64>,
         diag: &DiagSink,
     ) {
         if self.last_classified.is_none()
@@ -456,13 +460,15 @@ impl WidthController {
         {
             match (measured_cols, sibling_count) {
                 (Some(cols), Some(siblings)) => {
-                    self.classification_deadline = None;
-                    self.classify_settled_resize(cols, siblings, diag);
+                    self.classify_settled_resize(cols, siblings, panes_observed_at_ms, diag);
                 }
                 (Some(_), None) => {
                     self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
                 }
-                (None, _) => self.classification_deadline = None,
+                (None, _) => {
+                    self.classification_deadline = None;
+                    self.classification_resize_at_ms = None;
+                }
             }
         }
     }
@@ -489,7 +495,8 @@ impl WidthController {
                 self.mux,
                 Some(step.view_cols),
             );
-            self.convergence.retarget(Some(target.cols));
+            self.convergence
+                .retarget(Some(target.cols(Some(step.view_cols))));
             self.observe(measured_cols, SidebarWidthControlTrigger::Backstop, diag);
             return true;
         }
@@ -500,12 +507,17 @@ impl WidthController {
         &mut self,
         measured_cols: u16,
         sibling_count: usize,
+        panes_observed_at_ms: Option<u64>,
         diag: &DiagSink,
     ) {
         if !self.convergence.needs_adjustment(measured_cols) {
+            self.classification_deadline = None;
+            self.classification_resize_at_ms = None;
             return;
         }
         let Some(pane) = self.own_pane.as_ref() else {
+            self.classification_deadline = None;
+            self.classification_resize_at_ms = None;
             return;
         };
         let step = match crate::mux::backend_for(self.mux).sidebar_width_step(
@@ -521,6 +533,7 @@ impl WidthController {
                     SidebarWidthControlTrigger::Classification,
                     diag,
                 );
+                self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
                 return;
             }
         };
@@ -530,8 +543,24 @@ impl WidthController {
                 SidebarWidthControlTrigger::Classification,
                 diag,
             );
+            self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
             return;
         };
+        if !self
+            .classification_resize_at_ms
+            .zip(panes_observed_at_ms)
+            .is_some_and(|(resize_at_ms, observed_at_ms)| observed_at_ms > resize_at_ms)
+        {
+            self.observe(
+                measured_cols,
+                SidebarWidthControlTrigger::Classification,
+                diag,
+            );
+            self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
+            return;
+        }
+        self.classification_deadline = None;
+        self.classification_resize_at_ms = None;
 
         let previous = self
             .last_classified
@@ -546,8 +575,9 @@ impl WidthController {
                 self.mux,
                 Some(view_cols.get()),
             );
-            spawn_width_default_record(self.mux, &self.session_name, target.cols.get());
-            self.convergence.retarget(Some(target.cols));
+            let target_cols = target.cols(Some(view_cols.get()));
+            spawn_width_default_record(self.mux, &self.session_name, target_cols.get());
+            self.convergence.retarget(Some(target_cols));
             self.observe(
                 measured_cols,
                 SidebarWidthControlTrigger::Classification,
@@ -812,7 +842,7 @@ mod tests {
         let diag = crate::diag::DiagSink::disabled();
 
         assert_eq!(controller.convergence.target(), None);
-        controller.backstop(Some(80), Some(1), &diag);
+        controller.backstop(Some(80), Some(1), None, &diag);
 
         assert_eq!(controller.convergence.target(), Some(target(50)));
         assert_eq!(controller.last_classified, Some((200, 1)));
@@ -823,13 +853,13 @@ mod tests {
         let (_dir, _runtime, mut controller) = controller(MuxName::Zellij);
         let diag = crate::diag::DiagSink::disabled();
 
-        controller.backstop(Some(80), Some(1), &diag);
+        controller.backstop(Some(80), Some(1), None, &diag);
         let retry = controller
             .baseline_probe_deadline
             .expect("failed baseline re-arms the probe");
         assert!(retry > Instant::now());
 
-        controller.backstop(Some(80), Some(1), &diag);
+        controller.backstop(Some(80), Some(1), None, &diag);
         assert_eq!(
             controller.baseline_probe_deadline,
             Some(retry),
@@ -859,14 +889,14 @@ mod tests {
 
         controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
         controller.classification_deadline = Some(Instant::now());
-        controller.backstop(Some(83), Some(1), &diag);
+        controller.backstop(Some(83), Some(1), Some(u64::MAX), &diag);
 
         assert_eq!(
             crate::sidebar::width_target::pinned(&runtime),
             Some(crate::mux::WidthPermille::from_percent(40)),
         );
         assert_eq!(controller.classification_deadline, None);
-        controller.backstop(Some(83), Some(1), &diag);
+        controller.backstop(Some(83), Some(1), Some(u64::MAX), &diag);
         assert_eq!(
             crate::sidebar::width_target::pinned(&runtime),
             Some(crate::mux::WidthPermille::from_percent(40)),
@@ -883,7 +913,7 @@ mod tests {
 
         controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
         controller.classification_deadline = Some(Instant::now());
-        controller.backstop(Some(83), Some(2), &diag);
+        controller.backstop(Some(83), Some(2), Some(u64::MAX), &diag);
 
         assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
         assert_eq!(controller.convergence.target(), Some(target(50)));
@@ -899,7 +929,7 @@ mod tests {
 
         controller.observe(80, SidebarWidthControlTrigger::ResizeFeedback, &diag);
         controller.classification_deadline = Some(Instant::now());
-        controller.backstop(Some(80), Some(1), &diag);
+        controller.backstop(Some(80), Some(1), Some(u64::MAX), &diag);
 
         assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
         assert_eq!(controller.convergence.target(), Some(target(60)));
@@ -917,7 +947,7 @@ mod tests {
 
         controller.observe(96, SidebarWidthControlTrigger::ResizeFeedback, &diag);
         controller.classification_deadline = Some(Instant::now());
-        controller.backstop(Some(96), Some(1), &diag);
+        controller.backstop(Some(96), Some(1), Some(u64::MAX), &diag);
 
         assert_eq!(crate::sidebar::width_target::pinned(&runtime), Some(share));
         assert_eq!(controller.convergence.target(), Some(target(96)));
@@ -932,9 +962,30 @@ mod tests {
 
         controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
         controller.classification_deadline = Some(Instant::now());
-        controller.backstop(Some(83), Some(1), &diag);
+        controller.backstop(Some(83), Some(1), Some(u64::MAX), &diag);
 
         assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+        assert!(controller.classification_deadline.is_some());
+    }
+
+    #[test]
+    fn stale_pane_observation_converges_and_rearms_without_adopting() {
+        let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+        write_zellij_topology(&runtime);
+        controller.last_classified = Some((200, 1));
+        let diag = crate::diag::DiagSink::disabled();
+        controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+
+        controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+        let resize_at_ms = controller
+            .classification_resize_at_ms
+            .expect("resize starts classification");
+        controller.classification_deadline = Some(Instant::now());
+        controller.backstop(Some(83), Some(1), Some(resize_at_ms), &diag);
+
+        assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+        assert!(controller.classification_deadline.is_some());
+        assert_eq!(controller.classification_resize_at_ms, Some(resize_at_ms));
     }
 
     #[test]

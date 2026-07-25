@@ -37,8 +37,9 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
             extra_env: Default::default(),
             cwd: std::env::temp_dir(),
             target: rimz::mux::SidebarTarget {
-                cols: std::num::NonZeroU16::new(30).expect("nonzero test width"),
-                percent: 25,
+                share: rimz::mux::WidthPermille::from_percent(25),
+                max_cols: std::num::NonZeroU16::new(30).expect("nonzero test width"),
+                pinned: false,
             },
             detected_view_size: None,
             rimz_bin: stub.to_path_buf(),
@@ -118,8 +119,9 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
         extra_env: Default::default(),
         cwd: cwd.path().to_path_buf(),
         target: rimz::mux::SidebarTarget {
-            cols: std::num::NonZeroU16::new(30).expect("nonzero test width"),
-            percent: 25,
+            share: rimz::mux::WidthPermille::from_percent(25),
+            max_cols: std::num::NonZeroU16::new(30).expect("nonzero test width"),
+            pinned: false,
         },
         detected_view_size: None,
         rimz_bin: stub,

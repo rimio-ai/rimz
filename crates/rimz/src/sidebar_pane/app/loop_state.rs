@@ -911,6 +911,7 @@ impl LoopState {
                 .own_view
                 .as_ref()
                 .map(|view| view.sibling_count),
+            self.current.panes_observed_at_ms,
             diag,
         );
     }

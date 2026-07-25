@@ -244,7 +244,14 @@ fn sidebar_widths_converge_per_window_and_refresh_future_births() {
     );
 
     let mut reload_opts = opts;
-    reload_opts.target.cols = std::num::NonZeroU16::new(55).expect("nonzero test width");
+    reload_opts.target = rimz::mux::SidebarTarget {
+        share: rimz::mux::WidthPermille::from_cols(
+            std::num::NonZeroU16::new(55).expect("nonzero test width"),
+            std::num::NonZeroU16::new(340).expect("nonzero test view"),
+        ),
+        pinned: true,
+        ..reload_opts.target
+    };
     server
         .backend
         .reconcile_sidebars(&reload_opts, &rimz::mux::SidebarLiveness::default())
@@ -260,7 +267,7 @@ fn sidebar_birth_and_first_attach_preserve_work_shell_contract() {
     let (_stub_dir, stub) = sidebar_command_stub();
     let mut opts = sidebar_opts(session, stub, Some(100));
     opts.pristine_birth = true;
-    let sidebar_cols = u64::from(opts.target.cols.get());
+    let sidebar_cols = u64::from(opts.target.cols(Some(100)).get());
     let birth_shell_cols = 100 - sidebar_cols - 1;
     server
         .backend
@@ -364,7 +371,7 @@ fn new_window_hook_respawns_plain_shell_at_final_width_only() {
     ensure_rimz_session(&server, session, Some((100, 30)));
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = sidebar_opts(session, stub, Some(100));
-    let sidebar_cols = u64::from(opts.target.cols.get());
+    let sidebar_cols = u64::from(opts.target.cols(Some(100)).get());
     server
         .backend
         .open_sidebar(&opts, None)
@@ -690,7 +697,12 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
     );
     assert_eq!(
         left_pane_width(&server, "rimz-resume:#feature"),
-        Some(u64::from(sidebar.target.cols.get())),
+        Some(u64::from(
+            sidebar
+                .target
+                .cols(sidebar.detected_view_size.map(|(cols, _)| cols))
+                .get(),
+        )),
         "resume seeding keeps the hook-docked sidebar at the birth width"
     );
     // A re-run finds the window already present and seeds nothing new.

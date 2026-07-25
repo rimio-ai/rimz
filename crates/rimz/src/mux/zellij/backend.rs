@@ -945,7 +945,7 @@ impl MuxBackend for ZellijBackend {
         // Kept sidebars (not planned for closing) whose geometry sits off the
         // layout's dock — the residue of a mis-mounted add — converge in place
         // this pass, renderer untouched.
-        let off_spec = off_spec_sidebars(&panes, &planned_closes, opts.target.cols);
+        let off_spec = off_spec_sidebars(&panes, &planned_closes, opts.target);
         if plan.is_empty() && off_spec.is_empty() {
             return Ok(SidebarRecovery::default());
         }
@@ -1117,7 +1117,7 @@ impl MuxBackend for ZellijBackend {
         );
         let sidebar_percent =
             crate::sidebar::width_target::resolve(&runtime, width, MuxName::Zellij, view_cols)
-                .percent;
+                .percent();
         let layout = TempLayoutFile::new(render_tab_layout(opts, sidebar_percent)?)?;
         let args = [
             "new-tab".to_owned(),
@@ -1206,14 +1206,14 @@ pub(super) fn reconcile_pane(pane: &PaneTopologyPane) -> Option<ReconcilePane> {
 fn off_spec_sidebars(
     panes: &[PaneTopologyPane],
     closing: &[PaneId],
-    target_cols: std::num::NonZeroU16,
+    target: crate::mux::SidebarTarget,
 ) -> Vec<(u64, u64)> {
     let closing: HashSet<u64> = closing.iter().filter_map(parse_zellij_raw).collect();
     panes
         .iter()
         .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
         .filter(|pane| !closing.contains(&pane.id))
-        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, target_cols))
+        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, target))
         .map(|pane| (pane.tab_position, pane.id))
         .collect()
 }

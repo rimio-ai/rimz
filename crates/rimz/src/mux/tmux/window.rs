@@ -103,7 +103,10 @@ impl TmuxBackend {
         opts: &SidebarPaneOptions,
         window_id: &str,
     ) -> Result<PaneId> {
-        let size = opts.target.cols.to_string();
+        let view_cols = self
+            .window_width(window_id)
+            .map(|cols| u16::try_from(cols).unwrap_or(u16::MAX));
+        let size = opts.target.cols(view_cols).to_string();
         let mut args = vec![
             "split-window".to_owned(),
             "-d".to_owned(),
@@ -277,7 +280,10 @@ impl TmuxBackend {
         if let Some(sidebar_pane) = self.leftmost_pane(window_id)
             && sidebar_pane != first_pane
         {
-            let sidebar_cols = sidebar.target.cols.get();
+            let sidebar_cols = sidebar
+                .target
+                .cols(Some(u16::try_from(full_w).unwrap_or(u16::MAX)))
+                .get();
             let _ = self
                 .cmd()
                 .args([

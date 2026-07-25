@@ -199,8 +199,9 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         extra_env: Default::default(),
         cwd: cwd.path().to_path_buf(),
         target: rimz::mux::SidebarTarget {
-            cols: std::num::NonZeroU16::new(30).expect("nonzero test width"),
-            percent: 25,
+            share: rimz::mux::WidthPermille::from_percent(25),
+            max_cols: std::num::NonZeroU16::new(30).expect("nonzero test width"),
+            pinned: false,
         },
         detected_view_size: None,
         rimz_bin: stub,

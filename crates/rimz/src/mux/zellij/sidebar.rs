@@ -600,7 +600,7 @@ impl ZellijBackend {
         let sync = WidthSyncOptions {
             session_name: opts.session_name.clone(),
             workspace_id: opts.workspace_id.clone(),
-            target_cols: opts.target.cols,
+            target: opts.target,
         };
         let (width_floor, _) = self.converge_sidebar_width(&sync, tab_position, raw_id, floor);
         width_floor
@@ -893,7 +893,11 @@ impl ZellijBackend {
             let Some((cols, view_cols)) = cols.zip(tab_view_cols(panes, tab_position)) else {
                 break;
             };
-            let target_cols = u64::from(opts.target_cols.get());
+            let target_cols = u64::from(
+                opts.target
+                    .cols(Some(u16::try_from(view_cols).unwrap_or(u16::MAX)))
+                    .get(),
+            );
             if !sidebar_width_off_spec(cols, target_cols, zellij_resize_step_cols(view_cols)) {
                 break;
             }

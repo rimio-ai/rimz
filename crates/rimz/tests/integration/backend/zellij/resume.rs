@@ -35,8 +35,9 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
         extra_env: Default::default(),
         cwd: workspace.project_root.clone(),
         target: rimz::mux::SidebarTarget {
-            cols: std::num::NonZeroU16::new(40).expect("nonzero test width"),
-            percent: 25,
+            share: rimz::mux::WidthPermille::from_percent(25),
+            max_cols: std::num::NonZeroU16::new(40).expect("nonzero test width"),
+            pinned: false,
         },
         detected_view_size: None,
         rimz_bin: stub,

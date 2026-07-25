@@ -183,8 +183,9 @@ mod tests {
                 extra_env: BTreeMap::new(),
                 cwd: PathBuf::from("/work"),
                 target: rimz::mux::SidebarTarget {
-                    cols: std::num::NonZeroU16::new(72).expect("nonzero test width"),
-                    percent: 25,
+                    share: rimz::mux::WidthPermille::from_percent(25),
+                    max_cols: std::num::NonZeroU16::new(72).expect("nonzero test width"),
+                    pinned: false,
                 },
                 detected_view_size: None,
                 rimz_bin: PathBuf::from("/bin/rimz"),

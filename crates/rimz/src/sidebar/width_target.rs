@@ -36,13 +36,13 @@ fn load_file(runtime: &RuntimePaths) -> Option<WidthTargetFile> {
     }
 }
 
-/// Read the current target share without resolving it against view geometry.
-pub fn load(runtime: &RuntimePaths) -> Option<WidthPermille> {
+#[cfg(test)]
+pub(crate) fn load(runtime: &RuntimePaths) -> Option<WidthPermille> {
     load_file(runtime).map(|file| file.permille)
 }
 
-/// Read the target only when the user has pinned it.
-pub fn pinned(runtime: &RuntimePaths) -> Option<WidthPermille> {
+#[cfg(test)]
+pub(crate) fn pinned(runtime: &RuntimePaths) -> Option<WidthPermille> {
     load_file(runtime)
         .filter(|file| file.pinned)
         .map(|file| file.permille)
@@ -57,8 +57,17 @@ pub fn resolve(
 ) -> crate::mux::SidebarTarget {
     let stored = load_file(runtime);
     let view_cols = view_cols.and_then(NonZeroU16::new);
-    let (permille, pinned) = match (stored, view_cols) {
-        (Some(file), _) if file.pinned => (file.permille, true),
+    if view_cols.is_none()
+        && let Some(file) = stored
+    {
+        return crate::mux::SidebarTarget {
+            share: file.permille,
+            max_cols: width.max_cols,
+            pinned: file.pinned,
+        };
+    }
+    let (permille, pinned, persist) = match (stored, view_cols) {
+        (Some(file), Some(_)) if file.pinned => (file.permille, true, true),
         (_, Some(view_cols)) => {
             let target_cols =
                 u16::try_from(width.target_cols(u64::from(view_cols.get()))).unwrap_or(u16::MAX);
@@ -68,23 +77,27 @@ pub fn resolve(
                     view_cols,
                 ),
                 false,
+                true,
             )
         }
         _ => (
             WidthPermille::from_percent(width.percent.resolve(None)),
             false,
+            false,
         ),
     };
     let permille = permille.snap_to_rung(mux);
     let resolved = WidthTargetFile { permille, pinned };
-    if stored != Some(resolved)
+    if persist
+        && stored != Some(resolved)
         && let Err(err) = write_and_broadcast(runtime, resolved)
     {
         warn!(error = %err, "sidebar width target resolve write failed");
     }
     crate::mux::SidebarTarget {
-        cols: view_cols.map_or(width.max_cols, |view_cols| permille.cols(view_cols)),
-        percent: permille.to_percent_rounded(),
+        share: permille,
+        max_cols: width.max_cols,
+        pinned,
     }
 }
 
@@ -156,26 +169,26 @@ mod tests {
 
         let width = SidebarWidth::default();
         assert_eq!(
-            resolve(&runtime, width, MuxName::Zellij, Some(200)).cols,
+            resolve(&runtime, width, MuxName::Zellij, Some(200)).cols(Some(200)),
             NonZeroU16::new(50).expect("nonzero"),
         );
         assert_eq!(load(&runtime), Some(WidthPermille::from_percent(25)));
         assert_eq!(pinned(&runtime), None);
         assert_eq!(
-            resolve(&runtime, width, MuxName::Tmux, Some(300)).cols,
+            resolve(&runtime, width, MuxName::Tmux, Some(300)).cols(Some(300)),
             NonZeroU16::new(72).expect("nonzero"),
         );
         assert_ne!(load(&runtime), Some(WidthPermille::from_percent(25)));
 
         fs::write(runtime.sidebar_width_path(), b"not json").expect("garbage file");
         assert_eq!(
-            resolve(&runtime, width, MuxName::Tmux, Some(120)).cols,
+            resolve(&runtime, width, MuxName::Tmux, Some(120)).cols(Some(120)),
             NonZeroU16::new(30).expect("nonzero"),
         );
 
         fs::write(runtime.sidebar_width_path(), br#"{"cols":90}"#).expect("old record");
         assert_eq!(
-            resolve(&runtime, width, MuxName::Tmux, Some(120)).cols,
+            resolve(&runtime, width, MuxName::Tmux, Some(120)).cols(Some(120)),
             NonZeroU16::new(30).expect("nonzero"),
         );
     }
@@ -195,7 +208,7 @@ mod tests {
                 MuxName::Zellij,
                 Some(200),
             )
-            .cols,
+            .cols(Some(200)),
             NonZeroU16::new(80).expect("nonzero"),
         );
         assert_eq!(
@@ -205,7 +218,7 @@ mod tests {
                 MuxName::Zellij,
                 Some(300),
             )
-            .cols,
+            .cols(Some(300)),
             NonZeroU16::new(120).expect("nonzero"),
             "a pin scales and is not clamped by max_cols",
         );
@@ -217,7 +230,7 @@ mod tests {
         let runtime = runtime(dir.path());
         let width = SidebarWidth::default();
         assert_eq!(
-            resolve(&runtime, width, MuxName::Tmux, Some(400)).cols,
+            resolve(&runtime, width, MuxName::Tmux, Some(400)).cols(Some(400)),
             width.max_cols,
         );
 
@@ -229,21 +242,37 @@ mod tests {
         )
         .expect("pin width target");
         assert_eq!(
-            resolve(&runtime, width, MuxName::Tmux, Some(400)).cols,
+            resolve(&runtime, width, MuxName::Tmux, Some(400)).cols(Some(400)),
             NonZeroU16::new(200).expect("nonzero"),
         );
     }
 
     #[test]
-    fn zellij_default_uses_the_nearest_rung_around_the_cap() {
+    fn zellij_default_keeps_the_cap_after_snapping_the_share() {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = runtime(dir.path());
         let width = SidebarWidth::default();
 
         assert_eq!(
-            resolve(&runtime, width, MuxName::Zellij, Some(400)).cols,
-            NonZeroU16::new(80).expect("nonzero"),
-            "the nearest 5% rung may land half a rung beyond max_cols",
+            resolve(&runtime, width, MuxName::Zellij, Some(400)).cols(Some(400)),
+            width.max_cols,
+        );
+    }
+
+    #[test]
+    fn geometry_free_resolve_keeps_the_last_established_auto_share() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = runtime(dir.path());
+        let width = SidebarWidth::default();
+
+        let established = resolve(&runtime, width, MuxName::Tmux, Some(250));
+        assert_eq!(established.cols(Some(250)), NonZeroU16::new(72).unwrap());
+        let without_geometry = resolve(&runtime, width, MuxName::Tmux, None);
+        assert_eq!(without_geometry.share, established.share);
+        assert_eq!(
+            without_geometry.cols(Some(250)),
+            NonZeroU16::new(72).unwrap(),
+            "a blind narrow Auto fallback must not replace the established share",
         );
     }
 
@@ -259,8 +288,9 @@ mod tests {
             MuxName::Zellij,
             None,
         );
-        assert_eq!(target.cols, theme.display.max_cols);
-        assert_eq!(target.percent, 40);
+        assert_eq!(target.cols(None), theme.display.max_cols);
+        assert_eq!(target.percent(), 40);
+        assert_eq!(load(&runtime), None, "a blind fallback is not persisted");
 
         clear(&runtime).expect("clear explicit target");
         theme.display.width_percent = None;
@@ -271,8 +301,8 @@ mod tests {
             MuxName::Zellij,
             None,
         );
-        assert_eq!(target.cols, theme.display.max_cols);
-        assert_eq!(target.percent, 30);
+        assert_eq!(target.cols(None), theme.display.max_cols);
+        assert_eq!(target.percent(), 30);
     }
 
     #[test]

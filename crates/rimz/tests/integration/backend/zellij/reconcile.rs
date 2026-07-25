@@ -410,7 +410,15 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     assert_eq!(report.failed, 0);
     assert_eq!(report.misdocked, 0);
     assert_sidebar_is_left_docked(&xdg, &name);
-    wait_for_sidebar_width_at_most(&xdg, &name, u64::from(opts.target.cols.get()));
+    wait_for_sidebar_width_at_most(
+        &xdg,
+        &name,
+        u64::from(
+            opts.target
+                .cols(opts.detected_view_size.map(|(cols, _)| cols))
+                .get(),
+        ),
+    );
     assert_sidebar_identity(
         &xdg,
         &name,
@@ -849,8 +857,9 @@ fn reconcile_opts(
     let share = rimz::mux::WidthPermille::from_cols(requested_cols, view_cols)
         .snap_to_rung(MuxName::Zellij);
     let target = rimz::mux::SidebarTarget {
-        cols: share.cols(view_cols),
-        percent: share.to_percent_rounded(),
+        share,
+        max_cols: width.max_cols,
+        pinned: false,
     };
     SidebarPaneOptions {
         session_name: name.to_owned(),

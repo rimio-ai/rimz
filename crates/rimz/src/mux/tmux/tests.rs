@@ -286,8 +286,9 @@ fn open_tab_rejects_an_empty_layout() {
         extra_env: Default::default(),
         cwd: PathBuf::from("/tmp/rimz-empty"),
         target: crate::mux::SidebarTarget {
-            cols: std::num::NonZeroU16::new(20).expect("nonzero test width"),
-            percent: 25,
+            share: crate::mux::WidthPermille::from_percent(25),
+            max_cols: std::num::NonZeroU16::new(20).expect("nonzero test width"),
+            pinned: false,
         },
         detected_view_size: None,
         rimz_bin: PathBuf::from("/bin/true"),
