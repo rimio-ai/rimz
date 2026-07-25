@@ -364,6 +364,7 @@ impl SidebarSnapshot {
 
     /// Top-level agent sessions bound to one of this frame's live agent panes.
     /// Historical rollup roots stay out of peer-set handle disambiguation.
+    /// Only meaningful after [`Self::with_live_panes`] populates `agent_panes`.
     pub fn pane_bound_roots(&self) -> impl Iterator<Item = &AgentState> {
         self.root_agents().filter(|agent| {
             self.agent_panes
