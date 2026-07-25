@@ -1482,6 +1482,51 @@ fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
 }
 
 #[test]
+fn steer_sender_prefix_ignores_shadowed_co_resident_session() {
+    let env = Env::new();
+    register_role_agent(
+        &env,
+        "claude",
+        "sess-prefix-target",
+        "reviewer",
+        true,
+        Some(TRACE_PANE),
+    );
+    register_role_agent(
+        &env,
+        "codex",
+        "sess-prefix-owner",
+        "coder",
+        true,
+        Some("terminal_4"),
+    );
+    register_role_agent(
+        &env,
+        "codex",
+        "sess-prefix-shadow",
+        "coder",
+        true,
+        Some("terminal_4"),
+    );
+    let target_pane = agent_pane(&env, "claude");
+    let mut sender_pane = agent_pane(&env, "codex");
+    sender_pane.pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_4");
+    let pane_fixture = env.write_pane_fixture(&[target_pane, sender_pane]);
+
+    let trace_log = env.project_root.join("zellij-shadowed-sender-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-shadowed-sender-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", pane_fixture)
+            .env("RIMZ_AGENT_KIND", "codex")
+            .env("RIMZ_AGENT_NAME", "coder-agent")
+            .env("RIMZ_AGENT_ROLE", "coder")
+            .args(["message", "--steer", "@reviewer", "--", "re-review"]),
+        "steer from reborn agent",
+    );
+    assert_text_then_enter(&trace_log, "from @coder: re-review");
+}
+
+#[test]
 fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
     let env = Env::new();
     env.install_agent_hooks("claude");

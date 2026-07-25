@@ -204,7 +204,7 @@ pub(super) fn list_messages(
     if json {
         render::json_pretty(&messages)?;
     } else {
-        let agents: Vec<&AgentState> = snapshot.root_agents().collect();
+        let agents = rimz::harness::target::addressable_agents(&snapshot);
         let mut out = render::out();
         render_message_digest(&mut out, messages, &agents, &lane_scope, hidden, status)?;
     }
@@ -545,7 +545,7 @@ mod tests {
             DeliveryGate::Done,
         );
         let message = MessageListRow::from_record(message);
-        let agents: Vec<&AgentState> = snapshot.root_agents().collect();
+        let agents = rimz::harness::target::addressable_agents(&snapshot);
         assert_eq!(message_target(&message, &agents), "@coder#project");
     }
 

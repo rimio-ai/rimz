@@ -19,7 +19,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.alive_snapshot()?;
     let agent = crate::cli::resolve_agent_one(&snapshot, &reference, None, ctx.channel())?.clone();
-    let peers = snapshot.root_agents().collect::<Vec<_>>();
+    let peers = rimz::harness::target::addressable_agents(&snapshot);
     let message = restart_resolved(&ctx, &agent, &peers)?;
     writeln!(crate::cli::render::out(), "{message}")?;
     Ok(())

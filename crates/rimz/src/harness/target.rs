@@ -232,7 +232,7 @@ pub fn resolve_one<'a>(
     worktree_flag: Option<&str>,
     current_channel: Option<&str>,
 ) -> Result<&'a AgentState, TargetErr> {
-    let candidates = root_agents(snapshot);
+    let candidates = addressable_agents(snapshot);
     let matches = resolve_mentions(raw, worktree_flag, current_channel, &candidates)?;
     match matches.as_slice() {
         [one] => Ok(one),
@@ -252,7 +252,7 @@ pub fn resolve_many<'a>(
     worktree_flag: Option<&str>,
     current_channel: Option<&str>,
 ) -> Result<Vec<&'a AgentState>, TargetErr> {
-    let candidates = root_agents(snapshot);
+    let candidates = addressable_agents(snapshot);
     resolve_agents(raw, worktree_flag, current_channel, &candidates)
 }
 
@@ -366,7 +366,13 @@ pub fn bind_agent<'a>(
         .find(|binding| binding.matches_agent(agent))
 }
 
-fn root_agents(snapshot: &SidebarSnapshot) -> Vec<&AgentState> {
+/// The root agents that can be named in this snapshot.
+///
+/// One physical agent instance contributes at most one addressable row. Handle
+/// rendering uses this same set so [`agent_handle`] stays the inverse of
+/// [`parse_target`]. A pure rollup has no `agent_panes`, cannot observe
+/// shadowing, and therefore yields every root.
+pub fn addressable_agents(snapshot: &SidebarSnapshot) -> Vec<&AgentState> {
     snapshot
         .root_agents()
         .filter(|agent| !shadowed_by_pane_owner(snapshot, agent))

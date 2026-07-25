@@ -93,7 +93,7 @@ fn collect_show_report(
         None => None,
     }
     .filter(|view| !view.entries.is_empty());
-    let peers: Vec<&AgentState> = snapshot.root_agents().collect();
+    let peers = rimz::harness::target::addressable_agents(snapshot);
     let me = SelfIdentity::from_env().resolve(snapshot);
     let report_agent = agent.as_ref().map(|agent| {
         let session_cost = cost.as_ref().and_then(|cost| cost.total_cost_usd);

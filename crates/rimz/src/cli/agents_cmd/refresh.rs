@@ -45,7 +45,7 @@ pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()
         return Ok(());
     }
 
-    let peers: Vec<&AgentState> = snapshot.root_agents().collect();
+    let peers = rimz::harness::target::addressable_agents(&snapshot);
     let mut failed = false;
     let mut out = render::out();
     for agent in targets {

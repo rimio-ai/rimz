@@ -69,7 +69,7 @@ fn select<'a>(
 }
 
 fn root_peers(snapshot: &rimz::SidebarSnapshot) -> Vec<&AgentState> {
-    snapshot.root_agents().collect()
+    rimz::harness::target::addressable_agents(snapshot)
 }
 
 pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) -> Result<()> {

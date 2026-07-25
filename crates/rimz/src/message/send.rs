@@ -183,7 +183,7 @@ pub(crate) fn send_batch_to_live_pane(
         ) {
             Ok(PaneWrite::Sent) => {
                 compacted = true;
-                let peers = snapshot.root_agents().collect::<Vec<_>>();
+                let peers = crate::harness::target::addressable_agents(snapshot);
                 crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
                     at: jiff::Timestamp::now(),
                     assist: crate::harness::assist_log::Assist::AutoCompact {
@@ -282,7 +282,7 @@ fn write_batch(
                     .iter()
                     .all(|message| message.body == MessageBody::Prompt)
             );
-            let peers: Vec<&AgentState> = snapshot.root_agents().collect();
+            let peers = crate::harness::target::addressable_agents(snapshot);
             let payload = batch
                 .iter()
                 .map(|message| {

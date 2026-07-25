@@ -346,8 +346,8 @@ pub(super) fn message_miss(
 ) -> Result<()> {
     let mut out = render::err();
     writeln!(out, "{err:#}")?;
-    let agents = snapshot
-        .root_agents()
+    let agents = rimz::harness::target::addressable_agents(snapshot)
+        .into_iter()
         .filter(|agent| {
             channel.is_none_or(|filter| rimz::harness::target::agent_in_worktree(agent, filter))
         })

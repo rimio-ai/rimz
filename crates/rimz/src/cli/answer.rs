@@ -463,11 +463,7 @@ fn transcript_has_answer(paths: &rimz::StatePaths, ask_id: &AskId) -> Result<boo
 }
 
 fn root_peers(snapshot: &rimz::SidebarSnapshot) -> Vec<&rimz::agents::AgentState> {
-    snapshot
-        .agents
-        .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
-        .collect()
+    rimz::harness::target::addressable_agents(snapshot)
 }
 
 fn parse_wait(raw: &str) -> std::result::Result<Duration, String> {

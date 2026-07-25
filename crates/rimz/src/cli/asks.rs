@@ -270,11 +270,7 @@ fn view_for_agent(
 }
 
 fn root_peers(snapshot: &rimz::SidebarSnapshot) -> Vec<&AgentState> {
-    snapshot
-        .agents
-        .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
-        .collect()
+    rimz::harness::target::addressable_agents(snapshot)
 }
 
 fn first_line(view: &OpenAskView) -> &str {

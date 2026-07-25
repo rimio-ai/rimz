@@ -250,7 +250,7 @@ What the send path spaces is *messages*, not the paste and its submit: it sleeps
 
 A send from a RimZ-launched agent arrives prefixed `from @sender: `, gaining `#channel` when it crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
 
-The handle is the shortest unique selector: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. `--no-from` delivers verbatim.
+The handle is the shortest unique selector over addressable agents: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down this ladder. `--no-from` delivers verbatim.
 
 The receiver's turn-start hook parses the prefix once and writes a first-class `Message` transcript entry with structured `from`. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed hook text stays the transcript content.
 
