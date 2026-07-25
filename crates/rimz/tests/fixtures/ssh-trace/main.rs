@@ -9,6 +9,8 @@
 //! `$RIMZ_TEST_SSH_RAW_TTY` simulates OpenSSH leaving the controlling tty raw;
 //! `$RIMZ_TEST_SSH_TTY_STATE_LOG` records whether each attach inherited sane
 //! shell flags before that transition.
+//! `$RIMZ_TEST_SSH_SUSPEND` stops the visible client until its process group
+//! receives `SIGCONT`, exercising the launcher's job-control mirror.
 //! `$RIMZ_TEST_SSH_STDERR` supplies the visible attach's diagnostic output.
 //! `$RIMZ_TEST_SSH_MASTER_PLAN` scripts background ControlMaster failures and
 //! `$RIMZ_TEST_SSH_MASTER_STDERR` supplies their diagnostic output.
@@ -80,6 +82,8 @@ fn main() {
         stream.flush().expect("flush attach stderr");
     }
 
+    suspend_if_requested();
+
     if let Ok(ms) = env::var("RIMZ_TEST_SSH_SLEEP_MS")
         && let Ok(ms) = ms.parse::<u64>()
     {
@@ -88,6 +92,16 @@ fn main() {
 
     exit_from_plan("RIMZ_TEST_SSH_PLAN");
 }
+
+#[cfg(unix)]
+fn suspend_if_requested() {
+    if env::var_os("RIMZ_TEST_SSH_SUSPEND").is_some() {
+        nix::sys::signal::raise(nix::sys::signal::Signal::SIGTSTP).expect("suspend ssh trace");
+    }
+}
+
+#[cfg(not(unix))]
+fn suspend_if_requested() {}
 
 #[cfg(unix)]
 fn record_and_enter_raw_tty_if_requested() {

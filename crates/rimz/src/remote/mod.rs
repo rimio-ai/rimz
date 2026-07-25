@@ -347,6 +347,7 @@ pub struct SshAttachAttempt<'a> {
     plan: &'a SshAttachPlan,
     phase: AttemptPhase,
     mark: bool,
+    outer_scroll_bracket: bool,
 }
 
 impl SshAttachPlan {
@@ -363,6 +364,7 @@ impl SshAttachPlan {
             plan: self,
             phase: AttemptPhase::Initial,
             mark: false,
+            outer_scroll_bracket: false,
         }
     }
 
@@ -371,6 +373,7 @@ impl SshAttachPlan {
             plan: self,
             phase: AttemptPhase::Retry,
             mark: false,
+            outer_scroll_bracket: false,
         }
     }
 
@@ -415,6 +418,11 @@ impl SshAttachAttempt<'_> {
         self
     }
 
+    pub fn with_outer_scroll_bracket(mut self, outer_scroll_bracket: bool) -> Self {
+        self.outer_scroll_bracket = outer_scroll_bracket;
+        self
+    }
+
     pub fn plain(&self) -> CommandSpec {
         self.compile(ControlMode::Plain)
     }
@@ -446,7 +454,12 @@ impl SshAttachAttempt<'_> {
             .args(control_path.into_iter().flat_map(link::control_options))
             .args(["-t", "--"])
             .arg(options.target.ssh_destination().as_str())
-            .arg(guarded_snippet(options, self.phase, self.mark))
+            .arg(guarded_snippet(
+                options,
+                self.phase,
+                self.mark,
+                self.outer_scroll_bracket,
+            ))
     }
 }
 
@@ -526,7 +539,12 @@ pub fn term_plan_from(
 /// The single remote shell command: repair the non-login-shell PATH, fail
 /// with the install fix when the host has no `rimz`, provision the carried
 /// terminal when needed, then exec into the room.
-fn guarded_snippet(options: &SshAttachOptions, phase: AttemptPhase, mark: bool) -> String {
+fn guarded_snippet(
+    options: &SshAttachOptions,
+    phase: AttemptPhase,
+    mark: bool,
+    outer_scroll_bracket: bool,
+) -> String {
     let (verb, arg) = match &options.target.spec {
         RemoteSpec::Path(path) => ("start", quote_remote_path(path)),
         RemoteSpec::Session(name) => ("attach", sh_quote(name)),
@@ -537,6 +555,9 @@ fn guarded_snippet(options: &SshAttachOptions, phase: AttemptPhase, mark: bool) 
     }
     if let Some(mux) = options.mux {
         rimz.push_str(&format!(" --mux {mux}"));
+    }
+    if outer_scroll_bracket {
+        rimz.push_str(" --outer-scroll-bracket");
     }
     let mut env_setup = String::new();
     env_setup.push_str(&format!(

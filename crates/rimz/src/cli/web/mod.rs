@@ -478,7 +478,7 @@ fn exec_session_attach(spec: &rimz::mux::CommandSpec, session: Option<&str>) -> 
         .context("validated browser attach lost its session target")?;
     let display_name = crate::cli::sessions::session_display_name(session);
     rimz::web::write_session_sync(Some((session, &display_name)))?;
-    room::exec_attach_command(spec)
+    room::launch_attach_command(spec)
 }
 
 fn ensure_web_enabled(config: &rimz::config::MachineConfig) -> Result<()> {

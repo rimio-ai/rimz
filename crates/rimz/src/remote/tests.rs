@@ -671,6 +671,28 @@ fn ssh_attach_attempt_exports_the_render_marker_only_when_requested() {
 }
 
 #[test]
+fn ssh_attach_attempt_marks_an_existing_outer_scroll_bracket_only_when_requested() {
+    let plan = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false);
+    let unmarked = plan.initial().plain();
+    let marked = plan.initial().with_outer_scroll_bracket(true).plain();
+
+    assert!(
+        !unmarked
+            .args
+            .last()
+            .unwrap()
+            .contains("--outer-scroll-bracket")
+    );
+    assert!(
+        marked
+            .args
+            .last()
+            .unwrap()
+            .contains("rimz attach --attach --outer-scroll-bracket -- 'query-engine'")
+    );
+}
+
+#[test]
 fn ssh_attach_plan_exports_force_version_on_every_attempt_when_set() {
     let mut plan = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false);
     assert!(

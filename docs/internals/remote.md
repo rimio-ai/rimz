@@ -167,6 +167,8 @@ RimZ pins `ControlPersist=no`, `ConnectionAttempts=1`, and `ClearAllForwardings=
 
 The local supervisor requests `RIMZ_ATTACH_MARK` only when that colored panel held the alternate screen. Immediately before the remote room launches the mux client, a compatible RimZ writes a green check at the parked cursor; pty ordering puts the check ahead of the mux's first paint. An older remote ignores the variable and leaves the arrow in place until the mux renders.
 
+One-shot `--no-reconnect` SSH owns the alternate-scroll save/disable/restore bracket in the local RimZ process and marks the remote room launch so a current remote does not nest terminal mode saves. An older remote ignores the hidden launch flag and remains covered by the local bracket. Reconnect supervision launches SSH itself, so its unmarked remote RimZ owns the bracket instead.
+
 An attach over a confirmed master pipes and drains SSH stderr instead of letting control-client diagnostics paint over the panel. The supervisor filters direct and shared-connection close notices, maps a transport exit with no remaining diagnostic to `SSH control connection dropped`, carries that cause into recovery or a fatal message, and prints `rimz: detached from <host>` for a clean exit. The initial interactive fallback inherits stderr so authentication prompts, banners, and host-key warnings remain usable.
 
 **Classifying the end** of a session is pure:

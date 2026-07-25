@@ -575,6 +575,9 @@ pub struct AttachFlags {
     /// Alias for `--no-attach`.
     #[arg(long)]
     print: bool,
+    /// The invoking client already owns the terminal's alternate-scroll bracket.
+    #[arg(long, hide = true)]
+    outer_scroll_bracket: bool,
 }
 
 impl AttachFlags {
@@ -586,6 +589,10 @@ impl AttachFlags {
         } else {
             room::AttachMode::Auto
         }
+    }
+
+    pub(crate) fn outer_scroll_bracket(&self) -> bool {
+        self.outer_scroll_bracket
     }
 }
 
