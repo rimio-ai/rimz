@@ -84,7 +84,7 @@ The exported environment is the whole channel from client to host:
 | `RIMZ_REMOTE_CLIENT_VERSION` | The local binary's semantic version, for the skew gate. |
 | `RIMZ_REMOTE_FORCE_VERSION` | Set by `--force-version`, downgrading the minor refusal to a warning. |
 | `RIMZ_REMOTE_RECONNECT` | Set on retry attempts only, selecting the room's unattended posture. |
-| `RIMZ_ATTACH_MARK` | Set when a colored connection panel owns the alternate screen, asking a compatible remote RimZ to replace the parked Multiplexer arrow with a green check immediately before mux exec. |
+| `RIMZ_ATTACH_MARK` | Set when a colored connection panel owns the alternate screen, asking a compatible remote RimZ to replace the parked Multiplexer arrow with a green check immediately before mux launch. |
 | `RIMZ_CLIENT_SIZE` | Locally probed `<cols>x<rows>`, seeding the sidebar when the remote birth has no pty. |
 | `COLORTERM` | `truecolor` when the local terminal advertises 24-bit color, which SSH does not forward. |
 | `TERM` | Set by the `TermPlan` below. |
@@ -165,7 +165,7 @@ RimZ pins `ControlPersist=no`, `ConnectionAttempts=1`, and `ClearAllForwardings=
 
 **The handoff** keeps the alternate screen and click/wheel mouse reporting alive across the transition. When the master is confirmed, the still-owned panel turns its checkpoints green and animates the yellow Multiplexer `attaching…` row for the rest of the minimum-display window. The final frame freezes that row with an arrow and parks the cursor on its symbol cell before releasing raw input without leaving the alternate screen or dropping mouse capture, so the attached multiplexer paints directly over that frame and residual scroll momentum remains a mouse event instead of becoming an arrow key. A safety leave restores the main screen and mouse mode after the session ends. Ctrl-C, and the interactive fallback, instead return to intact pre-panel scrollback.
 
-The local supervisor requests `RIMZ_ATTACH_MARK` only when that colored panel held the alternate screen. Immediately before the remote room execs the mux client, a compatible RimZ writes a green check at the parked cursor; pty ordering puts the check ahead of the mux's first paint. An older remote ignores the variable and leaves the arrow in place until the mux renders.
+The local supervisor requests `RIMZ_ATTACH_MARK` only when that colored panel held the alternate screen. Immediately before the remote room launches the mux client, a compatible RimZ writes a green check at the parked cursor; pty ordering puts the check ahead of the mux's first paint. An older remote ignores the variable and leaves the arrow in place until the mux renders.
 
 An attach over a confirmed master pipes and drains SSH stderr instead of letting control-client diagnostics paint over the panel. The supervisor filters direct and shared-connection close notices, maps a transport exit with no remaining diagnostic to `SSH control connection dropped`, carries that cause into recovery or a fatal message, and prints `rimz: detached from <host>` for a clean exit. The initial interactive fallback inherits stderr so authentication prompts, banners, and host-key warnings remain usable.
 

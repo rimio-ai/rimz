@@ -90,7 +90,7 @@ Selection is stable across worktrees: every worktree of one repository resolves 
 
 | Group | Methods | Notes |
 | --- | --- | --- |
-| Session lifecycle | `ensure_session`, `attach_command`, `detach`, `kill_session`, `list_sessions`, `session_liveness`, `version` | `attach_command` hands back a `CommandSpec` for `exec(3)` rather than running it. |
+| Session lifecycle | `ensure_session`, `attach_command`, `detach`, `kill_session`, `list_sessions`, `session_liveness`, `version` | `attach_command` hands a `CommandSpec` to the CLI attach runner rather than running it. |
 | Pane inventory | `list_panes`, `cached_pane_roster`, `client_view` | See [reading the room](#reading-the-room). |
 | Pane I/O | `capture_pane`, `send_keys`, `send_key`, `paste_text` | `paste_text` wraps one bracketed paste; the submit Enter follows separately as a keystroke. |
 | Structure | `split_pane`, `open_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. |
@@ -583,6 +583,8 @@ The batch also does four things the option list alone does not express:
 - names `ESC[27u` as `user-keys[240]` and binds it to Escape, because tmux passes that modifier-less form into panes verbatim.
 
 On tmux 3.5.x the same extended-key mode trades clean multiline clipboard paste; tmux 3.6 preserves paste bytes while modified keys still reach agents as CSI-u. Per-option semantics and RimZ's values are in the [reference → options](../externals/mux-adapter/tmux-reference.md#options); the config model is in [configuration.md](../guide/configuration.md#multiplexer-room-options).
+
+An attach launched by RimZ runs with alternate scroll disabled on its terminal and restores the mode when the client exits. tmux unconditionally disables outer mouse reporting in `tty_start_tty` before its first attached-client repaint restores the requested mouse mode, and terminals with alternate scroll enabled translate wheel ticks in that gap into arrow keys. The CLI brackets the client process because a tmux `client-detached` hook runs after teardown has cleared the departed client's tty name; the same bracket safely covers Zellij attaches.
 
 When RimZ owns `pane-border-status`, it also writes a `pane-border-format` that floods the `rimz-sidebar` pane's border row with spaces, so work panes carry titled frames while the sidebar reads frameless: the tmux analog of Zellij's borderless sidebar. tmux borders are inter-pane separators plus an optional top or bottom status row, and tmux does not draw the outer window edge, so a closed four-edge pane frame stays Zellij-only.
 

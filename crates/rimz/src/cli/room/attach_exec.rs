@@ -1,4 +1,4 @@
-//! Attach action selection, attach-command printing, and exec.
+//! Attach action selection, attach-command printing, and execution.
 
 use std::ffi::OsStr;
 use std::io::{IsTerminal, Write};
@@ -11,6 +11,11 @@ use super::{AttachAction, AttachMode};
 // The local recovery panel parks its cursor on the Multiplexer symbol cell;
 // this in-band marker lands there immediately before the mux paints.
 const ATTACH_MARK: &[u8] = b"\x1b[32m\xe2\x9c\x93\x1b[39m";
+// Terminals with alternate scroll enabled convert wheel ticks to arrow keys
+// while the alternate screen has no mouse owner. tmux enters that state while
+// repainting an attaching client, so bracket the client with mode 1007 off.
+const ALTERNATE_SCROLL_DISABLE: &[u8] = b"\x1b[?1007l";
+const ALTERNATE_SCROLL_RESTORE: &[u8] = b"\x1b[?1007h";
 
 pub(super) fn run_attach_action(
     spec: &rimz::mux::CommandSpec,
@@ -132,22 +137,31 @@ pub(super) fn report_already_inside(
     Ok(())
 }
 
-#[cfg(unix)]
 pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
-    use std::os::unix::process::CommandExt;
-
-    emit_attach_mark();
     let mut command = attach_command(spec);
-    let err = command.exec();
-    Err::<(), _>(err).with_context(|| format!("execing `{}`", spec.display_line()))
+    let stdout_is_terminal = std::io::stdout().is_terminal();
+    let mut stdout = std::io::stdout().lock();
+    run_attach_command(
+        spec,
+        &mut stdout,
+        stdout_is_terminal,
+        std::env::var_os(rimz::remote::ATTACH_MARK_ENV).as_deref(),
+        |_| command.status(),
+    )
 }
 
-#[cfg(not(unix))]
-pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
-    emit_attach_mark();
-    let status = attach_command(spec)
-        .status()
-        .with_context(|| format!("running `{}`", spec.display_line()))?;
+fn run_attach_command(
+    spec: &rimz::mux::CommandSpec,
+    stdout: &mut dyn Write,
+    stdout_is_terminal: bool,
+    attach_mark: Option<&OsStr>,
+    run: impl FnOnce(&mut dyn Write) -> std::io::Result<std::process::ExitStatus>,
+) -> Result<()> {
+    emit_terminal_bytes(stdout, stdout_is_terminal, ALTERNATE_SCROLL_DISABLE);
+    emit_attach_mark(stdout, attach_mark, stdout_is_terminal);
+    let status = run(stdout);
+    emit_terminal_bytes(stdout, stdout_is_terminal, ALTERNATE_SCROLL_RESTORE);
+    let status = status.with_context(|| format!("running `{}`", spec.display_line()))?;
     if !status.success() {
         anyhow::bail!(
             "attach command `{}` exited with {status}",
@@ -157,13 +171,15 @@ pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
     Ok(())
 }
 
-fn emit_attach_mark() {
-    let mark = std::env::var_os(rimz::remote::ATTACH_MARK_ENV);
-    if !attach_mark_enabled(mark.as_deref(), std::io::stdout().is_terminal()) {
+fn emit_attach_mark(stdout: &mut dyn Write, mark: Option<&OsStr>, stdout_is_terminal: bool) {
+    if !attach_mark_enabled(mark, stdout_is_terminal) {
         return;
     }
-    let mut stdout = std::io::stdout().lock();
-    if stdout.write_all(ATTACH_MARK).is_ok() {
+    emit_terminal_bytes(stdout, true, ATTACH_MARK);
+}
+
+fn emit_terminal_bytes(stdout: &mut dyn Write, stdout_is_terminal: bool, bytes: &[u8]) {
+    if stdout_is_terminal && stdout.write_all(bytes).is_ok() {
         let _ = stdout.flush();
     }
 }
@@ -237,5 +253,62 @@ mod tests {
         assert!(command.get_envs().any(|(key, value)| {
             key == OsStr::new(rimz::remote::ATTACH_MARK_ENV) && value.is_none()
         }));
+    }
+
+    #[test]
+    fn alternate_scroll_sequences_are_exact() {
+        assert_eq!(ALTERNATE_SCROLL_DISABLE, b"\x1b[?1007l");
+        assert_eq!(ALTERNATE_SCROLL_RESTORE, b"\x1b[?1007h");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attach_brackets_child_output_and_preserves_its_failure() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let spec = rimz::mux::CommandSpec::new("sh").args(["-c", "printf child; exit 23"]);
+        let mut output = Vec::new();
+        let result = run_attach_command(&spec, &mut output, true, None, |stdout| {
+            stdout.write_all(b"child")?;
+            Ok(std::process::ExitStatus::from_raw(23 << 8))
+        });
+
+        assert_eq!(
+            output,
+            [ALTERNATE_SCROLL_DISABLE, b"child", ALTERNATE_SCROLL_RESTORE].concat(),
+        );
+        assert!(
+            result.unwrap_err().to_string().contains(
+                "attach command `sh -c printf child; exit 23` exited with exit status: 23"
+            )
+        );
+    }
+
+    #[test]
+    fn attach_restores_after_launch_error_and_skips_non_terminal_sequences() {
+        let spec = rimz::mux::CommandSpec::new("mux");
+        let mut terminal_output = Vec::new();
+        let result = run_attach_command(&spec, &mut terminal_output, true, None, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "missing mux",
+            ))
+        });
+        assert_eq!(
+            terminal_output,
+            [ALTERNATE_SCROLL_DISABLE, ALTERNATE_SCROLL_RESTORE].concat(),
+        );
+        assert!(result.unwrap_err().to_string().contains("running `mux`"));
+
+        let mut piped_output = Vec::new();
+        let result = run_attach_command(&spec, &mut piped_output, false, None, |stdout| {
+            stdout.write_all(b"child")?;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "missing mux",
+            ))
+        });
+        assert_eq!(piped_output, b"child");
+        assert!(result.unwrap_err().to_string().contains("running `mux`"));
     }
 }
