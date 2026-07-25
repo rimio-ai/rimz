@@ -20,7 +20,7 @@ fn dashboard_row(name: &str, state: RowState, failed: bool) -> WatchRow {
         next_text: match state {
             RowState::Running => "running now".to_owned(),
             RowState::Due => "due".to_owned(),
-            RowState::Paused => "paused".to_owned(),
+            RowState::Held => "paused".to_owned(),
             RowState::Blocked => "blocked · trust".to_owned(),
             RowState::Upcoming(next) => ui::until_label(next, now),
             RowState::NeverRun => "—".to_owned(),
@@ -117,7 +117,7 @@ fn watch_dashboard_adapts_band_columns_rank_height_and_width() {
         room_is_open: true,
         rows: vec![
             dashboard_row("never", RowState::NeverRun, false),
-            dashboard_row("paused", RowState::Paused, false),
+            dashboard_row("paused", RowState::Held, false),
             dashboard_row(
                 "later",
                 RowState::Upcoming(Timestamp::from_second(300).unwrap()),
@@ -691,6 +691,7 @@ fn blocked_project_rendering_names_the_gate_and_fix() {
     let mut out = Vec::new();
     table.render(&mut out).unwrap();
     write_blocked_footer(&mut out, 2).unwrap();
+    write_disabled_footer(&mut out, 1).unwrap();
 
     let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
     assert!(out.contains("blocked · trust"), "{out}");
@@ -704,12 +705,16 @@ fn blocked_project_rendering_names_the_gate_and_fix() {
         blocked_notice(TrustState::Untrusted),
         "project trust is untrusted — review with `rimz trust`, approve with `rimz trust grant`"
     );
+    assert!(
+        out.contains("1 project task(s) disabled — arm with `rimz loop enable <name>`"),
+        "{out}"
+    );
 }
 
 fn interval_timing(
     blocked: Option<TrustState>,
     last_fire: Option<Timestamp>,
-    pause: Option<&PauseEntry>,
+    arming: Option<&Arming>,
     now: Timestamp,
 ) -> schedule::TaskTiming {
     let entry = TaskEntry {
@@ -719,9 +724,9 @@ fn interval_timing(
     };
     schedule::TaskTiming::evaluate(
         schedule::TaskShape::compile("task", &entry).schedule(),
-        blocked,
+        blocked.map_or(TaskSource::Config, |state| TaskSource::Project { state }),
         last_fire,
-        pause,
+        arming,
         &now.to_zoned(jiff::tz::TimeZone::UTC),
     )
 }
@@ -729,16 +734,22 @@ fn interval_timing(
 #[test]
 fn task_timing_maps_to_existing_list_and_watch_labels() {
     let now = Timestamp::from_second(10_000).unwrap();
-    let manual = PauseEntry {
-        until: None,
+    let manual = Arming {
+        enabled: false,
+        at: now,
+        pause_until: None,
         strikes: None,
     };
-    let strikes = PauseEntry {
-        until: None,
+    let strikes = Arming {
+        enabled: false,
+        at: now,
+        pause_until: None,
         strikes: Some(3),
     };
-    let timed = PauseEntry {
-        until: Timestamp::from_second(10_300).ok(),
+    let timed = Arming {
+        enabled: true,
+        at: now,
+        pause_until: Timestamp::from_second(10_300).ok(),
         strikes: None,
     };
     let cases = [
@@ -749,18 +760,39 @@ fn task_timing_maps_to_existing_list_and_watch_labels() {
         ),
         (
             interval_timing(None, None, Some(&manual), now),
-            RowState::Paused,
-            "paused",
+            RowState::Held,
+            "disabled",
         ),
         (
             interval_timing(None, None, Some(&strikes), now),
-            RowState::Paused,
-            "paused · 3 strikes",
+            RowState::Held,
+            "disabled · 3 strikes",
         ),
         (
             interval_timing(None, None, Some(&timed), now),
-            RowState::Paused,
+            RowState::Held,
             "paused · in 5m",
+        ),
+        (
+            schedule::TaskTiming::evaluate(
+                schedule::TaskShape::compile(
+                    "task",
+                    &TaskEntry {
+                        agent: Some("claude".to_owned()),
+                        every: Some("15m".to_owned()),
+                        ..TaskEntry::default()
+                    },
+                )
+                .schedule(),
+                TaskSource::Project {
+                    state: TrustState::Trusted,
+                },
+                None,
+                None,
+                &now.to_zoned(jiff::tz::TimeZone::UTC),
+            ),
+            RowState::Held,
+            "disabled · enable to arm",
         ),
         (
             interval_timing(None, Timestamp::from_second(8_800).ok(), None, now),
@@ -775,7 +807,7 @@ fn task_timing_maps_to_existing_list_and_watch_labels() {
         (
             schedule::TaskTiming::evaluate(
                 schedule::TaskShape::compile("task", &TaskEntry::default()).schedule(),
-                None,
+                TaskSource::Config,
                 Some(now),
                 None,
                 &now.to_zoned(jiff::tz::TimeZone::UTC),
@@ -805,8 +837,10 @@ fn task_timing_maps_to_existing_list_and_watch_labels() {
 #[test]
 fn show_headline_keeps_blocked_before_pause() {
     let now = Timestamp::from_second(10_000).unwrap();
-    let pause = PauseEntry {
-        until: None,
+    let pause = Arming {
+        enabled: true,
+        at: Timestamp::MIN,
+        pause_until: Timestamp::from_second(10_300).ok(),
         strikes: None,
     };
     let timing = interval_timing(Some(TrustState::Untrusted), None, Some(&pause), now);
@@ -817,19 +851,24 @@ fn show_headline_keeps_blocked_before_pause() {
     let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
     assert!(out.contains("next blocked · trust"), "{out}");
     assert!(!out.contains("paused"), "{out}");
-    assert!(out.contains("resume with `rimz loop resume task`"), "{out}");
+    assert!(!out.contains("loop enable"), "{out}");
 }
 
 #[test]
 fn running_watch_row_retains_next_fire_through_pause_overlay() {
     let now = Timestamp::from_second(10_000).unwrap();
-    let pause = PauseEntry {
-        until: None,
+    let pause = Arming {
+        enabled: true,
+        at: Timestamp::MIN,
+        pause_until: Timestamp::from_second(10_300).ok(),
         strikes: None,
     };
     let timing = interval_timing(None, Timestamp::from_second(9_400).ok(), Some(&pause), now);
 
-    assert_eq!(timing.state(), schedule::TaskTimingState::Paused(pause));
+    assert_eq!(
+        timing.state(),
+        schedule::TaskTimingState::Paused(Timestamp::from_second(10_300).unwrap())
+    );
     assert_eq!(timing.next_timestamp(), None);
     assert_eq!(watch_next_timestamp(&timing, false), None);
     assert_eq!(

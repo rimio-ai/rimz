@@ -13,8 +13,9 @@ rimz loop add ci-green --check "gh run watch --exit-status" --on success --until
 rimz loop add repo-audit --project --agent codex --prompt "audit the dependency lockfile for advisories" --every day --at 08:00
 rimz loop fire pr-watch
 rimz loop rename pr-watch ci-watch
+rimz loop enable pr-watch
+rimz loop disable pr-watch
 rimz loop pause pr-watch --for 2h
-rimz loop resume pr-watch
 rimz loop stop pr-watch
 rimz loop list
 rimz loop show pr-watch
@@ -32,7 +33,7 @@ Schedules repeat only with `--every` or `--cron`. Shapes are: one-shot (`--at 07
 
 A matching exhausted Qwen 5-hour, 7-day, or 30-day window records strike-neutral `budget skipped` before any check command or pane creation. The reason names the Alibaba region, window, usage, and reset without exposing the account fingerprint.
 
-`--max-strikes <N>` auto-pauses the task after that many consecutive failed fires. It defaults to `3`; `0` disables auto-pause. A failed, timed-out, errored, budget-exceeded, or verify-failed result counts, as does a completed or delivered action whose check still failed; a successful action or healthy check resets the counter.
+`--max-strikes <N>` auto-disables the task after that many consecutive failed fires. It defaults to `3`; `0` disables the strike gate. A failed, timed-out, errored, budget-exceeded, or verify-failed result counts, as does a completed or delivered action whose check still failed; a successful action or healthy check resets the counter.
 
 `--timeout <DURATION>` caps an explicit supervised wait and its verify commands. Scheduled `--agent` runs without this task-specific value use `loop.default-timeout`, which defaults to `2h`; set it with `rimz config set loop.default-timeout 3h`. Manual `loop fire` stays unbounded when the task has no `--timeout`, while checks retain their five-minute default.
 
@@ -48,13 +49,13 @@ A matching exhausted Qwen 5-hour, 7-day, or 30-day window records strike-neutral
 
 `rimz loop add` writes repeating tasks to the per-machine `loop.toml` by default. RimZ-generated `--in`, bare `--at`, and `--until` tasks persist as state, not `loop.toml` config, so they clear themselves when they retire.
 
-`--project` writes `[tasks.<name>]` to `.rimz/config.toml` instead: it omits `root` because the project root is implicit, rejects `--wake` and `--until`, requires `--every` or `--cron`, and prints the `rimz trust grant` follow-up after add, remove, or rename. Trusted project tasks win over same-named machine tasks; an untrusted project task does not fire, and during the untrusted window a same-named machine task keeps running. Project tasks ship in the repo, so they run only on a machine that has [granted trust](./hooks-trust.md#project-trust).
+`--project` writes `[tasks.<name>]` to `.rimz/config.toml` instead: it omits `root` because the project root is implicit, rejects `--wake` and `--until`, requires `--every` or `--cron`, and prints the `rimz trust grant` follow-up after add, remove, or rename. Trusted project tasks win over same-named machine tasks; an untrusted project task does not fire, and during the untrusted window a same-named machine task keeps running. Project tasks ship in the repo, so they need both [project trust](./hooks-trust.md#project-trust) and a machine-local `rimz loop enable <name>` before they run unattended. `rimz loop add --project` enables the task on the authoring machine.
 
-## Pause and resume
+## Enable, disable, and pause
 
-`loop pause <name>` holds a task until `loop resume <name>` lifts the pause. `--for <duration>` uses the `s`, `m`, `h`, and `d` duration units and resumes automatically; a pause without `--for` is indefinite. Resumed schedules continue from the resume moment, so interval, calendar, and cron tasks do not replay fires missed during the pause.
+`loop enable <name>` arms a task locally and clears a disable, a timed pause, and its strike counter. `loop disable <name>` holds it until the next explicit enable. Both accept `--all` instead of a name to affect every machine, state, and current-project task shown by `loop list`.
 
-Pause is per-machine state. Pausing a project task affects only this machine and does not edit the trust-hashed project config. Reaching the strike threshold writes the same machine pause state with a strike reason and fires `loop_paused` notification handlers; `loop resume` clears the counter. `loop fire <name>` remains the manual testing hatch: it reports the pause, then runs the task anyway.
+`loop pause <name> --for <duration>` applies a bounded hold using the `s`, `m`, `h`, and `d` units; `--for` is required because `disable` owns the indefinite case. All three commands write per-machine state and never edit a trust-hashed project config. Enabling or reaching the end of a pause becomes the new schedule edge, so interval, calendar, and cron tasks do not replay missed fires. Reaching the strike threshold disables the task and fires `loop_disabled` notification handlers. `loop fire <name>` remains the manual testing hatch: it reports a disable or pause, then runs the task anyway.
 
 ## Fire, stop, list, show, logs, rename
 
@@ -62,9 +63,9 @@ Pause is per-machine state. Pausing a project task affects only this machine and
 
 A task that is already running records `overlapped` and skips instead of stacking another run. `loop stop <name>` first marks a linked supervised run canceled, wakes its waiter, and gives it a short grace to release the overlap lock; a remaining holder receives SIGTERM and another grace, while SIGKILL stays a manual operator decision. The command exits `0` after a stop or when no run is active, and exits `1` with the holder PID and lock path when the lock remains held. `loop rename` moves the task key in its store; the task then re-arms, so an interval task next fires one interval later.
 
-`loop list`, `loop watch`, `loop show`, and `loop logs` read only. `loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, today's COST, and next fire; timed pauses show their automatic resume time and strike pauses show `paused · N strikes`. `loop watch` holds a live dashboard open, repainting next-fire countdowns and the `running now` state every second; the `rimzd` loop panel runs it with `--hold`, which ignores `q` and Ctrl-C, and the sidebar elder restores the panel if its pane closes while the view survives. Source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`.
+`loop list`, `loop watch`, `loop show`, and `loop logs` read only. `loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, today's COST, and next fire; states include `disabled`, `disabled · N strikes`, `disabled · enable to arm`, and `paused · <time>`. `loop watch` holds a live dashboard open, repainting next-fire countdowns and the `running now` state every second; the `rimzd` loop panel runs it with `--hold`, which ignores `q` and Ctrl-C, and the sidebar elder restores the panel if its pane closes while the view survives. Source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`.
 
-`loop show <name>` opens with one task's schedule, pause state or next fire, a health verdict from the latest conclusive run, task facts, effective timeout, configured budgets, spend trend, and any active pre-threshold `strikes N/max`; an active linked run includes its run id and the matching `loop stop` command. Check-gated agent and wake tasks add `AGENT RUNS`, which counts escalation attempts against all recorded fires, aggregates their valid costs across the rotation-bounded log, and lists the five latest attempts without collapsing them. `RECENT RUNS` retains the compact collapsed history, `LAST RUN` retains its full stored detail, and an older last failure becomes a one-line pointer to `loop logs`.
+`loop show <name>` opens with one task's schedule, held state or next fire, a health verdict from the latest conclusive run, task facts, effective timeout, configured budgets, spend trend, and any active pre-threshold `strikes N/max`; an active linked run includes its run id and the matching `loop stop` command. Check-gated agent and wake tasks add `AGENT RUNS`, which counts escalation attempts against all recorded fires, aggregates their valid costs across the rotation-bounded log, and lists the five latest attempts without collapsing them. `RECENT RUNS` retains the compact collapsed history, `LAST RUN` retains its full stored detail, and an older last failure becomes a one-line pointer to `loop logs`.
 
 `loop logs <name>` prints complete forensic blocks for the latest ten records, oldest first so the newest finishes the stream. `-n, --runs <N>` changes the limit, and `--failed` keeps only failed, timed-out, budget-exceeded, verify-failed, and errored records. Each block includes the status, age, mode, exit information, check output, error chains, run ids, captured pane output tails, costs and tokens, and transcript links when recorded.
 

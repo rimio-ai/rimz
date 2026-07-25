@@ -37,8 +37,8 @@ use rimz::harness::schedule::runner::{
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
+    arming::{self, ArmState, Arming, DisabledReason, TaskKey},
     catalog::{LoadedTask, TaskCatalog, TaskSource},
-    pauses::{self, PauseEntry},
     strikes,
 };
 use rimz::ids::WorkspaceId;
@@ -72,10 +72,12 @@ enum LoopSubcmd {
     Remove(NameArgs),
     /// Rename a task in the store that owns it.
     Rename(RenameArgs),
-    /// Pause a task until it is resumed or the optional duration elapses.
+    /// Pause a task for a bounded duration.
     Pause(PauseArgs),
-    /// Resume a paused task without replaying missed fires.
-    Resume(NameArgs),
+    /// Enable tasks here without replaying missed fires.
+    Enable(ScopeArgs),
+    /// Disable tasks here until explicitly enabled.
+    Disable(ScopeArgs),
     /// Stop a task's active run, releasing its overlap lock.
     Stop(NameArgs),
     /// List configured tasks and whether their room is open.
@@ -127,7 +129,7 @@ struct AddArgs {
     /// Total agent turns allowed while making --verify pass.
     #[arg(long, value_name = "N", requires = "verify")]
     max_attempts: Option<u32>,
-    /// Auto-pause after N consecutive failed fires; default 3, 0 disables.
+    /// Auto-disable after N consecutive failed fires; default 3, 0 disables.
     #[arg(long, value_name = "N")]
     max_strikes: Option<u32>,
     /// Guard polarity for --check: fail wakes on non-zero exit, success wakes on zero exit.
@@ -192,11 +194,26 @@ struct NameArgs {
 }
 
 #[derive(Debug, Args)]
+struct ScopeArgs {
+    #[arg(
+        required_unless_present = "all",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::loop_tasks)
+    )]
+    name: Option<String>,
+    /// Apply to every task listed here: machine, state, and this project.
+    #[arg(long, conflicts_with = "name")]
+    all: bool,
+}
+
+#[derive(Debug, Args)]
 struct PauseArgs {
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::loop_tasks
+    ))]
     name: String,
-    /// Resume automatically after a duration such as `2h`.
-    #[arg(long = "for", value_name = "DUR")]
-    pause_for: Option<String>,
+    /// Lift the pause automatically after a duration such as `2h`; use disable for indefinite holds.
+    #[arg(long = "for", value_name = "DUR", required = true)]
+    pause_for: String,
 }
 
 #[derive(Debug, Args)]
@@ -257,7 +274,8 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::Remove(args) => add::remove(&args.name, globals),
         LoopSubcmd::Rename(args) => add::rename(&args.name, &args.new_name, globals),
         LoopSubcmd::Pause(args) => add::pause(args, globals),
-        LoopSubcmd::Resume(args) => add::resume(&args.name, globals),
+        LoopSubcmd::Enable(args) => add::enable(args, globals),
+        LoopSubcmd::Disable(args) => add::disable(args, globals),
         LoopSubcmd::Stop(args) => stop::stop(&args.name, globals),
         LoopSubcmd::List => render::list(globals),
         LoopSubcmd::Watch(args) => render::watch(args, globals),
@@ -304,6 +322,10 @@ fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<LoadedTask>> {
     Ok(task_catalog(globals)?.visible().get(name).cloned())
 }
 
+fn task_key(name: &str, task: &LoadedTask) -> String {
+    TaskKey::for_task(name, task.source(), &task.entry().resolved_root())
+}
+
 fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
     RuntimePaths::for_workspace(WorkspaceId::from_project_root(root)).ok()
 }
@@ -311,25 +333,24 @@ fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
 fn observe_task_timing(
     name: &str,
     task: &LoadedTask,
-    blocked: Option<TrustState>,
     stamps: &BTreeMap<String, Timestamp>,
-    pause: Option<&PauseEntry>,
+    arming: Option<&Arming>,
     now_zoned: &jiff::Zoned,
 ) -> schedule::TaskTiming {
     let last_fire = stamps.get(name).copied();
-    schedule::TaskTiming::evaluate(task.schedule(), blocked, last_fire, pause, now_zoned)
+    schedule::TaskTiming::evaluate(task.schedule(), task.source(), last_fire, arming, now_zoned)
 }
 
 fn task_next_fire_text(
     name: &str,
     task: &LoadedTask,
-    pause: Option<&PauseEntry>,
+    arming: Option<&Arming>,
     now: Timestamp,
 ) -> Option<String> {
     let runtime = runtime_for_root(&task.entry().resolved_root())?;
     let stamps = schedule::last_stamps(&runtime);
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    observe_task_timing(name, task, None, &stamps, pause, &now_zoned)
+    observe_task_timing(name, task, &stamps, arming, &now_zoned)
         .next_timestamp()
         .map(|next| ui::rel_until(next, now))
 }
@@ -342,7 +363,7 @@ fn finish_project_mutation(
 ) -> Result<()> {
     if crate::cli::trust::regrant_own_mutation(project_root, pre_state)? {
         if task_added {
-            writeln!(out, "trust: granted — task fires on schedule")?;
+            writeln!(out, "trust: granted — task enabled and fires on schedule")?;
         } else {
             writeln!(out, "trust: kept")?;
         }
@@ -352,7 +373,7 @@ fn finish_project_mutation(
         && crate::cli::trust::offer_inline_grant(project_root, "grant trust now?")?
     {
         if task_added {
-            writeln!(out, "trust: granted — task fires on schedule")?;
+            writeln!(out, "trust: granted — task enabled and fires on schedule")?;
         }
         return Ok(());
     }

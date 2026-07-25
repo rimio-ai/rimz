@@ -25,7 +25,7 @@ Three rules follow from having no daemon, and they explain most of the module.
 | [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) | The elder's side: arm-on-first-sight, due planning, `loop-fire.json`, and spawning the detached `rimz loop run <name>`. |
 | [`schedule/runner.rs`](../../../crates/rimz/src/harness/schedule/runner.rs) | `TaskFire`: the ordered gate ladder, the run lock, the check, prompt preparation, the prepared effect, and the one terminal history transition. |
 | [`schedule/run_log.rs`](../../../crates/rimz/src/harness/schedule/run_log.rs) | `LoopRunRecord`, `LoopRunResult`, the user-global JSONL history, cost rollups, and the daily-budget gate. |
-| [`schedule/pauses.rs`](../../../crates/rimz/src/harness/schedule/pauses.rs), [`strikes.rs`](../../../crates/rimz/src/harness/schedule/strikes.rs) | Machine-local overlays: the pause and its effective-last-fire rule, and consecutive failure counts. |
+| [`schedule/arming.rs`](../../../crates/rimz/src/harness/schedule/arming.rs), [`strikes.rs`](../../../crates/rimz/src/harness/schedule/strikes.rs) | Machine-local overlays: durable enablement, bounded pauses, their effective-last-fire rule, and consecutive failure counts. |
 | [`schedule/instances.rs`](../../../crates/rimz/src/harness/schedule/instances.rs), [`overlay_store.rs`](../../../crates/rimz/src/harness/schedule/overlay_store.rs) | RimZ-owned ephemeral task rows, and the shared locked persistence the overlays use. |
 | [`schedule/config_edit.rs`](../../../crates/rimz/src/harness/schedule/config_edit.rs) | Comment-preserving TOML editing for machine `loop.toml` and project `.rimz/config.toml`. |
 | [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd) | Flag translation, terminal orchestration, executing prepared effects, and rendering. No scheduling policy. |
@@ -54,14 +54,14 @@ Three sources back the catalog, and they are not interchangeable.
 | Source | File | Nature |
 | --- | --- | --- |
 | `Config` | `~/.config/rimz/loop.toml` | per-machine automation, like your crontab; never inherited by a clone |
-| `Project` | `<root>/.rimz/config.toml` under `[tasks.*]` | shared automation that travels with the repo, and therefore trust-gated |
+| `Project` | `<root>/.rimz/config.toml` under `[tasks.*]` | shared automation that travels with the repo, and therefore defaults disabled until it is both trusted and enabled on this machine |
 | `Instance` | `~/.local/state/rimz/loop-instances.json` | RimZ-owned ephemerals: one-shots, agent self-wakes, and poll-until rows |
 
 The instance store exists so runtime churn never edits user config. An agent scheduling its own `--in 30m` wake writes state, not your `loop.toml`, and the row retires itself after firing.
 
 Project tasks are more constrained than machine tasks, because a committed task cannot make machine-local claims. Loading rejects `root` (a project task runs at the project root), `wake` (it cannot pin a session on someone else's machine), and `deadline` (a poll-until timestamp is machine state), and requires `every` or `cron`, because a one-shot would have to delete itself from a trust-hashed file on fire.
 
-A project task also runs commands on whoever pulls it, so it enters the project trust hash ([trust.md](./trust.md)) and stays inert until each user grants it.
+A project task also runs commands on whoever pulls it, so it enters the project trust hash ([trust.md](./trust.md)) and stays inert until each user grants it. Trust approves the config contents; the separate machine-local enablement record approves that task for unattended execution here. `rimz loop add --project` writes an enabled record for its author, while a cloned task has no record and therefore defaults disabled.
 
 ### Visible and runnable precedence
 
@@ -91,7 +91,8 @@ The arming stamp sets the edge each shape reads, which produces one behaviour wo
 | State | Meaning |
 | --- | --- |
 | `Blocked(trust)` | a project task awaiting or stale on its grant |
-| `Paused` | an active machine-local pause overlay |
+| `Disabled(reason)` | a machine-local manual or strike disable, or a project task not yet enabled here |
+| `Paused(t)` | a bounded machine-local pause whose deadline is still in the future |
 | `Invalid` | the schedule half of the row failed to parse |
 | `Unarmed` | no room has seen it yet |
 | `Upcoming(t)` | the next occurrence, still in the future |
@@ -112,13 +113,13 @@ The plan is a four-way decision per task:
 | State | Action |
 | --- | --- |
 | no stamp | arm: record `now`, do not fire |
-| stamped, pause active | hold the existing stamp unchanged |
+| stamped, disabled or pause active | hold the existing stamp unchanged |
 | stamped, schedule due | fire: record `now` |
 | stamped, not due | keep the stamp |
 
 State is written before any helper spawns, which is what makes a fire at-most-once per occurrence even when ticks are hot.
 
-Pauses overlay every source without editing durable definitions. When a timed pause expires or `loop resume` ends one, that end becomes the **effective last-fire edge**, so a resumed schedule waits for its next occurrence rather than replaying everything missed while it was held. Pause state is machine-local, so pausing a project task affects only your machine.
+The machine-local `loop-arming.json` overlay holds enablement, a bounded pause deadline, and an automatic-disable strike reason without editing durable task definitions. Project keys use `<workspace_id>::<name>` and machine or instance keys use `machine::<name>`, so a same-named task in another checkout never inherits an enable. Enabling writes the anti-replay edge; when a timed pause expires, its deadline becomes the **effective last-fire edge**. Either lift makes the schedule wait for its next occurrence rather than replaying everything missed while held.
 
 ## One fire
 
@@ -168,7 +169,7 @@ On fire, the runner resolves the recorded root, confirms the pinned root session
 
 Self-paced loops are ordinary one-shots: an agent schedules its next `--in` wake at the end of the current one, and the instance row is removed before delivery, so the next one exists only while work remains.
 
-## History, strikes, and pauses
+## History, strikes, and arming
 
 Every fire appends a `LoopRunRecord` to the user-global `~/.local/state/rimz/loop-runs.log.jsonl`. Loop config is per-machine but the log is per-user, so history survives a task being edited or removed.
 
@@ -184,9 +185,9 @@ The record carries the result, mode (`scheduled` or `manual`), duration, error c
 
 That table encodes the judgement calls. A turn that completed but left its check red is a failure, because the task is not doing its job. A gate that declined to spend money is not a failure at all.
 
-`record_transition` appends first and then updates the overlays, because the history row is durable truth while the overlays are best-effort. Consecutive strikes reaching the threshold (`--max-strikes`, default 3, `0` to disable) auto-pause the task indefinitely, display `paused · N strikes`, and fire `loop_paused` notification handlers. `rimz loop resume` clears the counter and re-arms; `rimz loop fire` still works on a paused task for testing.
+`record_transition` appends first and then updates the overlays, because the history row is durable truth while the overlays are best-effort. Consecutive strikes reaching the threshold (`--max-strikes`, default 3, `0` to disable) auto-disable the task, display `disabled · N strikes`, and fire `loop_disabled` notification handlers. `rimz loop enable` clears the counter and re-arms; `rimz loop fire` still works on a disabled or paused task for testing.
 
-Strike counts live in machine-local `loop-strikes.json`, independently of run-log rotation, and an advisory lock serializes updates from concurrent task runners.
+Strike counts live in machine-local `loop-strikes.json`, independently of run-log rotation, and use the same scoped keys as arming. Each overlay has an advisory lock that serializes updates from concurrent task runners. The retired unscoped `loop-pauses.json` is ignored and removed by `rimz gc`.
 
 ## Recovery the elder runs
 

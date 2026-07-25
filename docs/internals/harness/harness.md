@@ -80,7 +80,7 @@ Six state machines carry most of the subsystem's behaviour. Each has one owning 
 | --- | --- | --- |
 | Message lifecycle | `MessageStatus` | [messaging.md § Status lifecycle](./messaging.md#status-lifecycle) |
 | Supervised run | `RunStatus`, whose `exit_code` is the caller contract | [scripting.md § Status and exit codes](./scripting.md#status-and-exit-codes) |
-| Loop task timing and outcome | `TaskTiming`, `LoopRunResult` | [loops.md § Schedule shapes](./loops.md#schedule-shapes), [§ History, strikes, and pauses](./loops.md#history-strikes-and-pauses) |
+| Loop task timing and outcome | `TaskTiming`, `LoopRunResult` | [loops.md § Schedule shapes](./loops.md#schedule-shapes), [§ History, strikes, and arming](./loops.md#history-strikes-and-arming) |
 | Dollar budget ledger | `BudgetVerdict` | [budget.md § The verdict](./budget.md#the-verdict) |
 | Worktree removal | `ProtectionSet::assess` | [worktrees.md § The assessment](./worktrees.md#the-assessment) |
 | Project trust | `TrustState` | [trust.md § States](./trust.md#states) |

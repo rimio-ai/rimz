@@ -1324,7 +1324,7 @@ fn notification_kind_from_cli(value: &str) -> Result<NotificationKind> {
         "waiting" => Ok(NotificationKind::Waiting),
         "failed" => Ok(NotificationKind::Failed),
         "paused" => Ok(NotificationKind::Paused),
-        "loop_paused" => Ok(NotificationKind::LoopPaused),
+        "loop_disabled" => Ok(NotificationKind::LoopDisabled),
         "success" => Ok(NotificationKind::Success),
         "coalesced" => Ok(NotificationKind::Coalesced),
         "reminder" => Ok(NotificationKind::Reminder),

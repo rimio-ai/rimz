@@ -89,6 +89,8 @@ rimz loop add refactor --agent claude --prompt "Refactor the next rough module a
 - A one-shot (bare `--at`, `--in`, or a `--until` deadline) persists as state instead, so an agent scheduling its own wake never touches your `loop.toml`; the entry retires itself after firing.
 - `--project` writes the entry to `<root>/.rimz/config.toml`: shared automation that travels with the repo, so it has to be a repeating task (a one-shot is machine state by definition). A committed task runs commands on whoever pulls it, so it enters the project trust hash and stays inert until each user approves it ([security.md](./security.md)). When the workspace is trusted, or this command creates its first project config, your own `loop add`, `loop remove`, and `loop rename` edits re-pin the grant automatically. A config carrying changes not yet reviewed on this machine keeps the surface-diff and grant offer in a terminal, or the review and approve commands elsewhere. A trusted project task wins over a same-named machine task without double-firing.
 
+Trust and enablement answer different questions. Trust says the project config contains commands you accept as yours to run; `rimz loop enable <name>` says this particular task may run unattended on this machine. A project task pulled from a repo starts disabled even after trust is granted, while a task you create with `rimz loop add --project` starts enabled here. The enablement record stays in machine state and never changes the repo or its trust hash.
+
 There is no scheduler daemon; the room keeps time. While a room for the task's project is open, attached or not, that room's elected sidebar process fires due tasks on its regular tick, running each through the hidden `rimz loop run`. Close the room and the clock stops. Opening one late does not replay what was missed: a task first seen past its time waits for the next matching occurrence, so there is never a catch-up storm.
 
 A scheduled `--agent` fire lands in the `rimzd` loop zone: the runtime column's live loop panel stays open, and transient run panes stack under it instead of splitting the sidebar or a working tab. If the panel pane was closed while the `rimzd` view remains, RimZ recreates the panel at fire time and stacks the run under it; if the whole view is gone or the split fails, it falls back to a new run tab. Manual `rimz loop fire` keeps splitting beside the caller so its foreground stream stays local.
@@ -152,7 +154,7 @@ Set the default once with `harness.smart_compact`, an occupied-token count like 
 
 **Dollar budgets cap what a task spends.** `--budget 5` caps each fired run; `--budget-per-day 20` makes the scheduler sum that task's completed run costs in the configured local day and skip a fire that cannot fund its per-run cap, recording `budget skipped`. `rimz loop list` shows each task's spend against its daily cap. For check-gated work, `rimz loop show` separates the agent attempts from cheap check passes and totals their costs across the recorded history; other tasks retain the last-run and rolling ten-run average cost. Fresh input/output tokens stay visible per run. The room-fleet and provider-account daily caps gate the same fires before launch, and a spent provider quota records the same `budget skipped` result before the task's `--check` command or pane exists. The whole cap model, and why a human message can waive an interactive turn but never satisfies a loop gate, is the [budgets guide](./budget.md).
 
-**Repeated failures pause the task.** Three consecutive failed fires auto-pause any task indefinitely, display `paused · 3 strikes` in `rimz loop list`, and fire notification handlers with kind `loop_paused`. A completed or delivered turn still counts when its check shows the world remains broken; a healthy check or successful turn resets the counter. Inspect with `rimz loop show`, then use `rimz loop resume <name>` to clear the strikes and re-arm the schedule. Set `--max-strikes <N>` per task to change the threshold, or `--max-strikes 0` to disable auto-pause; `rimz loop fire` remains available while paused for a manual test.
+**Repeated failures disable the task.** Three consecutive failed fires auto-disable any task, display `disabled · 3 strikes` in `rimz loop list`, and fire notification handlers with kind `loop_disabled`. A completed or delivered turn still counts when its check shows the world remains broken; a healthy check or successful turn resets the counter. Inspect with `rimz loop show`, then use `rimz loop enable <name>` to clear the strikes and re-arm the schedule. Set `--max-strikes <N>` per task to change the threshold, or `--max-strikes 0` to disable the strike gate; `rimz loop fire` remains available while disabled for a manual test.
 
 ## Every schedule shape
 
@@ -179,8 +181,9 @@ rimz loop show pr-watch        # health, next fire, agent-run rollup, and recent
 rimz loop logs pr-watch        # full forensics for recent runs
 rimz loop fire pr-watch        # fire now in the foreground for testing; the schedule stays put
 rimz loop fire pr-watch --keep # leave the transient pane open to inspect
+rimz loop enable pr-watch      # arm locally and clear any pause or strike disable
+rimz loop disable pr-watch     # hold until the next explicit enable
 rimz loop pause pr-watch --for 2h
-rimz loop resume pr-watch
 rimz loop stop pr-watch        # cancel a stuck run and release its overlap lock
 rimz loop remove pr-watch
 ```
@@ -189,7 +192,7 @@ rimz loop remove pr-watch
 
 When a fire reports `previous run still active`, inspect `rimz loop show <name>` for the active run id and holder age, then run `rimz loop stop <name>`. Stop uses the durable cancellation path first and SIGTERM only as a backstop; if the holder still owns the lock, it prints the PID and lock path for manual recovery instead of escalating to SIGKILL.
 
-Pause holds the elder's clock without deleting the task, and `--for` resumes it automatically. The schedule continues from the resume moment instead of replaying missed fires. Pause state belongs to one machine, so pausing a project task affects only your machine; an auto-pause adds its strike reason, and `rimz loop resume` clears that counter. `rimz loop fire` still runs a paused task for testing.
+Enablement and pauses belong to one machine and never edit the task definition. `rimz loop disable <name>` holds a task indefinitely; `rimz loop pause <name> --for <duration>` is a bounded hold that lifts itself; `rimz loop enable <name>` clears either hold and any strike counter. `--all` applies enable or disable to every machine, state, and current-project task in `rimz loop list`. Each lift becomes the new schedule edge, so missed interval, calendar, and cron fires never replay. `rimz loop fire` still runs a disabled or paused task for testing.
 
 Run mechanics (exit codes, output formats, `wait --stream`) are in [scripting.md](./scripting.md), and every flag is in the [loop CLI reference](../reference/cli/loop.md).
 

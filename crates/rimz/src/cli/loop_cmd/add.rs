@@ -59,7 +59,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     let mut out = ui::out();
     writeln!(out, "added loop task `{}`", args.name)?;
     if mutation.cleared_overlays() {
-        writeln!(out, "pause: cleared")?;
+        writeln!(out, "arming: reset")?;
     }
     if let Some(pre_state) = project_pre_state {
         finish_project_mutation(&mut out, &project_root, true, pre_state)?;
@@ -337,73 +337,95 @@ fn project_mutation_pre_state(
 }
 
 pub(super) fn pause(args: PauseArgs, globals: &GlobalFlags) -> Result<()> {
-    load_task(&args.name, globals)?.ok_or_else(|| {
+    let task = load_task(&args.name, globals)?.ok_or_else(|| {
         anyhow::anyhow!("no loop task named `{}`; see `rimz loop list`", args.name)
     })?;
     let now = Timestamp::now();
-    let until = args
-        .pause_for
-        .as_deref()
-        .map(|raw| {
-            let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!(err))?;
-            if duration.is_zero() {
-                bail!("--for must be greater than zero");
-            }
-            now.checked_add(duration)
-                .context("resolving --for against the current clock")
-        })
-        .transpose()?;
-    pauses::set(
-        &args.name,
-        PauseEntry {
-            until,
-            strikes: None,
-        },
-    )?;
+    let key = task_key(&args.name, &task);
+    let entries = arming::load();
+    if matches!(
+        ArmState::resolve(entries.get(&key), task.source(), now),
+        ArmState::Disabled(_)
+    ) {
+        bail!(
+            "loop task `{}` is disabled; enable it before pausing",
+            args.name
+        );
+    }
+    let duration = parse_task_timeout(&args.pause_for).map_err(|err| anyhow::anyhow!(err))?;
+    if duration.is_zero() {
+        bail!("--for must be greater than zero");
+    }
+    let until = now
+        .checked_add(duration)
+        .context("resolving --for against the current clock")?;
+    arming::pause(&key, task.source(), until)?;
 
     let mut out = ui::out();
-    match until {
-        Some(until) => writeln!(
-            out,
-            "loop `{}`: paused; resumes {}",
-            args.name,
-            pause_until_text(until, now)
-        )?,
-        None => writeln!(
-            out,
-            "loop `{}`: paused; resume with `rimz loop resume {}`",
-            args.name, args.name
-        )?,
+    writeln!(
+        out,
+        "loop `{}`: paused; resumes {}",
+        args.name,
+        pause_until_text(until, now)
+    )?;
+    Ok(())
+}
+
+pub(super) fn enable(args: ScopeArgs, globals: &GlobalFlags) -> Result<()> {
+    let tasks = scoped_tasks(args, globals)?;
+    let now = Timestamp::now();
+    let entries = arming::load();
+    let mut out = ui::out();
+    for (name, task) in tasks {
+        let key = task_key(&name, &task);
+        let record = entries.get(&key);
+        let already_enabled = ArmState::resolve(record, task.source(), now) == ArmState::Live
+            && record.is_none_or(|record| {
+                record.enabled && record.pause_until.is_none() && record.strikes.is_none()
+            });
+        if already_enabled {
+            strikes::clear(&key)?;
+            writeln!(out, "loop `{name}`: already enabled")?;
+            continue;
+        }
+        arming::enable(&key)?;
+        strikes::clear(&key)?;
+        let current = arming::load();
+        write!(out, "loop `{name}`: enabled")?;
+        if let Some(next) = task_next_fire_text(&name, &task, current.get(&key), now) {
+            write!(out, " · next {next}")?;
+        }
+        writeln!(out)?;
     }
     Ok(())
 }
 
-pub(super) fn resume(name: &str, globals: &GlobalFlags) -> Result<()> {
-    let task = load_task(name, globals)?
-        .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
-    let now = Timestamp::now();
-    let pause = pauses::load().remove(name);
-    if !pause
-        .as_ref()
-        .is_some_and(|entry| pauses::is_active(entry, now))
-    {
-        writeln!(ui::out(), "loop `{name}`: not paused")?;
-        return Ok(());
-    }
-
-    let resumed = PauseEntry {
-        until: Some(now),
-        strikes: None,
-    };
-    pauses::set(name, resumed)?;
-    strikes::clear(name)?;
+pub(super) fn disable(args: ScopeArgs, globals: &GlobalFlags) -> Result<()> {
+    let tasks = scoped_tasks(args, globals)?;
     let mut out = ui::out();
-    write!(out, "loop `{name}`: resumed")?;
-    if let Some(next) = task_next_fire_text(name, &task, Some(&resumed), now) {
-        write!(out, " · next {next}")?;
+    for (name, task) in tasks {
+        arming::disable(&task_key(&name, &task), None)?;
+        writeln!(out, "loop `{name}`: disabled")?;
     }
-    writeln!(out)?;
     Ok(())
+}
+
+fn scoped_tasks(args: ScopeArgs, globals: &GlobalFlags) -> Result<Vec<(String, LoadedTask)>> {
+    let catalog = task_catalog(globals)?;
+    if args.all {
+        return Ok(catalog
+            .visible()
+            .iter()
+            .map(|(name, task)| (name.clone(), task.clone()))
+            .collect());
+    }
+    let name = args.name.unwrap_or_default();
+    let task = catalog
+        .visible()
+        .get(&name)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
+    Ok(vec![(name, task)])
 }
 
 fn resolve_delivery_target(

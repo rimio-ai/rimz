@@ -47,7 +47,7 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
         && let Some(info) = holder
         && wait_for_run_lock_release(name, entry, STOP_GRACE)?
     {
-        append_stopped_record(name, entry, info, run.as_ref());
+        append_stopped_record(name, &task, info, run.as_ref());
         write_stopped(name, run.as_ref(), true)?;
         return Ok(());
     }
@@ -74,7 +74,7 @@ fn lock_info(state: &RunLockState) -> Option<RunLockInfo> {
 
 fn append_stopped_record(
     name: &str,
-    entry: &TaskEntry,
+    task: &LoadedTask,
     info: RunLockInfo,
     run: Option<&RunRecord>,
 ) {
@@ -91,7 +91,7 @@ fn append_stopped_record(
     record.mode = None;
     record.error = Some("stopped by rimz loop stop".to_owned());
     record.run_id = run.map(|record| record.run_id.to_string());
-    run_log::record_transition(name, entry, &record);
+    run_log::record_transition(task, &record);
 }
 
 fn write_stopped(name: &str, run: Option<&RunRecord>, signaled: bool) -> std::io::Result<()> {

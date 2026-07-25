@@ -15,12 +15,12 @@ use std::time::Duration;
 use crate::config::{TaskEntry, TaskTarget};
 use jiff::{SignedDuration, Timestamp, Zoned};
 
+pub mod arming;
 pub mod catalog;
 pub mod config_edit;
 pub(crate) mod fire;
 pub mod instances;
 mod overlay_store;
-pub mod pauses;
 pub mod run_log;
 pub mod runner;
 pub mod strikes;
@@ -342,7 +342,7 @@ impl ParsedSchedule {
 pub struct TaskTiming {
     parsed: Result<ParsedSchedule, ScheduleErr>,
     state: TaskTimingState,
-    active_pause: Option<pauses::PauseEntry>,
+    arm_state: arming::ArmState,
     scheduled_next: Option<Timestamp>,
 }
 
@@ -350,7 +350,8 @@ pub struct TaskTiming {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskTimingState {
     Blocked(crate::trust::TrustState),
-    Paused(pauses::PauseEntry),
+    Disabled(arming::DisabledReason),
+    Paused(Timestamp),
     Invalid,
     Unarmed,
     Upcoming(Timestamp),
@@ -361,41 +362,41 @@ pub enum TaskTimingState {
 impl TaskTiming {
     pub fn evaluate(
         parsed: &Result<ParsedSchedule, ScheduleErr>,
-        blocked: Option<crate::trust::TrustState>,
+        source: catalog::TaskSource,
         last_fire: Option<Timestamp>,
-        pause: Option<&pauses::PauseEntry>,
+        arming: Option<&arming::Arming>,
         now: &Zoned,
     ) -> Self {
         let parsed = parsed.clone();
-        let active_pause = pause
-            .filter(|pause| pauses::is_active(pause, now.timestamp()))
-            .copied();
+        let arm_state = arming::ArmState::resolve(arming, source, now.timestamp());
         let scheduled_next = match (&parsed, last_fire) {
             (Ok(parsed), Some(last_fire)) => parsed.schedule.next_after(
-                pauses::effective_last_fire(last_fire, pause, now.timestamp()),
+                arming::effective_last_fire(last_fire, arming, now.timestamp()),
                 now,
             ),
             (Ok(_), None) | (Err(_), _) => None,
         };
-        let state = if let Some(state) = blocked {
+        let state = if let Some(state) = source.blocked_state() {
             TaskTimingState::Blocked(state)
-        } else if let Some(pause) = active_pause {
-            TaskTimingState::Paused(pause)
         } else {
-            match (&parsed, last_fire) {
-                (Err(_), _) => TaskTimingState::Invalid,
-                (Ok(_), None) => TaskTimingState::Unarmed,
-                (Ok(_), Some(_)) => match scheduled_next {
-                    Some(next) if next <= now.timestamp() => TaskTimingState::Due(next),
-                    Some(next) => TaskTimingState::Upcoming(next),
-                    None => TaskTimingState::NoOccurrence,
+            match arm_state {
+                arming::ArmState::Disabled(reason) => TaskTimingState::Disabled(reason),
+                arming::ArmState::Paused(until) => TaskTimingState::Paused(until),
+                arming::ArmState::Live => match (&parsed, last_fire) {
+                    (Err(_), _) => TaskTimingState::Invalid,
+                    (Ok(_), None) => TaskTimingState::Unarmed,
+                    (Ok(_), Some(_)) => match scheduled_next {
+                        Some(next) if next <= now.timestamp() => TaskTimingState::Due(next),
+                        Some(next) => TaskTimingState::Upcoming(next),
+                        None => TaskTimingState::NoOccurrence,
+                    },
                 },
             }
         };
         Self {
             parsed,
             state,
-            active_pause,
+            arm_state,
             scheduled_next,
         }
     }
@@ -408,8 +409,8 @@ impl TaskTiming {
         self.parsed.as_ref()
     }
 
-    pub const fn active_pause(&self) -> Option<pauses::PauseEntry> {
-        self.active_pause
+    pub const fn arm_state(&self) -> arming::ArmState {
+        self.arm_state
     }
 
     pub const fn next_timestamp(&self) -> Option<Timestamp> {
@@ -419,7 +420,7 @@ impl TaskTiming {
         }
     }
 
-    /// Parsed schedule occurrence independent of trust and active-pause display overlays.
+    /// Parsed schedule occurrence independent of trust and arming display overlays.
     pub const fn scheduled_next_timestamp(&self) -> Option<Timestamp> {
         self.scheduled_next
     }

@@ -10,10 +10,9 @@ use std::path::{Path, PathBuf};
 
 use jiff::{Timestamp, Zoned};
 
-use super::pauses::PauseEntry;
 use super::{
+    arming::{self, ArmState, Arming, TaskKey},
     catalog::{LoadedTask, TaskCatalog},
-    pauses,
 };
 use crate::RuntimePaths;
 use crate::ids::WorkspaceId;
@@ -46,8 +45,8 @@ pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
     );
     let path = state_path(runtime);
     let state = read_state(&path);
-    let pauses = pauses::load();
-    let (actions, next_state) = plan(&tasks, &state, &pauses, now);
+    let arming = arming::load();
+    let (actions, next_state) = plan(&tasks, &state, &arming, now);
     if next_state != state
         && let Err(err) = write_temp_then_rename_cache(&path, &next_state)
     {
@@ -84,7 +83,7 @@ fn workspace_project_root(runtime: &RuntimePaths) -> Option<PathBuf> {
 fn plan(
     tasks: &BTreeMap<String, LoadedTask>,
     state: &BTreeMap<String, Timestamp>,
-    pauses: &BTreeMap<String, PauseEntry>,
+    arming_entries: &BTreeMap<String, Arming>,
     now: &Zoned,
 ) -> (Vec<(String, Action)>, BTreeMap<String, Timestamp>) {
     let mut actions = Vec::new();
@@ -101,20 +100,20 @@ fn plan(
                 continue;
             }
         };
-        let pause = pauses.get(name);
+        let key = TaskKey::for_task(name, task.source(), &task.entry().resolved_root());
+        let arming = arming_entries.get(&key);
+        let arm_state = ArmState::resolve(arming, task.source(), now.timestamp());
         match state.get(name).copied() {
             None => {
                 actions.push((name.clone(), Action::Arm));
                 next_state.insert(name.clone(), now.timestamp());
             }
-            Some(last_fire)
-                if pause.is_some_and(|entry| pauses::is_active(entry, now.timestamp())) =>
-            {
+            Some(last_fire) if arm_state != ArmState::Live => {
                 next_state.insert(name.clone(), last_fire);
             }
             Some(last_fire)
                 if parsed.schedule.due(
-                    pauses::effective_last_fire(last_fire, pause, now.timestamp()),
+                    arming::effective_last_fire(last_fire, arming, now.timestamp()),
                     now,
                 ) =>
             {
@@ -194,6 +193,10 @@ mod tests {
         LoadedTask::new(NAME, entry, TaskSource::Config)
     }
 
+    fn loaded_from(entry: TaskEntry, source: TaskSource) -> LoadedTask {
+        LoadedTask::new(NAME, entry, source)
+    }
+
     fn task(root: &str, every: &str) -> LoadedTask {
         loaded(TaskEntry {
             agent: Some("claude".to_owned()),
@@ -204,19 +207,21 @@ mod tests {
         })
     }
 
-    fn until(stamp: Timestamp) -> PauseEntry {
-        PauseEntry {
-            until: Some(stamp),
+    fn until(stamp: Timestamp) -> Arming {
+        Arming {
+            enabled: true,
+            at: Timestamp::from_second(0).expect("timestamp"),
+            pause_until: Some(stamp),
             strikes: None,
         }
     }
 
     /// Durable inputs for one elder tick over a single task. The default is the
-    /// never-seen, unpaused case.
+    /// never-seen, live case.
     #[derive(Default)]
     struct Tick {
         state: Option<Timestamp>,
-        pause: Option<PauseEntry>,
+        arming: Option<Arming>,
     }
 
     impl Tick {
@@ -228,9 +233,9 @@ mod tests {
             }
         }
 
-        fn paused(self, pause: PauseEntry) -> Self {
+        fn held(self, arming: Arming) -> Self {
             Self {
-                pause: Some(pause),
+                arming: Some(arming),
                 ..self
             }
         }
@@ -240,7 +245,15 @@ mod tests {
             let (actions, next) = plan(
                 &one(task.clone()),
                 &self.state.map(one).unwrap_or_default(),
-                &self.pause.map(one).unwrap_or_default(),
+                &self
+                    .arming
+                    .map(|arming| {
+                        BTreeMap::from([(
+                            TaskKey::for_task(NAME, task.source(), &task.entry().resolved_root()),
+                            arming,
+                        )])
+                    })
+                    .unwrap_or_default(),
                 now,
             );
             (
@@ -271,8 +284,10 @@ mod tests {
         let due = seconds_before(stamp, 300);
         let early = seconds_before(stamp, 240);
         let prior = seconds_before(stamp, 600);
-        let manual = PauseEntry {
-            until: None,
+        let manual = Arming {
+            enabled: false,
+            at: stamp,
+            pause_until: None,
             strikes: Some(3),
         };
         let every_5m = &task("/repo", "5m");
@@ -293,12 +308,12 @@ mod tests {
             "not yet due"
         );
         assert_eq!(
-            run(Tick::default().paused(manual), every_5m),
+            run(Tick::default().held(manual), every_5m),
             arm(stamp),
             "armed while paused"
         );
         assert_eq!(
-            run(Tick::armed(prior).paused(manual), every_5m),
+            run(Tick::armed(prior).held(manual), every_5m),
             carry(prior),
             "held by a pause"
         );
@@ -314,7 +329,7 @@ mod tests {
         assert!(next.is_empty());
     }
 
-    /// An ended pause becomes the effective last-fire edge, so a resumed task
+    /// An ended pause becomes the effective last-fire edge, so a lifted task
     /// waits out a full interval and never replays an occurrence it slept through.
     #[test]
     fn ended_pause_sets_the_effective_fire_edge() {
@@ -322,7 +337,7 @@ mod tests {
         let interval_task = &task("/repo", "5m");
         let pause_end = seconds_before(now.timestamp(), 240);
         let stale_stamp = seconds_before(pause_end, 600);
-        let resumed = || Tick::armed(stale_stamp).paused(until(pause_end));
+        let resumed = || Tick::armed(stale_stamp).held(until(pause_end));
 
         assert_eq!(
             resumed().run(interval_task, &now),
@@ -346,7 +361,7 @@ mod tests {
         });
         let slept_through = zdt(2026, 6, 23, 6, 0, 0).timestamp();
         let woke_at_0730 =
-            || Tick::armed(slept_through).paused(until(zdt(2026, 6, 24, 7, 30, 0).timestamp()));
+            || Tick::armed(slept_through).held(until(zdt(2026, 6, 24, 7, 30, 0).timestamp()));
         assert_eq!(
             woke_at_0730().run(daily, &zdt(2026, 6, 24, 8, 0, 0)),
             carry(slept_through),
@@ -356,6 +371,52 @@ mod tests {
             woke_at_0730().run(daily, &zdt(2026, 6, 25, 7, 0, 0)).0,
             Some(Action::Fire),
             "the next day's occurrence fires normally"
+        );
+    }
+
+    #[test]
+    fn project_task_stays_held_until_enable_and_does_not_replay() {
+        let now = zdt(2026, 6, 24, 8, 5, 0);
+        let prior = seconds_before(now.timestamp(), 600);
+        let task = loaded_from(
+            TaskEntry {
+                agent: Some("claude".to_owned()),
+                prompt: Some("do it".to_owned()),
+                root: PathBuf::from("/repo"),
+                every: Some("5m".to_owned()),
+                ..TaskEntry::default()
+            },
+            TaskSource::Project {
+                state: crate::trust::TrustState::Trusted,
+            },
+        );
+
+        assert_eq!(
+            Tick::default().run(&task, &now),
+            arm(now.timestamp()),
+            "an unstamped disabled task still gets its first-sight stamp"
+        );
+        assert_eq!(
+            Tick::armed(prior).run(&task, &now),
+            carry(prior),
+            "a project task without a local enable stays held"
+        );
+        let enabled = Arming {
+            enabled: true,
+            at: now.timestamp(),
+            pause_until: None,
+            strikes: None,
+        };
+        assert_eq!(
+            Tick::armed(prior).held(enabled).run(&task, &now),
+            carry(prior),
+            "enabling establishes a fresh replay edge"
+        );
+        let due = zdt(2026, 6, 24, 8, 10, 0);
+        assert_eq!(
+            Tick::armed(prior).held(enabled).run(&task, &due),
+            fire(due.timestamp()),
+            "the next occurrence fires normally"
         );
     }
 

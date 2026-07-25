@@ -120,7 +120,7 @@ Notifications deliver attention off-screen, best-effort, over the sidebar inbox.
 
 `title` and `body` are optional templates for agent-status and coalesced desktop or banner text. Templates substitute `{{kind}}`, `{{agent}}`, `{{handle}}`, `{{status}}`, `{{worktree}}`, `{{task}}`, `{{count}}`, and `{{unread}}`; `agent` and `handle` are the agent handles or roles joined for multi-agent notifications, and a value unavailable for a notification kind renders empty. Reminder and remote-link notifications keep their built-in text.
 
-Each `[[notifications.handler]]` runs locally through `sh -c` when all present `when` clauses match. `kind` names notification kinds (`waiting`, `failed`, `paused`, `success`, `coalesced`, `reminder`, `loop_paused`, `link_lost`, `link_restored`), `worktree` glob-matches an agent branch or path, and `handle` glob-matches the agent handle or role (a leading `@` in the pattern is accepted as the usual address sigil). A `command` template may also use `{{title}}` and `{{body}}`, the rendered banner strings. Each substituted command value is shell-quoted as one token, so write `ntfy publish --title {{title}} rimz {{body}}`, not `--title "{{title}}"`. The legacy `command = "..."` key is shorthand for one unconditional handler, and every handler receives `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND` in the environment; reminders also get `RIMZ_NOTIFY_UNREAD`. The debounce, coalesce, and remind model is in [notifications.md](../internals/sidebar/notifications.md), and the guide is [notifications.md](./notifications.md).
+Each `[[notifications.handler]]` runs locally through `sh -c` when all present `when` clauses match. `kind` names notification kinds (`waiting`, `failed`, `paused`, `success`, `coalesced`, `reminder`, `loop_disabled`, `link_lost`, `link_restored`), `worktree` glob-matches an agent branch or path, and `handle` glob-matches the agent handle or role (a leading `@` in the pattern is accepted as the usual address sigil). A `command` template may also use `{{title}}` and `{{body}}`, the rendered banner strings. Each substituted command value is shell-quoted as one token, so write `ntfy publish --title {{title}} rimz {{body}}`, not `--title "{{title}}"`. The legacy `command = "..."` key is shorthand for one unconditional handler, and every handler receives `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND` in the environment; reminders also get `RIMZ_NOTIFY_UNREAD`. The debounce, coalesce, and remind model is in [notifications.md](../internals/sidebar/notifications.md), and the guide is [notifications.md](./notifications.md).
 
 ### Resume
 
@@ -482,7 +482,7 @@ session = "sess-abc123"
 handle = "@planner"
 ```
 
-Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`; shared project tasks use the same shape in `<repo>/.rimz/config.toml`, are trust-hashed, and stay inert until `rimz trust grant`. The scheduling model (shapes, watchdogs, self-wakes) is [loops.md](./loops.md); this section is the field shape.
+Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`; shared project tasks use the same shape in `<repo>/.rimz/config.toml`, are trust-hashed, and need both `rimz trust grant` and a machine-local `rimz loop enable <name>` before they run unattended. The scheduling model (shapes, watchdogs, self-wakes) is [loops.md](./loops.md); this section is the field shape.
 
 `default-timeout` bounds scheduled supervised turns whose task omits `timeout`; it accepts positive `s`, `m`, `h`, and `d` durations and defaults to `2h`. Set it with `rimz config set loop.default-timeout 3h`. Task-specific `timeout` wins, and a manual `rimz loop fire` without one remains unbounded.
 
@@ -492,7 +492,7 @@ Each task chooses `agent`, `wake`, `check`, or `check` plus one agent action:
 - `[tasks.<name>.wake]` pins delivery to one live agent session through the message path: `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only.
 - `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, `on = "success"` on zero exit. Check output is appended to the agent prompt when the guard fires.
 - `verify` runs a shell command after a spawned agent turn and re-prompts that same supervised session on failure; `max-attempts` is the total agent-turn cap and defaults to `3`.
-- `max-strikes` auto-pauses the task after that many consecutive failed or no-progress fires, defaults to `3`, and accepts `0` to disable; `rimz loop resume` clears the machine-local counter.
+- `max-strikes` auto-disables the task after that many consecutive failed or no-progress fires, defaults to `3`, and accepts `0` to disable the strike gate; `rimz loop enable` clears the machine-local counter.
 - `deadline` is normally written by `rimz loop add --until 30m` into the instance state store for poll-until tasks, not hand-authored in `loop.toml`.
 - `budget` caps each spawned supervised run; `budget-per-day` requires it and skips a fire when today's recorded task spend, plus the next run's cap, would exceed the daily amount.
 - `surplus` requires forward headroom in the provider's longest running budget window; `surplus-after` adds an elapsed floor and implies at least `1.0x` headroom when used alone. Both fields apply to `agent` and `wake` actions and fail closed without a complete window reading; the headroom model is [budgets → the surplus gate](./budget.md#the-surplus-gate).
@@ -502,8 +502,8 @@ Field notes:
 - Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset.
 - Machine tasks carry a `root`: `rimz loop add` writes an absolute path, and a hand-edited `~` or relative root is normalized before room matching, firing, and display.
 - Project tasks run at the project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, reject `root`, `wake`, and `deadline`, and require `every` or `cron` because one-shots are machine state.
-- Trusted project tasks win over same-named machine tasks and state instances; an untrusted or stale project task stays visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, and removing or renaming a project-owned task edits that file and prints the `rimz trust grant` follow-up.
-- RimZ-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file.
+- Trusted project tasks win over same-named machine tasks and state instances but default disabled until locally enabled; an untrusted or stale project task stays visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, enables that task for its author, and removing or renaming a project-owned task edits the project file.
+- RimZ-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json`; machine-local task enablement and bounded pauses live in `~/.local/state/rimz/loop-arming.json`.
 
 The full model is in [loops.md](../internals/harness/loops.md), and the CLI is in [loop.md](../reference/cli/loop.md).
 
