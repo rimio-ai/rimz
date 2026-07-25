@@ -117,7 +117,7 @@ fn open_delivery(
                 projection
                     .agents
                     .into_iter()
-                    .find(|agent| agent.kind == record.kind && agent.agent_id == record.agent_id)
+                    .find(|agent| record.same_agent_card(agent))
             })
     } else {
         None
