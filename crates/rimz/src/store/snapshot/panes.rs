@@ -387,11 +387,11 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
     if !definition.capabilities.registers_lazily {
         return true;
     }
-    let stamp_names_live_root = stamp_names_live_pane_root(stamped, pane);
-    if !stamp_names_live_root && !pane_start_allows_bind(agent.last_activity, pane) {
+    let stamp_owned_by_live_root = stamp_owned_by_live_pane_root(agent, stamped, pane);
+    if !stamp_owned_by_live_root && !pane_start_allows_bind(agent.last_activity, pane) {
         return false;
     }
-    if !stamp_names_live_root
+    if !stamp_owned_by_live_root
         && pane
             .hosted_agent_process_start
             .is_some_and(|start| agent.last_activity < start)
@@ -418,16 +418,23 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
     }
 }
 
-/// Whether the stamp was recorded by the process that is still this pane's
-/// root. The resume wrapper records its own pid, and that pid survives the
-/// exec into the provider, so a matching pane pid proves the stamp belongs to
-/// the pane's current tenancy rather than a carried-over incarnation. Hook
-/// stamps carry no pid, so they keep the activity-clock guard below.
-fn stamp_names_live_pane_root(stamped: &PaneRef, pane: &PaneRef) -> bool {
-    matches!(
-        (stamped.pane_pid, pane.pane_pid),
-        (Some(stamped), Some(live)) if stamped == live
-    )
+/// Whether the card's owning agent process is still this pane's root. A resume
+/// wrapper records the same pid as both runtime owner and pane root, and that
+/// pid survives its exec into the provider. Hook-enriched stamps can carry the
+/// root pid too, but a shell-hosted agent's runtime owner is the child CLI, so
+/// it keeps the activity-clock guard below.
+fn stamp_owned_by_live_pane_root(agent: &AgentState, stamped: &PaneRef, pane: &PaneRef) -> bool {
+    let (Some(stamped_pid), Some(live_pid), Some(owner)) = (
+        stamped.pane_pid,
+        pane.pane_pid,
+        agent.runtime_owner.as_ref(),
+    ) else {
+        return false;
+    };
+    stamped_pid == live_pid
+        && owner.kind == crate::pane::RuntimeOwnerKind::Agent
+        && owner.subject_id == agent.agent_id.as_str()
+        && owner.pid == live_pid
 }
 
 /// Defensive guard for read-time binds: when the pane's process start is known,
@@ -644,6 +651,12 @@ mod tests {
             .active_ago(120)
             .in_pane("%4");
         agent.pane.as_mut().expect("stamped pane").pane_pid = Some(84);
+        agent.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+            crate::pane::RuntimeOwnerKind::Agent,
+            "sess-resumed",
+            84,
+            None,
+        ));
         let live = PaneRef {
             pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
             command: Some("codex".to_owned()),
@@ -655,6 +668,36 @@ mod tests {
         };
 
         assert!(stamped_agent_matches_live_pane(
+            &agent,
+            agent.pane.as_ref().expect("stamped pane"),
+            &live,
+        ));
+    }
+
+    #[test]
+    fn shell_root_stamp_keeps_clock_guard_when_agent_owner_is_child() {
+        let mut agent = agent("codex", "sess-retired", AgentStatus::Idle, 1)
+            .worktree("/repo/main")
+            .active_ago(120)
+            .in_pane("%4");
+        agent.pane.as_mut().expect("stamped pane").pane_pid = Some(84);
+        agent.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+            crate::pane::RuntimeOwnerKind::Agent,
+            "sess-retired",
+            85,
+            None,
+        ));
+        let live = PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
+            command: Some("zsh".to_owned()),
+            pane_pid: Some(84),
+            pane_process_start: Some(ago(60)),
+            hosted_agent_kind: Some(AgentKind::new_unchecked("codex")),
+            hosted_agent_process_start: Some(ago(60)),
+            ..pane_cmd("%4", "tab_0", "zsh", None)
+        };
+
+        assert!(!stamped_agent_matches_live_pane(
             &agent,
             agent.pane.as_ref().expect("stamped pane"),
             &live,
@@ -694,6 +737,12 @@ mod tests {
             .active_ago(120)
             .in_pane("%4");
         agent.pane.as_mut().expect("stamped pane").pane_pid = Some(84);
+        agent.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+            crate::pane::RuntimeOwnerKind::Agent,
+            "sess-resumed",
+            84,
+            None,
+        ));
         let live = PaneRef {
             pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
             command: Some("node".to_owned()),
