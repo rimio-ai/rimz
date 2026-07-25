@@ -599,13 +599,14 @@ fn loop_enable_disable_pause_workflow() {
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("already enabled"));
 
     let key = machine_task_key("probe");
-    let prior_enable = Timestamp::now() - SignedDuration::from_secs(60);
+    let prior_enable = Timestamp::now() - SignedDuration::from_hours(3);
+    let expired_pause_end = Timestamp::now() - SignedDuration::from_mins(1);
     let expired = BTreeMap::from([(
         key.clone(),
         Arming {
             enabled: true,
             at: Some(prior_enable),
-            pause_until: Some(Timestamp::now() - SignedDuration::from_secs(1)),
+            pause_until: Some(expired_pause_end),
             strikes: None,
         },
     )]);
@@ -617,7 +618,7 @@ fn loop_enable_disable_pause_workflow() {
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("already enabled"));
     let enabled = read_loop_arming(&env)[&key];
     assert_eq!(enabled.at, Some(prior_enable));
-    assert_eq!(enabled.pause_until, None);
+    assert_eq!(enabled.pause_until, Some(expired_pause_end));
 
     loop_ok(
         &env,

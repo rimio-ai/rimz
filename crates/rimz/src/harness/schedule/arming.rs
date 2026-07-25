@@ -148,10 +148,6 @@ pub fn pause(key: &str, source: TaskSource, until: Timestamp) -> Result<()> {
     pause_in(&state_home(), key, source, until)
 }
 
-pub fn clear_expired_pause(key: &str, now: Timestamp) -> Result<bool> {
-    clear_expired_pause_in(&state_home(), key, now)
-}
-
 pub fn disable_if_live(
     key: &str,
     source: TaskSource,
@@ -229,21 +225,6 @@ fn pause_in(state_root: &Path, key: &str, source: TaskSource, until: Timestamp) 
             let changed = entry.pause_until != Some(until);
             entry.pause_until = Some(until);
             ((), changed)
-        })
-        .map_err(Into::into)
-}
-
-fn clear_expired_pause_in(state_root: &Path, key: &str, now: Timestamp) -> Result<bool> {
-    STORE
-        .mutate(state_root, |entries: &mut BTreeMap<String, Arming>| {
-            let Some(entry) = entries.get_mut(key) else {
-                return (false, false);
-            };
-            if !entry.pause_until.is_some_and(|until| until <= now) {
-                return (false, false);
-            }
-            entry.pause_until = None;
-            (true, true)
         })
         .map_err(Into::into)
 }
@@ -495,34 +476,6 @@ mod tests {
                 ts(20),
             )
             .expect("machine default")
-        );
-    }
-
-    #[test]
-    fn clearing_an_expired_pause_preserves_the_enable_edge() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let key = "machine::nightly";
-        set_in(
-            dir.path(),
-            key,
-            Arming {
-                enabled: true,
-                at: Some(ts(10)),
-                pause_until: Some(ts(20)),
-                strikes: None,
-            },
-        )
-        .expect("seed arming");
-
-        assert!(clear_expired_pause_in(dir.path(), key, ts(20)).expect("clear pause"));
-        assert_eq!(
-            load_from(dir.path())[key],
-            Arming {
-                enabled: true,
-                at: Some(ts(10)),
-                pause_until: None,
-                strikes: None,
-            }
         );
     }
 
