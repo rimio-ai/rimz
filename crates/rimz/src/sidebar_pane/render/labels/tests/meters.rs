@@ -949,3 +949,32 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
     assert_eq!(spans[2].style, theme.muted(), "count");
     assert!(context_compaction_spans(&theme, 0).is_empty());
 }
+
+#[test]
+fn tool_repeat_marker_starts_at_the_warning_threshold() {
+    let theme = Theme::fixed(false);
+    let repeat = crate::agent_activity::ToolRepeat {
+        digest: "digest".to_owned(),
+        tool: "Bash".to_owned(),
+        count: 3,
+        since: jiff::Timestamp::from_second(1_700_000_000).unwrap(),
+    };
+
+    assert!(context_tool_repeat_spans(&theme, None, 3).is_empty());
+    assert!(
+        context_tool_repeat_spans(
+            &theme,
+            Some(&crate::agent_activity::ToolRepeat {
+                count: 2,
+                ..repeat.clone()
+            }),
+            3,
+        )
+        .is_empty()
+    );
+    let spans = context_tool_repeat_spans(&theme, Some(&repeat), 3);
+    assert_eq!(text(&spans), " · ⟲ 3");
+    assert_eq!(spans[0].style, theme.muted(), "seam");
+    assert_eq!(spans[1].style, theme.warn(Modifier::empty()), "marker");
+    assert_eq!(spans[2].style, theme.muted(), "count");
+}

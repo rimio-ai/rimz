@@ -93,6 +93,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
     sub_providers: &["anthropic"],
     expected_windows: &["5h", "7d"],
     tools: ToolClassification {
+        input_key: Some("tool_input"),
         mutating: &["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"],
         editing: &["Edit", "Write", "MultiEdit", "NotebookEdit"],
         blocking: &[

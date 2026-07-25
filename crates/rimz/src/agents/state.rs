@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::agent_activity::ToolRepeat;
 use crate::ids::{AgentKind, AgentSessionId, AskId};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
@@ -153,6 +154,12 @@ impl ContextSeverity {
 /// overrides this for the live sidebar projection.
 pub const DEFAULT_STALL_AFTER_SECS: u32 = 30 * 60;
 
+/// Consecutive identical tool calls before the sidebar annotates a card.
+pub const DEFAULT_TOOL_REPEAT_WARN_AFTER: u32 = 3;
+
+/// Consecutive identical tool calls before the sidebar routes attention.
+pub const DEFAULT_TOOL_REPEAT_ATTENTION_AFTER: u32 = 20;
+
 /// Default silence window credited to a working span before estimated active
 /// time pauses. The next progress signal resumes accrual without counting the
 /// intervening idle gap.
@@ -185,6 +192,20 @@ pub fn is_stalled(
 ) -> bool {
     status == AgentStatus::Running
         && now.duration_since(last_activity).as_secs() >= i64::from(stalled_after_secs)
+}
+
+/// Whether a `running` agent has repeated one identical named tool call enough
+/// times to warrant attention. A loop completes tools and refreshes the
+/// activity heartbeat, so it cannot trip [`is_stalled`]; the repeat run is the
+/// explicit progress-failure certificate. The next differing tool or other
+/// progress event clears the run, so the escalation self-heals without human
+/// action.
+pub fn is_tool_looping(
+    status: AgentStatus,
+    repeat: Option<&ToolRepeat>,
+    attention_after: u32,
+) -> bool {
+    status == AgentStatus::Running && repeat.is_some_and(|repeat| repeat.count >= attention_after)
 }
 
 /// Whether a `running` agent's latest turn died on a provider API error with no
@@ -548,6 +569,9 @@ pub struct AgentState {
     /// Named tool calls observed for this session.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_calls: BTreeMap<String, u32>,
+    /// Open run of consecutive identical tool calls from the activity sidecar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_repeat: Option<ToolRepeat>,
     /// Occupied-context-token reading for the latest smart-compact command this
     /// agent received. The send path suppresses duplicate `/compact` sends while
     /// the carried-forward gauge still equals this baseline, without rescanning
@@ -628,6 +652,8 @@ struct AgentStateWire {
     compaction_count: u32,
     #[serde(default)]
     tool_calls: BTreeMap<String, u32>,
+    #[serde(default)]
+    tool_repeat: Option<ToolRepeat>,
     last_compact_command_tokens: Option<u64>,
     last_seen: Timestamp,
     last_activity: Timestamp,
@@ -690,6 +716,7 @@ impl From<AgentStateWire> for AgentState {
             compacting_since: wire.compacting_since,
             compaction_count: wire.compaction_count,
             tool_calls: wire.tool_calls,
+            tool_repeat: wire.tool_repeat,
             last_compact_command_tokens: wire.last_compact_command_tokens,
             last_seen: wire.last_seen,
             last_activity: wire.last_activity,
@@ -756,6 +783,7 @@ impl AgentState {
             compacting_since: None,
             compaction_count: 0,
             tool_calls: BTreeMap::new(),
+            tool_repeat: None,
             last_compact_command_tokens: None,
             last_seen: at,
             last_activity: at,

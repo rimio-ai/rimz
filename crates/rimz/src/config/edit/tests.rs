@@ -122,6 +122,8 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "sidebar.afk_after_secs",
     "agents.attention.active_grace_secs",
     "agents.attention.stalled_after_secs",
+    "agents.attention.tool_repeat_warn_after",
+    "agents.attention.tool_repeat_attention_after",
     "agents.attention.inactive_after_secs",
     "agents.attention.archive_after_secs",
     "theme.pets.enabled",

@@ -64,6 +64,8 @@ impl<'a> AgentProjectionIndex<'a> {
 pub(super) struct AttentionWindows {
     /// Silent-`running` → actionable `!` projection window (`stalled_after_secs`).
     pub stalled_after_secs: u32,
+    /// Identical-tool run length that projects a running row to `!`.
+    pub tool_repeat_attention_after: u32,
     /// No-activity → inactive-sink window (`inactive_after_secs`).
     pub inactive_after_secs: u32,
     /// No-activity → archive-sink window (`archive_after_secs`).
@@ -82,6 +84,7 @@ impl AttentionWindows {
             .max(inactive_after_secs.saturating_add(1));
         Self {
             stalled_after_secs: config.stalled_after_secs.get(),
+            tool_repeat_attention_after: config.tool_repeat_attention_after.get(),
             inactive_after_secs,
             archive_after_secs,
         }
@@ -121,6 +124,7 @@ pub(super) fn build_worktree_groups_from_rows(
         agent_projection.exhausted_resumes,
         now,
         windows.stalled_after_secs,
+        windows.tool_repeat_attention_after,
     );
     stamp_attention(&mut rows, now, windows);
 
@@ -260,6 +264,7 @@ mod tests {
             now(),
             AttentionWindows {
                 stalled_after_secs: 1,
+                tool_repeat_attention_after: 20,
                 inactive_after_secs: 3_600,
                 archive_after_secs: 86_400,
             },
@@ -273,6 +278,7 @@ mod tests {
             now(),
             AttentionWindows {
                 stalled_after_secs: 1,
+                tool_repeat_attention_after: 20,
                 inactive_after_secs: 1_200,
                 archive_after_secs: 86_400,
             },
@@ -289,6 +295,7 @@ mod tests {
             now(),
             AttentionWindows {
                 stalled_after_secs: 1,
+                tool_repeat_attention_after: 20,
                 inactive_after_secs: 3_600,
                 archive_after_secs: 86_400,
             },
@@ -300,6 +307,7 @@ mod tests {
             now(),
             AttentionWindows {
                 stalled_after_secs: 1,
+                tool_repeat_attention_after: 20,
                 inactive_after_secs: 3_600,
                 archive_after_secs: 86_400,
             },
@@ -349,6 +357,7 @@ mod tests {
             now(),
             AttentionWindows {
                 stalled_after_secs: 1,
+                tool_repeat_attention_after: 20,
                 inactive_after_secs: 3_600,
                 archive_after_secs: 86_400,
             },
@@ -364,6 +373,7 @@ mod tests {
     fn archive_window_is_threshold_driven_and_strict() {
         let windows = AttentionWindows {
             stalled_after_secs: 1,
+            tool_repeat_attention_after: 20,
             inactive_after_secs: 3_600,
             archive_after_secs: 86_400,
         };
@@ -385,6 +395,7 @@ mod tests {
     fn stamp_attention_records_score() {
         let windows = AttentionWindows {
             stalled_after_secs: 1,
+            tool_repeat_attention_after: 20,
             inactive_after_secs: 3_600,
             archive_after_secs: 86_400,
         };

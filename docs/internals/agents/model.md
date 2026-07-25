@@ -210,8 +210,9 @@ The sidebar row projection ([`project_display_status`](../../../crates/rimz/src/
 | 5 | a turn that completed without a `Stop` hook | `success` |
 | 6 | a turn or ask interrupted without a terminal hook | `idle` |
 | 7 | a clean turn parked on background work | `success`, retaining the `parked` phase |
-| 8 | silent past the stall window | `paused` on a spent window, otherwise `failed` |
-| 9 | nothing above applies | `effective_status` |
+| 8 | a consecutive identical-tool run reaches the attention threshold | `failed`, with the tool and repeat count |
+| 9 | silent past the stall window | `paused` on a spent window, otherwise `failed` |
+| 10 | nothing above applies | `effective_status` |
 
 Rung by rung:
 
@@ -222,8 +223,9 @@ Rung by rung:
 5. **Turn completion.** Codex's `/review` ends on a clean rollout `task_complete` with a non-empty `last_agent_message` and no `Stop`, so the completion marker postdates `last_activity` and settles the row instead of letting the stall window misread a finished review as failed ([codex.md](./codex.md#turn-completion-marker)). A newer prompt self-clears it.
 6. **Turn interruption.** The derived marker source is provider-specific: Codex writes rollout `turn_aborted` for Esc and `/clear` mid-turn ([codex.md](./codex.md#turn-interruption-marker)); Claude writes a transcript `user` sentinel beginning `[Request interrupted by user` ([claude.md](./claude.md#turn-interruption-marker)). The marker postdates `last_activity` and settles the row as at rest with no result, instead of letting a false wait persist or the stall window misread it as failed.
 7. **Parked settle** displays a clean turn parked on background work as `success` immediately, since the turn's verdict was earned and only the background chore is still humming. The display row retains the `parked` phase so `⋯ bg` keeps that pending work legible; a wake's `turn_started` re-runs the row.
-8. **Stall** is the backstop for any other `running` agent silent past the configurable window. A kind with a spent, unreset budget window reads `paused`. Everything else escalates to the attention `!` ([Liveness and presence](#liveness-and-presence)).
-9. **The bottom rung** is `effective_status`, which is where the hookless plan-approval projection lands: a `running` Codex row whose completed planning turn rests on a rollout `Plan` item reads as `waiting`. The normal `Stop` hook records the durable plan ask, so this marker is the missed-hook backstop that keeps the row and the message-delivery gate safe without inventing an ask record ([codex.md](./codex.md#plan-approval-marker)).
+8. **Tool-loop detection** catches a `running` agent whose completed tool calls keep refreshing the heartbeat while making no progress: the same tool name and canonicalized arguments repeated to the configured attention threshold project to `!` with a `loop: <tool> ×<count>` label. The next differing tool or other progress event clears the consecutive run and returns the row to `running` without human action.
+9. **Stall** is the backstop for any other `running` agent silent past the configurable window. A kind with a spent, unreset budget window reads `paused`. Everything else escalates to the attention `!` ([Liveness and presence](#liveness-and-presence)).
+10. **The bottom rung** is `effective_status`, which is where the hookless plan-approval projection lands: a `running` Codex row whose completed planning turn rests on a rollout `Plan` item reads as `waiting`. The normal `Stop` hook records the durable plan ask, so this marker is the missed-hook backstop that keeps the row and the message-delivery gate safe without inventing an ask record ([codex.md](./codex.md#plan-approval-marker)).
 
 Each rung reads enrichment plus liveness, and each leaves the rollup holding the true lifecycle status: Claude transcript-death can leave the rollup `running` while Codex Stop-over-rollout-error records the rollup `failed`, and projection refines either display to `paused`. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/store/snapshot/view/tests/status/stall.rs) test stacks the causes against each other, so a reordering fails the suite even when every single-cause test still passes.
 

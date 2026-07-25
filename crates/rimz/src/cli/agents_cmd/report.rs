@@ -101,6 +101,7 @@ pub(super) struct StatsReport {
     pub cost_usd: Option<f64>,
     pub active_secs: Option<u64>,
     pub tool_calls: BTreeMap<String, u32>,
+    pub tool_repeat: Option<rimz::agent_activity::ToolRepeat>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -321,6 +322,7 @@ pub(super) fn build_entry(
             cost_usd,
             active_secs: card.and_then(|card| card.estimated_active_secs),
             tool_calls: agent.tool_calls.clone(),
+            tool_repeat: agent.tool_repeat.clone(),
         },
         timeline: TimelineReport {
             registered_at: agent.registered_at,

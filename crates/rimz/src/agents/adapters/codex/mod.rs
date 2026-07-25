@@ -159,6 +159,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
     sub_providers: &["openai", "openai-codex"],
     expected_windows: &["5h", "7d"],
     tools: ToolClassification {
+        input_key: Some("tool_input"),
         mutating: &[
             "Bash",
             "shell",

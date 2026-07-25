@@ -79,6 +79,23 @@ pub(crate) fn handle_lifecycle_hook(
             LifecycleSignal::TurnEnded { .. } | LifecycleSignal::TurnInterrupted
         )
     });
+    let tool_call = recorded.as_ref().and_then(|recorded| {
+        let LifecycleSignal::ToolUsed {
+            name: Some(name), ..
+        } = &recorded.observation.signal
+        else {
+            return None;
+        };
+        agent
+            .spec()
+            .tool_signature(payload)
+            .map(|digest| (name.as_str(), digest))
+    });
+    let tool_run = tool_call
+        .as_ref()
+        .map_or(rimz::agent_activity::ToolRun::Reset, |(tool, digest)| {
+            rimz::agent_activity::ToolRun::Call { tool, digest }
+        });
     let transcript_path = recorded
         .as_ref()
         .and_then(|recorded| recorded.observation.transcript_path.as_deref());
@@ -122,6 +139,7 @@ pub(crate) fn handle_lifecycle_hook(
                 model_hint,
                 transcript_path,
                 turn_ended,
+                tool_run,
             },
         });
     }
@@ -321,6 +339,7 @@ struct LifecycleEventContext<'a> {
     model_hint: Option<&'a str>,
     transcript_path: Option<&'a str>,
     turn_ended: bool,
+    tool_run: rimz::agent_activity::ToolRun<'a>,
 }
 
 struct ContextSidecarInput<'a> {
@@ -466,6 +485,7 @@ mod tests {
                 model_hint: None,
                 transcript_path: None,
                 turn_ended: false,
+                tool_run: rimz::agent_activity::ToolRun::Reset,
             },
         });
         assert!(

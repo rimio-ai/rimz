@@ -163,6 +163,26 @@ pub(in crate::sidebar_pane::render) fn context_compaction_spans(
     ]
 }
 
+/// The `· ⟲ N` identical-tool tail for the context line. It annotates the
+/// card at the warning threshold without changing status or attention rank.
+pub(in crate::sidebar_pane::render) fn context_tool_repeat_spans(
+    theme: &Theme,
+    repeat: Option<&crate::agent_activity::ToolRepeat>,
+    warn_after: u32,
+) -> Vec<Span<'static>> {
+    let Some(repeat) = repeat.filter(|repeat| repeat.count >= warn_after) else {
+        return Vec::new();
+    };
+    vec![
+        Span::styled(" · ", theme.muted()),
+        Span::styled(
+            theme.glyph(GlyphRole::ToolRepeat).to_owned(),
+            theme.warn(Modifier::empty()),
+        ),
+        Span::styled(format!(" {}", repeat.count), theme.muted()),
+    ]
+}
+
 /// The `▤ {filled}` head of the card's context line: the filled-square marker +
 /// the filled-window figure. The marker wears the caller's `severity` — the
 /// same [`severity_color`] tone the bar and the `▣` glyph paint — so the

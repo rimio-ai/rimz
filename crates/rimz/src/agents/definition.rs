@@ -7,6 +7,7 @@
 //! implementations behind the adapters boundary.
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use super::lifecycle::{AskKind, LifecycleSignalKind};
 use super::{LaunchPreset, PresetArgMatcher, PresetErr, PresetField};
@@ -533,6 +534,9 @@ impl PlanLabel {
 /// The agent's tool vocabulary, classified for lifecycle and native blocking prompts.
 #[derive(Debug)]
 pub struct ToolClassification {
+    /// Raw provider-payload key that holds a tool call's arguments. `None`
+    /// when the protocol exposes no arguments RimZ can compare accurately.
+    pub input_key: Option<&'static str>,
     /// Tools that mutate the workspace — write files or run commands. A
     /// mutating tool is proof of real work, so its completed tool signal is
     /// durable even when it does not change state.
@@ -1017,6 +1021,26 @@ impl AgentSpec {
         self.tool_in(payload, self.tools.mutating)
     }
 
+    /// A stable digest of a tool call's identity: its name plus its arguments.
+    /// Returns `None` when the adapter declares no input key or the payload
+    /// carries neither a name nor input there, keeping repeat detection off
+    /// instead of falling back to an imprecise name-only key.
+    pub fn tool_signature(&self, payload: &Value) -> Option<String> {
+        let name = payload.get("tool_name").and_then(Value::as_str)?;
+        let input = payload.get(self.tools.input_key?)?;
+        let mut hasher = Sha256::new();
+        hasher.update(name.as_bytes());
+        hasher.update([0]);
+        hasher.update(serde_json::to_vec(input).ok()?);
+        let digest = hasher.finalize();
+        Some(
+            digest[..8]
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+        )
+    }
+
     /// Whether a tool-use payload names a *file-editing* tool.
     pub fn tool_edits_files(&self, payload: &Value) -> bool {
         self.tool_in(payload, self.tools.editing)
@@ -1132,6 +1156,74 @@ mod tests {
         assert_eq!(codex.blocking_tool_kind(Some("ExitPlanMode")), None);
         assert_eq!(codex.blocking_tool_kind(Some("update_plan")), None);
         assert_eq!(codex.blocking_tool_kind(None), None);
+    }
+
+    #[test]
+    fn tool_signature_is_canonical_and_argument_sensitive() {
+        let claude = crate::agents::registry::spec_by_kind("claude").unwrap();
+        let ordered = claude
+            .tool_signature(&json!({
+                "tool_name": "Bash",
+                "tool_input": { "command": "cargo check", "timeout": 30 }
+            }))
+            .expect("Claude signature");
+        let reordered = claude
+            .tool_signature(&json!({
+                "tool_input": { "timeout": 30, "command": "cargo check" },
+                "tool_name": "Bash"
+            }))
+            .expect("reordered Claude signature");
+        let changed = claude
+            .tool_signature(&json!({
+                "tool_name": "Bash",
+                "tool_input": { "command": "cargo test", "timeout": 30 }
+            }))
+            .expect("changed Claude signature");
+
+        assert_eq!(ordered, reordered);
+        assert_ne!(ordered, changed);
+    }
+
+    #[test]
+    fn tool_signature_covers_each_declared_input_key_shape() {
+        for (kind, payload, expected) in [
+            (
+                "codex",
+                json!({"tool_name": "exec_command", "tool_input": {"cmd": "cargo check"}}),
+                "934fb6c158c4e4bb",
+            ),
+            (
+                "opencode",
+                json!({"tool_name": "bash", "input": {"command": "cargo check"}}),
+                "b3a522bf71a0647b",
+            ),
+            (
+                "cursor",
+                json!({"tool_name": "Shell", "args": {"command": "cargo check"}}),
+                "575d06c0294ef4dd",
+            ),
+            (
+                "copilot",
+                json!({"tool_name": "bash", "toolInput": "{\"command\":\"cargo check\"}"}),
+                "2e690e85400b7508",
+            ),
+        ] {
+            let spec = crate::agents::registry::spec_by_kind(kind).unwrap();
+            assert_eq!(
+                spec.tool_signature(&payload).as_deref(),
+                Some(expected),
+                "{kind} input-key shape"
+            );
+        }
+
+        let kiro = crate::agents::registry::spec_by_kind("kiro").unwrap();
+        assert_eq!(
+            kiro.tool_signature(&json!({
+                "tool_name": "fs_write",
+                "tool_input": {"path": "src/main.rs"}
+            })),
+            None
+        );
     }
 
     #[test]

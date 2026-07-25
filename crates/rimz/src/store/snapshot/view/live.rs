@@ -327,6 +327,7 @@ impl SidebarSnapshot {
             };
             if touch.at > agent.last_activity {
                 agent.last_activity = touch.at;
+                agent.tool_repeat = touch.repeat.clone();
             }
         }
         self

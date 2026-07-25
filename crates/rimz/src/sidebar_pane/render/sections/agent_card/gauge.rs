@@ -427,6 +427,11 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
         theme,
         agent(row).map_or(0, |agent| agent.compaction_count),
     ));
+    left.extend(context_tool_repeat_spans(
+        theme,
+        agent(row).and_then(|agent| agent.tool_repeat.as_ref()),
+        row_ctx.tool_repeat_warn_after,
+    ));
     pin_right(left, age, width)
 }
 

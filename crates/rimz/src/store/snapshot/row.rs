@@ -344,7 +344,10 @@ pub struct AgentCard {
     /// Named tool calls observed for this session.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_calls: BTreeMap<String, u32>,
-    /// Provider error label projected while a dead turn escalates to failed.
+    /// Open run of consecutive identical tool calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_repeat: Option<crate::agent_activity::ToolRepeat>,
+    /// Label explaining why the row projected to failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error_label: Option<String>,
 }
@@ -373,6 +376,7 @@ impl Default for AgentCard {
             compacting: false,
             compaction_count: 0,
             tool_calls: BTreeMap::new(),
+            tool_repeat: None,
             turn_error_label: None,
         }
     }

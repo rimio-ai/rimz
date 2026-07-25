@@ -61,7 +61,8 @@ fn warm_sidecar_read_is_one_stat_per_file() {
     let ids: Vec<String> = (0..FLEET).map(|i| format!("sess-{i:02}")).collect();
     for id in &ids {
         agent_context::write(&runtime, "claude", id, &context_at(now)).expect("write context");
-        agent_activity::touch(&runtime, "claude", id).expect("touch activity");
+        agent_activity::touch(&runtime, "claude", id, agent_activity::ToolRun::Reset)
+            .expect("touch activity");
     }
     let keys: Vec<(&str, &str)> = ids.iter().map(|id| ("claude", id.as_str())).collect();
 

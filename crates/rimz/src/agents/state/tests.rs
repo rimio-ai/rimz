@@ -29,6 +29,7 @@ fn seed_sets_status_phase_clocks_and_empty_enrichment() {
     assert!(running.open_ask.is_none());
     assert_eq!(running.compaction_count, 0);
     assert!(running.tool_calls.is_empty());
+    assert!(running.tool_repeat.is_none());
 
     let waiting = AgentState::seed(
         AgentKind::new_unchecked("codex"),
@@ -37,6 +38,29 @@ fn seed_sets_status_phase_clocks_and_empty_enrichment() {
         at,
     );
     assert_eq!(waiting.phase, TurnPhase::Idle);
+}
+
+#[test]
+fn tool_looping_requires_running_status_and_threshold() {
+    let repeat = ToolRepeat {
+        digest: "digest".to_owned(),
+        tool: "Bash".to_owned(),
+        count: 20,
+        since: Timestamp::from_second(1_700_000_000).unwrap(),
+    };
+
+    assert!(!is_tool_looping(AgentStatus::Running, None, 20));
+    assert!(!is_tool_looping(
+        AgentStatus::Running,
+        Some(&ToolRepeat {
+            count: 19,
+            ..repeat.clone()
+        }),
+        20
+    ));
+    assert!(is_tool_looping(AgentStatus::Running, Some(&repeat), 20));
+    assert!(!is_tool_looping(AgentStatus::Idle, Some(&repeat), 20));
+    assert!(!is_tool_looping(AgentStatus::Failed, Some(&repeat), 20));
 }
 
 #[test]

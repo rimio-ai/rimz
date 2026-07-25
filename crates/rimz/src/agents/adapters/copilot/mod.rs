@@ -63,6 +63,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
     sub_providers: &[],
     expected_windows: &[],
     tools: ToolClassification {
+        input_key: Some("toolInput"),
         mutating: &["bash", "powershell", "create", "edit"],
         editing: &["create", "edit"],
         blocking: &[("ask_user", AskKind::Question)],

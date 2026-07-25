@@ -49,6 +49,7 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) width: usize,
     pub(in crate::sidebar_pane::render) tier: Tier,
     pub(in crate::sidebar_pane::render) bands: &'a ContextMeterConfig,
+    pub(in crate::sidebar_pane::render) tool_repeat_warn_after: u32,
     pub(in crate::sidebar_pane::render) card_density: CardDensityMode,
     pub(in crate::sidebar_pane::render) selected_index: usize,
     pub(in crate::sidebar_pane::render) animation_phase: u64,

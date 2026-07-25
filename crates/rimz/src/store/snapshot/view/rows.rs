@@ -55,6 +55,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
             compacting: agent.is_compacting(now),
             compaction_count: agent.compaction_count,
             tool_calls: agent.tool_calls.clone(),
+            tool_repeat: agent.tool_repeat.clone(),
             turn_error_label: None,
         })),
     }

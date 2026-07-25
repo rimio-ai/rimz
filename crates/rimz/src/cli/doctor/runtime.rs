@@ -1255,6 +1255,7 @@ fn classify_diagnostic(
             recovered_after_ms: None,
             ..
         }
+        | DiagEvent::ToolLoopEscalated { .. }
         | DiagEvent::RowConflict { .. }
         | DiagEvent::DuplicatePaneId { .. }
         | DiagEvent::ForeignSessionPane { .. }

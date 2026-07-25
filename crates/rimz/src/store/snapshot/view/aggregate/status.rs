@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 
+use crate::agent_activity::ToolRepeat;
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{
     AgentContext, AgentState, AgentStatus, AgentTurnError, ProviderCapacity, TurnErrorClass,
@@ -35,6 +36,8 @@ struct SettleFacts<'a> {
     effective_status: AgentStatus,
     now: Timestamp,
     stalled_after_secs: u32,
+    tool_repeat: Option<&'a ToolRepeat>,
+    tool_repeat_attention_after: u32,
 }
 
 struct Settled {
@@ -69,6 +72,7 @@ pub(super) fn project_display_status(
     exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     now: Timestamp,
     stalled_after_secs: u32,
+    tool_repeat_attention_after: u32,
 ) {
     let rate_limit_kinds = rate_limit_window_kinds(provider_capacities, now);
     for row in rows.iter_mut() {
@@ -147,6 +151,8 @@ pub(super) fn project_display_status(
             effective_status,
             now,
             stalled_after_secs,
+            tool_repeat: agent.tool_repeat.as_ref(),
+            tool_repeat_attention_after,
         });
         if let Some(label) = turn_error_label {
             agent.turn_error_label = label;
@@ -236,6 +242,8 @@ fn settle(facts: SettleFacts<'_>) -> Settled {
         effective_status,
         now,
         stalled_after_secs,
+        tool_repeat,
+        tool_repeat_attention_after,
     } = facts;
 
     if !waiting_interrupted && let Some(label) = budget_park_label {
@@ -280,6 +288,15 @@ fn settle(facts: SettleFacts<'_>) -> Settled {
         // earned; the chore hums on under the ⋯ bg marker. The wake's
         // turn_started re-runs the row.
         return Settled::status(AgentStatus::Success);
+    }
+
+    if let Some(repeat) = tool_repeat.filter(|repeat| {
+        crate::agents::is_tool_looping(status, Some(repeat), tool_repeat_attention_after)
+    }) {
+        return Settled::with_label(
+            AgentStatus::Failed,
+            Some(format!("loop: {} ×{}", repeat.tool, repeat.count)),
+        );
     }
 
     let stalled = crate::agents::is_stalled(status, last_activity, now, stalled_after_secs);

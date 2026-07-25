@@ -368,6 +368,12 @@ pub enum DiagEvent {
         interval_ms: u64,
         causes: Vec<FetchFoldCauseStats>,
     },
+    ToolLoopEscalated {
+        agent_kind: AgentKind,
+        agent_id: AgentSessionId,
+        tool: String,
+        count: u32,
+    },
     ProducerElected {
         prior_elder: SidebarInstanceId,
     },
@@ -495,6 +501,7 @@ impl DiagEvent {
                 recovered_after_ms: None,
                 ..
             }
+            | Self::ToolLoopEscalated { .. }
             | Self::TopologyWriteRejected { .. }
             | Self::RendererOrphanReaped { .. }
             | Self::SidebarOrphanReaped { .. }
@@ -576,6 +583,7 @@ impl DiagEvent {
             Self::SidebarWidthSettle { .. } => "sidebar_width_settle",
             Self::TickBudgetBreach { .. } => "tick_budget_breach",
             Self::FetchFoldStats { .. } => "fetch_fold_stats",
+            Self::ToolLoopEscalated { .. } => "tool_loop_escalated",
             Self::ProducerElected { .. } => "producer_elected",
             Self::ProducerDemoted { .. } => "producer_demoted",
             Self::RowConflict { .. } => "row_conflict",
@@ -704,6 +712,12 @@ impl DiagEvent {
                 format!("{}:{tick_loop:?}:{phase}:{since_ms}", self.kind_name())
             }
             Self::FetchFoldStats { .. } => self.kind_name().to_owned(),
+            Self::ToolLoopEscalated {
+                agent_kind,
+                agent_id,
+                tool,
+                ..
+            } => format!("{}:{agent_kind}:{agent_id}:{tool}", self.kind_name()),
             Self::RowConflict {
                 agent_kind,
                 agent_session_id,
@@ -1146,6 +1160,12 @@ impl DiagEvent {
                 "fetch fold totals over {interval_ms}ms across {} causes",
                 causes.len()
             ),
+            Self::ToolLoopEscalated {
+                agent_kind,
+                agent_id,
+                tool,
+                count,
+            } => format!("{agent_kind}/{agent_id} repeated {tool} {count} consecutive times"),
             Self::FrameAnomaly {
                 anomaly:
                     AnomalyKind::RowPresenceFlap {

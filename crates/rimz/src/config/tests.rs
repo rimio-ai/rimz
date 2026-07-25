@@ -1453,6 +1453,14 @@ fn attention_config_defaults_parses_and_rejects_zero() {
         crate::agents::DEFAULT_STALL_AFTER_SECS,
     );
     assert_eq!(
+        config.agents.attention.tool_repeat_warn_after.get(),
+        crate::agents::DEFAULT_TOOL_REPEAT_WARN_AFTER,
+    );
+    assert_eq!(
+        config.agents.attention.tool_repeat_attention_after.get(),
+        crate::agents::DEFAULT_TOOL_REPEAT_ATTENTION_AFTER,
+    );
+    assert_eq!(
         config.agents.attention.archive_after_secs.get(),
         crate::agents::DEFAULT_ARCHIVE_AFTER_SECS,
     );
@@ -1460,11 +1468,13 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     let tuned = load_no_fragments(&write_named(
         &dir,
         "agents.toml",
-        "[agents.attention]\nactive_grace_secs = 60\nstalled_after_secs = 2700\narchive_after_secs = 7200\n",
+        "[agents.attention]\nactive_grace_secs = 60\nstalled_after_secs = 2700\ntool_repeat_warn_after = 4\ntool_repeat_attention_after = 30\narchive_after_secs = 7200\n",
     ))
     .expect("load");
     assert_eq!(tuned.agents.attention.active_grace_secs.get(), 60);
     assert_eq!(tuned.agents.attention.stalled_after_secs.get(), 2700);
+    assert_eq!(tuned.agents.attention.tool_repeat_warn_after.get(), 4);
+    assert_eq!(tuned.agents.attention.tool_repeat_attention_after.get(), 30);
     assert_eq!(tuned.agents.attention.archive_after_secs.get(), 7200);
 
     let partial =
@@ -1484,6 +1494,22 @@ fn attention_config_defaults_parses_and_rejects_zero() {
             &dir,
             "agents.toml",
             "[agents.attention]\nstalled_after_secs = 0\n",
+        ))
+        .is_err()
+    );
+    assert!(
+        load_no_fragments(&write_named(
+            &dir,
+            "agents.toml",
+            "[agents.attention]\ntool_repeat_warn_after = 0\n",
+        ))
+        .is_err()
+    );
+    assert!(
+        load_no_fragments(&write_named(
+            &dir,
+            "agents.toml",
+            "[agents.attention]\ntool_repeat_attention_after = 0\n",
         ))
         .is_err()
     );
