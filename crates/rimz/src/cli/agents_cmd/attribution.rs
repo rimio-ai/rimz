@@ -31,9 +31,8 @@ pub(super) fn attribution(
     let channel = super::list::list_channel_filter(all, scope.as_deref(), &ctx.workspace);
     let default_worktree =
         (!all && channel.is_none()).then_some(ctx.workspace.worktree_root.as_path());
-    let agents = peers
-        .iter()
-        .copied()
+    let agents = snapshot
+        .root_agents()
         .filter(|agent| {
             if let Some(filter) = channel.as_deref() {
                 rimz::harness::target::agent_in_worktree(agent, filter)
