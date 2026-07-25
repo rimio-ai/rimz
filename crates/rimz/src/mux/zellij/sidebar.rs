@@ -17,7 +17,7 @@ use super::{
     ZellijBackend,
 };
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
+use crate::mux::width::{sidebar_width_off_spec, zellij_resize_step_cols};
 use crate::mux::{
     DaemonView, MuxBackend, MuxErr, PaneReadConsistency, PresencePluginOptions, Result,
     SessionLiveness, SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
@@ -600,8 +600,7 @@ impl ZellijBackend {
         let sync = WidthSyncOptions {
             session_name: opts.session_name.clone(),
             workspace_id: opts.workspace_id.clone(),
-            width: opts.width,
-            width_override: opts.width_override,
+            target_cols: opts.target.cols,
         };
         let (width_floor, _) = self.converge_sidebar_width(&sync, tab_position, raw_id, floor);
         width_floor
@@ -894,7 +893,7 @@ impl ZellijBackend {
             let Some((cols, view_cols)) = cols.zip(tab_view_cols(panes, tab_position)) else {
                 break;
             };
-            let target_cols = live_target_cols(opts.width, opts.width_override, view_cols);
+            let target_cols = u64::from(opts.target_cols.get());
             if !sidebar_width_off_spec(cols, target_cols, zellij_resize_step_cols(view_cols)) {
                 break;
             }

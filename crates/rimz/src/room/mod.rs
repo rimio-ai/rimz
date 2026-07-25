@@ -296,19 +296,20 @@ impl RoomContext {
         refresh_ms: Option<u16>,
         detected_size: Option<(u16, u16)>,
     ) -> SidebarPaneOptions {
-        let width_override = crate::sidebar::width_override::load(&self.runtime);
+        let target = crate::sidebar::width_target::resolve(
+            &self.runtime,
+            self.width,
+            self.backend.name(),
+            detected_size.map(|(cols, _)| cols),
+        );
         SidebarPaneOptions {
             session_name: self.workspace.session_name.clone(),
             workspace_id: self.workspace.workspace_id.clone(),
             project_root: self.workspace.project_root.clone(),
             extra_env: self.extra_env.clone(),
             cwd: cwd.to_path_buf(),
-            width: self.width,
-            birth_size: self
-                .width
-                .birth_size_with_override(detected_size.map(|(cols, _)| cols), width_override),
+            target,
             detected_view_size: detected_size,
-            width_override,
             rimz_bin: self.rimz_bin.clone(),
             pristine_birth: false,
             config: self.mux_config.clone(),

@@ -256,17 +256,23 @@ fn focus_resume_flushes_pending_metrics_fetch() {
 }
 
 #[test]
-fn width_target_event_reloads_the_override_without_a_producer_fetch() {
+fn width_target_event_reloads_the_target_without_a_producer_fetch() {
     let mut rig = Rig::new();
-    crate::sidebar::width_override::write(
+    crate::sidebar::width_target::pin(
         &rig.runtime,
         std::num::NonZeroU16::new(90).expect("nonzero width"),
+        crate::ids::MuxName::Tmux,
+        200,
     )
-    .expect("write width override");
+    .expect("pin width target");
 
     rig.event(SidebarEvent::WidthTargetChanged);
 
-    assert_eq!(rig.state.width_control.max_legit_cols(), 90);
+    assert_eq!(
+        rig.state.width_control.max_legit_cols(),
+        72,
+        "the share stays unresolved until backend view geometry arrives",
+    );
     assert!(
         rig.next_request().is_none(),
         "width propagation stays out of the producer path",

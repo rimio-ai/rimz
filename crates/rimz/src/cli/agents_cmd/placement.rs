@@ -160,10 +160,9 @@ fn exec_wrapper_in_place(
 mod tests {
     use super::*;
     use rimz::ids::WorkspaceId;
-    use rimz::mux::{LayoutColumn, PaneCmd, SidebarWidth};
+    use rimz::mux::{LayoutColumn, PaneCmd};
 
     fn request(placement: Placement) -> PlacementRequest {
-        let width = SidebarWidth::default();
         PlacementRequest {
             placement,
             mux: MuxName::Tmux,
@@ -183,10 +182,11 @@ mod tests {
                 project_root: PathBuf::from("/work"),
                 extra_env: BTreeMap::new(),
                 cwd: PathBuf::from("/work"),
-                width,
-                birth_size: width.birth_size(None),
+                target: rimz::mux::SidebarTarget {
+                    cols: std::num::NonZeroU16::new(72).expect("nonzero test width"),
+                    percent: 25,
+                },
                 detected_view_size: None,
-                width_override: None,
                 rimz_bin: PathBuf::from("/bin/rimz"),
                 pristine_birth: false,
                 config: rimz::config::MultiplexerConfig::default(),

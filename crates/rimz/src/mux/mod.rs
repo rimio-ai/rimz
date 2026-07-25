@@ -32,8 +32,8 @@ pub use reconcile::{SidebarLiveness, SidebarRecovery};
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
 pub use width::{
-    BirthSize, CLIENT_SIZE_ENV, SidebarWidth, WidthAdjust, WidthPercent, WidthStep,
-    client_size_from_env, detect_terminal_size, split_along_longer_edge,
+    CLIENT_SIZE_ENV, SidebarTarget, SidebarWidth, WidthAdjust, WidthPercent, WidthPermille,
+    WidthStep, client_size_from_env, detect_terminal_size, split_along_longer_edge,
 };
 pub use zellij::ZellijBackend;
 
@@ -421,21 +421,13 @@ pub struct SidebarPaneOptions {
     /// tmux carries the same map through [`SessionOptions`].
     pub extra_env: std::collections::BTreeMap<String, String>,
     pub cwd: PathBuf,
-    /// Live per-view width policy. The birth seed below gets panes onto the
-    /// screen; this policy owns their canonical width thereafter.
-    pub width: SidebarWidth,
-    /// The width seed freshly-born panes are spelled with in layouts, splits,
-    /// and hooks, resolved once per command by
-    /// [`SidebarWidth::birth_size_with_override`].
-    pub birth_size: BirthSize,
+    /// The single room-wide target freshly-born and live panes converge to.
+    pub target: SidebarTarget,
     /// The launching terminal's probed `(cols, rows)`. tmux reconcile uses it
     /// as the width basis when the session has no sized client, normalizing
     /// detached geometry to it first. `None` when the launch had no tty or the
     /// caller's terminal is unrelated to the session's clients (reload).
     pub detected_view_size: Option<(u16, u16)>,
-    /// Room-runtime width chosen from the sidebar. It applies verbatim to every
-    /// view and outranks the live percentage/cap policy.
-    pub width_override: Option<std::num::NonZeroU16>,
     pub rimz_bin: PathBuf,
     /// True only for a fresh room birth whose session was absent before
     /// `ensure_session`, letting tmux repurpose the pristine first pane into the
@@ -461,8 +453,7 @@ pub struct SidebarPaneOptions {
 pub struct WidthSyncOptions {
     pub session_name: String,
     pub workspace_id: WorkspaceId,
-    pub width: SidebarWidth,
-    pub width_override: Option<std::num::NonZeroU16>,
+    pub target_cols: std::num::NonZeroU16,
 }
 
 /// The `rimz sidebar serve` argv after the program name — the one spelling

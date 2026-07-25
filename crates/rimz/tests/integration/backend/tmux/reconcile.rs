@@ -245,9 +245,8 @@ fn reconcile_sidebars_redocks_sidebar_without_skewing_work_columns() {
     let session = "rimz-reconcile-no-skew";
     let target = format!("{session}:0");
     let server = TmuxServer::new();
-    let width = SidebarWidth::default();
-    let birth_size = width.birth_size(Some(80));
-    let sidebar_cols = birth_size.cols.to_string();
+    let target_cols = std::num::NonZeroU16::new(20).expect("nonzero test width");
+    let sidebar_cols = target_cols.to_string();
     server.ensure_with_shell(session);
     let main_pane = server.display(&target, "#{pane_id}");
     server.tmux(&[
@@ -307,7 +306,10 @@ fn reconcile_sidebars_redocks_sidebar_without_skewing_work_columns() {
     );
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = SidebarPaneOptions {
-        birth_size,
+        target: rimz::mux::SidebarTarget {
+            cols: target_cols,
+            percent: 25,
+        },
         detected_view_size: Some((80, 24)),
         ..sidebar_opts(session, stub, Some(80))
     };

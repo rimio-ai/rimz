@@ -3,8 +3,7 @@
 use std::collections::HashSet;
 
 use crate::ids::PaneId;
-use crate::mux::SidebarWidth;
-use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
+use crate::mux::width::{sidebar_width_off_spec, zellij_resize_step_cols};
 use crate::mux::zellij::pane_topology::{PaneTopologyPane, ZellijPaneId};
 use crate::pane::SIDEBAR_CHROME_TITLE;
 
@@ -219,8 +218,7 @@ pub(super) fn sidebar_geometry_off_spec(
     pane: &PaneTopologyPane,
     panes: &[PaneTopologyPane],
     excluded: &HashSet<u64>,
-    width: SidebarWidth,
-    width_override: Option<std::num::NonZeroU16>,
+    target_cols: std::num::NonZeroU16,
 ) -> bool {
     let Some(verdict) = sidebar_dock_verdict(pane, panes, excluded) else {
         return false;
@@ -230,7 +228,7 @@ pub(super) fn sidebar_geometry_off_spec(
             tab_view_cols(panes, pane.tab_position).is_some_and(|view_cols| {
                 sidebar_width_off_spec(
                     cols,
-                    live_target_cols(width, width_override, view_cols),
+                    u64::from(target_cols.get()),
                     zellij_resize_step_cols(view_cols),
                 )
             })

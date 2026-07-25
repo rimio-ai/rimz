@@ -2,9 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, PaneId};
-use rimz::mux::{
-    LayoutPanes, MuxBackend, PaneCmd, SidebarPaneOptions, SidebarWidth, TabOptions, ZellijBackend,
-};
+use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, SidebarPaneOptions, TabOptions, ZellijBackend};
 
 use crate::common::{CommandTimeoutExt, Env, ZellijNamespace};
 
@@ -36,10 +34,11 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
         project_root: workspace.project_root.clone(),
         extra_env: Default::default(),
         cwd: workspace.project_root.clone(),
-        width: SidebarWidth::default(),
-        birth_size: SidebarWidth::default().birth_size(Some(160)),
+        target: rimz::mux::SidebarTarget {
+            cols: std::num::NonZeroU16::new(40).expect("nonzero test width"),
+            percent: 25,
+        },
         detected_view_size: None,
-        width_override: None,
         rimz_bin: stub,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),

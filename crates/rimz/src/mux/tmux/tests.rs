@@ -273,24 +273,23 @@ fn open_tab_rejects_an_empty_layout() {
 
     use crate::ids::WorkspaceId;
     use crate::mux::{
-        LayoutColumn, LayoutPanes, MuxBackend, MuxErr, PaneCmd, SidebarPaneOptions, SidebarWidth,
-        TabOptions,
+        LayoutColumn, LayoutPanes, MuxBackend, MuxErr, PaneCmd, SidebarPaneOptions, TabOptions,
     };
 
     // Pointed at a socket no server owns: the empty-layout guards return before
     // any tmux command runs, so this never forks tmux and needs no live server.
     let backend = TmuxBackend::with_socket("/nonexistent/rimz-open-tab.sock");
-    let width = SidebarWidth::default();
     let sidebar = SidebarPaneOptions {
         session_name: "rimz-empty".to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-empty")),
         project_root: PathBuf::from("/tmp/rimz-empty"),
         extra_env: Default::default(),
         cwd: PathBuf::from("/tmp/rimz-empty"),
-        width,
-        birth_size: width.birth_size(Some(80)),
+        target: crate::mux::SidebarTarget {
+            cols: std::num::NonZeroU16::new(20).expect("nonzero test width"),
+            percent: 25,
+        },
         detected_view_size: None,
-        width_override: None,
         rimz_bin: PathBuf::from("/bin/true"),
         pristine_birth: false,
         config: crate::config::MultiplexerConfig::default(),

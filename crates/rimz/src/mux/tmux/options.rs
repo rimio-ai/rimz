@@ -257,20 +257,20 @@ mod tests {
     use super::*;
     use crate::config::MultiplexerConfig;
     use crate::ids::WorkspaceId;
-    use crate::mux::{SidebarPaneOptions, SidebarWidth};
+    use crate::mux::SidebarPaneOptions;
 
     fn sidebar_opts(refresh_ms: Option<u16>) -> SidebarPaneOptions {
-        let width = SidebarWidth::default();
         SidebarPaneOptions {
             session_name: "room".to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-tmux-refresh")),
             project_root: PathBuf::from("/tmp/rimz-tmux-refresh"),
             extra_env: Default::default(),
             cwd: PathBuf::from("/tmp/rimz-tmux-refresh"),
-            width,
-            birth_size: width.birth_size(None),
+            target: crate::mux::SidebarTarget {
+                cols: std::num::NonZeroU16::new(72).expect("nonzero test width"),
+                percent: 25,
+            },
             detected_view_size: None,
-            width_override: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             pristine_birth: false,
             config: MultiplexerConfig::default(),

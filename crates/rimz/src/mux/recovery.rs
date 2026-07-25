@@ -617,17 +617,17 @@ mod tests {
     #[test]
     fn sidebar_serve_args_match_recovery_process_detection() {
         let root = PathBuf::from("/tmp/rimz-recovery-serve");
-        let width = crate::mux::SidebarWidth::default();
         let opts = crate::mux::SidebarPaneOptions {
             session_name: SESSION.to_owned(),
             workspace_id: WorkspaceId::from_project_root(&root),
             project_root: root.clone(),
             extra_env: Default::default(),
             cwd: root,
-            width,
-            birth_size: width.birth_size(None),
+            target: crate::mux::SidebarTarget {
+                cols: std::num::NonZeroU16::new(72).expect("nonzero test width"),
+                percent: 25,
+            },
             detected_view_size: None,
-            width_override: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             pristine_birth: false,
             config: crate::config::MultiplexerConfig::default(),

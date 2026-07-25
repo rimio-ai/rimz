@@ -8,16 +8,32 @@ fn sidebar_opts(
     detected_cols: Option<u16>,
 ) -> SidebarPaneOptions {
     let width = SidebarWidth::default();
+    let target = detected_cols.and_then(std::num::NonZeroU16::new).map_or(
+        crate::mux::SidebarTarget {
+            cols: width.max_cols,
+            percent: width.percent.resolve(None),
+        },
+        |view_cols| {
+            let requested_cols = std::num::NonZeroU16::new(
+                u16::try_from(width.target_cols(u64::from(view_cols.get()))).expect("test target"),
+            )
+            .expect("nonzero test target");
+            let share = crate::mux::WidthPermille::from_cols(requested_cols, view_cols)
+                .snap_to_rung(crate::MuxName::Zellij);
+            crate::mux::SidebarTarget {
+                cols: share.cols(view_cols),
+                percent: share.to_percent_rounded(),
+            }
+        },
+    );
     SidebarPaneOptions {
         session_name: session_name.to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/proj/root")),
         project_root: PathBuf::from("/proj/root"),
         extra_env: Default::default(),
         cwd: PathBuf::from("/proj/worktree"),
-        width,
-        birth_size: width.birth_size(detected_cols),
+        target,
         detected_view_size: None,
-        width_override: None,
         rimz_bin: PathBuf::from("/usr/bin/rimz"),
         pristine_birth: false,
         config: crate::config::MultiplexerConfig::default(),
@@ -215,7 +231,7 @@ fn session_layout_seeds_template_and_birth_from_probed_width() {
     let layout = render_session_layout(&capped, None, &[]).expect("render layout");
     assert_eq!(
         layout
-            .matches(r#"pane size="21%" name="rimz-sidebar" borderless=true"#)
+            .matches(r#"pane size="20%" name="rimz-sidebar" borderless=true"#)
             .count(),
         2,
         "the template and explicit birth tab share the cap-aware seed:\n{layout}",
@@ -226,7 +242,7 @@ fn session_layout_seeds_template_and_birth_from_probed_width() {
         .and_then(|section| section.split("\n    tab").next())
         .expect("layout carries a new_tab_template");
     assert!(
-        new_tab_template.contains(r#"size="21%""#),
+        new_tab_template.contains(r#"size="20%""#),
         "the new_tab_template carries the cap-aware launch seed:\n{layout}",
     );
     let birth_tab = layout
@@ -350,7 +366,7 @@ fn tab_layout_derives_percent_from_an_explicit_live_width() {
     assert_work_area_template(&layout, 1, 1);
     assert!(
         layout.contains(r#"pane size="21%" name="rimz-sidebar" borderless=true"#),
-        "custom tab layouts spell the live column target as a percentage:\n{layout}",
+        "custom tab layouts spell the shared target as a percentage:\n{layout}",
     );
     assert_sidebar_sizes_are_percent(&layout);
     assert!(

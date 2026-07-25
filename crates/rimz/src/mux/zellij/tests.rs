@@ -17,7 +17,7 @@ use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, Top
 use crate::mux::{
     LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, PaneReadConsistency,
     ReconcilePaneRole, SidebarPaneOptions, SidebarWidth, SplitDirection, SplitPaneOptions,
-    SplitPlacement, SplitTarget, TabOptions, WidthPercent, WidthSyncOptions,
+    SplitPlacement, SplitTarget, TabOptions, WidthSyncOptions,
 };
 #[cfg(unix)]
 use crate::sidebar::cache::write_pane_topology_cache;
@@ -79,16 +79,24 @@ impl TestRoom {
 
     fn sidebar_options(&self, view_cols: u16) -> SidebarPaneOptions {
         let width = SidebarWidth::default();
+        let view_cols = std::num::NonZeroU16::new(view_cols).expect("nonzero test view");
+        let requested_cols = std::num::NonZeroU16::new(
+            u16::try_from(width.target_cols(u64::from(view_cols.get()))).expect("test target"),
+        )
+        .expect("nonzero test width");
+        let share = crate::mux::WidthPermille::from_cols(requested_cols, view_cols)
+            .snap_to_rung(crate::MuxName::Zellij);
         SidebarPaneOptions {
             session_name: "rimz-test".to_owned(),
             workspace_id: self.workspace_id.clone(),
             project_root: self.project_root.path().to_path_buf(),
             extra_env: Default::default(),
             cwd: self.project_root.path().to_path_buf(),
-            width,
-            birth_size: width.birth_size(Some(view_cols)),
+            target: crate::mux::SidebarTarget {
+                cols: share.cols(view_cols),
+                percent: share.to_percent_rounded(),
+            },
             detected_view_size: None,
-            width_override: None,
             rimz_bin: "rimz".into(),
             pristine_birth: false,
             config: MultiplexerConfig::default(),
@@ -592,6 +600,7 @@ fn assert_stepwise_width(
     initial: u64,
     step: i64,
     view: u64,
+    target: u16,
     direction: &str,
     calls: usize,
 ) {
@@ -630,11 +639,7 @@ exit 0
     let width = WidthSyncOptions {
         session_name: "rimz-test".to_owned(),
         workspace_id: room.workspace_id.clone(),
-        width: SidebarWidth {
-            percent: WidthPercent::Fixed(30),
-            max_cols: std::num::NonZeroU16::new(72).expect("cap"),
-        },
-        width_override: None,
+        target_cols: std::num::NonZeroU16::new(target).expect("target"),
     };
     let (floor, resized) = backend.converge_sidebar_widths_stepwise(&width, 1, 8, None);
     assert!(resized, "{name}: expected resize");
@@ -659,7 +664,7 @@ exit 0
         .find(|pane| pane.is_terminal() && pane.id == 8)
         .and_then(|pane| pane.pane_columns)
         .expect("sidebar columns");
-    let target = crate::mux::width::live_target_cols(width.width, None, view);
+    let target = u64::from(width.target_cols.get());
     assert!(
         !crate::mux::width::sidebar_width_off_spec(
             final_cols,
@@ -673,12 +678,12 @@ exit 0
 #[cfg(unix)]
 #[test]
 fn stepwise_sidebar_width_converges_across_supported_steps() {
-    for (name, initial, step, view, direction, calls) in [
-        ("shrink", 90, -1, 360, "decrease", 10),
-        ("grow", 40, 19, 380, "increase", 3),
-        ("full-step-below", 53, 10, 213, "increase", 2),
+    for (name, initial, step, view, target, direction, calls) in [
+        ("shrink", 90, -1, 360, 72, "decrease", 10),
+        ("grow", 40, 19, 380, 72, "increase", 3),
+        ("full-step-below", 53, 10, 213, 63, "increase", 2),
     ] {
-        assert_stepwise_width(name, initial, step, view, direction, calls);
+        assert_stepwise_width(name, initial, step, view, target, direction, calls);
     }
 }
 
@@ -718,11 +723,7 @@ exit 0
     let width = WidthSyncOptions {
         session_name: "rimz-test".to_owned(),
         workspace_id: room.workspace_id.clone(),
-        width: SidebarWidth {
-            percent: WidthPercent::Fixed(30),
-            max_cols: std::num::NonZeroU16::new(72).expect("cap"),
-        },
-        width_override: None,
+        target_cols: std::num::NonZeroU16::new(72).expect("target"),
     };
     assert!(
         backend

@@ -1,11 +1,12 @@
-//! Sidebar sizing math: a birth seed for panes that materialize before their
-//! view geometry is known, and the canonical live target for panes in a sized
-//! view. Pure domain arithmetic — the backends spell seeds into layouts,
-//! splits, and hooks, then converge live panes here; this file only computes it.
+//! Sidebar sizing math: keep one room-wide share, spell it for backend
+//! layouts, and converge live panes toward it.
 
 use std::num::NonZeroU16;
 
+use serde::{Deserialize, Serialize};
+
 use super::SplitDirection;
+use crate::ids::MuxName;
 
 const AUTO_WIDTH_BREAKPOINT_COLS: u64 = 240;
 const AUTO_WIDTH_NARROW_PERCENT: u16 = 25;
@@ -26,6 +27,9 @@ pub enum WidthAdjust {
 pub struct WidthStep {
     pub cols: u16,
     pub exact: bool,
+    /// Full width of the pane's view, or zero when the backend cannot resolve
+    /// geometry for this request.
+    pub view_cols: u16,
 }
 
 /// Resolve the validated absolute target requested by one width keypress.
@@ -76,26 +80,97 @@ impl WidthPercent {
     }
 }
 
-/// Resolve the canonical width for one live view: the room-runtime override
-/// verbatim when present, otherwise the configured percentage policy capped at
-/// `max_cols`.
-pub(crate) fn live_target_cols(
-    width: SidebarWidth,
-    width_override: Option<NonZeroU16>,
-    view_cols: u64,
-) -> u64 {
-    width_override.map_or_else(
-        || width.target_cols(view_cols),
-        |cols| u64::from(cols.get()),
-    )
+/// Tenths of a percent of the full view, in the inclusive range `1..=1000`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct WidthPermille(u16);
+
+impl WidthPermille {
+    const MIN: u16 = 1;
+    const MAX: u16 = 1000;
+    const ZELLIJ_RUNG: u16 = 50;
+
+    /// Convert a whole percentage into a valid share.
+    pub fn from_percent(percent: u16) -> Self {
+        Self(percent.saturating_mul(10).clamp(Self::MIN, Self::MAX))
+    }
+
+    /// Convert an absolute width into the smallest share that renders back to
+    /// that width. The ceiling preserves tmux's column-exact intent.
+    pub fn from_cols(cols: NonZeroU16, view_cols: NonZeroU16) -> Self {
+        let cols = u64::from(cols.get());
+        let view_cols = u64::from(view_cols.get());
+        let permille = (cols * 1000).div_ceil(view_cols);
+        Self(
+            u16::try_from(permille)
+                .unwrap_or(Self::MAX)
+                .clamp(Self::MIN, Self::MAX),
+        )
+    }
+
+    /// Render this share as absolute columns for one view, preserving the
+    /// minimum adjustable width.
+    pub fn cols(self, view_cols: NonZeroU16) -> NonZeroU16 {
+        let cols = (u64::from(self.0) * u64::from(view_cols.get()) / 1000)
+            .max(u64::from(MIN_ADJUSTABLE_WIDTH));
+        NonZeroU16::new(u16::try_from(cols).unwrap_or(u16::MAX)).unwrap_or(NonZeroU16::MAX)
+    }
+
+    /// Spell this share as a whole percentage for Zellij layout KDL.
+    pub fn to_percent_rounded(self) -> u16 {
+        ((self.0 + 5) / 10).clamp(1, 100)
+    }
+
+    /// Snap to the nearest backend-native share rung.
+    pub fn snap_to_rung(self, mux: MuxName) -> Self {
+        if mux != MuxName::Zellij {
+            return self;
+        }
+        let snapped = ((self.0 + Self::ZELLIJ_RUNG / 2) / Self::ZELLIJ_RUNG)
+            .saturating_mul(Self::ZELLIJ_RUNG)
+            .clamp(Self::ZELLIJ_RUNG, Self::MAX);
+        Self(snapped)
+    }
+}
+
+impl TryFrom<u16> for WidthPermille {
+    type Error = &'static str;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        if (Self::MIN..=Self::MAX).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err("width permille must be between 1 and 1000")
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WidthPermille {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = u16::deserialize(deserializer)?;
+        Self::try_from(value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// One resolved sidebar target in the spellings each backend requires.
+///
+/// With known view geometry, `cols` and `percent` describe the same share rung.
+/// Without geometry, columns use the configured cap while the percentage keeps
+/// the stored share for a detached Zellij layout; those answers necessarily
+/// describe different eventual view widths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SidebarTarget {
+    pub cols: NonZeroU16,
+    pub percent: u16,
 }
 
 /// Sidebar pane width: the configured percentage policy for each live view,
 /// capped at `max_cols` columns (`theme.display.max_cols`).
-/// [`SidebarWidth::birth_size`] seeds panes whose view geometry is not yet
-/// known; once live, the canonical width is [`live_target_cols`] of the current
-/// view and room-runtime override. A `width_percent` or `max_cols` edit
-/// therefore applies on the next convergence.
+/// A `width_percent` or `max_cols` edit applies on the next unpinned
+/// room-target resolution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SidebarWidth {
     /// Percentage policy for the view width — tracks terminal size below the cap.
@@ -134,85 +209,12 @@ impl SidebarWidth {
     pub fn cap_cols(self) -> u64 {
         u64::from(self.max_cols.get())
     }
-
-    /// The width verdict a launch resolves on a terminal `detected_cols`
-    /// wide: [`Self::target_cols`] of the probe — the percentage capped at
-    /// `max_cols` — as columns for tmux and as a percentage spelling for
-    /// Zellij layouts. An unknown width (`None` — launch outside a tty)
-    /// resolves to the bare cap with the explicit percentage, the pets wide
-    /// default, or the automatic policy's narrow fallback.
-    pub fn birth_size(self, detected_cols: Option<u16>) -> BirthSize {
-        let fallback_percent = self.percent.resolve(None);
-        match detected_cols {
-            Some(total) if total > 0 => {
-                let target = self.target_cols(u64::from(total));
-                // target_cols is ≥ 1 and ≤ max_cols, so the fallback chain is
-                // unreachable; spelled without panicking per the error rules.
-                let cols = u16::try_from(target)
-                    .ok()
-                    .and_then(NonZeroU16::new)
-                    .unwrap_or(self.max_cols);
-                // Round the percentage spelling to the nearest whole percent,
-                // so materializing it on the probed terminal lands within
-                // roughly half a percent of the verdict on either side. The
-                // reconcile tolerance absorbs that residue. `target ≤ total`
-                // bounds it at 100, and at least 1% keeps the spelling valid.
-                let total = u64::from(total);
-                let derived = ((target * 100 + total / 2) / total).clamp(1, 100);
-                BirthSize {
-                    cols,
-                    percent: u16::try_from(derived).unwrap_or(fallback_percent),
-                }
-            }
-            _ => BirthSize {
-                cols: self.max_cols,
-                percent: fallback_percent,
-            },
-        }
-    }
-
-    /// Pin a room-runtime override while retaining a percentage spelling for
-    /// Zellij births whose geometry is not known until attach.
-    pub fn birth_size_with_override(
-        self,
-        detected_cols: Option<u16>,
-        width_override: Option<NonZeroU16>,
-    ) -> BirthSize {
-        let Some(cols) = width_override else {
-            return self.birth_size(detected_cols);
-        };
-        let percent = match detected_cols {
-            Some(total) if total > 0 => {
-                let total = u64::from(total);
-                let derived = ((u64::from(cols.get()) * 100 + total / 2) / total).clamp(1, 100);
-                u16::try_from(derived).unwrap_or_else(|_| self.percent.resolve(Some(total)))
-            }
-            _ => self.percent.resolve(None),
-        };
-        BirthSize { cols, percent }
-    }
 }
 
 impl Default for SidebarWidth {
     fn default() -> Self {
         Self::from_config(&crate::config::ThemeConfig::default())
     }
-}
-
-/// The width seed a launch uses before a pane's live view geometry is known.
-/// `cols` seeds tmux split and hook paths; `percent` keeps every Zellij
-/// layout resizable and safe on detached background geometry. Live repair
-/// replaces either seed with the per-view target.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BirthSize {
-    /// The verdict in columns: `min(percent × probed width, max_cols)`, the
-    /// bare cap when no terminal was probed.
-    pub cols: NonZeroU16,
-    /// The verdict as a share of the probed width (rounded to nearest, ≥ 1%)
-    /// — the unknown-geometry spelling; the configured percentage when no
-    /// terminal was probed; pets use the wide default and automatic policy
-    /// uses its narrow fallback.
-    pub percent: u16,
 }
 
 /// Carries the connecting client's terminal `<cols>x<rows>` across SSH for a
@@ -250,8 +252,7 @@ pub(crate) fn zellij_resize_step_cols(view_cols: u64) -> u64 {
 
 /// The invoking terminal's `(cols, rows)`, when any standard stream is
 /// attached to one (stdout, then stderr, then stdin). Probed by the command
-/// that can birth the session; the width feeds [`SidebarWidth::birth_size`]
-/// and the pair sizes a detached tmux birth.
+/// that can birth the session; the pair sizes a detached tmux birth.
 pub fn detect_terminal_size() -> Option<(u16, u16)> {
     terminal_size::terminal_size().map(|(width, height)| (width.0, height.0))
 }
@@ -277,10 +278,12 @@ mod tests {
         let inexact = WidthStep {
             cols: 10,
             exact: false,
+            view_cols: 200,
         };
         let exact = WidthStep {
             cols: 2,
             exact: true,
+            view_cols: 200,
         };
 
         assert_eq!(
@@ -330,12 +333,12 @@ mod tests {
             "config stays raw until use",
         );
         assert_eq!(width.target_cols(120), 12);
-        assert_eq!(width.birth_size(None).percent, 10);
+        assert_eq!(width.percent.resolve(None), 10);
 
         theme.display.width_percent = Some(95);
         let width = SidebarWidth::from_config(&theme);
         assert_eq!(width.target_cols(60), 54);
-        assert_eq!(width.birth_size(None).percent, 90);
+        assert_eq!(width.percent.resolve(None), 90);
     }
 
     #[test]
@@ -347,7 +350,7 @@ mod tests {
         assert_eq!(width.percent, WidthPercent::Fixed(30));
         assert_eq!(width.target_cols(120), 36);
         assert_eq!(width.target_cols(300), 72);
-        assert_eq!(width.birth_size(None).percent, 30);
+        assert_eq!(width.percent.resolve(None), 30);
 
         theme.display.width_percent = Some(20);
         let width = SidebarWidth::from_config(&theme);
@@ -364,63 +367,31 @@ mod tests {
     }
 
     #[test]
-    fn birth_size_seeds_each_launch_from_detected_geometry() {
-        let width = SidebarWidth::default();
-        let birth = |cols: u16, percent: u16| BirthSize {
-            cols: NonZeroU16::new(cols).expect("nonzero"),
-            percent,
-        };
-        // Narrow views use the 25% branch below the cap.
-        assert_eq!(width.birth_size(Some(120)), birth(30, 25));
-        assert_eq!(width.birth_size(Some(200)), birth(50, 25));
-        // The breakpoint remains on the narrow branch.
-        assert_eq!(width.birth_size(Some(240)), birth(60, 25));
-        // Above it the 30% branch applies, then the cap bites.
-        assert_eq!(width.birth_size(Some(300)), birth(72, 24));
-        // Past it the cap bites, and the percentage spelling rounds to the
-        // nearest share of the probed width: round(72·100/340) = 21.
-        assert_eq!(width.birth_size(Some(340)), birth(72, 21));
-        assert_eq!(width.birth_size(Some(250)), birth(72, 29));
-        assert_eq!(width.birth_size(Some(460)), birth(72, 16));
-        // The percentage spelling never rounds below 1%, however wide the view.
-        assert_eq!(width.birth_size(Some(7300)), birth(72, 1));
-        // Unknown width (no tty, or a zero-width probe) resolves to the bare
-        // cap with the narrow fallback percentage for unknown-geometry panes.
-        assert_eq!(width.birth_size(None), birth(72, 25));
-        assert_eq!(width.birth_size(Some(0)), birth(72, 25));
-    }
+    fn width_permille_round_trips_columns_and_holds_the_floor() {
+        let cols = |cols| NonZeroU16::new(cols).expect("nonzero");
 
-    #[test]
-    fn room_override_pins_cols_and_derives_birth_percent() {
-        let width = SidebarWidth::default();
-        let cols = NonZeroU16::new(90).expect("nonzero");
-
+        for (view, target) in [(120, 30), (127, 31), (213, 72), (400, 82)] {
+            let view = cols(view);
+            let target = cols(target);
+            assert_eq!(WidthPermille::from_cols(target, view).cols(view), target);
+        }
         assert_eq!(
-            width.birth_size_with_override(Some(300), Some(cols)),
-            BirthSize { cols, percent: 30 },
-        );
-        assert_eq!(
-            width.birth_size_with_override(Some(240), Some(cols)),
-            BirthSize { cols, percent: 38 },
-        );
-        assert_eq!(
-            width.birth_size_with_override(None, Some(cols)),
-            BirthSize { cols, percent: 25 },
-        );
-        assert_eq!(
-            width.birth_size_with_override(Some(120), None),
-            width.birth_size(Some(120)),
+            WidthPermille::from_percent(1).cols(cols(120)),
+            cols(MIN_ADJUSTABLE_WIDTH),
         );
     }
 
     #[test]
-    fn live_target_prefers_override_then_tracks_capped_view_share() {
-        let runtime = NonZeroU16::new(90).expect("nonzero");
-        let width = SidebarWidth::default();
+    fn width_permille_snaps_only_zellij_to_share_rungs() {
+        let cols = |cols| NonZeroU16::new(cols).expect("nonzero");
+        let share = WidthPermille::from_cols(cols(81), cols(200));
 
-        assert_eq!(live_target_cols(width, Some(runtime), 120), 90);
-        assert_eq!(live_target_cols(width, None, 120), 30);
-        assert_eq!(live_target_cols(width, None, 300), 72);
+        assert_eq!(
+            share.snap_to_rung(MuxName::Zellij),
+            WidthPermille::from_percent(40),
+        );
+        assert_eq!(share.snap_to_rung(MuxName::Tmux), share);
+        assert_eq!(share.snap_to_rung(MuxName::Zellij).to_percent_rounded(), 40,);
     }
 
     #[test]
@@ -450,17 +421,13 @@ mod tests {
     }
 
     #[test]
-    fn live_targets_can_differ_from_the_birth_seed() {
+    fn resolved_targets_can_differ_when_view_geometry_changes() {
         let width = SidebarWidth::default();
-        let birth = width.birth_size(Some(300));
-
-        assert_eq!(birth.cols.get(), 72);
-        assert_eq!(
-            width.target_cols(190),
-            47,
-            "live geometry can differ from the launch seed",
-        );
-        assert_ne!(u64::from(birth.cols.get()), width.target_cols(190));
+        let wide = width.target_cols(300);
+        let narrow = width.target_cols(190);
+        assert_eq!(wide, 72);
+        assert_eq!(narrow, 47);
+        assert_ne!(wide, narrow);
     }
 
     #[test]

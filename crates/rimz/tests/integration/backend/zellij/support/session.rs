@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::ids::WorkspaceId;
 use rimz::mux::{
-    LayoutColumn, MuxBackend, PaneCmd, SidebarPaneOptions, SidebarWidth, ZellijBackend,
+    LayoutColumn, MuxBackend, PaneCmd, SidebarPaneOptions, SidebarWidth, WidthPermille,
+    ZellijBackend,
 };
 use tempfile::TempDir;
 
@@ -36,6 +37,18 @@ pub(in crate::backend::zellij) fn sidebar_opts(
     detected_cols: u16,
 ) -> SidebarPaneOptions {
     let workspace_root = PathBuf::from(format!("/tmp/rimz-{name}"));
+    let width = SidebarWidth::default();
+    let view_cols = std::num::NonZeroU16::new(detected_cols).expect("nonzero test view");
+    let requested_cols = std::num::NonZeroU16::new(
+        u16::try_from(width.target_cols(u64::from(detected_cols))).expect("test target"),
+    )
+    .expect("nonzero test width");
+    let share =
+        WidthPermille::from_cols(requested_cols, view_cols).snap_to_rung(rimz::MuxName::Zellij);
+    let target = rimz::mux::SidebarTarget {
+        cols: share.cols(view_cols),
+        percent: share.to_percent_rounded(),
+    };
     SidebarPaneOptions {
         session_name: name.to_owned(),
         workspace_id: WorkspaceId::from_project_root(&workspace_root),
@@ -45,10 +58,8 @@ pub(in crate::backend::zellij) fn sidebar_opts(
             "1".to_owned(),
         )]),
         cwd: cwd.to_path_buf(),
-        width: SidebarWidth::default(),
-        birth_size: SidebarWidth::default().birth_size(Some(detected_cols)),
+        target,
         detected_view_size: None,
-        width_override: None,
         rimz_bin: stub,
         pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),

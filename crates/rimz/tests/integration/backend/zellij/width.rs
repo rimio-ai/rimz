@@ -116,7 +116,7 @@ fn wait_for_sidebar_columns_matching(
 }
 
 #[test]
-fn sidebar_widths_converge_after_resize_new_tab_and_override() {
+fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     require_zellij!();
 
     let room = LiveZellijSession::new("fixedw");
@@ -153,7 +153,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
         sidebar_columns_by_tab(xdg, &name),
     );
 
-    // A native tab inherits the 340-column launch probe's cap-aware 21% seed,
+    // A native tab inherits the 340-column launch probe's snapped 20% share,
     // then live convergence applies the narrow-view policy.
     open_new_tab(xdg, &name);
     wait_for_tab_count(xdg, &name, 2);
@@ -172,7 +172,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
         sidebar_columns_by_tab(xdg, &name),
     );
 
-    // Keep one tab active while the two converged tabs need the room override;
+    // Keep one tab active while the two converged tabs need the room target;
     // the launch-seeded tab is already within its tolerance.
     open_new_tab(xdg, &name);
     wait_for_tab_count(xdg, &name, 3);
@@ -182,8 +182,8 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
         sidebar_columns_by_tab(xdg, &name),
     );
 
-    // A room override becomes the target for every existing tab, including
-    // the two background tabs, and every future tab.
+    // A shared target applies to every existing tab, including the two
+    // background tabs, and every future tab.
     assert_eq!(
         converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, 5),
         2,
@@ -201,7 +201,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
     );
     assert!(
         wait_for_sidebar_columns(xdg, &name, &[35..=45, 35..=45, 35..=45, 35..=45]),
-        "the override propagates to every tab, got {:?}",
+        "the shared target propagates to every tab, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
 }

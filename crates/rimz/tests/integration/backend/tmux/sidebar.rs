@@ -203,7 +203,7 @@ fn sidebar_widths_converge_per_window_and_refresh_future_births() {
     assert_eq!(
         left_pane_width(&server, "verdict:1"),
         Some(30),
-        "the pre-convergence hook still carries the 30-column birth seed",
+        "the pre-convergence hook still carries the 30-column launch target",
     );
     let pane = left_pane_id(&server, "verdict:1").expect("left pane id");
     server
@@ -244,8 +244,7 @@ fn sidebar_widths_converge_per_window_and_refresh_future_births() {
     );
 
     let mut reload_opts = opts;
-    reload_opts.birth_size = SidebarWidth::default().birth_size(None);
-    reload_opts.width_override = std::num::NonZeroU16::new(55);
+    reload_opts.target.cols = std::num::NonZeroU16::new(55).expect("nonzero test width");
     server
         .backend
         .reconcile_sidebars(&reload_opts, &rimz::mux::SidebarLiveness::default())
@@ -261,7 +260,7 @@ fn sidebar_birth_and_first_attach_preserve_work_shell_contract() {
     let (_stub_dir, stub) = sidebar_command_stub();
     let mut opts = sidebar_opts(session, stub, Some(100));
     opts.pristine_birth = true;
-    let sidebar_cols = u64::from(opts.birth_size.cols.get());
+    let sidebar_cols = u64::from(opts.target.cols.get());
     let birth_shell_cols = 100 - sidebar_cols - 1;
     server
         .backend
@@ -365,7 +364,7 @@ fn new_window_hook_respawns_plain_shell_at_final_width_only() {
     ensure_rimz_session(&server, session, Some((100, 30)));
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = sidebar_opts(session, stub, Some(100));
-    let sidebar_cols = u64::from(opts.birth_size.cols.get());
+    let sidebar_cols = u64::from(opts.target.cols.get());
     server
         .backend
         .open_sidebar(&opts, None)
@@ -691,7 +690,7 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
     );
     assert_eq!(
         left_pane_width(&server, "rimz-resume:#feature"),
-        Some(u64::from(sidebar.birth_size.cols.get())),
+        Some(u64::from(sidebar.target.cols.get())),
         "resume seeding keeps the hook-docked sidebar at the birth width"
     );
     // A re-run finds the window already present and seeds nothing new.

@@ -117,6 +117,7 @@ pub enum RendererExitCause {
 pub enum SidebarWidthIntentTrigger {
     Narrower,
     Wider,
+    MouseAdopt,
 }
 
 impl SidebarWidthIntentTrigger {
@@ -124,6 +125,7 @@ impl SidebarWidthIntentTrigger {
         match self {
             Self::Narrower => "narrower",
             Self::Wider => "wider",
+            Self::MouseAdopt => "mouse-adopt",
         }
     }
 }
@@ -152,6 +154,7 @@ pub enum SidebarWidthControlTrigger {
     Retarget,
     ResizeFeedback,
     Backstop,
+    Classification,
 }
 
 impl SidebarWidthControlTrigger {
@@ -160,6 +163,7 @@ impl SidebarWidthControlTrigger {
             Self::Retarget => "retarget",
             Self::ResizeFeedback => "resize-feedback",
             Self::Backstop => "backstop",
+            Self::Classification => "classification",
         }
     }
 }

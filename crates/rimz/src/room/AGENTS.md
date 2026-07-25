@@ -8,4 +8,4 @@ Local contract for `crates/rimz/src/room/` — managed room identity and lifecyc
 - CLI owns prompts, presentation, and attach execution.
 - `harness::rebirth` owns rebirth inspection, planning, and materialization.
 - `mux` owns backend commands and layout mechanics.
-- `sidebar` owns launch election plus heartbeat, cache, and width-override mechanics.
+- `sidebar` owns launch election plus heartbeat, cache, and room-wide width-target mechanics.
