@@ -66,12 +66,13 @@ Each event is a *partial* update. How the reducer treats a field the event omits
 
 | Lifetime | Rule | Fields |
 | --- | --- | --- |
-| identity | set once when the session registers, stable thereafter | `agent_id`, `kind`, `parent_agent_id`, `runtime_owner` |
+| identity | set once when the session registers, stable thereafter | `agent_id`, `kind`, `parent_agent_id` |
+| placement | replaced when the session moves into a resumed pane or a newer observation re-owns it | `pane`, `runtime_owner` |
 | set-once | fills from the first usable observation, then stays stable | `first_prompt` |
 | activity | replaced by the latest event, where *clearing* it is meaningful: an idle agent has no `task` | `status`, `task`, `last_activity` |
 | carry-forward | persists until a newer value arrives; a missing value never resets it | `model`, `effort`, `context_pct`, `context_window`, `prompt`, `description`, `transcript_path`, `recent_prompts` |
 | accumulated | increments from durable named events and survives replay | `tool_calls` |
-| live-derived | never stored; computed at snapshot time from the live pane or git | `pane`, `worktree_path`, `worktree_branch` |
+| live-derived | computed at snapshot time from the live pane or git over the stored fallback | `worktree_path`, `worktree_branch` |
 | transient heads | opened and closed by signals, painted over the base status | the turn [phase](#turn-phase), the [compaction bracket](#the-compaction-bracket) |
 
 [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) and [`AgentState`](../../../crates/rimz/src/agents/state.rs) are the field catalog. Four rules earn a note:
@@ -256,6 +257,8 @@ The lifecycle then runs in three phases.
 3. Same-directory sessions pair newest-first to the latest viable pane process-start before the session's first event.
 
 Residual ambiguity binds deterministically and appends a `binding.log.jsonl` breadcrumb. The ladder's guards and limits are [sidebar.md](../sidebar/sidebar.md#presence-model).
+
+A native resume establishes placement before this hook path: the exec wrapper appends `agent.attached` with its ambient pane and live process owner without emitting a lifecycle signal or registering a new session. Runtime projection therefore keeps an actually resumed card while a lazy provider is still silent, and the later hook or local-session observation remains authoritative for lifecycle state.
 
 Same-pane ownership is an adapter policy. `KeepPrimary` pins a pane to its earliest registered co-resident root session, which keeps Codex `/side` and `/btw` forks from repainting the primary card; later co-resident root clocks fold display-only onto the primary row. A provider-linked compact continuation inherits its predecessor's registration time, so it retains primacy after the predecessor leaves while unrelated forks remain subordinate. `FollowLatest` hands the pane to the latest registered root conversation, using latest activity and session id only as deterministic tie-breakers; Antigravity uses it for an in-place conversation-id switch, and Cursor for the hook-less `/clear` conversation switch. The policy applies only after kind, pane incarnation, process identity, directory, and root-session guards establish one live instance. Occupied-pane recovery still prefers unique focus evidence and otherwise admits only one resting same-kind owner, while running, waiting, ambiguous, already-known, wrong-directory, and wrong-incarnation candidates abstain.
 

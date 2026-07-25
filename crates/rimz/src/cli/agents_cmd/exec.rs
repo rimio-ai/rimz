@@ -15,6 +15,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let invocation = ExecInvocationContext::new(&workspace);
     let run_context = run_exec_context(&request, &invocation)?;
     let launch_identity = exec_launch_identity(&request)?;
+    let attach_target = exec_attach_target(&request);
     let entered_worktree = match request.worktree_path.as_deref() {
         Some(path) => match enter_worktree(path) {
             Ok(path) => Some(path),
@@ -74,6 +75,9 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     }
     if let Some(identity) = launch_identity.as_ref() {
         record_own_launch_pane(&invocation, identity);
+    }
+    if let Some(target) = attach_target.as_ref() {
+        record_own_resume_pane(&invocation, target);
     }
     let (program, rest) = process.argv.split_first().ok_or_else(|| {
         anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
@@ -511,6 +515,19 @@ pub(super) fn exec_launch_identity(
     }
 }
 
+pub(super) fn exec_attach_target(
+    request: &rimz::harness::launch::ExecRequest,
+) -> Option<(AgentKind, AgentSessionId)> {
+    match &request.action {
+        rimz::harness::launch::ExecAction::Resume { session_id, .. } => Some((
+            request.kind.clone(),
+            AgentSessionId::from(session_id.as_str()),
+        )),
+        rimz::harness::launch::ExecAction::Launch { .. }
+        | rimz::harness::launch::ExecAction::Fork { .. } => None,
+    }
+}
+
 fn record_own_run_pane(context: &RunExecContext) {
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
         return;
@@ -544,6 +561,28 @@ fn record_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
             error = %err,
             "could not persist provisional agent pane id",
         ),
+    }
+}
+
+fn record_own_resume_pane(
+    invocation: &ExecInvocationContext<'_>,
+    target: &(AgentKind, AgentSessionId),
+) {
+    let Some(pane_id) = rimz::mux::ambient_pane_id() else {
+        return;
+    };
+    let workspace = invocation.workspace;
+    if let Err(err) = invocation.store().and_then(|store| {
+        store.attach_agent_pane(&target.0, &target.1, &workspace.session_name, &pane_id)?;
+        Ok(())
+    }) {
+        tracing::debug!(
+            kind = %target.0,
+            agent_id = %target.1,
+            pane = %pane_id,
+            error = %err,
+            "could not persist resumed agent pane attach",
+        );
     }
 }
 

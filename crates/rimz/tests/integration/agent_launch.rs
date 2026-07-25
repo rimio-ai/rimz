@@ -5,13 +5,13 @@ use assert_cmd::assert::OutputAssertExt;
 #[cfg(unix)]
 use predicates::str::contains;
 #[cfg(unix)]
-use rimz::agents::LaunchParams;
+use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
 #[cfg(unix)]
 use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 #[cfg(unix)]
 use rimz::ids::{AgentKind, AgentSessionId};
 #[cfg(unix)]
-use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, EventKind};
 
 #[cfg(unix)]
 use crate::common::{
@@ -33,6 +33,113 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         identity: ExecIdentity::default(),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
+    let env = Env::new();
+    let shim_dir = write_env_dump_shim(&env, "codex");
+    let kind = AgentKind::new_unchecked("codex");
+    let session_id = AgentSessionId::from("sess-resumed");
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            &workspace.session_name,
+            kind.as_str(),
+            "SessionStart",
+            &AgentLifecycleObservation::new(Some(session_id.clone()), LifecycleSignal::Registered),
+        ))
+        .expect("seed resumed session");
+
+    let dump = env.home_root.join("codex-resume.env");
+    let resume = ExecRequest {
+        kind: kind.clone(),
+        action: ExecAction::Resume {
+            session_id: session_id.to_string(),
+            extra_args: Vec::new(),
+        },
+        provider_account: ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        identity: ExecIdentity::default(),
+    };
+    env.rimz()
+        .args(exec_args(&resume))
+        .arg("--root")
+        .arg(&env.project_root)
+        .env("SHELL", "/definitely/not/a/shell")
+        .env("PATH", path_with_front(&shim_dir))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
+        .env("TMUX_PANE", "%4")
+        .assert_success_within_timeout("codex resume attach");
+
+    let store = env.store();
+    let attaches = store
+        .read_events()
+        .expect("read events")
+        .into_iter()
+        .filter_map(|event| match event.kind() {
+            EventKind::AgentAttach(payload) => Some(payload),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(attaches.len(), 1);
+    let attach = &attaches[0];
+    assert_eq!(attach.agent_id, session_id);
+    assert_eq!(attach.pane_id.as_str(), "tmux:%4");
+    assert_eq!(attach.pane_pid, Some(attach.runtime_owner.pid));
+    assert_ne!(attach.runtime_owner.pid, 0);
+    assert_eq!(
+        attach.runtime_owner.kind,
+        rimz::pane::RuntimeOwnerKind::Agent
+    );
+    assert_eq!(attach.runtime_owner.subject_id, "sess-resumed");
+
+    for action in [
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+        ExecAction::Fork {
+            session_id: "sess-source".to_owned(),
+            extra_args: Vec::new(),
+        },
+    ] {
+        let env = Env::new();
+        let shim_dir = write_env_dump_shim(&env, "codex");
+        let dump = env.home_root.join("codex-no-attach.env");
+        let request = ExecRequest {
+            kind: kind.clone(),
+            action,
+            provider_account: ProviderAccountState::Unbound,
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: false,
+            exit_on_run_completion: false,
+            identity: ExecIdentity::default(),
+        };
+        env.rimz()
+            .args(exec_args(&request))
+            .arg("--root")
+            .arg(&env.project_root)
+            .env("SHELL", "/definitely/not/a/shell")
+            .env("PATH", path_with_front(&shim_dir))
+            .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
+            .env("TMUX_PANE", "%4")
+            .assert_success_within_timeout("codex non-resume exec");
+        assert!(
+            env.store()
+                .read_events()
+                .expect("read non-resume events")
+                .iter()
+                .all(|event| !matches!(event.kind(), EventKind::AgentAttach(_)))
+        );
     }
 }
 
