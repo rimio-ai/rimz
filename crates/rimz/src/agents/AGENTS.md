@@ -1,8 +1,8 @@
 # Agent adapters
 
-Local contract for `crates/rimz/src/agents/` — the integration layer. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules.
+Local contract for `crates/rimz/src/agents/` — the integration layer. Extends [crates/rimz/AGENTS.md](../../AGENTS.md).
 
-Topic detail lives in the internals leaves the root map describes — [adapter.md](../../../../docs/internals/agents/adapter.md) (this layer: the registry, the capability traits, the hook path, install, context sources, and declared coverage), [model.md](../../../../docs/internals/agents/model.md) (the agent model the adapters feed: the rollup, the state machine, and the displayed-status ladder), the per-kind internal mappings ([claude.md](../../../../docs/internals/agents/claude.md) and its Codex, Copilot, Kimi, Pi, OpenCode, Antigravity, Cursor, Droid, Kiro, Qwen, and Grok siblings), [providers.md](../../../../docs/internals/agents/providers.md) (accounts, balances, spend, and pricing), and the per-agent upstream references in [agent-adapter/](../../../../docs/externals/agent-adapter/claude-reference.md). The sequenced integration playbook for a new built-in is [agent-adapters.md](../../../../docs/contributing/agent-adapters.md).
+Topic detail lives in the internals leaves the root map describes — [adapter.md](../../../../docs/internals/agents/adapter.md) (this layer: the registry, the capability traits, the hook path, install, context sources, and declared coverage), [model.md](../../../../docs/internals/agents/model.md) (the agent model the adapters feed: the rollup, the state machine, and the displayed-status ladder), the per-kind internal mappings ([claude.md](../../../../docs/internals/agents/claude.md) and its Codex, Amp, Copilot, Kimi, Pi, OpenCode, Antigravity, Cursor, Droid, Kiro, Qwen, and Grok siblings), [providers.md](../../../../docs/internals/agents/providers.md) (accounts, balances, spend, and pricing), and the per-agent upstream references in [agent-adapter/](../../../../docs/externals/agent-adapter/claude-reference.md). The sequenced integration playbook for a new built-in is [agent-adapters.md](../../../../docs/contributing/agent-adapters.md).
 
 ## Layout
 
@@ -31,7 +31,7 @@ Provider modules own native protocol and process interpretation. Code outside `a
 ## Hook discipline
 
 - **Blocking ask hooks are sync.** Installing one as async is a hard install error — the source of truth for "must block" is the adapter's hook catalog or equivalent typed installer declaration, never the on-disk config.
-- **Neutral follows the agent's decision contract.** Claude, Codex, Pi, OpenCode, and Grok use empty stdout; Cursor returns `{}` on every wired event because its hook contract requires JSON. Diagnostics stay off stdout. The fresh-stdio rule for helper children (a wrapped statusline, a notifier) is enforced by the no-`Stdio::inherit` CI grep.
+- **Neutral follows the agent's decision contract.** Claude, Codex, Pi, OpenCode, and Grok use empty stdout; Cursor and Antigravity answer every wired event with JSON because their hook contracts require it. Diagnostics stay off stdout. The fresh-stdio rule for helper children (a wrapped statusline, a notifier) is enforced by the no-`Stdio::inherit` CI grep.
 - **Set installed hook timeouts from upstream deadlines**, leaving margin for RimZ to finish store writes before the agent kills the hook.
 - **Install is idempotent.** Reclaim every rimz-owned entry by the stable command substring before rewriting the canonical set; leave user-authored entries untouched.
 

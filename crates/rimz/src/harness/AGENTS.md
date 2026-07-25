@@ -1,6 +1,6 @@
 # Agent harness
 
-Local contract for `crates/rimz/src/harness/` — the spawn, address, drive, and reclaim machinery for agent sessions. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules.
+Local contract for `crates/rimz/src/harness/` — the spawn, address, drive, and reclaim machinery for agent sessions. Extends [crates/rimz/AGENTS.md](../../AGENTS.md).
 
 Topic detail lives in [harness.md](../../../../docs/internals/harness/harness.md) (spawn, address, resume, reclaim), [scripting.md](../../../../docs/internals/harness/scripting.md) (supervised runs), [loops.md](../../../../docs/internals/harness/loops.md) (loop scheduling and the assist log), and [budget.md](../../../../docs/internals/harness/budget.md) (dollar caps and the park), with the shared delivery substrate in [messaging.md](../../../../docs/internals/harness/messaging.md).
 

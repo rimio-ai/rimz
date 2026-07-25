@@ -1,6 +1,6 @@
 # Room runtime
 
-Local contract for `crates/rimz/src/room/` — managed room identity and lifecycle. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules.
+Local contract for `crates/rimz/src/room/` — managed room identity and lifecycle. Extends [crates/rimz/AGENTS.md](../../AGENTS.md).
 
 ## Boundaries
 

@@ -1,10 +1,10 @@
 # Store
 
-Local contract for `crates/rimz/src/store/` — durable workspace state. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules. Subsystem behaviour — on-disk shape, event log, write and read paths, write classes, maintenance — lives in [docs/internals/store.md](../../../../docs/internals/store.md).
+Local contract for `crates/rimz/src/store/` — durable workspace state. Extends [crates/rimz/AGENTS.md](../../AGENTS.md). Subsystem behaviour — on-disk shape, event log, write and read paths, write classes, maintenance — lives in [docs/internals/store.md](../../../../docs/internals/store.md).
 
 ## Writes and durability
 
-- Every mutator lands under [`writer.rs`](./writer.rs): the façade owns the `commit` primitive, and `writer/` owns the debounce, lifecycle, publish, reset, and queue branches. Reads on the `Store` handle stay lock-free.
+- Every mutator lands under [`writer.rs`](./writer.rs): the façade owns the `commit` primitive, and `writer/` owns the debounce, lifecycle, publish, reset, queue, and reap branches. Reads on the `Store` handle stay lock-free.
 - `workspace.lock` is the only cross-process serialization. Every writer is a short-lived CLI process, so a change that needs ordering takes the lock rather than introducing an in-process actor.
 - Every durable write routes through [`atomic.rs`](./atomic.rs), and every fsync syscall lives inside it; `cargo xtask invariants` rejects a `sync_all`/`sync_data` call anywhere else. No module hand-rolls its own atomic dance, and the event-log frame encoding stays beside its decoder in [`event_log/frame.rs`](./event_log/frame.rs).
 - [`writer/queue.rs`](./writer/queue.rs) owns all three message surfaces together: the live `messages.jsonl`, terminal text in the sibling `history.jsonl`, and terminal outcomes in the event log. Shared age pruning stays in [`atomic.rs`](./atomic.rs).
