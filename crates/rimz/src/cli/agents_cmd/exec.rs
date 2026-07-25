@@ -515,6 +515,8 @@ pub(super) fn exec_launch_identity(
     }
 }
 
+/// The exact durable card an exec wrapper can attach before provider startup.
+/// A fork abstains because its provider-assigned session id is not known yet.
 pub(super) fn exec_attach_target(
     request: &rimz::harness::launch::ExecRequest,
 ) -> Option<(AgentKind, AgentSessionId)> {
@@ -664,17 +666,9 @@ fn resolve_own_agent_end_trace(
             return Ok(Some((agent.kind.clone(), agent.agent_id.clone())));
         }
     }
-    // A resumed pane owns the resumed session and can safely fall back to its
-    // argv id. A fork's provider-assigned id is unknown here; falling back to
-    // the source id would stamp the original session ended when the fork exits.
-    Ok(match &request.action {
-        rimz::harness::launch::ExecAction::Resume { session_id, .. } => Some((
-            request.kind.clone(),
-            AgentSessionId::from(session_id.as_str()),
-        )),
-        rimz::harness::launch::ExecAction::Launch { .. }
-        | rimz::harness::launch::ExecAction::Fork { .. } => None,
-    })
+    // A resumed pane owns the resumed session and can safely fall back to the
+    // same argv identity used by its pre-start attach.
+    Ok(exec_attach_target(request))
 }
 
 fn append_agent_lifecycle_trace(
