@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -127,8 +128,16 @@ impl BrowserHandle {
         tab
     }
 
-    pub(super) fn tab_with_websocket_capture(&self, url: &str) -> (Arc<Tab>, WebSocketCapture) {
-        let tab = self.browser.new_tab().expect("open browser tab");
+    pub(super) fn tab_with_websocket_capture(
+        &self,
+        url: &str,
+        secret: Option<&str>,
+        capture_text: bool,
+    ) -> (Arc<Tab>, WebSocketCapture) {
+        let tab = secret.map_or_else(
+            || self.browser.new_tab().expect("open browser tab"),
+            |secret| self.configured_authed_tab(secret),
+        );
         tab.call_method(Network::Enable {
             max_total_buffer_size: None,
             max_resource_buffer_size: None,
@@ -137,33 +146,104 @@ impl BrowserHandle {
             enable_durable_messages: None,
         })
         .expect("enable browser network events");
-        let capture = WebSocketCapture::new(&tab);
+        let capture = WebSocketCapture::new(&tab, capture_text);
         tab.navigate_to(url).expect("navigate browser tab");
         (tab, capture)
     }
 }
 
 pub(super) struct WebSocketCapture {
+    closes: Arc<AtomicUsize>,
+    received: Arc<AtomicUsize>,
+    sent: Arc<AtomicUsize>,
     text: Arc<Mutex<String>>,
+    urls: Arc<Mutex<Vec<String>>>,
 }
 
 impl WebSocketCapture {
-    fn new(tab: &Tab) -> Self {
+    fn new(tab: &Tab, capture_text: bool) -> Self {
+        let closes = Arc::new(AtomicUsize::new(0));
+        let received = Arc::new(AtomicUsize::new(0));
+        let sent = Arc::new(AtomicUsize::new(0));
         let text = Arc::new(Mutex::new(String::new()));
+        let urls = Arc::new(Mutex::new(Vec::new()));
+        let listener_closes = Arc::clone(&closes);
+        let listener_received = Arc::clone(&received);
+        let listener_sent = Arc::clone(&sent);
         let listener_text = Arc::clone(&text);
-        tab.add_event_listener(Arc::new(move |event: &Event| {
-            let Event::NetworkWebSocketFrameReceived(event) = event else {
-                return;
-            };
-            let payload = &event.params.response.payload_data;
-            let mut text = listener_text.lock().expect("lock WebSocket capture");
-            text.push_str(payload);
-            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(payload) {
-                text.push_str(&String::from_utf8_lossy(&decoded));
+        let listener_urls = Arc::clone(&urls);
+        tab.add_event_listener(Arc::new(move |event: &Event| match event {
+            Event::NetworkWebSocketCreated(event) => {
+                listener_urls
+                    .lock()
+                    .expect("lock WebSocket URLs")
+                    .push(event.params.url.clone());
             }
+            Event::NetworkWebSocketFrameReceived(event) => {
+                listener_received.fetch_add(1, Ordering::Relaxed);
+                if !capture_text {
+                    return;
+                }
+                let payload = &event.params.response.payload_data;
+                let mut text = listener_text.lock().expect("lock WebSocket capture");
+                if text.len() > 1024 * 1024 {
+                    text.clear();
+                }
+                text.push_str(payload);
+                if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(payload) {
+                    text.push_str(&String::from_utf8_lossy(&decoded));
+                }
+            }
+            Event::NetworkWebSocketFrameSent(_) => {
+                listener_sent.fetch_add(1, Ordering::Relaxed);
+            }
+            Event::NetworkWebSocketClosed(_) => {
+                listener_closes.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
         }))
         .expect("listen for browser WebSocket frames");
-        Self { text }
+        Self {
+            closes,
+            received,
+            sent,
+            text,
+            urls,
+        }
+    }
+
+    pub(super) fn closes(&self) -> usize {
+        self.closes.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn received(&self) -> usize {
+        self.received.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn wait_until_sent(&self, budget: Duration) {
+        let deadline = Instant::now() + budget;
+        while self.sent.load(Ordering::Relaxed) == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "browser sent no WebSocket frames after opening the terminal"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    pub(super) fn wait_url_contains(&self, needle: &str, budget: Duration) {
+        let deadline = Instant::now() + budget;
+        loop {
+            let urls = self.urls.lock().expect("lock WebSocket URLs").clone();
+            if urls.iter().any(|url| url.contains(needle)) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "browser WebSocket URL did not contain {needle:?}; opened URLs: {urls:?}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     pub(super) fn wait_contains(&self, needle: &str, budget: Duration) {
@@ -285,6 +365,11 @@ impl LiveWebFixture {
             line,
             "Enter",
         ]);
+    }
+
+    pub(super) fn interrupt(&self) {
+        self.server
+            .output(&["send-keys", "-t", &self.workspace.session_name, "C-c"]);
     }
 
     pub(super) fn wait_capture_contains(&self, needle: &str, budget: Duration) -> String {

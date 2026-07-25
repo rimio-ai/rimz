@@ -377,7 +377,7 @@ fn spawn_spec_for(
     extra_args: &[String],
 ) -> CommandSpec {
     CommandSpec::new(program.display().to_string())
-        .args(["-O", "-a", "-i", &interface.to_string(), "-p"])
+        .args(["-O", "-a", "-P", "3600", "-i", &interface.to_string(), "-p"])
         .arg(port.to_string())
         .args(extra_args.iter().cloned())
         .arg(rimz_exe.display().to_string())
@@ -457,6 +457,8 @@ mod tests {
             [
                 "-O",
                 "-a",
+                "-P",
+                "3600",
                 "-i",
                 "127.0.0.1",
                 "-p",
@@ -469,6 +471,7 @@ mod tests {
                 "--share"
             ]
         );
+        assert!(spec.args.windows(2).any(|args| args == ["-P", "3600"]));
         assert!(!spec.args.iter().any(|arg| arg == "-W"));
         assert!(!spec.args.iter().any(|arg| arg == "-c"));
     }
