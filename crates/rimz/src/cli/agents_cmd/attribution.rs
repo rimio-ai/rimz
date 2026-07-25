@@ -60,11 +60,7 @@ pub(super) fn attribution(
     if md {
         return render::finish(render_markdown(&mut out, &report));
     }
-    render::finish(render_panel(
-        &mut out,
-        &report,
-        render::terminal_columns(120),
-    ))
+    render::finish(render_panel(&mut out, &report))
 }
 
 fn report_scope(
@@ -94,11 +90,7 @@ fn common_optional(values: impl IntoIterator<Item = Option<String>>) -> Option<S
         .then_some(first)
 }
 
-pub(super) fn render_panel(
-    w: &mut impl Write,
-    report: &Attribution,
-    max_width: usize,
-) -> std::io::Result<()> {
+pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io::Result<()> {
     if report.groups.is_empty() {
         return writeln!(
             w,
@@ -110,38 +102,42 @@ pub(super) fn render_panel(
         );
     }
 
-    let mut table = render::Table::new(["AGENT", "PROVIDER", "MODEL", "ACTIVE", "TOOLS", "COST"])
-        .right(&[3, 4, 5])
-        .max_width(max_width);
-    for group in &report.groups {
-        table.section_cells(vec![
-            render::cell(group_name(group)).fg(render::palette::header()),
-            render::cell(format!("· {}", totals_label(&group.totals))).fg(render::palette::meta()),
-        ]);
-        for member in &group.members {
-            let active = member
-                .active_secs
-                .map(duration_label)
-                .unwrap_or_else(|| "-".to_owned());
-            let cost = member
-                .cost_usd
-                .map(rimz::theme::fmt::dollars2)
-                .unwrap_or_else(|| "-".to_owned());
-            table.card(
-                [
-                    render::cell(member.handle.as_str())
-                        .fg(render::palette::identity(member.kind.as_str())),
-                    render::cell(member.provider.as_str()),
-                    render::cell(model_label(member)).fg(render::palette::muted()),
-                    render::cell(active).dash(),
-                    render::cell(member.tool_calls.to_string()),
-                    render::cell(cost).dash(),
-                ],
-                Some(render::cell(member_detail(member)).fg(render::palette::muted())),
-            );
+    let show_captions = report.groups.len() > 1 || report.groups[0].team.as_ref().is_some();
+    for (group_index, group) in report.groups.iter().enumerate() {
+        if group_index > 0 {
+            writeln!(w)?;
+        }
+        if show_captions {
+            writeln!(
+                w,
+                "{}",
+                render::paint(
+                    render::palette::header(),
+                    &format!("{} · {}", group_name(group), totals_label(&group.totals))
+                )
+            )?;
+            writeln!(w)?;
+        }
+        for (member_index, member) in group.members.iter().enumerate() {
+            if member_index > 0 {
+                writeln!(w)?;
+            }
+            writeln!(
+                w,
+                "  {} · {} · {}",
+                render::paint(
+                    render::palette::identity(member.kind.as_str()),
+                    &identity_label(member)
+                ),
+                member.provider,
+                render::paint(render::palette::muted(), &model_label(member))
+            )?;
+            let mut details = render::KeyVals::new().indent(6);
+            details.push("effort", render::cell(effort_label(member)));
+            details.push("tokens", render::cell(token_label(member)));
+            details.render(w)?;
         }
     }
-    table.render(w)?;
     writeln!(w, "\nTotal · {}", totals_label(&report.totals))
 }
 
@@ -157,7 +153,7 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
         totals_label(&report.totals)
     )?;
     writeln!(w)?;
-    let show_captions = report.groups.len() > 1 || report.groups[0].team.as_ref().is_some();
+    let show_captions = report.groups.len() > 1;
     for (index, group) in report.groups.iter().enumerate() {
         if index > 0 {
             writeln!(w)?;
@@ -166,32 +162,17 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
             writeln!(w, "**{}**", markdown_escape(&group_name(group)))?;
             writeln!(w)?;
         }
-        writeln!(
-            w,
-            "| Role | Agent | Model | Active | Tools | Tokens | Cost |"
-        )?;
-        writeln!(w, "|---|---|---|--:|--:|---|--:|")?;
         for member in &group.members {
             let role = member.role.as_deref().unwrap_or(member.handle.as_str());
-            let active = member
-                .active_secs
-                .map(duration_label)
-                .unwrap_or_else(|| "-".to_owned());
-            let cost = member
-                .cost_usd
-                .map(rimz::theme::fmt::dollars2)
-                .unwrap_or_else(|| "-".to_owned());
             writeln!(
                 w,
-                "| {} | {} | {} | {} | {} | {} | {} |",
+                "- **{}** — {} {}",
                 markdown_escape(role),
                 markdown_escape(&member.provider),
-                markdown_escape(&model_label(member)),
-                active,
-                member.tool_calls,
-                markdown_escape(&token_label(member)),
-                cost,
+                markdown_model_label(member),
             )?;
+            writeln!(w, "  - effort: {}", markdown_escape(&effort_label(member)))?;
+            writeln!(w, "  - tokens: {}", markdown_escape(&token_label(member)))?;
         }
     }
     writeln!(w)?;
@@ -234,31 +215,77 @@ fn model_label(member: &AttributionMember) -> String {
     }
 }
 
-fn member_detail(member: &AttributionMember) -> String {
-    let sessions = if member.sessions == 1 {
-        "1 session".to_owned()
+fn identity_label(member: &AttributionMember) -> String {
+    let handle_role = member
+        .handle
+        .trim_start_matches('@')
+        .split_once('#')
+        .map_or(member.handle.trim_start_matches('@'), |(handle, _)| handle);
+    match member.role.as_deref() {
+        Some(role) if role != handle_role => format!("{} ({role})", member.handle),
+        _ => member.handle.clone(),
+    }
+}
+
+fn markdown_model_label(member: &AttributionMember) -> String {
+    let label = model_label(member);
+    if label.contains('`') {
+        markdown_escape(&label)
     } else {
-        format!("{} sessions", member.sessions)
+        format!("`{}`", markdown_escape(&label))
+    }
+}
+
+fn effort_label(member: &AttributionMember) -> String {
+    let active = member
+        .active_secs
+        .map(|seconds| format!("{} active", duration_label(seconds)))
+        .unwrap_or_else(|| "active unknown".to_owned());
+    let cost = member
+        .cost_usd
+        .map(rimz::theme::fmt::dollars2)
+        .unwrap_or_else(|| "cost unknown".to_owned());
+    let tools = match member.tool_calls {
+        0 => "no tool calls".to_owned(),
+        1 => "1 tool call".to_owned(),
+        count => format!("{count} tool calls"),
     };
-    let compactions = if member.compactions == 1 {
-        "1 compaction".to_owned()
-    } else {
-        format!("{} compactions", member.compactions)
+    let compactions = match member.compactions {
+        0 => "no compactions".to_owned(),
+        1 => "1 compaction".to_owned(),
+        count => format!("{count} compactions"),
     };
-    format!("{} · {sessions} · {compactions}", token_label(member))
+    format!("{active} · {cost} · {tools}, {compactions}")
 }
 
 fn token_label(member: &AttributionMember) -> String {
-    let cache = member
-        .tokens
-        .cache_write
-        .saturating_add(member.tokens.cache_read);
-    format!(
-        "{} in · {} out · {} cache",
-        render::compact_count(member.tokens.input),
-        render::compact_count(member.tokens.output),
-        render::compact_count(cache)
-    )
+    [
+        (member.tokens.input, "input"),
+        (member.tokens.output, "output"),
+        (member.tokens.cache_write, "cache write"),
+        (member.tokens.cache_read, "cache read"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, name)| format!("{} {name}", token_count(count)))
+    .reduce(|mut label, component| {
+        label.push_str(", ");
+        label.push_str(&component);
+        label
+    })
+    .unwrap_or_else(|| "none recorded".to_owned())
+}
+
+fn token_count(value: u64) -> String {
+    let (divisor, suffix) = if value >= 1_000_000 {
+        (1_000_000_f64, "m")
+    } else if value >= 1_000 {
+        (1_000_f64, "k")
+    } else {
+        return value.to_string();
+    };
+    let count = format!("{:.1}", value as f64 / divisor);
+    format!("{}{suffix}", count.strip_suffix(".0").unwrap_or(&count))
 }
 
 fn totals_label(totals: &EffortTotals) -> String {
@@ -300,7 +327,7 @@ fn duration_label(seconds: u64) -> String {
 }
 
 fn markdown_escape(value: &str) -> String {
-    html_escape(value).replace('|', "\\|")
+    html_escape(value)
 }
 
 fn html_escape(value: &str) -> String {
@@ -392,24 +419,44 @@ mod tests {
     #[test]
     fn panel_groups_team_and_stray_members() {
         let mut output = anstream::StripStream::new(Vec::new());
-        render_panel(&mut output, &report(), 120).expect("render panel");
+        render_panel(&mut output, &report()).expect("render panel");
         insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @r"
-        AGENT     PROVIDER  MODEL         ACTIVE  TOOLS   COST
-
         forge team · 1 agent · 1h05m active · $1.25
-        @planner  Claude    fable`2@high   1h05m      7  $1.25
-          1k in · 800 out · 5k cache · 2 sessions · 1 compaction
+
+          @planner (plan|ner) · Claude · fable`2@high
+              effort: 1h05m active · $1.25 · 7 tool calls, 1 compaction
+              tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
 
         Other agents · 1 agent · 1h05m active · $1.25
-        @codex    Codex     gpt-5.5@high   1h05m      7  $1.25
-          1k in · 800 out · 5k cache · 2 sessions · 1 compaction
+
+          @codex · Codex · gpt-5.5@high
+              effort: 1h05m active · $1.25 · 7 tool calls, 1 compaction
+              tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
 
         Total · 2 agents · 2h10m active · $2.50
         ");
     }
 
     #[test]
-    fn markdown_escapes_cells_and_wraps_native_tables() {
+    fn panel_omits_redundant_caption_for_single_teamless_group() {
+        let mut report = report();
+        let teamless = report.groups.pop().expect("teamless fixture group");
+        report.totals = teamless.totals.clone();
+        report.groups = vec![teamless];
+
+        let mut output = anstream::StripStream::new(Vec::new());
+        render_panel(&mut output, &report).expect("render panel");
+        insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @r"
+          @codex · Codex · gpt-5.5@high
+              effort: 1h05m active · $1.25 · 7 tool calls, 1 compaction
+              tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
+
+        Total · 1 agent · 1h05m active · $1.25
+        ");
+    }
+
+    #[test]
+    fn markdown_escapes_values_and_renders_grouped_bullets() {
         let mut output = Vec::new();
         render_markdown(&mut output, &report()).expect("render markdown");
         insta::assert_snapshot!(String::from_utf8(output).expect("utf8"), @r"
@@ -418,18 +465,62 @@ mod tests {
 
         **forge team**
 
-        | Role | Agent | Model | Active | Tools | Tokens | Cost |
-        |---|---|---|--:|--:|---|--:|
-        | plan\|ner | Claude | fable&#96;2@high | 1h05m | 7 | 1k in · 800 out · 5k cache | $1.25 |
+        - **plan|ner** — Claude fable&#96;2@high
+          - effort: 1h05m active · $1.25 · 7 tool calls, 1 compaction
+          - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
 
         **Other agents**
 
-        | Role | Agent | Model | Active | Tools | Tokens | Cost |
-        |---|---|---|--:|--:|---|--:|
-        | @codex | Codex | gpt-5.5@high | 1h05m | 7 | 1k in · 800 out · 5k cache | $1.25 |
+        - **@codex** — Codex `gpt-5.5@high`
+          - effort: 1h05m active · $1.25 · 7 tool calls, 1 compaction
+          - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
 
         </details>
         ");
+    }
+
+    #[test]
+    fn markdown_single_team_keeps_the_group_name_in_the_summary_only() {
+        let mut report = report();
+        report.groups.pop();
+        report.totals = report.groups[0].totals.clone();
+        let mut output = Vec::new();
+
+        render_markdown(&mut output, &report).expect("render markdown");
+        let output = String::from_utf8(output).expect("utf8");
+
+        assert!(output.contains("<code>forge</code> team"));
+        assert!(!output.contains("**forge team**"));
+    }
+
+    #[test]
+    fn identity_omits_a_role_already_carried_by_the_handle() {
+        let matching = member("@planner#auth", Some("planner"), "Claude", "fable-2");
+        let displaced = member("@quiet-fox", Some("planner"), "Claude", "fable-2");
+
+        assert_eq!(identity_label(&matching), "@planner#auth");
+        assert_eq!(identity_label(&displaced), "@quiet-fox (planner)");
+    }
+
+    #[test]
+    fn token_labels_name_only_recorded_components() {
+        let mut sample = member("@coder", Some("coder"), "Codex", "gpt-5.5");
+        sample.tokens.cache_write = 0;
+        assert_eq!(
+            token_label(&sample),
+            "1.2k input, 800 output, 3k cache read"
+        );
+
+        sample.tokens = TokenSplit::default();
+        assert_eq!(token_label(&sample), "none recorded");
+    }
+
+    #[test]
+    fn token_counts_change_units_at_decimal_boundaries() {
+        assert_eq!(token_count(999), "999");
+        assert_eq!(token_count(1_000), "1k");
+        assert_eq!(token_count(1_100), "1.1k");
+        assert_eq!(token_count(1_000_000), "1m");
     }
 
     #[test]
@@ -438,7 +529,7 @@ mod tests {
         report.groups.clear();
         report.totals = EffortTotals::default();
         let mut panel = anstream::StripStream::new(Vec::new());
-        render_panel(&mut panel, &report, 120).expect("render panel");
+        render_panel(&mut panel, &report).expect("render panel");
         assert_eq!(
             String::from_utf8(panel.into_inner()).expect("utf8"),
             "No agent attribution records in this scope.\n"

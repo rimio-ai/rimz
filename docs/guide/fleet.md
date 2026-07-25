@@ -178,17 +178,19 @@ START             DUR  TOKENS       COST     OUTCOME  PROMPT
 
 ```console
 $ rimz agents attribution
-AGENT      PROVIDER  MODEL                ACTIVE  TOOLS    COST
-
 forge team · 3 agents · 36m active · $29.39
-@planner   Claude    claude-opus-5@xhigh     15m     84  $16.72
-  11k in · 148k out · 16m cache · 1 session · 0 compactions
 
-@coder     Codex     gpt-5.6-sol@xhigh       21m    106  $12.67
-  294k in · 41k out · 19m cache · 1 session · 0 compactions
+  @planner · Claude · claude-opus-5@xhigh
+      effort: 15m active · $16.72 · 84 tool calls, no compactions
+      tokens: 11k input, 148k output, 16m cache read
 
-@reviewer  Claude    claude-opus-5@xhigh       -      0       -
-  0 in · 0 out · 0 cache · 1 session · 0 compactions
+  @coder · Codex · gpt-5.6-sol@xhigh
+      effort: 21m active · $12.67 · 106 tool calls, no compactions
+      tokens: 294k input, 41k output, 19m cache read
+
+  @reviewer · Claude · claude-opus-5@xhigh
+      effort: active unknown · cost unknown · no tool calls, no compactions
+      tokens: none recorded
 
 Total · 3 agents · 36m active · $29.39
 ```

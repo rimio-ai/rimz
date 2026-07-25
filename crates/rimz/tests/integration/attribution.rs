@@ -164,7 +164,8 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
     let markdown = String::from_utf8(markdown.stdout).expect("markdown utf8");
     assert!(markdown.starts_with("<details>\n"));
     assert!(markdown.contains("<code>forge</code> team"));
-    assert!(markdown.contains("| planner | Codex | gpt-5.5@high |"));
+    assert!(markdown.contains("- **planner** — Codex `gpt-5.5@high`"));
+    assert!(markdown.contains("  - tokens: "));
 }
 
 #[test]
