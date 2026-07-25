@@ -56,21 +56,24 @@ pub fn resolve(
     view_cols: Option<u16>,
 ) -> crate::mux::SidebarTarget {
     let stored = load_file(runtime);
-    let pinned = stored.is_some_and(|file| file.pinned);
     let view_cols = view_cols.and_then(NonZeroU16::new);
-    let permille = if pinned {
-        stored
-            .map(|file| file.permille)
-            .unwrap_or_else(|| WidthPermille::from_percent(width.percent.resolve(None)))
-    } else if let Some(view_cols) = view_cols {
-        let target_cols =
-            u16::try_from(width.target_cols(u64::from(view_cols.get()))).unwrap_or(u16::MAX);
-        WidthPermille::from_cols(
-            NonZeroU16::new(target_cols).unwrap_or(NonZeroU16::MIN),
-            view_cols,
-        )
-    } else {
-        WidthPermille::from_percent(width.percent.resolve(None))
+    let (permille, pinned) = match (stored, view_cols) {
+        (Some(file), _) if file.pinned => (file.permille, true),
+        (_, Some(view_cols)) => {
+            let target_cols =
+                u16::try_from(width.target_cols(u64::from(view_cols.get()))).unwrap_or(u16::MAX);
+            (
+                WidthPermille::from_cols(
+                    NonZeroU16::new(target_cols).unwrap_or(NonZeroU16::MIN),
+                    view_cols,
+                ),
+                false,
+            )
+        }
+        _ => (
+            WidthPermille::from_percent(width.percent.resolve(None)),
+            false,
+        ),
     };
     let permille = permille.snap_to_rung(mux);
     let resolved = WidthTargetFile { permille, pinned };
@@ -228,6 +231,19 @@ mod tests {
         assert_eq!(
             resolve(&runtime, width, MuxName::Tmux, Some(400)).cols,
             NonZeroU16::new(200).expect("nonzero"),
+        );
+    }
+
+    #[test]
+    fn zellij_default_uses_the_nearest_rung_around_the_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = runtime(dir.path());
+        let width = SidebarWidth::default();
+
+        assert_eq!(
+            resolve(&runtime, width, MuxName::Zellij, Some(400)).cols,
+            NonZeroU16::new(80).expect("nonzero"),
+            "the nearest 5% rung may land half a rung beyond max_cols",
         );
     }
 
