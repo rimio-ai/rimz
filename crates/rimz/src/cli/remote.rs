@@ -477,6 +477,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 // The local process owns the outer terminal bracket for a
                 // one-shot SSH attach. Tell a current remote RimZ not to nest
                 // XTSAVE/XTRESTORE, whose saved mode slot is not a stack.
+                // The environment marker stays compatible with older remotes.
                 let plain_spec = plan.initial().with_outer_scroll_bracket(true).plain();
                 tty::sanitize_local_tty();
                 launch_attach_command(&plain_spec)

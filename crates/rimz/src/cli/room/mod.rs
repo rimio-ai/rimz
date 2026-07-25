@@ -77,14 +77,12 @@ enum RoomEntry<'a> {
     AttachCwd {
         workspace: rimz::ResolvedWorkspace,
         mode: AttachMode,
-        outer_scroll_bracket: bool,
         no_resume: bool,
         refresh_ms: Option<u16>,
     },
     AttachSession {
         session: String,
         mode: AttachMode,
-        outer_scroll_bracket: bool,
         no_resume: bool,
         refresh_ms: Option<u16>,
         record: Result<Option<WorkspaceRecord>>,
@@ -107,21 +105,6 @@ impl RoomEntry<'_> {
                 *no_resume
             }
             Self::AttachCwd { no_resume, .. } | Self::AttachSession { no_resume, .. } => *no_resume,
-        }
-    }
-
-    fn outer_scroll_bracket(&self) -> bool {
-        match self {
-            Self::Start { args, .. } => args.attach.outer_scroll_bracket(),
-            Self::AttachCwd {
-                outer_scroll_bracket,
-                ..
-            }
-            | Self::AttachSession {
-                outer_scroll_bracket,
-                ..
-            } => *outer_scroll_bracket,
-            Self::StartDetached { .. } | Self::WebSession { .. } => false,
         }
     }
 
@@ -383,14 +366,12 @@ fn report_initialized_config() -> Result<()> {
 
 pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
     let mode = args.attach.mode();
-    let outer_scroll_bracket = args.attach.outer_scroll_bracket();
     match args.workspace {
         Some(session) => enter_room(
             RoomEntry::AttachSession {
                 record: workspace_record_for_session(&session),
                 session,
                 mode,
-                outer_scroll_bracket,
                 no_resume: args.no_resume,
                 refresh_ms: args.refresh_ms,
             },
@@ -402,7 +383,6 @@ pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
                 RoomEntry::AttachCwd {
                     workspace,
                     mode,
-                    outer_scroll_bracket,
                     no_resume: args.no_resume,
                     refresh_ms: args.refresh_ms,
                 },
@@ -414,9 +394,8 @@ pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
 
 fn enter_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<()> {
     let mode = entry.mode();
-    let outer_scroll_bracket = entry.outer_scroll_bracket();
     let ready = prepare_room(entry, globals)?;
-    finish_attach(ready, mode, outer_scroll_bracket)
+    finish_attach(ready, mode)
 }
 
 enum ReadyRoom {
@@ -953,7 +932,7 @@ fn prompt_recover_or_fresh(
     }
 }
 
-fn finish_attach(ready: ReadyRoom, mode: AttachMode, outer_scroll_bracket: bool) -> Result<()> {
+fn finish_attach(ready: ReadyRoom, mode: AttachMode) -> Result<()> {
     match ready {
         ReadyRoom::Managed(context) => {
             let spec = context.prepare_attach();
@@ -969,7 +948,6 @@ fn finish_attach(ready: ReadyRoom, mode: AttachMode, outer_scroll_bracket: bool)
                 context.mux_name(),
                 context.session_name(),
                 Some(context.workspace_id()),
-                !outer_scroll_bracket,
             )
         }
         ReadyRoom::External {
@@ -980,7 +958,7 @@ fn finish_attach(ready: ReadyRoom, mode: AttachMode, outer_scroll_bracket: bool)
             let backend = rimz::mux::backend_for(mux);
             let spec = backend.attach_command(&session_name, &mux_config);
             tracing::info!(session = %session_name, mux = %mux, "workspace ready");
-            run_attach_action(&spec, mode, mux, &session_name, None, !outer_scroll_bracket)
+            run_attach_action(&spec, mode, mux, &session_name, None)
         }
     }
 }

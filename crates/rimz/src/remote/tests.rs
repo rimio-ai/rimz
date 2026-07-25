@@ -681,14 +681,21 @@ fn ssh_attach_attempt_marks_an_existing_outer_scroll_bracket_only_when_requested
             .args
             .last()
             .unwrap()
-            .contains("--outer-scroll-bracket")
+            .contains(OUTER_SCROLL_BRACKET_ENV)
     );
     assert!(
         marked
             .args
             .last()
             .unwrap()
-            .contains("rimz attach --attach --outer-scroll-bracket -- 'query-engine'")
+            .contains("export RIMZ_OUTER_SCROLL_BRACKET=1;")
+    );
+    assert!(
+        marked
+            .args
+            .last()
+            .unwrap()
+            .contains("rimz attach --attach -- 'query-engine'")
     );
 }
 

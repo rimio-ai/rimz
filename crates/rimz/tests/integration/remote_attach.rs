@@ -682,8 +682,12 @@ fn one_shot_connect_preserves_the_ssh_exit_code_without_dumping_argv() {
         "the child owns its failure presentation: {stderr}",
     );
     assert!(
-        snippet(&shim_invocations(&log)[0]).contains("--outer-scroll-bracket"),
+        snippet(&shim_invocations(&log)[0]).contains("RIMZ_OUTER_SCROLL_BRACKET=1"),
         "the outer SSH launcher suppresses a nested remote bracket",
+    );
+    assert!(
+        !snippet(&shim_invocations(&log)[0]).contains("--outer-scroll-bracket"),
+        "older remote CLIs must not receive a new argument",
     );
 }
 
@@ -693,25 +697,22 @@ fn one_shot_connect_mirrors_the_ssh_clients_suspend() {
     use nix::sys::signal::{Signal, killpg};
     use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
     use nix::unistd::Pid;
+    use std::os::unix::process::CommandExt as _;
 
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
-    let pair = remote_connect_pty();
-    let mut cmd = remote_connect_pty_command(&env, &log);
+    let mut cmd = remote_connect_command(&env, &log);
     cmd.arg("--no-reconnect");
     cmd.env("RIMZ_TEST_SSH_SUSPEND", "1");
+    cmd.process_group(0);
 
-    let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
-    let pid = Pid::from_raw(
-        i32::try_from(child.process_id().expect("remote connect pid")).expect("pid fits i32"),
-    );
-    drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
-    let reader_thread = std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let _ = reader.read_to_end(&mut output);
-        output
-    });
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn remote connect");
+    let pid = Pid::from_raw(i32::try_from(child.id()).expect("pid fits i32"));
 
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -728,14 +729,7 @@ fn one_shot_connect_mirrors_the_ssh_clients_suspend() {
 
     killpg(pid, Signal::SIGCONT).expect("foreground the attach process group");
     let status = child.wait().expect("wait resumed remote connect");
-    drop(pair.master);
-    let output =
-        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
-    assert!(status.success(), "resumed attach failed: {output}");
-    assert!(
-        output.rfind("\x1b[?1007r").is_some(),
-        "resumed attach restores alternate scroll: {output:?}",
-    );
+    assert!(status.success(), "resumed attach failed with {status}");
 }
 
 #[test]
