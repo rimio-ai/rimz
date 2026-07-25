@@ -1,6 +1,6 @@
 [toolchain]
 channel = "1.97.1"
-components = ["rustfmt", "clippy", "llvm-tools-preview"]
+components = ["rustfmt", "clippy", "llvm-tools-preview", "rust-analyzer"]
 # This exact pin, the vendored presence wasm, and its provenance sidecar move
 # together; a pin bump runs `cargo xtask plugin-refresh` in the same commit.
 # The plugin compiles to WASI, and rustup auto-installs every listed target.

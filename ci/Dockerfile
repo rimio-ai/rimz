@@ -46,7 +46,7 @@ RUN curl -fL --retry 5 --retry-delay 2 --retry-all-errors \
 
 RUN curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://sh.rustup.rs | \
       sh -s -- -y --no-modify-path --default-toolchain stable \
- && rustup component add rustfmt clippy llvm-tools-preview \
+ && rustup component add rustfmt clippy llvm-tools-preview rust-analyzer \
  && rustup target add wasm32-wasip1 aarch64-apple-darwin x86_64-apple-darwin \
  && rustc -V && cargo -V
 

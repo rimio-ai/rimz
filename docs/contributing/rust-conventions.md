@@ -215,7 +215,7 @@ Rules:
 
 ## Toolchain
 
-Rust 1.97.1 is pinned exactly in `rust-toolchain.toml`; the workspace is edition 2024 and declares Rust 1.95 as its installable-crate floor. The pin, vendored presence wasm, and provenance sidecar move together: every toolchain bump runs `cargo xtask plugin-refresh` in the same commit. Required components: `rustfmt`, `clippy`, `llvm-tools-preview`. Required targets: `wasm32-wasip1` (the Zellij presence plugin) plus `aarch64-apple-darwin` and `x86_64-apple-darwin` (the [release cross-builds](#release-packaging)). rustup provisions all of them from the pin; `ci/Dockerfile` mirrors the list for CI.
+Rust 1.97.1 is pinned exactly in `rust-toolchain.toml`; the workspace is edition 2024 and declares Rust 1.95 as its installable-crate floor. The pin, vendored presence wasm, and provenance sidecar move together: every toolchain bump runs `cargo xtask plugin-refresh` in the same commit. Required components: `rustfmt`, `clippy`, `llvm-tools-preview`, `rust-analyzer`. Required targets: `wasm32-wasip1` (the Zellij presence plugin) plus `aarch64-apple-darwin` and `x86_64-apple-darwin` (the [release cross-builds](#release-packaging)). rustup provisions all of them from the pin; `ci/Dockerfile` mirrors the list for CI.
 
 Node.js 26 or newer is a development prerequisite for the gate-tier ttyd pixel-layer harness. The CI image supplies the same major version, and the integration test fails at entry with the install requirement when `node` is missing or older.
 
