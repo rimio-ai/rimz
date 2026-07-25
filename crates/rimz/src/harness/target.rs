@@ -943,7 +943,8 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
 ///
 /// Record text supplies the otherwise ambiguous boundaries between adjacent
 /// human-authored messages. Agent-authored records also consume their rendered
-/// `from @sender: ` attribution.
+/// `from @sender: ` attribution. Interior record whitespace matches verbatim;
+/// only the paste's outer first/last whitespace follows hook normalization.
 pub fn align_submitted_prompt<'a>(
     prompt: &'a str,
     records: &[&MessageRecord],
@@ -955,22 +956,31 @@ pub fn align_submitted_prompt<'a>(
     let mut segments = Vec::with_capacity(records.len());
     for (index, record) in records.iter().enumerate() {
         let segment = remaining;
-        let mut body = trim_horizontal_start(segment);
+        let mut body = segment;
         if matches!(record.sender, MessageSender::Agent { .. }) {
             let attributed = body.strip_prefix("from @")?;
             let (handle, text) = attributed.split_once(": ")?;
             if handle.is_empty() || handle.chars().any(char::is_whitespace) {
                 return None;
             }
-            body = trim_horizontal_start(text);
+            body = text;
         }
-        let expected = record.text.trim();
+        let first = index == 0;
+        let last = index + 1 == records.len();
+        if first {
+            body = body.trim_start();
+        }
+        let expected = match (first, last) {
+            (true, true) => record.text.trim(),
+            (true, false) => record.text.trim_start(),
+            (false, true) => record.text.trim_end(),
+            (false, false) => record.text.as_str(),
+        };
         if expected.is_empty() {
             return None;
         }
         let after_text = body.strip_prefix(expected)?;
-        let after_text = trim_horizontal_start(after_text);
-        if index + 1 == records.len() {
+        if last {
             if !after_text.is_empty() {
                 return None;
             }
@@ -983,10 +993,6 @@ pub fn align_submitted_prompt<'a>(
         remaining = after_join;
     }
     Some(segments)
-}
-
-fn trim_horizontal_start(text: &str) -> &str {
-    text.trim_start_matches([' ', '\t', '\r'])
 }
 
 /// The optional `from @sender: ` prefix for a peer-authored message. Human-authored

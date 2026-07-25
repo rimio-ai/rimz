@@ -1982,7 +1982,7 @@ fn queued_delivery_batches_compatible_prompts() {
         record.message_id = fixed_message_id(id);
         record
     };
-    let mut first = message(1, "first", "planner", "feature-batch");
+    let mut first = message(1, "first\n", "planner", "feature-batch");
     first.sender = MessageSender::Human;
     let mut second = message(2, "second", "coder", "feature-batch");
     second.sender = MessageSender::Human;
@@ -2001,7 +2001,7 @@ fn queued_delivery_batches_compatible_prompts() {
         "batch delivery",
     );
 
-    let payload = "first\n\nsecond";
+    let payload = "first\n\n\nsecond";
     assert_text_then_enter(&trace_log, payload);
     let lines = trace_lines(&trace_log);
     assert_eq!(

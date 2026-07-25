@@ -236,6 +236,7 @@ pub(super) fn record_conversation(
                 let delivered_refs = delivered.iter().collect::<Vec<_>>();
                 let aligned =
                     rimz::harness::target::align_submitted_prompt(prompt, &delivered_refs);
+                let batch_aligned = aligned.is_some();
                 let segments =
                     aligned.unwrap_or_else(|| rimz::harness::target::split_batched_prompt(prompt));
                 for segment in segments {
@@ -259,11 +260,15 @@ pub(super) fn record_conversation(
                             segment.to_owned(),
                         )
                     };
-                    if let Some((offset, message)) = delivered[delivered_cursor..]
-                        .iter()
-                        .enumerate()
-                        .find(|(_, message)| message.text == delivered_text)
-                    {
+                    let matched = if batch_aligned {
+                        delivered.get(delivered_cursor).map(|message| (0, message))
+                    } else {
+                        delivered[delivered_cursor..]
+                            .iter()
+                            .enumerate()
+                            .find(|(_, message)| message.text == delivered_text)
+                    };
+                    if let Some((offset, message)) = matched {
                         entry.message_id = Some(message.message_id.clone());
                         entry.reply_to = message.in_reply_to.clone();
                         matched_ids.push(message.message_id.clone());
