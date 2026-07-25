@@ -205,7 +205,7 @@ pub(super) fn message_target_for_record(
     snapshot: &SidebarSnapshot,
 ) -> String {
     let row = MessageListRow::from_record(record.clone());
-    let agents: Vec<&AgentState> = snapshot.root_agents().collect();
+    let agents = rimz::harness::target::addressable_agents(snapshot);
     scoped_handle(message_target(&row, &agents), row.channel.as_deref())
 }
 

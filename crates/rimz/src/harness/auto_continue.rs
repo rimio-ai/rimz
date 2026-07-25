@@ -383,7 +383,7 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
     let Some(pane_id) = live_pane(&ctx.snapshot.agent_panes, &agent.kind, &agent.agent_id) else {
         return;
     };
-    let peers = ctx.snapshot.agents.iter().collect::<Vec<_>>();
+    let peers = crate::harness::target::addressable_agents(ctx.snapshot);
     let label = crate::harness::target::agent_handle(agent, &peers, false);
     if !spawn_auto_continue(
         ctx.runtime,

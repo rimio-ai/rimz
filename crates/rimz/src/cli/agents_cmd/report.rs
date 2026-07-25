@@ -185,8 +185,8 @@ impl SelfIdentity {
         }
 
         let kind = self.kind.as_ref()?;
-        let mut matches = snapshot
-            .root_agents()
+        let mut matches = rimz::harness::target::addressable_agents(snapshot)
+            .into_iter()
             .filter(|agent| agent.ended_at.is_none())
             .filter(|agent| {
                 launch_identity_matches(
@@ -791,7 +791,7 @@ mod tests {
             vec![state.clone()],
             now,
         );
-        let agents = snapshot.root_agents().collect::<Vec<_>>();
+        let agents = rimz::harness::target::addressable_agents(&snapshot);
         let list = build_list_report(&snapshot, &agents, now, Some(&runtime));
         assert_eq!(list.agents[0].budget.cap.as_deref(), Some("$6.00/day"));
         assert_eq!(list.agents[0].budget.spent_usd, Some(5.25));

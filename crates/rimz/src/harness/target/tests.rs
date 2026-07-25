@@ -193,12 +193,18 @@ fn at_all_fans_to_the_channel_only() {
 fn pane_owner_shadows_co_resident_session_from_every_address() {
     let mut snapshot = empty_snapshot();
     let mut older = agent("codex", "session-older", Some("main"), "terminal_1");
+    older.name = Some("coder-agent".to_owned());
+    older.kind_ordinal = Some(1);
     older.role = Some("coder".to_owned());
     older.origin = Some(crate::agents::SessionOrigin::Fresh);
     let mut owner = agent("codex", "session-owner", Some("main"), "terminal_1");
+    owner.name = Some("coder-agent".to_owned());
+    owner.kind_ordinal = Some(2);
     owner.role = Some("coder".to_owned());
     owner.origin = Some(crate::agents::SessionOrigin::Fresh);
     let mut hidden_fork = agent("codex", "session-fork", Some("main"), "terminal_1");
+    hidden_fork.name = Some("coder-agent".to_owned());
+    hidden_fork.kind_ordinal = Some(3);
     hidden_fork.role = Some("coder".to_owned());
     hidden_fork.origin = Some(crate::agents::SessionOrigin::Forked);
     snapshot.agents = vec![older, owner, hidden_fork];
@@ -223,6 +229,25 @@ fn pane_owner_shadows_co_resident_session_from_every_address() {
             .unwrap()
             .len(),
         1
+    );
+
+    let unfiltered = snapshot.root_agents().collect::<Vec<_>>();
+    assert_eq!(
+        agent_handle(&snapshot.agents[1], &unfiltered, false),
+        "@codex-2"
+    );
+    let peers = addressable_agents(&snapshot);
+    assert_eq!(agent_handle(peers[0], &peers, false), "@coder");
+    let sender = MessageSender::Agent {
+        kind: AgentKind::new_unchecked("codex"),
+        name: Some("coder-agent".to_owned()),
+        profile: None,
+        role: Some("coder".to_owned()),
+        channel: Some("main".to_owned()),
+    };
+    assert_eq!(
+        sender_prefix(&sender, &peers, Some("main")).as_deref(),
+        Some("from @coder: ")
     );
 }
 

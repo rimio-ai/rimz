@@ -450,11 +450,7 @@ fn resolve_delivery_target(
             "`{address}` has not registered a real session yet; run /schedule from inside the agent pane"
         );
     }
-    let peers: Vec<_> = snapshot
-        .agents
-        .iter()
-        .filter(|peer| peer.parent_agent_id.is_none())
-        .collect();
+    let peers = rimz::harness::target::addressable_agents(&snapshot);
     Ok(TaskTarget {
         kind: agent.kind.as_str().to_owned(),
         session: agent.agent_id.as_str().to_owned(),

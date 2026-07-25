@@ -27,7 +27,7 @@ pub(super) fn attribution(
         jiff::Timestamp::now(),
     )
     .with_agent_context(rimz::store::agent_context::read_all(ctx.runtime()));
-    let peers = snapshot.root_agents().collect::<Vec<_>>();
+    let peers = rimz::harness::target::addressable_agents(&snapshot);
     let channel = super::list::list_channel_filter(all, scope.as_deref(), &ctx.workspace);
     let default_worktree =
         (!all && channel.is_none()).then_some(ctx.workspace.worktree_root.as_path());

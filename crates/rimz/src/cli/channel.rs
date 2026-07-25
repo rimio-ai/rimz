@@ -104,13 +104,7 @@ fn list_channels(
     let snapshot = store.snapshot_cached().ok();
     let agents: Vec<&AgentState> = snapshot
         .as_ref()
-        .map(|snapshot| {
-            snapshot
-                .agents
-                .iter()
-                .filter(|agent| agent.parent_agent_id.is_none())
-                .collect()
-        })
+        .map(rimz::harness::target::addressable_agents)
         .unwrap_or_default();
     let mut live_by_channel: BTreeMap<String, LiveChannelAgents<'_>> = BTreeMap::new();
     for agent in agents {

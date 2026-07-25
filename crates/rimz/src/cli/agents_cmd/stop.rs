@@ -11,7 +11,7 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
     if all {
         let agents =
             rimz::harness::target::resolve_many(&snapshot, &reference, None, current_channel)?;
-        let peers: Vec<&AgentState> = snapshot.root_agents().collect();
+        let peers = rimz::harness::target::addressable_agents(&snapshot);
         let mut failed = false;
         let mut out = render::out();
         for agent in agents {

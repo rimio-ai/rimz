@@ -358,7 +358,7 @@ struct ResolvedTarget {
 impl ResolvedTarget {
     fn label(&self, snapshot: &SidebarSnapshot) -> String {
         if let Some(agent) = self.agent.as_ref() {
-            let peers = snapshot.root_agents().collect::<Vec<_>>();
+            let peers = crate::harness::target::addressable_agents(snapshot);
             crate::harness::target::agent_handle(agent, &peers, true)
         } else if let Some(pane) = self.pane.as_ref() {
             format!("@{}", pane.label())
