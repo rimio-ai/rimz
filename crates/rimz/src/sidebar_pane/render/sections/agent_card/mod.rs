@@ -7,7 +7,7 @@
 use crate::agents::{AgentContext, AgentCurrentUsage, CacheHealth, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::{AnimationRole, ContextMeterConfig, GlyphRole};
-use crate::{AgentCard, SidebarRow, SidebarSubAgent};
+use crate::{AgentCard, SidebarRow, SidebarSubAgent, SidebarWorktreeGroup};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -54,6 +54,23 @@ pub(in crate::sidebar_pane::render::sections) fn session_cost_usd(row: &SidebarR
         .and_then(|cost| cost.total_cost_usd)
 }
 
+pub(in crate::sidebar_pane) fn agent_card_cost_usd(
+    group: &SidebarWorktreeGroup,
+    row: &SidebarRow,
+) -> Option<f64> {
+    let session = session_cost_usd(row);
+    if group.collapses() {
+        group
+            .cohort_effort
+            .as_ref()
+            .and_then(|effort| effort.seats.get(row.id.as_str()))
+            .and_then(|seat| seat.cost_usd)
+            .or(session)
+    } else {
+        session
+    }
+}
+
 pub(in crate::sidebar_pane::render) fn awaiting_first_prompt_affordance(row: &SidebarRow) -> bool {
     matches!(CardStage::of(row), CardStage::Fresh { labeled: false })
 }
@@ -63,7 +80,7 @@ pub(super) fn row_lines(
     row: &SidebarRow,
     selected: bool,
     gutter: Gutter,
-    seat_cost_usd: Option<f64>,
+    cost_usd: Option<f64>,
     mut meter_pixels: Option<&mut MeterPixels>,
 ) -> Vec<Line<'static>> {
     let cw = content_width(ctx.width);
@@ -95,7 +112,7 @@ pub(super) fn row_lines(
     // the shell anchor — the build or `sudo` install reads in full while line 1
     // stays the stable shell label. Idle process rows have no detail to add.
     if row.is_process() {
-        inner.push(identity_line(ctx, row, attention, seat_cost_usd));
+        inner.push(identity_line(ctx, row, attention, cost_usd));
         if let Some(line) = process_detail_line(ctx.theme, row, cw) {
             inner.push(line);
         }
@@ -104,7 +121,7 @@ pub(super) fn row_lines(
         for slot in template(stage, status, ctx.card_density, selected) {
             match slot {
                 CardSlot::Identity => {
-                    inner.push(identity_line(ctx, row, attention, seat_cost_usd));
+                    inner.push(identity_line(ctx, row, attention, cost_usd));
                 }
                 CardSlot::Description => inner.push(description_line(ctx, row, attention)),
                 CardSlot::AwaitingDots => {
