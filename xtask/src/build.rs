@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::files::{copy_atomically, remove_stale_file, sha256_file, target_dir, write_atomically};
 use crate::pricing::pricing_refresh;
-use crate::runner::{run, run_with_env};
+use crate::runner::{run, run_with_env, run_with_env_and_removed};
 
 const PRESENCE_PLUGIN_TARGET: &str = "wasm32-wasip1";
 const DARWIN_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
@@ -22,6 +22,8 @@ const BUILD_VERSION_OVERRIDE_ENV: &str = "RIMZ_BUILD_VERSION_OVERRIDE";
 const STABLE_CHECKOUT_BUILD_ATTEMPTS: usize = 3;
 pub(crate) const WASM_MAGIC: [u8; 4] = *b"\0asm";
 const ENCODED_RUSTFLAGS_SEPARATOR: &str = "\x1f";
+const CANONICAL_REGISTRY_SOURCE_ROOT: &str = "/cargo/registry/src";
+const PLUGIN_BUILD_REMOVED_ENVS: [&str; 2] = ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"];
 const DARWIN_COREFOUNDATION_TBD: &str = r#"--- !tapi-tbd
 tbd-version:     4
 targets:         [ x86_64-macos, arm64-macos ]
@@ -86,7 +88,10 @@ pub(crate) fn dist(root: &Path) -> Result<()> {
 pub(crate) fn build_plugin(root: &Path) -> Result<()> {
     ensure_rust_target(root, PRESENCE_PLUGIN_TARGET)?;
     let rustflags = canonical_plugin_rustflags(root)?;
-    run_with_env(
+    // Compiler wrappers are transparent for ordinary builds, but a shared
+    // cache can return objects produced outside this checkout's canonical
+    // path-remap environment. Provenance builds must reach rustc directly.
+    run_with_env_and_removed(
         root,
         "cargo",
         [
@@ -99,6 +104,7 @@ pub(crate) fn build_plugin(root: &Path) -> Result<()> {
             "--locked",
         ],
         &[("CARGO_ENCODED_RUSTFLAGS", PathBuf::from(rustflags))],
+        &PLUGIN_BUILD_REMOVED_ENVS,
     )
 }
 
@@ -213,11 +219,92 @@ pub(crate) fn verify_vendored_plugin(root: &Path) -> Result<()> {
     let vendored =
         fs::read(&vendored_path).with_context(|| format!("reading {}", vendored_path.display()))?;
     if rebuilt != vendored {
+        let rebuilt_sha256 = sha256_file(&artifact)?;
+        let vendored_sha256 = sha256_file(&vendored_path)?;
         bail!(
-            "vendored presence plugin does not match a rebuild from source; run `cargo xtask plugin-refresh`"
+            "vendored presence plugin does not match a rebuild from source (vendored sha256: {vendored_sha256}, rebuilt sha256: {rebuilt_sha256}); run `cargo xtask plugin-refresh`\n{}",
+            describe_plugin_mismatch(&rebuilt, &vendored)
         );
     }
     Ok(())
+}
+
+/// Minimum run length for a path-like string worth reporting, matching the
+/// `strings -n 8` floor that keeps opcode noise out of the report.
+const EMBEDDED_PATH_MIN_LEN: usize = 8;
+/// Divergent paths per side in a mismatch report; a real environment
+/// difference shows up in the first few, and the rest only bury it.
+const EMBEDDED_PATH_REPORT_LIMIT: usize = 8;
+
+/// A provenance mismatch is almost always an absolute path that escaped the
+/// canonical remaps, so name the divergence rather than leaving a byte
+/// compare that has to be reproduced by hand from a CI artifact.
+fn describe_plugin_mismatch(rebuilt: &[u8], vendored: &[u8]) -> String {
+    let mut report = format!(
+        "plugin-provenance: rebuilt {} bytes against {} vendored bytes",
+        rebuilt.len(),
+        vendored.len()
+    );
+    if let Some(offset) = rebuilt
+        .iter()
+        .zip(vendored)
+        .position(|(new, old)| new != old)
+    {
+        report.push_str(&format!("; first differing byte at offset {offset}"));
+    }
+
+    let rebuilt_paths = embedded_paths(rebuilt);
+    let vendored_paths = embedded_paths(vendored);
+    for (label, mut paths) in [
+        (
+            "only in the rebuild",
+            rebuilt_paths.difference(&vendored_paths).peekable(),
+        ),
+        (
+            "only in the vendored artifact",
+            vendored_paths.difference(&rebuilt_paths).peekable(),
+        ),
+    ] {
+        if paths.peek().is_none() {
+            continue;
+        }
+        let paths: Vec<_> = paths.collect();
+        report.push_str(&format!(
+            "\nplugin-provenance: {} path(s) {label}:",
+            paths.len()
+        ));
+        for path in paths.iter().take(EMBEDDED_PATH_REPORT_LIMIT) {
+            report.push_str(&format!("\n  {path}"));
+        }
+        if let Some(remaining) = paths.len().checked_sub(EMBEDDED_PATH_REPORT_LIMIT)
+            && remaining > 0
+        {
+            report.push_str(&format!("\n  ... and {remaining} more"));
+        }
+    }
+    report
+}
+
+/// Absolute-path-looking printable runs embedded in a wasm module, the form a
+/// leaked build environment takes in panic and file strings.
+fn embedded_paths(bytes: &[u8]) -> BTreeSet<String> {
+    let mut paths = BTreeSet::new();
+    let mut run: Vec<u8> = Vec::new();
+    let mut flush = |run: &mut Vec<u8>| {
+        if run.first() == Some(&b'/') && run.len() >= EMBEDDED_PATH_MIN_LEN {
+            paths.insert(String::from_utf8_lossy(run).into_owned());
+        }
+        run.clear();
+    };
+    for &byte in bytes {
+        if byte.is_ascii_graphic() {
+            run.push(byte);
+        } else {
+            flush(&mut run);
+        }
+    }
+    flush(&mut run);
+    paths
 }
 
 pub(crate) fn presence_plugin_source_digest(root: &Path) -> Result<String> {
@@ -278,21 +365,81 @@ fn canonical_plugin_rustflags(root: &Path) -> Result<OsString> {
         })
         .context("$CARGO_HOME or $HOME is required to build the presence plugin")?;
     let sysroot = PathBuf::from(rustc_stdout(root, &["--print", "sysroot"])?);
+    let rust_source_virtual_root = installed_rust_source_virtual_root(root, &sysroot)?;
+    canonical_plugin_rustflags_for(
+        &cargo_home,
+        &sysroot,
+        root,
+        rust_source_virtual_root.as_deref(),
+    )
+}
+
+fn canonical_plugin_rustflags_for(
+    cargo_home: &Path,
+    sysroot: &Path,
+    root: &Path,
+    rust_source_virtual_root: Option<&str>,
+) -> Result<OsString> {
     let mut flags = OsString::new();
     for (source, destination) in [
-        (cargo_home.as_path(), "/cargo"),
-        (sysroot.as_path(), "/rust-sysroot"),
+        (cargo_home, "/cargo"),
+        (sysroot, "/rust-sysroot"),
         (root, "/rimz"),
     ] {
-        if !flags.is_empty() {
-            flags.push(ENCODED_RUSTFLAGS_SEPARATOR);
+        push_remap_flag(&mut flags, source, destination);
+    }
+
+    // Cargo keys registry source directories by the configured index URL.
+    // Source replacement therefore gives the same locked crate a different
+    // on-disk parent (and an otherwise different wasm panic/file string).
+    // These more-specific, later remaps make crates.io and an exact mirror
+    // converge on one embedded path.
+    let registry_sources = cargo_home.join("registry").join("src");
+    let mut source_roots = Vec::new();
+    match fs::read_dir(&registry_sources) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.with_context(|| {
+                    format!("reading an entry in {}", registry_sources.display())
+                })?;
+                if entry
+                    .file_type()
+                    .with_context(|| format!("reading file type for {}", entry.path().display()))?
+                    .is_dir()
+                {
+                    source_roots.push(entry.path());
+                }
+            }
         }
-        flags.push("--remap-path-prefix=");
-        flags.push(source.as_os_str());
-        flags.push("=");
-        flags.push(destination);
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(err).with_context(|| format!("reading {}", registry_sources.display()));
+        }
+    }
+    source_roots.sort();
+    for source_root in source_roots {
+        push_remap_flag(&mut flags, &source_root, CANONICAL_REGISTRY_SOURCE_ROOT);
+    }
+
+    // The standard library ships with its own sources already remapped to
+    // `/rustc/<commit-hash>`, but rustc rewrites those spans to the local
+    // `rust-src` tree whenever that component is installed. Mapping the local
+    // tree back onto the virtual root the toolchain would have emitted anyway
+    // makes the artifact identical with or without the component.
+    if let Some(virtual_root) = rust_source_virtual_root {
+        push_remap_flag(&mut flags, &rust_src_root(sysroot), virtual_root);
     }
     Ok(flags)
+}
+
+fn push_remap_flag(flags: &mut OsString, source: &Path, destination: &str) {
+    if !flags.is_empty() {
+        flags.push(ENCODED_RUSTFLAGS_SEPARATOR);
+    }
+    flags.push("--remap-path-prefix=");
+    flags.push(source.as_os_str());
+    flags.push("=");
+    flags.push(destination);
 }
 
 fn rustc_stdout(root: &Path, args: &[&str]) -> Result<String> {
@@ -337,6 +484,41 @@ fn ensure_rust_target(root: &Path, target: &str) -> Result<()> {
         return Ok(());
     }
     bail!("Rust target `{target}` is still unavailable after `rustup target add {target}`");
+}
+
+/// The `/rustc/<commit-hash>` root the pinned toolchain baked into its own
+/// standard-library spans, resolved only when the local `rust-src` tree exists
+/// and can therefore displace those spans. A toolchain that reports no commit
+/// hash cannot state the root it emitted, so a provenance build refuses rather
+/// than vendoring a machine-specific artifact.
+fn installed_rust_source_virtual_root(root: &Path, sysroot: &Path) -> Result<Option<String>> {
+    if !rust_src_installed(sysroot) {
+        return Ok(None);
+    }
+    let verbose = rustc_stdout(root, &["-vV"])?;
+    let commit_hash = rustc_commit_hash(&verbose).with_context(|| {
+        format!(
+            "the `rust-src` component is installed in {} but rustc reports no commit hash, so its standard-library source root cannot be normalized; remove the component or build with a released toolchain",
+            sysroot.display()
+        )
+    })?;
+    Ok(Some(format!("/rustc/{commit_hash}")))
+}
+
+fn rustc_commit_hash(verbose_version: &str) -> Option<&str> {
+    verbose_version
+        .lines()
+        .find_map(|line| line.strip_prefix("commit-hash:"))
+        .map(str::trim)
+        .filter(|hash| !hash.is_empty() && *hash != "unknown")
+}
+
+fn rust_src_installed(sysroot: &Path) -> bool {
+    rust_src_root(sysroot).join("library").is_dir()
+}
+
+fn rust_src_root(sysroot: &Path) -> PathBuf {
+    sysroot.join("lib").join("rustlib").join("src").join("rust")
 }
 
 fn rustup_target_installed(root: &Path, target: &str) -> Result<bool> {

@@ -48,6 +48,96 @@ fn plugin_provenance_decision_fails_ci_toolchain_drift() {
 }
 
 #[test]
+fn plugin_provenance_build_bypasses_compiler_wrappers() {
+    assert_eq!(
+        PLUGIN_BUILD_REMOVED_ENVS,
+        ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"]
+    );
+}
+
+#[test]
+fn plugin_provenance_normalizes_registry_mirror_cache_keys() {
+    let cargo_home = temp_path("plugin-cargo-home");
+    let registry_sources = cargo_home.join("registry").join("src");
+    let crates_io = registry_sources.join("index.crates.io-canonical");
+    let mirror = registry_sources.join("mirror.internal-cache-key");
+    fs::create_dir_all(&crates_io).unwrap();
+    fs::create_dir_all(&mirror).unwrap();
+
+    let flags = canonical_plugin_rustflags_for(
+        &cargo_home,
+        Path::new("/toolchains/pinned"),
+        Path::new("/workspace/rimz"),
+        None,
+    )
+    .unwrap();
+    let flags = flags.to_string_lossy();
+
+    for source in [crates_io, mirror] {
+        assert!(
+            flags.contains(&format!(
+                "--remap-path-prefix={}={CANONICAL_REGISTRY_SOURCE_ROOT}",
+                source.display()
+            )),
+            "{flags}"
+        );
+    }
+    let _ = fs::remove_dir_all(cargo_home);
+}
+
+#[test]
+fn plugin_provenance_maps_local_rust_sources_onto_the_virtual_root() {
+    let cargo_home = temp_path("plugin-cargo-home");
+    let flags = canonical_plugin_rustflags_for(
+        &cargo_home,
+        Path::new("/toolchains/pinned"),
+        Path::new("/workspace/rimz"),
+        Some("/rustc/abc123"),
+    )
+    .unwrap();
+    let flags = flags.to_string_lossy();
+
+    assert!(
+        flags.contains("--remap-path-prefix=/toolchains/pinned/lib/rustlib/src/rust=/rustc/abc123"),
+        "{flags}"
+    );
+}
+
+#[test]
+fn plugin_mismatch_names_the_diverging_embedded_paths() {
+    let rebuilt = b"\0asm\0/rustc/abc123/library/core/src/option.rs\0";
+    let vendored = b"\0asm\0/rust-src-local/library/core/src/option.rs\0";
+
+    let report = describe_plugin_mismatch(rebuilt, vendored);
+
+    assert!(
+        report.contains("first differing byte at offset 10"),
+        "{report}"
+    );
+    assert!(
+        report.contains("/rustc/abc123/library/core/src/option.rs"),
+        "{report}"
+    );
+    assert!(
+        report.contains("/rust-src-local/library/core/src/option.rs"),
+        "{report}"
+    );
+}
+
+#[test]
+fn rustc_commit_hash_reads_the_verbose_version_line() {
+    let verbose = "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\n";
+
+    assert_eq!(
+        rustc_commit_hash(verbose),
+        Some("8bab26f4f68e0e26f0bb7960be334d5b520ea452")
+    );
+    assert_eq!(rustc_commit_hash("commit-hash: unknown\n"), None);
+    assert_eq!(rustc_commit_hash("commit-hash:\n"), None);
+    assert_eq!(rustc_commit_hash("rustc 1.97.1\n"), None);
+}
+
+#[test]
 fn rustup_target_list_match_is_exact() {
     let installed = "wasm32-unknown-unknown\nwasm32-wasip1\n";
 

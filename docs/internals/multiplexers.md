@@ -490,7 +490,7 @@ A Zellij room requires Zellij 0.44 or newer and a loadable plugin. An older host
 
 ### Build identity and embedding
 
-The plugin is embedded into every RimZ build. Release binaries embed a fresh `cargo xtask build-plugin` artifact; the crates.io crate embeds the vendored `crates/rimz/presence/` wasm. `cargo xtask plugin-refresh` builds that artifact with canonical path remaps and commits provenance beside it: the source-tree digest, wasm digest, and producing rustc version. Repository invariants bind both digests to the current tree and blob, every vendored embed verifies the wasm digest, and `cargo xtask checks` rebuilds with the recorded toolchain and requires byte-for-byte equality.
+The plugin is embedded into every RimZ build. Release binaries embed a fresh `cargo xtask build-plugin` artifact; the crates.io crate embeds the vendored `crates/rimz/presence/` wasm. `cargo xtask plugin-refresh` builds that artifact with canonical path remaps (registry mirror cache keys, and the local standard-library sources mapped back onto the `/rustc/<commit-hash>` root the toolchain emits without `rust-src`), bypasses compiler wrappers, and commits provenance beside it: the source-tree digest, wasm digest, and producing rustc version. Repository invariants bind both digests to the current tree and blob, every vendored embed verifies the wasm digest, and `cargo xtask checks` rebuilds with the recorded toolchain and requires byte-for-byte equality.
 
 The digest of that wasm is the plugin's build identity, which intentionally makes each build a distinct Zellij plugin identity so an owner can upgrade a clientless session.
 
