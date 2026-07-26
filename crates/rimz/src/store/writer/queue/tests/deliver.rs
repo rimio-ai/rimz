@@ -1,5 +1,9 @@
 use super::*;
 
+fn user_message(text: &str) -> String {
+    format!("Type: USER_MESSAGE\nFrom: @user\nContent:\n{text}")
+}
+
 #[test]
 fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
     let q = Queue::new();
@@ -123,7 +127,7 @@ fn record_sent_then_turn_start_confirms_delivery() {
             &sent.agent_id,
             None,
             DeliveryAck::TurnStarted {
-                prompt: Some("next"),
+                prompt: Some(&user_message("next")),
             },
             "session",
         )
@@ -300,7 +304,7 @@ fn correlated_ack_confirms_matching_prompt_instead_of_oldest_sent() {
             &matching.agent_id,
             None,
             DeliveryAck::TurnStarted {
-                prompt: Some("rimz prompt"),
+                prompt: Some(&user_message("rimz prompt")),
             },
             "session",
         )
@@ -313,13 +317,12 @@ fn correlated_ack_confirms_matching_prompt_instead_of_oldest_sent() {
 
 #[test]
 fn correlated_ack_aligns_headered_and_mixed_batches() {
-    let user = |text: &str| format!("Type: USER_MESSAGE\nFrom: @user\nContent:\n{text}");
     for (first_sender, first_text, second_text, prompt) in [
         (
             MessageSender::Human,
             "first",
             "second",
-            format!("{}\n\n{}", user("first"), user("second")),
+            format!("{}\n\n{}", user_message("first"), user_message("second")),
         ),
         (
             MessageSender::Agent {
@@ -333,26 +336,30 @@ fn correlated_ack_aligns_headered_and_mixed_batches() {
             "second",
             format!(
                 "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst\n\n{}",
-                user("second")
+                user_message("second")
             ),
         ),
         (
             MessageSender::Human,
             "first\n",
             "second",
-            format!("{}\n\n{}", user("first\n"), user("second")),
+            format!("{}\n\n{}", user_message("first\n"), user_message("second")),
         ),
         (
             MessageSender::Human,
             "first",
             "\nsecond",
-            format!("{}\n\n{}", user("first"), user("\nsecond")),
+            format!("{}\n\n{}", user_message("first"), user_message("\nsecond")),
         ),
         (
             MessageSender::Human,
             "\nfirst",
             "second\n",
-            format!("{}\n\n{}", user("\nfirst"), user("second\n")),
+            format!(
+                "{}\n\n{}",
+                user_message("\nfirst"),
+                user_message("second\n")
+            ),
         ),
     ] {
         let q = Queue::new();
@@ -434,7 +441,7 @@ fn correlated_ack_absorbs_queued_late_ack_but_not_a_claimed_record() {
             &queued.agent_id,
             None,
             DeliveryAck::TurnStarted {
-                prompt: Some("late prompt"),
+                prompt: Some(&user_message("late prompt")),
             },
             "session",
         )
@@ -445,7 +452,7 @@ fn correlated_ack_absorbs_queued_late_ack_but_not_a_claimed_record() {
             &claimed.agent_id,
             None,
             DeliveryAck::TurnStarted {
-                prompt: Some("claimed prompt"),
+                prompt: Some(&user_message("claimed prompt")),
             },
             "session",
         )
