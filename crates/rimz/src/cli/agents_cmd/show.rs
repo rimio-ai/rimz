@@ -85,6 +85,10 @@ fn collect_show_report(
         .as_ref()
         .map(|agent| slot_lifetime_effort(store, runtime, agent))
         .transpose()?;
+    let budget_cost_usd = agent
+        .as_ref()
+        .and_then(|agent| session_cost(runtime, agent))
+        .and_then(|cost| cost.total_cost_usd);
     let messages = match agent.as_ref() {
         Some(agent) => show_messages(store, agent)?,
         None => Vec::new(),
@@ -108,6 +112,7 @@ fn collect_show_report(
                 runtime: Some(runtime),
                 effort: effort.map(|(effort, _)| effort),
                 active_secs: effort.and_then(|(_, active_secs)| active_secs),
+                budget_cost_usd,
             },
         )
     });
@@ -642,6 +647,16 @@ fn slot_lifetime_effort(
     .map(|record| record.display_secs(now, active_grace_secs))
     .reduce(u64::saturating_add);
     Ok((effort, active_secs))
+}
+
+fn session_cost(
+    runtime: &rimz::RuntimePaths,
+    agent: &AgentState,
+) -> Option<rimz::agents::AgentCost> {
+    let adapter = rimz::agents::find_definition(agent.kind.as_str())?;
+    let transcript = Path::new(agent.transcript_path.as_deref()?);
+    let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
+    rimz::agents::spending::session_cost_usd(adapter, agent.agent_id.as_str(), transcript, &prices)
 }
 
 fn show_messages(store: &rimz::Store, agent: &AgentState) -> Result<Vec<ShowMessage>> {
