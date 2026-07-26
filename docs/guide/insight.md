@@ -91,13 +91,15 @@ The window is yours to set with `[sidebar] spend_window` ([configuration](./conf
 - `24h`: a trailing twenty-four hours.
 - `today`: since calendar midnight in your configured `timezone`.
 
-To read one agent's cost instead of the room's, [`rimz agents show`](./fleet.md#manage-a-running-room) prints that session's token split, dollar total, and named tool-call summary. The same live per-session `tool_calls` map is available in `rimz sidebar snapshot` JSON. Claude, Codex, Pi, and OpenCode supply tool statistics; [agent support](../reference/agent-support.md#the-wiring-matrix) declares the other adapters' gaps.
+To read one agent's cost instead of the room's, [`rimz agents show`](./fleet.md#manage-a-running-room) prints the durable seat's lifetime token split and dollar total across its resumed sessions, plus the live named tool-call summary. The same live per-session `tool_calls` map is available in `rimz sidebar snapshot` JSON. Claude, Codex, Pi, and OpenCode supply tool statistics; [agent support](../reference/agent-support.md#the-wiring-matrix) declares the other adapters' gaps.
 
 ## How the numbers are calculated
 
 Historical figures come from the transcript and session files your agents already write to disk. RimZ never scrapes a pane or guesses from the screen; token counts come from provider-owned records and structured wires.
 
 Tool-call figures deliberately have two sources. The agent-card map counts named live tool-completion events for that session, while `rimz stats --json` rebuilds history from provider-owned transcripts, Codex rollouts, Pi sessions, and OpenCode tool parts. The historical maps therefore backfill existing sessions after an upgrade and can be more complete than live counts; in particular, Codex hooks miss unified-exec and web-search paths that its rollout history retains.
+
+Per-agent and per-team lifetime figures group every continuation of one durable seat, select its transcript entries, and deduplicate replayed API calls across resumed sessions before pricing. `rimz agents attribution`, `rimz agents show`, `rimz teams show`, and a finished team's collapsed sidebar receipt therefore agree on the same dollars and token split.
 
 The cache-hit percentage measures prompt input served from cache: `cache read / (cache read + cache write + fresh input)`, rounded to the nearest whole percent. Output is outside the denominator. The agent card uses cumulative counters for that provider session, covering the same lifetime as its session dollar figure; the Models and Agents rows use the selected stats window. A missing or zero input-side denominator stays absent. Green means at least 90%, yellow means 70–89%, and red means below 70%.
 

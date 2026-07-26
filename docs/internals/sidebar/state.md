@@ -64,7 +64,7 @@ Producing and publishing, all producer-only:
 | Module | What it owns |
 | --- | --- |
 | [`produce/`](../../../crates/rimz/src/sidebar/produce/mod.rs) | The producer read. `panes.rs` assembles and publishes the pane frame behind a single flight, `metrics.rs` samples per-pane `/proc`, `git.rs` enumerates worktree roots. |
-| [`refresh/`](../../../crates/rimz/src/sidebar/refresh/mod.rs) | The heavy lanes, each self-gated on its own TTL: `git_stats.rs`, `pr.rs`, `accounts.rs`, `usage.rs`, `credits.rs`, `rate_limits.rs`, `sessions.rs`, `live_spend.rs`, `daemon_reap.rs`. `git_refs.rs` reads ref files in process to skip a `git` fork, and `trace.rs` is the opt-in account-refresh timing trace. |
+| [`refresh/`](../../../crates/rimz/src/sidebar/refresh/mod.rs) | The heavy lanes, each self-gated on its own TTL: `git_stats.rs`, `pr.rs`, `accounts.rs`, `usage.rs`, `credits.rs`, `rate_limits.rs`, `sessions.rs`, `live_spend.rs`, `cohort_spend.rs`, `daemon_reap.rs`. `git_refs.rs` reads ref files in process to skip a `git` fork, and `trace.rs` is the opt-in account-refresh timing trace. |
 | [`workspace_projection.rs`](../../../crates/rimz/src/sidebar/workspace_projection.rs) | The renderer-independent fold publication and the consumer's adoption check. |
 | [`agent_projection.rs`](../../../crates/rimz/src/sidebar/agent_projection.rs) | Published adapter wiring and provider-local session discovery. |
 
@@ -112,7 +112,7 @@ Four threads inside the renderer gate on that election.
 | Thread | Owns while elected | On demotion |
 | --- | --- | --- |
 | Fetch worker | The pane frame, worktree group roots, the agent projection, and the workspace projection, on the data tick. | Folds published caches only. |
-| Cache refresher | Git diff stats, PR state, accounts, usage, credits, auto-continue, budget enforcement, due loop tasks and scheduled messages, and daemon-view repair. | Sleeps on the election poll. |
+| Cache refresher | Git diff stats, PR state, accounts, usage, credits, finished-cohort effort, auto-continue, budget enforcement, due loop tasks and scheduled messages, and daemon-view repair. | Sleeps on the election poll. |
 | tmux control-mode watch | The tmux presence stream for this session (tmux rooms only). | Drops the control client. |
 | Transcript watch | Filesystem watches on every live session whose adapter declares `transcript_tail_context`. | Drops the watches. |
 
@@ -213,6 +213,7 @@ The fetch worker publishes process metrics and group roots alongside pane produc
 | `pr-state.json` | Room | Producer-only `gh`/`tea` pull-request state, number, and best-effort CI verdict by worktree path, plus a `branch_ci` map for paths without a PR link, with each link stamped by its PR head branch plus per-repo probe stamps, path-to-repo metadata, merge SHAs, and last-seen HEAD SHAs. A branch switch invalidates the path's old link and resolves the new head branch. GitHub resolves each due repository with one GraphQL request in the normal room: aliased branch PR lookups share the response with deduplicated local-HEAD commit rollups, with bounded extra requests only past the alias limit. Every due probe re-verifies merged PR rollups so CI reruns move between passing and failing; Tea keeps its per-PR probes. Open PRs use the head-check rollup; merged PRs use the forge-reported merge commit and fall back to the PR head verdict when merge checks are absent; paths without a PR, including trunk, use the exact local HEAD SHA. Trunk bypasses PR matching so a same-named fork branch cannot attach a false badge. A pending PR or branch verdict keeps the repo on the hot TTL. Absent when the forge is unsupported or the HEAD commit has no forge verdict. |
 | `metrics-sample.json` | Room | Per-pane resource samples and pane-to-root-pid bindings. The figures themselves publish on the pane frame. |
 | `workspace-spending.<hash>.json` | Room | The room cockpit spend tally, headline cutoff, and the live-card session keys excluded from walked headline USD. Consumers accept a hash-matching publication only and leave the tally absent until one exists. |
+| `cohort-spend.json` | Room | Lifetime dollars, token split, and retained active time for each finished multi-agent group. The producer refreshes only collapsible groups on a 60-second TTL, folds the audit rollup through the shared cross-session effort aggregator, and projects the cached result onto `SidebarWorktreeGroup::cohort_effort`; renderers never parse transcripts. |
 | `link-stats.json` | Room | The latest remote-SSH probe stats behind the footer link badge ([remote.md](../remote.md)). |
 | `provider-spending.json` | Account-global | User-global fleet and provider spend totals plus the walk stamp. |
 | `spending.json` | Account-global | The incremental transcript parse cache behind the spend walk. |

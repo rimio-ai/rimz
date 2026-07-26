@@ -116,6 +116,7 @@ What each lane costs and what holds it down. Reproducible figures come from `car
 | PR state per repo | one `gh`/`tea` open-set call per due repo, plus a per-branch read only on an open-to-terminal transition | `PR_STATE_HOT_TTL` 20s / `PR_STATE_TTL` 5min; failure backoff retains the last known good map; terminal `merged` states are pinned |
 | provider accounts | cold providers run in waves of at most four account-then-version chains, each subprocess capped at 3s | `ACCOUNTS_TTL` 10min per provider; contention serves stale cache rather than duplicating the wave |
 | fleet spend walk | within `SPENDING_TTL` (15s): one read of the published aggregate, zero transcript IO. due walk: frontier stats plus O(appended bytes) per changed file | one warm walker per state/discovery namespace owns the index; consumers never open `spending.json` |
+| finished-cohort effort | transcript stat and parse work for collapsible groups only; unchanged files reuse one process-local parse memo | `COHORT_SPEND_TTL` 60s; one producer publishes `cohort-spend.json`, consumers and renderers only read the projection |
 | Codex daemon reap | zero without a daemon-hooked session; when due, one process scan plus one WebSocket handshake | `CODEX_DAEMON_REAP_TTL` 30s; success and failure share the stamp |
 
 ### The store write path
