@@ -5,7 +5,7 @@
 //! same-device predecessor and waits for `list-clients` to observe the removal
 //! before registering the new client.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::time::{Duration, Instant};
 
@@ -43,7 +43,7 @@ pub fn reap_lineage_clients(
     let deadline = started + REAP_TIMEOUT;
     let processes = proc::list_processes();
     let own_pid = std::process::id();
-    let protected = protected_processes(&processes, own_pid);
+    let protected = crate::mux::recovery::protected_pids(&processes, own_pid);
     let own_uid = proc::own_uid();
     let victims = select_lineage_clients(
         &processes,
@@ -192,22 +192,6 @@ fn query_client_count_until_with(
     }
 }
 
-fn protected_processes(processes: &[ProcInfo], own_pid: u32) -> HashSet<u32> {
-    let parents = processes
-        .iter()
-        .map(|process| (process.pid, process.ppid))
-        .collect::<HashMap<_, _>>();
-    let mut protected = HashSet::new();
-    let mut cursor = own_pid;
-    while cursor != 0 && protected.insert(cursor) {
-        let Some(parent) = parents.get(&cursor).copied() else {
-            break;
-        };
-        cursor = parent;
-    }
-    protected
-}
-
 struct MatchContext<'a> {
     own_uid: Option<u32>,
     protected: &'a HashSet<u32>,
@@ -323,7 +307,7 @@ mod tests {
             process(42, 30, 1000, "zellij attach --create other"),
             process(43, 30, 2000, "zellij attach --create room"),
         ];
-        let protected = protected_processes(&processes, 30);
+        let protected = crate::mux::recovery::protected_pids(&processes, 30);
         let lineage = |pid| match pid {
             10 | 20 | 30 | 40 | 42 | 43 => Some("same".to_owned()),
             41 => Some("other".to_owned()),

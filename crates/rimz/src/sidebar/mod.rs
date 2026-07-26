@@ -78,6 +78,42 @@ pub struct HeartbeatWriteErr {
     pub source: atomic::AtomicErr,
 }
 
+trait SidebarMux {
+    fn name(&self) -> MuxName;
+    fn open_sidebar(
+        &self,
+        opts: &SidebarPaneOptions,
+        daemon: Option<&DaemonView>,
+    ) -> crate::mux::Result<()>;
+    fn reconcile_sidebars(
+        &self,
+        opts: &SidebarPaneOptions,
+        live: &SidebarLiveness,
+    ) -> crate::mux::Result<crate::mux::SidebarRecovery>;
+}
+
+impl<T: MuxBackend + ?Sized> SidebarMux for T {
+    fn name(&self) -> MuxName {
+        MuxBackend::name(self)
+    }
+
+    fn open_sidebar(
+        &self,
+        opts: &SidebarPaneOptions,
+        daemon: Option<&DaemonView>,
+    ) -> crate::mux::Result<()> {
+        MuxBackend::open_sidebar(self, opts, daemon)
+    }
+
+    fn reconcile_sidebars(
+        &self,
+        opts: &SidebarPaneOptions,
+        live: &SidebarLiveness,
+    ) -> crate::mux::Result<crate::mux::SidebarRecovery> {
+        MuxBackend::reconcile_sidebars(self, opts, live)
+    }
+}
+
 /// Write this sidebar instance's liveness heartbeat in-process.
 ///
 /// The heartbeat is a runtime liveness file, not store truth, so the renderer
@@ -512,6 +548,15 @@ pub fn launch_sidebar_if_needed(
     opts: &SidebarPaneOptions,
     daemon: Option<&DaemonView>,
 ) -> SidebarLaunchOutcome {
+    launch_sidebar(backend, runtime, opts, daemon)
+}
+
+fn launch_sidebar<B: SidebarMux + ?Sized>(
+    backend: &B,
+    runtime: &RuntimePaths,
+    opts: &SidebarPaneOptions,
+    daemon: Option<&DaemonView>,
+) -> SidebarLaunchOutcome {
     sweep_orphan_runtime(runtime);
     // Fast path before contending — `single_flight`'s contract is that the
     // caller has already missed a fresh read by the time it elects.
@@ -570,8 +615,8 @@ pub fn launch_sidebar_if_needed(
     }
 }
 
-fn ensure_session_view(
-    backend: &dyn MuxBackend,
+fn ensure_session_view<B: SidebarMux + ?Sized>(
+    backend: &B,
     runtime: &RuntimePaths,
     opts: &SidebarPaneOptions,
 ) {
@@ -674,6 +719,8 @@ mod tests {
     use crate::ids::{MuxName, SidebarInstanceId, WorkspaceId};
     use crate::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION;
 
+    mod launch;
+
     struct Harness {
         _dir: TempDir,
         runtime: RuntimePaths,
@@ -707,6 +754,7 @@ mod tests {
                 None,
             );
             heartbeat.protocol_version = protocol_version.to_owned();
+            heartbeat.build = crate::build_id::current().map(str::to_owned);
             let path = self.runtime.heartbeat_dir.join(filename);
             std::fs::write(&path, serde_json::to_vec(&heartbeat).expect("json"))
                 .expect("write heartbeat");
@@ -754,10 +802,7 @@ mod tests {
     }
 
     fn instance(hex_tail: &str) -> SidebarInstanceId {
-        // UUIDv7 ids sort lexicographically by birth; craft deterministic ids so
-        // a test controls who is the elder. 32 hex chars after the `sb_` prefix.
-        let body = format!("{hex_tail:0>32}");
-        SidebarInstanceId::parse(&format!("sb_{body}")).expect("valid instance id")
+        SidebarInstanceId::parse(&format!("sb_{hex_tail:0>32}")).expect("valid instance id")
     }
 
     #[test]

@@ -45,7 +45,6 @@ mod reset;
 mod resume;
 mod run;
 mod sessions;
-mod sidebar_launch;
 mod sidebar_snapshot;
 mod sidebar_supervisor;
 mod sidebar_unread;
