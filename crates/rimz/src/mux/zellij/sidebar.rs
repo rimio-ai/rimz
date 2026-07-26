@@ -849,13 +849,17 @@ impl ZellijBackend {
         let mut initial = initial;
         let mut listing_retries = 0;
         let mut require_fresh_topology = false;
-        let mut last_cols = None;
+        let mut last_cols: Option<u64> = None;
         let mut last_step_grow = None;
         let mut no_progress_retry = false;
         let mut transient_retries = 0;
+        let mut reverse_spent = false;
         let mut resized = false;
 
         for _ in 0..RESIZE_MAX_STEPS {
+            if reverse_spent {
+                break;
+            }
             let owned_panes;
             let panes = if let Some((panes, _)) = initial.take() {
                 panes
@@ -901,6 +905,23 @@ impl ZellijBackend {
             if !sidebar_width_off_spec(cols, target_cols, zellij_resize_step_cols(view_cols)) {
                 break;
             }
+            let crossing_distance =
+                last_cols
+                    .zip(last_step_grow)
+                    .and_then(|(last_cols, last_step_grow)| {
+                        let crossed = if last_step_grow {
+                            last_cols < target_cols && cols > target_cols
+                        } else {
+                            last_cols > target_cols && cols < target_cols
+                        };
+                        crossed.then_some(last_cols.abs_diff(target_cols))
+                    });
+            if crossing_distance
+                .is_some_and(|last_distance| cols.abs_diff(target_cols) <= last_distance)
+            {
+                break;
+            }
+            let crossed_farther = crossing_distance.is_some();
             let grow = cols < target_cols;
             let no_progress =
                 last_cols
@@ -952,6 +973,7 @@ impl ZellijBackend {
                 break;
             }
             resized = true;
+            reverse_spent = crossed_farther;
         }
 
         (floor, resized)

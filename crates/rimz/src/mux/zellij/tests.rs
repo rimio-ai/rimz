@@ -696,6 +696,83 @@ fn stepwise_sidebar_width_converges_across_supported_steps() {
 }
 
 #[cfg(unix)]
+fn assert_stepwise_crossing_parks(
+    name: &str,
+    initial: u64,
+    expected_increase: usize,
+    expected_decrease: usize,
+) {
+    let room = TestRoom::new();
+    room.write_cache(
+        unix_now_ms().saturating_sub(1_000),
+        Some(8),
+        None,
+        vec![
+            terminal_pane(8, 1, initial, 0, "rimz-sidebar"),
+            terminal_pane(9, 1, 213 - initial, initial, "zsh"),
+        ],
+    );
+    let script = format!(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); log="$dir/zellij.log"; state="$dir/resize-count"
+printf '%s\n' "$*" >> "$log"
+if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
+case " $* " in
+  *" --name rimz:dump_topology "*)
+    count=$(cat "$state" 2>/dev/null || printf 0); cols=$(({initial} + count * 23)); work=$((213 - cols))
+    now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
+    printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s}}]}}\n' "$now" "$cols" "$cols" "$work" > "{cache}"
+    exit 0 ;;
+  *" action resize increase right --pane-id terminal_8 "*)
+    count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; sleep 0.01; exit 0 ;;
+  *" action resize decrease right --pane-id terminal_8 "*)
+    count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count - 1))" > "$state"; sleep 0.01; exit 0 ;;
+esac
+exit 0
+"#,
+        cache = room.runtime.root.join("pane-topology.json").display(),
+    );
+    let (temp, shim) = zellij_shim(&script);
+    let backend = room.backend(&shim);
+    let target_cols = std::num::NonZeroU16::new(63).expect("target");
+    let view_cols = std::num::NonZeroU16::new(213).expect("view");
+    let width = WidthSyncOptions {
+        session_name: "rimz-test".to_owned(),
+        workspace_id: room.workspace_id.clone(),
+        target: crate::mux::SidebarTarget {
+            share: crate::mux::WidthPermille::from_cols(target_cols, view_cols),
+            max_cols: target_cols,
+            pinned: true,
+        },
+    };
+
+    assert!(
+        backend
+            .converge_sidebar_widths_stepwise(&width, 1, 8, None)
+            .1,
+        "{name}: expected resize",
+    );
+    let log = shim_log(&temp);
+    assert_eq!(
+        command_count(&log, "action resize increase right --pane-id terminal_8"),
+        expected_increase,
+        "{name}:\n{log}",
+    );
+    assert_eq!(
+        command_count(&log, "action resize decrease right --pane-id terminal_8"),
+        expected_decrease,
+        "{name}:\n{log}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn stepwise_sidebar_width_parks_after_crossing_the_target() {
+    assert_stepwise_crossing_parks("farther crossing reverses once", 53, 1, 1);
+    assert_stepwise_crossing_parks("nearer crossing parks immediately", 48, 1, 0);
+}
+
+#[cfg(unix)]
 #[test]
 fn stepwise_sidebar_width_uses_authoritative_geometry_over_fresh_stale_cache() {
     let room = TestRoom::new();

@@ -26,6 +26,7 @@ enum Direction {
 enum WidthIdleReason {
     ReachedTolerance,
     CrossedNearest,
+    ReverseParked,
     NoProgress,
     StepBudget,
 }
@@ -50,7 +51,10 @@ struct WidthControl {
     steps_issued: u8,
     in_flight: Option<IssuedStep>,
     learned_step: Option<u16>,
+    /// Backend-native step estimate that seeds the stop band and survives retargeting.
+    native_step: Option<NonZeroU16>,
     retried_no_progress: bool,
+    reverse_issued: bool,
     idle_at: Option<u16>,
     traces: VecDeque<WidthTransition>,
 }
@@ -62,7 +66,9 @@ impl WidthControl {
             steps_issued: 0,
             in_flight: None,
             learned_step: None,
+            native_step: None,
             retried_no_progress: false,
+            reverse_issued: false,
             idle_at: None,
             traces: VecDeque::new(),
         }
@@ -76,8 +82,13 @@ impl WidthControl {
         self.steps_issued = 0;
         self.learned_step = None;
         self.retried_no_progress = false;
+        self.reverse_issued = false;
         self.idle_at = None;
         self.traces.clear();
+    }
+
+    fn seed_native_step(&mut self, step_cols: u16) {
+        self.native_step = NonZeroU16::new(step_cols).or(self.native_step);
     }
 
     fn target(&self) -> Option<NonZeroU16> {
@@ -89,7 +100,9 @@ impl WidthControl {
     }
 
     fn tolerance(&self) -> u16 {
-        self.learned_step.map_or(1, |step| (step / 2).max(1))
+        self.learned_step
+            .or(self.native_step.map(NonZeroU16::get))
+            .map_or(1, |step| (step / 2).max(1))
     }
 
     fn needs_adjustment(&self, own_cols: u16) -> bool {
@@ -120,6 +133,7 @@ impl WidthControl {
             self.steps_issued = 0;
             self.in_flight = None;
             self.retried_no_progress = false;
+            self.reverse_issued = false;
             self.idle_at = None;
         }
 
@@ -133,13 +147,24 @@ impl WidthControl {
                 });
                 self.in_flight = None;
                 self.retried_no_progress = false;
-                if crossed_target(step, own_cols, target_cols) {
+                if self.reverse_issued {
                     self.idle_at = Some(own_cols);
                     self.traces.push_back(WidthTransition::Idle {
                         at: own_cols,
-                        reason: WidthIdleReason::CrossedNearest,
+                        reason: WidthIdleReason::ReverseParked,
                     });
                     return None;
+                }
+                if crossed_target(step, own_cols, target_cols) {
+                    if own_cols.abs_diff(target_cols) <= step.width_before.abs_diff(target_cols) {
+                        self.idle_at = Some(own_cols);
+                        self.traces.push_back(WidthTransition::Idle {
+                            at: own_cols,
+                            reason: WidthIdleReason::CrossedNearest,
+                        });
+                        return None;
+                    }
+                    self.reverse_issued = true;
                 }
             } else if now.saturating_duration_since(step.at) < FEEDBACK_TIMEOUT {
                 return None;
@@ -312,6 +337,7 @@ impl WidthController {
                 return;
             }
         };
+        self.convergence.seed_native_step(step.cols);
         let Some(view_cols) = NonZeroU16::new(step.view_cols) else {
             diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
                 trigger,
@@ -411,6 +437,7 @@ impl WidthController {
                         WidthIdleReason::CrossedNearest => {
                             SidebarWidthSettleOutcome::CrossedNearest
                         }
+                        WidthIdleReason::ReverseParked => SidebarWidthSettleOutcome::ReverseParked,
                         WidthIdleReason::NoProgress => SidebarWidthSettleOutcome::NoProgress,
                         WidthIdleReason::StepBudget => SidebarWidthSettleOutcome::StepBudget,
                     };
@@ -488,6 +515,7 @@ impl WidthController {
             pane,
         ) && step.view_cols > 0
         {
+            self.convergence.seed_native_step(step.cols);
             self.last_classified = Some((step.view_cols, sibling_count));
             let target = crate::sidebar::width_target::resolve(
                 &self.runtime,
@@ -537,6 +565,7 @@ impl WidthController {
                 return;
             }
         };
+        self.convergence.seed_native_step(step.cols);
         let Some(view_cols) = NonZeroU16::new(step.view_cols) else {
             self.observe(
                 measured_cols,
@@ -896,11 +925,49 @@ mod tests {
             Some(crate::mux::WidthPermille::from_percent(40)),
         );
         assert_eq!(controller.classification_deadline, None);
+        assert!(
+            !controller.convergence.in_flight(),
+            "adopting a drag inside the seeded band must not nudge it",
+        );
         controller.backstop(Some(83), Some(1), Some(u64::MAX), &diag);
         assert_eq!(
             crate::sidebar::width_target::pinned(&runtime),
             Some(crate::mux::WidthPermille::from_percent(40)),
         );
+        assert!(
+            !controller.convergence.in_flight(),
+            "the next backstop must leave the adopted width parked",
+        );
+    }
+
+    #[test]
+    fn broadcast_reload_uses_the_seeded_native_band() {
+        let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+        write_zellij_topology(&runtime);
+        let diag = crate::diag::DiagSink::disabled();
+
+        controller.backstop(Some(50), Some(1), None, &diag);
+        crate::sidebar::width_target::pin(&runtime, target(83), MuxName::Zellij, 200)
+            .expect("pin external target");
+        controller.reload_target(&crate::config::ThemeConfig::default(), Some(83), &diag);
+
+        assert_eq!(controller.convergence.target(), Some(target(80)));
+        assert_eq!(controller.convergence.tolerance(), 5);
+        assert!(!controller.convergence.in_flight());
+    }
+
+    #[test]
+    fn drag_inside_the_native_band_never_arms_classification() {
+        let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+        write_zellij_topology(&runtime);
+        let diag = crate::diag::DiagSink::disabled();
+
+        controller.backstop(Some(50), Some(1), None, &diag);
+        controller.observe(54, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+
+        assert_eq!(controller.classification_deadline, None);
+        assert_eq!(controller.classification_resize_at_ms, None);
+        assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
     }
 
     #[test]
@@ -1001,12 +1068,163 @@ mod tests {
     }
 
     #[test]
+    fn seeded_native_step_parks_inside_half_a_step() {
+        let now = Instant::now();
+        let mut control = WidthControl::new(Some(target(80)));
+        control.seed_native_step(10);
+
+        assert_eq!(control.tolerance(), 5);
+        assert_eq!(control.decide(83, now), None);
+    }
+
+    #[test]
+    fn native_step_seed_survives_retargeting() {
+        let now = Instant::now();
+        let mut control = WidthControl::new(Some(target(80)));
+        control.seed_native_step(10);
+
+        control.retarget(Some(target(90)));
+
+        assert_eq!(control.tolerance(), 5);
+        assert_eq!(control.decide(94, now), None);
+    }
+
+    #[test]
+    fn learned_step_refines_the_seeded_band() {
+        let now = Instant::now();
+        let mut control = WidthControl::new(Some(target(80)));
+        control.seed_native_step(10);
+        assert_eq!(control.decide(60, now), Some((60, 80)));
+
+        assert_eq!(
+            control.decide(66, now + Duration::from_millis(10)),
+            Some((66, 80)),
+        );
+        assert_eq!(control.tolerance(), 3);
+    }
+
+    #[test]
+    fn exact_backend_seed_keeps_a_one_column_band() {
+        let now = Instant::now();
+        let mut inside = WidthControl::new(Some(target(80)));
+        inside.seed_native_step(2);
+        assert_eq!(inside.decide(79, now), None);
+
+        let mut outside = WidthControl::new(Some(target(80)));
+        outside.seed_native_step(2);
+        assert_eq!(outside.decide(78, now), Some((78, 80)));
+    }
+
+    #[test]
     fn sign_flip_stops_at_the_nearest_reachable_width() {
         let now = Instant::now();
         let mut control = WidthControl::new(Some(target(72)));
         assert_eq!(control.decide(68, now), Some((68, 72)));
         assert_eq!(control.decide(76, now + Duration::from_millis(10)), None);
         assert_eq!(control.decide(76, now + FEEDBACK_TIMEOUT * 2), None);
+    }
+
+    #[test]
+    fn strictly_nearer_crossing_parks_without_a_reverse() {
+        let now = Instant::now();
+        let mut control = WidthControl::new(Some(target(80)));
+        assert_eq!(control.decide(60, now), Some((60, 80)));
+
+        assert_eq!(control.decide(85, now + Duration::from_millis(10)), None);
+        assert!(!control.reverse_issued);
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::StepIssued {
+                from: 60,
+                target: 80,
+            }),
+        );
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::FeedbackLearned {
+                settled: 85,
+                learned_step: 25,
+            }),
+        );
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::Idle {
+                at: 85,
+                reason: WidthIdleReason::CrossedNearest,
+            }),
+        );
+    }
+
+    #[test]
+    fn farther_crossing_reverses_once_then_parks() {
+        let now = Instant::now();
+        let mut control = WidthControl::new(Some(target(80)));
+        assert_eq!(control.decide(83, now), Some((83, 80)));
+        assert_eq!(
+            control.decide(70, now + Duration::from_millis(10)),
+            Some((70, 80)),
+        );
+        assert!(control.reverse_issued);
+
+        assert_eq!(control.decide(83, now + Duration::from_millis(20)), None);
+        assert_eq!(control.decide(83, now + FEEDBACK_TIMEOUT * 2), None);
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::StepIssued {
+                from: 83,
+                target: 80,
+            }),
+        );
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::FeedbackLearned {
+                settled: 70,
+                learned_step: 13,
+            }),
+        );
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::StepIssued {
+                from: 70,
+                target: 80,
+            }),
+        );
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::FeedbackLearned {
+                settled: 83,
+                learned_step: 13,
+            }),
+        );
+        assert_eq!(
+            control.take_trace(),
+            Some(WidthTransition::Idle {
+                at: 83,
+                reason: WidthIdleReason::ReverseParked,
+            }),
+        );
+    }
+
+    #[test]
+    fn reverse_step_parks_even_outside_the_learned_band() {
+        let now = Instant::now();
+        let mut control = WidthControl::new(Some(target(80)));
+        assert_eq!(control.decide(83, now), Some((83, 80)));
+        assert_eq!(
+            control.decide(70, now + Duration::from_millis(10)),
+            Some((70, 80)),
+        );
+
+        assert_eq!(control.decide(95, now + Duration::from_millis(20)), None);
+        assert_eq!(control.tolerance(), 12);
+        assert!(95_u16.abs_diff(80) > control.tolerance());
+        assert_eq!(
+            control.traces.back(),
+            Some(&WidthTransition::Idle {
+                at: 95,
+                reason: WidthIdleReason::ReverseParked,
+            }),
+        );
     }
 
     #[test]
