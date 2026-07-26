@@ -150,22 +150,8 @@ pub fn workspace_projection_path(runtime: &RuntimePaths) -> PathBuf {
 pub fn read_workspace_projection(
     runtime: &RuntimePaths,
 ) -> Option<Arc<PublishedWorkspaceProjection>> {
-    read_cached_projection(&workspace_projection_path(runtime))
-}
-
-fn read_cached_projection(path: &Path) -> Option<Arc<PublishedWorkspaceProjection>> {
-    let stamped = StampedPath::of(path);
-    if let Some(projection) =
-        WORKSPACE_PROJECTION_PARSE_CACHE.with(|cache| cache.get_stamped(&stamped))
-    {
-        return Some(projection);
-    }
-    let bytes = std::fs::read(path).ok()?;
-    let projection = Arc::new(serde_json::from_slice(&bytes).ok()?);
-    WORKSPACE_PROJECTION_PARSE_CACHE.with(|cache| {
-        cache.store_stamped(&stamped, Arc::clone(&projection));
-    });
-    Some(projection)
+    WORKSPACE_PROJECTION_PARSE_CACHE
+        .with(|cache| cache.read_stamped_json(&workspace_projection_path(runtime)))
 }
 
 #[derive(Deserialize)]
@@ -177,18 +163,7 @@ struct LatestExtent {
 }
 
 fn read_latest_extent(path: &Path) -> Option<LogExtent> {
-    let stamped = StampedPath::of(path);
-    let latest = match LATEST_EXTENT_PARSE_CACHE.with(|cache| cache.get_stamped(&stamped)) {
-        Some(latest) => latest,
-        None => {
-            let bytes = std::fs::read(path).ok()?;
-            let latest = Arc::new(serde_json::from_slice::<LatestExtent>(&bytes).ok()?);
-            LATEST_EXTENT_PARSE_CACHE.with(|cache| {
-                cache.store_stamped(&stamped, Arc::clone(&latest));
-            });
-            latest
-        }
-    };
+    let latest = LATEST_EXTENT_PARSE_CACHE.with(|cache| cache.read_stamped_json(path))?;
     (latest.snapshot_version == crate::store::snapshot::SNAPSHOT_VERSION)
         .then_some(latest.reflects_log)
         .flatten()

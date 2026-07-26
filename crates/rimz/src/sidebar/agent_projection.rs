@@ -297,7 +297,8 @@ pub fn read_published(
     panes: &[PaneRef],
 ) -> AgentProjection {
     let inputs = LocalSessionInputs::from_panes(panes);
-    let Some(published) = read_cache(&runtime.agent_projection_path())
+    let Some(published) = AGENT_PROJECTION_PARSE_CACHE
+        .with(|cache| cache.read_stamped_json(&runtime.agent_projection_path()))
         .filter(|published| published.session_name == session_name)
     else {
         return AgentProjection::default();
@@ -348,21 +349,6 @@ fn publish_if_changed(
     crate::store::atomic::write_temp_then_rename_cache(path, published)?;
     on_changed();
     Ok(true)
-}
-
-fn read_cache(path: &Path) -> Option<Arc<AgentProjectionPublication>> {
-    let metadata = std::fs::metadata(path).ok()?;
-    let modified = metadata.modified().ok()?;
-    let len = metadata.len();
-    if let Some(cached) = AGENT_PROJECTION_PARSE_CACHE.with(|cache| cache.get(path, modified, len))
-    {
-        return Some(cached);
-    }
-    let parsed = Arc::new(serde_json::from_slice(&std::fs::read(path).ok()?).ok()?);
-    AGENT_PROJECTION_PARSE_CACHE.with(|cache| {
-        cache.store(path, modified, len, Arc::clone(&parsed));
-    });
-    Some(parsed)
 }
 
 #[cfg(test)]
@@ -531,8 +517,12 @@ mod tests {
         };
         publish_if_changed(&path, &publication, || {}).unwrap();
 
-        let first = read_cache(&path).unwrap();
-        let second = read_cache(&path).unwrap();
+        let first = AGENT_PROJECTION_PARSE_CACHE
+            .with(|cache| cache.read_stamped_json(&path))
+            .unwrap();
+        let second = AGENT_PROJECTION_PARSE_CACHE
+            .with(|cache| cache.read_stamped_json(&path))
+            .unwrap();
         assert!(Arc::ptr_eq(&first, &second));
     }
 

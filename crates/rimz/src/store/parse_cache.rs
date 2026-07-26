@@ -23,12 +23,13 @@
 //! and is never shared across threads.
 
 use std::cell::RefCell;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
+use serde::de::DeserializeOwned;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct FileStamp {
@@ -151,5 +152,19 @@ impl<T> ParseCache<T> {
             stamp: EntryStamp::File(stamped.stamp),
             value,
         });
+    }
+}
+
+impl<T: DeserializeOwned> ParseCache<T> {
+    /// Read one JSON value under the file identity observed before the read,
+    /// reusing this thread's last parse when that identity still matches.
+    pub(crate) fn read_stamped_json(&self, path: &Path) -> Option<Arc<T>> {
+        let stamped = StampedPath::of(path);
+        if let Some(value) = self.get_stamped(&stamped) {
+            return Some(value);
+        }
+        let value = Arc::new(serde_json::from_slice(&std::fs::read(path).ok()?).ok()?);
+        self.store_stamped(&stamped, Arc::clone(&value));
+        Some(value)
     }
 }
