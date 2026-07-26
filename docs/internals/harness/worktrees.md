@@ -34,6 +34,7 @@ The marker lives in the worktree's Git admin directory (`.git/worktrees/<name>/r
 | [`worktree/include.rs`](../../../crates/rimz/src/worktree/include.rs) | `.worktreeinclude` file copying and its containment rules. |
 | [`worktree/link.rs`](../../../crates/rimz/src/worktree/link.rs) | `.worktreelink` directory symlinks and the `info/exclude` registration. |
 | [`cli/worktree.rs`](../../../crates/rimz/src/cli/worktree.rs) | `rimz worktree new`, `list`, `remove`, and the hidden `cleanup` helper. |
+| [`cli/worktree_protection.rs`](../../../crates/rimz/src/cli/worktree_protection.rs) | Runtime pane and agent fact gathering for explicit removal, wrapper cleanup, and automatic gc. |
 | [`cli/gc.rs`](../../../crates/rimz/src/cli/gc.rs) | The `rimz gc` worktree sweep and its report. |
 | [`cli/agents_cmd/exec.rs`](../../../crates/rimz/src/cli/agents_cmd/exec.rs) | The exec wrapper that triggers cleanup when an agent pane ends. |
 | [`cli/agents_cmd/reconcile.rs`](../../../crates/rimz/src/cli/agents_cmd/reconcile.rs) | Cohort relaunch into a worktree that already exists. |
