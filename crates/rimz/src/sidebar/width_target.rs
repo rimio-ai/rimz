@@ -52,7 +52,7 @@ pub(crate) fn pinned(runtime: &RuntimePaths) -> Option<WidthPermille> {
 pub fn resolve(
     runtime: &RuntimePaths,
     width: SidebarWidth,
-    mux: MuxName,
+    _mux: MuxName,
     view_cols: Option<u16>,
 ) -> crate::mux::SidebarTarget {
     let stored = load_file(runtime);
@@ -86,7 +86,6 @@ pub fn resolve(
             false,
         ),
     };
-    let permille = permille.snap_to_rung(mux);
     let resolved = WidthTargetFile { permille, pinned };
     if persist
         && stored != Some(resolved)
@@ -101,11 +100,11 @@ pub fn resolve(
     }
 }
 
-/// Pin a user-selected room target as a backend-native share of the view.
+/// Pin a user-selected room target as its exact measured share of the view.
 pub fn pin(
     runtime: &RuntimePaths,
     cols: NonZeroU16,
-    mux: MuxName,
+    _mux: MuxName,
     view_cols: u16,
 ) -> atomic::Result<WidthPermille> {
     let view_cols = NonZeroU16::new(view_cols).ok_or_else(|| atomic::AtomicErr::Io {
@@ -115,7 +114,7 @@ pub fn pin(
             "sidebar width target needs nonzero view geometry",
         ),
     })?;
-    let permille = WidthPermille::from_cols(cols, view_cols).snap_to_rung(mux);
+    let permille = WidthPermille::from_cols(cols, view_cols);
     write_and_broadcast(
         runtime,
         WidthTargetFile {
@@ -208,13 +207,13 @@ mod tests {
     }
 
     #[test]
-    fn pin_snaps_and_resolve_scales_the_pin_with_the_view() {
+    fn pin_preserves_the_measured_width_and_scales_with_the_view() {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = runtime(dir.path());
         let cols = NonZeroU16::new(81).expect("nonzero");
-        let snapped = pin(&runtime, cols, MuxName::Zellij, 200).expect("pin width target");
-        assert_eq!(snapped, WidthPermille::from_percent(40));
-        assert_eq!(pinned(&runtime), Some(snapped));
+        let share = pin(&runtime, cols, MuxName::Zellij, 200).expect("pin width target");
+        assert_eq!(share, WidthPermille::try_from(405).expect("valid share"));
+        assert_eq!(pinned(&runtime), Some(share));
         assert_eq!(
             resolve(
                 &runtime,
@@ -223,7 +222,7 @@ mod tests {
                 Some(200),
             )
             .cols(Some(200)),
-            NonZeroU16::new(80).expect("nonzero"),
+            cols,
         );
         assert_eq!(
             resolve(
@@ -233,7 +232,7 @@ mod tests {
                 Some(300),
             )
             .cols(Some(300)),
-            NonZeroU16::new(120).expect("nonzero"),
+            NonZeroU16::new(122).expect("nonzero"),
             "a pin scales and is not clamped by max_cols",
         );
     }
@@ -262,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn zellij_default_keeps_the_cap_after_snapping_the_share() {
+    fn zellij_default_keeps_the_cap() {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = runtime(dir.path());
         let width = SidebarWidth::default();

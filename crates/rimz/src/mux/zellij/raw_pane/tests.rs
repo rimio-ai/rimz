@@ -318,9 +318,9 @@ fn sidebar_geometry_classifies_dock_shapes() {
           {"id": 31, "is_plugin": false, "tab_id": 10, "title": "zsh",
            "pane_x": 57, "pane_columns": 241},
           {"id": 32, "is_plugin": false, "tab_id": 11, "title": "rimz-sidebar",
-           "pane_x": 0, "pane_columns": 86},
+           "pane_x": 0, "pane_columns": 87},
           {"id": 33, "is_plugin": false, "tab_id": 11, "title": "zsh",
-           "pane_x": 86, "pane_columns": 212}
+           "pane_x": 87, "pane_columns": 211}
         ]"#;
     let panes: Vec<PaneTopologyPane> = serde_json::from_str(json).unwrap();
     let target_cols = std::num::NonZeroU16::new(72).expect("nonzero target");

@@ -6,7 +6,6 @@ use std::num::NonZeroU16;
 use serde::{Deserialize, Serialize};
 
 use super::SplitDirection;
-use crate::ids::MuxName;
 
 const AUTO_WIDTH_BREAKPOINT_COLS: u64 = 240;
 const AUTO_WIDTH_NARROW_PERCENT: u16 = 25;
@@ -25,7 +24,10 @@ pub enum WidthAdjust {
 /// column target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WidthStep {
+    /// Requested target movement for one width keypress.
     pub cols: u16,
+    /// Stop-band width that spans the backend's widest possible movement.
+    pub band_cols: u16,
     pub exact: bool,
     /// Full width of the pane's view, or zero when the backend cannot resolve
     /// geometry for this request.
@@ -88,7 +90,6 @@ pub struct WidthPermille(u16);
 impl WidthPermille {
     const MIN: u16 = 1;
     const MAX: u16 = 1000;
-    const ZELLIJ_RUNG: u16 = 50;
 
     /// Convert a whole percentage into a valid share.
     pub fn from_percent(percent: u16) -> Self {
@@ -120,17 +121,6 @@ impl WidthPermille {
     /// Spell this share as a whole percentage for Zellij layout KDL.
     pub fn to_percent_rounded(self) -> u16 {
         ((self.0 + 5) / 10).clamp(1, 100)
-    }
-
-    /// Snap to the nearest backend-native share rung.
-    pub fn snap_to_rung(self, mux: MuxName) -> Self {
-        if mux != MuxName::Zellij {
-            return self;
-        }
-        let snapped = ((self.0 + Self::ZELLIJ_RUNG / 2) / Self::ZELLIJ_RUNG)
-            .saturating_mul(Self::ZELLIJ_RUNG)
-            .clamp(Self::ZELLIJ_RUNG, Self::MAX);
-        Self(snapped)
     }
 }
 
@@ -305,11 +295,13 @@ mod tests {
     fn width_adjustment_resolves_absolute_targets_and_floor() {
         let inexact = WidthStep {
             cols: 10,
+            band_cols: 11,
             exact: false,
             view_cols: 200,
         };
         let exact = WidthStep {
             cols: 2,
+            band_cols: 1,
             exact: true,
             view_cols: 200,
         };
@@ -317,6 +309,11 @@ mod tests {
         assert_eq!(
             adjust_target_cols(30, WidthAdjust::Wider, inexact, 24),
             NonZeroU16::new(40)
+        );
+        assert_eq!(
+            adjust_target_cols(75, WidthAdjust::Wider, inexact, 24),
+            NonZeroU16::new(85),
+            "a floor-sized Zellij keypress targets the next measured lattice width",
         );
         assert_eq!(
             adjust_target_cols(40, WidthAdjust::Narrower, inexact, 24),
@@ -414,19 +411,6 @@ mod tests {
             WidthPermille::from_percent(1).cols(cols(120)),
             cols(MIN_ADJUSTABLE_WIDTH),
         );
-    }
-
-    #[test]
-    fn width_permille_snaps_only_zellij_to_share_rungs() {
-        let cols = |cols| NonZeroU16::new(cols).expect("nonzero");
-        let share = WidthPermille::from_cols(cols(81), cols(200));
-
-        assert_eq!(
-            share.snap_to_rung(MuxName::Zellij),
-            WidthPermille::from_percent(40),
-        );
-        assert_eq!(share.snap_to_rung(MuxName::Tmux), share);
-        assert_eq!(share.snap_to_rung(MuxName::Zellij).to_percent_rounded(), 40,);
     }
 
     #[test]

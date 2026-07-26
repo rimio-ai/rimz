@@ -164,7 +164,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
         sidebar_columns_by_tab(xdg, &name),
     );
 
-    // A native tab inherits the 340-column launch probe's snapped 20% share,
+    // A native tab inherits the 340-column launch probe's whole-percent layout share,
     // then live convergence applies the narrow-view policy.
     open_new_tab(xdg, &name);
     wait_for_tab_count(xdg, &name, 2);

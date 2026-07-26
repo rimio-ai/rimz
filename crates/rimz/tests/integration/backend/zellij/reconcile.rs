@@ -851,8 +851,7 @@ fn reconcile_opts(
         u16::try_from(width.target_cols(u64::from(detected_cols))).expect("test target"),
     )
     .expect("nonzero test width");
-    let share = rimz::mux::WidthPermille::from_cols(requested_cols, view_cols)
-        .snap_to_rung(MuxName::Zellij);
+    let share = rimz::mux::WidthPermille::from_cols(requested_cols, view_cols);
     let target = rimz::mux::SidebarTarget {
         share,
         max_cols: width.max_cols,

@@ -690,8 +690,11 @@ impl MuxBackend for ZellijBackend {
             })?;
         let cols = u16::try_from(crate::mux::width::zellij_resize_step_cols(view_cols))
             .unwrap_or(u16::MAX);
+        let band_cols = u16::try_from(crate::mux::width::zellij_resize_stop_step_cols(view_cols))
+            .unwrap_or(u16::MAX);
         Ok(WidthStep {
             cols,
+            band_cols,
             exact: false,
             view_cols: u16::try_from(view_cols).unwrap_or(0),
         })
