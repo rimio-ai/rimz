@@ -615,6 +615,8 @@ fn only_interactive_human_delivery_waives_a_budget() {
         channel: None,
     };
     assert!(!is_budget_waiving_delivery(&message));
+    message.sender = MessageSender::System;
+    assert!(!is_budget_waiving_delivery(&message));
 }
 
 #[test]
