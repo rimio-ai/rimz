@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/cli/sidebar/tests.rs
-assertion_line: 308
 expression: strip_sgr(&ansi)
 ---
   flightdeck                    /srv/code/flightdeck

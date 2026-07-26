@@ -310,6 +310,13 @@ fn expanded_line_frame_bypasses_group_cap_and_fits_content() {
         );
     }
     assert!(!rendered.contains("+2 more"), "{rendered}");
+    assert!(
+        rendered
+            .lines()
+            .last()
+            .is_some_and(|line| line.contains("? for help")),
+        "expanded frame did not end with the footer: {rendered}"
+    );
 
     let mut measured_snapshot = snapshot.clone();
     measured_snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;

@@ -803,7 +803,7 @@ fn rollup_snapshot_fallback(
     reason: Option<&dyn std::fmt::Display>,
 ) -> Result<SidebarSnapshot> {
     if let Some(error) = reason {
-        tracing::warn!(%error, "sidebar snapshot pane discovery failed; emitting frameless rollup metadata");
+        tracing::warn!(%error, "pane discovery failed; falling back to the frameless rollup");
     }
     produce_rollup_snapshot_with_refresh(
         &mut RollupCursor::new(),
