@@ -19,6 +19,8 @@ Each command around `rimz agents` has its own page: [`rimz message`](./message.m
 
 `message`, `transcript`, `pane capture`/`send`/`focus`, and the `agents show`/`logs`/`history`/`focus`/`fork`/`wait`/`stop`/`restart`/`refresh` verbs share one address grammar: `@<handle>` names who, an optional `#<channel>` names the stamped lane, and a raw pane id is the precise fallback. This is the one place it is spelled out; every agent-facing command assumes it.
 
+The [`pane` commands](./pane.md) additionally accept the literal `sidebar` for the session's sidebar pane.
+
 **Handles that name one agent:**
 
 - `@writer` — an explicit name from a single-agent launch such as `rimz agents claude --name writer`.

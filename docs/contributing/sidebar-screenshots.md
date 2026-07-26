@@ -27,7 +27,7 @@ The task fails at entry when `freeze`, `rsvg-convert`, or JetBrainsMono Nerd Fon
 
 `cargo xtask screenshot list` prints `rimz pane list --json` so a target pane id is easy to copy into a focused capture.
 
-`cargo xtask screenshot live [--lines N] [--output PATH]` finds a live `rimz-sidebar` pane from pane metadata, captures it with `rimz pane capture --ansi`, renders a PNG, and leaves focus untouched.
+`cargo xtask screenshot live [--lines N] [--output PATH]` captures the `sidebar` target with `rimz pane capture --ansi`, renders a PNG, and leaves focus untouched. The target resolves the caller's own view first, then the focused tab, then any sidebar in the session.
 
 `cargo xtask screenshot pane <id> [--lines N] [--output PATH]` captures any normalized pane id, for example `zellij:terminal_3` or `tmux:%3`.
 

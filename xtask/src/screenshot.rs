@@ -7,7 +7,6 @@ use std::process;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
-use serde_json::Value;
 
 use crate::files::remove_stale_file;
 use crate::is_help_flag;
@@ -104,9 +103,7 @@ pub(crate) fn screenshot(root: &Path, args: &[String]) -> Result<()> {
         "live" => {
             let opts = parse_capture_screenshot_options(&args[1..])?;
             ensure_screenshot_prerequisites()?;
-            let panes = rimz_output(root, &os_args(["pane", "list", "--json"]))?;
-            let pane = select_live_sidebar_pane(&panes)?;
-            let ansi = capture_pane_ansi(root, &pane, opts.lines)?;
+            let ansi = capture_pane_ansi(root, "sidebar", opts.lines)?;
             let output = screenshot_output_path(root, opts.output, "live")?;
             write_screenshot_png(root, &ansi, &output)?;
             print_screenshot_path(&output);
@@ -343,44 +340,6 @@ fn render_state_ansi(
         args.push(OsString::from(scheme));
     }
     rimz_output_with_env(root, &args, &[("COLORTERM", "truecolor")], &["NO_COLOR"])
-}
-
-fn select_live_sidebar_pane(panes_json: &[u8]) -> Result<String> {
-    let panes: Value = serde_json::from_slice(panes_json).context("parsing pane list JSON")?;
-    let Value::Array(panes) = panes else {
-        bail!("pane list JSON is not an array");
-    };
-    let sidebars: Vec<&Value> = panes.iter().filter(|pane| pane_is_sidebar(pane)).collect();
-    if sidebars.is_empty() {
-        bail!(
-            "no rimz-sidebar pane found; run `cargo xtask screenshot list` to inspect live panes"
-        );
-    }
-
-    if let [pane] = sidebars.as_slice() {
-        return pane_id(pane);
-    }
-
-    bail!(
-        "multiple rimz-sidebar panes matched; run `cargo xtask screenshot list`, then `cargo xtask screenshot pane <id>`"
-    )
-}
-
-fn pane_is_sidebar(pane: &Value) -> bool {
-    pane_str(pane, "command") == Some("rimz-sidebar")
-        || pane_str(pane, "spawn_command").is_some_and(|command| {
-            command.contains("rimz sidebar serve") || command.contains("rimz-sidebar")
-        })
-}
-
-fn pane_id(pane: &Value) -> Result<String> {
-    pane_str(pane, "pane_id")
-        .map(ToOwned::to_owned)
-        .context("pane entry is missing pane_id")
-}
-
-fn pane_str<'a>(pane: &'a Value, key: &str) -> Option<&'a str> {
-    pane.get(key).and_then(Value::as_str)
 }
 
 fn ensure_screenshot_prerequisites() -> Result<()> {

@@ -385,6 +385,7 @@ enum Align {
 pub(crate) struct Cell {
     text: String,
     style: Option<anstyle::Style>,
+    suffix: Option<(String, anstyle::Style)>,
 }
 
 /// Start a plain (unstyled) cell from any text.
@@ -392,6 +393,7 @@ pub(crate) fn cell(text: impl Into<String>) -> Cell {
     Cell {
         text: text.into(),
         style: None,
+        suffix: None,
     }
 }
 
@@ -399,6 +401,12 @@ impl Cell {
     /// Paint this cell with a palette style.
     pub(crate) fn fg(mut self, style: anstyle::Style) -> Self {
         self.style = Some(style);
+        self
+    }
+
+    /// Append a separately styled label after this cell's primary text.
+    pub(crate) fn suffix(mut self, text: impl Into<String>, style: anstyle::Style) -> Self {
+        self.suffix = Some((text.into(), style));
         self
     }
 
@@ -413,20 +421,26 @@ impl Cell {
     }
 
     fn width(&self) -> usize {
-        self.text.width()
+        self.text.width() + self.suffix.as_ref().map_or(0, |(text, _)| 1 + text.width())
     }
 
     fn write_styled(&self, w: &mut impl Write) -> std::io::Result<()> {
         match self.style {
             Some(style) => write!(w, "{}{}{}", style.render(), self.text, style.render_reset()),
             None => write!(w, "{}", self.text),
+        }?;
+        if let Some((text, style)) = &self.suffix {
+            write!(w, " {}{}{}", style.render(), text, style.render_reset())?;
         }
+        Ok(())
     }
 
     fn clipped(&self, width: usize) -> Self {
+        let suffix_width = self.suffix.as_ref().map_or(0, |(text, _)| 1 + text.width());
         Cell {
-            text: clip_to_width(&self.text, width),
+            text: clip_to_width(&self.text, width.saturating_sub(suffix_width)),
             style: self.style,
+            suffix: self.suffix.clone(),
         }
     }
 
@@ -647,6 +661,7 @@ impl Table {
             Cell {
                 text: line,
                 style: cell.style,
+                suffix: None,
             }
             .write_styled(w)?;
             writeln!(w)?;
@@ -1321,19 +1336,20 @@ mod tests {
     }
 
     #[test]
-    fn styled_cells_emit_ansi_and_strip_cleanly() {
-        let mut table = Table::new(["S"]);
-        table.row([cell("running").fg(palette::good())]);
-        let mut raw: Vec<u8> = Vec::new();
-        table.render(&mut raw).expect("render to buffer");
+    fn suffixed_cells_measure_and_render_both_styles() {
+        let main = palette::meta();
+        let suffix = palette::faint();
+        let mut table = Table::new(["PANE", "VALUE"]);
+        table.row([cell("x").fg(main).suffix("(self)", suffix), cell("one")]);
+        table.row([cell("plain"), cell("two")]);
+        let mut raw = Vec::new();
+        table.render(&mut raw).expect("render suffixed cell");
         let raw = String::from_utf8(raw).expect("utf-8");
-        assert!(
-            raw.contains('\u{1b}'),
-            "styled output carries ANSI: {raw:?}"
-        );
-        assert!(
-            !strip(|w| table.render(w)).contains('\u{1b}'),
-            "an ANSI-stripping stream yields plain text"
+        assert!(raw.contains(&paint(main, "x")));
+        assert!(raw.contains(&paint(suffix, "(self)")));
+        assert_eq!(
+            strip(|w| table.render(w)),
+            "PANE      VALUE\nx (self)  one\nplain     two\n"
         );
     }
 }
