@@ -49,7 +49,7 @@ pub(crate) fn refresh_cohort_spend_for(
     now_ms: u64,
     cursor: &mut RollupCursor,
     memo: &mut EffortParseMemo,
-) -> CohortSpendCache {
+) {
     let path = runtime.cohort_spend_path();
     let current = read_cohort_spend_cache(&path);
     let needed = snapshot
@@ -59,10 +59,10 @@ pub(crate) fn refresh_cohort_spend_for(
         .map(|group| group.key.as_str())
         .collect::<BTreeSet<_>>();
     if !cache_due(&current, now_ms) && current.groups.keys().map(String::as_str).eq(needed) {
-        return current;
+        return;
     }
     let Ok((_, agents, _)) = cursor.fold(state) else {
-        return current;
+        return;
     };
     let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     let groups = compute_cohort_effort(
@@ -86,7 +86,6 @@ pub(crate) fn refresh_cohort_spend_for(
             "sidebar cohort-spend cache write failed"
         );
     }
-    refreshed
 }
 
 fn compute_cohort_effort(
@@ -153,6 +152,7 @@ fn compute_cohort_effort(
         computed.insert(group.key.clone(), cohort);
     }
 
+    memo.retain_touched();
     computed
 }
 
