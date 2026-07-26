@@ -293,6 +293,17 @@ pub struct SidebarSnapshot {
 }
 
 impl SidebarSnapshot {
+    pub(crate) fn live_agent_pane(
+        &self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+    ) -> Option<PaneId> {
+        self.agent_panes
+            .iter()
+            .find(|pane| &pane.kind == kind && pane.agent_id.as_ref() == Some(agent_id))
+            .map(|pane| pane.pane_id.clone())
+    }
+
     #[cfg(test)]
     pub fn build(workspace_id: WorkspaceId, events: Vec<EventEnvelope>, now: Timestamp) -> Self {
         Self::build_with_carryover(workspace_id, events, Vec::new(), now)

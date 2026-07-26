@@ -33,13 +33,17 @@ pub(crate) struct ParsedSidecar<R> {
     pub record: Option<R>,
 }
 
-pub(crate) fn path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> PathBuf {
+pub(crate) fn digest(kind: &str, agent_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(kind.as_bytes());
     hasher.update([0]);
     hasher.update(agent_id.as_bytes());
     let digest = hex::encode(hasher.finalize());
-    dir.join(format!("{prefix}.{}.json", &digest[..32]))
+    digest[..32].to_owned()
+}
+
+pub(crate) fn path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> PathBuf {
+    dir.join(format!("{prefix}.{}.json", digest(kind, agent_id)))
 }
 
 pub(crate) fn lock_path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> PathBuf {
@@ -201,6 +205,18 @@ mod tests {
 
     fn read_all_test(dir: &Path) -> Vec<TestRecord> {
         TEST_PARSE_CACHE.with(|cache| read_all(dir, cache))
+    }
+
+    #[test]
+    fn digest_and_path_preserve_sidecar_names() {
+        assert_eq!(
+            digest("codex", "sess-1"),
+            "8b13d7a2e1e761f29386b7f853b83f17"
+        );
+        assert_eq!(
+            path(Path::new("/tmp/cache"), "test", "codex", "sess-1"),
+            Path::new("/tmp/cache/test.8b13d7a2e1e761f29386b7f853b83f17.json")
+        );
     }
 
     #[test]

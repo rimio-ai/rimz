@@ -6,6 +6,7 @@
 //! not spawn the same occurrence twice.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use jiff::{Timestamp, Zoned};
@@ -156,17 +157,20 @@ fn state_path(runtime: &RuntimePaths) -> PathBuf {
 }
 
 fn spawn_loop_run(runtime: &RuntimePaths, project_root: Option<&Path>, name: &str) {
-    let mut cmd = crate::child_process::detached_rimz_command(crate::proc::rimz_exe(), runtime);
+    let mut args = Vec::<OsString>::new();
     if let Some(project_root) = project_root {
-        cmd.arg("--root").arg(project_root);
+        args.extend([
+            OsString::from("--root"),
+            project_root.as_os_str().to_owned(),
+        ]);
     }
-    cmd.args(["loop", "run", name]);
+    args.extend([OsString::from("loop"), OsString::from("run"), name.into()]);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         task = name,
         "sidebar: firing loop task",
     );
-    if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "loop-run") {
+    if let Err(err) = crate::child_process::spawn_detached_rimz(runtime, args, "loop-run") {
         tracing::debug!(
             task = name,
             tags.operation = "loop_fire.spawn",

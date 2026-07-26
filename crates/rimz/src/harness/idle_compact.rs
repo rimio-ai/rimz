@@ -5,6 +5,7 @@
 //! detached `rimz agents idle-compact` helper. The helper owns the durable
 //! message write; this module writes only a disposable pacing record.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -12,8 +13,6 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentState, AgentStatus};
-#[cfg(not(test))]
-use crate::child_process::detached_rimz_command;
 use crate::config::{HarnessConfig, IdleCompactMode};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::store::atomic::write_temp_then_rename_cache;
@@ -75,7 +74,7 @@ pub(crate) fn compact_idle_agents(
         ) {
             continue;
         }
-        let Some(pane_id) = live_pane(snapshot, agent) else {
+        let Some(pane_id) = snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
             continue;
         };
         let (Some(command), Some(occupied)) = (command, occupied) else {
@@ -171,14 +170,6 @@ fn worktree_pr_open(agent: &AgentState, cache: &crate::sidebar::refresh::pr::PrS
     })
 }
 
-fn live_pane(snapshot: &SidebarSnapshot, agent: &AgentState) -> Option<PaneId> {
-    snapshot
-        .agent_panes
-        .iter()
-        .find(|pane| pane.kind == agent.kind && pane.agent_id.as_ref() == Some(&agent.agent_id))
-        .map(|pane| pane.pane_id.clone())
-}
-
 fn fire_record_path(
     runtime: &RuntimePaths,
     kind: &AgentKind,
@@ -186,7 +177,7 @@ fn fire_record_path(
 ) -> PathBuf {
     runtime.root.join("idle-compact").join(format!(
         "{}.json",
-        crate::harness::budget::agent_digest(kind, agent_id)
+        crate::store::sidecar::digest(kind.as_str(), agent_id.as_str())
     ))
 }
 
@@ -206,7 +197,6 @@ fn write_fire_record(path: &Path, record: &FireRecord) {
     }
 }
 
-#[cfg(not(test))]
 fn spawn_idle_compact(
     runtime: &RuntimePaths,
     kind: &AgentKind,
@@ -216,26 +206,24 @@ fn spawn_idle_compact(
     occupied: u64,
     label: &str,
 ) -> bool {
-    let exe = crate::proc::rimz_exe();
-    let mut cmd = detached_rimz_command(exe, runtime);
-    cmd.args([
-        "agents",
-        "idle-compact",
-        "--workspace-id",
-        runtime.workspace_id.as_str(),
-        "--kind",
-        kind.as_str(),
-        "--agent-id",
-        agent_id.as_str(),
-        "--pane",
-        &pane_id.to_string(),
-        "--command",
-        command,
-        "--occupied-tokens",
-        &occupied.to_string(),
-        "--label",
-        label,
-    ]);
+    let args: Vec<OsString> = vec![
+        "agents".into(),
+        "idle-compact".into(),
+        "--workspace-id".into(),
+        runtime.workspace_id.as_str().into(),
+        "--kind".into(),
+        kind.as_str().into(),
+        "--agent-id".into(),
+        agent_id.as_str().into(),
+        "--pane".into(),
+        pane_id.to_string().into(),
+        "--command".into(),
+        command.into(),
+        "--occupied-tokens".into(),
+        occupied.to_string().into(),
+        "--label".into(),
+        label.into(),
+    ];
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         workspace = %runtime.workspace_id,
@@ -243,7 +231,8 @@ fn spawn_idle_compact(
         occupied,
         "sidebar: compacting idle agent",
     );
-    if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "agent-idle-compact") {
+    if let Err(err) = crate::child_process::spawn_detached_rimz(runtime, args, "agent-idle-compact")
+    {
         tracing::debug!(
             workspace = %runtime.workspace_id,
             tags.operation = "idle_compact.spawn",
@@ -252,20 +241,6 @@ fn spawn_idle_compact(
         );
         return false;
     }
-    true
-}
-
-#[cfg(test)]
-fn spawn_idle_compact(
-    runtime: &RuntimePaths,
-    kind: &AgentKind,
-    agent_id: &AgentSessionId,
-    pane_id: &PaneId,
-    command: &str,
-    occupied: u64,
-    label: &str,
-) -> bool {
-    let _ = (runtime, kind, agent_id, pane_id, command, occupied, label);
     true
 }
 
@@ -292,6 +267,24 @@ mod tests {
         agent.worktree_path = Some("/repo/worktree".to_owned());
         agent.worktree_branch = Some("feat/cache".to_owned());
         agent
+    }
+
+    #[test]
+    fn fire_cache_path_preserves_existing_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+            .expect("runtime");
+
+        assert_eq!(
+            fire_record_path(
+                &runtime,
+                &AgentKind::new_unchecked("claude"),
+                &"sess".into()
+            )
+            .file_name()
+            .and_then(|name| name.to_str()),
+            Some("4a8d94f232e55a6a0879ba0858b59241.json")
+        );
     }
 
     fn due(agent: &AgentState) -> bool {

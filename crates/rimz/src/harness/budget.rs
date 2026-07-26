@@ -9,6 +9,7 @@
 //! graph.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -1087,7 +1088,7 @@ fn interrupt_parked_agent(
     if agent.status != AgentStatus::Running || !interrupt_due(last_interrupt, ctx.now) {
         return;
     }
-    let Some(pane_id) = live_pane(ctx.snapshot, agent) else {
+    let Some(pane_id) = ctx.snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
         return;
     };
 
@@ -1300,14 +1301,6 @@ fn is_budget_waiving_delivery(message: &MessageRecord) -> bool {
         && message.gate != DeliveryGate::Resume
 }
 
-fn live_pane(snapshot: &SidebarSnapshot, agent: &AgentState) -> Option<PaneId> {
-    snapshot
-        .agent_panes
-        .iter()
-        .find(|pane| pane.kind == agent.kind && pane.agent_id.as_ref() == Some(&agent.agent_id))
-        .map(|pane| pane.pane_id.clone())
-}
-
 fn interrupt_due(last: Option<Timestamp>, now: Timestamp) -> bool {
     last.is_none_or(|last| now.as_second() - last.as_second() >= INTERRUPT_RETRY_SECS)
 }
@@ -1471,30 +1464,29 @@ fn ledger_day_reset(ledger: &BudgetLedger, now: Timestamp, zone: &TimeZone) -> O
         .map(|zoned| zoned.timestamp())
 }
 
-#[cfg(not(test))]
 fn spawn_budget_park(
     runtime: &RuntimePaths,
     agent: &AgentState,
     pane_id: &PaneId,
     at_cost: Option<f64>,
 ) -> bool {
-    let mut cmd = crate::child_process::detached_rimz_command(crate::proc::rimz_exe(), runtime);
-    cmd.args([
-        "agents",
-        "budget-park",
-        "--workspace-id",
-        runtime.workspace_id.as_str(),
-        "--kind",
-        agent.kind.as_str(),
-        "--agent-id",
-        agent.agent_id.as_str(),
-        "--pane",
-        &pane_id.to_string(),
-    ]);
+    let mut args: Vec<OsString> = vec![
+        "agents".into(),
+        "budget-park".into(),
+        "--workspace-id".into(),
+        runtime.workspace_id.as_str().into(),
+        "--kind".into(),
+        agent.kind.as_str().into(),
+        "--agent-id".into(),
+        agent.agent_id.as_str().into(),
+        "--pane".into(),
+        pane_id.to_string().into(),
+    ];
     if let Some(at_cost) = at_cost {
-        cmd.arg("--at-cost").arg(at_cost.to_string());
+        args.extend([OsString::from("--at-cost"), at_cost.to_string().into()]);
     }
-    if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "agent-budget-park") {
+    if let Err(err) = crate::child_process::spawn_detached_rimz(runtime, args, "agent-budget-park")
+    {
         tracing::debug!(
             workspace = %runtime.workspace_id,
             kind = %agent.kind,
@@ -1508,33 +1500,15 @@ fn spawn_budget_park(
     true
 }
 
-#[cfg(test)]
-fn spawn_budget_park(
-    _runtime: &RuntimePaths,
-    _agent: &AgentState,
-    _pane_id: &PaneId,
-    _at_cost: Option<f64>,
-) -> bool {
-    true
-}
-
 pub fn budget_ledger_path(
     runtime: &RuntimePaths,
     kind: &AgentKind,
     agent_id: &AgentSessionId,
 ) -> PathBuf {
-    runtime
-        .root
-        .join(format!("budget.{}.json", agent_digest(kind, agent_id)))
-}
-
-pub(crate) fn agent_digest(kind: &AgentKind, agent_id: &AgentSessionId) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(kind.as_str().as_bytes());
-    hasher.update([0]);
-    hasher.update(agent_id.as_str().as_bytes());
-    let digest = hex::encode(hasher.finalize());
-    digest[..32].to_owned()
+    runtime.root.join(format!(
+        "budget.{}.json",
+        crate::store::sidecar::digest(kind.as_str(), agent_id.as_str())
+    ))
 }
 
 pub fn read_ledger(

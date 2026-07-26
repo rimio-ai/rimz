@@ -8,6 +8,7 @@
 //! burn-rate cache; atomic replacement plus observation stamps make duplicate
 //! folds idempotent.
 
+use std::ffi::OsString;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
@@ -19,8 +20,6 @@ use crate::agents::account::{
     ProviderCapacity, RedemptionCode, ResetCreditResult, prepare_reset_credit_redemption,
 };
 use crate::agents::{AccountUsageSnapshot, RateLimitWindow, ResetCredits};
-#[cfg(not(test))]
-use crate::child_process::detached_rimz_command;
 use crate::config::ResumeConfig;
 use crate::harness::assist_log::AssistWindowReset;
 use crate::store::atomic::write_temp_then_rename_cache;
@@ -588,22 +587,19 @@ fn publish_usage(
     }
 }
 
-#[cfg(not(test))]
 fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason, request_id: &str) -> bool {
-    let exe = crate::proc::rimz_exe();
-    let mut cmd = detached_rimz_command(exe, runtime);
-    cmd.args([
-        "agents",
-        "auto-redeem",
-        "--workspace-id",
-        runtime.workspace_id.as_str(),
-        "--kind",
-        CODEX_KIND,
-        "--reason",
-        reason.as_str(),
-        "--request-id",
-        request_id,
-    ]);
+    let args: Vec<OsString> = vec![
+        "agents".into(),
+        "auto-redeem".into(),
+        "--workspace-id".into(),
+        runtime.workspace_id.as_str().into(),
+        "--kind".into(),
+        CODEX_KIND.into(),
+        "--reason".into(),
+        reason.as_str().into(),
+        "--request-id".into(),
+        request_id.into(),
+    ];
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         workspace = %runtime.workspace_id,
@@ -611,7 +607,8 @@ fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason, request_id: &
         reason = reason.as_str(),
         "sidebar: auto-redeeming reset credit",
     );
-    if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "agent-auto-redeem") {
+    if let Err(err) = crate::child_process::spawn_detached_rimz(runtime, args, "agent-auto-redeem")
+    {
         tracing::debug!(
             workspace = %runtime.workspace_id,
             tags.operation = "auto_redeem.spawn",
@@ -620,12 +617,6 @@ fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason, request_id: &
         );
         return false;
     }
-    true
-}
-
-#[cfg(test)]
-fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason, request_id: &str) -> bool {
-    let _ = (runtime, reason, request_id);
     true
 }
 
