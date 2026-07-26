@@ -3,7 +3,7 @@
 
 use crate::agents::{AgentStatus, ExtraCredits, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
-use crate::sidebar_pane::pets::{PetBody, PetView};
+use crate::sidebar_pane::pets::PetView;
 use crate::{RemoteControlBadge, SidebarProviderPanel, SpendTally, SpendWindow};
 use jiff::{SignedDuration, Timestamp};
 use ratatui::style::{Color, Modifier, Style};
@@ -46,10 +46,6 @@ const PROVIDER_NORMAL_MIN_WIDTH: usize = 40;
 /// Blank cells between the active provider block and the pet column when the
 /// pet rides beside the dashboard.
 const PET_COLUMN_GAP: usize = 1;
-
-/// Pet captions leave three trailing cells so their right edge lines up with the
-/// sprite body's inner gap.
-const PET_CAPTION_RIGHT_PAD: usize = 3;
 
 /// The provider bar's label slot (`5h` / `7d` / `30d` / `ex` / `api`) and value
 /// column, shared by every provider bar so they align front and back. The label
@@ -503,20 +499,17 @@ pub(in crate::sidebar_pane::render) fn dashboard_block(
     ));
 
     if context.mode == DashboardMode::Pet
-        && let Some(pet_w) = pet_column_width(context.theme, context.pet)
-        && pet_w + PET_COLUMN_GAP < context.width
+        && let Some(pet) =
+            super::pets::dashboard_pet_column(context.pet, context.theme, context.width)
+        && pet.width + PET_COLUMN_GAP < context.width
     {
+        let pet_w = pet.width;
         let block_w = context.width.saturating_sub(pet_w + PET_COLUMN_GAP);
-        output.push_inert(provider_pet_caption_line(
-            context.theme,
-            context.pet,
-            context.width,
-        ));
+        output.push_inert(pet.caption);
         let block = provider_block_lines(&context, active, block_w, None);
-        let pet_lines = super::pets::dashboard_pet_grid_lines(context.pet, context.theme, pet_w);
         let footer_rows = usize::from(context.folded_footer.is_some());
         let block_rows = block.len() + footer_rows;
-        let pet_rows = pet_lines.len();
+        let pet_rows = pet.body.len();
         let rows = block_rows.max(pet_rows);
         let footer = context
             .folded_footer
@@ -524,7 +517,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_block(
             .map(|footer| folded_footer_line(footer, block_w));
         output.extend_inert(zip_provider_pet_lines(
             block,
-            pet_lines,
+            pet.body,
             footer,
             ProviderPetZipLayout {
                 pet_top: rows.saturating_sub(pet_rows),
@@ -597,40 +590,6 @@ fn provider_block_lines(
 
 fn folded_footer_line(parts: super::super::chrome::FooterParts, width: usize) -> Line<'static> {
     pin_right(parts.left, vec![parts.help], width)
-}
-
-fn pet_column_width(theme: &Theme, pet: Option<&PetView>) -> Option<usize> {
-    theme
-        .pet_body_enabled()
-        .then(|| {
-            pet.and_then(|view| match view.body.as_ref()? {
-                PetBody::Pixel(pixel) => Some(usize::from(pixel.size.cols)),
-                PetBody::Cell(grid) => grid.iter().map(Vec::len).max(),
-            })
-        })
-        .flatten()
-        .filter(|width| *width > 0)
-}
-
-fn provider_pet_caption_line(theme: &Theme, pet: Option<&PetView>, width: usize) -> Line<'static> {
-    let Some(caption) = super::pets::dashboard_pet_caption(pet) else {
-        return Line::from("");
-    };
-    let caption_w = width.saturating_sub(PET_CAPTION_RIGHT_PAD);
-    let clipped = clip(caption, caption_w);
-    let lead = caption_w.saturating_sub(text_width(&clipped));
-    let mut spans = Vec::new();
-    if lead > 0 {
-        spans.push(Span::raw(" ".repeat(lead)));
-    }
-    if !clipped.is_empty() {
-        spans.push(Span::styled(clipped, theme.muted()));
-    }
-    let trail = width.saturating_sub(caption_w);
-    if trail > 0 {
-        spans.push(Span::raw(" ".repeat(trail)));
-    }
-    Line::from(spans)
 }
 
 struct ProviderPetZipLayout {

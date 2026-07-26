@@ -10,6 +10,15 @@ const CAPTION_GAP: usize = 2;
 /// Below this much room to the sprite's right, the caption stacks underneath
 /// instead of riding alongside.
 const MIN_SIDE_CAPTION: usize = 6;
+/// Dashboard pet captions leave three trailing cells so their right edge lines
+/// up with the sprite body's inner gap.
+const DASHBOARD_CAPTION_RIGHT_PAD: usize = 3;
+
+pub(super) struct DashboardPetColumn {
+    pub(super) width: usize,
+    pub(super) caption: Line<'static>,
+    pub(super) body: Vec<Line<'static>>,
+}
 
 pub(super) fn pet_panel_lines(
     pet: Option<&PetView>,
@@ -30,49 +39,46 @@ pub(super) fn pet_panel_lines(
     vec![centered_caption(fallback, theme, width)]
 }
 
-pub(super) fn dashboard_pet_caption(pet: Option<&PetView>) -> Option<&str> {
-    pet_caption(pet)
-}
-
-pub(super) fn dashboard_pet_grid_lines(
+pub(super) fn dashboard_pet_column(
     pet: Option<&PetView>,
     theme: &Theme,
-    width: usize,
-) -> Vec<Line<'static>> {
-    if let Some(pixel) = theme
-        .pet_body_enabled()
-        .then(|| pet.and_then(|view| pet_pixel(view)))
-        .flatten()
-    {
-        let pixel_style = Style::default().fg(image_id_color(pixel.image_id));
-        let pet_width = usize::from(pixel.size.cols).min(width);
-        let left = width.saturating_sub(pet_width);
-        let mut lines = (0..pixel.size.rows)
-            .map(|row| {
-                let mut spans = Vec::with_capacity(pet_width + usize::from(left > 0));
-                if left > 0 {
-                    spans.push(Span::raw(" ".repeat(left)));
-                }
-                spans
-                    .extend((0..pet_width).map(|col| {
-                        Span::styled(placeholder_cluster(row, col as u16), pixel_style)
-                    }));
-                Line::from(spans)
-            })
-            .collect::<Vec<_>>();
-        lines.push(Line::from(" ".repeat(width)));
-        return lines;
+    dashboard_width: usize,
+) -> Option<DashboardPetColumn> {
+    if !theme.pet_body_enabled() {
+        return None;
     }
-    let Some(grid) = theme
-        .pet_body_enabled()
-        .then(|| pet.and_then(|view| pet_cell_grid(view)))
-        .flatten()
-    else {
-        return Vec::new();
+    let pet = pet?;
+    let (width, mut body) = match pet.body.as_ref()? {
+        PetBody::Pixel(pixel) => {
+            let width = usize::from(pixel.size.cols);
+            let pixel_style = Style::default().fg(image_id_color(pixel.image_id));
+            let lines = (0..pixel.size.rows)
+                .map(|row| {
+                    Line::from(
+                        (0..width)
+                            .map(|col| {
+                                Span::styled(placeholder_cluster(row, col as u16), pixel_style)
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect();
+            (width, lines)
+        }
+        PetBody::Cell(grid) => {
+            let width = grid.iter().map(Vec::len).max().unwrap_or(0);
+            (width, grid_lines(grid, width))
+        }
     };
-    let mut lines = grid_lines(grid, width);
-    lines.push(Line::from(" ".repeat(width)));
-    lines
+    if width == 0 {
+        return None;
+    }
+    body.push(Line::from(" ".repeat(width)));
+    Some(DashboardPetColumn {
+        width,
+        caption: dashboard_caption_line(pet.caption.as_deref(), theme, dashboard_width),
+        body,
+    })
 }
 
 fn pet_caption(pet: Option<&PetView>) -> Option<&str> {
@@ -86,11 +92,25 @@ fn pet_cell_grid(view: &PetView) -> Option<&PetCellGrid> {
     }
 }
 
-fn pet_pixel(view: &PetView) -> Option<&crate::sidebar_pane::pets::PetPixelView> {
-    match view.body.as_ref()? {
-        PetBody::Pixel(pixel) => Some(pixel),
-        PetBody::Cell(_) => None,
+fn dashboard_caption_line(caption: Option<&str>, theme: &Theme, width: usize) -> Line<'static> {
+    let Some(caption) = caption else {
+        return Line::from("");
+    };
+    let caption_w = width.saturating_sub(DASHBOARD_CAPTION_RIGHT_PAD);
+    let clipped = clip(caption, caption_w);
+    let lead = caption_w.saturating_sub(text_width(&clipped));
+    let mut spans = Vec::new();
+    if lead > 0 {
+        spans.push(Span::raw(" ".repeat(lead)));
     }
+    if !clipped.is_empty() {
+        spans.push(Span::styled(clipped, theme.muted()));
+    }
+    let trail = width.saturating_sub(caption_w);
+    if trail > 0 {
+        spans.push(Span::raw(" ".repeat(trail)));
+    }
+    Line::from(spans)
 }
 
 /// The sprite pinned to the right edge, with its caption set to the left,
