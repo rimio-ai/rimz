@@ -315,7 +315,7 @@ impl RoomContext {
             .record_workspace(&self.workspace)
             .context("recording workspace metadata for reset")?;
         let records = store
-            .reset_records(&self.workspace.session_name, hard)
+            .reset_records(hard)
             .context("resetting workspace records")?;
         Ok(RoomResetReport { teardown, records })
     }

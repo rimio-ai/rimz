@@ -399,9 +399,7 @@ fn soft_reset_keeps_closed_identity_and_hard_reset_forgets_it() {
         ))
         .expect("append dead-owner lifecycle");
 
-    h.store
-        .reset_records("rimz-test", false)
-        .expect("soft reset");
+    h.store.reset_records(false).expect("soft reset");
     let after_soft = h
         .store
         .runtime_projection(RuntimeScope::Audit)
@@ -414,9 +412,7 @@ fn soft_reset_keeps_closed_identity_and_hard_reset_forgets_it() {
         "soft reset preserves resumable identity"
     );
 
-    h.store
-        .reset_records("rimz-test", true)
-        .expect("hard reset");
+    h.store.reset_records(true).expect("hard reset");
     let after_hard = h
         .store
         .runtime_projection(RuntimeScope::Audit)
