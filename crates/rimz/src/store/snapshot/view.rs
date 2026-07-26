@@ -279,13 +279,12 @@ pub struct SidebarSnapshot {
     /// which read as stale so a fresh fold replaces them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reflects_log: Option<event_log::LogExtent>,
-    /// Durable sessions whose rollup carries `ended_at` — every reap variant
-    /// and graceful end folds here. The local-session fresh-fallback binding
-    /// reads it so a dead session's on-disk rollout can never adopt an
-    /// unclaimed live pane. Stamped by `assemble_snapshot`; the pure reducer
-    /// path leaves it empty.
+    /// Sessions fenced from local-session fresh-fallback binding: durably
+    /// ended (`ended_at`, including every reap variant and graceful end) or
+    /// expelled from the runtime projection for a known-dead owner process.
+    /// Stamped by `assemble_snapshot`; the pure reducer path leaves it empty.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub ended_sessions: BTreeSet<(AgentKind, AgentSessionId)>,
+    pub fenced_sessions: BTreeSet<(AgentKind, AgentSessionId)>,
     /// Latest terminal resume-gated prompt outcome per folded agent card.
     /// `None` means a pre-outcome snapshot and forces a fresh fold before the
     /// auto-continue producer reads it.
@@ -357,7 +356,7 @@ impl SidebarSnapshot {
             fleet_budget: None,
             link: None,
             reflects_log: None,
-            ended_sessions: BTreeSet::new(),
+            fenced_sessions: BTreeSet::new(),
             resume_outcomes: Some(Vec::new()),
         }
     }

@@ -658,7 +658,7 @@ fn ended_session_cannot_adopt_a_provisional_launch_identity() {
     provisional.channel = Some("auth".to_owned());
     let pane = pane("%1", "codex", "/repo/main");
     let mut snapshot = room(vec![provisional]);
-    snapshot.ended_sessions.insert((
+    snapshot.fenced_sessions.insert((
         AgentKind::new_unchecked("codex"),
         AgentSessionId::from("session-dead"),
     ));
@@ -688,7 +688,7 @@ fn ended_session_cannot_adopt_a_provisional_launch_identity() {
 }
 
 #[test]
-fn session_stamped_to_an_absent_pane_cannot_fresh_bind_elsewhere() {
+fn ownerless_session_stamped_to_an_absent_pane_cannot_fresh_bind_elsewhere() {
     let durable = agent("codex", "session-a", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .in_pane("%9");
@@ -736,7 +736,7 @@ fn exact_resume_can_bind_an_ended_session() {
     let mut pane = pane("%1", "codex", "/repo/main");
     pane.resumed_session_id = Some(AgentSessionId::from("session-ended"));
     let mut snapshot = room(Vec::new());
-    snapshot.ended_sessions.insert((
+    snapshot.fenced_sessions.insert((
         AgentKind::new_unchecked("codex"),
         AgentSessionId::from("session-ended"),
     ));
