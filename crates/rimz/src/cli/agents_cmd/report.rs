@@ -152,6 +152,7 @@ pub(super) struct ReportOverrides<'a> {
     pub runtime: Option<&'a rimz::RuntimePaths>,
     pub effort: Option<rimz::agents::spending::SlotEffort>,
     pub active_secs: Option<u64>,
+    pub budget_cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -286,7 +287,7 @@ pub(super) fn build_entry(
         .effort
         .map(|effort| effort.tokens)
         .filter(|tokens| tokens.display_total() > 0);
-    let budget = budget_report(overrides.runtime, agent, cost_usd);
+    let budget = budget_report(overrides.runtime, agent, overrides.budget_cost_usd);
 
     AgentReportEntry {
         id: agent.agent_id.clone(),
@@ -771,6 +772,7 @@ mod tests {
         let mut state = agent("effort");
         state.usage.total_tokens = Some(999);
         state.usage.fresh_input_tokens = Some(999);
+        state.budget = Some("$1.00".to_owned());
         let peers = [&state];
         let entry = build_entry(
             &state,
@@ -790,6 +792,7 @@ mod tests {
                     cost_usd: Some(0.5),
                 }),
                 active_secs: Some(60),
+                budget_cost_usd: Some(0.25),
                 ..ReportOverrides::default()
             },
         );
@@ -801,6 +804,7 @@ mod tests {
         assert_eq!(entry.stats.cache_read_tokens, Some(40));
         assert_eq!(entry.stats.cost_usd, Some(0.5));
         assert_eq!(entry.stats.active_secs, Some(60));
+        assert_eq!(entry.budget.spent_usd, Some(0.25));
     }
 
     #[test]
