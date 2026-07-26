@@ -82,7 +82,7 @@ rimz teams stop forge                   # close the whole live cohort
 Add `--json` to `rimz teams` or `show` for the structured report.
 The bare team name and the longer `launch` form use the same reconciliation engine as `rimz agents <team>`, while `resume`, `focus`, `restart`, and `stop` keep the cohort lifecycle together.
 When the same team is live in several lanes, run the lifecycle command inside the lane you mean or select it with `-w NAME`.
-The `COST` in `rimz teams show`, the team's attribution footer, and its collapsed finished sidebar receipt all use the same lifetime fold across every resumed session of each role, so their dollars and token totals agree.
+The `COST` in `rimz teams show`, the team's attribution footer, and its collapsed finished sidebar receipt all use the same lifetime fold across every resumed session of each role, so their dollars and token totals agree. Expanding that finished receipt puts each role's lifetime cost on its card, and those cards add back to the receipt; live cards remain scoped to the current provider session.
 Use [`rimz agents attribution --md`](../reference/cli/agents.md#attribution) when the team's pull request is ready; it credits every role from durable lane history, including members that exited before the PR opened.
 The full flag surface lives in the [teams CLI reference](../reference/cli/teams.md).
 
