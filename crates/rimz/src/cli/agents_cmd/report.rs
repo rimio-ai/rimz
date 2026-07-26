@@ -150,7 +150,8 @@ pub(super) struct SubAgentReport {
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct ReportOverrides<'a> {
     pub runtime: Option<&'a rimz::RuntimePaths>,
-    pub cost_usd: Option<f64>,
+    pub effort: Option<rimz::agents::spending::SlotEffort>,
+    pub active_secs: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -273,12 +274,19 @@ pub(super) fn build_entry(
         .and_then(|row| row.pane.as_ref())
         .or(agent.pane.as_ref())
         .map(|pane| pane.pane_id.to_string());
-    let cost_usd = card
-        .and_then(|card| card.context.as_ref())
-        .and_then(|context| context.cost.as_ref())
-        .and_then(|cost| cost.total_cost_usd)
-        .or(overrides.cost_usd);
-    let budget = budget_report(overrides.runtime, agent, overrides.cost_usd);
+    let cost_usd = overrides.effort.map_or_else(
+        || {
+            card.and_then(|card| card.context.as_ref())
+                .and_then(|context| context.cost.as_ref())
+                .and_then(|cost| cost.total_cost_usd)
+        },
+        |effort| effort.cost_usd,
+    );
+    let effort_tokens = overrides
+        .effort
+        .map(|effort| effort.tokens)
+        .filter(|tokens| tokens.display_total() > 0);
+    let budget = budget_report(overrides.runtime, agent, cost_usd);
 
     AgentReportEntry {
         id: agent.agent_id.clone(),
@@ -314,13 +322,25 @@ pub(super) fn build_entry(
             compacting: agent.is_compacting(now),
         },
         stats: StatsReport {
-            total_tokens: agent.usage.total_tokens,
-            fresh_input_tokens: agent.usage.fresh_input_tokens,
-            cache_read_tokens: agent.usage.cache_read_input_tokens,
-            cache_write_tokens: agent.usage.cache_write_input_tokens,
-            output_tokens: agent.usage.output_tokens,
+            total_tokens: effort_tokens
+                .map(rimz::agents::spending::EffortTokens::display_total)
+                .or(agent.usage.total_tokens),
+            fresh_input_tokens: effort_tokens
+                .map(|tokens| tokens.input)
+                .or(agent.usage.fresh_input_tokens),
+            cache_read_tokens: effort_tokens
+                .map(|tokens| tokens.cache_read)
+                .or(agent.usage.cache_read_input_tokens),
+            cache_write_tokens: effort_tokens
+                .map(|tokens| tokens.cache_write)
+                .or(agent.usage.cache_write_input_tokens),
+            output_tokens: effort_tokens
+                .map(|tokens| tokens.output)
+                .or(agent.usage.output_tokens),
             cost_usd,
-            active_secs: card.and_then(|card| card.estimated_active_secs),
+            active_secs: overrides
+                .active_secs
+                .or_else(|| card.and_then(|card| card.estimated_active_secs)),
             tool_calls: agent.tool_calls.clone(),
             tool_repeat: agent.tool_repeat.clone(),
         },
@@ -746,6 +766,44 @@ mod tests {
     }
 
     #[test]
+    fn lifetime_effort_overrides_live_stats_as_one_unit() {
+        let now = Timestamp::from_second(2_000).unwrap();
+        let mut state = agent("effort");
+        state.usage.total_tokens = Some(999);
+        state.usage.fresh_input_tokens = Some(999);
+        let peers = [&state];
+        let entry = build_entry(
+            &state,
+            None,
+            None,
+            &peers,
+            None,
+            now,
+            ReportOverrides {
+                effort: Some(rimz::agents::spending::SlotEffort {
+                    tokens: rimz::agents::spending::EffortTokens {
+                        input: 10,
+                        output: 20,
+                        cache_write: 30,
+                        cache_read: 40,
+                    },
+                    cost_usd: Some(0.5),
+                }),
+                active_secs: Some(60),
+                ..ReportOverrides::default()
+            },
+        );
+
+        assert_eq!(entry.stats.total_tokens, Some(100));
+        assert_eq!(entry.stats.fresh_input_tokens, Some(10));
+        assert_eq!(entry.stats.output_tokens, Some(20));
+        assert_eq!(entry.stats.cache_write_tokens, Some(30));
+        assert_eq!(entry.stats.cache_read_tokens, Some(40));
+        assert_eq!(entry.stats.cost_usd, Some(0.5));
+        assert_eq!(entry.stats.active_secs, Some(60));
+    }
+
+    #[test]
     fn budget_projection_uses_effective_ledger_cap_and_live_spend() {
         let dir = tempfile::tempdir().expect("tempdir");
         let workspace_id = rimz::ids::WorkspaceId::from_project_root(dir.path());
@@ -779,7 +837,11 @@ mod tests {
             now,
             ReportOverrides {
                 runtime: Some(&runtime),
-                cost_usd: Some(100.0),
+                effort: Some(rimz::agents::spending::SlotEffort {
+                    cost_usd: Some(100.0),
+                    ..rimz::agents::spending::SlotEffort::default()
+                }),
+                ..ReportOverrides::default()
             },
         );
 
