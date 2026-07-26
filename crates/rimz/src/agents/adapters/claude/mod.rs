@@ -680,9 +680,16 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
         child_id: &str,
         prior: Option<&super::SubagentUsageCursor>,
         prices: &PriceBook,
+        book_fingerprint: Option<&str>,
     ) -> Option<super::SubagentUsageCursor> {
         let parent = optional_payload_string(payload, &["transcript_path"])?;
-        subagent_cost::advance_cursor(Path::new(&parent), child_id, prior, prices)
+        subagent_cost::advance_cursor(
+            Path::new(&parent),
+            child_id,
+            prior,
+            prices,
+            book_fingerprint,
+        )
     }
 
     fn local_context_refresh(

@@ -177,6 +177,7 @@ mod tests {
             offset: 412,
             cost_usd: 0.42,
             unpriced: false,
+            book_fingerprint: Some("1700000000:412".to_owned()),
             last_request: None,
         };
 
@@ -186,6 +187,21 @@ mod tests {
         .unwrap();
 
         assert_eq!(read_all(&runtime)[0].usage_cursor, Some(cursor));
+    }
+
+    #[test]
+    fn usage_cursor_without_book_fingerprint_still_parses() {
+        let cursor: SubagentUsageCursor = serde_json::from_str(
+            r#"{
+                "transcript_path":"child.jsonl",
+                "offset":7,
+                "cost_usd":0.12,
+                "unpriced":true
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(cursor.book_fingerprint, None);
     }
 
     #[test]
@@ -216,6 +232,7 @@ mod tests {
             offset: 7,
             cost_usd: 0.12,
             unpriced: false,
+            book_fingerprint: None,
             last_request: None,
         };
 

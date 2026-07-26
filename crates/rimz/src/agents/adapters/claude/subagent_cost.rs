@@ -20,6 +20,7 @@ pub(super) fn advance_cursor(
     child_id: &str,
     prior: Option<&SubagentUsageCursor>,
     prices: &PriceBook,
+    book_fingerprint: Option<&str>,
 ) -> Option<SubagentUsageCursor> {
     let filename = format!("agent-{child_id}.jsonl");
     if Path::new(&filename).file_name()?.to_str()? != filename {
@@ -28,9 +29,12 @@ pub(super) fn advance_cursor(
     let path = subagents_dir(parent_transcript)?.join(filename);
     let len = std::fs::metadata(&path).ok()?.len();
     let transcript_path = path.to_string_lossy().into_owned();
+    let replay_unpriced = prior.is_some_and(|cursor| {
+        cursor.unpriced && cursor.book_fingerprint.as_deref() != book_fingerprint
+    });
     let mut cursor = prior
         .filter(|cursor| {
-            cursor.transcript_path == transcript_path && cursor.offset <= len && !cursor.unpriced
+            cursor.transcript_path == transcript_path && cursor.offset <= len && !replay_unpriced
         })
         .cloned()
         .unwrap_or(SubagentUsageCursor {
@@ -38,6 +42,7 @@ pub(super) fn advance_cursor(
             offset: 0,
             cost_usd: 0.0,
             unpriced: false,
+            book_fingerprint: None,
             last_request: None,
         });
 
@@ -60,6 +65,11 @@ pub(super) fn advance_cursor(
         fold_entry(&mut cursor, &entry, prices);
     }
     cursor.offset = next_offset;
+    cursor.book_fingerprint = if cursor.unpriced {
+        book_fingerprint.map(str::to_owned)
+    } else {
+        None
+    };
     Some(cursor)
 }
 
@@ -197,6 +207,8 @@ mod tests {
 
     use super::*;
 
+    const BOOK_FINGERPRINT: &str = "1700000000:100";
+
     fn prices() -> PriceBook {
         PriceBook::from_litellm_json(
             r#"{
@@ -255,7 +267,7 @@ mod tests {
     }
 
     fn advance(parent: &Path, prior: Option<&SubagentUsageCursor>) -> SubagentUsageCursor {
-        advance_cursor(parent, "child-1", prior, &prices()).unwrap()
+        advance_cursor(parent, "child-1", prior, &prices(), Some(BOOK_FINGERPRINT)).unwrap()
     }
 
     #[test]
@@ -389,11 +401,12 @@ mod tests {
         let cursor = advance(&parent, None);
 
         assert!(cursor.unpriced);
+        assert_eq!(cursor.book_fingerprint.as_deref(), Some(BOOK_FINGERPRINT));
         assert_eq!(cursor.display_cost(), None);
     }
 
     #[test]
-    fn refreshed_price_table_heals_an_unpriced_cursor() {
+    fn changed_book_fingerprint_heals_while_unchanged_resumes() {
         let (_dir, parent, child) = session();
         write_lines(
             &child,
@@ -414,7 +427,24 @@ mod tests {
             }"#,
         );
 
-        let healed = advance_cursor(&parent, "child-1", Some(&cursor), &refreshed).unwrap();
+        let unchanged = advance_cursor(
+            &parent,
+            "child-1",
+            Some(&cursor),
+            &refreshed,
+            Some(BOOK_FINGERPRINT),
+        )
+        .unwrap();
+        assert_eq!(unchanged, cursor);
+
+        let healed = advance_cursor(
+            &parent,
+            "child-1",
+            Some(&unchanged),
+            &refreshed,
+            Some("1700000001:200"),
+        )
+        .unwrap();
 
         assert!(!healed.unpriced);
         assert_eq!(healed.display_cost(), Some(10.0));
@@ -471,7 +501,8 @@ mod tests {
         append_line(&child, &second);
         let incremental = advance(&parent, Some(&cursor));
 
-        let full = advance_cursor(&parent, "child-1", None, &prices()).unwrap();
+        let full =
+            advance_cursor(&parent, "child-1", None, &prices(), Some(BOOK_FINGERPRINT)).unwrap();
 
         assert_eq!(incremental, full);
     }
@@ -534,8 +565,14 @@ mod tests {
             )],
         );
 
-        let changed =
-            advance_cursor(&other_parent, "child-1", Some(&truncated), &prices()).unwrap();
+        let changed = advance_cursor(
+            &other_parent,
+            "child-1",
+            Some(&truncated),
+            &prices(),
+            Some(BOOK_FINGERPRINT),
+        )
+        .unwrap();
         assert_eq!(changed.display_cost(), Some(9.0));
         assert_ne!(changed.transcript_path, truncated.transcript_path);
     }
@@ -545,13 +582,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let parent = dir.path().join("missing.jsonl");
 
-        assert!(advance_cursor(&parent, "child-1", None, &prices()).is_none());
+        assert!(
+            advance_cursor(&parent, "child-1", None, &prices(), Some(BOOK_FINGERPRINT)).is_none()
+        );
     }
 
     #[test]
     fn child_id_cannot_escape_the_subagents_directory() {
         let (_dir, parent, _child) = session();
 
-        assert!(advance_cursor(&parent, "x/../../outside", None, &prices()).is_none());
+        assert!(
+            advance_cursor(
+                &parent,
+                "x/../../outside",
+                None,
+                &prices(),
+                Some(BOOK_FINGERPRINT)
+            )
+            .is_none()
+        );
     }
 }
