@@ -553,6 +553,44 @@ pub(crate) fn clamp_pct(value: Option<f64>) -> Option<u8> {
         .map(|value| value.round().clamp(0.0, 100.0) as u8)
 }
 
+/// Resume state for exact, incremental pricing of one child's transcript.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubagentUsageCursor {
+    /// Provider transcript this cursor resumes. A path change resets the fold.
+    pub transcript_path: String,
+    /// Byte offset just past the last complete JSONL record consumed.
+    pub offset: u64,
+    /// Cumulative per-request-priced cost for every consumed child request.
+    pub cost_usd: f64,
+    /// At least one priceable request had no price, so the cumulative figure is
+    /// incomplete and must not be displayed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unpriced: bool,
+    /// Last keyed request, retained across statusline ticks so a contiguous
+    /// duplicate can replace its earlier, less complete record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_request: Option<PricedRequest>,
+}
+
+impl SubagentUsageCursor {
+    /// Exact cumulative cost, hidden whenever any consumed request was unpriced.
+    pub fn display_cost(&self) -> Option<f64> {
+        (!self.unpriced).then_some(self.cost_usd)
+    }
+}
+
+/// One request retained for the child-transcript duplicate replacement guard.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PricedRequest {
+    /// `message.id`, a NUL separator, and `requestId`.
+    pub key: String,
+    pub cost_usd: f64,
+    pub token_total: u64,
+    /// Whether the request carried Claude's fast/priority pricing marker.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_speed: bool,
+}
+
 /// Per-subagent enrichment a paneless child cannot publish for itself. Claude's
 /// `subagentStatusLine` is `exec`d to render the agent panel's child rows and is
 /// handed each task's `type`, `description`, `tokenCount`, and `startTime`; RimZ
@@ -578,6 +616,12 @@ pub struct SubagentContext {
     /// subagent that never reads a transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_count: Option<u64>,
+    /// Exact cumulative per-request-priced child cost, when the provider exposes
+    /// a dedicated transcript and every priceable request resolved. Display-only:
+    /// parent/session spend already includes child requests, so this is never
+    /// added to a group or provider total.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     /// When the child began, from `startTime`. The card derives elapsed work as
     /// `(running ? now : last_activity) − started_at`. Absent when the upstream
     /// value is missing or unparseable.

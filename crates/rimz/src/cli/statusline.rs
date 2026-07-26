@@ -168,12 +168,21 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
     let runtime =
         RuntimePaths::for_workspace(workspace.workspace_id).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
+    let prices = pricing::cached_book(&runtime.shared_pricing_cache_path());
     for observation in &observations {
-        rimz::store::subagent_context::write(
+        rimz::store::subagent_context::update(
             &runtime,
             agent.spec().kind,
             &observation.agent_id,
-            &observation.context,
+            |prior| {
+                let prior_cursor = prior.and_then(|record| record.usage_cursor.as_ref());
+                let cursor = agent
+                    .subagent_cost_cursor(&payload, &observation.agent_id, prior_cursor, &prices)
+                    .or_else(|| prior_cursor.cloned());
+                let mut context = observation.context.clone();
+                context.cost_usd = cursor.as_ref().and_then(|cursor| cursor.display_cost());
+                (context, cursor)
+            },
         )
         .context("writing subagent-context sidecar")?;
     }

@@ -66,6 +66,7 @@ impl SubagentStatuslinePayload {
                         agent_type: task.r#type.filter(|t| !t.is_empty()),
                         description: task.description.filter(|d| !d.is_empty()),
                         token_count: task.token_count.as_ref().and_then(value_as_u64),
+                        cost_usd: None,
                         started_at: task.start_time.as_ref().and_then(value_as_timestamp),
                         observed_at,
                     },

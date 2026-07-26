@@ -580,6 +580,11 @@ pub struct SidebarSubAgent {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
+    /// Exact cumulative cost for this child, when its provider exposes a
+    /// dedicated priced transcript. Display-only and never summed into parent
+    /// or provider spend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_secs: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

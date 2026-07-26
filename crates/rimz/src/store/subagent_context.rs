@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::context::SubagentContext;
+use crate::agents::context::{SubagentContext, SubagentUsageCursor};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::atomic;
 use crate::store::paths::RuntimePaths;
@@ -33,6 +33,10 @@ pub struct SubagentContextRecord {
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
     pub context: SubagentContext,
+    /// Resume state for incremental per-request pricing of this child's
+    /// provider transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_cursor: Option<SubagentUsageCursor>,
 }
 
 impl sidecar::SidecarRecord for SubagentContextRecord {
@@ -56,12 +60,40 @@ pub fn write(
     agent_id: &str,
     context: &SubagentContext,
 ) -> Result<(), atomic::AtomicErr> {
-    let record = SubagentContextRecord {
-        kind: AgentKind::new_unchecked(kind),
-        agent_id: agent_id.into(),
-        context: context.clone(),
-    };
-    sidecar::write_record(&runtime.subagent_context_dir, &record)
+    update(runtime, kind, agent_id, |prior| {
+        (
+            context.clone(),
+            prior.and_then(|record| record.usage_cursor.clone()),
+        )
+    })
+}
+
+/// Read-modify-write one child sidecar under its per-record advisory lock.
+/// The caller receives the latest valid record and returns both the display
+/// context and resumable transcript-pricing cursor to publish.
+pub fn update(
+    runtime: &RuntimePaths,
+    kind: &str,
+    agent_id: &str,
+    apply: impl FnOnce(Option<&SubagentContextRecord>) -> (SubagentContext, Option<SubagentUsageCursor>),
+) -> Result<(), atomic::AtomicErr> {
+    let _lock = sidecar::RecordLock::acquire(
+        &runtime.subagent_context_dir,
+        <SubagentContextRecord as sidecar::SidecarRecord>::FILE_PREFIX,
+        kind,
+        agent_id,
+    )?;
+    let prior = sidecar::read_one(&runtime.subagent_context_dir, kind, agent_id);
+    let (context, usage_cursor) = apply(prior.as_ref());
+    sidecar::write_record(
+        &runtime.subagent_context_dir,
+        &SubagentContextRecord {
+            kind: AgentKind::new_unchecked(kind),
+            agent_id: agent_id.into(),
+            context,
+            usage_cursor,
+        },
+    )
 }
 
 thread_local! {
@@ -101,6 +133,7 @@ mod tests {
             agent_type: None,
             description: Some("locate the render seam".to_owned()),
             token_count: Some(12_400),
+            cost_usd: None,
             started_at: Some(observed_at),
             observed_at,
         }
@@ -133,5 +166,73 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].agent_id, "child-old");
         assert_eq!(all[0].context.observed_at, old);
+    }
+
+    #[test]
+    fn usage_cursor_round_trips() {
+        let (_dir, runtime) = runtime();
+        let now = Timestamp::now();
+        let cursor = SubagentUsageCursor {
+            transcript_path: "/tmp/parent/subagents/agent-child-1.jsonl".to_owned(),
+            offset: 412,
+            cost_usd: 0.42,
+            unpriced: false,
+            last_request: None,
+        };
+
+        update(&runtime, "claude", "child-1", |_| {
+            (ctx(now), Some(cursor.clone()))
+        })
+        .unwrap();
+
+        assert_eq!(read_all(&runtime)[0].usage_cursor, Some(cursor));
+    }
+
+    #[test]
+    fn pre_feature_record_parses_without_a_cursor_or_cost() {
+        let record: SubagentContextRecord = serde_json::from_str(
+            r#"{
+                "kind":"claude",
+                "agent_id":"child-1",
+                "context":{
+                    "description":"old record",
+                    "observed_at":"2026-01-01T00:00:00Z"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(record.context.cost_usd, None);
+        assert_eq!(record.usage_cursor, None);
+    }
+
+    #[test]
+    fn update_reads_prior_and_persists_the_returned_cursor() {
+        let (_dir, runtime) = runtime();
+        let now = Timestamp::now();
+        write(&runtime, "claude", "child-1", &ctx(now)).unwrap();
+        let cursor = SubagentUsageCursor {
+            transcript_path: "child.jsonl".to_owned(),
+            offset: 7,
+            cost_usd: 0.12,
+            unpriced: false,
+            last_request: None,
+        };
+
+        update(&runtime, "claude", "child-1", |prior| {
+            let prior = prior.expect("prior record");
+            assert_eq!(
+                prior.context.description.as_deref(),
+                Some("locate the render seam")
+            );
+            let mut context = prior.context.clone();
+            context.cost_usd = cursor.display_cost();
+            (context, Some(cursor.clone()))
+        })
+        .unwrap();
+
+        let record = read_all(&runtime).into_iter().next().unwrap();
+        assert_eq!(record.context.cost_usd, Some(0.12));
+        assert_eq!(record.usage_cursor, Some(cursor));
     }
 }

@@ -20,7 +20,6 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 
 use jiff::Timestamp;
@@ -200,7 +199,12 @@ pub fn update_record(
     observed_at: Timestamp,
     update: impl FnOnce(&mut AgentContextRecord, bool) -> bool,
 ) -> Result<bool, atomic::AtomicErr> {
-    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
+    let _lock = sidecar::RecordLock::acquire(
+        &runtime.agent_context_dir,
+        <AgentContextRecord as sidecar::SidecarRecord>::FILE_PREFIX,
+        kind,
+        agent_id,
+    )?;
     let prior = read_one_unlocked(runtime, kind, agent_id);
     let existed = prior.is_some();
     let mut record =
@@ -464,50 +468,6 @@ fn merge_observed_cost(
     *target != before
 }
 
-struct RecordLock {
-    file: File,
-}
-
-impl RecordLock {
-    fn acquire(
-        runtime: &RuntimePaths,
-        kind: &str,
-        agent_id: &str,
-    ) -> Result<Self, atomic::AtomicErr> {
-        std::fs::create_dir_all(&runtime.agent_context_dir).map_err(|source| {
-            atomic::AtomicErr::Io {
-                path: runtime.agent_context_dir.clone(),
-                source,
-            }
-        })?;
-        let path = sidecar::lock_path(
-            &runtime.agent_context_dir,
-            <AgentContextRecord as sidecar::SidecarRecord>::FILE_PREFIX,
-            kind,
-            agent_id,
-        );
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&path)
-            .map_err(|source| atomic::AtomicErr::Io {
-                path: path.clone(),
-                source,
-            })?;
-        file.lock()
-            .map_err(|source| atomic::AtomicErr::Io { path, source })?;
-        Ok(Self { file })
-    }
-}
-
-impl Drop for RecordLock {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
-    }
-}
-
 thread_local! {
     /// Per-thread parse cache. Every update lands via atomic rename of a
     /// freshly-written temp file, so `(mtime, len)` validates content; the
@@ -529,7 +489,13 @@ pub fn read_all(runtime: &RuntimePaths) -> Vec<AgentContextRecord> {
 /// Remove a session's sidecar on `SessionEnd` or reap. Best-effort:
 /// a missing file is success.
 pub fn remove(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> std::io::Result<()> {
-    let _lock = RecordLock::acquire(runtime, kind, agent_id).map_err(|error| match error {
+    let _lock = sidecar::RecordLock::acquire(
+        &runtime.agent_context_dir,
+        <AgentContextRecord as sidecar::SidecarRecord>::FILE_PREFIX,
+        kind,
+        agent_id,
+    )
+    .map_err(|error| match error {
         atomic::AtomicErr::Io { source, .. } => source,
         atomic::AtomicErr::Json(source) => std::io::Error::other(source),
     })?;

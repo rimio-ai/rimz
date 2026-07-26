@@ -458,6 +458,21 @@ pub trait ContextCapability: CoreCapability {
         Vec::new()
     }
 
+    /// Incrementally price one child's dedicated transcript from provider-native
+    /// statusline context. The cursor is display-only enrichment: callers may
+    /// persist and resume it, but it never feeds lifecycle or routing decisions.
+    /// `None` means the adapter has no exact per-child source, or that source
+    /// could not be read on this tick.
+    fn subagent_cost_cursor(
+        &self,
+        _payload: &Value,
+        _child_id: &str,
+        _prior: Option<&SubagentUsageCursor>,
+        _prices: &PriceBook,
+    ) -> Option<SubagentUsageCursor> {
+        None
+    }
+
     /// A detached `rimz` helper to spawn after a lifecycle event or producer
     /// tick — the out-of-band enrichment lane. The caller spawns it with fresh,
     /// fully-nulled stdio and never waits, so it adds no latency to the

@@ -460,11 +460,11 @@ impl SidebarSnapshot {
     }
 
     /// Attach each child's `subagentStatusLine` enrichment (description, token
-    /// count, start time) to its `AgentState` by `(kind, agent_id)`. It must land
-    /// on the `AgentState`, not the already-projected `SidebarSubAgent`: the
-    /// live-pane fold re-runs `attach_sub_agents` → `sub_agent_from_state`.
-    /// `token_count` claims the otherwise-unused `total_tokens` slot (a paneless
-    /// child reads no transcript). Display-only, like
+    /// count, exact cost, start time) to its `AgentState` by `(kind, agent_id)`.
+    /// It must land on the `AgentState`, not the already-projected
+    /// `SidebarSubAgent`: the live-pane fold re-runs `attach_sub_agents` →
+    /// `sub_agent_from_state`. `token_count` claims the otherwise-unused
+    /// `total_tokens` slot (a paneless child reads no transcript). Display-only, like
     /// [`with_agent_context`](Self::with_agent_context) — it never touches
     /// `last_activity`, so ranking is untouched. A record whose child is absent
     /// from the rollup is dropped; the key it is filed under is authority.
@@ -486,6 +486,7 @@ impl SidebarSnapshot {
                     agent.task = context.agent_type;
                 }
                 agent.subagent_description = context.description;
+                agent.subagent_cost_usd = context.cost_usd;
                 agent.subagent_started_at = context.started_at;
                 if context.token_count.is_some() {
                     agent.usage.total_tokens = context.token_count;

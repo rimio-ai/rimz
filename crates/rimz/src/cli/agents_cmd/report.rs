@@ -723,6 +723,7 @@ mod tests {
                     effort: Some("high".to_owned()),
                     description: None,
                     total_tokens: Some(1_200),
+                    cost_usd: None,
                     elapsed_secs: Some(12),
                     started_at: None,
                     last_activity: now,

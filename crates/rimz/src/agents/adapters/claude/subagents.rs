@@ -39,7 +39,7 @@ pub(super) fn spawned_subagents_under(parent_transcript: &Path) -> Vec<SpawnedSu
         .collect()
 }
 
-fn subagents_dir(parent_transcript: &Path) -> Option<PathBuf> {
+pub(super) fn subagents_dir(parent_transcript: &Path) -> Option<PathBuf> {
     if parent_transcript.file_name() == Some(OsStr::new("chat.jsonl")) {
         return Some(parent_transcript.parent()?.join("subagents"));
     }

@@ -68,7 +68,8 @@ pub use context::{
     AgentSessionUsage, AgentTokenUsage, AgentTurnError, CacheHealth, ContextObservation,
     CostCoverage, FieldPatch, LocalContextPatch, LocalTokenPatch, ProviderAccountScope,
     RateLimitWindow, RateLimitWindowScope, SessionContextInput, SessionContextRefresh,
-    SubagentContext, SubagentObservation, TurnErrorClass, TurnSettle, TurnSettleOutcome,
+    SubagentContext, SubagentObservation, SubagentUsageCursor, TurnErrorClass, TurnSettle,
+    TurnSettleOutcome,
 };
 pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCredits};

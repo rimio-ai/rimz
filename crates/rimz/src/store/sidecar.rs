@@ -10,7 +10,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -44,6 +44,46 @@ pub(crate) fn path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> Path
 
 pub(crate) fn lock_path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> PathBuf {
     path(dir, prefix, kind, agent_id).with_extension("lock")
+}
+
+/// Per-record advisory lock shared by sidecar writers that need an atomic
+/// read-modify-write across independent CLI processes.
+pub(crate) struct RecordLock {
+    file: File,
+}
+
+impl RecordLock {
+    pub(crate) fn acquire(
+        dir: &Path,
+        prefix: &str,
+        kind: &str,
+        agent_id: &str,
+    ) -> Result<Self, atomic::AtomicErr> {
+        std::fs::create_dir_all(dir).map_err(|source| atomic::AtomicErr::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let path = lock_path(dir, prefix, kind, agent_id);
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|source| atomic::AtomicErr::Io {
+                path: path.clone(),
+                source,
+            })?;
+        file.lock()
+            .map_err(|source| atomic::AtomicErr::Io { path, source })?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for RecordLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
 }
 
 pub(crate) fn write_record<R: SidecarRecord>(

@@ -27,6 +27,7 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
     );
     child.parent_agent_id = Some("claude-1".into());
     child.subagent_description = Some("locate the render seam".to_owned());
+    child.subagent_cost_usd = Some(0.42);
     child.subagent_started_at = Some(fixed_now() - Duration::from_secs(90));
     child.last_activity = fixed_now() - Duration::from_secs(30);
     child.last_seen = fixed_now() - Duration::from_secs(30);
@@ -76,6 +77,14 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
         rendered.contains("Explore — locate the render seam"),
         "the finished child keeps its type line:\n{rendered}"
     );
+    let priced_line = rendered
+        .lines()
+        .find(|line| line.contains("Explore — locate the render seam"))
+        .expect("priced child line");
+    assert!(
+        priced_line.contains("$0.42▐"),
+        "the exact child cost pins right on line 1:\n{rendered}"
+    );
     // The running child's leading cell is the thinking orbit (frame 0 at the
     // test's fixed animation phase), the agent-row head vocabulary verbatim.
     assert!(
@@ -123,6 +132,52 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
         "both metadata-bearing children carry a `◇` row:\n{rendered}"
     );
     assert_snapshot("subagent_two_line_entry", rendered);
+}
+
+#[test]
+fn narrow_subagent_line_truncates_description_before_exact_cost() {
+    let parent = agent(
+        "claude-root",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    let mut child = agent(
+        "claude-child",
+        "claude",
+        AgentStatus::Success,
+        None,
+        None,
+        Some("Explore"),
+    );
+    child.parent_agent_id = Some("claude-root".into());
+    child.subagent_description =
+        Some("trace every caller through the complete rendering pipeline".to_owned());
+    child.subagent_cost_usd = Some(0.42);
+
+    let snapshot = snapshot_with(vec![parent, child]);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: 0,
+            ..Default::default()
+        },
+        34,
+        23,
+    );
+    let child_line = rendered
+        .lines()
+        .find(|line| line.contains("Explore"))
+        .expect("child line");
+
+    assert!(child_line.contains("$0.42▐"), "{rendered}");
+    assert!(
+        !child_line.contains("complete rendering pipeline"),
+        "description yields width to the exact cost:\n{rendered}"
+    );
 }
 
 #[test]

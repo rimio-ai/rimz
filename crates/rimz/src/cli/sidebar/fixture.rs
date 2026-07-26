@@ -690,6 +690,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                         model: Some("Sonnet 4.6"),
                         description: None,
                         total_tokens: Some(23_500),
+                        cost_usd: None,
                         elapsed_secs: Some(210),
                     },
                     now,
@@ -704,6 +705,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                         model: Some("Sonnet 4.6"),
                         description: None,
                         total_tokens: Some(14_800),
+                        cost_usd: None,
                         elapsed_secs: Some(260),
                     },
                     now,
@@ -742,6 +744,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                         model: Some("Haiku"),
                         description: Some("trace handler graph"),
                         total_tokens: Some(20_100),
+                        cost_usd: Some(0.34),
                         elapsed_secs: Some(420),
                     },
                     now,
@@ -756,6 +759,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                         model: Some("Haiku"),
                         description: Some("exercise auth edge cases"),
                         total_tokens: Some(18_700),
+                        cost_usd: Some(0.27),
                         elapsed_secs: Some(390),
                     },
                     now,
@@ -770,6 +774,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                         model: Some("Haiku"),
                         description: None,
                         total_tokens: Some(11_400),
+                        cost_usd: Some(0.18),
                         elapsed_secs: Some(360),
                     },
                     now,
@@ -784,6 +789,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                         model: Some("Haiku"),
                         description: Some("write migration runbook"),
                         total_tokens: Some(9_900),
+                        cost_usd: Some(0.14),
                         elapsed_secs: Some(300),
                     },
                     now,
@@ -798,6 +804,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                         model: Some("Haiku"),
                         description: Some("split blocking checks"),
                         total_tokens: Some(8_700),
+                        cost_usd: Some(0.12),
                         elapsed_secs: Some(240),
                     },
                     now,
@@ -1888,7 +1895,7 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> rimz::SidebarRow {
     match spec.sub_agents {
         Some(sub_agents) => card.sub_agents = sub_agents,
         None if spec.status == rimz::agents::AgentStatus::Running => {
-            card.sub_agents = default_sub_agents(now);
+            card.sub_agents = default_sub_agents(spec.name, now);
         }
         None => {}
     }
@@ -1943,7 +1950,7 @@ fn agent_context(
     }
 }
 
-fn default_sub_agents(now: jiff::Timestamp) -> Vec<rimz::SidebarSubAgent> {
+fn default_sub_agents(kind: &str, now: jiff::Timestamp) -> Vec<rimz::SidebarSubAgent> {
     vec![
         sub_agent(
             SubAgentSpec {
@@ -1955,6 +1962,7 @@ fn default_sub_agents(now: jiff::Timestamp) -> Vec<rimz::SidebarSubAgent> {
                 model: Some("Haiku"),
                 description: Some("audit auth watcher changes"),
                 total_tokens: Some(22_400),
+                cost_usd: (kind == "claude").then_some(0.34),
                 elapsed_secs: Some(320),
             },
             now,
@@ -1969,6 +1977,7 @@ fn default_sub_agents(now: jiff::Timestamp) -> Vec<rimz::SidebarSubAgent> {
                 model: Some("Haiku"),
                 description: None,
                 total_tokens: Some(18_900),
+                cost_usd: (kind == "claude").then_some(0.12),
                 elapsed_secs: Some(180),
             },
             now,
@@ -1985,6 +1994,7 @@ struct SubAgentSpec<'a> {
     model: Option<&'a str>,
     description: Option<&'a str>,
     total_tokens: Option<u64>,
+    cost_usd: Option<f64>,
     elapsed_secs: Option<i64>,
 }
 
@@ -2002,6 +2012,7 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> rimz::SidebarSubAg
         effort: Some("xhigh".to_owned()),
         description: spec.description.map(ToOwned::to_owned),
         total_tokens: spec.total_tokens,
+        cost_usd: spec.cost_usd,
         elapsed_secs: spec.elapsed_secs,
         started_at: Some(registered_at),
         last_activity: now,

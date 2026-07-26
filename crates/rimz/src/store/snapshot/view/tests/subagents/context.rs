@@ -20,6 +20,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
                 agent_type: None,
                 description: Some("locate the render path".to_owned()),
                 token_count: Some(12_400),
+                cost_usd: Some(0.42),
                 started_at: Some(started),
                 observed_at: epoch(),
             },
@@ -30,6 +31,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
                 agent_type: Some("Explore".to_owned()),
                 description: Some("search the store".to_owned()),
                 token_count: Some(5_000),
+                cost_usd: None,
                 started_at: None,
                 observed_at: epoch(),
             },
@@ -40,6 +42,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
                 agent_type: Some("SomethingElse".to_owned()),
                 description: None,
                 token_count: None,
+                cost_usd: None,
                 started_at: None,
                 observed_at: epoch(),
             },
@@ -50,6 +53,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
                 agent_type: None,
                 description: Some("nowhere".to_owned()),
                 token_count: None,
+                cost_usd: None,
                 started_at: None,
                 observed_at: epoch(),
             },
@@ -62,10 +66,12 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
         Some("locate the render path")
     );
     assert_eq!(child.usage.total_tokens, Some(12_400));
+    assert_eq!(child.subagent_cost_usd, Some(0.42));
     assert_eq!(child.subagent_started_at, Some(started));
 
     let fork = rollup_agent(&folded, "fork-1");
     assert_eq!(fork.task.as_deref(), Some("Explore"));
+    assert_eq!(fork.subagent_cost_usd, None);
     assert_eq!(
         fork.subagent_description.as_deref(),
         Some("search the store")
@@ -85,5 +91,6 @@ fn record(agent_id: &str, context: SubagentContext) -> SubagentContextRecord {
         kind: AgentKind::new_unchecked("claude"),
         agent_id: agent_id.into(),
         context,
+        usage_cursor: None,
     }
 }

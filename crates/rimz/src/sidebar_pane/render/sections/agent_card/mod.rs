@@ -128,13 +128,14 @@ pub(super) fn row_lines(
 /// child. Line 1 leads with the same live cell an agent row wears — the
 /// thinking head while the child reasons, the working fill while it acts,
 /// the static `✓`/`!` verdict once it finishes — then the type and the
-/// description of what the parent asked it to do; line 2 (deeper indent) is
-/// its reported token figure `◇` (the card's whole-unit figure, never a decimal), model,
-/// and reasoning effort — one per-card column grid, each slot sized to its
-/// widest sibling so the figures, models, and efforts stack — with elapsed
-/// work (the clock-fill glyph over a fixed `<1m`/`9m`/`2h` label in the
-/// parent's age tone ramp) pinned right under the parent's own stats. Children
-/// are
+/// description of what the parent asked it to do, with the child's exact cost
+/// pinned right when a priced per-child transcript exists; line 2 (deeper
+/// indent) is its reported token figure `◇` (the card's whole-unit figure,
+/// never a decimal), model, and reasoning effort — one per-card column grid,
+/// each slot sized to its widest sibling so the figures, models, and efforts
+/// stack — with elapsed work (the clock-fill glyph over a fixed
+/// `<1m`/`9m`/`2h` label in the parent's age tone ramp) pinned right under the
+/// parent's own stats. Children are
 /// subordinate to the parent card, so their text stays at the soft middle
 /// weight — the model/effort metadata a step deeper at the dim chrome, like
 /// the parent's capability tokens — and indented past the parent's stat
@@ -208,7 +209,14 @@ fn sub_agent_lines(ctx: &RowCtx<'_>, sub_agents: &[SidebarSubAgent]) -> Vec<Line
         if let Some(detail) = detail {
             spans.push(Span::styled(format!(" — {detail}"), theme.body()));
         }
-        lines.push(Line::from(trim_spans_to_width(spans, width)));
+        let mut right = Vec::new();
+        if let Some(usd) = sub.cost_usd.filter(|usd| *usd >= 0.005) {
+            right.push(Span::styled(
+                dollars2(usd),
+                theme.money_style(Modifier::empty()),
+            ));
+        }
+        lines.push(pin_right(spans, right, width));
 
         if let Some(line) = sub_agent_metadata_line(theme, sub, token_col, model_col, width) {
             lines.push(line);
