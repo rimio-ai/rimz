@@ -194,6 +194,20 @@ mod tests {
     }
 
     #[test]
+    fn fixed_percent_resolves_up_to_the_next_column() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = runtime(dir.path());
+        let mut theme = crate::config::ThemeConfig::default();
+        theme.display.width_percent = Some(30);
+        let width = SidebarWidth::from_config(&theme);
+
+        assert_eq!(
+            resolve(&runtime, width, MuxName::Tmux, Some(213)).cols(Some(213)),
+            NonZeroU16::new(64).expect("nonzero"),
+        );
+    }
+
+    #[test]
     fn pin_snaps_and_resolve_scales_the_pin_with_the_view() {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = runtime(dir.path());

@@ -144,12 +144,12 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     );
 
     assert_eq!(
-        converge_each_sidebar_with_nudges(&backend, xdg, &name, 52, 5),
+        converge_each_sidebar_with_nudges(&backend, xdg, &name, 52, 10),
         1,
     );
     assert!(
-        wait_for_sidebar_columns(xdg, &name, &[47..=57]),
-        "the birth pane converges near the smaller view's 52-column target, got {:?}",
+        wait_for_sidebar_columns(xdg, &name, &[52..=61]),
+        "the birth pane converges at or just above the smaller view's 52-column target, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
 
@@ -158,17 +158,17 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     open_new_tab(xdg, &name);
     wait_for_tab_count(xdg, &name, 2);
     assert!(
-        wait_for_sidebar_columns(xdg, &name, &[47..=57, 42..=46]),
+        wait_for_sidebar_columns(xdg, &name, &[52..=61, 42..=46]),
         "the native template births the new tab from the cap-aware launch seed, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
     assert_eq!(
-        converge_each_sidebar_with_nudges(&backend, xdg, &name, 52, 5),
+        converge_each_sidebar_with_nudges(&backend, xdg, &name, 52, 10),
         1,
     );
     assert!(
-        wait_for_sidebar_columns(xdg, &name, &[47..=57, 47..=57]),
-        "both tabs converge near the 25% live target, got {:?}",
+        wait_for_sidebar_columns(xdg, &name, &[52..=61, 52..=61]),
+        "both tabs converge at or just above the 25% live target, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
 
@@ -177,7 +177,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     open_new_tab(xdg, &name);
     wait_for_tab_count(xdg, &name, 3);
     assert!(
-        wait_for_sidebar_columns(xdg, &name, &[47..=57, 47..=57, 42..=46]),
+        wait_for_sidebar_columns(xdg, &name, &[52..=61, 52..=61, 42..=46]),
         "the new tab starts at the launch seed while converged tabs stay narrow, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
@@ -185,22 +185,22 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     // A shared target applies to every existing tab, including the two
     // background tabs, and every future tab.
     assert_eq!(
-        converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, 5),
+        converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, 10),
         2,
     );
     assert!(wait_for_sidebar_columns(
         xdg,
         &name,
-        &[35..=45, 35..=45, 35..=45]
+        &[40..=49, 40..=49, 40..=49]
     ));
     open_new_tab(xdg, &name);
     wait_for_tab_count(xdg, &name, 4);
     assert_eq!(
-        converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, 5),
+        converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, 10),
         0,
     );
     assert!(
-        wait_for_sidebar_columns(xdg, &name, &[35..=45, 35..=45, 35..=45, 35..=45]),
+        wait_for_sidebar_columns(xdg, &name, &[40..=49, 40..=49, 40..=49, 40..=49]),
         "the shared target propagates to every tab, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
@@ -211,7 +211,7 @@ fn converge_each_sidebar_with_nudges(
     xdg: &std::path::Path,
     session: &str,
     target_cols: u16,
-    tolerance: u64,
+    step_cols: u64,
 ) -> usize {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut resized = std::collections::HashSet::new();
@@ -224,7 +224,10 @@ fn converge_each_sidebar_with_nudges(
             .collect();
         let pending: Vec<_> = sidebars
             .into_iter()
-            .filter(|pane| pane.pane_columns.abs_diff(u64::from(target_cols)) > tolerance)
+            .filter(|pane| {
+                pane.pane_columns < u64::from(target_cols)
+                    || pane.pane_columns >= u64::from(target_cols).saturating_add(step_cols.max(1))
+            })
             .collect();
         if pending.is_empty() {
             return resized.len();

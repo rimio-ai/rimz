@@ -585,8 +585,8 @@ impl MuxBackend for TmuxBackend {
         // dance and no session teardown is needed. `split-window` mounts fine on
         // a detached session, so tmux never defers an add the way the Zellij
         // backend must (its detached screen thread drops the mount). Kept panes
-        // that drift beyond the cross-backend repair band snap toward their
-        // per-window targets after the close/add phases.
+        // outside the cross-backend stop band snap to their per-window targets
+        // after the close/add phases.
         let panes = self.list_panes(PaneListOptions {
             session_name: Some(opts.session_name.clone()),
             ..Default::default()

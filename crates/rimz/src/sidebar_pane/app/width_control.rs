@@ -10,7 +10,7 @@ use crate::diag::record::{
 };
 use crate::ids::{MuxName, PaneId};
 use crate::mux::WidthAdjust;
-use crate::mux::width::{WidthCrossing, width_crossing};
+use crate::mux::width::{sidebar_width_off_spec, width_undershot};
 use crate::{RuntimePaths, diag::DiagSink};
 use tracing::{debug, warn};
 
@@ -20,7 +20,6 @@ const MAX_STEPS: u8 = 32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WidthIdleReason {
     ReachedTolerance,
-    CrossedNearest,
     ReverseParked,
     NoProgress,
     StepBudget,
@@ -93,15 +92,21 @@ impl WidthControl {
         self.in_flight.is_some()
     }
 
-    fn tolerance(&self) -> u16 {
+    fn stop_step(&self) -> u16 {
         self.learned_step
             .or(self.native_step.map(NonZeroU16::get))
-            .map_or(1, |step| (step / 2).max(1))
+            .unwrap_or(1)
+            .max(1)
     }
 
     fn needs_adjustment(&self, own_cols: u16) -> bool {
-        self.target
-            .is_some_and(|target| own_cols.abs_diff(target.get()) > self.tolerance())
+        self.target.is_some_and(|target| {
+            sidebar_width_off_spec(
+                u64::from(own_cols),
+                u64::from(target.get()),
+                u64::from(self.stop_step()),
+            )
+        })
     }
 
     fn feedback_deadline(&self) -> Option<Instant> {
@@ -142,28 +147,22 @@ impl WidthControl {
                 self.in_flight = None;
                 self.retried_no_progress = false;
                 if self.reverse_issued {
-                    self.idle_at = Some(own_cols);
-                    self.traces.push_back(WidthTransition::Idle {
-                        at: own_cols,
-                        reason: WidthIdleReason::ReverseParked,
-                    });
-                    return None;
+                    if own_cols >= target_cols {
+                        self.idle_at = Some(own_cols);
+                        self.traces.push_back(WidthTransition::Idle {
+                            at: own_cols,
+                            reason: WidthIdleReason::ReverseParked,
+                        });
+                        return None;
+                    }
+                    self.reverse_issued = false;
                 }
-                match width_crossing(
+                if width_undershot(
                     u64::from(step.width_before),
                     u64::from(own_cols),
                     u64::from(target_cols),
                 ) {
-                    Some(WidthCrossing::NearerOrEqual) => {
-                        self.idle_at = Some(own_cols);
-                        self.traces.push_back(WidthTransition::Idle {
-                            at: own_cols,
-                            reason: WidthIdleReason::CrossedNearest,
-                        });
-                        return None;
-                    }
-                    Some(WidthCrossing::Farther) => self.reverse_issued = true,
-                    None => {}
+                    self.reverse_issued = true;
                 }
             } else if now.saturating_duration_since(step.at) < FEEDBACK_TIMEOUT {
                 return None;
@@ -419,9 +418,6 @@ impl WidthController {
                     let outcome = match reason {
                         WidthIdleReason::ReachedTolerance => {
                             SidebarWidthSettleOutcome::ReachedTolerance
-                        }
-                        WidthIdleReason::CrossedNearest => {
-                            SidebarWidthSettleOutcome::CrossedNearest
                         }
                         WidthIdleReason::ReverseParked => SidebarWidthSettleOutcome::ReverseParked,
                         WidthIdleReason::NoProgress => SidebarWidthSettleOutcome::NoProgress,

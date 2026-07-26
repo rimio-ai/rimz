@@ -687,9 +687,9 @@ exit 0
 #[test]
 fn stepwise_sidebar_width_converges_across_supported_steps() {
     for (name, initial, step, view, target, direction, calls) in [
-        ("shrink", 90, -1, 360, 72, "decrease", 10),
+        ("shrink", 90, -1, 360, 72, "decrease", 2),
         ("grow", 40, 19, 380, 72, "increase", 3),
-        ("full-step-below", 53, 10, 213, 63, "increase", 2),
+        ("full-step-below", 53, 10, 213, 64, "increase", 3),
     ] {
         assert_stepwise_width(name, initial, step, view, target, direction, calls);
     }
@@ -734,7 +734,7 @@ exit 0
     );
     let (temp, shim) = zellij_shim(&script);
     let backend = room.backend(&shim);
-    let target_cols = std::num::NonZeroU16::new(63).expect("target");
+    let target_cols = std::num::NonZeroU16::new(64).expect("target");
     let view_cols = std::num::NonZeroU16::new(213).expect("view");
     let width = WidthSyncOptions {
         session_name: "rimz-test".to_owned(),
@@ -767,9 +767,9 @@ exit 0
 
 #[cfg(unix)]
 #[test]
-fn stepwise_sidebar_width_parks_after_crossing_the_target() {
-    assert_stepwise_crossing_parks("farther crossing reverses once", 53, 1, 1);
-    assert_stepwise_crossing_parks("nearer crossing parks immediately", 48, 1, 0);
+fn stepwise_sidebar_width_reverses_only_after_a_downward_undershoot() {
+    assert_stepwise_crossing_parks("overshoot then undershoot reverses once", 53, 2, 1);
+    assert_stepwise_crossing_parks("upward crossing into the band parks", 48, 1, 0);
 }
 
 #[cfg(unix)]
@@ -792,7 +792,7 @@ printf '%s\n' "$*" >> "$log"
 if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
 case " $* " in
   *" action list-panes --all --json "*)
-    count=$(cat "$state" 2>/dev/null || printf 0); cols=$((171 - count * 20)); if [ "$cols" -lt 71 ]; then cols=71; fi
+    count=$(cat "$state" 2>/dev/null || printf 0); cols=$((171 - count * 19)); if [ "$cols" -lt 72 ]; then cols=72; fi
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
     printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":72}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":72,"pane_columns":308}}]}}\n' "$now" > "{cache}"
     printf '[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s}}]\n' "$cols" "$cols" "$((380 - cols))"; exit 0 ;;

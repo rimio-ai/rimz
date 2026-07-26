@@ -95,12 +95,12 @@ impl WidthPermille {
         Self(percent.saturating_mul(10).clamp(Self::MIN, Self::MAX))
     }
 
-    /// Convert an absolute width into the smallest share that renders back to
-    /// that width. The ceiling preserves tmux's column-exact intent.
+    /// Convert an absolute width into the largest share that renders back to
+    /// that width under ceiling-based rendering.
     pub fn from_cols(cols: NonZeroU16, view_cols: NonZeroU16) -> Self {
         let cols = u64::from(cols.get());
         let view_cols = u64::from(view_cols.get());
-        let permille = (cols * 1000).div_ceil(view_cols);
+        let permille = cols * 1000 / view_cols;
         Self(
             u16::try_from(permille)
                 .unwrap_or(Self::MAX)
@@ -108,10 +108,11 @@ impl WidthPermille {
         )
     }
 
-    /// Render this share as absolute columns for one view, preserving the
-    /// minimum adjustable width.
+    /// Render this share as the smallest column count at or above its exact
+    /// value, preserving the minimum adjustable width.
     pub fn cols(self, view_cols: NonZeroU16) -> NonZeroU16 {
-        let cols = (u64::from(self.0) * u64::from(view_cols.get()) / 1000)
+        let cols = (u64::from(self.0) * u64::from(view_cols.get()))
+            .div_ceil(1000)
             .max(u64::from(MIN_ADJUSTABLE_WIDTH));
         NonZeroU16::new(u16::try_from(cols).unwrap_or(u16::MAX)).unwrap_or(NonZeroU16::MAX)
     }
@@ -221,7 +222,7 @@ impl SidebarWidth {
     /// `min(percent × total_cols, max_cols)`.
     pub fn target_cols(self, total_cols: u64) -> u64 {
         let percent = self.percent.resolve(Some(total_cols));
-        let cols = (total_cols * u64::from(percent) / 100).max(1);
+        let cols = (total_cols * u64::from(percent)).div_ceil(100).max(1);
         cols.min(self.cap_cols())
     }
 
@@ -256,32 +257,15 @@ pub fn client_size_from_env() -> Option<(u16, u16)> {
         .and_then(parse_client_size)
 }
 
-/// Whether a live sidebar's drift warrants repair toward the canonical width.
-/// Drift beyond half the backend's resize resolution (with a one-column
-/// minimum) can be moved closer. The band is symmetric because the canonical
-/// target already carries either the user's recorded width or the configured
-/// cap.
+/// Whether a live sidebar can move closer to the smallest reachable width at
+/// or above the canonical target.
 pub(crate) fn sidebar_width_off_spec(cols: u64, canonical_cols: u64, step_cols: u64) -> bool {
-    cols.abs_diff(canonical_cols) > (step_cols / 2).max(1)
+    cols < canonical_cols || cols >= canonical_cols.saturating_add(step_cols.max(1))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WidthCrossing {
-    NearerOrEqual,
-    Farther,
-}
-
-/// Classify a strict target crossing by whether the new width is the nearest
-/// of the two reachable results.
-pub(crate) fn width_crossing(before: u64, after: u64, target: u64) -> Option<WidthCrossing> {
-    let crossed = (before < target && after > target) || (before > target && after < target);
-    crossed.then(|| {
-        if after.abs_diff(target) <= before.abs_diff(target) {
-            WidthCrossing::NearerOrEqual
-        } else {
-            WidthCrossing::Farther
-        }
-    })
+/// Whether a shrink step crossed from the target's upper side to below it.
+pub(crate) fn width_undershot(before: u64, after: u64, target: u64) -> bool {
+    before >= target && after < target
 }
 
 /// Zellij's built-in resize increment is approximately 5% of the view width.
@@ -409,7 +393,14 @@ mod tests {
     fn width_permille_round_trips_columns_and_holds_the_floor() {
         let cols = |cols| NonZeroU16::new(cols).expect("nonzero");
 
-        for (view, target) in [(120, 30), (127, 31), (213, 72), (400, 82)] {
+        for (view, target) in [
+            (120, 30),
+            (127, 31),
+            (213, 72),
+            (400, 82),
+            (213, 63),
+            (213, 64),
+        ] {
             let view = cols(view);
             let target = cols(target);
             assert_eq!(WidthPermille::from_cols(target, view).cols(view), target);
@@ -462,44 +453,37 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_width_repair_uses_half_a_resize_step_as_slack() {
-        // Exact backends retain only the one-column minimum band.
-        assert!(!sidebar_width_off_spec(71, 72, 1));
-        assert!(!sidebar_width_off_spec(73, 72, 1));
-        assert!(sidebar_width_off_spec(70, 72, 1));
-        assert!(sidebar_width_off_spec(74, 72, 1));
+    fn sidebar_width_repair_uses_the_upward_reachable_band() {
+        // Exact backends retain only exact equality.
+        assert!(!sidebar_width_off_spec(72, 72, 1));
+        assert!(sidebar_width_off_spec(71, 72, 1));
+        assert!(sidebar_width_off_spec(73, 72, 1));
 
-        // A 213-column Zellij view has a ten-column step and a symmetric
-        // five-column band around the canonical width.
+        // A 213-column Zellij view has a ten-column step, so every width from
+        // the target through one column below the next step is settled.
         let step = zellij_resize_step_cols(213);
         assert_eq!(step, 10);
-        assert!(!sidebar_width_off_spec(58, 63, step));
-        assert!(!sidebar_width_off_spec(68, 63, step));
-        assert!(sidebar_width_off_spec(57, 63, step));
-        assert!(sidebar_width_off_spec(69, 63, step));
+        assert!(sidebar_width_off_spec(63, 64, step));
+        assert!(!sidebar_width_off_spec(64, 64, step));
+        assert!(!sidebar_width_off_spec(73, 64, step));
+        assert!(sidebar_width_off_spec(74, 64, step));
 
         // Regression: a full Zellij step and one tmux keypress both propagate.
-        assert!(sidebar_width_off_spec(53, 63, zellij_resize_step_cols(213)));
-        assert!(sidebar_width_off_spec(61, 63, 1));
+        assert!(sidebar_width_off_spec(54, 64, zellij_resize_step_cols(213)));
+        assert!(sidebar_width_off_spec(63, 64, 1));
 
-        // Zero and tiny views still produce a one-column minimum band.
+        // Zero and tiny views still produce a one-column minimum step.
         assert_eq!(zellij_resize_step_cols(0), 1);
         assert_eq!(zellij_resize_step_cols(19), 1);
     }
 
     #[test]
-    fn width_crossings_classify_the_nearest_reachable_side() {
-        assert_eq!(
-            width_crossing(48, 71, 63),
-            Some(WidthCrossing::NearerOrEqual),
-        );
-        assert_eq!(
-            width_crossing(58, 68, 63),
-            Some(WidthCrossing::NearerOrEqual),
-        );
-        assert_eq!(width_crossing(53, 76, 63), Some(WidthCrossing::Farther));
-        assert_eq!(width_crossing(48, 55, 63), None);
-        assert_eq!(width_crossing(48, 63, 63), None);
+    fn width_undershot_only_classifies_downward_target_crossings() {
+        assert!(width_undershot(76, 53, 64));
+        assert!(width_undershot(64, 63, 64));
+        assert!(!width_undershot(53, 76, 64));
+        assert!(!width_undershot(76, 71, 64));
+        assert!(!width_undershot(48, 55, 64));
     }
 
     #[test]
@@ -508,7 +492,7 @@ mod tests {
         let wide = width.target_cols(300);
         let narrow = width.target_cols(190);
         assert_eq!(wide, 72);
-        assert_eq!(narrow, 47);
+        assert_eq!(narrow, 48);
         assert_ne!(wide, narrow);
     }
 
