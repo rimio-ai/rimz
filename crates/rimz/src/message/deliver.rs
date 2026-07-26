@@ -12,8 +12,8 @@ use crate::agents::AgentStatus;
 use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{
     AfterCondition, DeliveryGate, MessageRecord, MessageStatus, WhenCondition,
-    delivery_window_from_env, gate_open_for_agent, max_delivery_attempts_from_env,
-    message_interval_from_env, older_ready_blocker, queue_head,
+    command_submit_delay_from_env, delivery_window_from_env, gate_open_for_agent,
+    max_delivery_attempts_from_env, message_interval_from_env, older_ready_blocker, queue_head,
 };
 use crate::workspace::ResolvedWorkspace;
 use crate::{PaneAgent, RuntimePaths, SidebarSnapshot, Store};
@@ -238,6 +238,7 @@ fn attempt_delivery(
         force: claimed[0].force || matches!(policy, DeliveryPolicy::Steer { force: true }),
         steer: matches!(policy, DeliveryPolicy::Steer { .. }),
         pacer: send::Pacer::new(message_interval_from_env()),
+        command_submit_delay: command_submit_delay_from_env(),
     };
     let send_messages: Vec<MessageRecord> = claimed
         .iter()

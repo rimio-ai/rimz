@@ -20,6 +20,10 @@ pub const MESSAGE_WAKE_FILE: &str = "message-wake.json";
 /// Default spacing between discrete message pane writes.
 pub const DEFAULT_MESSAGE_INTERVAL: Duration = Duration::from_secs(1);
 pub const MESSAGE_INTERVAL_ENV: &str = "RIMZ_MESSAGE_INTERVAL_MS";
+/// Default gap after raw-typed command text, allowing composer paste-burst
+/// heuristics to flush before the submit keystroke arrives.
+pub const DEFAULT_COMMAND_SUBMIT_DELAY: Duration = Duration::from_secs(1);
+pub const COMMAND_SUBMIT_DELAY_ENV: &str = "RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS";
 pub const DEFAULT_DELIVERY_WINDOW: Duration = Duration::from_secs(30);
 pub const DELIVERY_WINDOW_ENV: &str = "RIMZ_MESSAGE_DELIVERY_WINDOW_MS";
 pub const DEFAULT_COMMAND_DELIVERY_WINDOW: Duration = Duration::from_secs(180);
@@ -910,6 +914,11 @@ pub fn settle_duration_from_env() -> Duration {
 /// Spacing between discrete message pane writes.
 pub fn message_interval_from_env() -> Duration {
     env_ms(MESSAGE_INTERVAL_ENV).unwrap_or(DEFAULT_MESSAGE_INTERVAL)
+}
+
+/// Gap between raw-typed command text and its submit keystroke.
+pub fn command_submit_delay_from_env() -> Duration {
+    env_ms(COMMAND_SUBMIT_DELAY_ENV).unwrap_or(DEFAULT_COMMAND_SUBMIT_DELAY)
 }
 
 pub fn delivery_window_from_env() -> Duration {
