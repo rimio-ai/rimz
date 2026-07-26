@@ -295,9 +295,7 @@ fn soft_reset_preserves_dead_paneless_resume_identity() {
         ))
         .expect("retire pane stamps");
 
-    h.store
-        .reset_records("rimz-test", false)
-        .expect("soft reset");
+    h.store.reset_records(false).expect("soft reset");
     let projection = h
         .store
         .runtime_projection(rimz::RuntimeScope::Audit)

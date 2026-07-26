@@ -134,16 +134,11 @@ impl Store {
     /// this method terminal-wakes any surviving waiters and makes the store
     /// match that product boundary.
     #[must_use = "durability barrier; check the result"]
-    pub fn reset_records(&self, session_name: &str, hard: bool) -> Result<ResetRecordsOutcome> {
-        self.reset_records_with(session_name, hard, event_log::rotate)
+    pub fn reset_records(&self, hard: bool) -> Result<ResetRecordsOutcome> {
+        self.reset_records_with(hard, event_log::rotate)
     }
 
-    fn reset_records_with<F>(
-        &self,
-        _session_name: &str,
-        hard: bool,
-        rotate: F,
-    ) -> Result<ResetRecordsOutcome>
+    fn reset_records_with<F>(&self, hard: bool, rotate: F) -> Result<ResetRecordsOutcome>
     where
         F: FnOnce(&Path, &Path, u64) -> event_log::Result<event_log::RotationOutcome>,
     {
@@ -190,9 +185,7 @@ impl Store {
                 &self.inner.paths.root,
             ))?;
 
-            if hard {
-                remove_file_if_exists(&self.inner.paths.latest_snapshot)?;
-            } else {
+            if !hard {
                 snapshot::rebuild(&self.inner.paths)?;
             }
 
@@ -250,7 +243,7 @@ mod tests {
 
         let rotate_called = Cell::new(false);
         store
-            .reset_records_with("rimz-test", false, |events_log, archive_dir, min_bytes| {
+            .reset_records_with(false, |events_log, archive_dir, min_bytes| {
                 rotate_called.set(true);
                 assert!(
                     paths.agents_carryover.exists(),
