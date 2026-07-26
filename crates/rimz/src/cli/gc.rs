@@ -323,8 +323,9 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
             return WorktreeSweepStatus::Skipped(WorktreeSkip::NoStore);
         }
     };
-    let snapshot = match super::alive_snapshot(&store, &workspace.session_name) {
-        Ok(snapshot) => snapshot,
+    let protection = match super::worktree_protection::for_automatic_gc(&workspace, &store, globals)
+    {
+        Ok(protection) => protection,
         Err(err) => {
             tracing::debug!(
                 error = %err,
@@ -333,23 +334,6 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
             return WorktreeSweepStatus::Skipped(WorktreeSkip::RosterUnavailable);
         }
     };
-    let panes = match rimz::mux::auto_detect_backend(globals.mux) {
-        Ok(mux) => rimz::mux::backend_for(mux)
-            .list_panes(rimz::mux::PaneListOptions {
-                session_name: Some(workspace.session_name.clone()),
-                workspace_id: Some(workspace.workspace_id.clone()),
-                ..Default::default()
-            })
-            .map(|listing| listing.panes)
-            .unwrap_or_default(),
-        Err(_) => Vec::new(),
-    };
-    let protections = rimz::worktree::protection_set_from_runtime(
-        &panes,
-        &snapshot.agents,
-        None,
-        rimz::worktree::Occupancy::Unproven,
-    );
     spinner.set("scanning worktrees…");
     let entries = match rimz::worktree::discover_owned(&workspace.project_root) {
         Ok(entries) => entries,
@@ -366,7 +350,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
             (entry, status)
         })
         .collect();
-    let (candidates, kept) = partition_candidates(inspected, &protections);
+    let (candidates, kept) = partition_candidates(inspected, &protection.protections);
     let total = candidates.len();
     let mut sweep = WorktreeSweep {
         kept,
@@ -1316,46 +1300,6 @@ mod tests {
     use rimz::{MuxName, PaneId};
 
     #[test]
-    fn gc_protection_excludes_sidebar_chrome() {
-        let panes = vec![
-            pane(
-                "terminal_side",
-                Some("rimz-sidebar"),
-                Some("/repo-worktrees/demo"),
-            ),
-            pane(
-                "terminal_agent",
-                Some("codex"),
-                Some("/repo-worktrees/demo"),
-            ),
-            pane(
-                "terminal_shell",
-                Some("zsh"),
-                Some("/repo-worktrees/demo/src"),
-            ),
-            pane("terminal_unknown", None, Some("/repo-worktrees/demo")),
-            pane("terminal_empty", Some("zsh"), None),
-        ];
-
-        let protections = rimz::worktree::protection_set_from_runtime(
-            &panes,
-            &[],
-            None,
-            rimz::worktree::Occupancy::Unproven,
-        );
-        assert!(protections.protects(std::path::Path::new("/repo-worktrees/demo")));
-        assert!(
-            !rimz::worktree::protection_set_from_runtime(
-                &panes[..1],
-                &[],
-                None,
-                rimz::worktree::Occupancy::Unproven,
-            )
-            .protects(std::path::Path::new("/repo-worktrees/demo"))
-        );
-    }
-
-    #[test]
     fn partition_candidates_keeps_protected_dirty_and_unmerged_entries() {
         let entries = vec![
             worktree_entry("protected", "/repo-worktrees/protected", true, Some(false)),
@@ -1724,13 +1668,5 @@ mod tests {
         let mut stream = anstream::StripStream::new(Vec::new());
         render_report(outcome, &mut stream).expect("render report");
         String::from_utf8(stream.into_inner()).expect("utf-8")
-    }
-
-    fn pane(raw: &str, command: Option<&str>, cwd: Option<&str>) -> rimz::pane::PaneRef {
-        rimz::pane::PaneRef {
-            command: command.map(ToOwned::to_owned),
-            cwd: cwd.map(ToOwned::to_owned),
-            ..rimz::pane::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))
-        }
     }
 }

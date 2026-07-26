@@ -4,7 +4,8 @@ use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use rimz::message::MessageStatus;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::common::Env;
 
@@ -56,6 +57,35 @@ fn channel_new_validates_bare_names() {
         .assert()
         .failure()
         .stderr(contains("invalid channel name"));
+}
+
+#[test]
+fn channel_new_refuses_worktree_conflict() {
+    if Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+
+    env.rimz()
+        .args(["channel", "new", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "channel `demo` is backed by a worktree; use `--worktree demo`",
+        ));
+
+    let store = env.store();
+    let channels =
+        rimz::channel::list(&store.paths().channels_record).expect("read named channels");
+    assert!(
+        channels.is_empty(),
+        "collision must not write a named record"
+    );
 }
 
 #[test]
@@ -278,6 +308,41 @@ fn agent_pane(env: &Env, command: &str) -> rimz::pane::PaneRef {
         elevated_agent: None,
         first_seen_at_ms: None,
     }
+}
+
+fn init_repo(path: &Path) {
+    for args in [
+        &["init", "-b", "main"][..],
+        &["config", "user.email", "rimz@example.com"],
+        &["config", "user.name", "RimZ Test"],
+    ] {
+        assert!(
+            Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .status()
+                .expect("run git")
+                .success(),
+            "git {args:?}"
+        );
+    }
+    std::fs::write(path.join("README.md"), "fixture\n").expect("write fixture");
+    assert!(
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(path)
+            .status()
+            .expect("git add")
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(path)
+            .status()
+            .expect("git commit")
+            .success()
+    );
 }
 
 fn zellij_trace_shim() -> PathBuf {

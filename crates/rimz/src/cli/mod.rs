@@ -48,6 +48,7 @@ mod update;
 mod web;
 mod workspace;
 mod worktree;
+mod worktree_protection;
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::PathBuf;

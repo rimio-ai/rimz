@@ -1,8 +1,9 @@
-//! Durable named-channel registry.
+//! Durable named-channel registry and shared channel/worktree namespace.
 //!
 //! Worktree, team, and directory channels are derived from their backing state.
 //! This file stores only bare named channels so an empty cooperation tab survives
-//! room rebirth.
+//! room rebirth. Named-channel and managed-worktree creation also enter through
+//! here so neither can claim a name already owned by the other.
 
 use std::collections::{BTreeMap, btree_map::Entry};
 use std::fs;
@@ -15,11 +16,16 @@ use serde::{Deserialize, Serialize};
 use crate::store::atomic::{self, write_temp_then_rename};
 use crate::store::lock::{self, WorkspaceLock};
 use crate::store::paths::StatePaths;
+use crate::workspace::{ResolvedWorkspace, RootClass};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChannelErr {
     #[error("invalid channel name `{name}`; use ASCII letters, numbers, `_`, or `-`")]
     InvalidName { name: String },
+    #[error("channel `{name}` is backed by a worktree; use `--worktree {name}`")]
+    WorktreeCollision { name: String },
+    #[error("channel `{name}` is a named channel; use `rimz channel new` or pick another name")]
+    NamedChannelCollision { name: String },
     #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
     #[error(transparent)]
@@ -92,7 +98,16 @@ pub fn list(path: &Path) -> Result<Vec<ChannelRecord>> {
 }
 
 #[must_use = "durability barrier; check the result"]
-pub fn register(paths: &StatePaths, name: &str) -> Result<ChannelRecord> {
+pub fn register(
+    workspace: &ResolvedWorkspace,
+    paths: &StatePaths,
+    name: &str,
+) -> Result<ChannelRecord> {
+    if managed_worktree_channel_exists(workspace, name) {
+        return Err(ChannelErr::WorktreeCollision {
+            name: name.to_owned(),
+        });
+    }
     validate_name(name)?;
     let _lock = WorkspaceLock::acquire(&paths.workspace_lock)?;
     let mut channels = read(&paths.channels_record)?;
@@ -111,6 +126,18 @@ pub fn register(paths: &StatePaths, name: &str) -> Result<ChannelRecord> {
     Ok(record)
 }
 
+/// Reject a managed-worktree name already owned by a named channel.
+///
+/// Admission stays a registry-only read so worktree creation adds no Git probe.
+pub fn ensure_worktree_name_available(paths: &StatePaths, name: &str) -> Result<()> {
+    if read(&paths.channels_record).is_ok_and(|channels| channels.0.contains_key(name)) {
+        return Err(ChannelErr::NamedChannelCollision {
+            name: name.to_owned(),
+        });
+    }
+    Ok(())
+}
+
 #[must_use = "durability barrier; check the result"]
 pub fn remove(paths: &StatePaths, name: &str) -> Result<Option<ChannelRecord>> {
     validate_name(name)?;
@@ -123,25 +150,37 @@ pub fn remove(paths: &StatePaths, name: &str) -> Result<Option<ChannelRecord>> {
     Ok(removed)
 }
 
+fn managed_worktree_channel_exists(workspace: &ResolvedWorkspace, name: &str) -> bool {
+    workspace.root_class == RootClass::Repo
+        && crate::worktree::discover_owned(&workspace.project_root).is_ok_and(|worktrees| {
+            worktrees
+                .into_iter()
+                .any(|worktree| worktree.branch.as_deref().unwrap_or(&worktree.marker.name) == name)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
+    use crate::workspace::WorkspaceResolver;
     use tempfile::tempdir;
 
-    fn paths() -> StatePaths {
+    fn fixture() -> (ResolvedWorkspace, StatePaths) {
         let dir = tempdir().expect("tempdir");
         let root = dir.keep();
+        let workspace = WorkspaceResolver::resolve(&root, None).expect("workspace");
         let id = WorkspaceId::from_project_root(&root);
-        StatePaths::under(id, &root).expect("state paths")
+        let paths = StatePaths::under(id, &root).expect("state paths");
+        (workspace, paths)
     }
 
     #[test]
     fn registry_round_trips_and_register_is_idempotent() {
-        let paths = paths();
+        let (workspace, paths) = fixture();
 
-        let first = register(&paths, "design").expect("register");
-        let second = register(&paths, "design").expect("register again");
+        let first = register(&workspace, &paths, "design").expect("register");
+        let second = register(&workspace, &paths, "design").expect("register again");
         let records = list(&paths.channels_record).expect("list");
 
         assert_eq!(first, second);
@@ -150,8 +189,8 @@ mod tests {
 
     #[test]
     fn remove_deletes_named_record() {
-        let paths = paths();
-        register(&paths, "ops").expect("register");
+        let (workspace, paths) = fixture();
+        register(&workspace, &paths, "ops").expect("register");
 
         let removed = remove(&paths, "ops").expect("remove");
         let records = list(&paths.channels_record).expect("list");
@@ -162,12 +201,25 @@ mod tests {
 
     #[test]
     fn absent_remove_does_not_create_registry_file() {
-        let paths = paths();
+        let (_, paths) = fixture();
 
         let removed = remove(&paths, "ops").expect("remove");
 
         assert!(removed.is_none());
         assert!(!paths.channels_record.exists());
+    }
+
+    #[test]
+    fn worktree_name_admission_rejects_named_channel() {
+        let (workspace, paths) = fixture();
+        register(&workspace, &paths, "design").expect("register");
+
+        let err = ensure_worktree_name_available(&paths, "design").expect_err("collision");
+
+        assert!(matches!(
+            err,
+            ChannelErr::NamedChannelCollision { name } if name == "design"
+        ));
     }
 
     #[test]

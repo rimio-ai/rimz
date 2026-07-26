@@ -1,4 +1,4 @@
-//! `rimz worktree` — gather runtime protection facts, prompt, remove, and archive.
+//! `rimz worktree` — prompt, remove, archive, and present managed checkouts.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -129,9 +129,8 @@ fn new_worktree(
     if let Some(name) = requested_name
         .as_ref()
         .map(|requested| requested.name.as_str())
-        && super::channel::named_channel_registered(&store, name)
     {
-        bail!("channel `{name}` is a named channel; use `rimz channel new` or pick another name");
+        rimz::channel::ensure_worktree_name_available(store.paths(), name)?;
     }
     let created = if let Some(pr) = from_pr.as_ref() {
         rimz::worktree::create_from_pr(
@@ -328,11 +327,7 @@ fn remove_worktree(
     force: bool,
 ) -> Result<()> {
     let store = open_store(workspace)?;
-    let guard = runtime_guard(
-        &workspace.project_root,
-        globals,
-        rimz::worktree::Occupancy::ProvenLive,
-    );
+    let guard = super::worktree_protection::for_explicit_removal(&workspace.project_root, globals);
     let path = rimz::worktree::worktree_path(&workspace.project_root, config, &name)?;
     if force && guard.protections.protects(&path) {
         writeln!(
@@ -396,12 +391,8 @@ pub(super) fn cleanup_worktree(
     if !interactive {
         std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
     }
-    let protections = runtime_guard(
-        &marker.repo_root,
-        globals,
-        rimz::worktree::Occupancy::Unproven,
-    )
-    .protections;
+    let protections =
+        super::worktree_protection::for_wrapper_cleanup(&marker.repo_root, globals).protections;
     match protections.assess(path, status) {
         rimz::worktree::RemovalAssessment::Removable => {
             let removed = remove_for_cleanup(path, &marker, globals, false)?;
@@ -471,67 +462,6 @@ fn remove_for_cleanup(
         ),
     }
     Ok(removed)
-}
-
-/// The live-room facts every removal path assesses against: the normalized
-/// protection set plus the agent rows it was folded from, so a caller can name
-/// who is holding a checkout without probing the room a second time.
-struct RuntimeGuard {
-    protections: rimz::worktree::ProtectionSet,
-    agents: Vec<AgentState>,
-}
-
-fn runtime_guard(
-    repo_root: &Path,
-    globals: &GlobalFlags,
-    occupancy: rimz::worktree::Occupancy,
-) -> RuntimeGuard {
-    let workspace = match WorkspaceResolver::resolve(repo_root, globals.root.clone()) {
-        Ok(workspace) => Some(workspace),
-        Err(err) => {
-            tracing::debug!(
-                path = %repo_root.display(),
-                error = %err,
-                "could not resolve workspace while gathering worktree protection facts",
-            );
-            None
-        }
-    };
-    let (panes, own) = rimz::mux::auto_detect_backend(globals.mux)
-        .ok()
-        .map(|mux| {
-            let panes = rimz::mux::backend_for(mux)
-                .list_panes(rimz::mux::PaneListOptions {
-                    session_name: workspace
-                        .as_ref()
-                        .map(|workspace| workspace.session_name.clone()),
-                    workspace_id: workspace
-                        .as_ref()
-                        .map(|workspace| workspace.workspace_id.clone()),
-                    ..Default::default()
-                })
-                .map(|listing| listing.panes)
-                .unwrap_or_default();
-            (panes, rimz::mux::own_pane_id(mux))
-        })
-        .unwrap_or_default();
-    let agents = match workspace.as_ref().and_then(|workspace| {
-        super::open_store(workspace)
-            .and_then(|store| super::alive_snapshot(&store, &workspace.session_name))
-            .ok()
-    }) {
-        Some(snapshot) => snapshot.agents,
-        None => Vec::new(),
-    };
-    RuntimeGuard {
-        protections: rimz::worktree::protection_set_from_runtime(
-            &panes,
-            &agents,
-            own.as_ref(),
-            occupancy,
-        ),
-        agents,
-    }
 }
 
 /// Name what is holding a checkout, for the refusal and the `--force` warning.
