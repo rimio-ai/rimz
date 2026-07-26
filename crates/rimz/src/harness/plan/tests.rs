@@ -1160,7 +1160,7 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
     identities[1].prompt = Some("lead this".to_owned());
     let panes = compile_layout_panes(
         &layout,
-        CompileLayoutPanes {
+        LayoutPaneParams {
             cwd: Path::new("/tmp/project"),
             cleanup_worktree: false,
             in_place: false,
@@ -1220,7 +1220,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let fresh = [fresh];
     let panes = compile_layout_panes(
         &layout,
-        CompileLayoutPanes {
+        LayoutPaneParams {
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
             in_place: false,
@@ -1240,7 +1240,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
 
     let err = compile_layout_panes(
         &layout,
-        CompileLayoutPanes {
+        LayoutPaneParams {
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
             in_place: false,
@@ -1257,7 +1257,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
 
     let err = compile_layout_panes(
         &layout,
-        CompileLayoutPanes {
+        LayoutPaneParams {
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
             in_place: false,
@@ -1272,7 +1272,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let surplus = [fresh[0].clone(), fresh[0].clone()];
     let err = compile_layout_panes(
         &layout,
-        CompileLayoutPanes {
+        LayoutPaneParams {
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
             in_place: false,
@@ -1320,7 +1320,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     let launches = [launch];
     let panes = compile_layout_panes(
         &layout,
-        CompileLayoutPanes {
+        LayoutPaneParams {
             cwd: Path::new("/tmp/project"),
             cleanup_worktree: false,
             in_place: false,
@@ -1354,7 +1354,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     for (cleanup_worktree, in_place) in [(false, true), (true, false)] {
         let panes = compile_layout_panes(
             &layout,
-            CompileLayoutPanes {
+            LayoutPaneParams {
                 cwd: Path::new("/tmp/project"),
                 cleanup_worktree,
                 in_place,
@@ -1406,7 +1406,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     let layout = LayoutSpec::single(cell);
     let panes = compile_layout_panes(
         &layout,
-        CompileLayoutPanes {
+        LayoutPaneParams {
             cwd: Path::new("/tmp/project"),
             cleanup_worktree: false,
             in_place: false,

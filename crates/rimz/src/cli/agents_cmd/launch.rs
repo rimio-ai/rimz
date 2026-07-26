@@ -278,7 +278,7 @@ pub(super) fn launch_layout(
     let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
     let panes = compile_layout_panes(
         &layout,
-        CompileLayoutPanes {
+        LayoutPaneParams {
             cwd: &cwd,
             cleanup_worktree: worktree_launch,
             in_place,
@@ -427,7 +427,7 @@ fn launch_resume_layout(
     let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
     let panes = compile_layout_panes(
         &layout,
-        CompileLayoutPanes {
+        LayoutPaneParams {
             cwd: &cwd,
             cleanup_worktree: false,
             in_place,
