@@ -1293,8 +1293,8 @@ fn delivered_human_messages(messages_dir: &Path) -> Vec<MessageRecord> {
 }
 
 fn is_budget_waiving_delivery(message: &MessageRecord) -> bool {
-    // Auto-continue records render as human-authored for transcript
-    // attribution, but their resume gate must not waive a dollar cap.
+    // Only attributed interactive human input waives a cap. System nudges and
+    // deliberately unattributed `--no-from` sends never do, regardless of gate.
     message.status == MessageStatus::Delivered
         && matches!(message.sender, MessageSender::Human)
         && !message.automated

@@ -421,8 +421,9 @@ pub struct MessageRecord {
 
 impl MessageRecord {
     /// A delivered prompt that is the human's own input. Agent senders carry
-    /// identity, background orchestration marks records automated, and resume
-    /// gates are auto-continue nudges that intentionally ride a human sender.
+    /// identity, system senders cover nudges and deliberately unattributed text,
+    /// background orchestration marks records automated, and resume gates stay
+    /// excluded for persisted records.
     pub fn is_user_input(&self) -> bool {
         matches!(self.sender, MessageSender::Human)
             && !self.automated

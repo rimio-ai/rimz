@@ -114,7 +114,7 @@ The turn scope runs [`evaluate_turn_scope`](../../../crates/rimz/src/harness/bud
 
 The waiver is the one place a human overrides a cap, and it is deliberately narrow.
 
-A message qualifies only if it was **delivered**, sent by a **human**, not marked `automated`, and not carried on the `Resume` gate. That last exclusion matters: auto-continue records render as human-authored so the transcript attributes them correctly, and without the gate check they would waive the cap they exist to wait out.
+A message qualifies only if it was **delivered**, sent by a **human**, not marked `automated`, and not carried on the `Resume` gate. System-authored nudges — auto-continue, budget-continue, and supervised verification prompts — do not qualify regardless of gate, so internal control text cannot spend through a human's cap. `--no-from` is deliberately unattributed system text and likewise grants no waiver or user-input spend attribution. The `automated` and `Resume` checks keep the same boundary explicit for persisted and manually constructed records.
 
 A qualifying delivery stamps a waiver at its delivery time. A turn that starts at or after the stamp runs while the agent is `Running`, and the terminal transition consumes the waiver and re-stamps the park at `now`, moving it past the delivery that granted it. One message therefore waives exactly one turn, and a second message is required for a second turn. Background and agent-to-agent traffic never waives at all, so a chatty team cannot spend through a cap that a human set.
 
