@@ -150,6 +150,50 @@ fn snapshot_exits_cleanly_when_the_consumer_closes_the_pipe() {
 }
 
 #[test]
+fn frame_emits_plain_text_over_a_pipe() {
+    let env = Env::new();
+    let session = "test-session";
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().expect("runtime dirs");
+    let published = rimz::sidebar::frame::assemble_frame(
+        Vec::new(),
+        rimz::sidebar::timing::unix_now_ms(),
+        session,
+    );
+    rimz::store::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &published)
+        .expect("publish pane frame");
+
+    let output = env
+        .rimz()
+        .args([
+            "sidebar",
+            "frame",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--session-name",
+            session,
+            "--width",
+            "40",
+            "--height",
+            "12",
+        ])
+        .output()
+        .expect("spawn sidebar frame");
+
+    assert!(
+        output.status.success(),
+        "frame failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.stdout.is_empty(), "frame stdout is empty");
+    assert!(
+        !output.stdout.contains(&b'\x1b'),
+        "piped frame contains ANSI escapes: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
 fn sidebar_lights_claude_rc_badge_from_claude_startup_setting() {
     let env = Env::new();
     let settings = write_claude_settings(&env, r#"{ "remoteControlAtStartup": true }"#);
