@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde::Deserialize;
 
-use super::{Ctx, GlobalFlags, resolve_agent_one};
+use super::{Ctx, GlobalFlags, resolve_open_ask};
 use rimz::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
 use rimz::ids::AskId;
 use rimz::mux::{paste_into_pane, press_pane_key, type_into_pane};
@@ -140,16 +140,9 @@ fn resolve_current_agent<'a>(
     target: &str,
     channel: Option<&str>,
 ) -> std::result::Result<&'a rimz::agents::AgentState, String> {
-    let agent = if target.starts_with("ask_") {
-        let ask_id = AskId::parse(target).map_err(|err| err.to_string())?;
-        snapshot
-            .agents
-            .iter()
-            .find(|agent| agent.open_ask.as_ref().is_some_and(|ask| ask.id == ask_id))
-            .ok_or_else(|| format!("ask `{ask_id}` is no longer current"))?
-    } else {
-        resolve_agent_one(snapshot, target, None, channel).map_err(|err| err.to_string())?
-    };
+    let agent = resolve_open_ask(snapshot, target, channel, false)
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| format!("ask `{target}` is no longer current"))?;
     if !agent.is_awaiting_input() || agent.open_ask.is_none() {
         return Err(format!("{target} is not asking anything"));
     }

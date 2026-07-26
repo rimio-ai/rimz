@@ -649,7 +649,9 @@ fn into_supervised_request(
     let output_format = args.launch.output_format.unwrap_or_default();
     validate_supervised_output(&args, output_format)?;
     let prompt = resolve_print_prompt(&args, args.launch.input_format.unwrap_or_default())?;
-    let permission_mode = supervised_permission_mode_from_flags(args.launch.ask, args.launch.yolo)?;
+    let permission_mode =
+        interactive_permission_mode_from_flags(args.launch.ask, args.launch.yolo)?
+            .unwrap_or(PermissionMode::Auto);
     let system_prompt_file = resolve_launch_prompt_file(
         args.launch.system_prompt_file.as_deref(),
         "--system-prompt-file",

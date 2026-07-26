@@ -17,8 +17,8 @@ use rimz::agents::{ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCre
 use rimz::config::MachineConfig;
 use rimz::sidebar::enrich::provider_panels_from_caches;
 use rimz::sidebar::refresh::{
-    AccountsCache, ProviderRecord, query_provider_accounts, refresh_account_usage_if_due,
-    refresh_account_usage_now,
+    AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts,
+    refresh_account_usage_if_due, refresh_account_usage_now,
 };
 use rimz::{DailyBudgetView, RuntimePaths, SidebarProviderPanel};
 
@@ -111,32 +111,6 @@ fn validate_kind(kind: Option<&str>) -> Result<()> {
         "unknown provider kind `{kind}`; known kinds: {}",
         known.join(", ")
     )
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ProviderStatus {
-    LoggedIn,
-    LoggedOut,
-    Unavailable,
-}
-
-impl ProviderStatus {
-    fn from_record(record: Option<&ProviderRecord>) -> Self {
-        match record {
-            Some(record) if record.ok && record.account.is_some() => Self::LoggedIn,
-            Some(record) if record.ok => Self::LoggedOut,
-            Some(_) | None => Self::Unavailable,
-        }
-    }
-
-    fn human(self) -> &'static str {
-        match self {
-            Self::LoggedIn => "logged in",
-            Self::LoggedOut => "logged out",
-            Self::Unavailable => "unavailable",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -294,7 +268,7 @@ fn write_pretty(
             " · {}",
             render::paint(
                 render::status::provider(report.status),
-                report.status.human()
+                provider_status_label(report.status)
             )
         )?;
 
@@ -370,6 +344,14 @@ fn write_pretty(
         rows.render(out)?;
     }
     Ok(())
+}
+
+fn provider_status_label(status: ProviderStatus) -> &'static str {
+    match status {
+        ProviderStatus::LoggedIn => "logged in",
+        ProviderStatus::LoggedOut => "logged out",
+        ProviderStatus::Unavailable => "unavailable",
+    }
 }
 
 fn write_optional(out: &mut impl Write, value: Option<&str>, prefix: &str) -> std::io::Result<()> {

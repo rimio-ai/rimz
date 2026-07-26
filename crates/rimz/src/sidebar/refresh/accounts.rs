@@ -75,6 +75,24 @@ pub struct ProviderRecord {
     pub account: Option<AgentAccount>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderStatus {
+    LoggedIn,
+    LoggedOut,
+    Unavailable,
+}
+
+impl ProviderStatus {
+    pub fn from_record(record: Option<&ProviderRecord>) -> Self {
+        match record {
+            Some(record) if record.ok && record.account.is_some() => Self::LoggedIn,
+            Some(record) if record.ok => Self::LoggedOut,
+            Some(_) | None => Self::Unavailable,
+        }
+    }
+}
+
 /// Resolve provider accounts for the producer behind a process-wide
 /// single-flight. Fresh providers ride their own timestamps; only due kinds
 /// fork, and the winner merges those records into the shared cache.

@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 
-use super::{Ctx, GlobalFlags, resolve_agent_one};
+use super::{Ctx, GlobalFlags, resolve_open_ask};
 use crate::cli::render;
 use rimz::agents::{AgentState, AskKind, OpenAskDetail, read_open_ask};
 use rimz::ids::AskId;
@@ -170,20 +170,8 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::harness::target::addressable_agents(&snapshot);
-    let agent = if target.starts_with("ask_") {
-        let ask_id = AskId::parse(target)?;
-        snapshot
-            .agents
-            .iter()
-            .find(|agent| {
-                agent.parent_agent_id.is_none()
-                    && agent.is_awaiting_input()
-                    && agent.open_ask.as_ref().is_some_and(|ask| ask.id == ask_id)
-            })
-            .ok_or_else(|| anyhow::anyhow!("ask `{ask_id}` is no longer open"))?
-    } else {
-        resolve_agent_one(&snapshot, target, None, ctx.channel())?
-    };
+    let agent = resolve_open_ask(&snapshot, target, ctx.channel(), true)?
+        .ok_or_else(|| anyhow::anyhow!("ask `{target}` is no longer open"))?;
     if !agent.is_awaiting_input() || agent.open_ask.is_none() {
         bail!(
             "{} is not asking anything",
