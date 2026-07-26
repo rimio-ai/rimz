@@ -61,7 +61,7 @@ fn channel_new_validates_bare_names() {
 
 #[test]
 fn channel_new_refuses_worktree_conflict() {
-    if Command::new("git").arg("--version").output().is_err() {
+    if git_missing() {
         return;
     }
     let env = Env::new();
@@ -311,37 +311,34 @@ fn agent_pane(env: &Env, command: &str) -> rimz::pane::PaneRef {
 }
 
 fn init_repo(path: &Path) {
-    for args in [
-        &["init", "-b", "main"][..],
-        &["config", "user.email", "rimz@example.com"],
-        &["config", "user.name", "RimZ Test"],
-    ] {
-        assert!(
-            Command::new("git")
-                .args(args)
-                .current_dir(path)
-                .status()
-                .expect("run git")
-                .success(),
-            "git {args:?}"
-        );
-    }
-    std::fs::write(path.join("README.md"), "fixture\n").expect("write fixture");
+    git(path, &["init", "-b", "main"]);
+    git(path, &["config", "user.email", "rimz@example.com"]);
+    git(path, &["config", "user.name", "RimZ Test"]);
+    commit_file(path, "README.md", "fixture\n", "initial");
+}
+
+fn git_missing() -> bool {
+    Command::new("git").arg("--version").output().is_err()
+}
+
+fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {
+    std::fs::write(repo.join(name), contents).expect("write committed file");
+    git(repo, &["add", name]);
+    git(repo, &["commit", "-m", message]);
+}
+
+fn git(cwd: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("spawn git");
     assert!(
-        Command::new("git")
-            .args(["add", "README.md"])
-            .current_dir(path)
-            .status()
-            .expect("git add")
-            .success()
-    );
-    assert!(
-        Command::new("git")
-            .args(["commit", "-m", "initial"])
-            .current_dir(path)
-            .status()
-            .expect("git commit")
-            .success()
+        output.status.success(),
+        "git {} failed\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
 }
 
