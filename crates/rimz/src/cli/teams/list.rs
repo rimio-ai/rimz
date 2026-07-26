@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -301,22 +301,35 @@ fn live_instances(
     audit_agents: &[AgentState],
     prices: &rimz::agents::PriceBook,
 ) -> BTreeMap<String, Vec<LiveInstance>> {
+    let cohorts = rimz::harness::target::team_cohorts(agents);
+    let live_ids = cohorts
+        .iter()
+        .flat_map(|cohort| cohort.members.iter().map(|agent| agent.agent_id.clone()))
+        .collect::<BTreeSet<_>>();
     let audit_refs = audit_agents.iter().collect::<Vec<_>>();
     let mut effort_by_session = BTreeMap::new();
+    let mut memo = rimz::agents::spending::EffortParseMemo::default();
     for records in rimz::agents::attribution::slot_groups(&audit_refs) {
-        let effort = rimz::agents::spending::slot_effort(
+        if !records
+            .iter()
+            .any(|agent| live_ids.contains(&agent.agent_id))
+        {
+            continue;
+        }
+        let effort = rimz::agents::spending::slot_effort_with_memo(
             &records
                 .iter()
                 .map(|agent| rimz::agents::spending::EffortSessionRef::from_state(agent))
                 .collect::<Vec<_>>(),
             prices,
+            &mut memo,
         );
         for record in records {
             effort_by_session.insert(record.agent_id.clone(), effort);
         }
     }
     let mut by_team: BTreeMap<String, Vec<LiveInstance>> = BTreeMap::new();
-    for cohort in rimz::harness::target::team_cohorts(agents) {
+    for cohort in cohorts {
         let members = cohort.members;
         let mut status_counts = BTreeMap::new();
         for agent in &members {
