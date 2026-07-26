@@ -78,10 +78,11 @@ fn assemble_snapshot(
     snapshot.fenced_sessions = ended;
     snapshot.fenced_sessions.extend(expelled);
     snapshot.reap_stale_sessions();
-    snapshot.display_name = display_name_for(paths);
+    let identity = WorkspaceSnapshotIdentity::from_paths(paths);
+    snapshot.display_name = identity.display_name;
     let mut snapshot = snapshot
-        .with_root_class(root_class_for(paths))
-        .with_project_root(project_root_for(paths));
+        .with_root_class(identity.root_class)
+        .with_project_root(identity.project_root);
     // Stamp the extent the fold consumed. The freshness gate compares it
     // against the live log length, so a racing append can never pass a
     // stale rollup off as current.
@@ -154,51 +155,57 @@ thread_local! {
     static LATEST_PARSE_CACHE: ParseCache<SidebarSnapshot> = const { ParseCache::new() };
 }
 
-pub(crate) fn display_name_for(paths: &StatePaths) -> String {
-    let record = match workspace_record::read(&paths.workspace_record) {
-        Ok(record) => record,
-        Err(WorkspaceRecordErr::Io { source, .. })
-            if source.kind() == std::io::ErrorKind::NotFound =>
-        {
-            return paths.workspace_id.as_str().to_owned();
-        }
-        Err(err) => {
-            tracing::debug!(
-                path = %paths.workspace_record.display(),
-                error = %err,
-                "workspace record is unreadable while resolving the display name",
-            );
-            return paths.workspace_id.as_str().to_owned();
-        }
-    };
-    let root = crate::worktree::normalize_path_lexical(&record.project_root);
-    let Some(name) = root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-    else {
-        tracing::debug!(
-            root = %root.display(),
-            "workspace project root has no usable display name",
-        );
-        return paths.workspace_id.as_str().to_owned();
-    };
-    name.to_owned()
+struct WorkspaceSnapshotIdentity {
+    display_name: String,
+    project_root: Option<PathBuf>,
+    root_class: RootClass,
 }
 
-pub(crate) fn project_root_for(paths: &StatePaths) -> Option<PathBuf> {
-    workspace_record::read(&paths.workspace_record)
-        .ok()
-        .map(|record| record.project_root)
-}
+impl WorkspaceSnapshotIdentity {
+    fn fallback(paths: &StatePaths) -> Self {
+        Self {
+            display_name: paths.workspace_id.as_str().to_owned(),
+            project_root: None,
+            root_class: RootClass::Repo,
+        }
+    }
 
-/// The room root's class from the workspace record, defaulting to `Repo` (the
-/// prior grouping) when the record is missing or pre-dates the field.
-pub(crate) fn root_class_for(paths: &StatePaths) -> RootClass {
-    workspace_record::read(&paths.workspace_record)
-        .ok()
-        .map(|record| record.root_class)
-        .unwrap_or(RootClass::Repo)
+    fn from_paths(paths: &StatePaths) -> Self {
+        let record = match workspace_record::read(&paths.workspace_record) {
+            Ok(record) => record,
+            Err(WorkspaceRecordErr::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                return Self::fallback(paths);
+            }
+            Err(err) => {
+                tracing::debug!(
+                    path = %paths.workspace_record.display(),
+                    error = %err,
+                    "workspace record is unreadable while resolving snapshot identity",
+                );
+                return Self::fallback(paths);
+            }
+        };
+        let root = crate::worktree::normalize_path_lexical(&record.project_root);
+        let display_name = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                tracing::debug!(
+                    root = %root.display(),
+                    "workspace project root has no usable display name",
+                );
+                paths.workspace_id.as_str().to_owned()
+            });
+        Self {
+            display_name,
+            project_root: Some(record.project_root),
+            root_class: record.root_class,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -212,7 +219,7 @@ mod tests {
     use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
     use crate::store::event::EventEnvelope;
 
-    fn write_workspace_record(paths: &StatePaths, project_root: PathBuf) {
+    fn write_workspace_record(paths: &StatePaths, project_root: PathBuf, root_class: RootClass) {
         workspace_record::write(
             paths,
             &workspace_record::WorkspaceRecord {
@@ -220,7 +227,7 @@ mod tests {
                 project_root,
                 worktree_root: None,
                 session_name: "rimz-legacy".to_owned(),
-                root_class: RootClass::Repo,
+                root_class,
                 rimz_bin: None,
                 rimz_build: None,
                 updated_at: Timestamp::UNIX_EPOCH,
@@ -235,9 +242,16 @@ mod tests {
         let workspace = WorkspaceId::from_project_root(dir.path());
         let paths = StatePaths::under(workspace, dir.path()).expect("state paths");
         paths.ensure_dirs().expect("state dirs");
-        write_workspace_record(&paths, PathBuf::from("/srv/projects/rimz/child/.."));
+        write_workspace_record(
+            &paths,
+            PathBuf::from("/srv/projects/rimz/child/.."),
+            RootClass::Repo,
+        );
 
-        assert_eq!(display_name_for(&paths), "rimz");
+        assert_eq!(
+            WorkspaceSnapshotIdentity::from_paths(&paths).display_name,
+            "rimz"
+        );
     }
 
     #[test]
@@ -246,9 +260,46 @@ mod tests {
         let workspace = WorkspaceId::from_project_root(dir.path());
         let paths = StatePaths::under(workspace.clone(), dir.path()).expect("state paths");
         paths.ensure_dirs().expect("state dirs");
-        write_workspace_record(&paths, PathBuf::from("/tmp/.."));
+        write_workspace_record(&paths, PathBuf::from("/tmp/.."), RootClass::Directory);
 
-        assert_eq!(display_name_for(&paths), workspace.as_str());
+        let identity = WorkspaceSnapshotIdentity::from_paths(&paths);
+        assert_eq!(identity.display_name, workspace.as_str());
+        assert_eq!(identity.project_root, Some(PathBuf::from("/tmp/..")));
+        assert_eq!(identity.root_class, RootClass::Directory);
+    }
+
+    #[test]
+    fn build_applies_workspace_identity_from_one_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace, dir.path()).expect("state paths");
+        paths.ensure_dirs().expect("state dirs");
+        let project_root = PathBuf::from("/srv/projects/identity");
+        write_workspace_record(&paths, project_root.clone(), RootClass::Marker);
+
+        let snapshot = build_from(&paths).expect("build snapshot");
+
+        assert_eq!(snapshot.display_name, "identity");
+        assert_eq!(snapshot.project_root, Some(project_root));
+        assert_eq!(snapshot.root_class, RootClass::Marker);
+    }
+
+    #[test]
+    fn missing_or_malformed_workspace_record_uses_identity_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).expect("state paths");
+        paths.ensure_dirs().expect("state dirs");
+
+        for corrupt in [false, true] {
+            if corrupt {
+                std::fs::write(&paths.workspace_record, b"not json").expect("corrupt record");
+            }
+            let identity = WorkspaceSnapshotIdentity::from_paths(&paths);
+            assert_eq!(identity.display_name, workspace.as_str());
+            assert_eq!(identity.project_root, None);
+            assert_eq!(identity.root_class, RootClass::Repo);
+        }
     }
 
     #[cfg(target_os = "linux")]
