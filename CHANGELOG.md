@@ -1,13 +1,20 @@
 # Changelog
 
-What changed in each RimZ release, written for the people who run it. Every release is a git tag: `v0.4.2` tags the `0.4.2` workspace version, `v0.4.1` tags `0.4.1`, `v0.4` tags `0.4.0`. Each heading links to that release's full diff.
+What changed in each RimZ release, written for the people who run it. Every release is a git tag: `v0.4.3` tags the `0.4.3` workspace version, `v0.4.2` tags `0.4.2`, `v0.4` tags `0.4.0`. Each heading links to that release's full diff.
 
 RimZ is beta software on the 0.x line. Commands, flags, config keys, and output formats can change between releases while the design settles, so read the "Changed" section of a release before upgrading. Entries describe what you can do differently; the reasoning behind a change lives in the linked guide.
 
-## Unreleased
+## [0.4.3] (2026-07-26)
+
+Money grows a durable spine: every per-agent and per-team figure now folds one seat's whole lifetime across resumed sessions, `rimz agents attribution` credits the agents behind a pull request after their panes are gone, and a pricing pass removes three sources of wrong dollars. Teams become a first-class command surface, turn budgets cap a runaway turn, and idle contexts compact before the provider cache expires. Around that, scheduled tasks separate project trust from a machine-local enable, agent cards flag an agent stuck repeating one tool call, and the sidebar width becomes one shared share of the screen that every tab follows.
 
 ### Added
 
+- `rimz agents attribution` credits every root agent that worked a lane, folding durable session records with transcript spend and active-time sidecars so a teammate that already exited still appears. `--md` prints a credit block for a pull-request body, `--json` the audit record, and `--all` covers every lane in the room. → [agents](./docs/reference/cli/agents.md#attribution) · [fleet](./docs/guide/fleet.md#manage-a-running-room)
+- Agent cards flag an agent stuck repeating one identical tool call: an amber `⟲ N` after `agents.attention.tool_repeat_warn_after` calls (3), escalating to `!` with `loop: <tool> ×<count>` at `tool_repeat_attention_after` (20), and clearing on the next differing call. Claude and Codex report the arguments this needs; other adapters keep the detection off. → [sidebar](./docs/guide/sidebar.md#the-agent-card)
+- Claude subagent rows carry an exact cost priced from each child's own transcript, hidden while any request has no known rate; the child figure is display-only because the parent session already counts it. → [Token Insight](./docs/guide/insight.md#per-room-the-cockpit)
+- `rimz pane list` gives each tab its sidebar row and marks the calling pane `(self)`, while `sidebar` becomes a target for `pane capture`, `pane send`, and `pane focus`. → [pane](./docs/reference/cli/pane.md)
+- `rimz sidebar frame` prints the live sidebar as one static frame for a script or a screenshot, with `--expand` opening every card at full height.
 - `harness.turn_budget` caps every agent turn at a configured dollar amount, parks a runaway turn without arming a midnight resume, and reopens with a fresh baseline on the next human prompt. → [budgets](./docs/guide/budget.md#cap-every-turn)
 - `rimz teams` discovers and validates effective team definitions, inspects live members and cost, installs release-matched GitHub bundles, launches or resumes teams through the existing cohort engine, and focuses, restarts, or stops a live cohort; bare-name launch and the `launch` verb mirror `rimz agents`, while active and finished sidebar groups carry the team's name even beside stray agents. → [teams](./docs/guide/teams.md#see-and-drive-your-teams)
 - Sidebar snapshot JSON exposes cumulative estimated active time for root sessions, excluding waits, idle spans, parked background work, and silence past a configurable grace.
@@ -21,12 +28,25 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 
 ### Changed
 
+- Scheduled tasks separate project trust from permission to run here: `rimz loop resume` becomes `rimz loop enable`, `rimz loop disable` holds a task indefinitely, `rimz loop pause` now requires `--for <duration>`, and either verb takes `--all` for every listed task. Strike exhaustion disables rather than pauses, so `rimz loop list` reads `disabled · N strikes` and notification handlers matching `loop_paused` must move to the `loop_disabled` kind. A project task pulled from a repository stays disabled until you enable it locally, while `rimz loop add --project` enables it for its author. → [loops](./docs/guide/loops.md#every-schedule-shape) · [security](./docs/guide/security.md#project-trust)
+- Per-agent and per-team money now reports the durable seat's lifetime across all of its resumed sessions, deduplicating requests that a resume replayed. `rimz agents show`, `rimz teams show`, `rimz agents attribution`, and a finished team's collapsed sidebar receipt agree on the same dollars, token split, and active time, and expanding that receipt shows each member's lifetime cost adding back to the pin. Live agent cards and every budget gate stay scoped to the current provider session. → [Token Insight](./docs/guide/insight.md#how-the-numbers-are-calculated)
+- Sidebar width is one room-wide share of the screen. `a` and `d` set it, and so does a settled mouse drag once it passes half a native step; every tab converges on the new share within a tick. tmux keeps the selected column exactly, Zellij settles on the narrowest of its 5% rungs that still covers the share rather than undershooting it, and the share holds its proportion through terminal resizes, reloads, and reattaches. → [sidebar](./docs/guide/sidebar.md#bottom-chrome)
 - `rimz agents --json` and `rimz agents show --json` now publish one versioned, stable-key agent report instead of the provider-shaped store rollup. JSON and tables share projected status and normalized model, context, token, cost, active-time, compaction, attention, placement, budget, subagent, handle, and caller-identity fields; consumers must migrate to schema 1. → [agent control JSON](./docs/reference/cli/agents.md#list)
 - First-run consent prompts default to no: the project-trust grant for an untrusted clone and the hands-off automation opt-in both need an explicit yes, so pressing Enter never activates a cloned repo's command surface or unattended runs. Re-running setup still defaults the automation prompt to your current setting. → [security](./docs/guide/security.md#project-trust)
-- The vendored Zellij presence plugin is reproducibly bound to its checked-in source; builds verify its checksum before embedding, and CI rebuilds and compares the wasm byte for byte. → [security](./docs/guide/security.md#the-zellij-presence-plugin)
+- The vendored Zellij presence plugin is reproducibly bound to its checked-in source; builds verify its checksum before embedding, and CI rebuilds and compares the wasm byte for byte. The rebuild no longer depends on the machine it runs on, so a compiler cache, a crates.io mirror, or an installed `rust-src` component cannot change the vendored bytes. → [security](./docs/guide/security.md#the-zellij-presence-plugin)
+- `rimz sidebar render`, which drew a one-off sidebar at a given width and height, has been removed; `rimz sidebar frame` renders the live sidebar instead. The contributor fixture and gallery commands now require a build with the `testkit` feature, keeping sample data out of released binaries.
 
 ### Fixed
 
+- Model prices correct three overcharges: a 2023 Bedrock row no longer supplies the price for Claude models RimZ has not seen (it charged $8/M input against Sonnet's $3/M), `claude-3-7-sonnet` and `claude-3-haiku` drop Bedrock's resale markup and cache rates in favor of their direct rows, GPT-5 through GPT-5.5 cache writes stop costing 25% too much, and Qwen 3 coder cached input stops reporting at half its billed rate. → [Token Insight](./docs/guide/insight.md#how-the-numbers-are-calculated)
+- Costs re-price themselves after a price-book refresh instead of leaving subagent and card figures computed from stale rates, while steady-state ticks stay incremental.
+- A Codex rollout that fails on provider capacity pauses and auto-resumes like other transient overloads, and unrelated URLs, source lines, or token counts in a rollout no longer turn a silent pane death into an automatic overload retry.
+- Scrolling immediately after an attach no longer walks an agent's prompt history: RimZ saves, disables, and restores alternate scroll around every multiplexer attach it launches, preserving exit codes and job control, and an older RimZ on the remote side ignores the negotiation instead of rejecting the attach. → [troubleshooting](./docs/guide/troubleshooting.md#scroll-wheel-sends-arrow-keys)
+- A resumed agent records its pane placement before its provider starts, so a reborn card stays visible and addressable in `rimz agents` and `rimz pane list` instead of disappearing until the provider registers.
+- `rimz pane list` disambiguates handles against the panes it just listed, the way `rimz agents` does, and `rimz message show` names a durable receiver that survives without a live process.
+- An exited agent's provider session can no longer be rebound to a freshly launched one, and a co-resident audit session no longer makes a live teammate's handle ambiguous while its accounting records stay intact.
+- Running subagent rows show their model as soon as the child starts on Claude, Qwen, and OpenCode, rather than waiting for it to finish.
+- Claude session discovery no longer mistakes a subagent's companion transcript for the session's primary one.
 - Codex agent cards follow the successor session created by `/compact` in Codex 0.145 and newer instead of staying pinned to the completed predecessor.
 - OAuth usage probes pin Claude and Codex Bearer tokens to their official provider hosts or loopback test servers, closing GHSA-vv3p-wfq9-jc4m. Thanks to @walt-verweij for the report. → [security](./docs/guide/security.md#what-leaves-your-machine)
 - Healthy builds and large-file copies stay in the sidebar's working state while Linux completes blocking disk I/O; `!` now requires a sustained non-progressing process stall, and a new foreground command starts with a fresh stall baseline.
@@ -38,6 +58,7 @@ RimZ is beta software on the 0.x line. Commands, flags, config keys, and output 
 - Browser panes opened with macOS Option chords no longer begin with the composed accent after xterm handles the Meta input, including in Safari and Chrome. → [web](./docs/guide/web.md#browser-appearance-and-input)
 - Closing a RimZ browser tab no longer asks for leave-site confirmation; reconnecting reattaches the same room.
 - Ctrl-C stops `rimz remote connect` without opening another recovery attempt, including while the remote host asks a setup, hook-installation, or trust question. → [remote](./docs/guide/remote.md#a-link-that-heals-itself)
+- A command message such as `/compact` now submits instead of sitting typed but unsent in a Codex composer. Codex treats characters arriving together as a paste and suppresses Enter briefly afterwards, so RimZ waits for that window to close before submitting. → [messaging](./docs/guide/messaging.md)
 
 ## [0.4.2] (2026-07-22)
 
@@ -215,6 +236,7 @@ What shipped:
 - Theming and pets: bundled palettes, color-depth and slot overrides, custom themes, provider branding, and an animated companion on the provider dashboard. → [theme](./docs/guide/theme.md) · [pets](./docs/guide/pets.md)
 - `rimz doctor`, `rimz setup`, hook install and uninstall, project trust, and a documented reset and GC path. → [troubleshooting](./docs/guide/troubleshooting.md) · [security](./docs/guide/security.md)
 
+[0.4.3]: https://github.com/rimio-ai/rimz/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/rimio-ai/rimz/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/rimio-ai/rimz/compare/v0.4...v0.4.1
 [0.4.0]: https://github.com/rimio-ai/rimz/compare/v0.3...v0.4
