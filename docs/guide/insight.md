@@ -83,7 +83,7 @@ The top of the sidebar narrows all of this to the room you are standing in. Two 
  ¤ 16 (2)                                      $420.00    ← live agents · unread · spend
 ```
 
-The token breakdown sums every durable session record that ran in the room's spend window, and the dollar figure below it is the room's cost for that same window, counting up in an eased roll the moment any agent's cost moves. Live transcript costs price each request before adding it to the session; statuslines that expose only session-cumulative totals use base-rate estimates because their sums no longer contain the request boundaries needed for exact long-context tiers. Both lines are scoped to this room: the project root and the worktrees grouped under it, never your whole machine.
+The token breakdown sums every durable session record that ran in the room's spend window, and the dollar figure below it is the room's cost for that same window, counting up in an eased roll the moment any agent's cost moves. Live transcript costs price each request before adding it to the session; statuslines that expose only session-cumulative totals use base-rate estimates because their sums no longer contain the request boundaries needed for exact long-context tiers. Claude child cards use that same per-request policy against each child's transcript and hide the figure when any request is unpriced; the child figure never adds to totals because the parent session already includes it. Both lines are scoped to this room: the project root and the worktrees grouped under it, never your whole machine.
 
 The window is yours to set with `[sidebar] spend_window` ([configuration](./configuration.md#sidebar-rendering)):
 
