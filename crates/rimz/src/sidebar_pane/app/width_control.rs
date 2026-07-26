@@ -10,17 +10,12 @@ use crate::diag::record::{
 };
 use crate::ids::{MuxName, PaneId};
 use crate::mux::WidthAdjust;
+use crate::mux::width::{WidthCrossing, width_crossing};
 use crate::{RuntimePaths, diag::DiagSink};
 use tracing::{debug, warn};
 
 const FEEDBACK_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_STEPS: u8 = 32;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Direction {
-    Narrower,
-    Wider,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WidthIdleReason {
@@ -40,7 +35,6 @@ enum WidthTransition {
 
 #[derive(Clone, Copy, Debug)]
 struct IssuedStep {
-    direction: Direction,
     width_before: u16,
     at: Instant,
 }
@@ -155,8 +149,12 @@ impl WidthControl {
                     });
                     return None;
                 }
-                if crossed_target(step, own_cols, target_cols) {
-                    if own_cols.abs_diff(target_cols) <= step.width_before.abs_diff(target_cols) {
+                match width_crossing(
+                    u64::from(step.width_before),
+                    u64::from(own_cols),
+                    u64::from(target_cols),
+                ) {
+                    Some(WidthCrossing::NearerOrEqual) => {
                         self.idle_at = Some(own_cols);
                         self.traces.push_back(WidthTransition::Idle {
                             at: own_cols,
@@ -164,7 +162,8 @@ impl WidthControl {
                         });
                         return None;
                     }
-                    self.reverse_issued = true;
+                    Some(WidthCrossing::Farther) => self.reverse_issued = true,
+                    None => {}
                 }
             } else if now.saturating_duration_since(step.at) < FEEDBACK_TIMEOUT {
                 return None;
@@ -199,14 +198,8 @@ impl WidthControl {
             return None;
         }
 
-        let direction = if own_cols < target_cols {
-            Direction::Wider
-        } else {
-            Direction::Narrower
-        };
         self.steps_issued += 1;
         self.in_flight = Some(IssuedStep {
-            direction,
             width_before: own_cols,
             at: now,
         });
@@ -215,13 +208,6 @@ impl WidthControl {
             target: target_cols,
         });
         Some((own_cols, target_cols))
-    }
-}
-
-fn crossed_target(step: IssuedStep, own_cols: u16, target_cols: u16) -> bool {
-    match step.direction {
-        Direction::Narrower => step.width_before > target_cols && own_cols < target_cols,
-        Direction::Wider => step.width_before < target_cols && own_cols > target_cols,
     }
 }
 

@@ -17,7 +17,9 @@ use super::{
     ZellijBackend,
 };
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::mux::width::{sidebar_width_off_spec, zellij_resize_step_cols};
+use crate::mux::width::{
+    WidthCrossing, sidebar_width_off_spec, width_crossing, zellij_resize_step_cols,
+};
 use crate::mux::{
     DaemonView, MuxBackend, MuxErr, PaneReadConsistency, PresencePluginOptions, Result,
     SessionLiveness, SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
@@ -905,23 +907,13 @@ impl ZellijBackend {
             if !sidebar_width_off_spec(cols, target_cols, zellij_resize_step_cols(view_cols)) {
                 break;
             }
-            let crossing_distance =
-                last_cols
-                    .zip(last_step_grow)
-                    .and_then(|(last_cols, last_step_grow)| {
-                        let crossed = if last_step_grow {
-                            last_cols < target_cols && cols > target_cols
-                        } else {
-                            last_cols > target_cols && cols < target_cols
-                        };
-                        crossed.then_some(last_cols.abs_diff(target_cols))
-                    });
-            if crossing_distance
-                .is_some_and(|last_distance| cols.abs_diff(target_cols) <= last_distance)
+            let crossed_farther = match last_cols
+                .and_then(|last_cols| width_crossing(last_cols, cols, target_cols))
             {
-                break;
-            }
-            let crossed_farther = crossing_distance.is_some();
+                Some(WidthCrossing::NearerOrEqual) => break,
+                Some(WidthCrossing::Farther) => true,
+                None => false,
+            };
             let grow = cols < target_cols;
             let no_progress =
                 last_cols

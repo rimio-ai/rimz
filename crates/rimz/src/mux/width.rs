@@ -265,6 +265,25 @@ pub(crate) fn sidebar_width_off_spec(cols: u64, canonical_cols: u64, step_cols: 
     cols.abs_diff(canonical_cols) > (step_cols / 2).max(1)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WidthCrossing {
+    NearerOrEqual,
+    Farther,
+}
+
+/// Classify a strict target crossing by whether the new width is the nearest
+/// of the two reachable results.
+pub(crate) fn width_crossing(before: u64, after: u64, target: u64) -> Option<WidthCrossing> {
+    let crossed = (before < target && after > target) || (before > target && after < target);
+    crossed.then(|| {
+        if after.abs_diff(target) <= before.abs_diff(target) {
+            WidthCrossing::NearerOrEqual
+        } else {
+            WidthCrossing::Farther
+        }
+    })
+}
+
 /// Zellij's built-in resize increment is approximately 5% of the view width.
 pub(crate) fn zellij_resize_step_cols(view_cols: u64) -> u64 {
     (view_cols / 20).max(1)
@@ -466,6 +485,21 @@ mod tests {
         // Zero and tiny views still produce a one-column minimum band.
         assert_eq!(zellij_resize_step_cols(0), 1);
         assert_eq!(zellij_resize_step_cols(19), 1);
+    }
+
+    #[test]
+    fn width_crossings_classify_the_nearest_reachable_side() {
+        assert_eq!(
+            width_crossing(48, 71, 63),
+            Some(WidthCrossing::NearerOrEqual),
+        );
+        assert_eq!(
+            width_crossing(58, 68, 63),
+            Some(WidthCrossing::NearerOrEqual),
+        );
+        assert_eq!(width_crossing(53, 76, 63), Some(WidthCrossing::Farther));
+        assert_eq!(width_crossing(48, 55, 63), None);
+        assert_eq!(width_crossing(48, 63, 63), None);
     }
 
     #[test]
