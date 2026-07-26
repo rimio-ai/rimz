@@ -83,7 +83,7 @@ The launch block is declarative on purpose. Because permission argv, resume shap
 | `TranscriptCapability` | `parse_transcript_messages`, streaming pages, source positions | no transcript surface; JSONL adapters inherit the byte-cursor implementation |
 | `ContextCapability` | `observe_context`, `local_context_refresh`, `context_refresh_spawn`, local turn pricing | no out-of-band context source |
 | `AccountCapability` | `probe_account`, `probe_account_usage`, realtime usage, reset credits, remote-control state | logged out, and no account-usage surface |
-| `SpendingCapability` | `spending_sources`, `parse_spend`, `transcript_files`, `session_transcript` | no historical spend enters fleet aggregation |
+| `SpendingCapability` | `spending_sources`, `parse_spend`, `transcript_files`, `session_transcript`, `session_spend_transcripts` | no historical spend enters fleet aggregation |
 | `RuntimeControlCapability` | remote-control readiness, host argv, reconciliation | remote control is disabled |
 
 An adapter is therefore readable top to bottom as a list of `impl` blocks, and a gap is visible as an empty one. Grok is the compact worked example: a spec, a `decode_hook`, an install source, a transcript parser, a local context refresh, an account probe, a spend parser, and empty impls for the rest ([`adapters/grok/mod.rs`](../../../crates/rimz/src/agents/adapters/grok/mod.rs)).
