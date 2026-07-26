@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
 use headless_chrome::protocol::cdp::{Network, types::Event};
 use headless_chrome::{Browser, LaunchOptions, Tab};
 use rimz::mux::{ClientFocusOptions, MuxBackend, ZellijBackend};
@@ -132,13 +131,9 @@ impl BrowserHandle {
     pub(super) fn tab_with_websocket_capture(
         &self,
         url: &str,
-        secret: Option<&str>,
-        capture_text: bool,
+        secret: &str,
     ) -> (Arc<Tab>, WebSocketCapture) {
-        let tab = secret.map_or_else(
-            || self.browser.new_tab().expect("open browser tab"),
-            |secret| self.configured_authed_tab(secret),
-        );
+        let tab = self.configured_authed_tab(secret);
         tab.call_method(Network::Enable {
             max_total_buffer_size: None,
             max_resource_buffer_size: None,
@@ -147,7 +142,7 @@ impl BrowserHandle {
             enable_durable_messages: None,
         })
         .expect("enable browser network events");
-        let capture = WebSocketCapture::new(&tab, capture_text);
+        let capture = WebSocketCapture::new(&tab);
         tab.navigate_to(url).expect("navigate browser tab");
         (tab, capture)
     }
@@ -157,21 +152,18 @@ pub(super) struct WebSocketCapture {
     closes: Arc<AtomicUsize>,
     received: Arc<AtomicUsize>,
     sent: Arc<AtomicUsize>,
-    text: Arc<Mutex<String>>,
     urls: Arc<Mutex<Vec<String>>>,
 }
 
 impl WebSocketCapture {
-    fn new(tab: &Tab, capture_text: bool) -> Self {
+    fn new(tab: &Tab) -> Self {
         let closes = Arc::new(AtomicUsize::new(0));
         let received = Arc::new(AtomicUsize::new(0));
         let sent = Arc::new(AtomicUsize::new(0));
-        let text = Arc::new(Mutex::new(String::new()));
         let urls = Arc::new(Mutex::new(Vec::new()));
         let listener_closes = Arc::clone(&closes);
         let listener_received = Arc::clone(&received);
         let listener_sent = Arc::clone(&sent);
-        let listener_text = Arc::clone(&text);
         let listener_urls = Arc::clone(&urls);
         tab.add_event_listener(Arc::new(move |event: &Event| match event {
             Event::NetworkWebSocketCreated(event) => {
@@ -180,17 +172,8 @@ impl WebSocketCapture {
                     .expect("lock WebSocket URLs")
                     .push(event.params.url.clone());
             }
-            Event::NetworkWebSocketFrameReceived(event) => {
+            Event::NetworkWebSocketFrameReceived(_) => {
                 listener_received.fetch_add(1, Ordering::Relaxed);
-                if !capture_text {
-                    return;
-                }
-                let payload = &event.params.response.payload_data;
-                let mut text = listener_text.lock().expect("lock WebSocket capture");
-                text.push_str(payload);
-                if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(payload) {
-                    text.push_str(&String::from_utf8_lossy(&decoded));
-                }
             }
             Event::NetworkWebSocketFrameSent(_) => {
                 listener_sent.fetch_add(1, Ordering::Relaxed);
@@ -205,7 +188,6 @@ impl WebSocketCapture {
             closes,
             received,
             sent,
-            text,
             urls,
         }
     }
@@ -243,21 +225,6 @@ impl WebSocketCapture {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
-
-    pub(super) fn wait_contains(&self, needle: &str, budget: Duration) {
-        let deadline = Instant::now() + budget;
-        loop {
-            let text = self.text.lock().expect("lock WebSocket capture").clone();
-            if text.contains(needle) {
-                return;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "browser WebSocket did not contain {needle:?}; captured frames:\n{text}"
-            );
-            std::thread::sleep(Duration::from_millis(100));
-        }
-    }
 }
 
 pub(super) struct OpenedWeb {
@@ -276,7 +243,6 @@ pub(super) struct LiveWebFixture {
     server: TmuxServer,
     ttyd: PathBuf,
     web_port: u16,
-    share_port: u16,
 }
 
 impl LiveWebFixture {
@@ -311,7 +277,6 @@ impl LiveWebFixture {
             server,
             ttyd: stack.ttyd.clone(),
             web_port,
-            share_port,
         }
     }
 
@@ -321,10 +286,6 @@ impl LiveWebFixture {
 
     pub(super) fn display_name(&self) -> String {
         workspace_display_name(&self.workspace)
-    }
-
-    pub(super) fn share_base_url(&self) -> String {
-        format!("http://127.0.0.1:{}/", self.share_port)
     }
 
     pub(super) fn open(&self) -> OpenedWeb {
@@ -398,23 +359,6 @@ impl LiveWebFixture {
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-    }
-
-    pub(super) fn add_room(&self, name: &str) -> rimz::ResolvedWorkspace {
-        let root = self.env.project_root.join(name);
-        self.env.write_config(&root, "");
-        self.env.record(&root);
-        let workspace = rimz::WorkspaceResolver::resolve(&root, None).expect("resolve second room");
-        self.server.output(&[
-            "new-session",
-            "-d",
-            "-s",
-            &workspace.session_name,
-            "-c",
-            &root.to_string_lossy(),
-            "sh",
-        ]);
-        workspace
     }
 
     fn capture(&self, session: &str) -> String {

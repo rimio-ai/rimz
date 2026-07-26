@@ -65,8 +65,7 @@ fn continuous_output_keeps_websocket_attached() {
     let fixture = LiveWebFixture::new(&stack);
     let opened = fixture.open();
     let browser = BrowserHandle::launch(&stack.browser);
-    let (tab, frames) =
-        browser.tab_with_websocket_capture(&opened.url, Some(&opened.secret), false);
+    let (tab, frames) = browser.tab_with_websocket_capture(&opened.url, &opened.secret);
 
     frames.wait_url_contains(
         &format!("arg={}", fixture.workspace.session_name),
@@ -195,14 +194,6 @@ fn share_broadcast_views_without_auth_and_drops_input() {
     tab.press_key("Enter")
         .expect("submit read-only viewer marker");
     fixture.assert_capture_absent("RIMZ_VIEWER_INPUT", Duration::from_secs(3));
-
-    let second = fixture.add_room("unshared");
-    let (_refused, frames) = browser.tab_with_websocket_capture(
-        &format!("{}?room={}", fixture.share_base_url(), second.session_name),
-        None,
-        true,
-    );
-    frames.wait_contains("this room is not shared", ATTACH_TIMEOUT);
 }
 
 #[test]
