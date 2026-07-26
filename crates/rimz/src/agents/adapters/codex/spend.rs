@@ -166,13 +166,7 @@ pub(crate) fn resume_live_fold(
         fold = LocalSpendFold::default();
     }
     let parsed = parse_codex_spend(path, Some(&fold.cursor), prices);
-    for entry in &parsed.entries {
-        fold.total_usd += entry.cost_usd;
-        fold.input = fold.input.saturating_add(entry.input);
-        fold.output = fold.output.saturating_add(entry.output);
-        fold.cache_write = fold.cache_write.saturating_add(entry.cache_write);
-        fold.cache_read = fold.cache_read.saturating_add(entry.cache_read);
-    }
+    fold.absorb(&parsed.entries);
     fold.cursor = parsed.cursor;
     fold
 }

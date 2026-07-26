@@ -148,6 +148,7 @@ fn model_display_name(value: Option<String>) -> Option<String> {
 
 impl StatuslinePayload {
     pub(crate) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
+        // This provider statusline is the sanctioned live-card cost overlay.
         let mut total_cost_usd = 0.0;
         for (model, metrics) in &self.metrics.models {
             let Some(usage) = metrics.tokens.session_usage() else {

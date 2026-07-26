@@ -34,13 +34,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
     }
     let prices = pricing::cached_book(ctx.shared_pricing_cache_path);
     let parsed = parse_claude_spend(&path, fold.cursor.offset, &prices);
-    for entry in &parsed.entries {
-        fold.total_usd += entry.cost_usd;
-        fold.input = fold.input.saturating_add(entry.input);
-        fold.output = fold.output.saturating_add(entry.output);
-        fold.cache_write = fold.cache_write.saturating_add(entry.cache_write);
-        fold.cache_read = fold.cache_read.saturating_add(entry.cache_read);
-    }
+    fold.absorb(&parsed.entries);
     fold.cursor = parsed.cursor;
     let session_usage = fold.session_usage();
     let tokens = session_usage.map_or(LocalTokenPatch::Keep, |session_usage| {

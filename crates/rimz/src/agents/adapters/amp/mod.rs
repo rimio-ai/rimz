@@ -25,10 +25,10 @@ use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
-    AgentCost, AgentCurrentUsage, AgentErr, AgentLifecycleObservation, AgentTokenUsage, AskKind,
-    FieldPatch, HookOutput, HookRouting, LocalContextPatch, LocalContextRefresh,
-    LocalContextRefreshCtx, LocalTokenPatch, RefreshTrigger, Result, SessionOrigin, TranscriptStat,
-    non_empty_trimmed, sanitize_user_prompt,
+    AgentCurrentUsage, AgentErr, AgentLifecycleObservation, AgentTokenUsage, AskKind, FieldPatch,
+    HookOutput, HookRouting, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
+    LocalTokenPatch, RefreshTrigger, Result, SessionOrigin, TranscriptStat, non_empty_trimmed,
+    sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -421,16 +421,11 @@ impl crate::agents::capabilities::ContextCapability for AmpAdapter {
         });
         let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
         let (entries, _) = spend::entries_from_thread(&parsed, &prices);
-        let cost_usd = entries.iter().map(|entry| entry.cost_usd).sum::<f64>();
         Some(LocalContextRefresh {
             context: LocalContextPatch {
                 model_id: model_id.map_or(FieldPatch::Keep, FieldPatch::Set),
                 tokens: LocalTokenPatch::PreserveEstablished(tokens),
-                cost: (cost_usd > 0.0)
-                    .then(|| AgentCost {
-                        total_cost_usd: Some(cost_usd),
-                        ..AgentCost::default()
-                    })
+                cost: crate::agents::spending::session_cost_from_entries(&entries, ctx.agent_id)
                     .map_or(FieldPatch::Keep, FieldPatch::Set),
                 ..LocalContextPatch::authoritative_current()
             },
