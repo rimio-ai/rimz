@@ -20,7 +20,7 @@ use std::io::{IsTerminal as _, Write as _};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::cli) enum RunPlacement {
+pub(super) enum RunPlacement {
     Split,
     LoopZone,
     Tab,
@@ -29,7 +29,7 @@ pub(in crate::cli) enum RunPlacement {
 /// A supervised `-p` run hosts its agent pane in a split of the current tab so
 /// focus stays with the caller; it opens a new tab only when forced or when
 /// there is no ambient pane to split.
-pub(in crate::cli) fn run_placement(
+pub(super) fn run_placement(
     force_new_tab: bool,
     has_ambient_pane: bool,
     loop_zone: bool,
@@ -44,7 +44,7 @@ pub(in crate::cli) fn run_placement(
 }
 
 /// Resolve and finalize the one-cell layout for a command-neutral supervised request.
-pub(in crate::cli) fn prepare_supervised_launch_layout(
+pub(super) fn prepare_supervised_launch_layout(
     request: &SupervisedRunRequest,
     spec: &str,
     workspace: &rimz::ResolvedWorkspace,

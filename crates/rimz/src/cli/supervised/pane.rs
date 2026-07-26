@@ -308,7 +308,7 @@ pub(crate) fn resolve_run_pane_in_snapshot(
 }
 
 #[cfg(test)]
-pub(crate) fn ensure_sendable(record: &RunRecord) -> Result<()> {
+fn ensure_sendable(record: &RunRecord) -> Result<()> {
     if record.status.is_terminal() {
         bail!(
             "run {} is {}; nothing to send",
@@ -317,4 +317,25 @@ pub(crate) fn ensure_sendable(record: &RunRecord) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rimz::harness::run::RunStatus;
+
+    #[test]
+    fn terminal_run_is_not_sendable() {
+        let mut record = RunRecord::new(
+            rimz::ids::WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
+            rimz::ids::AgentKind::new_unchecked("codex"),
+            rimz::harness::run::PermissionMode::Auto,
+            "go".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        record.status = RunStatus::Canceled;
+
+        let err = ensure_sendable(&record).expect_err("terminal run rejects sends");
+        assert!(err.to_string().contains("nothing to send"));
+    }
 }

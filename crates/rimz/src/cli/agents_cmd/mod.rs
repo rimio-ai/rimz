@@ -87,8 +87,6 @@ use stop::stop_agent;
 pub(in crate::cli) use stop::stop_resolved;
 use supervised::OutputFormat;
 use supervised::run::run_print;
-#[cfg(test)]
-use supervised::run::{RunPlacement, run_placement};
 use top::{TopArgs, run_top};
 use wait::wait_agent;
 
