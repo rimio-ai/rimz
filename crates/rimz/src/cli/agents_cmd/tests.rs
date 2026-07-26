@@ -617,6 +617,18 @@ fn refresh_targets_honor_channel_filter() {
 mod launch_options {
     use super::*;
 
+    #[test]
+    fn supervised_request_carries_model_and_effort_overrides() {
+        let args = parse_agents(&[
+            "rimz", "codex", "fix-it", "--model", " gpt-5 ", "--effort", " low ", "-p",
+        ]);
+
+        let (request, _) = into_supervised_request(args).expect("build supervised request");
+
+        assert_eq!(request.model.as_deref(), Some(" gpt-5 "));
+        assert_eq!(request.effort.as_deref(), Some(" low "));
+    }
+
     fn resolve_and_validate(
         args: &AgentsArgs,
         machine: &MachineConfig,
