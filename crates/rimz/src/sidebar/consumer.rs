@@ -189,6 +189,14 @@ pub fn read_published_snapshot(
     Ok(project_local(workspace, frame.as_deref(), exclude))
 }
 
+/// Whether the producer has published a pane frame for `session`.
+///
+/// The one-shot frame command uses this gate to prefer the passive consumer
+/// path without mistaking a valid frameless rollup for a published frame.
+pub fn published_frame_exists(runtime: &RuntimePaths, session: &str) -> bool {
+    read_snapshot_cache(&runtime.pane_frame_path(), session).is_some()
+}
+
 fn read_published_workspace_snapshot(
     cursor: &mut RollupCursor,
     state: &StatePaths,

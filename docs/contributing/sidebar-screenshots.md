@@ -33,6 +33,8 @@ The task fails at entry when `freeze`, `rsvg-convert`, or JetBrainsMono Nerd Fon
 
 `cargo xtask screenshot state <empty|fleet|provider|cockpit|focus|economy|reach> [--width W] [--height H] [--output PATH]` renders deterministic fixture frames through the same headless sidebar renderer used by tests. `cockpit` (fleet breadth), `focus` (expanded team cards and the remote footer), `economy` and `reach` (provider spend; pets appear in the gallery with `--pets`) are packed gallery states for review.
 
+Live sidebar state can also be captured as line-oriented terminal output without the mux through `rimz sidebar frame`.
+
 `rimz sidebar gallery [--pets]` opens one frameless compositor pane in the current room with those packed states side by side, split by thin `│` delimiter rules and no real sidebar dock; outside any mux session, the same command renders the compositor inline in the current terminal. The compositor chooses four columns when the terminal is wider than 240 columns and three at or below that width, decided once at launch. `--pets` turns the dashboard companion on in every column.
 
 Set `RIMZ_BIN=/path/to/rimz` to capture with a specific binary. Without it, `xtask` runs the current checkout through `cargo run --quiet -p rimz --bin rimz -- ...`.

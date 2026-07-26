@@ -250,12 +250,27 @@ fn strip_sgr(ansi: &[u8]) -> String {
     let mut stripped = String::new();
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
-        if ch == '\x1b' && chars.peek() == Some(&'[') {
-            chars.next();
-            for ch in chars.by_ref() {
-                if ch == 'm' {
-                    break;
+        if ch == '\x1b' {
+            match chars.peek() {
+                Some('[') => {
+                    chars.next();
+                    for ch in chars.by_ref() {
+                        if ch == 'm' {
+                            break;
+                        }
+                    }
                 }
+                Some(']') => {
+                    chars.next();
+                    let mut escaped = false;
+                    for ch in chars.by_ref() {
+                        if ch == '\x07' || (escaped && ch == '\\') {
+                            break;
+                        }
+                        escaped = ch == '\x1b';
+                    }
+                }
+                _ => stripped.push(ch),
             }
         } else {
             stripped.push(ch);
@@ -282,6 +297,15 @@ fn strip_sgr(ansi: &[u8]) -> String {
 #[test]
 fn provider_fixture_frame_is_deterministic() {
     assert_fixture_frame_snapshot(SidebarFixtureState::Provider, "provider_fixture_frame");
+}
+
+#[test]
+fn expanded_fixture_frame_is_deterministic() {
+    let snapshot = sidebar_fixture_snapshot(SidebarFixtureState::Cockpit).unwrap();
+    let mut ansi = Vec::new();
+    rimz::sidebar_pane::render::render_expanded_line_ansi(&mut ansi, &snapshot, 54).unwrap();
+
+    insta::assert_snapshot!("expanded_fixture_frame", strip_sgr(&ansi));
 }
 
 #[test]

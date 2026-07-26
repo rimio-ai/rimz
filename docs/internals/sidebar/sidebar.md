@@ -28,6 +28,8 @@ Steps 1 through 8 happen in the elected producer and are published once for ever
 
 The command `rimz sidebar snapshot --json` runs steps 1 through 8 and prints the result. It is the fastest way to see what the renderer sees, and the fastest way to settle whether a bug lives in the producer or the renderer: if the wrong answer is already in the JSON, stop looking at `sidebar_pane/`.
 
+If the snapshot JSON is right and the pane looks wrong, `rimz sidebar frame` reproduces the renderer's output without capturing through the mux.
+
 ## Where the code lives
 
 The sidebar spans three module trees, one per half of the split above plus the data plane that feeds it.

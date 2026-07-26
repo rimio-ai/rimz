@@ -1,11 +1,12 @@
 //! `rimz sidebar` — inspect, serve, and structurally repair the sidebar fleet.
 //!
-//! The snapshot arm is a thin delegate over the library produce pipeline
-//! ([`rimz::sidebar::produce`]): it resolves workspace/session/mux, calls
+//! Snapshot inspection and one-shot frame rendering are thin delegates over the
+//! library data plane. Snapshot resolves workspace/session/mux and calls
 //! `produce_snapshot_with_refresh` (or the in-process consumer read for
-//! `--no-produce`), and emits — the CLI owns argv, fallback intent, and stdout
-//! alone. The elder renderer produces in process on its fetch worker, so this
-//! arm serves inspection and scripting.
+//! `--no-produce`); frame prefers an already-published consumer frame and falls
+//! back to the same producer path. The CLI owns argv, fallback intent, and
+//! stdout alone. The elder renderer produces in process on its fetch worker, so
+//! these arms serve inspection and scripting.
 
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -16,7 +17,7 @@ use clap::{ArgAction, Args, Subcommand, ValueEnum};
 use super::{GlobalFlags, current_channel, open_store};
 use crate::cli::render;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
-use rimz::sidebar::consumer::{PublishedSnapshotReader, RollupCursor};
+use rimz::sidebar::consumer::{PublishedSnapshotReader, RollupCursor, published_frame_exists};
 use rimz::sidebar::events::SidebarEvent;
 use rimz::sidebar::notify::{Notification, NotificationAgent, NotificationKind};
 use rimz::sidebar::presence::{
@@ -62,6 +63,26 @@ enum SidebarSubcmd {
         /// pays the mux/git round-trip exactly once, on the elder.
         #[arg(long)]
         no_produce: bool,
+    },
+    /// Render the live sidebar snapshot once without capturing a mux pane.
+    Frame {
+        #[arg(long)]
+        workspace_id: Option<String>,
+        #[arg(long)]
+        mux: Option<MuxName>,
+        #[arg(long)]
+        session_name: Option<String>,
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+        width: Option<u16>,
+        #[arg(
+            long,
+            conflicts_with = "expand",
+            value_parser = clap::value_parser!(u16).range(1..)
+        )]
+        height: Option<u16>,
+        /// Every card expanded, every group un-truncated; the frame grows to fit.
+        #[arg(long)]
+        expand: bool,
     },
     /// Run the terminal sidebar renderer.
     Serve {
@@ -345,6 +366,7 @@ impl SidebarArgs {
     pub(crate) fn command_label(&self) -> &'static str {
         match &self.command {
             SidebarSubcmd::Snapshot { .. } => "sidebar snapshot",
+            SidebarSubcmd::Frame { .. } => "sidebar frame",
             SidebarSubcmd::Serve { .. } => "sidebar serve",
             SidebarSubcmd::Repair => "sidebar repair",
             SidebarSubcmd::Render { .. } => "sidebar render",
@@ -381,6 +403,24 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 min_pane_cache_ms,
                 json,
                 no_produce,
+            },
+        ),
+        SidebarSubcmd::Frame {
+            workspace_id,
+            mux,
+            session_name,
+            width,
+            height,
+            expand,
+        } => frame(
+            globals,
+            FrameCommand {
+                workspace_id,
+                mux,
+                session_name,
+                width,
+                height,
+                expand,
             },
         ),
         SidebarSubcmd::Serve {
@@ -598,6 +638,15 @@ struct SnapshotCommand {
     no_produce: bool,
 }
 
+struct FrameCommand {
+    workspace_id: Option<String>,
+    mux: Option<MuxName>,
+    session_name: Option<String>,
+    width: Option<u16>,
+    height: Option<u16>,
+    expand: bool,
+}
+
 struct SnapshotContext {
     state: StatePaths,
     runtime: RuntimePaths,
@@ -611,7 +660,55 @@ fn snapshot(globals: &GlobalFlags, command: SnapshotCommand) -> Result<()> {
     if try_emit_consumer_snapshot(&context, !command.no_produce, command.json)? {
         return Ok(());
     }
-    emit_producer_snapshot(&context, command.mux, globals, command.json)
+    let snapshot = producer_snapshot(&context, command.mux, globals)?;
+    emit_snapshot(&snapshot, command.json)
+}
+
+fn frame(globals: &GlobalFlags, command: FrameCommand) -> Result<()> {
+    let context = resolve_snapshot_context(
+        globals,
+        &SnapshotCommand {
+            workspace_id: command.workspace_id,
+            mux: command.mux,
+            session_name: command.session_name,
+            exclude_pane_id: None,
+            min_pane_cache_ms: None,
+            json: false,
+            no_produce: false,
+        },
+    )?;
+    let snapshot = if !pane_fixture_active()
+        && let Some(session) = context.session_name.as_deref()
+        && published_frame_exists(&context.runtime, session)
+    {
+        PublishedSnapshotReader::new(context.runtime.clone(), session, None)
+            .read(&context.state)
+            .context("reading the consumer snapshot")?
+    } else {
+        producer_snapshot(&context, command.mux, globals)?
+    };
+
+    let sidebar_width = rimz::mux::SidebarWidth::from_config(&snapshot.theme);
+    let terminal_size = rimz::mux::detect_terminal_size();
+    let width = command.width.unwrap_or_else(|| {
+        terminal_size.map_or_else(
+            || sidebar_width.max_cols.get(),
+            |(cols, _)| {
+                u16::try_from(sidebar_width.target_cols(u64::from(cols))).unwrap_or(u16::MAX)
+            },
+        )
+    });
+    let height = command
+        .height
+        .unwrap_or_else(|| terminal_size.map_or(24, |(_, rows)| rows));
+
+    let mut out = render::out();
+    let write = if command.expand {
+        rimz::sidebar_pane::render::render_expanded_line_ansi(&mut out, &snapshot, width)
+    } else {
+        rimz::sidebar_pane::render::render_fixed_line_ansi(&mut out, &snapshot, None, width, height)
+    };
+    render::finish(write.and_then(|()| out.flush()))
 }
 
 fn resolve_snapshot_context(
@@ -672,17 +769,16 @@ fn try_emit_consumer_snapshot(
     Ok(true)
 }
 
-fn emit_producer_snapshot(
+fn producer_snapshot(
     context: &SnapshotContext,
     mux: Option<MuxName>,
     globals: &GlobalFlags,
-    json: bool,
-) -> Result<()> {
+) -> Result<SidebarSnapshot> {
     let mux = mux
         .or(globals.mux)
         .or_else(|| rimz::mux::auto_detect_backend(None).ok());
     let (Some(session_name), Some(mux)) = (context.session_name.clone(), mux) else {
-        return emit_rollup_snapshot(context, json, None);
+        return rollup_snapshot_fallback(context, None);
     };
     let opts = ProduceOptions {
         mux,
@@ -697,27 +793,26 @@ fn emit_producer_snapshot(
         &context.runtime,
         &opts,
     ) {
-        Ok(snapshot) => emit_snapshot(&snapshot, json),
-        Err(err) => emit_rollup_snapshot(context, json, Some(&err)),
+        Ok(snapshot) => Ok(snapshot),
+        Err(err) => rollup_snapshot_fallback(context, Some(&err)),
     }
 }
 
-fn emit_rollup_snapshot(
+fn rollup_snapshot_fallback(
     context: &SnapshotContext,
-    json: bool,
     reason: Option<&dyn std::fmt::Display>,
-) -> Result<()> {
+) -> Result<SidebarSnapshot> {
     if let Some(error) = reason {
         tracing::warn!(%error, "sidebar snapshot pane discovery failed; emitting frameless rollup metadata");
     }
-    let snapshot = produce_rollup_snapshot_with_refresh(
+    produce_rollup_snapshot_with_refresh(
         &mut RollupCursor::new(),
         &context.state,
         &context.runtime,
         context.exclude.as_ref(),
         context.min_pane_cache_ms,
-    )?;
-    emit_snapshot(&snapshot, json)
+    )
+    .map_err(Into::into)
 }
 
 fn emit_snapshot(snapshot: &rimz::SidebarSnapshot, json: bool) -> Result<()> {

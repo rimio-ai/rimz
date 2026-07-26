@@ -134,6 +134,7 @@ pub(crate) fn compose_lines_with_meter(
 
     let mut frame = top.window(0, layout.top_shown);
     frame.append(scroll_block);
+    let content_height = frame.lines.len().saturating_add(bottom_height);
     let pad = height.saturating_sub(frame.lines.len() + bottom_height);
     for _ in 0..pad {
         frame.push_inert(Line::from(""));
@@ -148,6 +149,7 @@ pub(crate) fn compose_lines_with_meter(
         scroll_offset: layout.offset,
         top_height: layout.top_shown,
         bottom_height,
+        content_height,
     }
 }
 
@@ -474,6 +476,8 @@ pub(crate) struct ComposedFrame {
     pub(crate) scroll_offset: usize,
     pub(crate) top_height: usize,
     pub(crate) bottom_height: usize,
+    /// Rows occupied by composed content before viewport padding.
+    pub(crate) content_height: usize,
 }
 
 fn resolve_scroll_offset(

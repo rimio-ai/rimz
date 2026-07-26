@@ -279,6 +279,69 @@ fn snapshot_with(mut agents: Vec<AgentState>) -> SidebarSnapshot {
     snapshot
 }
 
+#[test]
+fn expanded_line_frame_bypasses_group_cap_and_fits_content() {
+    let count = crate::sidebar_pane::view::WORKTREE_ROW_CAP + 2;
+    let agents = (0..count)
+        .map(|index| {
+            let handle = format!("expanded-{index}");
+            let mut agent = agent(
+                &handle,
+                "codex",
+                AgentStatus::Idle,
+                Some("/repo/main"),
+                Some("main"),
+                None,
+            );
+            agent.role = Some(handle);
+            agent
+        })
+        .collect();
+    let snapshot = snapshot_with(agents);
+
+    let mut ansi = Vec::new();
+    render_expanded_line_ansi(&mut ansi, &snapshot, 54).unwrap();
+    let rendered = String::from_utf8_lossy(&ansi);
+
+    for index in 0..count {
+        assert!(
+            rendered.contains(&format!("expanded-{index}")),
+            "expanded frame omitted row {index}: {rendered}"
+        );
+    }
+    assert!(!rendered.contains("+2 more"), "{rendered}");
+
+    let mut measured_snapshot = snapshot.clone();
+    measured_snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
+    let ui = fixed_theme_ui(
+        &measured_snapshot,
+        &UiState {
+            expanded_groups: measured_snapshot
+                .worktree_groups
+                .iter()
+                .map(|group| group.key.clone())
+                .collect(),
+            ..UiState::default()
+        },
+    );
+    let theme = ui
+        .cached_theme(&measured_snapshot.theme)
+        .expect("fixed theme is cached");
+    let composed = compose_lines_with_meter(
+        &measured_snapshot,
+        None,
+        &ui,
+        theme.as_ref(),
+        54,
+        u16::MAX,
+        None,
+    );
+    assert_eq!(
+        ansi.iter().filter(|byte| **byte == b'\n').count(),
+        composed.content_height
+    );
+}
+
 fn agent(
     id: &str,
     kind: &str,
