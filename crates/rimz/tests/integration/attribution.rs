@@ -22,12 +22,13 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
     std::fs::create_dir_all(&day).expect("mkdir rollout tree");
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
 
-    for (ordinal, role, session) in [
-        (0, "planner", "sess-attribution-planner"),
-        (1, "coder", "sess-attribution-coder"),
+    for (file_ordinal, launch_ordinal, role, session) in [
+        (0, 0, "planner", "sess-attribution-planner"),
+        (1, 0, "planner", "sess-attribution-planner-resumed"),
+        (2, 1, "coder", "sess-attribution-coder"),
     ] {
         let rollout = day.join(format!(
-            "rollout-2026-07-23T00-00-0{ordinal}-{session}.jsonl"
+            "rollout-2026-07-23T00-00-0{file_ordinal}-{session}.jsonl"
         ));
         std::fs::write(
             &rollout,
@@ -41,7 +42,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
             AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Registered);
         observation.launch.role = Some(role.to_owned());
         observation.launch.team = Some("forge".to_owned());
-        observation.launch.launch_ordinal = Some(ordinal);
+        observation.launch.launch_ordinal = Some(launch_ordinal);
         observation.launch.channel = Some("feature".to_owned());
         observation.launch.model = Some("gpt-5.5".to_owned());
         observation.launch.effort = Some("high".to_owned());
@@ -58,10 +59,6 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
             .expect("register attribution agent");
     }
 
-    let ended = AgentLifecycleObservation::new(
-        Some("sess-attribution-planner".into()),
-        LifecycleSignal::Ended,
-    );
     let store = env.store();
     let active_start = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(60);
     rimz::store::active_time::record_progress(
@@ -80,15 +77,21 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         180,
     )
     .expect("close active span");
-    store
-        .append_event(&rimz::EventEnvelope::agent_lifecycle(
-            env.workspace_id.clone(),
-            &workspace.session_name,
-            "codex",
-            "rimz.agent-ended",
-            &ended,
-        ))
-        .expect("stamp planner ended");
+    for session in [
+        "sess-attribution-planner",
+        "sess-attribution-planner-resumed",
+    ] {
+        let ended = AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Ended);
+        store
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                &workspace.session_name,
+                "codex",
+                "rimz.agent-ended",
+                &ended,
+            ))
+            .expect("stamp planner session ended");
+    }
     let mut audit = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("audit projection");
@@ -115,6 +118,12 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
             ),
             (
                 "sess-attribution-planner",
+                Some("feature"),
+                Some("forge"),
+                Some("planner")
+            ),
+            (
+                "sess-attribution-planner-resumed",
                 Some("feature"),
                 Some("forge"),
                 Some("planner")
@@ -149,16 +158,11 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         .find(|member| member["role"] == "planner")
         .expect("planner");
     assert_eq!(planner["presence"], "exited");
-    assert!(
-        report["totals"]["tokens"]["input"]
-            .as_u64()
-            .is_some_and(|tokens| tokens > 0)
-    );
-    assert!(
-        report["totals"]["cost_usd"]
-            .as_f64()
-            .is_some_and(|cost| cost > 0.0)
-    );
+    assert_eq!(planner["sessions"], 2);
+    assert_eq!(report["totals"]["tokens"]["input"], 1_000);
+    assert_eq!(report["totals"]["tokens"]["output"], 400);
+    assert_eq!(report["totals"]["tokens"]["cache_read"], 1_000);
+    assert_eq!(report["totals"]["cost_usd"], 0.0175);
     assert_eq!(report["totals"]["active_secs"], 60);
 
     let markdown = env
