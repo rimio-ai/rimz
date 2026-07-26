@@ -697,11 +697,18 @@ fn stepwise_sidebar_width_converges_across_supported_steps() {
 #[cfg(unix)]
 fn assert_stepwise_park(
     name: &str,
-    initial: u64,
+    widths: &[u64],
     target: u16,
     expected_increase: usize,
     expected_decrease: usize,
 ) {
+    let initial = widths[0];
+    let last = widths[widths.len() - 1];
+    let geometry_cases = widths
+        .iter()
+        .enumerate()
+        .map(|(count, width)| format!("      {count}) cols={width} ;;\n"))
+        .collect::<String>();
     let room = TestRoom::new();
     room.write_cache(
         unix_now_ms().saturating_sub(1_000),
@@ -719,14 +726,18 @@ printf '%s\n' "$*" >> "$log"
 if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
 case " $* " in
   *" --name rimz:dump_topology "*)
-    count=$(cat "$state" 2>/dev/null || printf 0); cols=$(({initial} + count * 11)); work=$((213 - cols))
+    count=$(cat "$state" 2>/dev/null || printf 0)
+    case "$count" in
+{geometry_cases}      *) cols={last} ;;
+    esac
+    work=$((213 - cols))
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
     printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s}}]}}\n' "$now" "$cols" "$cols" "$work" > "{cache}"
     exit 0 ;;
   *" action resize increase right --pane-id terminal_8 "*)
     count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; sleep 0.01; exit 0 ;;
   *" action resize decrease right --pane-id terminal_8 "*)
-    count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count - 1))" > "$state"; sleep 0.01; exit 0 ;;
+    count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; sleep 0.01; exit 0 ;;
 esac
 exit 0
 "#,
@@ -763,18 +774,12 @@ exit 0
         expected_decrease,
         "{name}:\n{log}",
     );
-    let final_cols = backend
-        .topology_panes_for_workspace(
-            "rimz-test",
-            &room.workspace_id,
-            None,
-            crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
-        )
-        .expect("final topology")
-        .into_iter()
-        .find(|pane| pane.is_terminal() && pane.id == 8)
-        .and_then(|pane| pane.pane_columns)
-        .expect("sidebar columns");
+    let action_count = std::fs::read_to_string(temp.path().join("resize-count"))
+        .expect("resize count")
+        .trim()
+        .parse::<usize>()
+        .expect("numeric resize count");
+    let final_cols = widths.get(action_count).copied().unwrap_or(last);
     let target = u64::from(width.target.cols(Some(view_cols.get())).get());
     assert!(
         !crate::mux::width::sidebar_width_off_spec(
@@ -793,9 +798,16 @@ exit 0
 #[cfg(unix)]
 #[test]
 fn stepwise_sidebar_width_parks_at_the_smallest_reachable_width_above_target() {
-    assert_stepwise_park("default-between-lattice-points", 53, 54, 1, 0);
-    assert_stepwise_park("grow", 48, 64, 2, 0);
-    assert_stepwise_park("shrink", 82, 64, 0, 1);
+    assert_stepwise_park("default-between-lattice-points", &[53, 64], 54, 1, 0);
+    assert_stepwise_park("grow", &[48, 59, 70], 64, 2, 0);
+    assert_stepwise_park("shrink", &[82, 71], 64, 0, 1);
+    assert_stepwise_park(
+        "coarse-step undershoot reverses once",
+        &[53, 76, 63, 64],
+        64,
+        2,
+        1,
+    );
 }
 
 #[cfg(unix)]

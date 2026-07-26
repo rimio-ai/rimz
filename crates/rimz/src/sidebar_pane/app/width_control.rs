@@ -321,13 +321,14 @@ impl WidthController {
                 return;
             }
         };
+        let adjustment_cols = step.adjustment_cols(dir);
         self.convergence.seed_native_step(step.band_cols);
         let Some(view_cols) = NonZeroU16::new(step.view_cols) else {
             diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
                 trigger,
                 own_cols,
                 base_cols,
-                step_cols: Some(step.cols),
+                step_cols: Some(adjustment_cols),
                 step_exact: step.exact,
                 target_cols: None,
                 verdict: SidebarWidthIntentVerdict::RejectedNoStep,
@@ -345,19 +346,19 @@ impl WidthController {
                 trigger,
                 own_cols,
                 base_cols,
-                step_cols: Some(step.cols),
+                step_cols: Some(adjustment_cols),
                 step_exact: step.exact,
                 target_cols: None,
                 verdict: SidebarWidthIntentVerdict::RejectedFloor,
             });
-            debug!(pane = %pane, base_cols, step_cols = step.cols, "sidebar width intent rejected at minimum width");
+            debug!(pane = %pane, base_cols, step_cols = adjustment_cols, "sidebar width intent rejected at minimum width");
             return;
         };
         diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
             trigger,
             own_cols,
             base_cols,
-            step_cols: Some(step.cols),
+            step_cols: Some(adjustment_cols),
             step_exact: step.exact,
             target_cols: Some(target.get()),
             verdict: SidebarWidthIntentVerdict::Accepted,
