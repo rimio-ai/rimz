@@ -6,11 +6,6 @@
 //! cannot accrue forever. The files are runtime-sidecar projection inputs, not
 //! durable event-log truth.
 
-use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
-use std::fs::{File, OpenOptions};
-use std::path::PathBuf;
-
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -153,73 +148,26 @@ fn update_record(
     at: Timestamp,
     update: impl FnOnce(&mut ActiveTimeRecord, bool) -> bool,
 ) -> Result<bool, atomic::AtomicErr> {
-    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
-    let prior = sidecar::read_one(&runtime.active_time_dir, kind, agent_id);
-    let existed = prior.is_some();
-    let mut record = prior.unwrap_or_else(|| ActiveTimeRecord {
-        kind: AgentKind::new_unchecked(kind),
-        agent_id: agent_id.into(),
-        credited_ms: 0,
-        last_progress: at,
-        active: false,
-    });
-    if !update(&mut record, existed) {
-        return Ok(false);
-    }
-    sidecar::write_record(&runtime.active_time_dir, &record)?;
-    Ok(true)
-}
-
-struct RecordLock {
-    file: File,
-}
-
-impl RecordLock {
-    fn acquire(
-        runtime: &RuntimePaths,
-        kind: &str,
-        agent_id: &str,
-    ) -> Result<Self, atomic::AtomicErr> {
-        std::fs::create_dir_all(&runtime.active_time_dir).map_err(|source| {
-            atomic::AtomicErr::Io {
-                path: runtime.active_time_dir.clone(),
-                source,
-            }
-        })?;
-        let path = sidecar::lock_path(
-            &runtime.active_time_dir,
-            <ActiveTimeRecord as sidecar::SidecarRecord>::FILE_PREFIX,
-            kind,
-            agent_id,
-        );
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&path)
-            .map_err(|source| atomic::AtomicErr::Io {
-                path: path.clone(),
-                source,
-            })?;
-        file.lock()
-            .map_err(|source| atomic::AtomicErr::Io { path, source })?;
-        Ok(Self { file })
-    }
-}
-
-impl Drop for RecordLock {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
-    }
+    sidecar::update(
+        &runtime.active_time_dir,
+        kind,
+        agent_id,
+        || ActiveTimeRecord {
+            kind: AgentKind::new_unchecked(kind),
+            agent_id: agent_id.into(),
+            credited_ms: 0,
+            last_progress: at,
+            active: false,
+        },
+        update,
+    )
 }
 
 thread_local! {
     /// The long-lived consumer pays one stat per queried live identity and
     /// reparses only records whose atomic rename changed `(mtime, len)`.
     static ACTIVE_TIME_PARSE_CACHE:
-        RefCell<HashMap<PathBuf, sidecar::ParsedSidecar<ActiveTimeRecord>>> =
-        RefCell::new(HashMap::new());
+        sidecar::ParseCache<ActiveTimeRecord> = sidecar::ParseCache::default();
 }
 
 /// Read records only for identities already present in the snapshot.
@@ -227,52 +175,8 @@ pub fn read_for_keys<'a>(
     runtime: &RuntimePaths,
     keys: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> Vec<ActiveTimeRecord> {
-    let mut seen = BTreeSet::new();
-    ACTIVE_TIME_PARSE_CACHE.with_borrow_mut(|cache| {
-        let records = keys
-            .into_iter()
-            .filter_map(|(kind, agent_id)| {
-                let path = sidecar::path(
-                    &runtime.active_time_dir,
-                    <ActiveTimeRecord as sidecar::SidecarRecord>::FILE_PREFIX,
-                    kind,
-                    agent_id,
-                );
-                if !seen.insert(path.clone()) {
-                    return None;
-                }
-                let Ok(meta) = std::fs::metadata(&path) else {
-                    cache.remove(&path);
-                    return None;
-                };
-                let mtime = meta.modified().ok()?;
-                let len = meta.len();
-                let record = match cache.get(&path) {
-                    Some(parsed) if parsed.mtime == mtime && parsed.len == len => {
-                        parsed.record.clone()
-                    }
-                    _ => {
-                        let record = std::fs::read(&path)
-                            .ok()
-                            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-                        cache.insert(
-                            path,
-                            sidecar::ParsedSidecar {
-                                mtime,
-                                len,
-                                record: record.clone(),
-                            },
-                        );
-                        record
-                    }
-                }?;
-                (record.kind.as_str() == kind && record.agent_id.as_str() == agent_id)
-                    .then_some(record)
-            })
-            .collect();
-        cache.retain(|path, _| seen.contains(path));
-        records
-    })
+    ACTIVE_TIME_PARSE_CACHE
+        .with(|cache| sidecar::read_for_keys(&runtime.active_time_dir, keys, cache))
 }
 
 #[cfg(test)]

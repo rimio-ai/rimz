@@ -8,7 +8,6 @@
 //! consumers keep a per-thread `(mtime, len)` parse cache, capping steady-state
 //! scans at one stat per file per tick.
 
-use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -27,10 +26,18 @@ pub(crate) trait SidecarRecord: Serialize + DeserializeOwned + Clone {
     fn agent_id(&self) -> &str;
 }
 
-pub(crate) struct ParsedSidecar<R> {
-    pub mtime: SystemTime,
-    pub len: u64,
-    pub record: Option<R>,
+struct ParsedSidecar<R> {
+    mtime: SystemTime,
+    len: u64,
+    record: Option<R>,
+}
+
+pub(crate) struct ParseCache<R>(std::cell::RefCell<HashMap<PathBuf, ParsedSidecar<R>>>);
+
+impl<R> Default for ParseCache<R> {
+    fn default() -> Self {
+        Self(std::cell::RefCell::new(HashMap::new()))
+    }
 }
 
 pub(crate) fn path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> PathBuf {
@@ -42,18 +49,18 @@ pub(crate) fn path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> Path
     dir.join(format!("{prefix}.{}.json", &digest[..32]))
 }
 
-pub(crate) fn lock_path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> PathBuf {
+fn lock_path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> PathBuf {
     path(dir, prefix, kind, agent_id).with_extension("lock")
 }
 
 /// Per-record advisory lock shared by sidecar writers that need an atomic
 /// read-modify-write across independent CLI processes.
-pub(crate) struct RecordLock {
+struct RecordLock {
     file: File,
 }
 
 impl RecordLock {
-    pub(crate) fn acquire(
+    fn acquire(
         dir: &Path,
         prefix: &str,
         kind: &str,
@@ -86,10 +93,7 @@ impl Drop for RecordLock {
     }
 }
 
-pub(crate) fn write_record<R: SidecarRecord>(
-    dir: &Path,
-    record: &R,
-) -> Result<(), atomic::AtomicErr> {
+fn write_record<R: SidecarRecord>(dir: &Path, record: &R) -> Result<(), atomic::AtomicErr> {
     atomic::write_temp_then_rename_cache(
         &path(dir, R::FILE_PREFIX, record.kind(), record.agent_id()),
         record,
@@ -104,27 +108,50 @@ pub(crate) fn read_one<R: SidecarRecord>(dir: &Path, kind: &str, agent_id: &str)
     (record.kind() == kind && record.agent_id() == agent_id).then_some(record)
 }
 
-pub(crate) fn remove<R: SidecarRecord>(
+/// Mutate one record against its latest published bytes under the canonical
+/// per-record lock. Missing, malformed, or key-mismatched bytes use `default`;
+/// returning `false` leaves the file untouched.
+pub(crate) fn update<R: SidecarRecord>(
     dir: &Path,
     kind: &str,
     agent_id: &str,
-) -> std::io::Result<()> {
-    match fs::remove_file(path(dir, R::FILE_PREFIX, kind, agent_id)) {
+    default: impl FnOnce() -> R,
+    apply: impl FnOnce(&mut R, bool) -> bool,
+) -> Result<bool, atomic::AtomicErr> {
+    let _lock = RecordLock::acquire(dir, R::FILE_PREFIX, kind, agent_id)?;
+    let prior = read_one(dir, kind, agent_id);
+    let existed = prior.is_some();
+    let mut record = prior.unwrap_or_else(default);
+    if !apply(&mut record, existed) {
+        return Ok(false);
+    }
+    atomic::write_temp_then_rename_cache(&path(dir, R::FILE_PREFIX, kind, agent_id), &record)?;
+    Ok(true)
+}
+
+pub(crate) fn remove_locked<R: SidecarRecord>(
+    dir: &Path,
+    kind: &str,
+    agent_id: &str,
+) -> Result<(), atomic::AtomicErr> {
+    let _lock = RecordLock::acquire(dir, R::FILE_PREFIX, kind, agent_id)?;
+    let record_path = path(dir, R::FILE_PREFIX, kind, agent_id);
+    match fs::remove_file(&record_path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err),
+        Err(source) => Err(atomic::AtomicErr::Io {
+            path: record_path,
+            source,
+        }),
     }
 }
 
-pub(crate) fn read_all<R: SidecarRecord>(
-    dir: &Path,
-    cache: &RefCell<HashMap<PathBuf, ParsedSidecar<R>>>,
-) -> Vec<R> {
+pub(crate) fn read_all<R: SidecarRecord>(dir: &Path, cache: &ParseCache<R>) -> Vec<R> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut out = Vec::new();
-    let mut cache = cache.borrow_mut();
+    let mut cache = cache.0.borrow_mut();
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
     for entry in entries.flatten() {
         let path = entry.path();
@@ -159,6 +186,56 @@ pub(crate) fn read_all<R: SidecarRecord>(
     out
 }
 
+/// Read only requested live identities, deduplicating their canonical paths.
+/// Each unchanged `(mtime, len)` serves the per-thread cached parse, including
+/// cached failures; dropped keys and vanished files leave no cache entry.
+pub(crate) fn read_for_keys<'a, R: SidecarRecord>(
+    dir: &Path,
+    keys: impl IntoIterator<Item = (&'a str, &'a str)>,
+    cache: &ParseCache<R>,
+) -> Vec<R> {
+    let mut seen = BTreeSet::new();
+    let mut cache = cache.0.borrow_mut();
+    let records = keys
+        .into_iter()
+        .filter_map(|(kind, agent_id)| {
+            let record_path = path(dir, R::FILE_PREFIX, kind, agent_id);
+            if !seen.insert(record_path.clone()) {
+                return None;
+            }
+            let Ok(meta) = fs::metadata(&record_path) else {
+                cache.remove(&record_path);
+                return None;
+            };
+            let Ok(mtime) = meta.modified() else {
+                cache.remove(&record_path);
+                return None;
+            };
+            let len = meta.len();
+            let record = match cache.get(&record_path) {
+                Some(parsed) if parsed.mtime == mtime && parsed.len == len => parsed.record.clone(),
+                _ => {
+                    let record = fs::read(&record_path)
+                        .ok()
+                        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+                    cache.insert(
+                        record_path,
+                        ParsedSidecar {
+                            mtime,
+                            len,
+                            record: record.clone(),
+                        },
+                    );
+                    record
+                }
+            }?;
+            (record.kind() == kind && record.agent_id() == agent_id).then_some(record)
+        })
+        .collect();
+    cache.retain(|path, _| seen.contains(path));
+    records
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,8 +243,7 @@ mod tests {
     use tempfile::tempdir;
 
     thread_local! {
-        static TEST_PARSE_CACHE: RefCell<HashMap<PathBuf, ParsedSidecar<TestRecord>>> =
-            RefCell::new(HashMap::new());
+        static TEST_PARSE_CACHE: ParseCache<TestRecord> = ParseCache::default();
     }
 
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -201,6 +277,13 @@ mod tests {
 
     fn read_all_test(dir: &Path) -> Vec<TestRecord> {
         TEST_PARSE_CACHE.with(|cache| read_all(dir, cache))
+    }
+
+    fn read_keys_test<'a>(
+        dir: &Path,
+        keys: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Vec<TestRecord> {
+        TEST_PARSE_CACHE.with(|cache| read_for_keys(dir, keys, cache))
     }
 
     #[test]
@@ -268,14 +351,14 @@ mod tests {
         write_record(dir.path(), &record("sess-1", 1_700_000_000)).unwrap();
         write_record(dir.path(), &record("sess-2", 1_700_000_000)).unwrap();
 
-        remove::<TestRecord>(dir.path(), "codex", "sess-1").unwrap();
+        remove_locked::<TestRecord>(dir.path(), "codex", "sess-1").unwrap();
 
         let ids: Vec<_> = read_all_test(dir.path())
             .into_iter()
             .map(|record| record.agent_id)
             .collect();
         assert_eq!(ids, vec!["sess-2".to_owned()]);
-        remove::<TestRecord>(dir.path(), "codex", "sess-1").unwrap();
+        remove_locked::<TestRecord>(dir.path(), "codex", "sess-1").unwrap();
     }
 
     #[test]
@@ -306,6 +389,155 @@ mod tests {
             read_all_test(dir.path())[0].note,
             "cached",
             "same (mtime, len) still serves the cached parse"
+        );
+    }
+
+    #[test]
+    fn locked_update_creates_defaults_skips_no_ops_and_reads_latest_bytes() {
+        let dir = tempdir().unwrap();
+        assert!(
+            !update(
+                dir.path(),
+                "codex",
+                "sess-1",
+                || record("sess-1", 1),
+                |_, existed| {
+                    assert!(!existed);
+                    false
+                },
+            )
+            .unwrap()
+        );
+        assert!(!path(dir.path(), "test", "codex", "sess-1").exists());
+
+        assert!(
+            update(
+                dir.path(),
+                "codex",
+                "sess-1",
+                || record("sess-1", 1),
+                |record, existed| {
+                    assert!(!existed);
+                    record.note = "created".to_owned();
+                    true
+                },
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            read_one::<TestRecord>(dir.path(), "codex", "sess-1")
+                .unwrap()
+                .note,
+            "created"
+        );
+
+        assert_eq!(read_all_test(dir.path())[0].note, "created");
+        let record_path = path(dir.path(), "test", "codex", "sess-1");
+        let mut latest = read_one::<TestRecord>(dir.path(), "codex", "sess-1").unwrap();
+        latest.note = "direct!".to_owned();
+        std::fs::write(&record_path, serde_json::to_vec(&latest).unwrap()).unwrap();
+        assert!(
+            update(
+                dir.path(),
+                "codex",
+                "sess-1",
+                || record("sess-1", 2),
+                |record, existed| {
+                    assert!(existed);
+                    record.note.push_str(" updated");
+                    true
+                },
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            read_one::<TestRecord>(dir.path(), "codex", "sess-1")
+                .unwrap()
+                .note,
+            "direct! updated"
+        );
+    }
+
+    #[test]
+    fn keyed_reads_dedupe_validate_and_evict_dead_keys() {
+        let dir = tempdir().unwrap();
+        write_record(dir.path(), &record("sess-1", 1)).unwrap();
+        write_record(dir.path(), &record("sess-2", 2)).unwrap();
+        assert_eq!(
+            read_keys_test(
+                dir.path(),
+                [
+                    ("codex", "sess-1"),
+                    ("codex", "sess-1"),
+                    ("codex", "sess-2"),
+                ],
+            )
+            .len(),
+            2
+        );
+
+        let wrong_path = path(dir.path(), "test", "codex", "wrong");
+        std::fs::write(
+            &wrong_path,
+            serde_json::to_vec(&record("different", 3)).unwrap(),
+        )
+        .unwrap();
+        assert!(read_keys_test(dir.path(), [("codex", "wrong")]).is_empty());
+
+        read_keys_test(dir.path(), [("codex", "sess-1"), ("codex", "sess-2")]);
+        read_keys_test(dir.path(), [("codex", "sess-1")]);
+        let sess_2_path = path(dir.path(), "test", "codex", "sess-2");
+        std::fs::write(&sess_2_path, b"malformed").unwrap();
+        assert!(
+            read_keys_test(dir.path(), [("codex", "sess-2")]).is_empty(),
+            "a dropped key must not retain its prior cached parse"
+        );
+    }
+
+    #[test]
+    fn keyed_reads_cache_success_and_failure_at_the_same_stamp() {
+        let dir = tempdir().unwrap();
+        write_record(dir.path(), &record("sess-1", 1)).unwrap();
+        let record_path = path(dir.path(), "test", "codex", "sess-1");
+        assert_eq!(read_keys_test(dir.path(), [("codex", "sess-1")]).len(), 1);
+        let original = std::fs::read(&record_path).unwrap();
+        let mtime = std::fs::metadata(&record_path).unwrap().modified().unwrap();
+        let swapped = String::from_utf8(original)
+            .unwrap()
+            .replace("cached", "direct");
+        std::fs::write(&record_path, swapped).unwrap();
+        File::options()
+            .write(true)
+            .open(&record_path)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert_eq!(
+            read_keys_test(dir.path(), [("codex", "sess-1")])[0].note,
+            "cached",
+            "same-stamp success serves the cached parse"
+        );
+
+        let malformed_path = path(dir.path(), "test", "codex", "sess-bad");
+        let valid = serde_json::to_vec(&record("sess-bad", 2)).unwrap();
+        let mut malformed = valid.clone();
+        malformed[0] = b'!';
+        std::fs::write(&malformed_path, &malformed).unwrap();
+        let mtime = std::fs::metadata(&malformed_path)
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert!(read_keys_test(dir.path(), [("codex", "sess-bad")]).is_empty());
+        std::fs::write(&malformed_path, valid).unwrap();
+        File::options()
+            .write(true)
+            .open(&malformed_path)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert!(
+            read_keys_test(dir.path(), [("codex", "sess-bad")]).is_empty(),
+            "same-stamp malformed bytes stay negative-cached"
         );
     }
 }
