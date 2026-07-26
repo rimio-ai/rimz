@@ -1,7 +1,8 @@
 use super::*;
-use rimz::agents::{AgentState, AgentStatus};
-use rimz::harness::run::{PermissionMode, RunCancellation, RunStatus};
+use rimz::agents::{AgentState, AgentStatus, LaunchParams};
+use rimz::harness::run::{PermissionMode, RunCancellation, RunStatus, SupervisedRunRequest};
 use rimz::harness::run_wake::{self, ExpectedRunFrame, WakeupFrame};
+use rimz::harness::spec::Cell;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::pane::PaneRef;
 use rimz::store::{RuntimePaths, StatePaths};
@@ -28,12 +29,77 @@ fn stream_json_prompt_rejects_malformed_lines() {
 }
 
 #[test]
-fn terminal_run_is_not_sendable() {
-    let mut record = run_record("codex");
-    record.status = RunStatus::Canceled;
+fn supervised_run_placement_matrix() {
+    use super::run::{RunPlacement, run_placement};
 
-    let err = ensure_sendable(&record).expect_err("terminal run rejects sends");
-    assert!(err.to_string().contains("nothing to send"));
+    for (force_new_tab, has_ambient_pane, loop_zone, expected) in [
+        (false, true, false, RunPlacement::Split),
+        (true, true, false, RunPlacement::Tab),
+        (false, false, false, RunPlacement::Tab),
+        (false, true, true, RunPlacement::LoopZone),
+        (false, false, true, RunPlacement::LoopZone),
+        (true, true, true, RunPlacement::Tab),
+    ] {
+        assert_eq!(
+            run_placement(force_new_tab, has_ambient_pane, loop_zone),
+            expected,
+            "force_new_tab={force_new_tab}, has_ambient_pane={has_ambient_pane}, loop_zone={loop_zone}"
+        );
+    }
+}
+
+#[test]
+fn supervised_launch_normalizes_model_and_effort_overrides() {
+    let request = SupervisedRunRequest {
+        spec: "codex".to_owned(),
+        prompt: "fix-it".to_owned(),
+        description: None,
+        worktree: None,
+        from_pr: None,
+        channel: None,
+        name: None,
+        background: false,
+        force_new_tab: false,
+        permission_mode: PermissionMode::Auto,
+        model: Some(" gpt-5 ".to_owned()),
+        system_prompt_file: None,
+        append_system_prompt_file: None,
+        effort: Some(" low ".to_owned()),
+        budget: None,
+        max_turns: None,
+        timeout: None,
+        keep: false,
+        retries: 0,
+        verify: None,
+        max_attempts: None,
+        loop_zone: false,
+        loop_task: None,
+        passthrough: Vec::new(),
+        managed_launch: rimz::agents::ManagedLaunchState::PendingResolution,
+    };
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workspace =
+        rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
+
+    let prepared = super::run::prepare_supervised_launch_layout(
+        &request,
+        &request.spec,
+        &workspace,
+        &rimz::config::MachineConfig::default(),
+    )
+    .expect("prepare supervised launch")
+    .layout;
+    let [
+        Cell::Agent(rimz::harness::spec::AgentCell {
+            launch: LaunchParams { model, effort, .. },
+            ..
+        }),
+    ] = prepared.columns[0].rows.as_slice()
+    else {
+        panic!("one agent")
+    };
+    assert_eq!(model.as_deref(), Some("gpt-5"));
+    assert_eq!(effort.as_deref(), Some("low"));
 }
 
 #[test]

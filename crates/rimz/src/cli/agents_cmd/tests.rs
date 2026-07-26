@@ -614,28 +614,6 @@ fn refresh_targets_honor_channel_filter() {
     assert_eq!(workspace, vec!["auth", "docs"]);
 }
 
-mod placement {
-    use super::*;
-
-    #[test]
-    fn supervised_run_placement_matrix() {
-        for (force_new_tab, has_ambient_pane, loop_zone, expected) in [
-            (false, true, false, RunPlacement::Split),
-            (true, true, false, RunPlacement::Tab),
-            (false, false, false, RunPlacement::Tab),
-            (false, true, true, RunPlacement::LoopZone),
-            (false, false, true, RunPlacement::LoopZone),
-            (true, true, true, RunPlacement::Tab),
-        ] {
-            assert_eq!(
-                run_placement(force_new_tab, has_ambient_pane, loop_zone),
-                expected,
-                "force_new_tab={force_new_tab}, has_ambient_pane={has_ambient_pane}, loop_zone={loop_zone}"
-            );
-        }
-    }
-}
-
 mod launch_options {
     use super::*;
 
@@ -659,37 +637,6 @@ mod launch_options {
             true,
         )?;
         Ok((resolved, preset))
-    }
-
-    #[test]
-    fn supervised_launch_normalizes_model_and_effort_overrides() {
-        let args = parse_agents(&[
-            "rimz", "codex", "fix-it", "--model", " gpt-5 ", "--effort", " low ", "-p",
-        ]);
-        let (request, _) = into_supervised_request(args).expect("build supervised request");
-        let dir = tempfile::tempdir().expect("temp dir");
-        let workspace = rimz::workspace::WorkspaceResolver::resolve(dir.path(), None)
-            .expect("resolve workspace");
-
-        let prepared = crate::cli::supervised::run::prepare_supervised_launch_layout(
-            &request,
-            &request.spec,
-            &workspace,
-            &MachineConfig::default(),
-        )
-        .expect("prepare supervised launch")
-        .layout;
-        let [
-            Cell::Agent(rimz::harness::spec::AgentCell {
-                launch: LaunchParams { model, effort, .. },
-                ..
-            }),
-        ] = prepared.columns[0].rows.as_slice()
-        else {
-            panic!("one agent")
-        };
-        assert_eq!(model.as_deref(), Some("gpt-5"));
-        assert_eq!(effort.as_deref(), Some("low"));
     }
 
     #[test]

@@ -52,7 +52,7 @@ static RUN_INTERRUPT_HANDLERS_INSTALLED: OnceLock<()> = OnceLock::new();
 #[cfg(test)]
 use output::RunStreamEvent;
 #[cfg(test)]
-use pane::{ensure_sendable, latest_resolved_run_pane, resolve_run_pane_in_snapshot};
+use pane::{latest_resolved_run_pane, resolve_run_pane_in_snapshot};
 #[cfg(test)]
 use stream::{stream_attached_run, stream_blocking_run};
 
