@@ -299,6 +299,7 @@ mod tests {
     #[test]
     fn matcher_selects_only_same_lineage_clients_outside_own_ancestry() {
         let processes = vec![
+            process(1, 0, 1000, "zellij attach --create room"),
             process(10, 1, 1000, "zellij attach --create room"),
             process(20, 10, 1000, "zellij attach --create room"),
             process(30, 20, 1000, "rimz attach --attach room"),
@@ -309,7 +310,7 @@ mod tests {
         ];
         let protected = crate::mux::recovery::protected_pids(&processes, 30);
         let lineage = |pid| match pid {
-            10 | 20 | 30 | 40 | 42 | 43 => Some("same".to_owned()),
+            1 | 10 | 20 | 30 | 40 | 42 | 43 => Some("same".to_owned()),
             41 => Some("other".to_owned()),
             _ => None,
         };
