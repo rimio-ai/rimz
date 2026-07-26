@@ -524,7 +524,9 @@ impl Default for SpendingWalker {
 /// adapter already parses for historical spending. Native thread ids select the
 /// requested session in multi-session stores; id-free entries are included only
 /// when the parsed file has no thread ids at all, which is the one-file-per-session
-/// shape used by JSONL transcript providers.
+/// shape used by JSONL transcript providers. This fallback intentionally reads
+/// only the supplied primary file; Claude's statusline self-report remains the
+/// source that includes subagent companions for live session-scoped cost.
 pub fn session_cost_usd(
     adapter: &AgentDefinition,
     session_id: &str,

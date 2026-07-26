@@ -101,6 +101,41 @@ fn resumed_slot_deduplicates_replayed_transcript_effort() {
 }
 
 #[test]
+fn claude_slot_credits_subagent_transcript_effort() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let transcript = dir.path().join("claude-session.jsonl");
+    let subagents = dir.path().join("claude-session/subagents");
+    std::fs::create_dir_all(&subagents).unwrap();
+    std::fs::write(
+        &transcript,
+        concat!(
+            r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":1.0,"requestId":"main","message":{"id":"main","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        subagents.join("agent-child.jsonl"),
+        concat!(
+            r#"{"timestamp":"2026-01-01T10:00:01.000Z","costUSD":2.0,"requestId":"child","isSidechain":true,"message":{"id":"child","model":"child-model","usage":{"input_tokens":20,"output_tokens":2}}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    let mut state = agent("claude-session", "claude", 10);
+    state.team = Some("forge".to_owned());
+    state.role = Some("planner".to_owned());
+    state.transcript_path = Some(transcript.to_string_lossy().into_owned());
+
+    let report = build_for(&[state]);
+    let member = &report.groups[0].members[0];
+
+    assert_eq!(member.tokens.input, 30);
+    assert_eq!(member.tokens.output, 3);
+    assert_eq!(member.cost_usd, Some(3.0));
+}
+
+#[test]
 fn team_roles_and_provider_kinds_keep_distinct_slots() {
     let mut planner = agent("planner", "claude", 10);
     planner.team = Some("forge".to_owned());

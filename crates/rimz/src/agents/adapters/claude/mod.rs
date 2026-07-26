@@ -766,6 +766,19 @@ impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
             .or_else(|| files.into_iter().next())
     }
 
+    fn session_spend_transcripts(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+    ) -> Vec<PathBuf> {
+        let Some(main) = self.session_transcript(session_id, prior_path) else {
+            return Vec::new();
+        };
+        let mut transcripts = vec![main.clone()];
+        transcripts.extend(subagents::subagent_transcripts_under(&main));
+        transcripts
+    }
+
     /// Current Claude transcripts log no `costUSD`, so each turn is priced
     /// from its `message.usage` through the book; an older transcript's
     /// positive `costUSD` is used verbatim. Lines are independent, so a

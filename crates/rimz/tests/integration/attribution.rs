@@ -181,6 +181,67 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
 }
 
 #[test]
+fn attribution_cli_credits_claude_subagent_companions() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let session = "sess-claude-subagents";
+    let transcript = env.home_root.join(format!("{session}.jsonl"));
+    let subagents = env.home_root.join(session).join("subagents");
+    std::fs::create_dir_all(&subagents).expect("mkdir subagents");
+    std::fs::write(
+        &transcript,
+        concat!(
+            r#"{"timestamp":"2026-07-23T00:00:00.000Z","costUSD":1.0,"requestId":"main","message":{"id":"main","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            "\n"
+        ),
+    )
+    .expect("write parent transcript");
+    std::fs::write(
+        subagents.join("agent-child.jsonl"),
+        concat!(
+            r#"{"timestamp":"2026-07-23T00:00:01.000Z","costUSD":2.0,"requestId":"child","isSidechain":true,"message":{"id":"child","model":"child-model","usage":{"input_tokens":20,"output_tokens":2}}}"#,
+            "\n"
+        ),
+    )
+    .expect("write subagent transcript");
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let mut observation =
+        AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Registered);
+    observation.launch.team = Some("forge".to_owned());
+    observation.launch.role = Some("planner".to_owned());
+    observation.launch.channel = Some("feature".to_owned());
+    observation.worktree_path = Some(env.project_root.display().to_string());
+    observation.transcript_path = Some(transcript.display().to_string());
+    env.store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "UserPromptSubmit",
+            &observation,
+        ))
+        .expect("register Claude agent");
+
+    let output = env
+        .rimz()
+        .arg("--root")
+        .arg(&env.project_root)
+        .args(["agents", "attribution", "#feature", "--json"])
+        .output()
+        .expect("run attribution");
+    assert!(
+        output.status.success(),
+        "attribution failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
+
+    assert_eq!(report["totals"]["tokens"]["input"], 30);
+    assert_eq!(report["totals"]["tokens"]["output"], 3);
+    assert_eq!(report["totals"]["cost_usd"], 3.0);
+}
+
+#[test]
 fn attribution_output_modes_conflict_at_the_cli_boundary() {
     let env = Env::new();
     let output = env

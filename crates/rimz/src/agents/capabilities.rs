@@ -642,6 +642,18 @@ pub trait SpendingCapability: CoreCapability {
         })
     }
 
+    /// Resolve every file whose bytes carry one session's spend. Providers
+    /// that split a session across companion files override this method.
+    fn session_spend_transcripts(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+    ) -> Vec<PathBuf> {
+        self.session_transcript(session_id, prior_path)
+            .into_iter()
+            .collect()
+    }
+
     /// Parse one transcript file into cost entries for the spending pass,
     /// resuming from `resume` when given: read only past its offset, restore
     /// any cross-line state it carries, and return entries the cache appends

@@ -3,7 +3,7 @@ use super::*;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use super::super::subagents::spawned_subagents_under;
+use super::super::subagents::{spawned_subagents_under, subagent_transcripts_under};
 use crate::ids::AgentSessionId;
 
 fn legacy_session() -> (tempfile::TempDir, PathBuf, PathBuf) {
@@ -195,5 +195,39 @@ fn nested_replay_cannot_close_the_outer_child() {
                 parent_workspace: None,
             })
             .is_empty()
+    );
+}
+
+#[test]
+fn spend_transcripts_include_sorted_companions_for_both_session_layouts() {
+    for session in [legacy_session(), chat_session()] {
+        let (_dir, parent, children) = session;
+        std::fs::write(children.join("agent-z.jsonl"), "").unwrap();
+        std::fs::write(children.join("agent-a.jsonl"), "").unwrap();
+        std::fs::write(children.join("agent-a.meta.json"), "").unwrap();
+
+        assert_eq!(
+            subagent_transcripts_under(&parent),
+            [
+                children.join("agent-a.jsonl"),
+                children.join("agent-z.jsonl")
+            ]
+        );
+        assert_eq!(
+            ClaudeAdapter.session_spend_transcripts("parent", Some(&parent)),
+            [
+                parent.clone(),
+                children.join("agent-a.jsonl"),
+                children.join("agent-z.jsonl")
+            ]
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("missing.jsonl");
+    std::fs::write(&parent, "").unwrap();
+    assert_eq!(
+        ClaudeAdapter.session_spend_transcripts("missing", Some(&parent)),
+        [parent]
     );
 }
