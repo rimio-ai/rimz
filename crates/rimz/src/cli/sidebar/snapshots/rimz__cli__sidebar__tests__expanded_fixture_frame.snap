@@ -21,9 +21,9 @@ expression: strip_sgr(&ansi)
    󰕰 ━━━━━━━━━━━━━━━━╺━╺───────────────────────   24%
    󰿦 247k · 󱥸 212k  24k  9k  30k
     subagents (2)
-      Explore — audit auth watcher changes
+      Explore — audit auth watcher changes     $0.34
         22k · Haiku · xhigh
-     ⠁ Plan — run focused nextest
+     ⠁ Plan — run focused nextest               $0.12
         18k · Haiku · xhigh                    󰪞  3m
  ▁ claude · Opus 4.8 · xhigh · 1m              $28.90
    compact provider trace
@@ -69,9 +69,9 @@ expression: strip_sgr(&ansi)
    󰕰 ━━━━━━━━━━━━━━━━━━━╺━━╺───────────────────   31%
    󰿦 314k · 󱥸 270k  31k  12k  39k             󰪞 6m
     subagents (2)
-      Explore — audit auth watcher changes
+      Explore — audit auth watcher changes     $0.34
         22k · Haiku · xhigh
-     ⠁ Plan — run focused nextest
+     ⠁ Plan — run focused nextest               $0.12
         18k · Haiku · xhigh                    󰪞  3m
 
   mux-merge #91                                main
