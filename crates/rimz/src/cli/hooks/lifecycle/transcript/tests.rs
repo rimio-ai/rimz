@@ -206,7 +206,7 @@ fn user_message_header_records_prompt_without_envelope() {
         &started,
         None,
         &[],
-        &[message.clone()],
+        std::slice::from_ref(&message),
     )
     .unwrap();
 
