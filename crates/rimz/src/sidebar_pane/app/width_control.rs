@@ -274,13 +274,8 @@ impl WidthController {
     ) {
         self.width = crate::mux::SidebarWidth::from_config(theme);
         let target = self.last_classified.map(|(view_cols, _)| {
-            crate::sidebar::width_target::resolve(
-                &self.runtime,
-                self.width,
-                self.mux,
-                Some(view_cols),
-            )
-            .cols(Some(view_cols))
+            crate::sidebar::width_target::resolve(&self.runtime, self.width, Some(view_cols))
+                .cols(Some(view_cols))
         });
         self.convergence.retarget(target);
         if let Some(cols) = measured_cols {
@@ -363,12 +358,8 @@ impl WidthController {
             target_cols: Some(target.get()),
             verdict: SidebarWidthIntentVerdict::Accepted,
         });
-        let target = match crate::sidebar::width_target::pin(
-            &self.runtime,
-            target,
-            self.mux,
-            view_cols.get(),
-        ) {
+        let target = match crate::sidebar::width_target::pin(&self.runtime, target, view_cols.get())
+        {
             Ok(permille) => permille.cols(view_cols),
             Err(err) => {
                 warn!(error = %err, "sidebar width target pin failed");
@@ -502,7 +493,6 @@ impl WidthController {
             let target = crate::sidebar::width_target::resolve(
                 &self.runtime,
                 self.width,
-                self.mux,
                 Some(step.view_cols),
             );
             self.convergence
@@ -583,7 +573,6 @@ impl WidthController {
             let target = crate::sidebar::width_target::resolve(
                 &self.runtime,
                 self.width,
-                self.mux,
                 Some(view_cols.get()),
             );
             let target_cols = target.cols(Some(view_cols.get()));
@@ -612,18 +601,14 @@ impl WidthController {
             .convergence
             .target()
             .map_or(measured_cols, NonZeroU16::get);
-        let permille = match crate::sidebar::width_target::pin(
-            &self.runtime,
-            measured,
-            self.mux,
-            view_cols.get(),
-        ) {
-            Ok(permille) => permille,
-            Err(err) => {
-                warn!(error = %err, "sidebar mouse width target pin failed");
-                return;
-            }
-        };
+        let permille =
+            match crate::sidebar::width_target::pin(&self.runtime, measured, view_cols.get()) {
+                Ok(permille) => permille,
+                Err(err) => {
+                    warn!(error = %err, "sidebar mouse width target pin failed");
+                    return;
+                }
+            };
         let target = permille.cols(view_cols);
         diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
             trigger: SidebarWidthIntentTrigger::MouseAdopt,

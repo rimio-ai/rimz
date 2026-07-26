@@ -261,7 +261,6 @@ fn width_target_event_reloads_the_target_without_a_producer_fetch() {
     crate::sidebar::width_target::pin(
         &rig.runtime,
         std::num::NonZeroU16::new(90).expect("nonzero width"),
-        crate::ids::MuxName::Tmux,
         200,
     )
     .expect("pin width target");

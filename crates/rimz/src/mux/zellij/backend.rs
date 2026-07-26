@@ -1119,8 +1119,7 @@ impl MuxBackend for ZellijBackend {
             &crate::config::MachineConfig::load_lenient().theme,
         );
         let sidebar_percent =
-            crate::sidebar::width_target::resolve(&runtime, width, MuxName::Zellij, view_cols)
-                .percent();
+            crate::sidebar::width_target::resolve(&runtime, width, view_cols).percent();
         let layout = TempLayoutFile::new(render_tab_layout(opts, sidebar_percent)?)?;
         let args = [
             "new-tab".to_owned(),

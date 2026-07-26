@@ -81,6 +81,31 @@ fn one_target_converges_from_both_directions_and_none_stays_idle() {
 }
 
 #[test]
+fn narrower_after_an_exact_pin_issues_a_resize() {
+    let now = Instant::now();
+    let step = crate::mux::WidthStep {
+        cols: 10,
+        band_cols: 11,
+        exact: false,
+        view_cols: 213,
+    };
+    let narrowed = crate::mux::width::adjust_target_cols(
+        64,
+        WidthAdjust::Narrower,
+        step,
+        crate::mux::width::MIN_ADJUSTABLE_WIDTH,
+    )
+    .expect("narrower target");
+    let mut control = WidthControl::new(Some(target(64)));
+    control.seed_native_step(step.band_cols);
+
+    control.retarget(Some(narrowed));
+
+    assert_eq!(narrowed, target(53));
+    assert_eq!(control.decide(64, now), Some((64, 53)));
+}
+
+#[test]
 fn width_target_pin_broadcasts_without_a_producer_fetch() {
     let (dir, runtime, _controller) = controller(MuxName::Tmux);
     let instance = SidebarInstanceId::new();
@@ -100,8 +125,8 @@ fn width_target_pin_broadcasts_without_a_producer_fetch() {
     )
     .expect("write heartbeat");
 
-    let permille = crate::sidebar::width_target::pin(&runtime, target(82), MuxName::Tmux, 200)
-        .expect("pin width target");
+    let permille =
+        crate::sidebar::width_target::pin(&runtime, target(82), 200).expect("pin width target");
     assert_eq!(crate::sidebar::width_target::load(&runtime), Some(permille));
     let mut payload = [0_u8; 1024];
     let received = socket.recv(&mut payload).expect("receive target broadcast");
@@ -129,8 +154,8 @@ fn zellij_uses_live_step_and_rejects_floor_crossing() {
         "repeated keys compound on persisted pending intent",
     );
     let prior = NonZeroU16::new(30).expect("prior target");
-    let prior_share = crate::sidebar::width_target::pin(&runtime, prior, MuxName::Zellij, 200)
-        .expect("pin prior target");
+    let prior_share =
+        crate::sidebar::width_target::pin(&runtime, prior, 200).expect("pin prior target");
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
     controller.adjust(30, WidthAdjust::Narrower, &diag);
     assert_eq!(
@@ -271,8 +296,7 @@ fn broadcast_reload_uses_the_seeded_native_band() {
     let diag = crate::diag::DiagSink::disabled();
 
     controller.backstop(Some(50), Some(1), None, &diag);
-    crate::sidebar::width_target::pin(&runtime, target(83), MuxName::Zellij, 200)
-        .expect("pin external target");
+    crate::sidebar::width_target::pin(&runtime, target(83), 200).expect("pin external target");
     controller.reload_target(&crate::config::ThemeConfig::default(), Some(83), &diag);
 
     assert_eq!(controller.convergence.target(), Some(target(83)));
@@ -331,8 +355,8 @@ fn settled_view_resize_scales_a_pinned_target() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology_for_view(&runtime, 240);
     controller.last_classified = Some((200, 1));
-    let share = crate::sidebar::width_target::pin(&runtime, target(80), MuxName::Zellij, 200)
-        .expect("pin width target");
+    let share =
+        crate::sidebar::width_target::pin(&runtime, target(80), 200).expect("pin width target");
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
 
