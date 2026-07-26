@@ -94,7 +94,7 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
     };
 
     assert!(
-        spec(RuntimeControlReadiness::Disabled, false,)
+        spec(RuntimeControlReadiness::Disabled, false)
             .hosts
             .is_empty()
     );
@@ -110,7 +110,7 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
                 "claude",
                 "uninstalled",
                 "Claude is not installed",
-            ),),
+            )),
             false,
         )
         .hosts

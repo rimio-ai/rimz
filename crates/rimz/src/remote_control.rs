@@ -4,7 +4,6 @@
 //! daemon protocol. This module probes each provider once per operation and
 //! coordinates effects.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::agents::runtime_control::{
@@ -32,7 +31,8 @@ impl RemoteControlHost {
 /// One batch probe of both configured provider hosts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReadinessSnapshot {
-    states: BTreeMap<crate::ids::AgentKind, RuntimeControlReadiness>,
+    claude: RuntimeControlReadiness,
+    codex: RuntimeControlReadiness,
 }
 
 impl ReadinessSnapshot {
@@ -57,13 +57,18 @@ impl ReadinessSnapshot {
     }
 
     pub fn for_host(&self, host: RemoteControlHost) -> &RuntimeControlReadiness {
-        self.for_kind(host.kind())
+        match host {
+            RemoteControlHost::Claude => &self.claude,
+            RemoteControlHost::Codex => &self.codex,
+        }
     }
 
     pub fn for_kind(&self, kind: &str) -> &RuntimeControlReadiness {
-        self.states
-            .get(&crate::ids::AgentKind::new_unchecked(kind))
-            .unwrap_or(&RuntimeControlReadiness::Disabled)
+        match kind {
+            "claude" => &self.claude,
+            "codex" => &self.codex,
+            _ => &RuntimeControlReadiness::Disabled,
+        }
     }
 
     pub fn claude_host_argv(&self) -> Option<&[String]> {
@@ -94,12 +99,7 @@ impl ReadinessSnapshot {
     }
 
     fn from_readiness(claude: RuntimeControlReadiness, codex: RuntimeControlReadiness) -> Self {
-        Self {
-            states: [("claude", claude), ("codex", codex)]
-                .into_iter()
-                .map(|(kind, state)| (crate::ids::AgentKind::new_unchecked(kind), state))
-                .collect(),
-        }
+        Self { claude, codex }
     }
 }
 

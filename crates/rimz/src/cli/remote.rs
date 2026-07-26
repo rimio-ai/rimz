@@ -39,7 +39,7 @@ enum RemoteSubcmd {
     Add {
         name: String,
         #[command(flatten)]
-        args: saved_alias::Args,
+        args: SavedAliasArgs,
     },
     /// Replace a saved remote target.
     #[command(
@@ -51,7 +51,7 @@ enum RemoteSubcmd {
         ))]
         name: String,
         #[command(flatten)]
-        args: saved_alias::Args,
+        args: SavedAliasArgs,
     },
     /// Connect to a remote alias or raw `[user@]host:<session-or-path>` target.
     Connect {
@@ -59,7 +59,7 @@ enum RemoteSubcmd {
         #[arg(long)]
         reset: bool,
         #[command(flatten)]
-        args: connection::Args,
+        args: ConnectionArgs,
     },
     /// Install rimz on a remote alias, `[user@]host:<session-or-path>` target, or `[user@]host`.
     Setup {
@@ -71,7 +71,7 @@ enum RemoteSubcmd {
     /// Connect to a remote alias or raw target with `--no-resume`.
     Reset {
         #[command(flatten)]
-        args: connection::Args,
+        args: ConnectionArgs,
     },
     /// Delete a saved remote alias.
     Rm {
@@ -108,64 +108,56 @@ enum LinkStatsSubcmd {
     Ingest(link_stats::LinkStatsIngestArgs),
 }
 
-mod saved_alias {
-    use super::{MuxName, RemoteAlias};
+#[derive(Debug, Args)]
+struct SavedAliasArgs {
+    target: String,
+    /// Hand the link to a single ssh run instead of supervising reconnects.
+    #[arg(long)]
+    no_reconnect: bool,
+    /// Come up empty when this alias births a remote room.
+    #[arg(long)]
+    no_resume: bool,
+    /// Disable automatic forwarding of new remote listeners.
+    #[arg(long)]
+    no_auto_forward: bool,
+}
 
-    #[derive(Debug, clap::Args)]
-    pub(super) struct Args {
-        pub(super) target: String,
-        /// Hand the link to a single ssh run instead of supervising reconnects.
-        #[arg(long)]
-        pub(super) no_reconnect: bool,
-        /// Come up empty when this alias births a remote room.
-        #[arg(long)]
-        pub(super) no_resume: bool,
-        /// Disable automatic forwarding of new remote listeners.
-        #[arg(long)]
-        pub(super) no_auto_forward: bool,
-    }
-
-    impl Args {
-        pub(super) fn into_alias(self, name: String, mux: Option<MuxName>) -> RemoteAlias {
-            RemoteAlias {
-                name,
-                target: self.target,
-                reconnect: !self.no_reconnect,
-                no_resume: self.no_resume,
-                mux,
-                auto_forward: !self.no_auto_forward,
-            }
+impl SavedAliasArgs {
+    fn into_alias(self, name: String, mux: Option<MuxName>) -> RemoteAlias {
+        RemoteAlias {
+            name,
+            target: self.target,
+            reconnect: !self.no_reconnect,
+            no_resume: self.no_resume,
+            mux,
+            auto_forward: !self.no_auto_forward,
         }
     }
 }
 
-mod connection {
-    use super::AttachFlags;
-
-    #[derive(Debug, clap::Args)]
-    pub(super) struct Args {
-        #[arg(add = clap_complete::ArgValueCandidates::new(
-            crate::cli::complete::remote_aliases
-        ))]
-        pub(super) alias_or_target: String,
-        /// Hand the link to a single ssh run instead of supervising reconnects.
-        #[arg(long)]
-        pub(super) no_reconnect: bool,
-        /// Attach despite a minor version mismatch with the host.
-        #[arg(long)]
-        pub(super) force_version: bool,
-        /// Open the remote Zellij room in the local browser through an SSH tunnel.
-        #[arg(long)]
-        pub(super) web: bool,
-        /// Local tunnel port for `--web`.
-        #[arg(long, requires = "web")]
-        pub(super) web_port: Option<u16>,
-        /// Disable automatic forwarding of new remote listeners.
-        #[arg(long)]
-        pub(super) no_auto_forward: bool,
-        #[command(flatten)]
-        pub(super) attach: AttachFlags,
-    }
+#[derive(Debug, Args)]
+struct ConnectionArgs {
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::remote_aliases
+    ))]
+    alias_or_target: String,
+    /// Hand the link to a single ssh run instead of supervising reconnects.
+    #[arg(long)]
+    no_reconnect: bool,
+    /// Attach despite a minor version mismatch with the host.
+    #[arg(long)]
+    force_version: bool,
+    /// Open the remote Zellij room in the local browser through an SSH tunnel.
+    #[arg(long)]
+    web: bool,
+    /// Local tunnel port for `--web`.
+    #[arg(long, requires = "web")]
+    web_port: Option<u16>,
+    /// Disable automatic forwarding of new remote listeners.
+    #[arg(long)]
+    no_auto_forward: bool,
+    #[command(flatten)]
+    attach: AttachFlags,
 }
 
 impl RemoteArgs {
@@ -311,8 +303,8 @@ fn resolve_setup_destination(input: &str, aliases: &RemoteAliases) -> Result<Ssh
     }
 }
 
-fn connect(args: connection::Args, reset: bool, globals: &GlobalFlags) -> Result<()> {
-    let connection::Args {
+fn connect(args: ConnectionArgs, reset: bool, globals: &GlobalFlags) -> Result<()> {
+    let ConnectionArgs {
         alias_or_target,
         no_reconnect,
         force_version,
@@ -470,7 +462,7 @@ mod tests {
             color: super::super::ColorWhen::Auto,
         };
 
-        let built_alias = saved_alias::Args {
+        let built_alias = SavedAliasArgs {
             target: "prod-box:query-engine".to_owned(),
             no_reconnect: false,
             no_resume: false,
