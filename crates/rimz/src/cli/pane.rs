@@ -292,7 +292,10 @@ fn list(
             ..Default::default()
         })?
         .panes;
-    let self_pane = rimz::mux::own_pane_id(backend.name());
+    let self_pane = workspace
+        .as_ref()
+        .filter(|workspace| workspace.session_name == session)
+        .and_then(|_| rimz::mux::own_pane_id(backend.name()));
     // Only overlay agents when listing this workspace's own session — a foreign
     // session's pane ids carry no meaning in our rollup.
     let overlay = workspace
