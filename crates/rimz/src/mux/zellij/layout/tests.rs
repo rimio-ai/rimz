@@ -16,7 +16,6 @@ fn sidebar_opts(
             )
             .expect("nonzero test target");
             crate::mux::WidthPermille::from_cols(requested_cols, view_cols)
-                .snap_to_rung(crate::MuxName::Zellij)
         },
     );
     let target = crate::mux::SidebarTarget {
@@ -229,7 +228,7 @@ fn session_layout_seeds_template_and_birth_from_probed_width() {
     let layout = render_session_layout(&capped, None, &[]).expect("render layout");
     assert_eq!(
         layout
-            .matches(r#"pane size="20%" name="rimz-sidebar" borderless=true"#)
+            .matches(r#"pane size="21%" name="rimz-sidebar" borderless=true"#)
             .count(),
         2,
         "the template and explicit birth tab share the cap-aware seed:\n{layout}",
@@ -240,7 +239,7 @@ fn session_layout_seeds_template_and_birth_from_probed_width() {
         .and_then(|section| section.split("\n    tab").next())
         .expect("layout carries a new_tab_template");
     assert!(
-        new_tab_template.contains(r#"size="20%""#),
+        new_tab_template.contains(r#"size="21%""#),
         "the new_tab_template carries the cap-aware launch seed:\n{layout}",
     );
     let birth_tab = layout

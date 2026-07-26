@@ -257,6 +257,7 @@ impl MuxBackend for FakeBackend {
     ) -> rimz::mux::Result<rimz::mux::WidthStep> {
         Ok(rimz::mux::WidthStep {
             cols: 2,
+            band_cols: 1,
             exact: true,
             view_cols: 120,
         })

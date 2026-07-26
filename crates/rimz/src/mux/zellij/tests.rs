@@ -84,8 +84,7 @@ impl TestRoom {
             u16::try_from(width.target_cols(u64::from(view_cols.get()))).expect("test target"),
         )
         .expect("nonzero test width");
-        let share = crate::mux::WidthPermille::from_cols(requested_cols, view_cols)
-            .snap_to_rung(crate::MuxName::Zellij);
+        let share = crate::mux::WidthPermille::from_cols(requested_cols, view_cols);
         SidebarPaneOptions {
             session_name: "rimz-test".to_owned(),
             workspace_id: self.workspace_id.clone(),
@@ -699,6 +698,7 @@ fn stepwise_sidebar_width_converges_across_supported_steps() {
 fn assert_stepwise_park(
     name: &str,
     initial: u64,
+    target: u16,
     expected_increase: usize,
     expected_decrease: usize,
 ) {
@@ -734,7 +734,7 @@ exit 0
     );
     let (temp, shim) = zellij_shim(&script);
     let backend = room.backend(&shim);
-    let target_cols = std::num::NonZeroU16::new(64).expect("target");
+    let target_cols = std::num::NonZeroU16::new(target).expect("target");
     let view_cols = std::num::NonZeroU16::new(213).expect("view");
     let width = WidthSyncOptions {
         session_name: "rimz-test".to_owned(),
@@ -793,8 +793,9 @@ exit 0
 #[cfg(unix)]
 #[test]
 fn stepwise_sidebar_width_parks_at_the_smallest_reachable_width_above_target() {
-    assert_stepwise_park("grow", 48, 2, 0);
-    assert_stepwise_park("shrink", 82, 0, 1);
+    assert_stepwise_park("default-between-lattice-points", 53, 54, 1, 0);
+    assert_stepwise_park("grow", 48, 64, 2, 0);
+    assert_stepwise_park("shrink", 82, 64, 0, 1);
 }
 
 #[cfg(unix)]

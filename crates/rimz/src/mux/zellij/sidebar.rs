@@ -905,6 +905,8 @@ impl ZellijBackend {
             if !sidebar_width_off_spec(cols, target_cols, zellij_resize_stop_step_cols(view_cols)) {
                 break;
             }
+            // Defensive only: the ceiling stop estimate bounds Zellij's real
+            // lattice, but reverse once if a future backend delta exceeds it.
             let undershot =
                 last_cols.is_some_and(|last_cols| width_undershot(last_cols, cols, target_cols));
             let grow = cols < target_cols;

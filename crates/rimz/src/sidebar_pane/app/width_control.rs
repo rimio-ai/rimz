@@ -94,7 +94,7 @@ impl WidthControl {
 
     fn stop_step(&self) -> u16 {
         self.learned_step
-            .or(self.native_step.map(NonZeroU16::get))
+            .max(self.native_step.map(NonZeroU16::get))
             .unwrap_or(1)
     }
 
@@ -321,7 +321,7 @@ impl WidthController {
                 return;
             }
         };
-        self.convergence.seed_native_step(step.cols);
+        self.convergence.seed_native_step(step.band_cols);
         let Some(view_cols) = NonZeroU16::new(step.view_cols) else {
             diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
                 trigger,
@@ -496,7 +496,7 @@ impl WidthController {
             pane,
         ) && step.view_cols > 0
         {
-            self.convergence.seed_native_step(step.cols);
+            self.convergence.seed_native_step(step.band_cols);
             self.last_classified = Some((step.view_cols, sibling_count));
             let target = crate::sidebar::width_target::resolve(
                 &self.runtime,
@@ -546,7 +546,7 @@ impl WidthController {
                 return;
             }
         };
-        self.convergence.seed_native_step(step.cols);
+        self.convergence.seed_native_step(step.band_cols);
         let Some(view_cols) = NonZeroU16::new(step.view_cols) else {
             self.observe(
                 measured_cols,

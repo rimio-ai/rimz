@@ -43,8 +43,7 @@ pub(in crate::backend::zellij) fn sidebar_opts(
         u16::try_from(width.target_cols(u64::from(detected_cols))).expect("test target"),
     )
     .expect("nonzero test width");
-    let share =
-        WidthPermille::from_cols(requested_cols, view_cols).snap_to_rung(rimz::MuxName::Zellij);
+    let share = WidthPermille::from_cols(requested_cols, view_cols);
     let target = rimz::mux::SidebarTarget {
         share,
         max_cols: width.max_cols,

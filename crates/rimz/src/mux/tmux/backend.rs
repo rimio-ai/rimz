@@ -336,6 +336,7 @@ impl MuxBackend for TmuxBackend {
         ensure_pane_backend(pane, MuxName::Tmux)?;
         Ok(WidthStep {
             cols: SIDEBAR_RESIZE_STEP_COLS,
+            band_cols: 1,
             exact: true,
             view_cols: self
                 .window_width(pane.raw())

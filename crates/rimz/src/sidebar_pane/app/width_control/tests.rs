@@ -184,6 +184,18 @@ fn first_backend_geometry_resolves_the_initial_target() {
 }
 
 #[test]
+fn zellij_geometry_seeds_the_ceiling_stop_band() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology_for_view(&runtime, 213);
+    let diag = crate::diag::DiagSink::disabled();
+
+    controller.backstop(Some(64), Some(1), None, &diag);
+
+    assert_eq!(controller.convergence.target(), Some(target(54)));
+    assert_eq!(controller.convergence.stop_step(), 11);
+}
+
+#[test]
 fn missing_backend_geometry_retries_the_baseline_at_most_once_per_second() {
     let (_dir, _runtime, mut controller) = controller(MuxName::Zellij);
     let diag = crate::diag::DiagSink::disabled();
@@ -228,7 +240,10 @@ fn settled_drag_pins_once_after_the_debounce() {
 
     assert_eq!(
         crate::sidebar::width_target::pinned(&runtime),
-        Some(crate::mux::WidthPermille::from_percent(40)),
+        Some(crate::mux::WidthPermille::from_cols(
+            target(83),
+            target(200)
+        )),
     );
     assert_eq!(controller.classification_deadline, None);
     assert!(
@@ -238,7 +253,10 @@ fn settled_drag_pins_once_after_the_debounce() {
     controller.backstop(Some(83), Some(1), Some(u64::MAX), &diag);
     assert_eq!(
         crate::sidebar::width_target::pinned(&runtime),
-        Some(crate::mux::WidthPermille::from_percent(40)),
+        Some(crate::mux::WidthPermille::from_cols(
+            target(83),
+            target(200)
+        )),
     );
     assert!(
         !controller.convergence.in_flight(),
@@ -257,7 +275,7 @@ fn broadcast_reload_uses_the_seeded_native_band() {
         .expect("pin external target");
     controller.reload_target(&crate::config::ThemeConfig::default(), Some(83), &diag);
 
-    assert_eq!(controller.convergence.target(), Some(target(80)));
+    assert_eq!(controller.convergence.target(), Some(target(83)));
     assert_eq!(controller.convergence.stop_step(), 10);
     assert!(!controller.convergence.in_flight());
 }
@@ -408,7 +426,7 @@ fn native_step_seed_survives_retargeting() {
 }
 
 #[test]
-fn learned_step_refines_the_seeded_band() {
+fn a_short_learned_step_does_not_narrow_the_seeded_band() {
     let now = Instant::now();
     let mut control = WidthControl::new(Some(target(80)));
     control.seed_native_step(10);
@@ -418,7 +436,7 @@ fn learned_step_refines_the_seeded_band() {
         control.decide(66, now + Duration::from_millis(10)),
         Some((66, 80)),
     );
-    assert_eq!(control.stop_step(), 6);
+    assert_eq!(control.stop_step(), 10);
 }
 
 #[test]
@@ -435,6 +453,16 @@ fn step_estimate_uses_an_upward_band() {
     let mut next_step = WidthControl::new(Some(target(80)));
     next_step.seed_native_step(2);
     assert_eq!(next_step.decide(82, now), Some((82, 80)));
+}
+
+#[test]
+fn one_column_stop_step_keeps_exact_backends_exact() {
+    let now = Instant::now();
+    let mut control = WidthControl::new(Some(target(80)));
+    control.seed_native_step(1);
+
+    assert_eq!(control.decide(80, now), None);
+    assert_eq!(control.decide(81, now), Some((81, 80)));
 }
 
 #[test]
