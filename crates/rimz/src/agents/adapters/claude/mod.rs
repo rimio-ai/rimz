@@ -757,7 +757,7 @@ impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
         let files: Vec<PathBuf> = self
             .transcript_files()
             .into_iter()
-            .filter(|path| matches_session(path))
+            .filter(|path| matches_session(path) && !subagents::is_subagent_transcript(path))
             .collect();
         files
             .iter()

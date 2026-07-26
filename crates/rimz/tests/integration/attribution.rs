@@ -185,8 +185,9 @@ fn attribution_cli_credits_claude_subagent_companions() {
     let env = Env::new();
     env.record(&env.project_root);
     let session = "sess-claude-subagents";
-    let transcript = env.home_root.join(format!("{session}.jsonl"));
-    let subagents = env.home_root.join(session).join("subagents");
+    let projects = env.config_root().join("claude/projects/project");
+    let transcript = projects.join(format!("{session}.jsonl"));
+    let subagents = projects.join(session).join("subagents");
     std::fs::create_dir_all(&subagents).expect("mkdir subagents");
     std::fs::write(
         &transcript,
@@ -211,7 +212,6 @@ fn attribution_cli_credits_claude_subagent_companions() {
     observation.launch.role = Some("planner".to_owned());
     observation.launch.channel = Some("feature".to_owned());
     observation.worktree_path = Some(env.project_root.display().to_string());
-    observation.transcript_path = Some(transcript.display().to_string());
     env.store()
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
             env.workspace_id.clone(),
