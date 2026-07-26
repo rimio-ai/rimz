@@ -136,6 +136,18 @@ fn park_path(runtime: &RuntimePaths) -> PathBuf {
     park_record_path(runtime, &AgentKind::new_unchecked("claude"), &"sess".into())
 }
 
+#[test]
+fn park_cache_path_preserves_existing_name() {
+    let (_dir, runtime) = temp_runtime();
+
+    assert_eq!(
+        park_path(&runtime)
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("auto-continue.4a8d94f232e55a6a0879ba0858b59241.json")
+    );
+}
+
 fn agent(activity: i64) -> AgentState {
     let mut agent = crate::sidebar::test_support::root_agent("claude", "sess", None);
     agent.name = None;

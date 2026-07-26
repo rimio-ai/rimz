@@ -2,6 +2,7 @@
 //! fire-and-forget children to the global reaper and supervise foreground
 //! children with event-driven exit and signal waits.
 
+use std::ffi::OsStr;
 use std::io;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -215,8 +216,8 @@ fn signal_child(pid: u32, signal: ChildSignal) {
     let _ = kill(Pid::from_raw(pid as i32), signal);
 }
 
-/// Build a detached `rimz` helper command, anchored to RimZ-owned shared
-/// disk_usage so a deleted launch CWD cannot ENOENT the spawn.
+/// Build a detached `rimz` command with fresh null stdio, anchored to RimZ-owned
+/// shared disk usage so a deleted launch CWD cannot ENOENT the spawn.
 pub(crate) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {
     let mut cmd = Command::new(exe);
     cmd.current_dir(&runtime.shared_root)
@@ -224,6 +225,40 @@ pub(crate) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Com
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     cmd
+}
+
+fn detached_rimz_helper_command<I, S>(runtime: &RuntimePaths, args: I) -> Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut cmd = detached_rimz_command(crate::proc::rimz_exe(), runtime);
+    cmd.args(args);
+    cmd
+}
+
+/// Spawn one detached RimZ helper. Unit tests compile the exact command but
+/// suppress the subprocess centrally so policy tests cannot leak helpers.
+pub(crate) fn spawn_detached_rimz<I, S>(
+    runtime: &RuntimePaths,
+    args: I,
+    label: &'static str,
+) -> io::Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let cmd = detached_rimz_helper_command(runtime, args);
+    #[cfg(not(test))]
+    {
+        let mut cmd = cmd;
+        spawn_detached_reaped(&mut cmd, label).map(drop)
+    }
+    #[cfg(test)]
+    {
+        let _ = (cmd, label);
+        Ok(())
+    }
 }
 
 /// Spawn `cmd` detached and hand its `Child` to the global reaper thread so the
@@ -378,9 +413,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-        let cmd = detached_rimz_command(std::path::PathBuf::from("/nonexistent/rimz"), &runtime);
+        let cmd = detached_rimz_helper_command(&runtime, ["agents", "auto-continue"]);
 
+        assert_eq!(cmd.get_program(), crate::proc::rimz_exe());
         assert_eq!(cmd.get_current_dir(), Some(runtime.shared_root.as_path()));
+        assert_eq!(
+            cmd.get_args().collect::<Vec<_>>(),
+            [OsStr::new("agents"), OsStr::new("auto-continue")]
+        );
+    }
+
+    #[test]
+    fn detached_rimz_helper_does_not_spawn_in_unit_tests() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
+        let mut runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.shared_root = dir.path().join("missing");
+
+        spawn_detached_rimz(&runtime, ["agents", "auto-continue"], "test-helper")
+            .expect("unit-test spawn suppression");
     }
 
     #[test]

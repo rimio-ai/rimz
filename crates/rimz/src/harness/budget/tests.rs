@@ -35,10 +35,22 @@ fn budget_spec_accepts_canonical_forms_and_rejects_bad_values() {
 }
 
 #[test]
-fn agent_digest_preserves_existing_ledger_names() {
+fn budget_cache_path_preserves_existing_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .expect("runtime");
     assert_eq!(
-        agent_digest(&AgentKind::new_unchecked("claude"), &"sess".into()),
-        "4a8d94f232e55a6a0879ba0858b59241"
+        budget_ledger_path(
+            &runtime,
+            &AgentKind::new_unchecked("claude"),
+            &"sess".into()
+        )
+        .file_name()
+        .and_then(|name| name.to_str()),
+        Some("budget.4a8d94f232e55a6a0879ba0858b59241.json")
     );
 }
 

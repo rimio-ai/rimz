@@ -26,6 +26,7 @@
 //! arm decision is the pure, unit-tested [`resume_park`].
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -38,13 +39,13 @@ use crate::agents::{
     AgentCardRef, AgentState, ProviderCapacity, TurnErrorClass, display_turn_error,
     effective_turn_error_class,
 };
-#[cfg(not(test))]
-use crate::child_process::detached_rimz_command;
 use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
 use crate::store::atomic::write_temp_then_rename_cache;
-use crate::store::snapshot::{PaneAgent, ResumeOutcome};
+#[cfg(test)]
+use crate::store::snapshot::PaneAgent;
+use crate::store::snapshot::ResumeOutcome;
 
 /// Minimum gap between auto-continue nudges to one rate-limit-parked agent. One
 /// nudge resumes the turn within a frame, so this mostly bounds the brief window
@@ -380,7 +381,7 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
     ) {
         return;
     }
-    let Some(pane_id) = live_pane(&ctx.snapshot.agent_panes, &agent.kind, &agent.agent_id) else {
+    let Some(pane_id) = ctx.snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
         return;
     };
     let peers = crate::harness::target::addressable_agents(ctx.snapshot);
@@ -563,16 +564,6 @@ fn latest_resume_message<'a>(
         })
 }
 
-/// The live pane bound to one agent this frame, from the producer's pane fold. An
-/// agent with no bound live pane (absent from `agent_panes`) has nothing to type
-/// into.
-fn live_pane(panes: &[PaneAgent], kind: &AgentKind, agent_id: &AgentSessionId) -> Option<PaneId> {
-    panes
-        .iter()
-        .find(|pane| &pane.kind == kind && pane.agent_id.as_ref() == Some(agent_id))
-        .map(|pane| pane.pane_id.clone())
-}
-
 fn read_park(path: &Path) -> Option<ParkRecord> {
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
@@ -599,7 +590,7 @@ fn park_record_path(
 ) -> PathBuf {
     runtime.root.join(format!(
         "auto-continue.{}.json",
-        crate::harness::budget::agent_digest(kind, agent_id)
+        crate::store::sidecar::digest(kind.as_str(), agent_id.as_str())
     ))
 }
 
@@ -638,7 +629,6 @@ pub(crate) fn budget_park_armed(
 /// resume-gated message. Best-effort: a spawn failure is logged without
 /// consuming an attempt; a spawned helper that dies before queueing is still
 /// paced by the durable nudge stamp.
-#[cfg(not(test))]
 fn spawn_auto_continue(
     runtime: &RuntimePaths,
     kind: &AgentKind,
@@ -648,31 +638,29 @@ fn spawn_auto_continue(
     text: &str,
     facts: AutoContinueFacts<'_>,
 ) -> bool {
-    let exe = crate::proc::rimz_exe();
-    let mut cmd = detached_rimz_command(exe, runtime);
-    cmd.args([
-        "agents",
-        "auto-continue",
-        "--workspace-id",
-        runtime.workspace_id.as_str(),
-        "--kind",
-        kind.as_str(),
-        "--agent-id",
-        agent_id.as_str(),
-        "--pane",
-        &pane_id.to_string(),
-        "--text",
-        text,
-        "--reason",
-        facts.reason,
-        "--parked-since",
-        &facts.parked_since.to_string(),
-    ]);
+    let mut args: Vec<OsString> = vec![
+        "agents".into(),
+        "auto-continue".into(),
+        "--workspace-id".into(),
+        runtime.workspace_id.as_str().into(),
+        "--kind".into(),
+        kind.as_str().into(),
+        "--agent-id".into(),
+        agent_id.as_str().into(),
+        "--pane".into(),
+        pane_id.to_string().into(),
+        "--text".into(),
+        text.into(),
+        "--reason".into(),
+        facts.reason.into(),
+        "--parked-since".into(),
+        facts.parked_since.to_string().into(),
+    ];
     if let Some(message_id) = message_id {
-        cmd.args(["--message-id", message_id.as_str()]);
+        args.extend([OsString::from("--message-id"), message_id.as_str().into()]);
     }
     if let Some(label) = facts.label {
-        cmd.args(["--label", label]);
+        args.extend([OsString::from("--label"), label.into()]);
     }
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
@@ -681,7 +669,9 @@ fn spawn_auto_continue(
         reason = facts.reason,
         "sidebar: auto-continuing parked agent",
     );
-    if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "agent-auto-continue") {
+    if let Err(err) =
+        crate::child_process::spawn_detached_rimz(runtime, args, "agent-auto-continue")
+    {
         // Best-effort enrichment on a throttled producer path. The CWD anchor
         // clears the gc'd-worktree ENOENT; a bad RIMZ_BIN/PATH is an
         // environment fact, not a RimZ fault. Keep it at debug! so it never
@@ -694,35 +684,6 @@ fn spawn_auto_continue(
         );
         return false;
     }
-    true
-}
-
-#[cfg(test)]
-fn spawn_auto_continue(
-    runtime: &RuntimePaths,
-    kind: &AgentKind,
-    agent_id: &AgentSessionId,
-    pane_id: &PaneId,
-    message_id: Option<&MessageId>,
-    text: &str,
-    facts: AutoContinueFacts<'_>,
-) -> bool {
-    let AutoContinueFacts {
-        reason,
-        parked_since,
-        label,
-    } = facts;
-    let _ = (
-        runtime,
-        kind,
-        agent_id,
-        pane_id,
-        message_id,
-        text,
-        reason,
-        parked_since,
-        label,
-    );
     true
 }
 
