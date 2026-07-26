@@ -93,6 +93,7 @@ impl Drop for RecordLock {
     }
 }
 
+#[cfg(test)]
 fn write_record<R: SidecarRecord>(dir: &Path, record: &R) -> Result<(), atomic::AtomicErr> {
     atomic::write_temp_then_rename_cache(
         &path(dir, R::FILE_PREFIX, record.kind(), record.agent_id()),
