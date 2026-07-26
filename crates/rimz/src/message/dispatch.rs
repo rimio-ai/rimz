@@ -13,7 +13,7 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
-    WhenCondition, message_interval_from_env, queue_head,
+    WhenCondition, command_submit_delay_from_env, message_interval_from_env, queue_head,
 };
 use crate::workspace::ResolvedWorkspace;
 use crate::{PaneAgent, SidebarSnapshot, Store, TargetErr};
@@ -781,6 +781,7 @@ fn dispatch_targets(
         force: mode.draft.force,
         steer: mode.steer,
         pacer: send::Pacer::new(message_interval_from_env()),
+        command_submit_delay: command_submit_delay_from_env(),
     };
     let mut preflighted_kinds = BTreeSet::new();
     let mut outcomes = Vec::with_capacity(targets.len());

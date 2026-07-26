@@ -23,6 +23,7 @@ Re-fetch these pages — and, for the app-server, re-run the schema generators �
 | App-server README + schema generation | <https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md> |
 | App-server daemon lifecycle + PID backend | <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/README.md>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/lib.rs>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/backend/pid.rs>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/update_loop.rs> |
 | App-server control socket WebSocket transport | <https://github.com/openai/codex/pull/21843> |
+| TUI paste-burst heuristic | <https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/paste_burst.rs>, <https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/chat_composer.rs> |
 | Rollout/session JSONL + `auth.json` shape | open-source `codex-rs` types — <https://github.com/openai/codex> |
 | OAuth usage endpoint | Codex credential-file traffic; no public schema page |
 
@@ -32,6 +33,10 @@ The app-server protocol has no published version string; the canonical, version-
 codex app-server generate-ts --out DIR           # TypeScript bindings
 codex app-server generate-json-schema --out DIR  # JSON Schema bundle
 ```
+
+## TUI paste-burst handling
+
+Codex treats two or more plain characters arriving less than 8 ms apart as a suspected paste burst (`PASTE_BURST_CHAR_INTERVAL`). A release build flushes the buffered burst after 60 ms of inactivity (`PASTE_BURST_ACTIVE_IDLE_TIMEOUT`), while Enter received during the burst or within the following 120 ms (`PASTE_ENTER_SUPPRESS_WINDOW`) is appended as a literal newline instead of submitting. A bracketed paste clears the burst state through the explicit paste handler. RimZ's raw-typed command path therefore needs a temporal gap before its separate submit keystroke; the bracketed-paste prompt path does not.
 
 ## Session resume and fork
 
