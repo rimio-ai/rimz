@@ -81,9 +81,10 @@ fn collect_show_report(
     } else {
         None
     };
-    let cost = agent
+    let effort = agent
         .as_ref()
-        .and_then(|agent| session_cost(runtime, agent));
+        .map(|agent| slot_lifetime_effort(store, runtime, agent))
+        .transpose()?;
     let messages = match agent.as_ref() {
         Some(agent) => show_messages(store, agent)?,
         None => Vec::new(),
@@ -96,7 +97,6 @@ fn collect_show_report(
     let peers = rimz::harness::target::addressable_agents(snapshot);
     let me = SelfIdentity::from_env().resolve(snapshot);
     let report_agent = agent.as_ref().map(|agent| {
-        let session_cost = cost.as_ref().and_then(|cost| cost.total_cost_usd);
         build_entry(
             agent,
             row_for_agent(snapshot, agent),
@@ -106,7 +106,8 @@ fn collect_show_report(
             jiff::Timestamp::now(),
             ReportOverrides {
                 runtime: Some(runtime),
-                cost_usd: session_cost,
+                effort: effort.map(|(effort, _)| effort),
+                active_secs: effort.and_then(|(_, active_secs)| active_secs),
             },
         )
     });
@@ -600,14 +601,47 @@ fn preview(text: &str) -> String {
     }
 }
 
-fn session_cost(
+fn slot_lifetime_effort(
+    store: &rimz::Store,
     runtime: &rimz::RuntimePaths,
     agent: &AgentState,
-) -> Option<rimz::agents::AgentCost> {
-    let adapter = rimz::agents::find_definition(agent.kind.as_str())?;
-    let transcript = Path::new(agent.transcript_path.as_deref()?);
+) -> Result<(rimz::agents::spending::SlotEffort, Option<u64>)> {
+    let audit = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .context("reading audit agent rollup")?;
+    let refs = audit.agents.iter().collect::<Vec<_>>();
+    let records = rimz::agents::attribution::slot_groups(&refs)
+        .into_iter()
+        .find(|records| {
+            records
+                .iter()
+                .any(|record| record.agent_id == agent.agent_id)
+        })
+        .unwrap_or_else(|| vec![agent]);
     let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
-    rimz::agents::spending::session_cost_usd(adapter, agent.agent_id.as_str(), transcript, &prices)
+    let effort = rimz::agents::spending::slot_effort(
+        &records
+            .iter()
+            .map(|record| rimz::agents::spending::EffortSessionRef::from_state(record))
+            .collect::<Vec<_>>(),
+        &prices,
+    );
+    let now = jiff::Timestamp::now();
+    let active_grace_secs = crate::cli::machine_config()
+        .agents
+        .attention
+        .active_grace_secs
+        .get();
+    let active_secs = rimz::store::active_time::read_for_keys(
+        runtime,
+        records
+            .iter()
+            .map(|record| (record.kind.as_str(), record.agent_id.as_str())),
+    )
+    .into_iter()
+    .map(|record| record.display_secs(now, active_grace_secs))
+    .reduce(u64::saturating_add);
+    Ok((effort, active_secs))
 }
 
 fn show_messages(store: &rimz::Store, agent: &AgentState) -> Result<Vec<ShowMessage>> {
@@ -751,7 +785,10 @@ mod tests {
                 None,
                 jiff::Timestamp::UNIX_EPOCH,
                 ReportOverrides {
-                    cost_usd: Some(0.42),
+                    effort: Some(rimz::agents::spending::SlotEffort {
+                        cost_usd: Some(0.42),
+                        ..rimz::agents::spending::SlotEffort::default()
+                    }),
                     ..ReportOverrides::default()
                 },
             )),
