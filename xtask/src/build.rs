@@ -442,6 +442,7 @@ pub(crate) fn install(root: &Path) -> Result<()> {
 /// by resolving a DSN at runtime. See
 /// [off-box error reporting](../../docs/internals/diagnostics.md#off-box-error-reporting).
 pub(crate) fn install_dev(root: &Path) -> Result<()> {
+    run(root, "sh", ["scripts/install-dev-tools.sh"])?;
     let stage = stage_dev_install(root)?;
     install_from_stage(&stage)?;
     upload_debug_files(&stage.join("rimz"))

@@ -45,6 +45,7 @@ INSTALL_DEV_PATHS = (
     "Cargo.toml",
     "crates",
     "rust-toolchain.toml",
+    "scripts/install-dev-tools.sh",
     "xtask",
 )
 

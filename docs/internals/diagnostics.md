@@ -262,7 +262,7 @@ Without the feature, [`observability`](../../crates/rimz/src/observability.rs) i
 
 ### Opting in
 
-`cargo xtask install-dev` is the contributor shortcut: it installs the optimized `profiling` host profile with the feature on and, when `sentry-cli` is installed and authenticated, best-effort uploads that binary's debug files.
+`cargo xtask install-dev` is the contributor shortcut: it installs the Cargo tools listed in [`scripts/install-dev-tools.sh`](../../scripts/install-dev-tools.sh), including `cargo-insta` for reviewing and accepting snapshot changes, then installs the optimized `profiling` host profile with the feature on and, when `sentry-cli` is installed and authenticated, best-effort uploads that binary's debug files.
 
 Reporting turns on when a DSN resolves from `RIMZ_SENTRY_DSN` or the per-machine `[sentry]` config, with the env value winning and an empty value counting as unset. The DSN lives per-machine, never in the committed `.rimz/config.toml`, so a clone or pull cannot redirect a contributor's telemetry, and the DSN stays off the [project trust surface](./harness/trust.md).
 
