@@ -399,7 +399,15 @@ static CACHED_BOOK_MEMO: LazyLock<Mutex<CachedBookMemo>> = LazyLock::new(|| Mute
 /// persistent shared cache, without refreshing or writing. Spending fallbacks,
 /// agent-card costs, and hook reconciliation share this path.
 pub fn cached_book(cache_path: &Path) -> Arc<PriceBook> {
+    cached_book_with_fingerprint(cache_path).0
+}
+
+/// Load the memoized price book with the `(mtime, length)` fingerprint used to
+/// validate it. Consumers that persist derived pricing can use the fingerprint
+/// to retry only after the underlying cache changes.
+pub fn cached_book_with_fingerprint(cache_path: &Path) -> (Arc<PriceBook>, Option<String>) {
     let stamp = cache_stamp(cache_path);
+    let fingerprint = stamp.map(|(mtime_secs, len)| format!("{mtime_secs}:{len}"));
     let mut memo = CACHED_BOOK_MEMO
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -407,12 +415,12 @@ pub fn cached_book(cache_path: &Path) -> Arc<PriceBook> {
         && memo_path == cache_path
         && *memo_stamp == stamp
     {
-        return Arc::clone(book);
+        return (Arc::clone(book), fingerprint);
     }
 
     let book = Arc::new(PriceBook::assembled(&read_cache(cache_path)));
     *memo = Some((cache_path.to_owned(), stamp, Arc::clone(&book)));
-    book
+    (book, fingerprint)
 }
 
 fn cache_stamp(path: &Path) -> Option<(u64, u64)> {
@@ -1035,7 +1043,7 @@ mod tests {
         };
         write_cache(&path, &cache);
 
-        let first = cached_book(&path);
+        let (first, first_fingerprint) = cached_book_with_fingerprint(&path);
         assert!((first.price(model).unwrap().input - 3e-6).abs() < f64::EPSILON);
 
         cache.models.get_mut(model).unwrap().input = 30e-6;
@@ -1049,8 +1057,9 @@ mod tests {
         );
         write_cache(&path, &cache);
 
-        let second = cached_book(&path);
+        let (second, second_fingerprint) = cached_book_with_fingerprint(&path);
         assert!((second.price(model).unwrap().input - 30e-6).abs() < f64::EPSILON);
+        assert_ne!(first_fingerprint, second_fingerprint);
     }
 
     #[test]

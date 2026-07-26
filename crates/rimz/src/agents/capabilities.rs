@@ -461,6 +461,7 @@ pub trait ContextCapability: CoreCapability {
     /// Incrementally price one child's dedicated transcript from provider-native
     /// statusline context. The cursor is display-only enrichment: callers may
     /// persist and resume it, but it never feeds lifecycle or routing decisions.
+    /// The price-book fingerprint gates a poisoned cursor's full replay.
     /// `None` means the adapter has no exact per-child source, or that source
     /// could not be read on this tick.
     fn subagent_cost_cursor(
@@ -469,6 +470,7 @@ pub trait ContextCapability: CoreCapability {
         _child_id: &str,
         _prior: Option<&SubagentUsageCursor>,
         _prices: &PriceBook,
+        _book_fingerprint: Option<&str>,
     ) -> Option<SubagentUsageCursor> {
         None
     }
