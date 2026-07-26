@@ -1,6 +1,6 @@
 //! Lifetime effort folded for one logical agent slot.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -67,6 +67,7 @@ impl<'a> EffortSessionRef<'a> {
 #[derive(Debug, Default)]
 pub struct EffortParseMemo {
     files: HashMap<PathBuf, MemoEntry>,
+    touched: HashSet<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -105,6 +106,8 @@ pub fn slot_effort_with_memo(
         })
         .collect::<Vec<_>>();
 
+    memo.touched
+        .extend(resolved.iter().map(|(_, _, path)| path.clone()));
     for (_, adapter, path) in &resolved {
         let stat = TranscriptStat::from_path(path);
         let unchanged = memo.files.get(path).is_some_and(|entry| entry.stat == stat);
@@ -126,6 +129,13 @@ pub fn slot_effort_with_memo(
             .into_iter()
             .flat_map(|parsed| session_entries(&parsed.entries, session_id))
     }))
+}
+
+impl EffortParseMemo {
+    pub(crate) fn retain_touched(&mut self) {
+        let touched = std::mem::take(&mut self.touched);
+        self.files.retain(|path, _| touched.contains(path));
+    }
 }
 
 fn fold_entries<'a>(entries: impl IntoIterator<Item = &'a CachedEntry>) -> SlotEffort {
@@ -278,5 +288,32 @@ mod tests {
         });
 
         assert_eq!(tokens.display_total(), 110);
+    }
+
+    #[test]
+    fn parse_memo_drops_files_outside_the_current_pass() {
+        let mut memo = EffortParseMemo::default();
+        let keep = PathBuf::from("keep");
+        let drop = PathBuf::from("drop");
+        memo.files.insert(
+            keep.clone(),
+            MemoEntry {
+                stat: None,
+                entries: Vec::new(),
+            },
+        );
+        memo.files.insert(
+            drop,
+            MemoEntry {
+                stat: None,
+                entries: Vec::new(),
+            },
+        );
+        memo.touched.insert(keep.clone());
+
+        memo.retain_touched();
+
+        assert_eq!(memo.files.keys().collect::<Vec<_>>(), [&keep]);
+        assert!(memo.touched.is_empty());
     }
 }
