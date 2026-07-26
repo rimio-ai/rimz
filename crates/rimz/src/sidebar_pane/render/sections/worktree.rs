@@ -16,7 +16,7 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
-use crate::sidebar_pane::render::fmt::{activity_short, age_secs, dollars2, tokens_int};
+use crate::sidebar_pane::render::fmt::{activity_short, age_label, age_secs, dollars2, tokens_int};
 use crate::sidebar_pane::render::labels::{
     TokenColumns, TokenDetail, branch_delta_spans, diff_spans, elapsed_glyph, status_glyph,
     status_rest_style, token_breakdown_spans, token_total_glyph, trunk_glyph_spans,
@@ -26,7 +26,7 @@ use crate::sidebar_pane::render::theme::{Component, Theme};
 use crate::sidebar_pane::render::{HitTarget, RenderedBlock};
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 
-use super::agent_card::{row_lines, session_cost_usd};
+use super::agent_card::row_lines;
 use super::{Gutter, RowCtx, content_width, pin_right, with_gutter};
 
 /// Inputs needed to render one projected worktree group.
@@ -181,8 +181,11 @@ fn finished_roster_line(
     let process_count = hidden_rows.len().saturating_sub(members.len());
 
     let team = group.team.as_deref();
-    let cost = group.rows.iter().filter_map(session_cost_usd).sum::<f64>();
-    let cost_spans = if cost >= 0.005 {
+    let cost_spans = if let Some(cost) = group
+        .cohort_effort
+        .and_then(|effort| effort.cost_usd)
+        .filter(|cost| *cost >= 0.005)
+    {
         vec![Span::styled(
             dollars2(cost),
             ctx.theme.money_style(Modifier::empty()),
@@ -251,49 +254,48 @@ fn finished_roster_line(
 }
 
 fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Option<Line<'static>> {
-    let agents = group
+    let max_last_activity = group
         .rows
         .iter()
-        .filter_map(|row| row.as_agent().map(|agent| (row, agent)))
-        .collect::<Vec<_>>();
-    let max_last_activity = agents.iter().map(|(row, _)| row.last_activity).max()?;
-    let (total, input, output, cache_read, session_cache_read, session_input) = agents.iter().fold(
-        (0_u64, 0_u64, 0_u64, 0_u64, 0_u64, 0_u64),
-        |(total, input, output, cache_read, session_cache_read, session_input), (_, agent)| {
-            let session_usage = agent
-                .context
-                .as_ref()
-                .and_then(|context| context.tokens.as_ref())
-                .and_then(|tokens| tokens.session_usage.as_ref());
-            (
-                total.saturating_add(agent.usage.total_tokens.unwrap_or(0)),
-                input.saturating_add(agent.usage.fresh_input_tokens.unwrap_or(0)),
-                output.saturating_add(agent.usage.output_tokens.unwrap_or(0)),
-                cache_read.saturating_add(agent.usage.cache_read_input_tokens.unwrap_or(0)),
-                session_cache_read.saturating_add(
-                    session_usage.map_or(0, crate::agents::AgentSessionUsage::cache_read_tokens),
+        .filter(|row| row.is_agent())
+        .map(|row| row.last_activity)
+        .max()?;
+    let effort = group.cohort_effort.unwrap_or_default();
+    let total = effort.tokens.display_total();
+    let input = effort
+        .tokens
+        .input
+        .saturating_add(effort.tokens.cache_write);
+    let output = effort.tokens.output;
+    let cache_read = effort.tokens.cache_read;
+    let right = effort.active_secs.map_or_else(
+        || {
+            activity_short(max_last_activity, ctx.now).map_or_else(Vec::new, |label| {
+                let seconds = age_secs(max_last_activity, ctx.now);
+                vec![Span::styled(
+                    format!("{} {label}", elapsed_glyph(ctx.theme, seconds)),
+                    ctx.theme.muted(),
+                )]
+            })
+        },
+        |active_secs| {
+            let seconds = i64::try_from(active_secs).unwrap_or(i64::MAX);
+            vec![Span::styled(
+                format!(
+                    "{} {}",
+                    elapsed_glyph(ctx.theme, seconds),
+                    age_label(seconds)
                 ),
-                session_input.saturating_add(
-                    session_usage
-                        .map_or(0, crate::agents::AgentSessionUsage::displayed_input_tokens),
-                ),
-            )
+                ctx.theme.muted(),
+            )]
         },
     );
-
-    let right = activity_short(max_last_activity, ctx.now).map_or_else(Vec::new, |label| {
-        let seconds = age_secs(max_last_activity, ctx.now);
-        vec![Span::styled(
-            format!("{} {label}", elapsed_glyph(ctx.theme, seconds)),
-            ctx.theme.muted(),
-        )]
-    });
     if total == 0 && right.is_empty() {
         return None;
     }
 
     let cache_hit = (total > 0)
-        .then(|| crate::agents::context::cache_hit_percent(session_cache_read, session_input))
+        .then(|| crate::agents::context::cache_hit_percent(cache_read, input))
         .flatten()
         .map_or_else(Vec::new, |percent| {
             let style = match crate::agents::CacheHealth::classify(percent) {

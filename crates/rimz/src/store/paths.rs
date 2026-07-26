@@ -377,6 +377,10 @@ impl RuntimePaths {
         self.root.join("diff-stats.json")
     }
 
+    pub fn cohort_spend_path(&self) -> PathBuf {
+        self.root.join("cohort-spend.json")
+    }
+
     pub fn pr_state_path(&self) -> PathBuf {
         self.root.join("pr-state.json")
     }

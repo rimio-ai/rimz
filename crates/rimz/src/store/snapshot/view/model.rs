@@ -133,6 +133,13 @@ pub enum WorktreePrCi {
     Failing,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SidebarCohortEffort {
+    pub cost_usd: Option<f64>,
+    pub tokens: crate::agents::spending::EffortTokens,
+    pub active_secs: Option<u64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarWorktreeGroup {
     pub key: String,
@@ -143,6 +150,8 @@ pub struct SidebarWorktreeGroup {
     /// distinct teams make the group ambiguous.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cohort_effort: Option<SidebarCohortEffort>,
     pub status_counts: Vec<SidebarStatusCount>,
     pub rows: Vec<SidebarRow>,
     /// Total insertions and deletions relative to trunk.
@@ -355,6 +364,7 @@ mod tests {
             label: "group".to_owned(),
             kind: SidebarWorktreeKind::Worktree,
             team: None,
+            cohort_effort: None,
             status_counts: Vec::new(),
             rows,
             diff_added: None,
@@ -399,6 +409,20 @@ mod tests {
             ])
             .collapses()
         );
+    }
+
+    #[test]
+    fn worktree_group_without_cohort_effort_stays_serde_compatible() {
+        let group = collapse_test_group(vec![
+            collapse_test_row("agent-one", true),
+            collapse_test_row("agent-two", true),
+        ]);
+        let mut value = serde_json::to_value(&group).unwrap();
+        value.as_object_mut().unwrap().remove("cohort_effort");
+
+        let decoded: SidebarWorktreeGroup = serde_json::from_value(value).unwrap();
+
+        assert_eq!(decoded.cohort_effort, None);
     }
 
     #[test]

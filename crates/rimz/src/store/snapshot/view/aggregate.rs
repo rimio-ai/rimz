@@ -174,6 +174,7 @@ pub(super) fn build_worktree_groups_from_rows(
                 label,
                 kind,
                 team,
+                cohort_effort: None,
                 status_counts,
                 rows,
                 diff_added: None,

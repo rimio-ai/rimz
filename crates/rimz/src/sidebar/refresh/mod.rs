@@ -6,7 +6,7 @@
 //! freshest view in the same process.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::agents::AgentAccount;
 use crate::agents::AgentState;
@@ -18,6 +18,7 @@ use crate::config::MachineConfig;
 use crate::{RuntimePaths, SidebarSnapshot};
 
 pub mod accounts;
+pub mod cohort_spend;
 pub mod credits;
 pub mod daemon_reap;
 mod git_refs;
@@ -48,6 +49,7 @@ pub use usage::{
 };
 
 use self::accounts::produce_accounts;
+use self::cohort_spend::refresh_cohort_spend_for;
 use self::daemon_reap::refresh_codex_daemon_reap_cache;
 use self::git_stats::refresh_diff_stats_for;
 use self::pr::produce_pr_states;
@@ -71,6 +73,8 @@ pub struct RefreshedLanes {
 #[derive(Debug, Default)]
 pub struct ProducerRefreshState {
     git: git_stats::GitRefreshState,
+    cohort_rollup: crate::store::snapshot::RollupCursor,
+    cohort_effort: crate::agents::spending::EffortParseMemo,
 }
 
 /// Supply sidebar workspace scope to the account-global spending service. A
@@ -202,12 +206,13 @@ fn codex_origin_overrides(snapshot: &SidebarSnapshot) -> HashMap<PathBuf, PathBu
 pub fn refresh_heavy_lanes(
     base: &SidebarSnapshot,
     daemon_probe_agents: &[AgentState],
-    state_messages_dir: &Path,
+    state_paths: &crate::StatePaths,
     runtime: &RuntimePaths,
     config: &MachineConfig,
     spending_startup: crate::agents::spending::service::SpendingServiceStartup,
     state: &mut ProducerRefreshState,
 ) -> RefreshedLanes {
+    let state_messages_dir = &state_paths.messages_dir;
     refresh_codex_daemon_reap_cache(
         daemon_probe_agents,
         runtime,
@@ -262,6 +267,15 @@ pub fn refresh_heavy_lanes(
         runtime,
         config.sidebar.trunk.as_deref(),
         &mut state.git,
+    );
+    refresh_cohort_spend_for(
+        base,
+        state_paths,
+        runtime,
+        config.agents.attention.active_grace_secs.get(),
+        unix_now_ms(),
+        &mut state.cohort_rollup,
+        &mut state.cohort_effort,
     );
     let pr_cache = produce_pr_states(base, runtime);
 

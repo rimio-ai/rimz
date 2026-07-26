@@ -215,6 +215,13 @@ fn finished_group_collapses_unread_success_until_revealed() {
         .expect("agent row")
         .usage
         .total_tokens = Some(1_000);
+    group.cohort_effort = Some(crate::SidebarCohortEffort {
+        tokens: crate::agents::spending::EffortTokens {
+            input: 1_000,
+            ..crate::agents::spending::EffortTokens::default()
+        },
+        ..crate::SidebarCohortEffort::default()
+    });
 
     let snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(true);
@@ -421,6 +428,10 @@ fn finished_roster_pins_the_member_cost() {
         agent_row_with_cost("second", 0.58),
     ]);
     finished.finished = true;
+    finished.cohort_effort = Some(crate::SidebarCohortEffort {
+        cost_usd: Some(total),
+        ..crate::SidebarCohortEffort::default()
+    });
     for row in &mut finished.rows {
         row.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);
     }
@@ -446,15 +457,19 @@ fn finished_roster_pins_the_member_cost() {
     );
 
     let mut no_cost = group(vec![
-        agent_row_with_cost("zero", 0.0),
+        agent_row_with_cost("sidecar-only", 2.0),
         agent_row("absent", AgentStatus::Success),
     ]);
     no_cost.finished = true;
     let (texts, _, _) = render_group(&no_cost, false);
-    assert!(texts.iter().any(|line| line.contains("✓ zero  ✓ absent")));
+    assert!(
+        texts
+            .iter()
+            .any(|line| line.contains("✓ sidecar-only  ✓ absent"))
+    );
     assert!(
         texts.iter().all(|line| !line.contains('$')),
-        "zero and absent costs keep the terminal toggle bare: {texts:?}"
+        "missing cohort cost never falls back to live sidecars: {texts:?}"
     );
 }
 
@@ -642,6 +657,16 @@ fn finished_receipt_pins_cost_then_tokens_and_muted_age() {
 
     let mut finished = group(vec![first, second]);
     finished.finished = true;
+    finished.cohort_effort = Some(crate::SidebarCohortEffort {
+        cost_usd: Some(1.0),
+        tokens: crate::agents::spending::EffortTokens {
+            input: 300_000,
+            output: 180_000,
+            cache_write: 0,
+            cache_read: 700_000,
+        },
+        active_secs: Some(2 * 60 * 60),
+    });
     let mut snapshot = snapshot_with(Vec::new());
     snapshot.worktree_groups = vec![finished];
     let theme = Theme::fixed(true);
@@ -684,36 +709,19 @@ fn finished_receipt_pins_cost_then_tokens_and_muted_age() {
 
 #[test]
 fn finished_receipt_aggregates_session_cache_hit_percent() {
-    let mut first = agent_row("planner", AgentStatus::Success);
-    let first_agent = first.as_agent_mut().expect("agent row");
-    first_agent.usage.total_tokens = Some(100);
-    let mut first_context = claude_context(fixed_now());
-    first_context.tokens = Some(AgentTokenUsage {
-        session_usage: Some(AgentSessionUsage {
-            input_tokens: Some(10),
-            cache_read_input_tokens: Some(90),
-            ..AgentSessionUsage::default()
-        }),
-        ..AgentTokenUsage::default()
-    });
-    first_agent.context = Some(first_context);
-
-    let mut second = agent_row("coder", AgentStatus::Success);
-    let second_agent = second.as_agent_mut().expect("agent row");
-    second_agent.usage.total_tokens = Some(100);
-    let mut second_context = claude_context(fixed_now());
-    second_context.tokens = Some(AgentTokenUsage {
-        session_usage: Some(AgentSessionUsage {
-            input_tokens: Some(90),
-            cache_read_input_tokens: Some(10),
-            ..AgentSessionUsage::default()
-        }),
-        ..AgentTokenUsage::default()
-    });
-    second_agent.context = Some(second_context);
-
-    let mut finished = group(vec![first, second]);
+    let mut finished = group(vec![
+        agent_row("planner", AgentStatus::Success),
+        agent_row("coder", AgentStatus::Success),
+    ]);
     finished.finished = true;
+    finished.cohort_effort = Some(crate::SidebarCohortEffort {
+        tokens: crate::agents::spending::EffortTokens {
+            input: 100,
+            cache_read: 100,
+            ..crate::agents::spending::EffortTokens::default()
+        },
+        ..crate::SidebarCohortEffort::default()
+    });
     let (texts, _, _) = render_group(&finished, false);
     let totals = texts.last().expect("finished totals receipt");
     assert!(
@@ -730,9 +738,13 @@ fn finished_receipt_aggregates_session_cache_hit_percent() {
         agent_row("coder", AgentStatus::Success),
     ]);
     no_counters.finished = true;
-    for row in &mut no_counters.rows {
-        row.as_agent_mut().expect("agent row").usage.total_tokens = Some(100);
-    }
+    no_counters.cohort_effort = Some(crate::SidebarCohortEffort {
+        tokens: crate::agents::spending::EffortTokens {
+            output: 200,
+            ..crate::agents::spending::EffortTokens::default()
+        },
+        ..crate::SidebarCohortEffort::default()
+    });
     let (texts, _, _) = render_group(&no_counters, false);
     let totals = texts.last().expect("finished totals receipt");
     assert!(
@@ -755,6 +767,16 @@ fn finished_totals_degrade_tokens_before_the_right_pin() {
     witness.last_activity = row.last_activity;
     let mut finished = group(vec![row, witness]);
     finished.finished = true;
+    finished.cohort_effort = Some(crate::SidebarCohortEffort {
+        cost_usd: Some(1.0),
+        tokens: crate::agents::spending::EffortTokens {
+            input: 300_000,
+            output: 180_000,
+            cache_write: 0,
+            cache_read: 700_000,
+        },
+        active_secs: Some(2 * 60 * 60),
+    });
 
     let (texts, _, _) = render_group_at_width(&finished, false, 30);
     let summary = texts.last().expect("summary totals receipt");
@@ -912,6 +934,7 @@ fn group(rows: Vec<crate::SidebarRow>) -> crate::SidebarWorktreeGroup {
         label: "main".to_owned(),
         kind: crate::SidebarWorktreeKind::Worktree,
         team: None,
+        cohort_effort: None,
         status_counts: Vec::new(),
         rows,
         diff_added: None,

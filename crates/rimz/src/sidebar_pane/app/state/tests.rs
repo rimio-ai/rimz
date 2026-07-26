@@ -84,6 +84,7 @@ fn row_snapshot_at(
         label: "main".to_owned(),
         kind: crate::SidebarWorktreeKind::Worktree,
         team: None,
+        cohort_effort: None,
         status_counts: vec![SidebarStatusCount { status, count: 1 }],
         rows: vec![crate::SidebarRow {
             id: "sess-1".to_owned(),
@@ -158,6 +159,7 @@ fn snapshot_in_group(
         label: key.to_owned(),
         kind,
         team: None,
+        cohort_effort: None,
         status_counts: Vec::new(),
         rows: vec![row],
         diff_added: None,

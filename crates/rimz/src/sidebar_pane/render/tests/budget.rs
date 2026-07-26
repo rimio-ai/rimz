@@ -176,6 +176,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 label: format!("feature-{group}"),
                 kind: SidebarWorktreeKind::Worktree,
                 team: None,
+                cohort_effort: None,
                 status_counts: vec![SidebarStatusCount {
                     status: crate::agents::AgentStatus::Running,
                     count: per_group,

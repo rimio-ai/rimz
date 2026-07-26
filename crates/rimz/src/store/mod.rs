@@ -69,11 +69,11 @@ pub use crate::store::paths::{RuntimePaths, StatePaths};
 pub use crate::store::runtime::{RuntimeProjection, RuntimeScope};
 pub use crate::store::snapshot::{
     AgentCard, DailyBudgetView, PaneAgent, PresenceSample, ProcessCard, ProcessState,
-    RemoteControlBadge, RowCallSplit, RowCard, SidebarLinkFreshness, SidebarLinkHealth,
-    SidebarOwnView, SidebarPresence, SidebarProviderPanel, SidebarRow, SidebarSnapshot,
-    SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice,
-    WorktreePrCi, WorktreePrState, WorktreeTrunkSync, actionable_unread_count, lead_unread_row,
-    triage_key,
+    RemoteControlBadge, RowCallSplit, RowCard, SidebarCohortEffort, SidebarLinkFreshness,
+    SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel, SidebarRow,
+    SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
+    SidebarWorktreeKind, TruthNotice, WorktreePrCi, WorktreePrState, WorktreeTrunkSync,
+    actionable_unread_count, lead_unread_row, triage_key,
 };
 pub use crate::store::workspace_record::WorkspaceRecord;
 pub(crate) use crate::store::writer::DeliverySweepUpdate;

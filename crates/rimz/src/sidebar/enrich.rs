@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use super::frame::{PaneFrame, PaneMetrics};
 use super::refresh::accounts::{cached_accounts_for_snapshot, read_accounts_cache};
+use super::refresh::cohort_spend::{CohortSpendCache, read_cohort_spend_cache};
 use super::refresh::credits::apply_credits_cache;
 use super::refresh::daemon_reap::read_codex_daemon_reap;
 use super::refresh::git_stats::{
@@ -166,6 +167,12 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
         group.trunk_sync = display_trunk
             .as_deref()
             .and_then(|trunk| classify_trunk_sync(entry, &branch_label, trunk));
+    }
+}
+
+pub fn project_cohort_effort(snapshot: &mut SidebarSnapshot, cache: &CohortSpendCache) {
+    for group in &mut snapshot.worktree_groups {
+        group.cohort_effort = cache.groups.get(&group.key).copied();
     }
 }
 
@@ -452,6 +459,7 @@ fn enrich_core(
         crate::sidebar::timing::unix_now_ms(),
     );
     let diff_cache = read_diff_stats_cache(&runtime.diff_stats_path());
+    let cohort_spend_cache = read_cohort_spend_cache(&runtime.cohort_spend_path());
 
     // The room's enumerated group roots — a repo room's worktree checkouts, so
     // one parked outside the project root still earns its own pod instead of
@@ -633,6 +641,7 @@ fn enrich_core(
         lanes,
     );
     project_diff_stats(&mut folded, &diff_cache);
+    project_cohort_effort(&mut folded, &cohort_spend_cache);
     if let Some(lanes) = lanes {
         project_pr_state_map(&mut folded, &lanes.pr_states, &lanes.branch_ci, &diff_cache);
     } else {

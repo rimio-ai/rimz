@@ -462,6 +462,7 @@ mod tests {
             label: "main".to_owned(),
             kind: crate::SidebarWorktreeKind::Worktree,
             team: None,
+            cohort_effort: None,
             status_counts,
             rows,
             diff_added: None,

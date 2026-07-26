@@ -297,6 +297,7 @@ pub fn consumer_fold_inputs_stamp(
     let runtime_files = [
         runtime.pane_frame_path(),
         runtime.diff_stats_path(),
+        runtime.cohort_spend_path(),
         runtime.pr_state_path(),
         runtime.unread_path(),
         crate::remote::link::stats_path(runtime),
