@@ -269,15 +269,15 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
         .filter(|row| row.is_agent())
         .map(|row| row.last_activity)
         .max()?;
-    let effort = group.cohort_effort.clone().unwrap_or_default();
-    let total = effort.tokens.display_total();
-    let input = effort
-        .tokens
-        .input
-        .saturating_add(effort.tokens.cache_write);
-    let output = effort.tokens.output;
-    let cache_read = effort.tokens.cache_read;
-    let right = effort.active_secs.map_or_else(
+    let (tokens, active_secs) = group.cohort_effort.as_ref().map_or(
+        (crate::agents::spending::EffortTokens::default(), None),
+        |effort| (effort.tokens, effort.active_secs),
+    );
+    let total = tokens.display_total();
+    let input = tokens.input.saturating_add(tokens.cache_write);
+    let output = tokens.output;
+    let cache_read = tokens.cache_read;
+    let right = active_secs.map_or_else(
         || {
             activity_short(max_last_activity, ctx.now).map_or_else(Vec::new, |label| {
                 let seconds = age_secs(max_last_activity, ctx.now);

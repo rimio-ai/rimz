@@ -48,7 +48,7 @@ fn agent(row: &SidebarRow) -> Option<&AgentCard> {
     row.as_agent()
 }
 
-pub(in crate::sidebar_pane::render::sections) fn session_cost_usd(row: &SidebarRow) -> Option<f64> {
+fn session_cost_usd(row: &SidebarRow) -> Option<f64> {
     ctx(row)
         .and_then(|context| context.cost.as_ref())
         .and_then(|cost| cost.total_cost_usd)
