@@ -270,6 +270,25 @@ pub(crate) fn is_priceable_model_name(model: &str) -> bool {
     !model.is_empty() && !model.starts_with('<')
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum SplitPrice {
+    Priced(f64),
+    Unpriced,
+    NotPriceable,
+}
+
+/// Resolve one model/split pair without imposing a consumer's missing-price
+/// policy. Historical spending keeps unpriced tokens at zero dollars, while
+/// exact display figures hide until the same lookup resolves.
+pub(crate) fn lookup_split_price(prices: &PriceBook, model: &str, split: TokenSplit) -> SplitPrice {
+    if !is_priceable_model_name(model) {
+        return SplitPrice::NotPriceable;
+    }
+    prices.price(model).map_or(SplitPrice::Unpriced, |price| {
+        SplitPrice::Priced(price.cost_of(split))
+    })
+}
+
 /// Record a priceable model lookup miss at `ts_secs`, keeping the youngest
 /// timestamp so the chase stops once every occurrence ages out of the widest
 /// spend window.
@@ -304,14 +323,14 @@ pub(crate) fn price_split(
     ts_secs: u64,
     unknowns: &mut BTreeMap<String, u64>,
 ) -> Option<f64> {
-    if let Some(price) = prices.price(model) {
-        return Some(price.cost_of(split));
+    match lookup_split_price(prices, model, split) {
+        SplitPrice::Priced(cost) => Some(cost),
+        SplitPrice::Unpriced => {
+            record_unknown_model(unknowns, model, ts_secs);
+            Some(0.0)
+        }
+        SplitPrice::NotPriceable => None,
     }
-    if !is_priceable_model_name(model) {
-        return None;
-    }
-    record_unknown_model(unknowns, model, ts_secs);
-    Some(0.0)
 }
 
 /// Unknown models recorded by files still discovered in this spending pass.
@@ -390,6 +409,32 @@ mod tests {
     use super::*;
     use crate::agents::TranscriptCompanionStat;
     use crate::agents::spending::{SKIP_PARSE_MARGIN_SECS, WIDEST_SPEND_WINDOW_SECS};
+
+    #[test]
+    fn split_price_classifies_priced_unknown_and_synthetic_models() {
+        let prices = PriceBook::from_litellm_json(
+            r#"{
+                "known-model": {
+                    "input_cost_per_token": 2.0,
+                    "output_cost_per_token": 1.0
+                }
+            }"#,
+        );
+        let split = TokenSplit::new(3, 0);
+
+        assert_eq!(
+            lookup_split_price(&prices, "known-model", split),
+            SplitPrice::Priced(6.0)
+        );
+        assert_eq!(
+            lookup_split_price(&prices, "future-model", split),
+            SplitPrice::Unpriced
+        );
+        assert_eq!(
+            lookup_split_price(&prices, "<synthetic>", split),
+            SplitPrice::NotPriceable
+        );
+    }
 
     fn stat(mtime_secs: i64, mtime_nanos: u32, len: u64) -> TranscriptStat {
         TranscriptStat {

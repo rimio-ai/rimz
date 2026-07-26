@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::agents::context::{PricedRequest, SubagentUsageCursor};
 use crate::agents::pricing::{PriceBook, TokenSplit};
-use crate::agents::spending::is_priceable_model_name;
+use crate::agents::spending::{SplitPrice, lookup_split_price, should_replace_usage_duplicate};
 use crate::agents::transcript_fs::{bytes_contains, read_transcript_lines};
 
 use super::spend::{ClaudeEntry, ClaudeUsage, has_unsupported_null_field, request_split};
@@ -29,7 +29,9 @@ pub(super) fn advance_cursor(
     let len = std::fs::metadata(&path).ok()?.len();
     let transcript_path = path.to_string_lossy().into_owned();
     let mut cursor = prior
-        .filter(|cursor| cursor.transcript_path == transcript_path && cursor.offset <= len)
+        .filter(|cursor| {
+            cursor.transcript_path == transcript_path && cursor.offset <= len && !cursor.unpriced
+        })
         .cloned()
         .unwrap_or(SubagentUsageCursor {
             transcript_path,
@@ -114,18 +116,24 @@ fn fold_entry(cursor: &mut SubagentUsageCursor, entry: &ClaudeEntry, prices: &Pr
         cursor.last_request = None;
         return;
     };
-    request.key = key;
+    let request = PricedRequest {
+        key,
+        cost_usd: request.cost_usd,
+        token_total: request.token_total,
+        has_speed: request.has_speed,
+    };
 
     if let Some(previous) = cursor
         .last_request
         .as_ref()
         .filter(|previous| previous.key == request.key)
     {
-        let richer = request.token_total > previous.token_total
-            || (request.token_total == previous.token_total
-                && request.has_speed
-                && !previous.has_speed);
-        if richer {
+        if should_replace_usage_duplicate(
+            request.token_total,
+            request.has_speed,
+            previous.token_total,
+            previous.has_speed,
+        ) {
             cursor.cost_usd = cursor.cost_usd - previous.cost_usd + request.cost_usd;
             cursor.last_request = Some(request);
         }
@@ -136,33 +144,35 @@ fn fold_entry(cursor: &mut SubagentUsageCursor, entry: &ClaudeEntry, prices: &Pr
     cursor.last_request = Some(request);
 }
 
+struct PricedUsage {
+    cost_usd: f64,
+    token_total: u64,
+    has_speed: bool,
+}
+
 fn price_usage(
     usage: &ClaudeUsage,
     model: Option<&str>,
     logged_cost: Option<f64>,
     prices: &PriceBook,
     unpriced: &mut bool,
-) -> Option<PricedRequest> {
+) -> Option<PricedUsage> {
     let split = request_split(usage);
     if split.is_empty() {
         return None;
     }
     let cost_usd = match logged_cost {
         Some(cost) if cost > 0.0 => cost,
-        _ => {
-            let model = model.unwrap_or_default().trim();
-            if !is_priceable_model_name(model) {
-                return None;
-            }
-            let Some(price) = prices.price(model) else {
+        _ => match lookup_split_price(prices, model.unwrap_or_default(), split) {
+            SplitPrice::Priced(cost) => cost,
+            SplitPrice::Unpriced => {
                 *unpriced = true;
                 return None;
-            };
-            price.cost_of(split)
-        }
+            }
+            SplitPrice::NotPriceable => return None,
+        },
     };
-    Some(PricedRequest {
-        key: String::new(),
+    Some(PricedUsage {
         cost_usd,
         token_total: token_total(split),
         has_speed: usage.speed.is_some(),
@@ -380,6 +390,34 @@ mod tests {
 
         assert!(cursor.unpriced);
         assert_eq!(cursor.display_cost(), None);
+    }
+
+    #[test]
+    fn refreshed_price_table_heals_an_unpriced_cursor() {
+        let (_dir, parent, child) = session();
+        write_lines(
+            &child,
+            &[line(
+                "msg-1",
+                "req-1",
+                "future-model",
+                json!({"input_tokens": 2}),
+            )],
+        );
+        let cursor = advance(&parent, None);
+        let refreshed = PriceBook::from_litellm_json(
+            r#"{
+                "future-model": {
+                    "input_cost_per_token": 5.0,
+                    "output_cost_per_token": 1.0
+                }
+            }"#,
+        );
+
+        let healed = advance_cursor(&parent, "child-1", Some(&cursor), &refreshed).unwrap();
+
+        assert!(!healed.unpriced);
+        assert_eq!(healed.display_cost(), Some(10.0));
     }
 
     #[test]

@@ -652,13 +652,28 @@ pub(crate) fn should_replace_duplicate(candidate: &CachedEntry, existing: &Cache
         return existing.is_sidechain;
     }
 
-    let candidate_tokens = entry_token_total(candidate);
-    let existing_tokens = entry_token_total(existing);
+    should_replace_usage_duplicate(
+        entry_token_total(candidate),
+        candidate.has_speed,
+        entry_token_total(existing),
+        existing.has_speed,
+    )
+}
+
+/// Prefer the more complete form of one provider request. Kept independent of
+/// [`CachedEntry`] so incremental consumers can apply the same replacement
+/// policy without materializing a historical spending row.
+pub(crate) fn should_replace_usage_duplicate(
+    candidate_tokens: u64,
+    candidate_has_speed: bool,
+    existing_tokens: u64,
+    existing_has_speed: bool,
+) -> bool {
     if candidate_tokens != existing_tokens {
         return candidate_tokens > existing_tokens;
     }
 
-    candidate.has_speed && !existing.has_speed
+    candidate_has_speed && !existing_has_speed
 }
 
 fn entry_token_total(entry: &CachedEntry) -> u64 {
