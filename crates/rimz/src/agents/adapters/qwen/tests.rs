@@ -451,6 +451,7 @@ fn maps_lifecycle_context_background_and_subagents() {
     );
     assert_eq!(child.signal, LifecycleSignal::SubagentStarted);
     assert_eq!(child.task.as_deref(), Some("review"));
+    assert_eq!(child.launch.model, None);
     assert!(child.parent_agent_id.is_some());
     assert_eq!(
         hook_signal(
@@ -557,6 +558,47 @@ fn subagent_stop_reads_model_and_description_from_meta_sidecar() {
             "transcript_path":transcript,
         }),
     );
+    assert_eq!(observation.launch.model.as_deref(), Some("deepseek-v4-pro"));
+    assert_eq!(
+        observation.description.as_deref(),
+        Some("Inspect the lifecycle seam")
+    );
+    assert_eq!(observation.task.as_deref(), Some("general-purpose"));
+}
+
+#[test]
+fn subagent_start_reads_model_and_description_from_meta_sidecar() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("projects/project-a");
+    let transcript = project.join("chats/parent.jsonl");
+    let meta = project.join("subagents/parent/agent-child.meta.json");
+    fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    fs::create_dir_all(meta.parent().unwrap()).unwrap();
+    fs::write(&transcript, "").unwrap();
+    fs::write(
+        &meta,
+        r#"{
+            "agentId":"child",
+            "agentType":"general-purpose",
+            "subagentName":"general-purpose",
+            "description":"Inspect the lifecycle seam",
+            "createdAt":"2026-07-16T12:50:49.268Z",
+            "persistedCliFlags":{"model":"deepseek-v4-pro"}
+        }"#,
+    )
+    .unwrap();
+
+    let observation = hook_lifecycle(
+        &QwenAdapter,
+        "SubagentStart",
+        &json!({
+            "session_id":"parent",
+            "agent_id":"child",
+            "agent_type":"general-purpose",
+            "transcript_path":transcript,
+        }),
+    );
+    assert_eq!(observation.signal, LifecycleSignal::SubagentStarted);
     assert_eq!(observation.launch.model.as_deref(), Some("deepseek-v4-pro"));
     assert_eq!(
         observation.description.as_deref(),
