@@ -453,7 +453,7 @@ impl LiveZellijWebFixture {
     }
 
     pub(super) fn send_line(&self, line: &str) {
-        self.wait_until_attached();
+        self.wait_for_attached_zellij_client();
         let typed = self
             .namespace
             .command()
@@ -482,7 +482,7 @@ impl LiveZellijWebFixture {
         assert_success(&enter, "submit Zellij room input");
     }
 
-    fn wait_until_attached(&self) {
+    fn wait_for_attached_zellij_client(&self) {
         let backend = ZellijBackend::with_runtime_dir(self.namespace.path());
         let deadline = Instant::now() + super::ATTACH_TIMEOUT;
         let mut consecutive_matches = 0;
