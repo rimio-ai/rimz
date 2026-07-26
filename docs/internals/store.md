@@ -215,7 +215,7 @@ The publish gate decides when the writer refreshes those files. A checkpoint is 
 
 The same durable rollup answers two questions, and [`runtime.rs`](../../crates/rimz/src/store/runtime.rs) is the filter between them.
 
-**Runtime** is read-time filtering, and it backs the default views: `rimz sidebar snapshot`, the plain `rimz doctor` agent summary. It hides rows carrying `ended_at` and keeps the agent rollups whose `runtime_owner` is still the live process that wrote them. `runtime_owner` records the owner kind, a stable subject id, the pid, and on Linux the process-start token, so a reused pid does not read as the original owner. Records with no owner at all abstain and stay visible; known-dead owners and process-start mismatches are suppressed while the write path converges them to a real end stamp.
+**Runtime** is read-time filtering, and it backs the default views: `rimz sidebar snapshot`, the plain `rimz doctor` agent summary. It hides rows carrying `ended_at` and keeps the agent rollups whose `runtime_owner` is still the live process that wrote them; the projection's ended set rides the published snapshot as `ended_sessions` to fence provider-local session rebinding. `runtime_owner` records the owner kind, a stable subject id, the pid, and on Linux the process-start token, so a reused pid does not read as the original owner. Records with no owner at all abstain and stay visible; known-dead owners and process-start mismatches are suppressed while the write path converges them to a real end stamp.
 
 **Audit** bypasses the filter and reads durable history as written. `rimz doctor --audit` is the surface, and explicit resume is the reason ended rows are retained at all.
 

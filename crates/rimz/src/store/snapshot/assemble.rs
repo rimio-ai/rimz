@@ -69,9 +69,10 @@ fn assemble_snapshot(
     // Apply the same runtime liveness expel the live read does, so the
     // persisted `latest.json` matches what a reader would have projected —
     // never resurrecting a dead-pid agent.
-    let projection = RuntimeProjection::from_parts(agents, RuntimeScope::Runtime);
-    let mut snapshot =
-        SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), projection.agents, now);
+    let RuntimeProjection { ended, agents } =
+        RuntimeProjection::from_parts(agents, RuntimeScope::Runtime);
+    let mut snapshot = SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), agents, now);
+    snapshot.ended_sessions = ended;
     snapshot.reap_stale_sessions();
     snapshot.display_name = display_name_for(paths);
     let mut snapshot = snapshot
@@ -204,7 +205,7 @@ mod tests {
 
     use crate::agents::lifecycle::LifecycleSignal;
     use crate::agents::{AgentLifecycleObservation, LaunchParams};
-    use crate::ids::{AgentSessionId, WorkspaceId};
+    use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
     use crate::store::event::EventEnvelope;
 
     fn write_workspace_record(paths: &StatePaths, project_root: PathBuf) {
@@ -301,6 +302,47 @@ mod tests {
     }
 
     #[test]
+    fn published_snapshot_carries_ended_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+
+        let live = lifecycle(&workspace, "sess-live", None);
+        let ended_start = lifecycle(&workspace, "sess-ended", None);
+        let ended = EventEnvelope::agent_lifecycle(
+            workspace.clone(),
+            "session",
+            "claude",
+            "SessionEnd",
+            &AgentLifecycleObservation::new(
+                Some(AgentSessionId::from("sess-ended")),
+                LifecycleSignal::Ended,
+            ),
+        );
+        event_log::append(&paths.events_log, &live).unwrap();
+        event_log::append(&paths.events_log, &ended_start).unwrap();
+        event_log::append(&paths.events_log, &ended).unwrap();
+
+        let ended_key = (
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("sess-ended"),
+        );
+        let live_key = (
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("sess-live"),
+        );
+        let snapshot = build_from(&paths).unwrap();
+        assert!(snapshot.ended_sessions.contains(&ended_key));
+        assert!(!snapshot.ended_sessions.contains(&live_key));
+
+        rebuild(&paths).unwrap();
+        let published = read_fresh_latest(&paths).expect("published snapshot is fresh");
+        assert!(published.ended_sessions.contains(&ended_key));
+        assert!(!published.ended_sessions.contains(&live_key));
+    }
+
+    #[test]
     fn read_fresh_latest_serves_only_when_it_reflects_the_log() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
@@ -360,7 +402,7 @@ mod tests {
         atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
 
         // Read on a fresh thread. The parse cache is thread-local and keyed on
-        // `(path, mtime, len)`; rewriting version 5 to 0 keeps the byte length
+        // `(path, mtime, len)`; rewriting the version keeps the byte length
         // identical, so on a coarse-mtime filesystem the republish lands in the
         // same mtime tick and the warm cache would serve the prior (current-
         // version) parse. A production version change is always a cold-cache

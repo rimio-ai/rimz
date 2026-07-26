@@ -224,6 +224,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         fleet_budget: None,
         link: None,
         reflects_log: None,
+        ended_sessions: std::collections::BTreeSet::new(),
         resume_outcomes: Some(Vec::new()),
     }
 }
