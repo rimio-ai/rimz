@@ -1102,7 +1102,10 @@ pub(super) fn insights_lines(
         "—".to_owned()
     };
     let left = [
-        kv("Sessions:", &group_thousands(selected.sessions as u64)),
+        kv(
+            "Sessions:",
+            &rimz::theme::fmt::group_thousands(selected.sessions as u64),
+        ),
         kv(
             "Active days:",
             &format!("{}/{}", activity.active_count, activity.window_days),

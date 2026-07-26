@@ -116,3 +116,39 @@ fn menu_only_actions_name_the_agent_pane() {
         assert!(text_error.contains("agent pane"));
     }
 }
+
+#[test]
+fn ask_id_resolution_preserves_root_and_subagent_scopes() {
+    let now = jiff::Timestamp::from_second(1_000).unwrap();
+    let ask_id = AskId::parse("ask_0123456789abcdef").unwrap();
+    let mut child = rimz::testkit::agent_state("codex", "child", now);
+    child.status = rimz::agents::AgentStatus::Waiting;
+    child.waiting_since = Some(now);
+    child.parent_agent_id = Some(rimz::ids::AgentSessionId::from("parent"));
+    child.open_ask = Some(rimz::agents::OpenAsk {
+        id: ask_id.clone(),
+        kind: AskKind::Question,
+        detail: None,
+        native_key: Some("native-ask".to_owned()),
+        since: now,
+    });
+    let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-ask")),
+        vec![child],
+        now,
+    );
+
+    assert!(
+        crate::cli::resolve_open_ask(&snapshot, ask_id.as_str(), None, true)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        crate::cli::resolve_open_ask(&snapshot, ask_id.as_str(), None, false)
+            .unwrap()
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "child"
+    );
+}

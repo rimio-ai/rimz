@@ -25,10 +25,18 @@ pub fn window_label(window: &RateLimitWindow) -> String {
         return scope.label.clone();
     }
     match window.duration_mins {
-        Some(mins) if mins % (24 * 60) == 0 => format!("{}d", mins / (24 * 60)),
-        Some(mins) if mins % 60 == 0 => format!("{}h", mins / 60),
-        Some(mins) => format!("{mins}m"),
+        Some(mins) => duration_label(mins.into()),
         None => "usage".to_owned(),
+    }
+}
+
+pub fn duration_label(mins: u64) -> String {
+    if mins.is_multiple_of(24 * 60) {
+        format!("{}d", mins / (24 * 60))
+    } else if mins.is_multiple_of(60) {
+        format!("{}h", mins / 60)
+    } else {
+        format!("{mins}m")
     }
 }
 
@@ -46,7 +54,7 @@ pub fn dollars_cap(usd: f64) -> String {
     }
 }
 
-fn group_thousands(n: u64) -> String {
+pub fn group_thousands(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     let len = digits.len();
@@ -85,5 +93,13 @@ mod tests {
         assert_eq!(reset_secs(90_000), "1d01h");
         assert_eq!(reset_secs(18_000), "5h00m");
         assert_eq!(reset_secs(-1), "0h00m");
+    }
+
+    #[test]
+    fn duration_uses_largest_exact_unit() {
+        assert_eq!(duration_label(0), "0d");
+        assert_eq!(duration_label(59), "59m");
+        assert_eq!(duration_label(60), "1h");
+        assert_eq!(duration_label(1_440), "1d");
     }
 }

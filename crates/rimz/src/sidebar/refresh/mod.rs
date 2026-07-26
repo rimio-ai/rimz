@@ -30,7 +30,7 @@ pub mod sessions;
 mod trace;
 pub mod usage;
 
-pub use accounts::{AccountsCache, ProviderRecord, query_provider_accounts};
+pub use accounts::{AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts};
 pub use credits::{
     CreditsCache, DirectQueryClaim, ProviderCreditsEntry, merge_provider_credits,
     merge_provider_realtime_usage,

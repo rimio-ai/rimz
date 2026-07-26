@@ -618,22 +618,6 @@ pub(super) fn interactive_permission_mode_from_flags(
     })
 }
 
-pub(super) fn supervised_permission_mode_from_flags(
-    ask: bool,
-    yolo: bool,
-) -> Result<PermissionMode> {
-    if ask && yolo {
-        bail!("choose at most one of --ask and --yolo");
-    }
-    Ok(if yolo {
-        PermissionMode::Yolo
-    } else if ask {
-        PermissionMode::Ask
-    } else {
-        PermissionMode::Auto
-    })
-}
-
 pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> {
     if !args.launch.passthrough.is_empty() {
         bail!("missing agent spec before `--`");

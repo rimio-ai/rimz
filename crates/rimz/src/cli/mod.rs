@@ -56,7 +56,7 @@ use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use rimz::agents::AgentState;
-use rimz::ids::MuxName;
+use rimz::ids::{AskId, MuxName};
 use rimz::{RuntimePaths, StatePaths, Store};
 
 pub(crate) use ctx::Ctx;
@@ -292,6 +292,27 @@ pub(crate) fn resolve_agent_one<'a>(
         raw,
         rimz::harness::target::resolve_one(snapshot, raw, worktree_flag, current_channel),
     )
+}
+
+/// Resolve an ask id or agent ref while preserving each caller's ask scope.
+///
+/// `asks show` exposes root asks only and historically folds the awaiting
+/// state into ask-id lookup; `answer` may target a sub-agent and reports a
+/// matched-but-stale ask as "not asking" instead.
+pub(crate) fn resolve_open_ask<'a>(
+    snapshot: &'a rimz::SidebarSnapshot,
+    raw: &str,
+    current_channel: Option<&str>,
+    root_awaiting_only: bool,
+) -> Result<Option<&'a AgentState>> {
+    if raw.starts_with("ask_") {
+        let ask_id = AskId::parse(raw)?;
+        return Ok(snapshot.agents.iter().find(|agent| {
+            (!root_awaiting_only || (agent.parent_agent_id.is_none() && agent.is_awaiting_input()))
+                && agent.open_ask.as_ref().is_some_and(|ask| ask.id == ask_id)
+        }));
+    }
+    resolve_agent_one(snapshot, raw, None, current_channel).map(Some)
 }
 
 /// Resolve a ref to every matching live agent pane for `message --steer` and

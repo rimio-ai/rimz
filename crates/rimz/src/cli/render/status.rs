@@ -7,9 +7,8 @@ use rimz::agents::AgentStatus;
 use rimz::agents::TurnPhase;
 use rimz::harness::run::RunStatus;
 use rimz::message::MessageStatus;
+use rimz::sidebar::refresh::ProviderStatus;
 use rimz::trust::TrustState;
-
-use crate::cli::providers::ProviderStatus;
 
 use super::palette;
 

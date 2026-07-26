@@ -46,19 +46,10 @@ pub(super) fn fmt_tokens_lower(n: u64) -> String {
 pub(super) fn fmt_usd(v: f64) -> String {
     let whole = v.round() as i64;
     let sign = if whole < 0 { "-" } else { "" };
-    format!("{sign}${}", group_thousands(whole.unsigned_abs()))
-}
-
-pub(super) fn group_thousands(n: u64) -> String {
-    let digits = n.to_string();
-    let mut grouped = String::new();
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(ch);
-    }
-    grouped
+    format!(
+        "{sign}${}",
+        rimz::theme::fmt::group_thousands(whole.unsigned_abs())
+    )
 }
 
 /// A day key (days since the epoch) as `May 29`.

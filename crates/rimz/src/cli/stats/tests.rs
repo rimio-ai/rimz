@@ -1459,7 +1459,7 @@ fn token_and_dollar_formatting() {
     assert_eq!(fmt_tokens_lower(1_200_000_000), "1.2b");
     assert_eq!(fmt_usd(8_666.0), "$8,666");
     assert_eq!(fmt_usd(1_000_000.0), "$1,000,000");
-    assert_eq!(group_thousands(1_741), "1,741");
+    assert_eq!(rimz::theme::fmt::group_thousands(1_741), "1,741");
 }
 
 #[test]

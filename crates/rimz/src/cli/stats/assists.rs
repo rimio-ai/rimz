@@ -538,7 +538,7 @@ fn reset_facts(windows: &[AssistWindowReset], zone: &jiff::tz::TimeZone) -> Stri
         .map(|window| {
             let duration = window
                 .duration_mins
-                .map(duration_label)
+                .map(rimz::theme::fmt::duration_label)
                 .unwrap_or_else(|| "window".to_owned());
             let reset = window
                 .resets_at
@@ -578,16 +578,6 @@ fn recovered_secs(parked_since: Option<Timestamp>, at: Timestamp) -> u64 {
 
 fn format_hours(seconds: u64) -> String {
     format!("{:.1}h", seconds as f64 / 3_600.0)
-}
-
-fn duration_label(mins: u64) -> String {
-    if mins.is_multiple_of(24 * 60) {
-        format!("{}d", mins / (24 * 60))
-    } else if mins.is_multiple_of(60) {
-        format!("{}h", mins / 60)
-    } else {
-        format!("{mins}m")
-    }
 }
 
 fn reason_label(reason: RedeemReason) -> &'static str {
