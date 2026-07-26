@@ -1,8 +1,8 @@
 //! Provider-neutral remote-control readiness, room lifecycle, and sidebar wakes.
 //!
 //! Claude owns its foreground host protocol. Codex owns its managed per-user
-//! daemon protocol. This module probes each provider once per operation, maps
-//! their native readiness through explicit matches, and coordinates effects.
+//! daemon protocol. This module probes each provider once per operation and
+//! coordinates effects.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -29,70 +29,56 @@ impl RemoteControlHost {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HostState {
-    Disabled,
-    Ready,
-    Uninstalled(PreflightError),
-    Blocked(PreflightError),
-}
-
 /// One batch probe of both configured provider hosts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReadinessSnapshot {
-    states: BTreeMap<crate::ids::AgentKind, HostState>,
-    host_argv: BTreeMap<crate::ids::AgentKind, Vec<String>>,
+    states: BTreeMap<crate::ids::AgentKind, RuntimeControlReadiness>,
 }
 
 impl ReadinessSnapshot {
     pub fn probe(config: &RemoteControlConfig) -> Self {
-        let (claude, claude_host_argv) = probe_claude(config.enabled_for("claude"));
-        let codex = probe_codex(config.enabled_for("codex"));
-        Self::from_probes(
-            [("claude", claude), ("codex", codex)],
-            claude_host_argv.map(|argv| ("claude", argv)),
+        Self::from_readiness(
+            runtime_control::readiness("claude", config.enabled_for("claude")),
+            runtime_control::readiness("codex", config.enabled_for("codex")),
         )
     }
 
     pub fn probe_transition(host: RemoteControlHost) -> Self {
         match host {
-            RemoteControlHost::Claude => {
-                let (claude, claude_host_argv) = probe_claude(true);
-                Self::from_probes(
-                    [("claude", claude), ("codex", HostState::Disabled)],
-                    claude_host_argv.map(|argv| ("claude", argv)),
-                )
-            }
-            RemoteControlHost::Codex => Self::from_probes(
-                [
-                    ("claude", HostState::Disabled),
-                    ("codex", probe_codex(true)),
-                ],
-                None,
+            RemoteControlHost::Claude => Self::from_readiness(
+                runtime_control::readiness("claude", true),
+                RuntimeControlReadiness::Disabled,
+            ),
+            RemoteControlHost::Codex => Self::from_readiness(
+                RuntimeControlReadiness::Disabled,
+                runtime_control::readiness("codex", true),
             ),
         }
     }
 
-    pub fn for_host(&self, host: RemoteControlHost) -> &HostState {
+    pub fn for_host(&self, host: RemoteControlHost) -> &RuntimeControlReadiness {
         self.for_kind(host.kind())
     }
 
-    pub fn for_kind(&self, kind: &str) -> &HostState {
+    pub fn for_kind(&self, kind: &str) -> &RuntimeControlReadiness {
         self.states
             .get(&crate::ids::AgentKind::new_unchecked(kind))
-            .unwrap_or(&HostState::Disabled)
+            .unwrap_or(&RuntimeControlReadiness::Disabled)
     }
 
     pub fn claude_host_argv(&self) -> Option<&[String]> {
-        self.host_argv
-            .get(&crate::ids::AgentKind::new_unchecked("claude"))
-            .map(Vec::as_slice)
+        match self.for_host(RemoteControlHost::Claude) {
+            RuntimeControlReadiness::Ready {
+                host_argv: Some(argv),
+            } => Some(argv),
+            _ => None,
+        }
     }
 
     /// Skip uninstalled providers and refuse the first installed-provider block.
-    pub fn start_gate(&self) -> Result<(), PreflightError> {
+    pub fn start_gate(&self) -> Result<(), RuntimeControlIssue> {
         for host in [RemoteControlHost::Codex, RemoteControlHost::Claude] {
-            if let HostState::Blocked(issue) = self.for_host(host) {
+            if let RuntimeControlReadiness::Blocked(issue) = self.for_host(host) {
                 return Err(issue.clone());
             }
         }
@@ -100,48 +86,20 @@ impl ReadinessSnapshot {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_states(claude: HostState, codex: HostState) -> Self {
-        let claude_host_argv = matches!(claude, HostState::Ready)
-            .then(|| runtime_control::host_argv("claude"))
-            .flatten();
-        Self::from_probes(
-            [("claude", claude), ("codex", codex)],
-            claude_host_argv.map(|argv| ("claude", argv)),
-        )
+    pub(crate) fn from_states(
+        claude: RuntimeControlReadiness,
+        codex: RuntimeControlReadiness,
+    ) -> Self {
+        Self::from_readiness(claude, codex)
     }
 
-    fn from_probes(
-        states: impl IntoIterator<Item = (&'static str, HostState)>,
-        host_argv: Option<(&'static str, Vec<String>)>,
-    ) -> Self {
+    fn from_readiness(claude: RuntimeControlReadiness, codex: RuntimeControlReadiness) -> Self {
         Self {
-            states: states
+            states: [("claude", claude), ("codex", codex)]
                 .into_iter()
                 .map(|(kind, state)| (crate::ids::AgentKind::new_unchecked(kind), state))
                 .collect(),
-            host_argv: host_argv
-                .into_iter()
-                .map(|(kind, argv)| (crate::ids::AgentKind::new_unchecked(kind), argv))
-                .collect(),
         }
-    }
-}
-
-fn probe_claude(enabled: bool) -> (HostState, Option<Vec<String>>) {
-    match runtime_control::readiness("claude", enabled) {
-        RuntimeControlReadiness::Disabled => (HostState::Disabled, None),
-        RuntimeControlReadiness::Ready { host_argv } => (HostState::Ready, host_argv),
-        RuntimeControlReadiness::Uninstalled(issue) => (HostState::Uninstalled(issue), None),
-        RuntimeControlReadiness::Blocked(issue) => (HostState::Blocked(issue), None),
-    }
-}
-
-fn probe_codex(enabled: bool) -> HostState {
-    match runtime_control::readiness("codex", enabled) {
-        RuntimeControlReadiness::Disabled => HostState::Disabled,
-        RuntimeControlReadiness::Ready { .. } => HostState::Ready,
-        RuntimeControlReadiness::Uninstalled(issue) => HostState::Uninstalled(issue),
-        RuntimeControlReadiness::Blocked(issue) => HostState::Blocked(issue),
     }
 }
 
@@ -172,8 +130,6 @@ pub fn advisories(config: &RemoteControlConfig) -> Vec<String> {
     }
     out
 }
-
-pub type PreflightError = RuntimeControlIssue;
 
 /// Apply one persisted runtime toggle across provider lifecycle, live Claude
 /// room panes, and every known workspace's sidebar.

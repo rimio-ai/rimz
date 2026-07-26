@@ -813,10 +813,6 @@ impl crate::agents::capabilities::RuntimeControlCapability for ClaudeAdapter {
         }
     }
 
-    fn runtime_control_host_argv(&self) -> Option<Vec<String>> {
-        Some(remote_control::host_argv())
-    }
-
     fn prepare_runtime_control(&self, enabled: bool) {
         remote_control::ensure_consent(enabled);
     }

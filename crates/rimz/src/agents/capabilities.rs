@@ -681,10 +681,6 @@ pub trait RuntimeControlCapability: CoreCapability {
         runtime_control::RuntimeControlReadiness::Disabled
     }
 
-    fn runtime_control_host_argv(&self) -> Option<Vec<String>> {
-        None
-    }
-
     fn ensure_runtime_control(&self, _enabled: bool) {}
 
     /// Fill the preconditions this host needs before it can be launched at all —

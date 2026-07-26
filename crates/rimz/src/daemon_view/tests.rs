@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::runtime_control::{RuntimeControlIssue, RuntimeControlReadiness};
 use crate::config::DaemonConfig;
 use crate::ids::MuxName;
 use std::path::PathBuf;
@@ -66,10 +67,19 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
     let rimz_bin = Path::new("/usr/bin/rimz");
     let project_root = Path::new("/proj");
     let worktree_root = Path::new("/proj/wt");
-    let spec = |claude: crate::remote_control::HostState, codex_present| {
+    let claude_argv = vec![
+        "claude".to_owned(),
+        "remote-control".to_owned(),
+        "--spawn".to_owned(),
+        "worktree".to_owned(),
+    ];
+    let ready = || RuntimeControlReadiness::Ready {
+        host_argv: Some(claude_argv.clone()),
+    };
+    let spec = |claude: RuntimeControlReadiness, codex_present| {
         let remote_control = crate::remote_control::ReadinessSnapshot::from_states(
             claude,
-            crate::remote_control::HostState::Disabled,
+            RuntimeControlReadiness::Disabled,
         );
         daemon_view_spec(DaemonViewSpecParams {
             claude_host_argv: remote_control.claude_host_argv(),
@@ -84,11 +94,11 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
     };
 
     assert!(
-        spec(crate::remote_control::HostState::Disabled, false)
+        spec(RuntimeControlReadiness::Disabled, false,)
             .hosts
             .is_empty()
     );
-    let codex = spec(crate::remote_control::HostState::Disabled, true);
+    let codex = spec(RuntimeControlReadiness::Disabled, true);
     assert_eq!(codex.hosts.len(), 1);
     assert_eq!(codex.hosts[0].argv[0], "/usr/bin/rimz");
     assert!(codex.hosts[0].argv.iter().any(|arg| arg == "app-server"));
@@ -96,27 +106,22 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
 
     assert!(
         spec(
-            crate::remote_control::HostState::Uninstalled(
-                crate::remote_control::PreflightError::from_parts(
-                    "claude",
-                    "uninstalled",
-                    "Claude is not installed",
-                ),
-            ),
+            RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::from_parts(
+                "claude",
+                "uninstalled",
+                "Claude is not installed",
+            ),),
             false,
         )
         .hosts
         .is_empty()
     );
-    let claude = spec(crate::remote_control::HostState::Ready, false);
+    let claude = spec(ready(), false);
     assert_eq!(claude.hosts.len(), 1);
-    assert_eq!(
-        claude.hosts[0].argv,
-        crate::agents::runtime_control::host_argv("claude").expect("Claude host argv")
-    );
+    assert_eq!(claude.hosts[0].argv, claude_argv);
     assert_eq!(claude.hosts[0].cwd, project_root);
 
-    let pair = spec(crate::remote_control::HostState::Ready, true);
+    let pair = spec(ready(), true);
     assert_eq!(pair.hosts.len(), 2);
     assert!(pair.hosts[0].argv.iter().any(|arg| arg == "app-server"));
     assert_eq!(pair.hosts[1].argv[0], "claude");
