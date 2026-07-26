@@ -197,21 +197,20 @@ impl TallyAnim {
     }
 }
 
-/// One eased roll per agent card's session `$cost`, keyed by the row's
-/// durable id (the agent id), so a status-churn reorder or a refresh
-/// re-anchors a climb to the same agent. Folded on each data refresh next to
-/// the cockpit tally; an id no fold has observed displays the live target
-/// as-is, so a one-off draw or a test paints the corner correctly with no roll
-/// seeded.
+/// One eased roll per agent card's resolved `$cost`, keyed by the row's durable
+/// id (the agent id), so a status-churn reorder or a refresh re-anchors a climb
+/// to the same agent. Folded on each data refresh next to the cockpit tally; an
+/// id no fold has observed displays the target as-is, so a one-off draw or a
+/// test paints the corner correctly with no roll seeded.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CostRolls {
     rolls: HashMap<String, Roll>,
 }
 
 impl CostRolls {
-    /// Fold the snapshot's per-row costs: observe each agent row's session cost
-    /// under its row id, then drop the ids the snapshot no longer carries, so
-    /// the map tracks the live rows and never grows across a long session.
+    /// Fold the snapshot's resolved per-row costs under each row id, then drop
+    /// ids the snapshot no longer carries, so the map tracks the live rows and
+    /// never grows across a long session.
     pub(crate) fn observe(&mut self, costs: impl Iterator<Item = (String, f64)>, phase: u64) {
         let mut seen = HashSet::new();
         for (id, usd) in costs {

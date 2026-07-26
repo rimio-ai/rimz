@@ -107,10 +107,11 @@ pub(super) fn agent_identity_line(
     let theme = row_ctx.theme;
     let width = content_width(row_ctx.width);
     // Right cluster, built first so the left trims to whatever's left: the
-    // session cost, bold in dollar green, read through the row's stepped roll so
-    // an increase ticks up rather than jumps. A cost that rounds to $0.00 — an
-    // idle agent that has spent nothing yet — is omitted, not printed as zero
-    // (the filter reads the authoritative target, never a mid-climb value).
+    // resolved card cost, bold in dollar green: session-scoped while live and
+    // seat-lifetime once its finished cohort collapses. The row's stepped roll
+    // makes an increase tick up rather than jump. A cost that rounds to $0.00 is
+    // omitted, not printed as zero (the filter reads the authoritative target,
+    // never a mid-climb value).
     let mut right: Vec<Span<'static>> = Vec::new();
     if let Some(target) = cost_usd.filter(|usd| *usd >= 0.005) {
         let usd = row_ctx
