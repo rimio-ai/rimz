@@ -121,31 +121,11 @@ RimZ ships as one Rust binary: the `rimz` crate is CLI, domain library, and nati
 
 ## Documentation map
 
-Every other document is a leaf from here, grouped by purpose: **guide** (use it), **interface** (see it), **reference** (look it up), **internals** (how it works), **externals** (upstream surfaces), **contributing** (work on it).
+Every other document is a leaf from here, grouped by purpose: **interface** (see it), **reference** (look it up), **internals** (how it works), **externals** (upstream surfaces), **contributing** (work on it).
 
 **Root** — [README.md](./README.md) (product entry), [docs/README.md](./docs/README.md) (user documentation index, the README's Docs link), [DESIGN.md](./DESIGN.md) (the attention problem, design pillars, invariants, non-goals), [ARCHITECTURE.md](./ARCHITECTURE.md) (runtime shape, on-disk state, code-map rationale), [CHANGELOG.md](./CHANGELOG.md) (user-visible change per release, one section per git tag; each section is generated from merged history ahead of its tag).
 
-**Guide** — `docs/guide/`
-- [installation.md](./docs/guide/installation.md) — prerequisites and every install path: Homebrew, prebuilt binaries, Cargo, source.
-- [setup.md](./docs/guide/setup.md) — first-pass machine setup: config init, hooks, true color, pets, loop knobs, multiplexer essentials.
-- [multiplexer.md](./docs/guide/multiplexer.md) — Zellij and tmux baselines: recommended options, parity Alt chords, themed status bar, shipped under `examples/`.
-- [fleet.md](./docs/guide/fleet.md) — launching agents by name, permission-mode suffixes, profiles, and the layout grammar.
-- [teams.md](./docs/guide/teams.md) — named teams: role handles, the `agents.toml` shape, relaunch and resume, and the sidebar's one-block treatment.
-- [worktrees.md](./docs/guide/worktrees.md) — RimZ-owned Git worktrees: isolating a layout or team for parallel work, seeded files, and supervised cleanup.
-- [messaging.md](./docs/guide/messaging.md) — addresses, park/steer/schedule delivery, smart compaction, agent-to-agent chat, and channels.
-- [sidebar.md](./docs/guide/sidebar.md) — reading the sidebar: zones, agent cards and process rows, the agent lifecycle, attention routing and card ranking.
-- [insight.md](./docs/guide/insight.md) — token and dollar insight: the cockpit and provider-dashboard figures, `rimz stats` and its heatmap and breakdowns, and how every figure is calculated.
-- [budget.md](./docs/guide/budget.md) — enforced dollar caps: the four scopes (agent, loop task, room fleet, provider login), the park and its waivers, and `rimz budget`.
-- [remote.md](./docs/guide/remote.md) — attaching to a room on another host over SSH: a multiplexer attach, the self-healing link, continuity across reboots, and the provider mobile-app remote-control toggles.
-- [web.md](./docs/guide/web.md) — browser access: the shared ttyd daemon, remote `--web` tunnels, and machine credentials.
-- [scripting.md](./docs/guide/scripting.md) — supervised `-p` runs: exit codes, JSON and streaming output, background runs and wait, and the orchestration primitives.
-- [loops.md](./docs/guide/loops.md) — scheduled turns, watchdogs, agent self-wakes, and the unattended permission posture.
-- [notifications.md](./docs/guide/notifications.md) — off-screen attention: desktop banners, unread nudges, and handlers that push to your channels or clear routine prompts.
-- [theme.md](./docs/guide/theme.md) — sidebar theming: palettes, color depth and slot overrides, custom themes, animations, provider branding.
-- [pets.md](./docs/guide/pets.md) — the dashboard pet: what it acts out, built-in and petdex pets, bring-your-own sheets, pixel vs cell-art tiers, offline and privacy.
-- [configuration.md](./docs/guide/configuration.md) — the whole config model: the two tiers and merge order, `rimz config set` and safe regeneration, and a section per file (config, agents, loop, theme, project trust).
-- [troubleshooting.md](./docs/guide/troubleshooting.md) — `rimz doctor` first, then room-start refusals, hooks not reporting, degraded banners, version drift, reset and GC.
-- [security.md](./docs/guide/security.md) — threat model and guardrails.
+**Guide** — `docs/guide/` teaches the shipped product to people who never open the source; its own `AGENTS.md` and [docs/README.md](./docs/README.md) index the pages. Ship a user-visible behaviour change into the guide page that promises it, and get your own working knowledge from `docs/internals/` instead.
 
 **Interface** — `docs/interface/`
 - [sidebar.md](./docs/interface/sidebar.md) — the sidebar on screen: cockpit, agent cards, provider dashboard, rendered frames, glyph legend.
