@@ -235,10 +235,11 @@ pub(crate) fn agent_refs() -> Vec<CompletionCandidate> {
 }
 
 pub(crate) fn pane_targets() -> Vec<CompletionCandidate> {
+    let mut candidates = vec![candidate("sidebar", "RimZ sidebar pane")];
     let Some(context) = room_context() else {
-        return Vec::new();
+        return candidates;
     };
-    let mut candidates = handles_from_agents(&context.snapshot.agents);
+    candidates.extend(handles_from_agents(&context.snapshot.agents));
     if let Some(frame) = rimz::sidebar::cache::read_snapshot_cache(
         &context.store.runtime_paths().pane_frame_path(),
         &context.workspace.session_name,

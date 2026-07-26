@@ -1124,14 +1124,7 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
             .find(|candidate| &candidate.pane_id == pane)
             .and_then(|candidate| candidate.view_id.clone())
     });
-    // Focus the sidebar of the tab the user is on, falling back to any sidebar
-    // in the session.
-    let Some(sidebar) = listing
-        .panes
-        .iter()
-        .filter(|pane| pane.is_rimz_sidebar())
-        .find(|pane| focused_tab.is_some() && pane.view_id == focused_tab)
-        .or_else(|| listing.panes.iter().find(|pane| pane.is_rimz_sidebar()))
+    let Some(sidebar) = rimz::pane::select_sidebar_pane(&listing.panes, &[focused_tab])
         .map(|pane| pane.pane_id.clone())
     else {
         bail!("session {session_name} has no sidebar pane to focus");

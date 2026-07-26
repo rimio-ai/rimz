@@ -192,6 +192,24 @@ impl PaneRef {
     }
 }
 
+/// Pick the session's sidebar pane for a caller: the sidebar sharing the first
+/// matching preferred view (in order), else any sidebar in the listing.
+pub fn select_sidebar_pane<'a>(
+    panes: &'a [PaneRef],
+    preferred_views: &[Option<String>],
+) -> Option<&'a PaneRef> {
+    for view in preferred_views.iter().flatten() {
+        if let Some(sidebar) = panes
+            .iter()
+            .filter(|pane| pane.is_rimz_sidebar())
+            .find(|pane| pane.view_id.as_ref() == Some(view))
+        {
+            return Some(sidebar);
+        }
+    }
+    panes.iter().find(|pane| pane.is_rimz_sidebar())
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -200,22 +218,60 @@ fn is_false(value: &bool) -> bool {
 mod tests {
     use super::*;
 
+    fn pane(raw: &str, view: &str, command: Option<&str>) -> PaneRef {
+        PaneRef {
+            view_id: Some(view.to_owned()),
+            command: command.map(ToOwned::to_owned),
+            cwd: Some("/repo-worktrees/demo".to_owned()),
+            ..PaneRef::from_id(PaneId::from_parts(crate::ids::MuxName::Zellij, raw))
+        }
+    }
+
     #[test]
     fn pane_ref_classifies_rimz_sidebar_from_command() {
-        fn pane(command: Option<&str>) -> PaneRef {
-            PaneRef {
-                command: command.map(ToOwned::to_owned),
-                cwd: Some("/repo-worktrees/demo".to_owned()),
-                ..PaneRef::from_id(PaneId::from_parts(
-                    crate::ids::MuxName::Zellij,
-                    "terminal_1",
-                ))
-            }
-        }
+        assert!(pane("terminal_1", "tab_1", Some(SIDEBAR_CHROME_TITLE)).is_rimz_sidebar());
+        assert!(!pane("terminal_1", "tab_1", Some("codex")).is_rimz_sidebar());
+        assert!(!pane("terminal_1", "tab_1", Some("zsh")).is_rimz_sidebar());
+        assert!(!pane("terminal_1", "tab_1", None).is_rimz_sidebar());
+    }
 
-        assert!(pane(Some(SIDEBAR_CHROME_TITLE)).is_rimz_sidebar());
-        assert!(!pane(Some("codex")).is_rimz_sidebar());
-        assert!(!pane(Some("zsh")).is_rimz_sidebar());
-        assert!(!pane(None).is_rimz_sidebar());
+    #[test]
+    fn sidebar_selection_respects_preferred_view_order() {
+        let panes = vec![
+            pane("terminal_1", "tab_1", Some(SIDEBAR_CHROME_TITLE)),
+            pane("terminal_2", "tab_2", Some(SIDEBAR_CHROME_TITLE)),
+        ];
+
+        let selected = select_sidebar_pane(
+            &panes,
+            &[Some("tab_2".to_owned()), Some("tab_1".to_owned())],
+        )
+        .expect("sidebar");
+
+        assert_eq!(selected.pane_id.as_str(), "zellij:terminal_2");
+    }
+
+    #[test]
+    fn sidebar_selection_falls_back_to_any_sidebar() {
+        let panes = vec![
+            pane("terminal_1", "tab_1", Some("zsh")),
+            pane("terminal_2", "tab_2", Some(SIDEBAR_CHROME_TITLE)),
+        ];
+
+        let selected =
+            select_sidebar_pane(&panes, &[Some("missing".to_owned())]).expect("fallback sidebar");
+
+        assert_eq!(selected.pane_id.as_str(), "zellij:terminal_2");
+    }
+
+    #[test]
+    fn sidebar_selection_ignores_non_sidebar_panes() {
+        let panes = vec![
+            pane("terminal_1", "tab_1", Some("zsh")),
+            pane("terminal_2", "tab_2", Some("codex")),
+        ];
+
+        assert!(select_sidebar_pane(&panes, &[Some("tab_1".to_owned())]).is_none());
+        assert!(select_sidebar_pane(&[], &[]).is_none());
     }
 }

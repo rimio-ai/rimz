@@ -43,7 +43,7 @@ enum PaneSubcmd {
     },
     /// Capture a pane's visible text.
     Capture {
-        /// Pane id or agent address (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
+        /// Pane id, agent address, or `sidebar` (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::pane_targets
         ))]
@@ -60,7 +60,7 @@ enum PaneSubcmd {
     },
     /// Send text or named keys to a pane as if typed.
     Send {
-        /// Pane id or agent address (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
+        /// Pane id, agent address, or `sidebar` (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::pane_targets
         ))]
@@ -76,7 +76,7 @@ enum PaneSubcmd {
     },
     /// Focus a pane.
     Focus {
-        /// Pane id or agent address (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
+        /// Pane id, agent address, or `sidebar` (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::pane_targets
         ))]
@@ -166,6 +166,7 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
 enum PaneTarget {
     Id(PaneId),
     Address(String),
+    Sidebar,
 }
 
 struct ResolvedPaneTarget {
@@ -177,9 +178,12 @@ fn classify_pane_target(raw: &str) -> Result<PaneTarget> {
     if raw.starts_with('@') {
         return Ok(PaneTarget::Address(raw.to_owned()));
     }
+    if raw == "sidebar" {
+        return Ok(PaneTarget::Sidebar);
+    }
     PaneId::parse(raw).map(PaneTarget::Id).map_err(|_| {
         anyhow::anyhow!(
-            "invalid pane target `{raw}`: expected a pane id (`zellij:terminal_3`, `tmux:%1`) or an agent address (`@coder`, `@coder#lane`); run `rimz pane list` to see panes"
+            "invalid pane target `{raw}`: expected a pane id (`zellij:terminal_3`, `tmux:%1`), an agent address (`@coder`, `@coder#lane`), or `sidebar`; run `rimz pane list` to see panes"
         )
     })
 }
@@ -204,6 +208,54 @@ fn resolve_pane_target(raw: &str, globals: &GlobalFlags) -> Result<ResolvedPaneT
                 session_name: Some(ctx.workspace.session_name.clone()),
             })
         }
+        PaneTarget::Sidebar => {
+            let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+            let backend = rimz::mux::backend_for(mux);
+            let session_name =
+                WorkspaceResolver::resolve_participant(".", globals.root.clone())?.session_name;
+            let listing = backend
+                .list_panes(PaneListOptions {
+                    session_name: Some(session_name.clone()),
+                    ..Default::default()
+                })
+                .context("listing panes")?;
+            let own_view = rimz::mux::own_pane_id(mux).and_then(|own| {
+                listing
+                    .panes
+                    .iter()
+                    .find(|pane| pane.pane_id == own)
+                    .and_then(|pane| pane.view_id.clone())
+            });
+            let focused_view = backend
+                .client_view(rimz::mux::ClientFocusOptions {
+                    session_name: Some(session_name.clone()),
+                    ..Default::default()
+                })
+                .ok()
+                .and_then(|view| {
+                    let mut viewed = view.viewed_panes;
+                    viewed.sort_by_key(ToString::to_string);
+                    viewed.dedup();
+                    match viewed.as_slice() {
+                        [pane] => Some(pane.clone()),
+                        _ => None,
+                    }
+                })
+                .and_then(|focused| {
+                    listing
+                        .panes
+                        .iter()
+                        .find(|pane| pane.pane_id == focused)
+                        .and_then(|pane| pane.view_id.clone())
+                });
+            let pane = rimz::pane::select_sidebar_pane(&listing.panes, &[own_view, focused_view])
+                .map(|pane| pane.pane_id.clone())
+                .ok_or_else(|| anyhow::anyhow!("session {session_name} has no sidebar pane"))?;
+            Ok(ResolvedPaneTarget {
+                pane,
+                session_name: Some(session_name),
+            })
+        }
     }
 }
 
@@ -212,9 +264,8 @@ fn agent_name(agent: &AgentState) -> &str {
 }
 
 /// List the room as panes: every pane grouped by its native tab, each labelled
-/// with the agent-colleague that lives in it (`@kind#worktree`) or `process` for
-/// a plain pane, alongside its status and working directory. RimZ's own sidebar
-/// chrome is dropped — it is never a routing target.
+/// with the agent-colleague that lives in it (`@kind#worktree`), `sidebar`, or
+/// `process` for a plain pane, alongside its status and working directory.
 ///
 /// The pane enumeration is the spine and always works. The agent annotations are
 /// a best-effort overlay folded from the workspace snapshot the same way the
@@ -235,17 +286,13 @@ fn list(
             .map(|workspace| workspace.session_name.clone())
             .context("resolving the cwd's workspace session; pass --session-name")?,
     };
-    // Drop RimZ's own sidebar chrome: it is never a routing target, so it has no
-    // place in either the table or the `--json` tree.
     let panes: Vec<PaneRef> = backend
         .list_panes(PaneListOptions {
             session_name: Some(session.clone()),
             ..Default::default()
         })?
-        .panes
-        .into_iter()
-        .filter(|pane| !pane.is_rimz_sidebar())
-        .collect();
+        .panes;
+    let self_pane = rimz::mux::own_pane_id(backend.name());
     // Only overlay agents when listing this workspace's own session — a foreign
     // session's pane ids carry no meaning in our rollup.
     let overlay = workspace
@@ -278,7 +325,10 @@ fn list(
                     panes: tab
                         .panes
                         .iter()
-                        .map(|pane| pane_json(pane, agent_for(pane), &agents))
+                        .map(|pane| {
+                            let is_self = self_pane.as_ref() == Some(&pane.pane_id);
+                            pane_json(pane, agent_for(pane), &agents, is_self)
+                        })
                         .collect(),
                 })
                 .collect(),
@@ -290,7 +340,8 @@ fn list(
     for tab in group_by_tab(&panes) {
         table.section(tab.label());
         for pane in &tab.panes {
-            table.row(pane_row(pane, agent_for(pane), &agents));
+            let is_self = self_pane.as_ref() == Some(&pane.pane_id);
+            table.row(pane_row(pane, agent_for(pane), &agents, is_self));
         }
     }
     table.render(&mut render::out())?;
@@ -351,19 +402,24 @@ fn group_by_tab(panes: &[PaneRef]) -> Vec<TabGroup<'_>> {
     tabs
 }
 
-/// The styled cells for one pane row: occupant (agent handle or the literal
+/// The styled cells for one pane row: occupant (agent handle, `sidebar`, or
 /// `process`), status, cwd, and the pane id.
 fn pane_row(
     pane: &PaneRef,
     agent: Option<&AgentState>,
     peers: &[&AgentState],
+    is_self: bool,
 ) -> Vec<render::Cell> {
-    let occupant_cell = match agent {
-        Some(agent) => render::cell(rimz::harness::target::agent_handle(agent, peers, true))
-            .fg(render::palette::accent()),
-        None => render::cell("process").fg(render::palette::muted()),
+    let occupant_cell = if pane.is_rimz_sidebar() {
+        render::cell("sidebar").fg(render::palette::muted())
+    } else {
+        match agent {
+            Some(agent) => render::cell(rimz::harness::target::agent_handle(agent, peers, true))
+                .fg(render::palette::accent()),
+            None => render::cell("process").fg(render::palette::muted()),
+        }
     };
-    let status_cell = match agent {
+    let status_cell = match agent.filter(|_| !pane.is_rimz_sidebar()) {
         Some(agent) => {
             let status = agent.effective_status();
             let phase = if status == rimz::agents::AgentStatus::Running {
@@ -379,11 +435,15 @@ fn pane_row(
         .cwd
         .as_deref()
         .map_or_else(|| "-".to_owned(), render::home_relative);
+    let mut pane_cell = render::cell(pane.pane_id.to_string()).fg(render::palette::meta());
+    if is_self {
+        pane_cell = pane_cell.suffix("(self)", render::palette::faint());
+    }
     vec![
         occupant_cell,
         status_cell,
         render::cell(cwd).dash(),
-        render::cell(pane.pane_id.to_string()).fg(render::palette::meta()),
+        pane_cell,
     ]
 }
 
@@ -406,8 +466,10 @@ struct TabJson<'a> {
 #[derive(serde::Serialize)]
 struct PaneJson<'a> {
     pane_id: String,
-    /// `agent` when an agent overlay binds to the pane, `process` otherwise.
+    /// `sidebar` for RimZ chrome, `agent` when an overlay binds, `process` otherwise.
     kind: &'static str,
+    #[serde(rename = "self", skip_serializing_if = "is_false")]
+    is_self: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     agent: Option<AgentJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -431,10 +493,19 @@ fn pane_json<'a>(
     pane: &'a PaneRef,
     agent: Option<&AgentState>,
     peers: &[&AgentState],
+    is_self: bool,
 ) -> PaneJson<'a> {
+    let agent = agent.filter(|_| !pane.is_rimz_sidebar());
     PaneJson {
         pane_id: pane.pane_id.to_string(),
-        kind: if agent.is_some() { "agent" } else { "process" },
+        kind: if pane.is_rimz_sidebar() {
+            "sidebar"
+        } else if agent.is_some() {
+            "agent"
+        } else {
+            "process"
+        },
+        is_self,
         agent: agent.map(|agent| AgentJson {
             kind: agent.kind.to_string(),
             handle: rimz::harness::target::agent_handle(agent, peers, true),
@@ -445,6 +516,10 @@ fn pane_json<'a>(
         cwd: pane.cwd.as_deref(),
         pid: pane.pane_pid,
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn capture(
@@ -613,6 +688,10 @@ mod tests {
             classify_pane_target("@coder#lane").expect("agent address"),
             PaneTarget::Address("@coder#lane".to_owned())
         );
+        assert_eq!(
+            classify_pane_target("sidebar").expect("sidebar target"),
+            PaneTarget::Sidebar
+        );
     }
 
     #[test]
@@ -620,6 +699,7 @@ mod tests {
         let err = classify_pane_target("garbage").expect_err("invalid target");
         let message = err.to_string();
         assert!(message.contains("agent address (`@coder`, `@coder#lane`)"));
+        assert!(message.contains("`sidebar`"));
         assert!(message.contains("rimz pane list"));
     }
 
@@ -670,7 +750,7 @@ mod tests {
         let pane = pane("terminal_1", "tab_0", "#main", "claude", "/repo/main");
         let agent = agent_on("terminal_1", "claude", "main");
         let peers: Vec<&AgentState> = vec![&agent];
-        let json = pane_json(&pane, Some(&agent), &peers);
+        let json = pane_json(&pane, Some(&agent), &peers, false);
         assert_eq!(json.kind, "agent");
         let bound = json.agent.as_ref().expect("agent bound");
         assert_eq!(bound.handle, "@claude#main");
@@ -678,6 +758,7 @@ mod tests {
         assert_eq!(bound.worktree.as_deref(), Some("main"));
         let serialized = serde_json::to_value(&json).expect("pane JSON");
         assert!(serialized.get("focused").is_none());
+        assert!(serialized.get("self").is_none());
         assert_eq!(json.pane_id, "zellij:terminal_1");
     }
 
@@ -697,7 +778,7 @@ mod tests {
         .with_live_panes(vec![pane.clone()], None);
 
         let peers: Vec<&AgentState> = snapshot.pane_bound_roots().collect();
-        let json = pane_json(&pane, Some(peers[0]), &peers);
+        let json = pane_json(&pane, Some(peers[0]), &peers, false);
         assert_eq!(json.agent.expect("bound agent").handle, "@coder#main");
     }
 
@@ -726,14 +807,14 @@ mod tests {
             .agent_bound_to_pane(&second_pane)
             .expect("second pane bound");
         assert_eq!(
-            pane_json(&first_pane, Some(first), &peers)
+            pane_json(&first_pane, Some(first), &peers, false)
                 .agent
                 .expect("first agent")
                 .handle,
             "@codex-1#main"
         );
         assert_eq!(
-            pane_json(&second_pane, Some(second), &peers)
+            pane_json(&second_pane, Some(second), &peers, false)
                 .agent
                 .expect("second agent")
                 .handle,
@@ -744,11 +825,61 @@ mod tests {
     #[test]
     fn pane_json_leaves_a_plain_pane_unannotated() {
         let pane = pane("terminal_2", "tab_1", "shell", "zsh", "/home/x");
-        let json = pane_json(&pane, None, &[]);
+        let json = pane_json(&pane, None, &[], false);
         assert!(json.agent.is_none(), "a bare shell carries no agent");
         assert_eq!(json.kind, "process");
         assert_eq!(json.command, Some("zsh"), "command is retained in json");
         assert_eq!(json.pane_id, "zellij:terminal_2");
+    }
+
+    #[test]
+    fn pane_json_labels_the_sidebar_pane() {
+        let pane = pane(
+            "terminal_3",
+            "tab_1",
+            "shell",
+            rimz::pane::SIDEBAR_CHROME_TITLE,
+            "/home/x",
+        );
+        let json = pane_json(&pane, None, &[], false);
+
+        assert_eq!(json.kind, "sidebar");
+        assert!(json.agent.is_none());
+        let serialized = serde_json::to_value(&json).expect("pane JSON");
+        assert!(serialized.get("self").is_none());
+    }
+
+    #[test]
+    fn pane_json_marks_the_calling_pane() {
+        let pane = pane("terminal_2", "tab_1", "shell", "zsh", "/home/x");
+        let json = pane_json(&pane, None, &[], true);
+
+        let serialized = serde_json::to_value(&json).expect("pane JSON");
+        assert_eq!(serialized.get("self"), Some(&serde_json::json!(true)));
+    }
+
+    #[test]
+    fn pane_row_labels_a_calling_sidebar_before_any_agent_overlay() {
+        let pane = pane(
+            "terminal_3",
+            "tab_1",
+            "shell",
+            rimz::pane::SIDEBAR_CHROME_TITLE,
+            "/home/x",
+        );
+        let agent = agent_on("terminal_3", "codex", "main");
+        let peers = vec![&agent];
+        let mut table = render::Table::new(["AGENT", "STATUS", "CWD", "PANE"]);
+        table.row(pane_row(&pane, Some(&agent), &peers, true));
+        let mut raw = Vec::new();
+
+        table.render(&mut raw).expect("pane row");
+        let raw = String::from_utf8(raw).expect("utf-8");
+        let plain = anstream::adapter::strip_str(&raw).to_string();
+
+        assert!(plain.contains("sidebar"));
+        assert!(plain.contains("zellij:terminal_3 (self)"));
+        assert!(!plain.contains("@codex"));
     }
 
     #[test]
