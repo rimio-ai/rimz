@@ -21,7 +21,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use jiff::Timestamp;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use rimz::harness::run::RunRecord;
@@ -46,7 +45,6 @@ use rimz::message::DeliveryGate;
 use rimz::sidebar::fresh_sidebar_present;
 use rimz::store::paths::{RuntimePaths, StatePaths, state_home};
 use rimz::trust::{self, TrustState};
-use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 use rimz::workspace::WorkspaceResolver;
 
 use super::GlobalFlags;
@@ -54,9 +52,11 @@ use super::render as ui;
 
 mod add;
 mod render;
+mod run_report;
 #[path = "run.rs"]
 mod run_tasks;
 mod stop;
+mod watch;
 
 #[derive(Debug, Args)]
 pub struct LoopArgs {
@@ -278,7 +278,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::Disable(args) => add::disable(args, globals),
         LoopSubcmd::Stop(args) => stop::stop(&args.name, globals),
         LoopSubcmd::List => render::list(globals),
-        LoopSubcmd::Watch(args) => render::watch(args, globals),
+        LoopSubcmd::Watch(args) => watch::watch(args, globals),
         LoopSubcmd::Show(args) => render::show(args, globals),
         LoopSubcmd::Logs(args) => render::logs(args, globals),
         LoopSubcmd::Fire(args) => {

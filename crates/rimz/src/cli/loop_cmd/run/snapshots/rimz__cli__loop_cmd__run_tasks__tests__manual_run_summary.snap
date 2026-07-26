@@ -1,0 +1,10 @@
+---
+source: crates/rimz/src/cli/loop_cmd/run/tests.rs
+expression: "summary(\"watchdog\", &entry, 1_900, LoopRunMode::Manual, false, &outcome,)"
+---
+✗ failed (exit 1) in 1.9s · $0.42 · ↘ 12k ↗ 3k
+  │ error: boom
+  │ Usage: codex [OPTIONS] [PROMPT]
+  run: run_0123456789abcdef01234567
+  transcript: /tmp/transcript.jsonl
+  see: rimz loop show watchdog

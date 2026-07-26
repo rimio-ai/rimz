@@ -198,6 +198,31 @@ fn failed_summary_links_run_transcript_and_loop_show() {
 }
 
 #[test]
+fn manual_run_summary_snapshot() {
+    let entry = spawn_entry(false, CheckOn::Fail);
+    let outcome = RunOutcome::terminal(LoopRunResult::Failed)
+        .with_exit_code(Some(1))
+        .with_run_id(Some("run_0123456789abcdef01234567".to_owned()))
+        .with_transcript_path(Some("/tmp/transcript.jsonl".to_owned()))
+        .with_failure_tail(Some(
+            "error: boom\nUsage: codex [OPTIONS] [PROMPT]".to_owned(),
+        ))
+        .with_cost(Some(0.42), Some(12_000), Some(3_400));
+
+    insta::assert_snapshot!(
+        "manual_run_summary",
+        summary(
+            "watchdog",
+            &entry,
+            1_900,
+            LoopRunMode::Manual,
+            false,
+            &outcome,
+        )
+    );
+}
+
+#[test]
 fn skipped_check_summary_uses_check_time_and_action_verbs() {
     let spawn = RunOutcome::check_result(
         LoopRunResult::CheckSkipped,
