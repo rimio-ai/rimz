@@ -50,7 +50,8 @@ pub(crate) fn unix_now_ms() -> u64 {
 pub(crate) use aggregate::{
     CountedLocation, CountedPayload, HeadlineContext, NO_BURST_CUTOFF, SESSION_GAP_SECS,
     aggregate_counted_rollups, dedup_cached_entries, dedup_cached_entry_locations,
-    indexed_counted_entries, live_session_keys, origin_path, spending_files_signature,
+    indexed_counted_entries, live_session_keys, origin_path, should_replace_usage_duplicate,
+    spending_files_signature,
 };
 pub use aggregate::{
     DaySpend, HeadlineSpec, SpendScope, SpendTally, SpendWindow, SpendWindowMode, Spending,
@@ -79,8 +80,8 @@ pub use publish::{
     write_workspace_spending_cache,
 };
 pub(crate) use refresh::{
-    RefreshCallbacks, is_priceable_model_name, price_split, record_unknown_model,
-    recorded_unknown_models, refresh_spending_cache,
+    RefreshCallbacks, SplitPrice, is_priceable_model_name, lookup_split_price, price_split,
+    record_unknown_model, recorded_unknown_models, refresh_spending_cache,
 };
 pub(crate) use time::iso_to_unix_secs;
 pub use time::{unix_secs_now, utc_date};
