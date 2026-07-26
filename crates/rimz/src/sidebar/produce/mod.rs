@@ -80,6 +80,7 @@ pub struct ProduceOptions {
 #[derive(Clone, Copy)]
 struct ProducerEnrich<'a> {
     runtime: &'a RuntimePaths,
+    state: &'a StatePaths,
     messages_dir: &'a Path,
     exclude: Option<&'a PaneId>,
     min_pane_cache_ms: Option<u64>,
@@ -132,6 +133,7 @@ pub(crate) fn produce_workspace_snapshot(
         Some(&frame),
         ProducerEnrich {
             runtime,
+            state,
             messages_dir: &state.messages_dir,
             exclude: opts.exclude.as_ref(),
             min_pane_cache_ms: opts.min_pane_cache_ms,
@@ -180,6 +182,7 @@ pub fn produce_snapshot_with_refresh(
         Some(frame),
         ProducerEnrich {
             runtime,
+            state,
             messages_dir: &state.messages_dir,
             exclude: opts.exclude.as_ref(),
             min_pane_cache_ms: opts.min_pane_cache_ms,
@@ -297,6 +300,7 @@ pub fn produce_rollup_snapshot_with_refresh(
         None,
         ProducerEnrich {
             runtime,
+            state,
             messages_dir: &state.messages_dir,
             exclude,
             min_pane_cache_ms,
@@ -338,7 +342,7 @@ pub(crate) fn refresh_producer_caches_with_state(
     let _ = refresh_heavy_lanes(
         &base,
         &base.agents,
-        &state.messages_dir,
+        state,
         runtime,
         &config,
         crate::agents::spending::service::SpendingServiceStartup::HostEligible,
@@ -478,7 +482,7 @@ fn enrich_with_refresh(
     let refreshed = refresh_heavy_lanes(
         &folded,
         &snapshot.agents,
-        opts.messages_dir,
+        opts.state,
         opts.runtime,
         &config,
         crate::agents::spending::service::SpendingServiceStartup::OneShot,

@@ -88,6 +88,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         label: "main".to_owned(),
         kind: crate::SidebarWorktreeKind::Worktree,
         team: None,
+        cohort_effort: None,
         status_counts: vec![crate::SidebarStatusCount {
             status: crate::agents::AgentStatus::Running,
             count: 1,
@@ -220,6 +221,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             label: "main".to_owned(),
             kind: crate::SidebarWorktreeKind::Worktree,
             team: None,
+            cohort_effort: None,
             status_counts: vec![crate::SidebarStatusCount {
                 status: AgentStatus::Running,
                 count: 1,
@@ -255,6 +257,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             label: "feature".to_owned(),
             kind: crate::SidebarWorktreeKind::Worktree,
             team: None,
+            cohort_effort: None,
             status_counts: vec![crate::SidebarStatusCount {
                 status: AgentStatus::Failed,
                 count: 1,

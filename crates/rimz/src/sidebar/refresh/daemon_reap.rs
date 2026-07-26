@@ -143,8 +143,8 @@ mod tests {
         let workspace = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
-        let messages = dir.path().join("messages");
-        std::fs::create_dir_all(&messages).unwrap();
+        let state = crate::StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        state.ensure_dirs().unwrap();
 
         let mut agent = root_agent("codex", "live-thread", None);
         agent.runtime_owner = Some(RuntimeOwner::new(
@@ -182,7 +182,7 @@ mod tests {
         let _ = super::super::refresh_heavy_lanes(
             &base,
             &pre_reap.agents,
-            &messages,
+            &state,
             &runtime,
             &crate::config::MachineConfig::default(),
             crate::agents::spending::service::SpendingServiceStartup::OneShot,

@@ -51,10 +51,10 @@ pub use row::{
 pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use view::{
     DailyBudgetView, PresenceSample, RemoteControlBadge, RuntimeReapInputs, SNAPSHOT_VERSION,
-    SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarProviderPanel,
-    SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice,
-    WorktreePrCi, WorktreePrState, WorktreeTrunkSync, actionable_unread_count, cohort_team,
-    lead_unread_row, triage_key,
+    SidebarCohortEffort, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
+    SidebarProviderPanel, SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup,
+    SidebarWorktreeKind, TruthNotice, WorktreePrCi, WorktreePrState, WorktreeTrunkSync,
+    actionable_unread_count, cohort_team, lead_unread_row, triage_key,
 };
 pub(crate) use view::{format_plan_label, sort_windows};
 

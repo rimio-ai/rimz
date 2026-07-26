@@ -275,6 +275,7 @@ mod tests {
             label: "main".to_owned(),
             kind: SidebarWorktreeKind::Worktree,
             team: None,
+            cohort_effort: None,
             status_counts: Vec::new(),
             rows,
             diff_added: None,

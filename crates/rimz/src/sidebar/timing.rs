@@ -145,6 +145,9 @@ pub const DIFF_STATS_FOCUSED_COMMIT_TTL: Duration = Duration::from_secs(10);
 /// bound; accepted, the headers track fleet progress, not keystrokes.
 pub const DIFF_STATS_IDLE_TTL: Duration = Duration::from_secs(60);
 
+/// How often a finished collapsed cohort rechecks its durable transcript effort.
+pub const COHORT_SPEND_TTL: Duration = Duration::from_secs(60);
+
 /// How recently one of a worktree's agent rows must have been active for the
 /// worktree to count as hot — refreshed on [`DIFF_STATS_TTL`] rather than
 /// decaying to [`DIFF_STATS_IDLE_TTL`]. Generous against the fast TTL so a

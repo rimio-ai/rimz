@@ -64,11 +64,12 @@ impl<'a> EffortSessionRef<'a> {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct EffortParseMemo {
     files: HashMap<PathBuf, MemoEntry>,
 }
 
+#[derive(Debug)]
 struct MemoEntry {
     stat: Option<TranscriptStat>,
     entries: Vec<CachedEntry>,

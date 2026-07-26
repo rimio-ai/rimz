@@ -791,6 +791,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
         label: "main".to_owned(),
         kind: crate::SidebarWorktreeKind::Worktree,
         team: None,
+        cohort_effort: None,
         status_counts: Vec::new(),
         rows,
         diff_added: None,
