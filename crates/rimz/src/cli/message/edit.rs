@@ -112,10 +112,7 @@ pub(super) fn steer_queued_message(
         }
         status => bail!("{message_id} is {status}; only queued messages can be steered"),
     }
-    let mut snapshot = ctx.resolution_snapshot()?;
-    if rimz::RuntimePaths::for_workspace(record.workspace_id.clone()).is_ok() {
-        snapshot = ctx.fold_agent_context(snapshot);
-    }
+    let snapshot = ctx.fold_agent_context(ctx.resolution_snapshot()?);
     let label = message_target_for_record(record, &snapshot);
     let delivered = deliver::deliver_one(
         workspace,
