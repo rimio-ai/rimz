@@ -32,4 +32,4 @@ Local contract for `crates/rimz/src/sidebar/` — the view-model the renderer dr
 
 ## Tests
 
-Fold, fusion, election, and cadence logic stay in-module beside the file they cover. Supervisor, snapshot, launch, and unread behaviour lives in [`tests/integration/`](../../tests/integration/AGENTS.md); rendered flows belong to the journey tier and diff-stat cost to the performance tier.
+Fold, fusion, election, cadence, and launch orchestration over the private mux seam stay in-module beside the file they cover. As a scoped exception to the repository unit-test default, election and launch tests may use isolated tempdirs for heartbeat files, but spawn no process and contact no live mux. Public mux wiring and live-backend launch behaviour stay in [`tests/integration/`](../../tests/integration/AGENTS.md), alongside supervisor, snapshot, and unread behaviour; rendered flows belong to the journey tier and diff-stat cost to the performance tier.

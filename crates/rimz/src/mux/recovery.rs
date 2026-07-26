@@ -178,15 +178,11 @@ pub(crate) fn protected_pids(procs: &[ProcInfo], self_pid: u32) -> HashSet<u32> 
     let parents: HashMap<u32, u32> = procs.iter().map(|proc| (proc.pid, proc.ppid)).collect();
     let mut protected = HashSet::new();
     let mut current = self_pid;
-    // Bounded so a process-table glitch (a cycle) cannot loop forever.
-    for _ in 0..64 {
-        if !protected.insert(current) {
+    while current != 0 && protected.insert(current) {
+        let Some(parent) = parents.get(&current).copied() else {
             break;
-        }
-        match parents.get(&current) {
-            Some(&parent) if parent > 1 => current = parent,
-            _ => break,
-        }
+        };
+        current = parent;
     }
     protected
 }
@@ -515,6 +511,7 @@ mod tests {
         // A reset process tree: shell(100) -> rimz reset(101) -> this(102). None of
         // them carry the session name, but protect them explicitly regardless.
         let procs = vec![
+            proc(1, 0, me, "init"),
             proc(100, 1, me, "zsh"),
             proc(101, 100, me, "rimz reset"),
             proc(102, 101, me, "rimz reset"),
@@ -530,6 +527,7 @@ mod tests {
         assert!(protected.contains(&102));
         assert!(protected.contains(&101));
         assert!(protected.contains(&100));
+        assert!(protected.contains(&1));
         let got = select_sweep_targets(&procs, me, SESSION, WS, &protected, true);
         assert_eq!(got, vec![10]);
     }

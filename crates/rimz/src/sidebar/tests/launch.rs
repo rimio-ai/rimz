@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use super::*;
 
 fn sidebar_opts(harness: &Harness) -> SidebarPaneOptions {
-    let cwd = harness._dir.path().to_path_buf();
+    let cwd = harness.path().to_path_buf();
     SidebarPaneOptions {
         session_name: "session".to_owned(),
         workspace_id: harness.workspace_id.clone(),
