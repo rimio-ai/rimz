@@ -31,11 +31,9 @@ fn compute_fleet_spending_with_walker(
     project_root: Option<&std::path::Path>,
     spec: &HeadlineSpec,
 ) -> crate::agents::spending::SpendingCaches {
-    super::serve_direct(
-        walker,
-        runtime,
-        &service_request(runtime, project_root, spec),
-    )
+    let request = service_request(runtime, project_root, spec);
+    let context = super::request_context(&request, true);
+    super::compute_fleet_spending(walker, runtime, &context, &mut |_| {})
 }
 
 fn walk_fleet_spending(

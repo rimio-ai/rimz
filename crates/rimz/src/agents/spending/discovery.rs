@@ -415,7 +415,7 @@ impl SpendingDiscoveryIndex {
         self.last_authoritative
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub(crate) fn mark_non_authoritative_for_test(&mut self) {
         self.last_authoritative = false;
     }

@@ -7,9 +7,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use super::SPENDING_TTL;
 use super::aggregate::{DaySpend, SpendTally, SpendWindow, Spending};
 use super::cache::peek_cache_version;
+use super::{SPENDING_TTL, SpendingWalkResult};
 
 /// Gates the aggregate meaning in provider-spending.json, independent of the
 /// raw per-file cache version. An older stamp reads as stale, so the producer
@@ -78,6 +78,18 @@ pub struct ProviderSpendingCache {
 }
 
 impl ProviderSpendingCache {
+    pub(crate) fn from_walk(result: &SpendingWalkResult, refreshed_at_ms: u64) -> Self {
+        Self {
+            version: PROVIDER_SPENDING_VERSION,
+            refreshed_at_ms,
+            day_by_provider: result.provider_day.clone(),
+            day_cutoff_secs: result.day_cutoff_secs,
+            days: result.days.clone(),
+            models: result.models.clone(),
+            spending: result.spending.clone(),
+        }
+    }
+
     /// Whether this cache carries the current published aggregate shape.
     pub fn is_current_version(&self) -> bool {
         self.version == PROVIDER_SPENDING_VERSION
@@ -147,6 +159,13 @@ pub fn write_provider_spending_cache_with_day(
         models: models.clone(),
         spending: spending.clone(),
     };
+    write_provider_spending_cache_value(path, &cache)
+}
+
+pub(crate) fn write_provider_spending_cache_value(
+    path: &Path,
+    cache: &ProviderSpendingCache,
+) -> bool {
     if let Some(on_disk) = peek_cache_version(path)
         && on_disk > cache.version
     {

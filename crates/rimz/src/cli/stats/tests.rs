@@ -1,6 +1,6 @@
 use super::*;
 use rimz::theme::theme_glyphs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn day(tokens: u64, usd: f64) -> DaySpend {
     DaySpend { tokens, usd }
@@ -201,16 +201,14 @@ fn stats_serves_published_cache_without_walking() {
         .insert("claude".to_owned(), tally(120, 12.0, 3));
     rimz::agents::spending::write_provider_spending_cache_with_rollups(
         &runtime.shared_provider_spending_path(),
-        unix_millis_now(),
+        1,
         &spending,
         &by_day,
         &by_model,
     );
     let cursor_path = runtime.shared_spending_cursor_path();
     assert!(!cursor_path.exists());
-    let mut walker = SpendingWalker::new();
-
-    let stats = load_or_refresh_stats(&runtime, None, &mut walker).unwrap();
+    let stats = load_or_refresh_stats(&runtime, None).unwrap();
 
     assert_eq!(stats.by_day, by_day);
     assert_eq!(stats.by_model, by_model);
@@ -228,25 +226,46 @@ fn cold_refresh_publishes_sidebar_provider_rollups() {
     let runtime =
         RuntimePaths::under(rimz::WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     ensure_shared_runtime(&runtime).unwrap();
-    let transcript = write_jsonl(
+    let first = write_jsonl(
         dir.path(),
-        "claude.jsonl",
+        "claude-1.jsonl",
         &[&claude_line_today(1.25, "msg-1", "req-1")],
     );
-    let files = vec![(
-        rimz::agents::definition_by_kind("claude").unwrap(),
-        transcript.clone(),
-    )];
+    let second = write_jsonl(
+        dir.path(),
+        "claude-2.jsonl",
+        &[&claude_line_today(2.5, "msg-2", "req-2")],
+    );
+    let claude = rimz::agents::definition_by_kind("claude").unwrap();
+    let _discovery = rimz::agents::spending::override_discovered_spending_files_for_test(vec![
+        (claude, first.clone()),
+        (claude, second.clone()),
+    ]);
+    let mut progress = Vec::new();
+    let mut record_progress = |reading| progress.push(reading);
 
-    let mut walker = SpendingWalker::new();
-    let stats = compute_stats_from_files(&runtime, files, true, None, &mut walker);
+    let stats = load_or_refresh_stats(&runtime, Some(&mut record_progress)).unwrap();
     let published = read_provider_spending_cache(&runtime.shared_provider_spending_path());
     let fresh = load_published_stats(&runtime)
         .expect("published stats are current after a stats-owned refresh");
     let cursor =
         rimz::agents::spending::read_spending_cache(&runtime.shared_spending_cursor_path());
 
-    assert!(published.is_fresh(unix_millis_now()));
+    assert!(published.refreshed_at_ms > 0);
+    assert_eq!(
+        progress.first(),
+        Some(&SpendProgress {
+            finished_files: 0,
+            total_files: 2,
+        })
+    );
+    assert_eq!(
+        progress.last(),
+        Some(&SpendProgress {
+            finished_files: 2,
+            total_files: 2,
+        })
+    );
     assert!((published.spending.total.month.usd - stats.total.month.usd).abs() < 1e-9);
     assert!((fresh.total.month.usd - stats.total.month.usd).abs() < 1e-9);
     assert_eq!(
@@ -254,12 +273,14 @@ fn cold_refresh_publishes_sidebar_provider_rollups() {
         stats.total.month.tokens
     );
     assert_eq!(published.spending.by_provider, stats.by_agent);
-    assert!(
-        cursor
-            .files
-            .contains_key(&transcript.to_string_lossy().into_owned()),
-        "stats publishes the cursor cache that makes the next run history-independent"
-    );
+    for transcript in [first, second] {
+        assert!(
+            cursor
+                .files
+                .contains_key(&transcript.to_string_lossy().into_owned()),
+            "stats publishes the cursor cache that makes the next run history-independent"
+        );
+    }
 }
 
 #[test]
