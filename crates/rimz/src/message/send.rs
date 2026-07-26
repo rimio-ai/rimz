@@ -301,12 +301,12 @@ fn write_batch(
             let payload = batch
                 .iter()
                 .map(|message| {
-                    match crate::harness::target::sender_prefix(
+                    match crate::harness::target::message_header(
                         &message.sender,
                         &peers,
                         message.channel.as_deref(),
                     ) {
-                        Some(prefix) => format!("{prefix}{}", message.text),
+                        Some(header) => format!("{header}{}", message.text),
                         None => message.text.clone(),
                     }
                 })

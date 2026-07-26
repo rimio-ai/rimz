@@ -136,8 +136,8 @@ pub enum DeliveryVerdict {
 
 /// The record a system-initiated nudge queues against an agent card: budget
 /// continues, auto-continue resumes, and supervised verify re-prompts. A nudge
-/// carries the agent's channel, always submits, and rides a human sender so the
-/// receiver treats the text as ordinary input; its gate marks the automation.
+/// carries the agent's channel, always submits, and stays verbatim as system
+/// text; its gate marks the automation.
 fn nudge_record(
     workspace_id: crate::ids::WorkspaceId,
     agent: &crate::agents::AgentState,
@@ -147,7 +147,7 @@ fn nudge_record(
 ) -> MessageRecord {
     let record = MessageRecord::new(workspace_id, agent, text, true, gate)
         .with_channel(crate::harness::target::agent_channel(agent))
-        .with_sender(crate::message::MessageSender::Human);
+        .with_sender(crate::message::MessageSender::System);
     match pane_id {
         Some(pane_id) => record.with_pane_id(pane_id.clone()),
         None => record,
@@ -946,7 +946,7 @@ mod tests {
     }
 
     #[test]
-    fn nudge_record_rides_a_human_sender_and_carries_the_agents_channel() {
+    fn nudge_record_rides_a_system_sender_and_carries_the_agents_channel() {
         let mut agent = agent("sess-parked", AgentStatus::Paused);
         agent.channel = Some("auth".to_owned());
         let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_4");
@@ -958,10 +958,9 @@ mod tests {
             DeliveryGate::Resume,
             Some(&pane_id),
         );
-        // A resume nudge is system-initiated but must reach the agent as
-        // ordinary input, so it rides a human sender while its gate keeps it
-        // out of `is_user_input`.
-        assert_eq!(resume.sender, crate::message::MessageSender::Human);
+        // A resume nudge is system-initiated and stays verbatim; its gate keeps
+        // it out of `is_user_input`.
+        assert_eq!(resume.sender, crate::message::MessageSender::System);
         assert!(!resume.is_user_input());
         assert!(resume.enter, "a nudge always submits");
         assert_eq!(resume.gate, DeliveryGate::Resume);

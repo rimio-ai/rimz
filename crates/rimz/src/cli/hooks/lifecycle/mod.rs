@@ -659,7 +659,8 @@ mod tests {
             Some(agent.agent_id.clone()),
             LifecycleSignal::TurnStarted,
         );
-        real_observation.prompt = Some("real prompt".to_owned());
+        real_observation.prompt =
+            Some("Type: USER_MESSAGE\nFrom: @user\nContent:\nreal prompt".to_owned());
         confirm_sent_message_for_lifecycle(
             &store,
             rimz::agents::definition_by_kind("claude").unwrap(),

@@ -74,7 +74,10 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         rimz::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted);
-    started.observation.prompt = Some("from @planner: first\n\nfrom @reviewer: second".to_owned());
+    started.observation.prompt = Some(
+        "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst\n\nType: AGENT_MESSAGE\nFrom: @reviewer\nContent:\nsecond"
+            .to_owned(),
+    );
 
     record_conversation(
         &workspace,
@@ -181,7 +184,42 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
 }
 
 #[test]
-fn unprefixed_batch_keeps_each_confirmed_message_causal() {
+fn user_message_header_records_prompt_without_envelope() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let message = rimz::message::MessageRecord::new(
+        workspace.workspace_id.clone(),
+        &agent,
+        "from a human".to_owned(),
+        true,
+        rimz::message::DeliveryGate::Done,
+    );
+    let mut started = recorded(LifecycleSignal::TurnStarted);
+    started.observation.prompt =
+        Some("Type: USER_MESSAGE\nFrom: @user\nContent:\nfrom a human".to_owned());
+
+    record_conversation(
+        &workspace,
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &started,
+        None,
+        &[],
+        &[message.clone()],
+    )
+    .unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Prompt);
+    assert_eq!(entries[0].from, None);
+    assert_eq!(entries[0].text, "from a human");
+    assert_eq!(entries[0].message_id.as_ref(), Some(&message.message_id));
+}
+
+#[test]
+fn unheadered_system_batch_keeps_each_confirmed_message_causal() {
     let (_dir, store) = store();
     let workspace = workspace();
     let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
@@ -191,14 +229,16 @@ fn unprefixed_batch_keeps_each_confirmed_message_causal() {
         "\nfirst\n".to_owned(),
         true,
         rimz::message::DeliveryGate::Done,
-    );
+    )
+    .with_sender(rimz::message::MessageSender::System);
     let second = rimz::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
         "\nsecond\n".to_owned(),
         true,
         rimz::message::DeliveryGate::Done,
-    );
+    )
+    .with_sender(rimz::message::MessageSender::System);
     let mut started = recorded(LifecycleSignal::TurnStarted);
     started.observation.prompt = Some("first\n\n\n\nsecond".to_owned());
 

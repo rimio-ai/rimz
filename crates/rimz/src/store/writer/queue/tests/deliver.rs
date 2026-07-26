@@ -312,9 +312,15 @@ fn correlated_ack_confirms_matching_prompt_instead_of_oldest_sent() {
 }
 
 #[test]
-fn correlated_ack_aligns_unprefixed_and_mixed_batches() {
+fn correlated_ack_aligns_headered_and_mixed_batches() {
+    let user = |text: &str| format!("Type: USER_MESSAGE\nFrom: @user\nContent:\n{text}");
     for (first_sender, first_text, second_text, prompt) in [
-        (MessageSender::Human, "first", "second", "first\n\nsecond"),
+        (
+            MessageSender::Human,
+            "first",
+            "second",
+            format!("{}\n\n{}", user("first"), user("second")),
+        ),
         (
             MessageSender::Agent {
                 kind: AgentKind::new_unchecked("codex"),
@@ -325,25 +331,28 @@ fn correlated_ack_aligns_unprefixed_and_mixed_batches() {
             },
             "first",
             "second",
-            "from @planner: first\n\nsecond",
+            format!(
+                "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst\n\n{}",
+                user("second")
+            ),
         ),
         (
             MessageSender::Human,
             "first\n",
             "second",
-            "first\n\n\nsecond",
+            format!("{}\n\n{}", user("first\n"), user("second")),
         ),
         (
             MessageSender::Human,
             "first",
             "\nsecond",
-            "first\n\n\nsecond",
+            format!("{}\n\n{}", user("first"), user("\nsecond")),
         ),
         (
             MessageSender::Human,
             "\nfirst",
             "second\n",
-            "first\n\nsecond",
+            format!("{}\n\n{}", user("\nfirst"), user("second\n")),
         ),
     ] {
         let q = Queue::new();
@@ -364,7 +373,7 @@ fn correlated_ack_aligns_unprefixed_and_mixed_batches() {
                 &first.agent_id,
                 None,
                 DeliveryAck::TurnStarted {
-                    prompt: Some(prompt),
+                    prompt: Some(&prompt),
                 },
                 "session",
             )
