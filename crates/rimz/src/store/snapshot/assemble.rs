@@ -182,7 +182,7 @@ impl WorkspaceSnapshotIdentity {
                 tracing::debug!(
                     path = %paths.workspace_record.display(),
                     error = %err,
-                    "workspace record is unreadable while resolving snapshot identity",
+                    "workspace record is unreadable while resolving the display name",
                 );
                 return Self::fallback(paths);
             }
