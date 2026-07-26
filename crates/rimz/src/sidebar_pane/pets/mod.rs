@@ -117,26 +117,63 @@ pub fn dashboard_pet_size(tier: PetRenderTier) -> PetGridSize {
 
 #[derive(Default)]
 pub(crate) struct PetAssets {
-    loaded: Option<LoadedPet>,
-    loading: Option<LoadingPet>,
-    failed: Option<FailedPet>,
+    load_state: PetLoadState,
     previous_action: Option<PetAction>,
     jump_started_phase: Option<u64>,
     previous_unread_rows: BTreeSet<String>,
     caption: Option<String>,
 }
 
-struct LoadingPet {
-    id: String,
-    key: PreparationKey,
-    receiver: Receiver<LoadResult>,
+#[derive(Default)]
+enum PetLoadState {
+    #[default]
+    Empty,
+    Loading {
+        request: PetLoadRequest,
+        receiver: Receiver<LoadResult>,
+    },
+    Loaded {
+        request: PetLoadRequest,
+        asset: LoadedPetAsset,
+    },
+    Failed {
+        request: PetLoadRequest,
+        failed_at_phase: u64,
+        retry_receiver: Option<Receiver<LoadResult>>,
+    },
 }
 
-struct FailedPet {
+impl PetLoadState {
+    fn request(&self) -> Option<&PetLoadRequest> {
+        match self {
+            Self::Empty => None,
+            Self::Loading { request, .. }
+            | Self::Loaded { request, .. }
+            | Self::Failed { request, .. } => Some(request),
+        }
+    }
+
+    fn matches(&self, pet_id: &str, key: PreparationKey) -> bool {
+        self.request()
+            .is_some_and(|request| request.id == pet_id && request.key == key)
+    }
+
+    fn is_loading(&self) -> bool {
+        matches!(
+            self,
+            Self::Loading { .. }
+                | Self::Failed {
+                    retry_receiver: Some(_),
+                    ..
+                }
+        )
+    }
+}
+
+#[derive(Clone)]
+struct PetLoadRequest {
     id: String,
     key: PreparationKey,
-    caption: String,
-    failed_at_phase: u64,
 }
 
 /// Wall-clock span, in milliseconds, before a failed asset load is retried. A
@@ -161,12 +198,6 @@ fn phase_elapsed(started_phase: u64, phase: u64, refresh_ms: u16) -> std::time::
             .saturating_sub(started_phase)
             .saturating_mul(u64::from(refresh_ms.max(1))),
     )
-}
-
-struct LoadedPet {
-    id: String,
-    key: PreparationKey,
-    asset: LoadedPetAsset,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -229,15 +260,17 @@ impl PetAssets {
             data: vec![255, 0, 0, 255],
         };
         Self {
-            loaded: Some(LoadedPet {
-                id: pet_id.to_owned(),
-                key: PreparationKey::new(
-                    PetRenderTier::Pixel,
-                    DASHBOARD_PIXEL_PET,
-                    CellAspect::NEUTRAL,
-                ),
+            load_state: PetLoadState::Loaded {
+                request: PetLoadRequest {
+                    id: pet_id.to_owned(),
+                    key: PreparationKey::new(
+                        PetRenderTier::Pixel,
+                        DASHBOARD_PIXEL_PET,
+                        CellAspect::NEUTRAL,
+                    ),
+                },
                 asset: LoadedPetAsset::Pixel(vec![frame; catalog::FRAME_COUNT]),
-            }),
+            },
             ..Self::default()
         }
     }
@@ -259,9 +292,7 @@ impl PetAssets {
     /// `observe_unread_rows` call in the serve loop, so it is left untouched
     /// here; the full-teardown disabled path clears it on its own.
     fn reset_runtime_state(&mut self) {
-        self.loaded = None;
-        self.loading = None;
-        self.failed = None;
+        self.load_state = PetLoadState::Empty;
         self.previous_action = None;
         self.jump_started_phase = None;
         self.caption = None;
@@ -307,16 +338,12 @@ impl PetAssets {
         }
         self.observe_action(action, config.voice, phase);
 
-        let loading = preparation.is_some_and(|key| {
-            self.loading
-                .as_ref()
-                .is_some_and(|loading| loading.id == id && loading.key == key)
-        });
-        let unavailable_caption = self
-            .failed
-            .as_ref()
-            .filter(|failed| failed.id == id)
-            .map(|failed| failed.caption.clone());
+        let loading = preparation
+            .is_some_and(|key| self.load_state.matches(id, key) && self.load_state.is_loading());
+        let unavailable = matches!(
+            &self.load_state,
+            PetLoadState::Failed { request, .. } if request.id == id
+        );
         let body = preparation.and_then(|key| {
             let (sprite_index, track) = self.loaded_sprite(LoadedSpriteRequest {
                 pet_id: id,
@@ -351,7 +378,8 @@ impl PetAssets {
         };
         Some(PetView {
             body,
-            caption: unavailable_caption
+            caption: unavailable
+                .then(|| "pet unavailable".to_owned())
                 .or_else(|| self.caption.clone())
                 .or_else(|| loading.then(|| "fetching pet...".to_owned())),
             frame_interval,
@@ -359,11 +387,13 @@ impl PetAssets {
     }
 
     pub(crate) fn pixel_frame(&self, pet_id: &str, sprite_index: usize) -> Option<&RgbaImage> {
-        let loaded = self.loaded.as_ref()?;
-        if loaded.id != pet_id {
+        let PetLoadState::Loaded { request, asset } = &self.load_state else {
+            return None;
+        };
+        if request.id != pet_id {
             return None;
         }
-        match &loaded.asset {
+        match asset {
             LoadedPetAsset::Pixel(frames) => frames.get(sprite_index),
             LoadedPetAsset::Cell(_) => None,
         }
@@ -382,57 +412,54 @@ impl PetAssets {
         }
         self.previous_action = Some(action);
     }
+
     fn poll_loader(&mut self, phase: u64) {
-        let Some(loading) = &self.loading else {
-            return;
+        let (request, result) = match &self.load_state {
+            PetLoadState::Loading { request, receiver }
+            | PetLoadState::Failed {
+                request,
+                retry_receiver: Some(receiver),
+                ..
+            } => {
+                let result = match receiver.try_recv() {
+                    Ok(result) => result,
+                    Err(TryRecvError::Empty) => return,
+                    Err(TryRecvError::Disconnected) => Err("pet loader stopped".to_owned()),
+                };
+                (request.clone(), result)
+            }
+            PetLoadState::Empty
+            | PetLoadState::Loaded { .. }
+            | PetLoadState::Failed {
+                retry_receiver: None,
+                ..
+            } => return,
         };
-        let result = match loading.receiver.try_recv() {
-            Ok(result) => result,
-            Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err("pet loader stopped".to_owned()),
-        };
-        let id = loading.id.clone();
-        let key = loading.key;
-        self.loading = None;
         match result {
             Ok(asset) => {
-                self.loaded = Some(LoadedPet { id, key, asset });
-                self.failed = None;
+                self.load_state = PetLoadState::Loaded { request, asset };
             }
             Err(err) => {
-                tracing::debug!(pet = %id, error = %err, "pet asset unavailable");
-                self.loaded = None;
+                tracing::debug!(pet = %request.id, error = %err, "pet asset unavailable");
                 self.jump_started_phase = None;
-                self.failed = Some(FailedPet {
-                    id,
-                    key,
-                    caption: "pet unavailable".to_owned(),
+                self.load_state = PetLoadState::Failed {
+                    request,
                     failed_at_phase: phase,
-                });
+                    retry_receiver: None,
+                };
             }
         }
     }
 
     fn clear_mismatched_pet(&mut self, pet_id: &str, key: Option<PreparationKey>) {
-        if self
-            .loaded
-            .as_ref()
-            .is_some_and(|loaded| loaded.id != pet_id || key.is_some_and(|key| loaded.key != key))
-        {
-            self.loaded = None;
-            self.jump_started_phase = None;
-        }
-        if self.loading.as_ref().is_some_and(|loading| {
-            loading.id != pet_id || key.is_some_and(|key| loading.key != key)
-        }) {
-            self.loading = None;
-        }
-        if self
-            .failed
-            .as_ref()
-            .is_some_and(|failed| failed.id != pet_id || key.is_some_and(|key| failed.key != key))
-        {
-            self.failed = None;
+        let mismatched = self.load_state.request().is_some_and(|request| {
+            request.id != pet_id || key.is_some_and(|key| request.key != key)
+        });
+        if mismatched {
+            if matches!(&self.load_state, PetLoadState::Loaded { .. }) {
+                self.jump_started_phase = None;
+            }
+            self.load_state = PetLoadState::Empty;
         }
     }
 
@@ -445,27 +472,29 @@ impl PetAssets {
     ) {
         let id = source.id();
         let id: &str = id.as_ref();
-        if self
-            .loaded
-            .as_ref()
-            .is_some_and(|loaded| loaded.id == id && loaded.key == key)
-            || self
-                .loading
-                .as_ref()
-                .is_some_and(|loading| loading.id == id && loading.key == key)
+        if self.load_state.matches(id, key)
+            && matches!(
+                &self.load_state,
+                PetLoadState::Loaded { .. } | PetLoadState::Loading { .. }
+            )
         {
             return;
         }
         // A latched failure holds off a fresh attempt until the cooldown
         // elapses, so a transient miss recovers without a per-frame retry storm.
-        if let Some(failed) = self.failed.as_ref()
-            && failed.id == id
-            && failed.key == key
-            && !retry_due(failed.failed_at_phase, phase, refresh_ms)
-        {
-            return;
-        }
-        self.loaded = None;
+        let retrying = match &self.load_state {
+            PetLoadState::Failed {
+                request,
+                failed_at_phase,
+                retry_receiver,
+            } if request.id == id && request.key == key => {
+                if retry_receiver.is_some() || !retry_due(*failed_at_phase, phase, refresh_ms) {
+                    return;
+                }
+                Some(*failed_at_phase)
+            }
+            _ => None,
+        };
         let (sender, receiver) = mpsc::channel();
         let source = source.clone();
         let spawned = thread::Builder::new()
@@ -476,19 +505,28 @@ impl PetAssets {
             });
         match spawned {
             Ok(_) => {
-                self.loading = Some(LoadingPet {
+                let request = PetLoadRequest {
                     id: id.to_owned(),
                     key,
-                    receiver,
-                });
+                };
+                self.load_state = match retrying {
+                    Some(failed_at_phase) => PetLoadState::Failed {
+                        request,
+                        failed_at_phase,
+                        retry_receiver: Some(receiver),
+                    },
+                    None => PetLoadState::Loading { request, receiver },
+                };
             }
             Err(err) => {
-                self.failed = Some(FailedPet {
-                    id: id.to_owned(),
-                    key,
-                    caption: "pet unavailable".to_owned(),
+                self.load_state = PetLoadState::Failed {
+                    request: PetLoadRequest {
+                        id: id.to_owned(),
+                        key,
+                    },
                     failed_at_phase: phase,
-                });
+                    retry_receiver: None,
+                };
                 tracing::debug!(pet = %id, error = %err, "pet asset loader failed");
             }
         }
@@ -500,11 +538,13 @@ impl PetAssets {
         key: PreparationKey,
         sprite_index: usize,
     ) -> Option<PetCellGrid> {
-        let loaded = self.loaded.as_ref()?;
-        if loaded.id != pet_id || loaded.key != key {
+        let PetLoadState::Loaded { request, asset } = &self.load_state else {
+            return None;
+        };
+        if request.id != pet_id || request.key != key {
             return None;
         }
-        match &loaded.asset {
+        match asset {
             LoadedPetAsset::Cell(grids) => grids.get(sprite_index).cloned(),
             LoadedPetAsset::Pixel(_) => None,
         }
@@ -520,8 +560,10 @@ impl PetAssets {
             frame,
         } = request;
         let jump_duration = {
-            let loaded = self.loaded.as_ref()?;
-            if loaded.id != pet_id {
+            let PetLoadState::Loaded { request, .. } = &self.load_state else {
+                return None;
+            };
+            if request.id != pet_id {
                 return None;
             }
             Some(
@@ -539,11 +581,13 @@ impl PetAssets {
             jump_duration,
             unread_triggered: frame.unread_triggered,
         });
-        let loaded = self.loaded.as_ref()?;
-        if loaded.id != pet_id {
+        let PetLoadState::Loaded { request, asset } = &self.load_state else {
+            return None;
+        };
+        if request.id != pet_id {
             return None;
         }
-        let frame_count = match &loaded.asset {
+        let frame_count = match asset {
             LoadedPetAsset::Cell(grids) => grids.len(),
             LoadedPetAsset::Pixel(frames) => frames.len(),
         };

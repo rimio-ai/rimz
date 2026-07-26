@@ -70,22 +70,17 @@ fn render_tier_resolves_mode_caps_and_paintability() {
 fn disabled_config_clears_runtime_state() {
     let (_sender, receiver) = mpsc::channel();
     let mut assets = PetAssets {
-        loaded: loaded_cell_assets(None).loaded,
-        loading: Some(LoadingPet {
-            id: "codex".to_owned(),
-            key: cell_key(),
+        load_state: PetLoadState::Loading {
+            request: PetLoadRequest {
+                id: "codex".to_owned(),
+                key: cell_key(),
+            },
             receiver,
-        }),
+        },
         previous_action: Some(PetAction::Running),
         jump_started_phase: Some(1),
         previous_unread_rows: BTreeSet::from(["agent-1".to_owned()]),
         caption: Some("x".to_owned()),
-        failed: Some(FailedPet {
-            id: "codex".to_owned(),
-            key: cell_key(),
-            caption: "pet unavailable".to_owned(),
-            failed_at_phase: 0,
-        }),
     };
     assert!(
         assets
@@ -96,9 +91,7 @@ fn disabled_config_clears_runtime_state() {
     assert_eq!(assets.jump_started_phase, None);
     assert!(assets.previous_unread_rows.is_empty());
     assert_eq!(assets.caption, None);
-    assert!(assets.failed.is_none());
-    assert!(assets.loaded.is_none());
-    assert!(assets.loading.is_none());
+    assert!(matches!(assets.load_state, PetLoadState::Empty));
 }
 
 #[test]
@@ -107,26 +100,29 @@ fn empty_pet_selector_rests_with_no_pet() {
     assets.jump_started_phase = Some(3);
     assets.previous_unread_rows = BTreeSet::from(["agent-1".to_owned()]);
     assets.caption = Some("running".to_owned());
-    assets.failed = Some(FailedPet {
-        id: "codex".to_owned(),
-        key: cell_key(),
-        caption: "pet unavailable".to_owned(),
+    assets.load_state = PetLoadState::Failed {
+        request: PetLoadRequest {
+            id: "codex".to_owned(),
+            key: cell_key(),
+        },
         failed_at_phase: 0,
-    });
+        retry_receiver: None,
+    };
     let view = assets
         .view(&config_for("  "), cell_frame(PetAction::Idle, 0))
         .expect("enabled pets produce a view");
     assert_eq!(view.body, None);
     assert_eq!(view.caption.as_deref(), Some("no pet selected"));
-    assert!(assets.loading.is_none(), "an empty selector loads nothing");
-    assert!(assets.loaded.is_none());
+    assert!(
+        matches!(assets.load_state, PetLoadState::Empty),
+        "an empty selector loads nothing"
+    );
     assert_eq!(assets.previous_action, None);
     assert_eq!(assets.jump_started_phase, None);
     assert_eq!(
         assets.previous_unread_rows,
         BTreeSet::from(["agent-1".to_owned()])
     );
-    assert!(assets.failed.is_none());
 }
 
 #[test]
@@ -147,10 +143,11 @@ fn local_pet_path_begins_loading_under_its_own_id() {
         "a local-path selector uses loading cadence"
     );
     assert!(
-        assets
-            .loading
-            .as_ref()
-            .is_some_and(|loading| loading.id == "/no/such/pet/sheet.webp"),
+        matches!(
+            &assets.load_state,
+            PetLoadState::Loading { request, .. }
+                if request.id == "/no/such/pet/sheet.webp"
+        ),
         "the loader is keyed by the local path"
     );
 }
@@ -168,7 +165,7 @@ fn missing_body_size_does_not_start_asset_loading() {
     assert_eq!(view.body, None);
     assert_eq!(view.frame_interval, None);
     assert_eq!(view.caption.as_deref(), Some("resting"));
-    assert!(assets.loading.is_none());
+    assert!(matches!(assets.load_state, PetLoadState::Empty));
 }
 
 #[test]
@@ -178,11 +175,13 @@ fn failed_loader_settles_without_immediate_retry() {
     sender
         .send(Err("offline".to_owned()))
         .expect("send failure");
-    assets.loading = Some(LoadingPet {
-        id: "codex".to_owned(),
-        key: cell_key(),
+    assets.load_state = PetLoadState::Loading {
+        request: PetLoadRequest {
+            id: "codex".to_owned(),
+            key: cell_key(),
+        },
         receiver,
-    });
+    };
     let config = enabled_config();
 
     let view = assets
@@ -190,14 +189,35 @@ fn failed_loader_settles_without_immediate_retry() {
         .expect("enabled pets produce a view");
     assert_eq!(view.frame_interval, None);
     assert_eq!(view.caption.as_deref(), Some("pet unavailable"));
-    assert!(assets.loading.is_none());
-    assert!(assets.failed.is_some());
+    assert!(matches!(
+        assets.load_state,
+        PetLoadState::Failed {
+            retry_receiver: None,
+            ..
+        }
+    ));
 
     let view = assets
         .view(&config, cell_frame(PetAction::Idle, 1))
         .expect("enabled pets produce a view");
     assert_eq!(view.frame_interval, None);
-    assert!(assets.loading.is_none());
+    assert!(!assets.load_state.is_loading());
+
+    let view = assets
+        .view(&config, cell_frame(PetAction::Idle, 200))
+        .expect("enabled pets produce a view");
+    assert_eq!(
+        view.frame_interval,
+        Some(crate::sidebar::timing::animation_frame(REFRESH_MS))
+    );
+    assert_eq!(view.caption.as_deref(), Some("pet unavailable"));
+    assert!(matches!(
+        assets.load_state,
+        PetLoadState::Failed {
+            retry_receiver: Some(_),
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -327,8 +347,11 @@ fn pixel_view_resolves_sprite_without_cell_grid() {
             .is_some()
     );
     assert!(matches!(
-        assets.loaded.as_ref().expect("loaded").asset,
-        LoadedPetAsset::Pixel(_)
+        assets.load_state,
+        PetLoadState::Loaded {
+            asset: LoadedPetAsset::Pixel(_),
+            ..
+        }
     ));
 }
 
@@ -336,11 +359,13 @@ fn pixel_view_resolves_sprite_without_cell_grid() {
 fn prepared_grids_are_invalidated_on_size_or_aspect_change() {
     let key = cell_key();
     let mut assets = PetAssets {
-        loaded: Some(LoadedPet {
-            id: "codex".to_owned(),
-            key,
+        load_state: PetLoadState::Loaded {
+            request: PetLoadRequest {
+                id: "codex".to_owned(),
+                key,
+            },
             asset: LoadedPetAsset::Cell(vec![vec![]; catalog::FRAME_COUNT]),
-        }),
+        },
         ..PetAssets::default()
     };
 
@@ -352,13 +377,15 @@ fn prepared_grids_are_invalidated_on_size_or_aspect_change() {
             ..key
         }),
     );
-    assert!(assets.loaded.is_none());
+    assert!(matches!(assets.load_state, PetLoadState::Empty));
 
-    assets.loaded = Some(LoadedPet {
-        id: "codex".to_owned(),
-        key,
+    assets.load_state = PetLoadState::Loaded {
+        request: PetLoadRequest {
+            id: "codex".to_owned(),
+            key,
+        },
         asset: LoadedPetAsset::Cell(vec![vec![]; catalog::FRAME_COUNT]),
-    });
+    };
     assets.clear_mismatched_pet(
         "codex",
         Some(PreparationKey {
@@ -366,7 +393,7 @@ fn prepared_grids_are_invalidated_on_size_or_aspect_change() {
             ..key
         }),
     );
-    assert!(assets.loaded.is_none());
+    assert!(matches!(assets.load_state, PetLoadState::Empty));
 }
 
 #[test]
@@ -419,11 +446,13 @@ fn cell_key() -> PreparationKey {
 
 fn loaded_cell_assets(previous_action: Option<PetAction>) -> PetAssets {
     PetAssets {
-        loaded: Some(LoadedPet {
-            id: "codex".to_owned(),
-            key: cell_key(),
+        load_state: PetLoadState::Loaded {
+            request: PetLoadRequest {
+                id: "codex".to_owned(),
+                key: cell_key(),
+            },
             asset: LoadedPetAsset::Cell(vec![vec![]; catalog::FRAME_COUNT]),
-        }),
+        },
         previous_action,
         ..PetAssets::default()
     }
@@ -436,15 +465,17 @@ fn loaded_pixel_assets(previous_action: Option<PetAction>) -> PetAssets {
         data: vec![255, 0, 0, 255],
     };
     PetAssets {
-        loaded: Some(LoadedPet {
-            id: "codex".to_owned(),
-            key: PreparationKey {
-                tier: PetRenderTier::Pixel,
-                size: DASHBOARD_PIXEL_PET,
-                aspect: CellAspect::NEUTRAL,
+        load_state: PetLoadState::Loaded {
+            request: PetLoadRequest {
+                id: "codex".to_owned(),
+                key: PreparationKey {
+                    tier: PetRenderTier::Pixel,
+                    size: DASHBOARD_PIXEL_PET,
+                    aspect: CellAspect::NEUTRAL,
+                },
             },
             asset: LoadedPetAsset::Pixel(vec![frame; catalog::FRAME_COUNT]),
-        }),
+        },
         previous_action,
         ..PetAssets::default()
     }
