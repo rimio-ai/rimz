@@ -231,7 +231,7 @@ The expanded card also lists any **subagents** the agent spawned this turn. A `�
 
 ```
 ▌  ⧉ subagents (2)
-▌    ⠁ Explore — locate the render seam             $0.42
+▌    ⠁ Explore — locate the render seam         $0.42
 ▌      ◇ 12k · Opus 4.8                         ◔ 14m
 ▌    ✓ review — audit the trust hash
 ▌      ◇ 22k · Haiku 4.5
