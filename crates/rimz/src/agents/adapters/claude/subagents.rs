@@ -19,6 +19,13 @@ struct SubagentMetadata {
 }
 
 pub(super) fn spawned_subagents_under(parent_transcript: &Path) -> Vec<SpawnedSubagent> {
+    subagent_transcripts_under(parent_transcript)
+        .into_iter()
+        .filter_map(interrupted_subagent)
+        .collect()
+}
+
+pub(super) fn subagent_transcripts_under(parent_transcript: &Path) -> Vec<PathBuf> {
     let Some(subagents_dir) = subagents_dir(parent_transcript) else {
         return Vec::new();
     };
@@ -32,11 +39,7 @@ pub(super) fn spawned_subagents_under(parent_transcript: &Path) -> Vec<SpawnedSu
         .filter(|path| path.extension() == Some(OsStr::new("jsonl")))
         .collect::<Vec<_>>();
     transcripts.sort();
-
     transcripts
-        .into_iter()
-        .filter_map(interrupted_subagent)
-        .collect()
 }
 
 pub(super) fn subagents_dir(parent_transcript: &Path) -> Option<PathBuf> {

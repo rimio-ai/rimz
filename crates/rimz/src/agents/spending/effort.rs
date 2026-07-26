@@ -1,4 +1,5 @@
-//! Lifetime effort folded for one logical agent slot.
+//! Lifetime effort folded across every session-spend transcript for one
+//! logical agent slot.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -84,6 +85,7 @@ impl DedupPayload for SelectedEntry<'_> {
     }
 }
 
+/// Fold every transcript file from every continuation of one durable seat.
 pub fn slot_effort(sessions: &[EffortSessionRef<'_>], prices: &PriceBook) -> SlotEffort {
     slot_effort_with_memo(sessions, prices, &mut EffortParseMemo::default())
 }
@@ -101,33 +103,40 @@ pub fn slot_effort_with_memo(
                 .transcript_path
                 .filter(|path| !path.is_empty())
                 .map(Path::new);
-            let path = adapter.session_transcript(session.session_id, prior_path)?;
-            Some((session.session_id, adapter, path))
+            let paths = adapter.session_spend_transcripts(session.session_id, prior_path);
+            (!paths.is_empty()).then_some((session.session_id, adapter, paths))
         })
         .collect::<Vec<_>>();
 
-    memo.touched
-        .extend(resolved.iter().map(|(_, _, path)| path.clone()));
-    for (_, adapter, path) in &resolved {
-        let stat = TranscriptStat::from_path(path);
-        let unchanged = memo.files.get(path).is_some_and(|entry| entry.stat == stat);
-        if !unchanged {
-            let parsed = adapter.parse_spend(path, None, prices);
-            memo.files.insert(
-                path.clone(),
-                MemoEntry {
-                    stat,
-                    entries: parsed.entries,
-                },
-            );
+    memo.touched.extend(
+        resolved
+            .iter()
+            .flat_map(|(_, _, paths)| paths.iter().cloned()),
+    );
+    for (_, adapter, paths) in &resolved {
+        for path in paths {
+            let stat = TranscriptStat::from_path(path);
+            let unchanged = memo.files.get(path).is_some_and(|entry| entry.stat == stat);
+            if !unchanged {
+                let parsed = adapter.parse_spend(path, None, prices);
+                memo.files.insert(
+                    path.clone(),
+                    MemoEntry {
+                        stat,
+                        entries: parsed.entries,
+                    },
+                );
+            }
         }
     }
 
-    fold_entries(resolved.iter().flat_map(|(session_id, _, path)| {
-        memo.files
-            .get(path)
-            .into_iter()
-            .flat_map(|parsed| session_entries(&parsed.entries, session_id))
+    fold_entries(resolved.iter().flat_map(|(session_id, _, paths)| {
+        paths.iter().flat_map(|path| {
+            memo.files
+                .get(path)
+                .into_iter()
+                .flat_map(|parsed| session_entries(&parsed.entries, session_id))
+        })
     }))
 }
 
@@ -217,6 +226,53 @@ mod tests {
 
         assert_eq!(effort.tokens.input, 12);
         assert_eq!(effort.cost_usd, Some(0.5));
+    }
+
+    #[test]
+    fn claude_slot_effort_folds_subagent_companions_and_deduplicates_replays() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("session.jsonl");
+        let subagents = dir.path().join("session/subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        std::fs::write(
+            &main,
+            concat!(
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":1.0,"requestId":"r1","message":{"id":"m1","model":"main-model","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            subagents.join("agent-a.jsonl"),
+            concat!(
+                r#"{"timestamp":"2026-01-01T10:00:01.000Z","costUSD":99.0,"requestId":"replay","isSidechain":true,"message":{"id":"m1","model":"main-model","usage":{"input_tokens":999,"output_tokens":99}}}"#,
+                "\n",
+                r#"{"timestamp":"2026-01-01T10:00:02.000Z","costUSD":2.0,"requestId":"r2","isSidechain":true,"message":{"id":"m2","model":"child-model","usage":{"input_tokens":20,"output_tokens":2}}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let main = main.to_string_lossy().into_owned();
+
+        let effort = slot_effort(
+            &[EffortSessionRef {
+                kind: "claude",
+                session_id: "session",
+                transcript_path: Some(&main),
+            }],
+            &PriceBook::default(),
+        );
+
+        assert_eq!(
+            effort.tokens,
+            EffortTokens {
+                input: 30,
+                output: 3,
+                cache_write: 0,
+                cache_read: 0,
+            }
+        );
+        assert_eq!(effort.cost_usd, Some(3.0));
     }
 
     #[test]
