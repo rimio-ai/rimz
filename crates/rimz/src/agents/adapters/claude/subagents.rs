@@ -42,6 +42,12 @@ pub(super) fn subagent_transcripts_under(parent_transcript: &Path) -> Vec<PathBu
     transcripts
 }
 
+pub(super) fn is_subagent_transcript(path: &Path) -> bool {
+    path.parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == OsStr::new("subagents"))
+}
+
 pub(super) fn subagents_dir(parent_transcript: &Path) -> Option<PathBuf> {
     if parent_transcript.file_name() == Some(OsStr::new("chat.jsonl")) {
         return Some(parent_transcript.parent()?.join("subagents"));
