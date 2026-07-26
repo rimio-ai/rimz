@@ -1,4 +1,5 @@
 use serde_json::json;
+use std::io::Write as _;
 
 use super::*;
 use crate::ids::WorkspaceId;
@@ -65,6 +66,38 @@ fn folds_compaction_continuations_and_sums_rollup_effort() {
     assert_eq!(member.tool_calls, 5);
     assert_eq!(member.compactions, 3);
     assert_eq!(member.presence, Presence::Live);
+}
+
+#[test]
+fn resumed_slot_deduplicates_replayed_transcript_effort() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut agents = Vec::new();
+    for (id, filename) in [("one", "one.jsonl"), ("two", "two.jsonl")] {
+        let path = dir.path().join(filename);
+        let mut file = std::fs::File::create(&path).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"session_meta","payload":{{"id":"{id}"}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"model":"gpt-5.6-sol","timestamp":"2026-01-01T10:00:00.000Z","usage":{{"input_tokens":100,"output_tokens":20}}}}"#
+        )
+        .unwrap();
+        let mut state = agent(id, "codex", if id == "one" { 10 } else { 30 });
+        state.team = Some("forge".to_owned());
+        state.role = Some("coder".to_owned());
+        state.transcript_path = Some(path.to_string_lossy().into_owned());
+        agents.push(state);
+    }
+
+    let report = build_for(&agents);
+    let member = &report.groups[0].members[0];
+
+    assert_eq!(member.sessions, 2);
+    assert_eq!(member.tokens.input, 100);
+    assert_eq!(member.tokens.output, 20);
 }
 
 #[test]

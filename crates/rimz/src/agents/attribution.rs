@@ -6,7 +6,6 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 
 use jiff::Timestamp;
 use serde::Serialize;
@@ -16,6 +15,8 @@ use crate::store::active_time;
 use crate::store::paths::RuntimePaths;
 
 use super::{AgentState, pricing, spending};
+
+pub use super::spending::EffortTokens as TokenSplit;
 
 pub const ATTRIBUTION_SCHEMA: u8 = 1;
 
@@ -70,23 +71,6 @@ pub struct AttributionMember {
     pub compactions: u32,
     pub tokens: TokenSplit,
     pub cost_usd: Option<f64>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-pub struct TokenSplit {
-    pub input: u64,
-    pub output: u64,
-    pub cache_write: u64,
-    pub cache_read: u64,
-}
-
-impl TokenSplit {
-    fn add_assign(&mut self, other: Self) {
-        self.input = self.input.saturating_add(other.input);
-        self.output = self.output.saturating_add(other.output);
-        self.cache_write = self.cache_write.saturating_add(other.cache_write);
-        self.cache_read = self.cache_read.saturating_add(other.cache_read);
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -272,6 +256,13 @@ fn fold<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
     slots
 }
 
+pub fn slot_groups<'a>(agents: &[&'a AgentState]) -> Vec<Vec<&'a AgentState>> {
+    fold(agents)
+        .into_iter()
+        .map(|(_, records)| records)
+        .collect()
+}
+
 fn representatives<'a>(peers: &[&'a AgentState]) -> Vec<&'a AgentState> {
     fold(peers)
         .into_iter()
@@ -290,13 +281,12 @@ fn member(
 ) -> AttributionMember {
     // Every slot is created by `fold` only after its first record is inserted.
     let latest = newest(records).expect("folded attribution slot has records");
-    let (tokens, cost_usd) = records.iter().fold(
-        (TokenSplit::default(), None),
-        |(mut tokens, cost), agent| {
-            let (session_tokens, session_cost) = session_effort(agent, prices);
-            tokens.add_assign(session_tokens);
-            (tokens, sum_optional_cost(cost, session_cost))
-        },
+    let effort = spending::slot_effort(
+        &records
+            .iter()
+            .map(|agent| spending::EffortSessionRef::from_state(agent))
+            .collect::<Vec<_>>(),
+        prices,
     );
     let active_secs = records
         .iter()
@@ -343,8 +333,8 @@ fn member(
         compactions: records.iter().fold(0u32, |total, agent| {
             total.saturating_add(agent.compaction_count)
         }),
-        tokens,
-        cost_usd,
+        tokens: effort.tokens,
+        cost_usd: effort.cost_usd,
     }
 }
 
@@ -353,48 +343,6 @@ fn newest<'a>(records: &[&'a AgentState]) -> Option<&'a AgentState> {
         .iter()
         .copied()
         .max_by_key(|agent| (agent.last_activity, agent.registered_at))
-}
-
-fn session_effort(agent: &AgentState, prices: &pricing::PriceBook) -> (TokenSplit, Option<f64>) {
-    let Some(adapter) = super::find_definition(agent.kind.as_str()) else {
-        return (TokenSplit::default(), None);
-    };
-    let prior_path = agent
-        .transcript_path
-        .as_deref()
-        .filter(|path| !path.is_empty())
-        .map(Path::new);
-    let Some(path) = adapter.session_transcript(agent.agent_id.as_str(), prior_path) else {
-        return (TokenSplit::default(), None);
-    };
-    let parsed = adapter.parse_spend(&path, None, prices);
-    let entries = spending::session_entries(&parsed.entries, agent.agent_id.as_str());
-    if entries.is_empty() {
-        return (TokenSplit::default(), None);
-    }
-    entries.into_iter().fold(
-        (TokenSplit::default(), None),
-        |(mut tokens, cost), entry| {
-            tokens.add_assign(TokenSplit {
-                input: entry.input,
-                output: entry.output,
-                cache_write: entry.cache_write,
-                cache_read: entry.cache_read,
-            });
-            let entry_cost =
-                (entry.cost_usd.is_finite() && entry.cost_usd > 0.0).then_some(entry.cost_usd);
-            (tokens, sum_optional_cost(cost, entry_cost))
-        },
-    )
-}
-
-fn sum_optional_cost(total: Option<f64>, value: Option<f64>) -> Option<f64> {
-    match (total, value) {
-        (Some(total), Some(value)) => Some(total + value),
-        (Some(total), None) => Some(total),
-        (None, Some(value)) => Some(value),
-        (None, None) => None,
-    }
 }
 
 fn member_order(left: &AttributionMember, right: &AttributionMember) -> Ordering {
@@ -425,7 +373,7 @@ fn totals_from_refs(members: &[&AttributionMember]) -> EffortTotals {
             (None, Some(value)) => Some(value),
             (None, None) => None,
         };
-        totals.cost_usd = sum_optional_cost(totals.cost_usd, member.cost_usd);
+        totals.cost_usd = spending::sum_optional_cost(totals.cost_usd, member.cost_usd);
         totals.tool_calls = totals.tool_calls.saturating_add(member.tool_calls);
         totals.compactions = totals.compactions.saturating_add(member.compactions);
         totals.tokens.add_assign(member.tokens);
