@@ -69,10 +69,14 @@ fn assemble_snapshot(
     // Apply the same runtime liveness expel the live read does, so the
     // persisted `latest.json` matches what a reader would have projected —
     // never resurrecting a dead-pid agent.
-    let RuntimeProjection { ended, agents } =
-        RuntimeProjection::from_parts(agents, RuntimeScope::Runtime);
+    let RuntimeProjection {
+        ended,
+        expelled,
+        agents,
+    } = RuntimeProjection::from_parts(agents, RuntimeScope::Runtime);
     let mut snapshot = SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), agents, now);
-    snapshot.ended_sessions = ended;
+    snapshot.fenced_sessions = ended;
+    snapshot.fenced_sessions.extend(expelled);
     snapshot.reap_stale_sessions();
     snapshot.display_name = display_name_for(paths);
     let mut snapshot = snapshot
@@ -301,8 +305,36 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
-    fn published_snapshot_carries_ended_sessions() {
+    fn build_from_fences_dead_pid_agent_before_reap() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+
+        event_log::append(
+            &paths.events_log,
+            &lifecycle(&workspace, "sess-dead", Some(u32::MAX)),
+        )
+        .unwrap();
+
+        let snapshot = build_from(&paths).unwrap();
+        let dead_key = (
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("sess-dead"),
+        );
+        assert!(snapshot.fenced_sessions.contains(&dead_key));
+        assert!(
+            snapshot
+                .agents
+                .iter()
+                .all(|agent| agent.agent_id != "sess-dead")
+        );
+    }
+
+    #[test]
+    fn published_snapshot_carries_fenced_sessions() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
         let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -333,13 +365,13 @@ mod tests {
             AgentSessionId::from("sess-live"),
         );
         let snapshot = build_from(&paths).unwrap();
-        assert!(snapshot.ended_sessions.contains(&ended_key));
-        assert!(!snapshot.ended_sessions.contains(&live_key));
+        assert!(snapshot.fenced_sessions.contains(&ended_key));
+        assert!(!snapshot.fenced_sessions.contains(&live_key));
 
         rebuild(&paths).unwrap();
         let published = read_fresh_latest(&paths).expect("published snapshot is fresh");
-        assert!(published.ended_sessions.contains(&ended_key));
-        assert!(!published.ended_sessions.contains(&live_key));
+        assert!(published.fenced_sessions.contains(&ended_key));
+        assert!(!published.fenced_sessions.contains(&live_key));
     }
 
     #[test]

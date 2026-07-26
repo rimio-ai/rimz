@@ -215,7 +215,7 @@ The publish gate decides when the writer refreshes those files. A checkpoint is 
 
 The same durable rollup answers two questions, and [`runtime.rs`](../../crates/rimz/src/store/runtime.rs) is the filter between them.
 
-**Runtime** is read-time filtering, and it backs the default views: `rimz sidebar snapshot`, the plain `rimz doctor` agent summary. It hides rows carrying `ended_at` and keeps the agent rollups whose `runtime_owner` is still the live process that wrote them; the projection's ended set rides the published snapshot as `ended_sessions` to fence provider-local session rebinding. `runtime_owner` records the owner kind, a stable subject id, the pid, and on Linux the process-start token, so a reused pid does not read as the original owner. Records with no owner at all abstain and stay visible; known-dead owners and process-start mismatches are suppressed while the write path converges them to a real end stamp.
+**Runtime** is read-time filtering, and it backs the default views: `rimz sidebar snapshot`, the plain `rimz doctor` agent summary. It hides rows carrying `ended_at` and keeps the agent rollups whose `runtime_owner` is still the live process that wrote them; ended and dead-owner-expelled identities ride the published snapshot as `fenced_sessions` to fence provider-local session rebinding. `runtime_owner` records the owner kind, a stable subject id, the pid, and on Linux the process-start token, so a reused pid does not read as the original owner. Records with no owner at all abstain and stay visible; known-dead owners and process-start mismatches are suppressed while the write path converges them to a real end stamp.
 
 **Audit** bypasses the filter and reads durable history as written. `rimz doctor --audit` is the surface, and explicit resume is the reason ended rows are retained at all.
 
@@ -236,7 +236,7 @@ The off-lock tail runs a debounced scan, at most once a minute, over the audit r
 
 An agent named in `live-roster.json` is exempt from the last two until rebirth planning consumes the roster, so crash-recovery candidates survive the scan. Already-ended rows are skipped and cannot supersede an active replacement.
 
-The reducer stamps `ended_at`, which hides the row from runtime views immediately while the audit rollup keeps its resumable identity until rotation prunes it at the retention boundary. Runtime expel and snapshot view reaping apply the same predicates as latency shims, so the screen and the log agree before the durable append lands.
+The reducer stamps `ended_at`, which hides the row from runtime views immediately while the audit rollup keeps its resumable identity until rotation prunes it at the retention boundary. The stamp is suppression, not a terminal state: any later lifecycle event under the same `(kind, session id)` clears it, so a session that reports in again returns to the runtime view under its own identity and every fence keyed on the end stamp releases with it. Runtime expel and snapshot view reaping apply the same predicates as latency shims, so the screen and the log agree before the durable append lands.
 
 ### The session.death record
 

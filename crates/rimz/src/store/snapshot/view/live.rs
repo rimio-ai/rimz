@@ -87,22 +87,22 @@ impl SidebarSnapshot {
                 if used_sessions.contains(&index) {
                     return None;
                 }
-                // An ended session's rollout is durable history, not a live
+                // A durably ended or dead-owner-expelled session is not a live
                 // binding candidate: the store-blind provider cache
-                // re-discovers it forever, and adopting an unclaimed
-                // same-worktree pane would graft its dead identity onto
-                // whichever agent that pane actually hosts.
+                // re-discovers its rollout forever, and adopting an unclaimed
+                // same-worktree pane would graft that dead identity onto
+                // whichever agent the pane actually hosts.
                 if self
-                    .ended_sessions
+                    .fenced_sessions
                     .contains(&(observation.kind.clone(), observation.session_id.clone()))
                 {
                     return None;
                 }
-                // A durable row for this exact session stamped to a pane absent
-                // from the live frame is a dead pane awaiting reap — hold the
-                // fresh fold rather than rebind the corpse. Mux rebirth clears
-                // pane stamps, so a reborn session re-enters here unstamped; a
-                // transiently degraded frame only delays binding one cycle.
+                // A runtime-visible row can outlive its absent pane when it has
+                // no process owner or belongs to a still-live daemon. Hold that
+                // fresh fold rather than rebind it elsewhere. Mux rebirth
+                // clears pane stamps, so a reborn session re-enters here
+                // unstamped; a degraded frame only delays binding one cycle.
                 if let Some(agent) = binding_index
                     .root_index(&observation.kind, &observation.session_id)
                     .and_then(|index| binding_index.agent(index))

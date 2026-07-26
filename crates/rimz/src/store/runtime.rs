@@ -26,6 +26,7 @@ pub enum AgentLiveness {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RuntimeProjection {
     pub ended: BTreeSet<(AgentKind, AgentSessionId)>,
+    pub expelled: BTreeSet<(AgentKind, AgentSessionId)>,
     pub agents: Vec<AgentState>,
 }
 
@@ -40,14 +41,29 @@ impl RuntimeProjection {
             })
             .collect();
         match scope {
-            RuntimeScope::Audit => Self { ended, agents },
-            RuntimeScope::Runtime => Self {
+            RuntimeScope::Audit => Self {
                 ended,
-                agents: agents
-                    .into_iter()
-                    .filter(agent_is_runtime_visible)
-                    .collect(),
+                expelled: BTreeSet::new(),
+                agents,
             },
+            RuntimeScope::Runtime => {
+                let mut expelled = BTreeSet::new();
+                let agents = agents
+                    .into_iter()
+                    .filter(|agent| {
+                        let visible = agent_is_runtime_visible(agent);
+                        if !visible && agent.ended_at.is_none() {
+                            expelled.insert((agent.kind.clone(), agent.agent_id.clone()));
+                        }
+                        visible
+                    })
+                    .collect();
+                Self {
+                    ended,
+                    expelled,
+                    agents,
+                }
+            }
         }
     }
 }
@@ -118,12 +134,14 @@ mod tests {
         #[cfg(unix)]
         let agents = {
             let mut agents = agents;
-            agents.push(agent(Some(RuntimeOwner::new(
+            let mut dead = agent(Some(RuntimeOwner::new(
                 RuntimeOwnerKind::Agent,
                 "sess-dead",
                 u32::MAX,
                 None,
-            ))));
+            )));
+            dead.agent_id = AgentSessionId::from("sess-dead");
+            agents.push(dead);
             agents
         };
 
@@ -133,6 +151,16 @@ mod tests {
             projection.agents.len(),
             1,
             "unknown pid abstains while known-dead owners suppress stale overlays"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            projection.expelled,
+            [(
+                AgentKind::new_unchecked("claude"),
+                AgentSessionId::from("sess-dead"),
+            )]
+            .into_iter()
+            .collect()
         );
     }
 
@@ -150,10 +178,12 @@ mod tests {
         );
         assert_eq!(runtime.agents, vec![active]);
         assert_eq!(runtime.ended, [key.clone()].into_iter().collect());
+        assert!(runtime.expelled.is_empty());
 
         let audit = RuntimeProjection::from_parts(vec![ended.clone()], RuntimeScope::Audit);
         assert_eq!(audit.agents, vec![ended]);
         assert_eq!(audit.ended, [key].into_iter().collect());
+        assert!(audit.expelled.is_empty());
     }
 
     #[test]

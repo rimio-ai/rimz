@@ -43,7 +43,7 @@ pub(super) fn sidebar_fixture_snapshot(
         fleet_budget: None,
         link: None,
         reflects_log: None,
-        ended_sessions: std::collections::BTreeSet::new(),
+        fenced_sessions: std::collections::BTreeSet::new(),
         resume_outcomes: Some(Vec::new()),
     };
     snapshot.theme.scheme = Some("TokyoNight Night".to_owned());
