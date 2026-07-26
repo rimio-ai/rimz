@@ -330,14 +330,37 @@ fn log_lifecycle_receipt(
         }
     }
 
-    for derived in &receipt.derived {
-        log_transition(
+    for event in receipt
+        .events
+        .iter()
+        .filter(|event| receipt.primary_event_id.as_ref() != Some(&event.event_id))
+    {
+        log_canonical_transition(kind, event);
+    }
+}
+
+fn log_canonical_transition(kind: &str, event: &rimz::agents::LifecycleEvent) {
+    match &event.transition {
+        rimz::agents::LifecycleTransition::Reconciled { from, reason } => warn!(
+            target: "rimz::agent::lifecycle",
             kind,
-            derived.agent_id.as_str(),
-            derived.parent_agent_id.as_deref(),
-            &derived.signal,
-            derived.transition,
-        );
+            agent_id = event.agent_id.as_str(),
+            parent_agent_id = event.parent_agent_id.as_deref().unwrap_or(""),
+            from = ?from,
+            to = ?event.status,
+            signal = ?event.signal,
+            reason,
+            "reconciled lifecycle transition",
+        ),
+        rimz::agents::LifecycleTransition::Ignored { reason } => debug!(
+            target: "rimz::agent::lifecycle",
+            kind,
+            agent_id = event.agent_id.as_str(),
+            signal = ?event.signal,
+            reason,
+            "ignored lifecycle signal",
+        ),
+        rimz::agents::LifecycleTransition::Normal => {}
     }
 }
 
