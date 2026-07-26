@@ -344,7 +344,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
     );
     assert!(
         sidebar_geometry_off_spec(by_id(3), &panes, &excluded, target),
-        "a layout-born sidebar beyond half a resize step is repaired",
+        "a layout-born sidebar below the target is repaired",
     );
     assert_eq!(
         sidebar_dock_verdict(by_id(3), &panes, &excluded),
@@ -379,7 +379,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
     );
     assert!(
         sidebar_geometry_off_spec(by_id(12), &panes, &excluded, target),
-        "a docked sidebar beyond half a resize step still needs resizing",
+        "a docked sidebar below the target still needs resizing",
     );
     assert_eq!(
         sidebar_dock_verdict(by_id(12), &panes, &excluded),
@@ -425,11 +425,11 @@ fn sidebar_geometry_classifies_dock_shapes() {
     );
     assert!(
         sidebar_geometry_off_spec(by_id(30), &panes, &excluded, target),
-        "a sidebar narrower than the repair band grows",
+        "a sidebar below the target grows",
     );
     assert!(
         sidebar_geometry_off_spec(by_id(32), &panes, &excluded, target),
-        "a sidebar wider than half a resize step shrinks",
+        "a sidebar at least one resize step above the target shrinks",
     );
     assert_eq!(
         tab_view_cols(&panes, 7),
@@ -452,11 +452,11 @@ fn sidebar_geometry_classifies_dock_shapes() {
     );
     assert!(
         sidebar_width_off_spec(60, 72, zellij_resize_step_cols(298)),
-        "a pane beyond half a resize step is repaired",
+        "a pane below the target is repaired",
     );
     assert!(
         sidebar_width_off_spec(90, 72, zellij_resize_step_cols(298)),
-        "a pane wider than the repair band shrinks",
+        "a pane at least one resize step above the target shrinks",
     );
 }
 

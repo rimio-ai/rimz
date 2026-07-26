@@ -17,9 +17,7 @@ use super::{
     ZellijBackend,
 };
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::mux::width::{
-    WidthCrossing, sidebar_width_off_spec, width_crossing, zellij_resize_step_cols,
-};
+use crate::mux::width::{sidebar_width_off_spec, width_undershot, zellij_resize_step_cols};
 use crate::mux::{
     DaemonView, MuxBackend, MuxErr, PaneReadConsistency, PresencePluginOptions, Result,
     SessionLiveness, SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
@@ -907,13 +905,8 @@ impl ZellijBackend {
             if !sidebar_width_off_spec(cols, target_cols, zellij_resize_step_cols(view_cols)) {
                 break;
             }
-            let crossed_farther = match last_cols
-                .and_then(|last_cols| width_crossing(last_cols, cols, target_cols))
-            {
-                Some(WidthCrossing::NearerOrEqual) => break,
-                Some(WidthCrossing::Farther) => true,
-                None => false,
-            };
+            let undershot =
+                last_cols.is_some_and(|last_cols| width_undershot(last_cols, cols, target_cols));
             let grow = cols < target_cols;
             let no_progress =
                 last_cols
@@ -965,7 +958,7 @@ impl ZellijBackend {
                 break;
             }
             resized = true;
-            reverse_spent = crossed_farther;
+            reverse_spent = undershot;
         }
 
         (floor, resized)

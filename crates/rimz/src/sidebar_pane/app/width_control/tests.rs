@@ -258,7 +258,7 @@ fn broadcast_reload_uses_the_seeded_native_band() {
     controller.reload_target(&crate::config::ThemeConfig::default(), Some(83), &diag);
 
     assert_eq!(controller.convergence.target(), Some(target(80)));
-    assert_eq!(controller.convergence.tolerance(), 5);
+    assert_eq!(controller.convergence.stop_step(), 10);
     assert!(!controller.convergence.in_flight());
 }
 
@@ -362,7 +362,7 @@ fn stale_pane_observation_converges_and_rearms_without_adopting() {
 }
 
 #[test]
-fn observed_step_sets_the_reachable_tolerance() {
+fn observed_step_sets_the_upward_reachable_band() {
     let now = Instant::now();
     let mut control = WidthControl::new(Some(target(72)));
     assert_eq!(control.decide(50, now), Some((50, 72)));
@@ -370,17 +370,29 @@ fn observed_step_sets_the_reachable_tolerance() {
         control.decide(60, now + Duration::from_millis(10)),
         Some((60, 72))
     );
-    assert_eq!(control.decide(68, now + Duration::from_millis(20)), None);
+    assert_eq!(
+        control.decide(68, now + Duration::from_millis(20)),
+        Some((68, 72))
+    );
+    assert_eq!(control.decide(76, now + Duration::from_millis(30)), None);
 }
 
 #[test]
-fn seeded_native_step_parks_inside_half_a_step() {
+fn seeded_native_step_parks_between_the_target_and_next_step() {
     let now = Instant::now();
     let mut control = WidthControl::new(Some(target(80)));
     control.seed_native_step(10);
 
-    assert_eq!(control.tolerance(), 5);
+    assert_eq!(control.stop_step(), 10);
     assert_eq!(control.decide(83, now), None);
+
+    let mut below = WidthControl::new(Some(target(80)));
+    below.seed_native_step(10);
+    assert_eq!(below.decide(79, now), Some((79, 80)));
+
+    let mut next_step = WidthControl::new(Some(target(80)));
+    next_step.seed_native_step(10);
+    assert_eq!(next_step.decide(90, now), Some((90, 80)));
 }
 
 #[test]
@@ -391,7 +403,7 @@ fn native_step_seed_survives_retargeting() {
 
     control.retarget(Some(target(90)));
 
-    assert_eq!(control.tolerance(), 5);
+    assert_eq!(control.stop_step(), 10);
     assert_eq!(control.decide(94, now), None);
 }
 
@@ -406,23 +418,27 @@ fn learned_step_refines_the_seeded_band() {
         control.decide(66, now + Duration::from_millis(10)),
         Some((66, 80)),
     );
-    assert_eq!(control.tolerance(), 3);
+    assert_eq!(control.stop_step(), 6);
 }
 
 #[test]
-fn exact_backend_seed_keeps_a_one_column_band() {
+fn step_estimate_uses_an_upward_band() {
     let now = Instant::now();
     let mut inside = WidthControl::new(Some(target(80)));
     inside.seed_native_step(2);
-    assert_eq!(inside.decide(79, now), None);
+    assert_eq!(inside.decide(81, now), None);
 
-    let mut outside = WidthControl::new(Some(target(80)));
-    outside.seed_native_step(2);
-    assert_eq!(outside.decide(78, now), Some((78, 80)));
+    let mut below = WidthControl::new(Some(target(80)));
+    below.seed_native_step(2);
+    assert_eq!(below.decide(79, now), Some((79, 80)));
+
+    let mut next_step = WidthControl::new(Some(target(80)));
+    next_step.seed_native_step(2);
+    assert_eq!(next_step.decide(82, now), Some((82, 80)));
 }
 
 #[test]
-fn sign_flip_stops_at_the_nearest_reachable_width() {
+fn upward_crossing_stops_inside_the_reachable_band() {
     let now = Instant::now();
     let mut control = WidthControl::new(Some(target(72)));
     assert_eq!(control.decide(68, now), Some((68, 72)));
@@ -431,7 +447,7 @@ fn sign_flip_stops_at_the_nearest_reachable_width() {
 }
 
 #[test]
-fn strictly_nearer_crossing_parks_without_a_reverse() {
+fn upward_crossing_inside_the_band_parks_without_a_reverse() {
     let now = Instant::now();
     let mut control = WidthControl::new(Some(target(80)));
     assert_eq!(control.decide(60, now), Some((60, 80)));
@@ -456,13 +472,13 @@ fn strictly_nearer_crossing_parks_without_a_reverse() {
         control.take_trace(),
         Some(WidthTransition::Idle {
             at: 85,
-            reason: WidthIdleReason::CrossedNearest,
+            reason: WidthIdleReason::ReachedTolerance,
         }),
     );
 }
 
 #[test]
-fn farther_crossing_reverses_once_then_parks() {
+fn downward_undershoot_reverses_once_then_parks() {
     let now = Instant::now();
     let mut control = WidthControl::new(Some(target(80)));
     assert_eq!(control.decide(83, now), Some((83, 80)));
@@ -512,7 +528,7 @@ fn farther_crossing_reverses_once_then_parks() {
 }
 
 #[test]
-fn reverse_step_parks_even_outside_the_learned_band() {
+fn reverse_step_parks_after_overshooting_the_target() {
     let now = Instant::now();
     let mut control = WidthControl::new(Some(target(80)));
     assert_eq!(control.decide(83, now), Some((83, 80)));
@@ -522,13 +538,37 @@ fn reverse_step_parks_even_outside_the_learned_band() {
     );
 
     assert_eq!(control.decide(95, now + Duration::from_millis(20)), None);
-    assert_eq!(control.tolerance(), 12);
-    assert!(95_u16.abs_diff(80) > control.tolerance());
+    assert_eq!(control.stop_step(), 25);
     assert_eq!(
         control.traces.back(),
         Some(&WidthTransition::Idle {
             at: 95,
             reason: WidthIdleReason::ReverseParked,
+        }),
+    );
+}
+
+#[test]
+fn reverse_step_that_stays_below_target_keeps_converging() {
+    let now = Instant::now();
+    let mut control = WidthControl::new(Some(target(80)));
+    assert_eq!(control.decide(83, now), Some((83, 80)));
+    assert_eq!(
+        control.decide(70, now + Duration::from_millis(10)),
+        Some((70, 80)),
+    );
+    assert!(control.reverse_issued);
+
+    assert_eq!(
+        control.decide(75, now + Duration::from_millis(20)),
+        Some((75, 80)),
+    );
+    assert!(!control.reverse_issued);
+    assert_eq!(
+        control.traces.back(),
+        Some(&WidthTransition::StepIssued {
+            from: 75,
+            target: 80,
         }),
     );
 }
@@ -617,7 +657,10 @@ fn transitions_cover_issue_feedback_and_idle_outcomes() {
         })
     );
 
-    assert_eq!(control.decide(68, now + Duration::from_millis(20)), None);
+    assert_eq!(
+        control.decide(68, now + Duration::from_millis(20)),
+        Some((68, 72))
+    );
     assert_eq!(
         control.take_trace(),
         Some(WidthTransition::FeedbackLearned {
@@ -627,8 +670,24 @@ fn transitions_cover_issue_feedback_and_idle_outcomes() {
     );
     assert_eq!(
         control.take_trace(),
+        Some(WidthTransition::StepIssued {
+            from: 68,
+            target: 72,
+        })
+    );
+
+    assert_eq!(control.decide(76, now + Duration::from_millis(30)), None);
+    assert_eq!(
+        control.take_trace(),
+        Some(WidthTransition::FeedbackLearned {
+            settled: 76,
+            learned_step: 8,
+        })
+    );
+    assert_eq!(
+        control.take_trace(),
         Some(WidthTransition::Idle {
-            at: 68,
+            at: 76,
             reason: WidthIdleReason::ReachedTolerance,
         })
     );
