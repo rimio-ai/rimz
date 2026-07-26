@@ -27,7 +27,7 @@ pub fn run_budget_park(args: BudgetParkArgs) -> Result<()> {
     let kind = AgentKind::new_unchecked(args.kind);
     let agent_id = AgentSessionId::from(args.agent_id.as_str());
     let pane_id = PaneId::parse(&args.pane).context("parsing pane id")?;
-    let ctx = Ctx::for_budget_workspace(workspace_id, Some(pane_id.mux()))?;
+    let ctx = Ctx::for_workspace(workspace_id, Some(pane_id.mux()))?;
     let store = &ctx.store;
     let snapshot = ctx
         .resolution_snapshot()
