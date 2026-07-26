@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use headless_chrome::protocol::cdp::{Network, types::Event};
 use headless_chrome::{Browser, LaunchOptions, Tab};
+use rimz::mux::{ClientFocusOptions, MuxBackend, ZellijBackend};
 
 use crate::backend::tmux::TmuxServer;
 use crate::common::{CommandTimeoutExt, Env, ZellijNamespace, daemon_test_guard};
@@ -508,6 +509,7 @@ impl LiveZellijWebFixture {
     }
 
     pub(super) fn send_line(&self, line: &str) {
+        self.wait_until_attached();
         let typed = self
             .namespace
             .command()
@@ -534,6 +536,47 @@ impl LiveZellijWebFixture {
             .bounded_output()
             .expect("submit Zellij room input");
         assert_success(&enter, "submit Zellij room input");
+    }
+
+    fn wait_until_attached(&self) {
+        let backend = ZellijBackend::with_runtime_dir(self.namespace.path());
+        let deadline = Instant::now() + super::ATTACH_TIMEOUT;
+        let mut consecutive_matches = 0;
+        let mut last_human_clients = 0;
+        let mut last_viewed_panes = Vec::new();
+        let mut last_error = String::new();
+        loop {
+            match backend.client_view(ClientFocusOptions {
+                session_name: Some(self.workspace.session_name.clone()),
+                ..Default::default()
+            }) {
+                Ok(view) => {
+                    last_human_clients = view.presence.human_clients;
+                    last_viewed_panes = view.viewed_panes;
+                    last_error.clear();
+                    consecutive_matches =
+                        if last_human_clients == 1 && !last_viewed_panes.is_empty() {
+                            consecutive_matches + 1
+                        } else {
+                            0
+                        };
+                    if consecutive_matches == 2 {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    consecutive_matches = 0;
+                    last_error = error.to_string();
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Zellij web client did not become attached; last human client count: \
+                 {last_human_clients}; last viewed panes: {last_viewed_panes:?}; last error: \
+                 {last_error}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     fn command(&self) -> Command {
