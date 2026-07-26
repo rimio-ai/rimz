@@ -54,9 +54,7 @@ pub(super) fn run(args: RefreshContextArgs) -> Result<()> {
         return Ok(());
     };
     let workspace_id: WorkspaceId = args.workspace_id.parse().context("parsing workspace id")?;
-    let runtime =
-        RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
-    runtime.ensure_dirs().context("preparing runtime dirs")?;
+    let runtime = crate::cli::runtime_paths_for(workspace_id.clone())?;
 
     let prior = rimz::store::agent_context::read_one(&runtime, &args.kind, &args.session_id);
     let Some(refresh) = definition.refresh_session_context(&agents::SessionContextInput {

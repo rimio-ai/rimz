@@ -25,7 +25,7 @@ pub(super) struct RefreshArgs {
 pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx
-        .resolution_snapshot(globals)
+        .resolution_snapshot()
         .context("reading agent snapshot")?;
     let runtime = ctx.runtime();
     runtime.ensure_dirs().context("preparing runtime dirs")?;

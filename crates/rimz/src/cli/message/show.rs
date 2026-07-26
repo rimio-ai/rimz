@@ -36,7 +36,7 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
     let timeline = message_timeline(store, &message_id)?;
     let live_messages = store.list_messages()?;
     let now = Timestamp::now();
-    let delivery = open_delivery(&ctx, &message, &live_messages, globals, now)?;
+    let delivery = open_delivery(&ctx, &message, &live_messages, now)?;
     if json {
         return render::json_pretty(&MessageShowJson {
             message,
@@ -89,7 +89,6 @@ fn open_delivery(
     ctx: &Ctx,
     message: &MessageListRow,
     live_messages: &[MessageRecord],
-    globals: &GlobalFlags,
     now: Timestamp,
 ) -> Result<Option<MessageDeliveryJson>> {
     if !message.status.is_open() {
@@ -101,9 +100,9 @@ fn open_delivery(
     else {
         return Ok(None);
     };
-    let mut snapshot = ctx.resolution_snapshot(globals)?;
-    if let Ok(runtime) = rimz::RuntimePaths::for_workspace(record.workspace_id.clone()) {
-        snapshot = snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
+    let mut snapshot = ctx.resolution_snapshot()?;
+    if rimz::RuntimePaths::for_workspace(record.workspace_id.clone()).is_ok() {
+        snapshot = ctx.fold_agent_context(snapshot);
     }
     let check = deliver::explain(record, live_messages, &snapshot, now);
     let agents = rimz::harness::target::addressable_agents(&snapshot);

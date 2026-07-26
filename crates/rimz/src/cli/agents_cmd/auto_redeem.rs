@@ -4,10 +4,11 @@
 use anyhow::{Context, Result};
 use clap::Args;
 
-use rimz::RuntimePaths;
 use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::ids::WorkspaceId;
+
+use crate::cli::runtime_paths_for;
 
 #[derive(Debug, Args)]
 pub(super) struct AutoRedeemArgs {
@@ -23,8 +24,7 @@ pub(super) struct AutoRedeemArgs {
 
 pub(super) fn run_auto_redeem(args: AutoRedeemArgs) -> Result<()> {
     let workspace_id: WorkspaceId = args.workspace_id.parse().context("parsing workspace id")?;
-    let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
-    runtime.ensure_dirs().context("preparing runtime dirs")?;
+    let runtime = runtime_paths_for(workspace_id)?;
     let config = MachineConfig::load().context("loading auto-redeem config")?;
 
     let result = rimz::harness::auto_redeem::execute_auto_redeem(

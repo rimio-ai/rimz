@@ -15,11 +15,10 @@
 use anyhow::{Context, Result};
 use clap::Args;
 
-use rimz::RuntimePaths;
 use rimz::ids::WorkspaceId;
 use rimz::sidebar::refresh::refresh_claimed_account_usage;
 
-use crate::cli::GlobalFlags;
+use crate::cli::{GlobalFlags, runtime_paths_for};
 
 #[derive(Debug, Args)]
 pub(super) struct RefreshUsageArgs {
@@ -41,8 +40,7 @@ pub(super) struct RefreshUsageArgs {
 
 pub(super) fn run_refresh_usage(args: RefreshUsageArgs, _globals: &GlobalFlags) -> Result<()> {
     let workspace_id: WorkspaceId = args.workspace_id.parse().context("parsing workspace id")?;
-    let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
-    runtime.ensure_dirs().context("preparing runtime dirs")?;
+    let runtime = runtime_paths_for(workspace_id)?;
 
     let wrote =
         refresh_claimed_account_usage(&runtime, &args.kind, args.claim_id, args.merge_windows);

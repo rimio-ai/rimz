@@ -25,9 +25,7 @@ pub struct BudgetArgs {
 pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
-    let mut snapshot = ctx.resolution_snapshot(globals)?;
-    snapshot =
-        snapshot.with_agent_context(rimz::store::agent_context::read_all(store.runtime_paths()));
+    let snapshot = ctx.resolution_snapshot_with_context()?;
     let current_channel = crate::cli::current_channel(workspace);
     let agent = crate::cli::resolve_agent_one(
         &snapshot,

@@ -8,8 +8,10 @@
 
 use anyhow::{Context, Result};
 
+use rimz::ids::{MuxName, WorkspaceId};
+use rimz::store::workspace_record;
 use rimz::workspace::WorkspaceResolver;
-use rimz::{ResolvedWorkspace, RuntimePaths, SidebarSnapshot, Store};
+use rimz::{ResolvedWorkspace, RuntimePaths, SidebarSnapshot, StatePaths, Store};
 
 use super::GlobalFlags;
 
@@ -18,6 +20,7 @@ pub(crate) struct Ctx {
     pub(crate) workspace: ResolvedWorkspace,
     pub(crate) store: Store,
     channel: Option<String>,
+    mux: Option<MuxName>,
 }
 
 impl Ctx {
@@ -27,10 +30,80 @@ impl Ctx {
             .context("resolving current workspace")?;
         let store = super::open_store(&workspace)?;
         let channel = super::current_channel(&workspace);
+        let mux = globals.mux;
         Ok(Self {
             workspace,
             store,
             channel,
+            mux,
+        })
+    }
+
+    /// Open a workspace named by a detached helper without recording it again.
+    pub(crate) fn for_workspace(
+        workspace_id: WorkspaceId,
+        mux_hint: Option<MuxName>,
+    ) -> Result<Self> {
+        Self::for_workspace_with(workspace_id, mux_hint, WorkspaceOpenContext::Helper)
+    }
+
+    /// Preserve the budget helper's established error contexts while sharing
+    /// the same detached-workspace boot.
+    pub(crate) fn for_budget_workspace(
+        workspace_id: WorkspaceId,
+        mux_hint: Option<MuxName>,
+    ) -> Result<Self> {
+        Self::for_workspace_with(workspace_id, mux_hint, WorkspaceOpenContext::Budget)
+    }
+
+    fn for_workspace_with(
+        workspace_id: WorkspaceId,
+        mux_hint: Option<MuxName>,
+        context: WorkspaceOpenContext,
+    ) -> Result<Self> {
+        let (paths, runtime) = match context {
+            WorkspaceOpenContext::Helper => (
+                StatePaths::for_workspace(workspace_id.clone()).context("preparing store paths")?,
+                RuntimePaths::for_workspace(workspace_id.clone())
+                    .context("preparing runtime paths")?,
+            ),
+            WorkspaceOpenContext::Budget => {
+                let runtime = RuntimePaths::for_workspace(workspace_id.clone())
+                    .context("preparing budget runtime paths")?;
+                let paths = StatePaths::for_workspace(workspace_id.clone())
+                    .context("preparing budget state paths")?;
+                (paths, runtime)
+            }
+        };
+        let record =
+            workspace_record::read(&paths.workspace_record).with_context(|| match context {
+                WorkspaceOpenContext::Helper => {
+                    format!(
+                        "reading workspace record `{}`",
+                        paths.workspace_record.display()
+                    )
+                }
+                WorkspaceOpenContext::Budget => "reading budget workspace record".to_owned(),
+            })?;
+        let store = Store::open(paths, runtime).with_context(|| match context {
+            WorkspaceOpenContext::Helper => "opening store",
+            WorkspaceOpenContext::Budget => "opening budget store",
+        })?;
+        let workspace = ResolvedWorkspace {
+            workspace_id,
+            project_root: record.project_root.clone(),
+            root_class: record.root_class,
+            worktree_root: record.project_root,
+            worktree_branch: None,
+            session_name: record.session_name,
+            mux_hint,
+        };
+        let channel = super::current_channel(&workspace);
+        Ok(Self {
+            workspace,
+            store,
+            channel,
+            mux: mux_hint,
         })
     }
 
@@ -67,11 +140,26 @@ impl Ctx {
     /// enrichment. `min_pane_cache_ms` floors the pane pull at now, bypassing the
     /// producer's pane cache (up to 10s old in event mode). One mux roster read;
     /// falls back to the rollup when there is no mux to enumerate.
-    pub(crate) fn resolution_snapshot(&self, globals: &GlobalFlags) -> Result<SidebarSnapshot> {
+    pub(crate) fn resolution_snapshot(&self) -> Result<SidebarSnapshot> {
         Ok(rimz::sidebar::produce::resolution_snapshot(
             &self.workspace,
             &self.store,
-            globals.mux,
+            self.mux,
         )?)
     }
+
+    pub(crate) fn fold_agent_context(&self, snapshot: SidebarSnapshot) -> SidebarSnapshot {
+        snapshot.with_agent_context(rimz::store::agent_context::read_all(self.runtime()))
+    }
+
+    pub(crate) fn resolution_snapshot_with_context(&self) -> Result<SidebarSnapshot> {
+        self.resolution_snapshot()
+            .map(|snapshot| self.fold_agent_context(snapshot))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WorkspaceOpenContext {
+    Helper,
+    Budget,
 }

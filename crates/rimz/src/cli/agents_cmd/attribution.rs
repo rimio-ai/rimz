@@ -21,12 +21,11 @@ pub(super) fn attribution(
         .store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
-    let snapshot = rimz::SidebarSnapshot::build_with_agents(
+    let snapshot = ctx.fold_agent_context(rimz::SidebarSnapshot::build_with_agents(
         ctx.workspace.workspace_id.clone(),
         projection.agents,
         jiff::Timestamp::now(),
-    )
-    .with_agent_context(rimz::store::agent_context::read_all(ctx.runtime()));
+    ));
     let peers = rimz::harness::target::addressable_agents(&snapshot);
     let channel = super::list::list_channel_filter(all, scope.as_deref(), &ctx.workspace);
     let default_worktree =
