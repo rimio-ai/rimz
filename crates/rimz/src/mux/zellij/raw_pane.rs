@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use crate::ids::PaneId;
-use crate::mux::width::{sidebar_width_off_spec, zellij_resize_step_cols};
+use crate::mux::width::{sidebar_width_off_spec, zellij_resize_stop_step_cols};
 use crate::mux::zellij::pane_topology::{PaneTopologyPane, ZellijPaneId};
 use crate::pane::SIDEBAR_CHROME_TITLE;
 
@@ -232,7 +232,7 @@ pub(super) fn sidebar_geometry_off_spec(
                 sidebar_width_off_spec(
                     cols,
                     u64::from(target_cols),
-                    zellij_resize_step_cols(view_cols),
+                    zellij_resize_stop_step_cols(view_cols),
                 )
             })
         })

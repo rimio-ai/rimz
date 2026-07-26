@@ -17,7 +17,7 @@ use super::{
     ZellijBackend,
 };
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::mux::width::{sidebar_width_off_spec, width_undershot, zellij_resize_step_cols};
+use crate::mux::width::{sidebar_width_off_spec, width_undershot, zellij_resize_stop_step_cols};
 use crate::mux::{
     DaemonView, MuxBackend, MuxErr, PaneReadConsistency, PresencePluginOptions, Result,
     SessionLiveness, SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
@@ -902,7 +902,7 @@ impl ZellijBackend {
                     .cols(Some(u16::try_from(view_cols).unwrap_or(u16::MAX)))
                     .get(),
             );
-            if !sidebar_width_off_spec(cols, target_cols, zellij_resize_step_cols(view_cols)) {
+            if !sidebar_width_off_spec(cols, target_cols, zellij_resize_stop_step_cols(view_cols)) {
                 break;
             }
             let undershot =

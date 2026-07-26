@@ -443,19 +443,19 @@ fn sidebar_geometry_classifies_dock_shapes() {
     );
 
     assert!(
-        !sidebar_width_off_spec(72, 72, zellij_resize_step_cols(298)),
+        !sidebar_width_off_spec(72, 72, zellij_resize_stop_step_cols(298)),
         "canonical width is not a mis-mount",
     );
     assert!(
-        sidebar_width_off_spec(149, 72, zellij_resize_step_cols(298)),
+        sidebar_width_off_spec(149, 72, zellij_resize_stop_step_cols(298)),
         "the 50% mis-mount is wider than the canonical width",
     );
     assert!(
-        sidebar_width_off_spec(60, 72, zellij_resize_step_cols(298)),
+        sidebar_width_off_spec(60, 72, zellij_resize_stop_step_cols(298)),
         "a pane below the target is repaired",
     );
     assert!(
-        sidebar_width_off_spec(90, 72, zellij_resize_step_cols(298)),
+        sidebar_width_off_spec(90, 72, zellij_resize_stop_step_cols(298)),
         "a pane at least one resize step above the target shrinks",
     );
 }
