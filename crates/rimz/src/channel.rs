@@ -5,7 +5,7 @@
 //! room rebirth. Named-channel and managed-worktree creation also enter through
 //! here so neither can claim a name already owned by the other.
 
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -26,6 +26,8 @@ pub enum ChannelErr {
     WorktreeCollision { name: String },
     #[error("channel `{name}` is a named channel; use `rimz channel new` or pick another name")]
     NamedChannelCollision { name: String },
+    #[error(transparent)]
+    Worktree(#[from] crate::worktree::WorktreeErr),
     #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
     #[error(transparent)]
@@ -138,6 +140,17 @@ pub fn ensure_worktree_name_available(paths: &StatePaths, name: &str) -> Result<
     Ok(())
 }
 
+/// Managed-worktree names as they appear in the shared channel namespace.
+pub fn worktree_channel_names(workspace: &ResolvedWorkspace) -> Result<BTreeSet<String>> {
+    if workspace.root_class != RootClass::Repo {
+        return Ok(BTreeSet::new());
+    }
+    Ok(crate::worktree::discover_owned(&workspace.project_root)?
+        .into_iter()
+        .map(|worktree| worktree.branch.unwrap_or(worktree.marker.name))
+        .collect())
+}
+
 #[must_use = "durability barrier; check the result"]
 pub fn remove(paths: &StatePaths, name: &str) -> Result<Option<ChannelRecord>> {
     validate_name(name)?;
@@ -151,12 +164,7 @@ pub fn remove(paths: &StatePaths, name: &str) -> Result<Option<ChannelRecord>> {
 }
 
 fn managed_worktree_channel_exists(workspace: &ResolvedWorkspace, name: &str) -> bool {
-    workspace.root_class == RootClass::Repo
-        && crate::worktree::discover_owned(&workspace.project_root).is_ok_and(|worktrees| {
-            worktrees
-                .into_iter()
-                .any(|worktree| worktree.branch.as_deref().unwrap_or(&worktree.marker.name) == name)
-        })
+    worktree_channel_names(workspace).is_ok_and(|names| names.contains(name))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 //! `rimz channel` — durable named cooperation lanes.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -11,7 +11,7 @@ use crate::cli::render;
 use rimz::agents::AgentState;
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, TabOptions};
 use rimz::room::{RoomContext, RoomSizing};
-use rimz::workspace::{RootClass, WorkspaceResolver};
+use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
 pub struct ChannelArgs {
@@ -92,7 +92,7 @@ fn list_channels(
             },
         );
     }
-    for worktree in worktree_channels(workspace)? {
+    for worktree in rimz::channel::worktree_channel_names(workspace)? {
         entries.entry(worktree.clone()).or_insert(ChannelListEntry {
             channel: worktree,
             backing: "worktree".to_owned(),
@@ -175,19 +175,8 @@ fn live_backing(_channel: &str, explicit_named: bool) -> String {
     "directory".to_owned()
 }
 
-fn worktree_channels(workspace: &rimz::ResolvedWorkspace) -> Result<BTreeSet<String>> {
-    if workspace.root_class != RootClass::Repo {
-        return Ok(BTreeSet::new());
-    }
-    let entries = rimz::worktree::discover_owned(&workspace.project_root)?;
-    Ok(entries
-        .into_iter()
-        .map(|entry| entry.branch.unwrap_or(entry.marker.name))
-        .collect())
-}
-
 fn worktree_channel_exists(workspace: &rimz::ResolvedWorkspace, name: &str) -> bool {
-    worktree_channels(workspace).is_ok_and(|channels| channels.contains(name))
+    rimz::channel::worktree_channel_names(workspace).is_ok_and(|channels| channels.contains(name))
 }
 
 fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, channel: &str) {
