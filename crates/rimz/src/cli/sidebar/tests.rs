@@ -1,4 +1,6 @@
+#[cfg(feature = "testkit")]
 use super::SidebarFixtureState;
+#[cfg(feature = "testkit")]
 use super::fixture::sidebar_fixture_snapshot;
 
 fn parse_wake(argv: &[&str]) -> Box<super::WakeArgs> {
@@ -209,6 +211,7 @@ fn plugin_telemetry_decodes_structured_and_legacy_argv() {
 }
 
 #[test]
+#[cfg(feature = "testkit")]
 fn gallery_argv_parses_pets_flag() {
     use clap::Parser;
 
@@ -245,6 +248,7 @@ fn focus_repair_writer_argv_parses_structured_record() {
     .expect("focus repair writer argv must parse");
 }
 
+#[cfg(feature = "testkit")]
 fn strip_sgr(ansi: &[u8]) -> String {
     let text = String::from_utf8_lossy(ansi);
     let mut stripped = String::new();
@@ -295,11 +299,13 @@ fn strip_sgr(ansi: &[u8]) -> String {
 }
 
 #[test]
+#[cfg(feature = "testkit")]
 fn provider_fixture_frame_is_deterministic() {
     assert_fixture_frame_snapshot(SidebarFixtureState::Provider, "provider_fixture_frame");
 }
 
 #[test]
+#[cfg(feature = "testkit")]
 fn expanded_fixture_frame_is_deterministic() {
     let snapshot = sidebar_fixture_snapshot(SidebarFixtureState::Cockpit).unwrap();
     let mut ansi = Vec::new();
@@ -309,6 +315,7 @@ fn expanded_fixture_frame_is_deterministic() {
 }
 
 #[test]
+#[cfg(feature = "testkit")]
 fn fixture_frames_are_deterministic() {
     for (state, snapshot_name) in [
         (SidebarFixtureState::Fleet, "fleet_fixture_frame"),
@@ -321,6 +328,7 @@ fn fixture_frames_are_deterministic() {
     }
 }
 
+#[cfg(feature = "testkit")]
 fn assert_fixture_frame_snapshot(state: SidebarFixtureState, snapshot_name: &str) {
     let snapshot = sidebar_fixture_snapshot(state).unwrap();
 
@@ -331,6 +339,7 @@ fn assert_fixture_frame_snapshot(state: SidebarFixtureState, snapshot_name: &str
 }
 
 #[test]
+#[cfg(feature = "testkit")]
 fn gallery_columns_follow_requested_order_and_selection() {
     let columns = super::gallery_fixture_columns();
     assert_eq!(
@@ -371,6 +380,7 @@ fn gallery_columns_follow_requested_order_and_selection() {
 }
 
 #[test]
+#[cfg(feature = "testkit")]
 fn gallery_render_columns_apply_pets_override() {
     let mut theme = rimz::config::ThemeConfig::default();
     theme.display.pixel = rimz::config::PixelMode::Off;
@@ -405,6 +415,7 @@ fn gallery_render_columns_apply_pets_override() {
 }
 
 #[test]
+#[cfg(feature = "testkit")]
 fn gallery_fixtures_build_with_coherent_context() {
     let states = [
         SidebarFixtureState::Cockpit,
@@ -628,6 +639,7 @@ fn gallery_fixtures_build_with_coherent_context() {
 }
 
 #[test]
+#[cfg(feature = "testkit")]
 fn gallery_shimmer_leads_are_waiting_asks() {
     let cases: [(
         SidebarFixtureState,
@@ -702,6 +714,7 @@ fn gallery_shimmer_leads_are_waiting_asks() {
 }
 
 #[test]
+#[cfg(feature = "testkit")]
 fn gallery_fixture_frames_render_decisive_markers() {
     assert_fixture_frame_contains(
         SidebarFixtureState::Cockpit,
@@ -728,6 +741,7 @@ fn gallery_fixture_frames_render_decisive_markers() {
     assert_fixture_frame_lacks(SidebarFixtureState::Reach, &["edge-cache"]);
 }
 
+#[cfg(feature = "testkit")]
 fn agent_card_by_id<'a>(snapshot: &'a rimz::SidebarSnapshot, id: &str) -> &'a rimz::AgentCard {
     snapshot
         .worktree_groups
@@ -740,6 +754,7 @@ fn agent_card_by_id<'a>(snapshot: &'a rimz::SidebarSnapshot, id: &str) -> &'a ri
         .unwrap_or_else(|| panic!("agent card {id}"))
 }
 
+#[cfg(feature = "testkit")]
 fn agent_cards(snapshot: &rimz::SidebarSnapshot) -> Vec<&rimz::AgentCard> {
     snapshot
         .worktree_groups
@@ -749,6 +764,7 @@ fn agent_cards(snapshot: &rimz::SidebarSnapshot) -> Vec<&rimz::AgentCard> {
         .collect()
 }
 
+#[cfg(feature = "testkit")]
 fn assert_fixture_frame_contains(state: SidebarFixtureState, markers: &[&str]) {
     let snapshot = sidebar_fixture_snapshot(state).unwrap();
     let mut ansi = Vec::new();
@@ -762,6 +778,7 @@ fn assert_fixture_frame_contains(state: SidebarFixtureState, markers: &[&str]) {
     }
 }
 
+#[cfg(feature = "testkit")]
 fn assert_fixture_frame_lacks(state: SidebarFixtureState, markers: &[&str]) {
     let snapshot = sidebar_fixture_snapshot(state).unwrap();
     let mut ansi = Vec::new();

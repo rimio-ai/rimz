@@ -1,4 +1,5 @@
 use super::*;
+use std::path::PathBuf;
 
 pub(super) fn sidebar_fixture_snapshot(
     state: SidebarFixtureState,

@@ -8,11 +8,12 @@
 //! stdout alone. The elder renderer produces in process on its fetch worker, so
 //! these arms serve inspection and scripting.
 
-use std::io::{self, Read, Write};
-use std::path::PathBuf;
+#[cfg(feature = "testkit")]
+use std::io;
+use std::io::Write;
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{ArgAction, Args, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Subcommand};
 
 use super::{GlobalFlags, current_channel, open_store};
 use crate::cli::render;
@@ -31,8 +32,10 @@ use rimz::store::workspace_record;
 use rimz::workspace::WorkspaceResolver;
 use rimz::{PaneAgent, RuntimePaths, SidebarRow, SidebarSnapshot, StatePaths};
 
+#[cfg(feature = "testkit")]
 mod fixture;
 
+#[cfg(feature = "testkit")]
 use fixture::sidebar_fixture_snapshot;
 #[derive(Debug, Args)]
 pub struct SidebarArgs {
@@ -100,15 +103,9 @@ enum SidebarSubcmd {
     /// Repair missing, duplicate, wedged, or mis-docked sidebar panes without
     /// publishing a new build.
     Repair,
-    /// Read a snapshot JSON from stdin and render one fixed frame.
-    Render {
-        #[arg(long, default_value_t = 80)]
-        width: u16,
-        #[arg(long, default_value_t = 24)]
-        height: u16,
-    },
     /// Render a deterministic sidebar fixture frame. Hidden — contributor
     /// screenshot infrastructure, not a user-facing sidebar verb.
+    #[cfg(feature = "testkit")]
     #[command(hide = true)]
     Fixture {
         #[arg(value_enum)]
@@ -126,6 +123,7 @@ enum SidebarSubcmd {
     },
     /// Open a live sidebar feature gallery in a room tab or inline outside a
     /// mux session. Hidden — contributor visual review tool.
+    #[cfg(feature = "testkit")]
     #[command(hide = true)]
     Gallery {
         #[arg(long)]
@@ -133,6 +131,7 @@ enum SidebarSubcmd {
     },
     /// Render the live sidebar gallery compositor. Hidden — launched by
     /// `sidebar gallery`, not a user-facing sidebar verb.
+    #[cfg(feature = "testkit")]
     #[command(hide = true)]
     GalleryRender {
         #[arg(long)]
@@ -350,7 +349,8 @@ fn parse_zellij_focus_clients(raw: &str) -> Vec<rimz::mux::ClientPaneView> {
     projected
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+#[cfg(feature = "testkit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 enum SidebarFixtureState {
     Empty,
     Fleet,
@@ -369,9 +369,11 @@ impl SidebarArgs {
             SidebarSubcmd::Frame { .. } => "sidebar frame",
             SidebarSubcmd::Serve { .. } => "sidebar serve",
             SidebarSubcmd::Repair => "sidebar repair",
-            SidebarSubcmd::Render { .. } => "sidebar render",
+            #[cfg(feature = "testkit")]
             SidebarSubcmd::Fixture { .. } => "sidebar fixture",
+            #[cfg(feature = "testkit")]
             SidebarSubcmd::Gallery { .. } => "sidebar gallery",
+            #[cfg(feature = "testkit")]
             SidebarSubcmd::GalleryRender { .. } => "sidebar gallery-render",
             SidebarSubcmd::Wake { .. } => "sidebar wake",
             SidebarSubcmd::MarkRead { .. } => "sidebar mark-read",
@@ -438,7 +440,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             refresh_ms,
         ),
         SidebarSubcmd::Repair => repair(globals),
-        SidebarSubcmd::Render { width, height } => render(width, height),
+        #[cfg(feature = "testkit")]
         SidebarSubcmd::Fixture {
             state,
             width,
@@ -447,7 +449,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             theme_mode,
             theme_scheme,
         } => fixture(state, width, height, watch, theme_mode, theme_scheme),
+        #[cfg(feature = "testkit")]
         SidebarSubcmd::Gallery { pets } => gallery(globals, pets),
+        #[cfg(feature = "testkit")]
         SidebarSubcmd::GalleryRender { pets } => gallery_render(pets),
         SidebarSubcmd::Wake(args) => {
             let telemetry = args.telemetry();
@@ -930,16 +934,7 @@ fn resolve_serve_identity(
     Ok((workspace_id, session_name))
 }
 
-fn render(width: u16, height: u16) -> Result<()> {
-    let mut buf = String::new();
-    io::stdin()
-        .read_to_string(&mut buf)
-        .context("reading stdin")?;
-    let snapshot = serde_json::from_str(&buf).context("parsing snapshot from stdin")?;
-    rimz::sidebar_pane::render::render_fixed(io::stdout(), &snapshot, None, width, height)
-        .context("rendering snapshot")
-}
-
+#[cfg(feature = "testkit")]
 fn fixture(
     state: SidebarFixtureState,
     width: u16,
@@ -964,6 +959,7 @@ fn fixture(
         .context("rendering sidebar fixture")
 }
 
+#[cfg(feature = "testkit")]
 fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
     if rimz::mux::ambient_pane_id().is_none() {
         // No room can host a tab; the compositor owns this terminal.
@@ -1001,8 +997,10 @@ fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
         .context("opening sidebar gallery")
 }
 
+#[cfg(feature = "testkit")]
 const GALLERY_PETS: [&str; 4] = ["rocky", "seedy", "fireball", "bsod"];
 
+#[cfg(feature = "testkit")]
 fn gallery_render(pets: bool) -> Result<()> {
     let machine_config = super::machine_config();
     let refresh_ms = machine_config.theme.display.resolved_refresh_ms();
@@ -1010,6 +1008,7 @@ fn gallery_render(pets: bool) -> Result<()> {
     rimz::sidebar_pane::app::serve_gallery(columns, refresh_ms).context("serving sidebar gallery")
 }
 
+#[cfg(feature = "testkit")]
 fn gallery_render_columns(
     pets: bool,
     theme: &rimz::config::ThemeConfig,
@@ -1032,6 +1031,7 @@ fn gallery_render_columns(
     Ok(columns)
 }
 
+#[cfg(feature = "testkit")]
 fn gallery_selected_index(
     snapshot: &rimz::SidebarSnapshot,
     selector: fn(&rimz::SidebarRow) -> bool,
@@ -1044,8 +1044,10 @@ fn gallery_selected_index(
         .unwrap_or(0)
 }
 
+#[cfg(feature = "testkit")]
 type GallerySelector = fn(&rimz::SidebarRow) -> bool;
 
+#[cfg(feature = "testkit")]
 fn gallery_fixture_columns() -> [(SidebarFixtureState, GallerySelector); 4] {
     [
         (
@@ -1065,6 +1067,7 @@ fn gallery_fixture_columns() -> [(SidebarFixtureState, GallerySelector); 4] {
     ]
 }
 
+#[cfg(feature = "testkit")]
 fn parse_fixture_theme_mode(value: &str) -> Result<rimz::config::ThemeMode> {
     match value {
         "auto" => Ok(rimz::config::ThemeMode::Auto),
