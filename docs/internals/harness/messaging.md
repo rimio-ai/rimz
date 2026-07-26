@@ -210,11 +210,11 @@ When a queued head delivers, the helper extends the claim through the contiguous
 
 A member joins the batch only if it is a `Prompt` that submits with Enter, does not start with `/`, has its own gate open, matches the head's `force` flag, and shares the head's batch key (the sender's channel for an agent, the receiver's channel for a human, as if typed in the pane). A `Command` body, slash text, a no-enter draft, a force mismatch, a closed gate, or a cross-channel sender stops the batch. Resume control messages never batch.
 
-The batch lands as one paste and one submit. Agent-authored members keep their own `from @sender:` prefix, human and system members stay unprefixed, and sections are separated by a blank line. Claim, `Sent` recording, release, and pre-send failure each mutate the whole batch in one queue transaction, while audit events stay one per message in message order.
+The batch lands as one paste and one submit. Agent- and human-authored members keep their own structured message header, system members stay verbatim, and sections are separated by a blank line. Claim, `Sent` recording, release, and pre-send failure each mutate the whole batch in one queue transaction, while audit events stay one per message in message order.
 
 ### Confirmation and retry
 
-A `TurnStarted` hook aligns the whole submitted paste against candidate `Prompt` batches for that card. Durable record text supplies the boundaries between adjacent unprefixed human messages, while agent-authored records consume their `from @sender:` prefix. Record text and the blank-line join match verbatim inside a batch; only the first record's leading and last record's trailing whitespace follow the hook payload's outer normalization. The acknowledgement confirms a batch only when every record accounts for the reported paste; reported text that aligns with no batch is human input and confirms nothing. The correlated path also accepts a requeued prompt until twice its body window after `last_sent_at`, so the record keeps one additional window after reconciliation to absorb a racing acknowledgement instead of allowing another write.
+A `TurnStarted` hook aligns the whole submitted paste against candidate `Prompt` batches for that card. Durable record text supplies the boundaries between adjacent messages; agent- and human-authored records consume their structured headers, while system records match verbatim. Record text and the blank-line join match verbatim inside a batch; only the first record's leading and last record's trailing whitespace follow the hook payload's outer normalization. The acknowledgement confirms a batch only when every record accounts for the reported paste; reported text that aligns with no batch is direct pane input and confirms nothing. The correlated path also accepts a requeued prompt until twice its body window after `last_sent_at`, so the record keeps one additional window after reconciliation to absorb a racing acknowledgement instead of allowing another write.
 
 When a turn-start adapter reports no usable prompt text, confirmation falls back to the oldest `Sent` prompt and its `batch_id`, preserving hookless-text compatibility. A `Compacting` hook uses the same oldest-`Sent` fallback for `Command` records. Correlation never selects a `Claimed` record because its deliverer owns an in-progress pane write.
 
@@ -222,7 +222,7 @@ Failure has three shapes:
 
 **Pre-send failure** (pane gone, gate closed, an ask reserving input). Shared recovery keeps or returns the record to `Queued` with `last_error` set and pane affinity cleared, so the next boundary re-resolves a pane. A claim increments `attempts`; an initial send-now failure records the error before any claim exists. An immediate steer rejected on Waiting is terminal and reports the skipped target.
 
-**Unconfirmed prompt** (bytes landed, no hook arrived for 30 seconds by default). The sweep reconciler clears `pane_id` and `batch_id`, preserves `last_sent_at`, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. A requeued batch member reforms with whatever prefix is ready next time. Past the cap the record becomes `TimedOut`.
+**Unconfirmed prompt** (bytes landed, no hook arrived for 30 seconds by default). The sweep reconciler clears `pane_id` and `batch_id`, preserves `last_sent_at`, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. A requeued batch member reforms with whatever header is ready next time. Past the cap the record becomes `TimedOut`.
 
 **Unconfirmed command** (bytes landed, no hook arrived for 3 minutes by default). The sweep settles the record `TimedOut` with `delivery unconfirmed; command not resent`. A command reaches the pane at most once because a duplicate `/compact` can discard context and no missing acknowledgement proves the first submit failed.
 
@@ -246,13 +246,22 @@ What the send path spaces is *messages*, not the paste and its submit: it sleeps
 
 [`write_batch`](../../../crates/rimz/src/message/send.rs) records the batch as `Sent` after the paste lands and **before** it presses Enter. A submitted message is therefore always preceded by its durable record and audit event. The failure ordering this buys: a crash between paste and submit leaves a `Sent` record whose text sits unsubmitted in the composer, which the reconciler can reason about. The reverse ordering would let an agent start a turn RimZ has no record of.
 
-### The sender prefix
+### The message header
 
-A send from a RimZ-launched agent arrives prefixed `from @sender: `, gaining `#channel` when it crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
+Every attributed delivery carries a header before its raw record text:
 
-The handle is the shortest unique selector over addressable agents: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down this ladder. `--no-from` delivers verbatim.
+```text
+Type: AGENT_MESSAGE
+From: @sender
+Content:
+<message>
+```
 
-The receiver's turn-start hook parses the prefix once and writes a first-class `Message` transcript entry with structured `from`. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed hook text stays the transcript content.
+`Type` is `AGENT_MESSAGE` for a send from a RimZ-launched agent and `USER_MESSAGE` for a human's `rimz message`; a human header always uses `From: @user`. An agent handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
+
+The agent handle is the shortest unique selector over addressable agents: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down this ladder. System records and `--no-from` sends stay verbatim.
+
+The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` becomes a first-class `Message` transcript entry with structured `from`; `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
 
 ## Smart compaction
 
@@ -366,7 +375,7 @@ Two fields link entries into conversations, and both default empty so older JSON
 
 `reply_to` carries the parent message ids. The same turn-start replaces `AgentContext.turn_opened_by` with every matched id, including an empty vector that clears a prior turn. An agent-authored enqueue copies that current-turn vector into its new record's `in_reply_to`; a human sender, `--no-from`, an unnamed sender, or missing context starts a root. The turn's final `Assistant` entry and any mid-turn `Ask` copy `turn_opened_by` into `reply_to`. Requeue preserves `in_reply_to`, so retrying text keeps its causal position.
 
-A batched delivery splits on the blank-line boundaries that introduce another sender prefix, so each section becomes its own entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh); statusline-only detections stay card enrichment, because that path is lock-free and writes no transcript.
+A batched delivery splits on blank-line boundaries that introduce another `Type: AGENT_MESSAGE` or `Type: USER_MESSAGE` header, so each section becomes its own entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh); statusline-only detections stay card enrichment, because that path is lock-free and writes no transcript.
 
 `rimz transcript` projects linked entries into flat conversation components: it unions output edges from an `Assistant`, `Ask`, `Error`, or `Answer` to the messages that opened its turn, plus reply-back edges from a message to a parent whose sender is that message's receiver. Other causal edges, including hand-offs to third parties, root new conversations. The earliest entry in a component is its root; the rest follow chronologically beneath it. `--flat` skips the assembly.
 
