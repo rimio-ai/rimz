@@ -1,6 +1,6 @@
 use super::*;
 use crate::sidebar_pane::render::fmt::dollars2;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 #[test]
 fn collapsed_cap_keeps_attention_focused_unread_and_liveness_process_rows() {
@@ -474,6 +474,78 @@ fn finished_roster_pins_the_member_cost() {
 }
 
 #[test]
+fn expanded_finished_group_cards_show_seat_lifetime_cost() {
+    let live = group(vec![
+        agent_row_with_cost("planner", 0.42),
+        agent_row_with_cost("coder", 0.58),
+    ]);
+    let (live_texts, _, _) = render_group(&live, false);
+    assert!(
+        live_texts
+            .iter()
+            .any(|line| line.contains("planner") && line.contains("$0.42")),
+        "live cards retain session costs: {live_texts:?}"
+    );
+    assert!(
+        live_texts
+            .iter()
+            .any(|line| line.contains("coder") && line.contains("$0.58")),
+        "live cards retain session costs: {live_texts:?}"
+    );
+
+    let mut finished = group(vec![
+        agent_row_with_cost("planner", 0.42),
+        agent_row_with_cost("coder", 0.58),
+    ]);
+    finished.finished = true;
+    finished.cohort_effort = Some(crate::SidebarCohortEffort {
+        cost_usd: Some(4.0),
+        seats: BTreeMap::from([
+            (
+                "planner".to_owned(),
+                crate::SidebarSeatEffort {
+                    cost_usd: Some(1.5),
+                    ..crate::SidebarSeatEffort::default()
+                },
+            ),
+            (
+                "coder".to_owned(),
+                crate::SidebarSeatEffort {
+                    cost_usd: Some(2.5),
+                    ..crate::SidebarSeatEffort::default()
+                },
+            ),
+        ]),
+        ..crate::SidebarCohortEffort::default()
+    });
+
+    let (receipt, _, _) = render_group(&finished, false);
+    assert!(
+        receipt.iter().any(|line| line.contains("$4.00")),
+        "seat costs sum to the collapsed receipt: {receipt:?}"
+    );
+    let (expanded, _, _) = render_group(&finished, true);
+    assert!(
+        expanded
+            .iter()
+            .any(|line| line.contains("planner") && line.contains("$1.50")),
+        "finished cards use lifetime seat costs: {expanded:?}"
+    );
+    assert!(
+        expanded
+            .iter()
+            .any(|line| line.contains("coder") && line.contains("$2.50")),
+        "finished cards use lifetime seat costs: {expanded:?}"
+    );
+    assert!(
+        expanded
+            .iter()
+            .all(|line| !line.contains("$0.42") && !line.contains("$0.58")),
+        "finished cards replace session costs: {expanded:?}"
+    );
+}
+
+#[test]
 fn finished_roster_folds_overflow_without_clipping_names() {
     let mut finished = group(vec![
         agent_row("planner", AgentStatus::Success),
@@ -666,6 +738,7 @@ fn finished_receipt_pins_cost_then_tokens_and_muted_age() {
             cache_read: 700_000,
         },
         active_secs: Some(2 * 60 * 60),
+        ..crate::SidebarCohortEffort::default()
     });
     let mut snapshot = snapshot_with(Vec::new());
     snapshot.worktree_groups = vec![finished];
@@ -776,6 +849,7 @@ fn finished_totals_degrade_tokens_before_the_right_pin() {
             cache_read: 700_000,
         },
         active_secs: Some(2 * 60 * 60),
+        ..crate::SidebarCohortEffort::default()
     });
 
     let (texts, _, _) = render_group_at_width(&finished, false, 30);

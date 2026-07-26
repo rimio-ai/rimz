@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::agents::AgentStatus;
@@ -134,10 +136,18 @@ pub enum WorktreePrCi {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SidebarSeatEffort {
+    pub cost_usd: Option<f64>,
+    pub tokens: crate::agents::spending::EffortTokens,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SidebarCohortEffort {
     pub cost_usd: Option<f64>,
     pub tokens: crate::agents::spending::EffortTokens,
     pub active_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub seats: BTreeMap<String, SidebarSeatEffort>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -423,6 +433,21 @@ mod tests {
         let decoded: SidebarWorktreeGroup = serde_json::from_value(value).unwrap();
 
         assert_eq!(decoded.cohort_effort, None);
+    }
+
+    #[test]
+    fn cohort_effort_without_seats_stays_serde_compatible() {
+        let mut value = serde_json::to_value(SidebarCohortEffort {
+            cost_usd: Some(1.0),
+            ..SidebarCohortEffort::default()
+        })
+        .unwrap();
+        value.as_object_mut().unwrap().remove("seats");
+
+        let decoded: SidebarCohortEffort = serde_json::from_value(value).unwrap();
+
+        assert!(decoded.seats.is_empty());
+        assert_eq!(decoded.cost_usd, Some(1.0));
     }
 
     #[test]

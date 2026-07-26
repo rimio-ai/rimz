@@ -105,7 +105,19 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
         let selected = this_row == ctx.selected_index;
         let gutter = if selected { Gutter::Selected } else { lane };
-        for line in row_lines(ctx, row, selected, gutter, meter_pixels.as_deref_mut()) {
+        let seat_cost_usd = group
+            .cohort_effort
+            .as_ref()
+            .and_then(|effort| effort.seats.get(row.id.as_str()))
+            .and_then(|seat| seat.cost_usd);
+        for line in row_lines(
+            ctx,
+            row,
+            selected,
+            gutter,
+            seat_cost_usd,
+            meter_pixels.as_deref_mut(),
+        ) {
             block.push_row(line, this_row);
         }
     }
@@ -183,6 +195,7 @@ fn finished_roster_line(
     let team = group.team.as_deref();
     let cost_spans = if let Some(cost) = group
         .cohort_effort
+        .as_ref()
         .and_then(|effort| effort.cost_usd)
         .filter(|cost| *cost >= 0.005)
     {
@@ -260,7 +273,7 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
         .filter(|row| row.is_agent())
         .map(|row| row.last_activity)
         .max()?;
-    let effort = group.cohort_effort.unwrap_or_default();
+    let effort = group.cohort_effort.clone().unwrap_or_default();
     let total = effort.tokens.display_total();
     let input = effort
         .tokens

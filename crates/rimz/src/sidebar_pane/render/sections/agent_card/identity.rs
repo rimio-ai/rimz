@@ -27,6 +27,7 @@ pub(super) fn identity_line(
     row_ctx: &RowCtx<'_>,
     row: &SidebarRow,
     attention: CardAttention,
+    seat_cost_usd: Option<f64>,
 ) -> Line<'static> {
     let width = content_width(row_ctx.width);
     if row.is_process() {
@@ -34,7 +35,7 @@ pub(super) fn identity_line(
     }
 
     let status = row.status().unwrap_or(AgentStatus::Idle);
-    agent_identity_line(row_ctx, row, status, attention)
+    agent_identity_line(row_ctx, row, status, attention, seat_cost_usd)
 }
 
 /// The leading status cell for an agent row, applying the two transient render
@@ -101,6 +102,7 @@ pub(super) fn agent_identity_line(
     row: &SidebarRow,
     status: AgentStatus,
     attention: CardAttention,
+    seat_cost_usd: Option<f64>,
 ) -> Line<'static> {
     let theme = row_ctx.theme;
     let width = content_width(row_ctx.width);
@@ -110,7 +112,8 @@ pub(super) fn agent_identity_line(
     // idle agent that has spent nothing yet — is omitted, not printed as zero
     // (the filter reads the authoritative target, never a mid-climb value).
     let mut right: Vec<Span<'static>> = Vec::new();
-    if let Some(target) = session_cost_usd(row).filter(|usd| *usd >= 0.005) {
+    let target = seat_cost_usd.or_else(|| session_cost_usd(row));
+    if let Some(target) = target.filter(|usd| *usd >= 0.005) {
         let usd = row_ctx
             .cost_rolls
             .display(&row.id, target, row_ctx.animation_phase);

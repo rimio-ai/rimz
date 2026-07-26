@@ -172,7 +172,7 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
 
 pub fn project_cohort_effort(snapshot: &mut SidebarSnapshot, cache: &CohortSpendCache) {
     for group in &mut snapshot.worktree_groups {
-        group.cohort_effort = cache.groups.get(&group.key).copied();
+        group.cohort_effort = cache.groups.get(&group.key).cloned();
     }
 }
 

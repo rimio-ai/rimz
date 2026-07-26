@@ -9,11 +9,14 @@ use crate::agents::AgentState;
 use crate::agents::spending::{EffortParseMemo, EffortSessionRef};
 use crate::store::active_time;
 use crate::store::snapshot::RollupCursor;
-use crate::{RuntimePaths, SidebarCohortEffort, SidebarSnapshot, SidebarWorktreeGroup, StatePaths};
+use crate::{
+    RuntimePaths, SidebarCohortEffort, SidebarSeatEffort, SidebarSnapshot, SidebarWorktreeGroup,
+    StatePaths,
+};
 
 use super::super::timing::COHORT_SPEND_TTL;
 
-pub const COHORT_SPEND_CACHE_VERSION: u32 = 1;
+pub const COHORT_SPEND_CACHE_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CohortSpendCache {
@@ -134,6 +137,16 @@ fn compute_cohort_effort(
             cohort.tokens.add_assign(effort.tokens);
             cohort.cost_usd =
                 crate::agents::spending::sum_optional_cost(cohort.cost_usd, effort.cost_usd);
+            let seat = SidebarSeatEffort {
+                cost_usd: effort.cost_usd,
+                tokens: effort.tokens,
+            };
+            for record in records
+                .iter()
+                .filter(|record| row_ids.contains(record.agent_id.as_str()))
+            {
+                cohort.seats.insert(record.agent_id.to_string(), seat);
+            }
             let slot_active = records
                 .iter()
                 .filter_map(|record| {
@@ -267,5 +280,25 @@ mod tests {
         assert_eq!(effort.cost_usd, Some(0.5));
         assert_eq!(effort.tokens.input, 30);
         assert_eq!(effort.tokens.output, 4);
+        assert_eq!(
+            effort.seats.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["coder", "planner"]
+        );
+        assert_eq!(
+            effort
+                .seats
+                .values()
+                .filter_map(|seat| seat.cost_usd)
+                .sum::<f64>(),
+            effort.cost_usd.unwrap()
+        );
+        let seat_tokens = effort.seats.values().fold(
+            crate::agents::spending::EffortTokens::default(),
+            |mut total, seat| {
+                total.add_assign(seat.tokens);
+                total
+            },
+        );
+        assert_eq!(seat_tokens, effort.tokens);
     }
 }
