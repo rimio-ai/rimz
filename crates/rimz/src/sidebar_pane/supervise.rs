@@ -927,12 +927,7 @@ fn request_worker_handoff(
         debug!(error = %err, "sidebar supervisor worker handoff nudge failed");
     }
     if let Some(target) = target {
-        crate::diag::DiagSink::for_workspace(
-            config.workspace_id.clone(),
-            config.session_name.clone(),
-            Some(config.instance_id.clone()),
-        )
-        .emit(DiagEvent::SupervisorConvergence {
+        diag_sink(config).emit(DiagEvent::SupervisorConvergence {
             target_build: target.build.clone(),
         });
     }
@@ -969,12 +964,7 @@ fn record_signal_death(
     exit_code: Option<i32>,
     stderr_excerpt: String,
 ) {
-    let diag = crate::diag::DiagSink::for_workspace(
-        config.workspace_id.clone(),
-        config.session_name.clone(),
-        Some(config.instance_id.clone()),
-    );
-    diag.emit(DiagEvent::RendererSignalDeath {
+    diag_sink(config).emit(DiagEvent::RendererSignalDeath {
         signal,
         exit_code,
         stderr_excerpt: stderr_excerpt.clone(),
@@ -983,12 +973,7 @@ fn record_signal_death(
 }
 
 fn record_orphan_reap(config: &ServeConfig, worker_pid: i32) {
-    crate::diag::DiagSink::for_workspace(
-        config.workspace_id.clone(),
-        config.session_name.clone(),
-        Some(config.instance_id.clone()),
-    )
-    .emit(DiagEvent::RendererOrphanReaped {
+    diag_sink(config).emit(DiagEvent::RendererOrphanReaped {
         pane_id: config
             .own_pane
             .as_ref()
@@ -1011,38 +996,31 @@ fn preflight_supervisor(exe: &Path) -> std::result::Result<(), String> {
 }
 
 fn record_preflight_rejected(config: &ServeConfig, target_build: &str, reason: &str) {
-    crate::diag::DiagSink::for_workspace(
-        config.workspace_id.clone(),
-        config.session_name.clone(),
-        Some(config.instance_id.clone()),
-    )
-    .emit(DiagEvent::SupervisorPreflightRejected {
+    diag_sink(config).emit(DiagEvent::SupervisorPreflightRejected {
         target_build: target_build.to_owned(),
         reason: reason.to_owned(),
     });
 }
 
 fn record_self_close_rejected(config: &ServeConfig, siblings: usize, reason: &str) {
-    crate::diag::DiagSink::for_workspace(
-        config.workspace_id.clone(),
-        config.session_name.clone(),
-        Some(config.instance_id.clone()),
-    )
-    .emit(DiagEvent::SelfCloseRejected {
+    diag_sink(config).emit(DiagEvent::SelfCloseRejected {
         siblings,
         reason: reason.to_owned(),
     });
 }
 
 fn record_confirmed_self_close(config: &ServeConfig) {
+    diag_sink(config).emit_unlimited(DiagEvent::RendererExit {
+        cause: crate::diag::record::RendererExitCause::SelfCloseEmptyTab,
+    });
+}
+
+fn diag_sink(config: &ServeConfig) -> crate::diag::DiagSink {
     crate::diag::DiagSink::for_workspace(
         config.workspace_id.clone(),
         config.session_name.clone(),
         Some(config.instance_id.clone()),
     )
-    .emit_unlimited(DiagEvent::RendererExit {
-        cause: crate::diag::record::RendererExitCause::SelfCloseEmptyTab,
-    });
 }
 
 fn remove_orphan_runtime_files(config: &ServeConfig) {
@@ -1152,32 +1130,17 @@ fn render_program(exe: &std::path::Path) -> String {
 
 #[cfg(feature = "testkit")]
 fn reap_poll_interval() -> Duration {
-    let Some(value) = env::var_os(TEST_REAP_POLL_MS_ENV).filter(|value| !value.is_empty()) else {
-        return REAP_POLL_INTERVAL;
-    };
-    value
-        .to_str()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(REAP_POLL_INTERVAL)
+    duration_override(TEST_REAP_POLL_MS_ENV, REAP_POLL_INTERVAL)
 }
 
 #[cfg(feature = "testkit")]
 fn respawn_delay(delay: Duration) -> Duration {
-    env::var(TEST_RESPAWN_BACKOFF_MS_ENV)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(delay)
+    duration_override(TEST_RESPAWN_BACKOFF_MS_ENV, delay)
 }
 
 #[cfg(feature = "testkit")]
 fn record_poll_interval() -> Duration {
-    env::var(TEST_RECORD_POLL_MS_ENV)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(RECORD_POLL_INTERVAL)
+    duration_override(TEST_RECORD_POLL_MS_ENV, RECORD_POLL_INTERVAL)
 }
 
 #[cfg(not(feature = "testkit"))]
@@ -1187,11 +1150,7 @@ fn record_poll_interval() -> Duration {
 
 #[cfg(feature = "testkit")]
 fn respawn_stable_run() -> Duration {
-    env::var(TEST_STABLE_RUN_MS_ENV)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(RESPAWN_STABLE_RUN)
+    duration_override(TEST_STABLE_RUN_MS_ENV, RESPAWN_STABLE_RUN)
 }
 
 #[cfg(not(feature = "testkit"))]
@@ -1201,11 +1160,7 @@ fn respawn_stable_run() -> Duration {
 
 #[cfg(feature = "testkit")]
 fn worker_handoff_grace() -> Duration {
-    env::var(TEST_HANDOFF_GRACE_MS_ENV)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(WORKER_HANDOFF_GRACE)
+    duration_override(TEST_HANDOFF_GRACE_MS_ENV, WORKER_HANDOFF_GRACE)
 }
 
 #[cfg(not(feature = "testkit"))]
@@ -1220,16 +1175,16 @@ fn respawn_delay(delay: Duration) -> Duration {
 
 #[cfg(feature = "testkit")]
 fn pane_probe_interval() -> Duration {
-    let Some(value) =
-        env::var_os(TEST_PANE_PROBE_INTERVAL_MS_ENV).filter(|value| !value.is_empty())
-    else {
-        return PANE_PROBE_INTERVAL;
-    };
-    value
-        .to_str()
-        .and_then(|value| value.parse::<u64>().ok())
+    duration_override(TEST_PANE_PROBE_INTERVAL_MS_ENV, PANE_PROBE_INTERVAL)
+}
+
+#[cfg(feature = "testkit")]
+fn duration_override(name: &str, default: Duration) -> Duration {
+    env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.to_str()?.parse::<u64>().ok())
         .map(Duration::from_millis)
-        .unwrap_or(PANE_PROBE_INTERVAL)
+        .unwrap_or(default)
 }
 
 #[cfg(not(feature = "testkit"))]
