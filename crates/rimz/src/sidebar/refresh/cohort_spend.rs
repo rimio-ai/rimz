@@ -29,9 +29,11 @@ pub fn read_cohort_spend_cache(path: &Path) -> CohortSpendCache {
     let Ok(cache) = serde_json::from_slice::<CohortSpendCache>(&bytes) else {
         return CohortSpendCache::default();
     };
-    (cache.version == COHORT_SPEND_CACHE_VERSION)
-        .then_some(cache)
-        .unwrap_or_default()
+    if cache.version == COHORT_SPEND_CACHE_VERSION {
+        cache
+    } else {
+        CohortSpendCache::default()
+    }
 }
 
 fn cache_due(cache: &CohortSpendCache, now_ms: u64) -> bool {
