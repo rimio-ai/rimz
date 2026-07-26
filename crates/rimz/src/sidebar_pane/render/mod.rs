@@ -53,7 +53,7 @@ use std::num::NonZeroU16;
 
 use crate::agents::AgentStatus;
 use crate::agents::TurnPhase;
-use crate::config::{AnimationRole, GlyphRole};
+use crate::config::{AnimationRole, CardDensityMode, GlyphRole};
 use crate::sidebar_pane::pets::PetAction;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::{ProcessState, SidebarRow, SidebarSnapshot};
@@ -521,6 +521,43 @@ pub fn render_fixed_line_ansi<W: Write>(
     let mut terminal = infallible(Terminal::new(backend));
     infallible(terminal.clear());
     infallible(draw_to_terminal(&mut terminal, snapshot, alert));
+    write_buffer_line_ansi(&mut writer, terminal.backend().buffer())
+}
+
+/// Render the one-shot `rimz sidebar frame --expand` view as line-oriented ANSI.
+///
+/// Every card uses expanded density, every worktree group bypasses its row cap,
+/// and the offscreen viewport grows to the full composed height.
+pub fn render_expanded_line_ansi<W: Write>(
+    mut writer: W,
+    snapshot: &SidebarSnapshot,
+    width: u16,
+) -> io::Result<()> {
+    let mut snapshot = snapshot.clone();
+    snapshot.theme.display.card_density = CardDensityMode::Expanded;
+    let mut ui = UiState {
+        expanded_groups: snapshot
+            .worktree_groups
+            .iter()
+            .map(|group| group.key.clone())
+            .collect(),
+        ..UiState::default()
+    };
+    let theme = ui.theme(&snapshot.theme);
+    let composed =
+        compose_lines_with_meter(&snapshot, None, &ui, theme.as_ref(), width, u16::MAX, None);
+    let height =
+        u16::try_from(composed.content_height.clamp(1, usize::from(u16::MAX))).unwrap_or(u16::MAX);
+
+    let backend = TestBackend::new(width, height);
+    let mut terminal = infallible(Terminal::new(backend));
+    infallible(terminal.clear());
+    infallible(draw_to_terminal_with_ui(
+        &mut terminal,
+        &snapshot,
+        None,
+        &mut ui,
+    ));
     write_buffer_line_ansi(&mut writer, terminal.backend().buffer())
 }
 

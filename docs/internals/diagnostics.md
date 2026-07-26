@@ -230,6 +230,8 @@ Card-content questions (a wrong gauge, a missing cost, a card resting in the wro
 
 `rimz sidebar snapshot --json --no-produce`, run from anywhere inside the workspace or with `--workspace-id` from outside it, prints the fused `SidebarSnapshot` a node renders: the event-fresh rollup folded over the published pane frame plus the per-session sidecars ([state.md](./sidebar/state.md)). `--no-produce` keeps the read passive, with no mux or git forks, so inspection never perturbs the room. Omit it to pay one producing refresh when no fresh producer cache exists.
 
+`rimz sidebar frame` prints the rendered frame itself through the same passive read when a producer frame exists, falling back to one producing refresh otherwise. ANSI color is stripped when stdout is piped; `--expand` expands every card, reveals every capped worktree row, and grows the output so large fleets do not clip.
+
 ```sh
 rimz sidebar snapshot --json --no-produce | jq '
   .agents[] | select(.worktree_branch == "truecolor") | {

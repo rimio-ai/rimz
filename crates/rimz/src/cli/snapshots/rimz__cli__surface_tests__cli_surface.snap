@@ -1,5 +1,6 @@
 ---
 source: crates/rimz/src/cli/surface_tests.rs
+assertion_line: 172
 expression: rendered
 ---
 rimz
@@ -942,6 +943,8 @@ rimz help sidebar fixture [hidden]
 
 rimz help sidebar focus [hidden]
 
+rimz help sidebar frame
+
 rimz help sidebar gallery [hidden]
 
 rimz help sidebar gallery-render [hidden]
@@ -1828,6 +1831,19 @@ rimz sidebar focus [hidden]
     --toggle  [action=set-true takes=0..=0]
     --zellij  [action=set-true takes=0..=0 global]
 
+rimz sidebar frame
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --expand  [action=set-true takes=0..=0]
+    --height <HEIGHT>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session-name <SESSION_NAME>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --width <WIDTH>  [action=set takes=1..=1]
+    --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
 rimz sidebar gallery [hidden]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
@@ -1851,6 +1867,8 @@ rimz sidebar help
 rimz sidebar help fixture [hidden]
 
 rimz sidebar help focus [hidden]
+
+rimz sidebar help frame
 
 rimz sidebar help gallery [hidden]
 
