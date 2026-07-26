@@ -10,6 +10,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     running.phase = TurnPhase::Reasoning;
     running.subagent_description = Some("locate the render seam".to_owned());
     running.subagent_started_at = Some(started);
+    running.subagent_cost_usd = Some(0.42);
     running.usage.total_tokens = Some(12_400);
     running.model = Some("claude-opus-4-8".to_owned());
     running.effort = Some("high".to_owned());
@@ -17,6 +18,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     assert_eq!(sub.phase, TurnPhase::Reasoning);
     assert_eq!(sub.description.as_deref(), Some("locate the render seam"));
     assert_eq!(sub.total_tokens, Some(12_400));
+    assert_eq!(sub.cost_usd, Some(0.42));
     assert_eq!(sub.elapsed_secs, Some(100));
     assert_eq!(sub.model.as_deref(), Some("claude-opus-4-8"));
     assert_eq!(sub.effort.as_deref(), Some("high"));
@@ -36,6 +38,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     assert_eq!(sub.phase, TurnPhase::Idle);
     assert_eq!(sub.description.as_deref(), Some("adapter task description"));
     assert_eq!(sub.total_tokens, None);
+    assert_eq!(sub.cost_usd, None);
     assert_eq!(sub.elapsed_secs, Some(5));
     assert_eq!(sub.model, None);
     assert_eq!(sub.effort, None);

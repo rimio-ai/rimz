@@ -44,28 +44,29 @@ use crate::agents::transcript_fs::{bytes_contains, expand_tilde, home_dir, read_
 /// (`camelCase`; `costUSD` is an explicit serde rename).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ClaudeEntry {
+pub(super) struct ClaudeEntry {
     timestamp: Option<String>,
     cwd: Option<String>,
     #[serde(rename = "costUSD")]
-    cost_usd: Option<f64>,
+    pub(super) cost_usd: Option<f64>,
     #[serde(default)]
-    message: ClaudeMessage,
-    request_id: Option<String>,
+    pub(super) message: ClaudeMessage,
+    pub(super) request_id: Option<String>,
     session_id: Option<String>,
     version: Option<String>,
     is_sidechain: Option<bool>,
+    pub(super) agent_id: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
-struct ClaudeMessage {
+pub(super) struct ClaudeMessage {
     /// Anthropic message ID (`msg-…`).  The dedup key alongside `requestId`.
-    id: Option<String>,
-    model: Option<String>,
+    pub(super) id: Option<String>,
+    pub(super) model: Option<String>,
     #[serde(default, deserialize_with = "deserialize_claude_content")]
     content: Vec<ClaudeContentBlock>,
     #[serde(default)]
-    usage: ClaudeUsage,
+    pub(super) usage: ClaudeUsage,
 }
 
 #[derive(Deserialize)]
@@ -93,7 +94,7 @@ where
 /// and an explicit `:null` (which the upstream schema can emit for the cache
 /// fields), so a usage shape never drops an otherwise-valid cost entry.
 #[derive(Default, Deserialize)]
-struct ClaudeUsage {
+pub(super) struct ClaudeUsage {
     #[serde(default, deserialize_with = "lenient_opt_u64")]
     input_tokens: Option<u64>,
     #[serde(default, deserialize_with = "lenient_opt_u64")]
@@ -102,26 +103,26 @@ struct ClaudeUsage {
     cache_creation_input_tokens: Option<u64>,
     #[serde(default, deserialize_with = "lenient_opt_u64")]
     cache_read_input_tokens: Option<u64>,
-    speed: Option<String>,
+    pub(super) speed: Option<String>,
     #[serde(default)]
     cache_creation: Option<CacheCreation>,
     /// Separately billed nested calls such as Claude's advisor model. The
     /// top-level usage remains attributable to the main model.
     #[serde(default)]
-    iterations: Vec<ClaudeUsageIteration>,
+    pub(super) iterations: Vec<ClaudeUsageIteration>,
 }
 
 #[derive(Default, Deserialize)]
-struct ClaudeUsageIteration {
+pub(super) struct ClaudeUsageIteration {
     #[serde(rename = "type")]
-    kind: String,
-    model: Option<String>,
+    pub(super) kind: String,
+    pub(super) model: Option<String>,
     #[serde(flatten)]
-    usage: ClaudeUsage,
+    pub(super) usage: ClaudeUsage,
 }
 
 #[derive(Default, Deserialize)]
-struct CacheCreation {
+pub(super) struct CacheCreation {
     #[serde(default, deserialize_with = "lenient_u64")]
     ephemeral_5m_input_tokens: u64,
     #[serde(default, deserialize_with = "lenient_u64")]
@@ -229,7 +230,7 @@ fn env_config_dir(raw: &str) -> Option<PathBuf> {
 ///
 /// These are the same field names rejected by ccusage's `has_unsupported_null_field`.
 /// Skipping them prevents silently including entries with missing cost or IDs.
-fn has_unsupported_null_field(line: &[u8]) -> bool {
+pub(super) fn has_unsupported_null_field(line: &[u8]) -> bool {
     const NULL_PATTERNS: &[&[u8]] = &[
         b"\"id\":null",
         b"\"model\":null",
@@ -444,27 +445,7 @@ fn usage_entry(
     prices: &PriceBook,
     unknown_models: &mut BTreeMap<String, u64>,
 ) -> Option<CachedEntry> {
-    let (cache_5m, cache_1h) = usage
-        .cache_creation
-        .as_ref()
-        .map(|breakdown| {
-            (
-                breakdown.ephemeral_5m_input_tokens,
-                breakdown.ephemeral_1h_input_tokens,
-            )
-        })
-        .unwrap_or((usage.cache_creation_input_tokens.unwrap_or(0), 0));
-    // Claude reports the four token components separately, and prices the two
-    // cache-creation tiers at different rates; `input_tokens` is already the
-    // fresh (uncached) slice. The stored entry carries the tiers summed.
-    let split = TokenSplit {
-        input: usage.input_tokens.unwrap_or(0),
-        output: usage.output_tokens.unwrap_or(0),
-        cache_write: cache_5m,
-        cache_write_1h: cache_1h,
-        cache_read: usage.cache_read_input_tokens.unwrap_or(0),
-        fast: usage.speed.as_deref() == Some("fast"),
-    };
+    let split = request_split(usage);
     if split.is_empty() {
         return None;
     }
@@ -489,6 +470,32 @@ fn usage_entry(
         model: model.map(str::to_owned),
         ..CachedEntry::new(meta.ts_secs, cost_usd, &split)
     })
+}
+
+/// Normalize Claude's per-request usage into the pricing split shared by spend
+/// aggregation and exact child-transcript pricing.
+pub(super) fn request_split(usage: &ClaudeUsage) -> TokenSplit {
+    let (cache_5m, cache_1h) = usage
+        .cache_creation
+        .as_ref()
+        .map(|breakdown| {
+            (
+                breakdown.ephemeral_5m_input_tokens,
+                breakdown.ephemeral_1h_input_tokens,
+            )
+        })
+        .unwrap_or((usage.cache_creation_input_tokens.unwrap_or(0), 0));
+    // Claude reports the four token components separately, and prices the two
+    // cache-creation tiers at different rates; `input_tokens` is already the
+    // fresh (uncached) slice. The stored entry carries the tiers summed.
+    TokenSplit {
+        input: usage.input_tokens.unwrap_or(0),
+        output: usage.output_tokens.unwrap_or(0),
+        cache_write: cache_5m,
+        cache_write_1h: cache_1h,
+        cache_read: usage.cache_read_input_tokens.unwrap_or(0),
+        fast: usage.speed.as_deref() == Some("fast"),
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

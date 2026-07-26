@@ -127,6 +127,7 @@ fn sub_agents(count: usize, text: &str) -> Vec<SidebarSubAgent> {
             effort: Some(text.to_owned()),
             description: Some(text.to_owned()),
             total_tokens: Some((idx as u64).saturating_mul(1_000_000)),
+            cost_usd: None,
             elapsed_secs: Some(idx as i64),
             started_at: Some(fixed_now()),
             last_activity: fixed_now(),

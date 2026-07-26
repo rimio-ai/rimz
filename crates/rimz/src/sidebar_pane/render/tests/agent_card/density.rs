@@ -228,6 +228,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     );
     child.parent_agent_id = Some("claude-1".into());
     child.subagent_description = Some("map the render path".to_owned());
+    child.subagent_cost_usd = Some(0.42);
     child.subagent_started_at = Some(fixed_now() - Duration::from_secs(180));
     child.last_activity = fixed_now() - Duration::from_secs(60);
 

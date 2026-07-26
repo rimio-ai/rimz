@@ -2,6 +2,7 @@
 //! real `rimz` binary; XDG roots are scoped under a tempdir so state and
 //! runtime files don't escape.
 
+use std::io::Write as _;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -2704,10 +2705,41 @@ fn statusline_feed_captures_claude_turn_interruption() {
 #[test]
 fn subagent_statusline_feed_writes_one_sidecar_per_task() {
     let env = Env::new();
+    let pricing = env.runtime_paths().shared_pricing_cache_path();
+    std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
+    std::fs::write(
+        pricing,
+        r#"{"schema":4,"models":{"child-model":{"input":0.000001,"output":0.000005,"cache_read":0.0000001,"cache_create":0.00000125,"cache_read_explicit":true,"fast_multiplier":1.0}}}"#,
+    )
+    .unwrap();
     env.install_agent_hooks("claude");
 
-    let payload = r#"{
+    let parent_transcript = env.project_root.join("claude-session/chat.jsonl");
+    let child_transcript = parent_transcript
+        .parent()
+        .unwrap()
+        .join("subagents/agent-child-1.jsonl");
+    std::fs::create_dir_all(child_transcript.parent().unwrap()).unwrap();
+    std::fs::write(&parent_transcript, "").unwrap();
+    std::fs::write(
+        &child_transcript,
+        json!({
+            "type": "assistant",
+            "agentId": "child-1",
+            "requestId": "req-1",
+            "message": {
+                "id": "msg-1",
+                "model": "child-model",
+                "usage": {"input_tokens": 1000, "output_tokens": 100}
+            }
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let payload = json!({
         "columns": 80,
+        "transcript_path": parent_transcript,
         "tasks": [
             {
                 "id": "child-1",
@@ -2725,8 +2757,9 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
                 "tokenCount": 3100
             }
         ]
-    }"#;
-    let out = env.run_subagent_statusline_feed("claude", payload);
+    })
+    .to_string();
+    let out = env.run_subagent_statusline_feed("claude", &payload);
     assert!(
         out.status.success(),
         "feed stderr: {}",
@@ -2747,9 +2780,56 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
         Some("locate the render seam")
     );
     assert_eq!(records[0].context.token_count, Some(12_400));
+    let first_cost = records[0]
+        .context
+        .cost_usd
+        .expect("priced child transcript");
+    assert!(first_cost > 0.0);
+    assert!(
+        records[0]
+            .usage_cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.offset > 0)
+    );
     assert!(records[0].context.started_at.is_some());
     assert_eq!(records[1].agent_id, "child-2");
     assert_eq!(records[1].context.token_count, Some(3_100));
+    assert_eq!(records[1].context.cost_usd, None);
+
+    let mut child = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&child_transcript)
+        .unwrap();
+    writeln!(
+        child,
+        "{}",
+        json!({
+            "type": "assistant",
+            "agentId": "child-1",
+            "requestId": "req-2",
+            "message": {
+                "id": "msg-2",
+                "model": "child-model",
+                "usage": {"input_tokens": 2000, "output_tokens": 200}
+            }
+        })
+    )
+    .unwrap();
+    drop(child);
+
+    let out = env.run_subagent_statusline_feed("claude", &payload);
+    assert!(
+        out.status.success(),
+        "second feed stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let grown = env
+        .subagent_contexts()
+        .into_iter()
+        .find(|record| record.agent_id == "child-1")
+        .and_then(|record| record.context.cost_usd)
+        .expect("grown child cost");
+    assert!(grown > first_cost);
 }
 
 /// Build the `rimz hooks feed --source codex` command with `RIMZ_CODEX_BIN`

@@ -740,6 +740,7 @@ fn read_published_snapshot_folds_subagent_context() {
             agent_type: Some("Explore".to_owned()),
             description: Some("trace the sidebar rows".to_owned()),
             token_count: Some(12_400),
+            cost_usd: Some(0.42),
             started_at: Some(now),
             observed_at: now,
         },

@@ -16,9 +16,9 @@ expression: strip_sgr(&ansi)
 ▌  ▣ ━━━━━━━━━━━━━━━━━━━━╺━━╺──────────────────   33%▐
 ▌  ▤ 333k · ◌ 286k ◍ 33k ↘ 13k ↗ 41k · ↻ 2           ▐
 ▌  ⧉ subagents (2)                                   ▐
-▌    ✓ Explore — audit auth watcher changes          ▐
+▌    ✓ Explore — audit auth watcher changes     $0.34▐
 ▌      ◇ 22k · Haiku · xhigh                         ▐
-▌    ⠁ Plan — run focused nextest                    ▐
+▌    ⠁ Plan — run focused nextest               $0.12▐
 ▌      ◇ 18k · Haiku · xhigh                    ◔  3m▐
 
  ⑂ remote-link              ⇡1 ⇣1  +1240 -380  ⑂ main

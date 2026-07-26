@@ -16,13 +16,13 @@ expression: strip_sgr(&ansi)
 ▌  󰕰 ━━━━━━━━━━━━━╺━╺──────────────────────────   18%▐
 ▌  󰿦 183k · 󱥸 157k  18k  7k  22k             󰪠 22m▐
 ▌   subagents (5)                                   ▐
-▌     Explore — trace handler graph                 ▐
+▌     Explore — trace handler graph            $0.34▐
 ▌       20k · Haiku · xhigh                         ▐
-▌     Explore — exercise auth edge cases            ▐
+▌     Explore — exercise auth edge cases       $0.27▐
 ▌       18k · Haiku · xhigh                         ▐
-▌     Explore — summarize docs drift                ▐
+▌     Explore — summarize docs drift           $0.18▐
 ▌       11k · Haiku · xhigh                         ▐
-▌     Plan — write migration runbook                ▐
+▌     Plan — write migration runbook           $0.14▐
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 

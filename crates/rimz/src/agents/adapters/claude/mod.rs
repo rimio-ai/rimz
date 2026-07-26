@@ -29,6 +29,7 @@ pub mod remote_control;
 pub mod remote_liveness;
 pub(crate) mod spend;
 mod statusline;
+mod subagent_cost;
 mod subagent_statusline;
 mod subagents;
 
@@ -671,6 +672,17 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
             return Vec::new();
         };
         parsed.into_observations(Timestamp::now())
+    }
+
+    fn subagent_cost_cursor(
+        &self,
+        payload: &Value,
+        child_id: &str,
+        prior: Option<&super::SubagentUsageCursor>,
+        prices: &PriceBook,
+    ) -> Option<super::SubagentUsageCursor> {
+        let parent = optional_payload_string(payload, &["transcript_path"])?;
+        subagent_cost::advance_cursor(Path::new(&parent), child_id, prior, prices)
     }
 
     fn local_context_refresh(

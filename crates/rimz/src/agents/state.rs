@@ -519,6 +519,11 @@ pub struct AgentState {
     /// as `context`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_description: Option<String>,
+    /// Exact display-only cost for this subagent, folded from its runtime
+    /// context sidecar. Never reduced from the event log or added to parent
+    /// spend; `None` for root agents and children without an exact source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_cost_usd: Option<f64>,
     /// When this *subagent* began (its `subagentStatusLine` `startTime`), folded
     /// in alongside `subagent_description`. The card derives elapsed work from it;
     /// `None` for a root agent or before the first render.
@@ -641,6 +646,8 @@ struct AgentStateWire {
     #[serde(default)]
     budget_park: Option<crate::harness::budget::BudgetPark>,
     subagent_description: Option<String>,
+    #[serde(default)]
+    subagent_cost_usd: Option<f64>,
     subagent_started_at: Option<Timestamp>,
     turn_started_at: Option<Timestamp>,
     #[serde(default)]
@@ -709,6 +716,7 @@ impl From<AgentStateWire> for AgentState {
             estimated_active_secs: None,
             budget_park: wire.budget_park,
             subagent_description: wire.subagent_description,
+            subagent_cost_usd: wire.subagent_cost_usd,
             subagent_started_at: wire.subagent_started_at,
             turn_started_at: wire.turn_started_at,
             waiting_since: wire.waiting_since,
@@ -776,6 +784,7 @@ impl AgentState {
             estimated_active_secs: None,
             budget_park: None,
             subagent_description: None,
+            subagent_cost_usd: None,
             subagent_started_at: None,
             turn_started_at: None,
             waiting_since: None,
