@@ -222,8 +222,8 @@ fn probe_inventory(
     readers: &mut BTreeMap<String, PublishedSnapshotReader>,
 ) -> rimz::room::LiveRoomResult<(Vec<RoomRow>, Vec<KnownWorkspace>)> {
     let live = LiveSessions::probe();
-    let rooms = rimz::room::session::live_rooms_with(&live)?;
-    let dormant = rimz::room::session::dormant_workspaces(&live)?;
+    let inventory = rimz::room::session::room_inventory_with(&live)?;
+    let rooms = inventory.live;
     let live_names = rooms
         .iter()
         .map(|room| room.session_name.clone())
@@ -236,7 +236,7 @@ fn probe_inventory(
             RoomRow { room, stats }
         })
         .collect();
-    Ok((rows, dormant))
+    Ok((rows, inventory.dormant))
 }
 
 fn stats_for_room(

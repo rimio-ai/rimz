@@ -19,8 +19,8 @@ pub fn run(_args: SessionsArgs, globals: &GlobalFlags) -> Result<()> {
         );
     }
     if !picker_available() {
-        let rooms = rimz::room::session::live_rooms()?;
-        bail!("{}", session_listing(&rooms));
+        let inventory = rimz::room::session::room_inventory()?;
+        bail!("{}", session_listing(&inventory.live));
     }
     if !picker::run(picker::Mode::Terminal, None, None, globals)? {
         bail!("could not open the session manager in this terminal");

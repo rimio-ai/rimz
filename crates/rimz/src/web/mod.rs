@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use crate::config::MachineConfig;
 use crate::ids::MuxName;
 use crate::mux::CommandSpec;
-use crate::room::session::{LiveRoom, LiveSessions, live_rooms_with, workspace_record_for_session};
+use crate::room::session::{
+    LiveRoom, LiveSessions, room_inventory_with, workspace_record_for_session,
+};
 use crate::store::atomic;
 
 mod gate;
@@ -555,7 +557,7 @@ pub fn existing_session_attach_command(session: Option<&str>) -> Result<CommandS
     let live = LiveSessions::probe();
     let target = live_session_target_with_probe(session, &live);
     let Some((session, mux)) = target else {
-        let rooms = live_rooms_with(&live)?;
+        let rooms = room_inventory_with(&live)?.live;
         return Err(WebErr::InvalidSession(invalid_session_message(
             session, &rooms,
         )));

@@ -6,7 +6,10 @@ use anyhow::{Context, Result};
 
 use crate::harness::rebirth::{RebirthChoice, RebirthPlan};
 use crate::harness::resume::ResumePlan;
-use crate::mux::{BackgroundViewLaunch, BackgroundViewOptions, DaemonView, SessionHealth};
+use crate::mux::{
+    BackgroundViewLaunch, BackgroundViewOptions, DaemonView, SessionHealth, SidebarPaneOptions,
+};
+use crate::remote_control::ReadinessSnapshot;
 use crate::{StatePaths, Store};
 
 use super::RoomContext;
@@ -32,9 +35,9 @@ pub enum AttendedRecovery {
 }
 
 /// Whether normal room birth carries the configured daemon view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackgroundViewBirth {
-    Launch,
+    Launch(ReadinessSnapshot),
     Skip,
 }
 
@@ -146,7 +149,9 @@ impl RoomContext {
         }
 
         let background_view = match background_view {
-            BackgroundViewBirth::Launch => Some(self.background_view(refresh_ms)),
+            BackgroundViewBirth::Launch(readiness) => {
+                Some(self.background_view(&readiness, refresh_ms))
+            }
             BackgroundViewBirth::Skip => None,
         };
 
@@ -177,30 +182,30 @@ impl RoomContext {
             }
         };
 
+        let sidebar = self.sidebar_options(&cwd, resume.tabs.clone(), refresh_ms);
+
         self.register_focus_key();
 
         let background_view = background_view.as_ref();
         let daemon = background_view.map(|options| &options.view);
-        self.launch_sidebar(&cwd, refresh_ms, !pre_existed, &resume, daemon);
+        self.launch_sidebar(&sidebar, !pre_existed, daemon);
 
         if let Some(options) = background_view {
             self.launch_background_view(options);
         }
 
-        let reset = self.ensure_healthy(&cwd, refresh_ms, &resume, daemon, recovery)?;
+        let reset = self.ensure_healthy(&sidebar, daemon, recovery)?;
         self.load_presence();
         Ok(BirthOutcome { resume, reset })
     }
 
     fn launch_sidebar(
         &self,
-        cwd: &std::path::Path,
-        refresh_ms: Option<u16>,
+        options: &SidebarPaneOptions,
         pristine_birth: bool,
-        resume: &ResumePlan,
         daemon: Option<&DaemonView>,
     ) {
-        let mut opts = self.sidebar_options(cwd, resume.tabs.clone(), refresh_ms);
+        let mut opts = options.clone();
         opts.pristine_birth = pristine_birth;
         let _ = crate::sidebar::launch_sidebar_if_needed(
             self.backend.as_ref(),
@@ -247,13 +252,11 @@ impl RoomContext {
 
     fn ensure_healthy(
         &self,
-        cwd: &std::path::Path,
-        refresh_ms: Option<u16>,
-        resume: &ResumePlan,
+        sidebar: &SidebarPaneOptions,
         daemon: Option<&DaemonView>,
         recovery: AttendedRecovery,
     ) -> Result<Option<RoomResetReport>> {
-        if self.clean_session(cwd, refresh_ms, resume, daemon)? != SessionHealth::Stuck {
+        if self.clean_session(sidebar, daemon)? != SessionHealth::Stuck {
             return Ok(None);
         }
         if recovery == AttendedRecovery::RequireExplicitReset {
@@ -263,7 +266,7 @@ impl RoomContext {
             .into());
         }
         let reset = self.reset(false)?;
-        match self.clean_session(cwd, refresh_ms, resume, daemon) {
+        match self.clean_session(sidebar, daemon) {
             Ok(SessionHealth::Healthy | SessionHealth::Reborn) => Ok(Some(reset)),
             Ok(SessionHealth::Stuck) => Err(ResetRecoveryError {
                 report: reset,
@@ -281,13 +284,10 @@ impl RoomContext {
 
     fn clean_session(
         &self,
-        cwd: &std::path::Path,
-        refresh_ms: Option<u16>,
-        resume: &ResumePlan,
+        options: &SidebarPaneOptions,
         daemon: Option<&DaemonView>,
     ) -> Result<SessionHealth> {
-        let opts = self.sidebar_options(cwd, resume.tabs.clone(), refresh_ms);
-        match self.backend.ensure_clean_session(&opts, daemon) {
+        match self.backend.ensure_clean_session(options, daemon) {
             Ok(health) => Ok(health),
             Err(
                 err @ (crate::mux::MuxErr::SocketPathTooLong { .. }

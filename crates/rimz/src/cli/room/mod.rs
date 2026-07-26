@@ -409,7 +409,7 @@ enum ReadyRoom {
 
 fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
     let mut machine_config = machine_config();
-    let remote_control_readiness = if matches!(
+    let background_view = if matches!(
         entry,
         RoomEntry::Start { .. } | RoomEntry::StartDetached { .. }
     ) {
@@ -422,9 +422,9 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         let readiness =
             rimz::remote_control::ReadinessSnapshot::probe(&machine_config.remote_control);
         readiness.start_gate()?;
-        Some(readiness)
+        BackgroundViewBirth::Launch(readiness)
     } else {
-        None
+        BackgroundViewBirth::Skip
     };
 
     let mux = match &entry {
@@ -524,9 +524,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 mux,
                 RoomSizing::Birth,
             )?;
-            if let Some(readiness) = remote_control_readiness.clone() {
-                context.set_remote_control_readiness(readiness);
-            }
             context.claim_owner()?;
             birth_managed_room(
                 &mut context,
@@ -534,7 +531,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 entry.no_resume(),
                 entry.resume_prompt_mode(),
                 entry.refresh_ms(),
-                true,
+                background_view,
                 workspace.worktree_root.clone(),
             )?;
             ReadyRoom::Managed(Box::new(context))
@@ -553,7 +550,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 entry.no_resume(),
                 entry.resume_prompt_mode(),
                 entry.refresh_ms(),
-                false,
+                BackgroundViewBirth::Skip,
                 workspace.worktree_root.clone(),
             )?;
             ReadyRoom::Managed(Box::new(context))
@@ -567,7 +564,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 entry.no_resume(),
                 entry.resume_prompt_mode(),
                 entry.refresh_ms(),
-                false,
+                BackgroundViewBirth::Skip,
                 record.project_root.clone(),
             )?;
             ReadyRoom::Managed(Box::new(context))
@@ -590,7 +587,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                     entry.no_resume(),
                     entry.resume_prompt_mode(),
                     entry.refresh_ms(),
-                    false,
+                    BackgroundViewBirth::Skip,
                     record.project_root.clone(),
                 )?;
                 ReadyRoom::Managed(Box::new(context))
@@ -642,7 +639,7 @@ fn birth_managed_room(
     no_resume: bool,
     resume_prompt: ResumePromptMode,
     refresh_ms: Option<u16>,
-    launch_background_view: bool,
+    background_view: BackgroundViewBirth,
     cwd: std::path::PathBuf,
 ) -> Result<()> {
     let rebirth = if was_live {
@@ -672,11 +669,7 @@ fn birth_managed_room(
         context.birth(RoomBirth::Normal(NormalBirth {
             cwd,
             rebirth,
-            background_view: if launch_background_view {
-                BackgroundViewBirth::Launch
-            } else {
-                BackgroundViewBirth::Skip
-            },
+            background_view,
             refresh_ms,
             recovery: if std::io::stdin().is_terminal() {
                 AttendedRecovery::Reset
