@@ -115,6 +115,33 @@ fn screenshot_subcommand_help_reaches_the_task_parser() {
 }
 
 #[test]
+fn gate_accepts_the_read_only_check_flag() {
+    let argv = args(&["gate", "--check"]);
+
+    assert_eq!(
+        parse_args(&argv).unwrap(),
+        Action::Run {
+            task: "gate",
+            args: &argv[1..],
+        },
+    );
+    assert_eq!(
+        parse_args(&args(&["gate"])).unwrap(),
+        Action::Run {
+            task: "gate",
+            args: &[],
+        },
+    );
+}
+
+#[test]
+fn every_quiet_pass_task_is_a_real_task() {
+    for task in QUIET_PASS_TASKS {
+        assert!(task_info(task).is_some(), "unknown quiet-pass task: {task}");
+    }
+}
+
+#[test]
 fn profile_build_is_a_first_class_no_arg_task() {
     assert!(task_info("profile-build").is_some());
     assert_eq!(

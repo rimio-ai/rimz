@@ -179,8 +179,8 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "gate",
-        summary: "Run the fast pre-PR gate stack.",
-        runs: "fmt --all (fix), invariants, docs-links, all-feature + install-host lint, test (nextest -P gate)",
+        summary: "Run the fast pre-PR gate stack; --check verifies formatting instead of applying it.",
+        runs: "fmt --all (fix, or check-only under --check), invariants, docs-links, all-feature + install-host lint, test (nextest -P gate)",
     },
     TaskInfo {
         name: "checks",
@@ -279,10 +279,32 @@ fn task_accepts_args(task: &str) -> bool {
             | "complexity"
             | "pricing-refresh"
             | "screenshot"
+            | "gate"
     )
 }
 
+/// Verification tasks that produce no output of their own when they pass. Run
+/// standalone, an empty success is indistinguishable from a crash, so each one
+/// gets the same `✓ <task>` line the composite gate stack prints per step.
+const QUIET_PASS_TASKS: &[&str] = &[
+    "fmt",
+    "lint",
+    "invariants",
+    "docs-links",
+    "deps",
+    "deny",
+    "vet",
+];
+
 fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
+    let result = dispatch(task, args, root);
+    if result.is_ok() && QUIET_PASS_TASKS.contains(&task) {
+        gates::report_task_pass(task);
+    }
+    result
+}
+
+fn dispatch(task: &str, args: &[String], root: &Path) -> Result<()> {
     match task {
         "build" => build::build(root),
         "build-plugin" => build::build_plugin(root),
@@ -309,7 +331,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "complexity" => complexity::complexity(root, args),
         "invariants" => invariants::invariants(root),
         "docs-links" => docs_links::docs_links(root),
-        "gate" => gates::gate(root),
+        "gate" => gates::gate(root, args),
         "checks" => gates::checks(root),
         "pricing-refresh" => pricing::pricing_refresh(root, args),
         "theme-refresh" => theme::theme_refresh(root),

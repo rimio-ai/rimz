@@ -210,9 +210,23 @@ enum GateResult {
     Fail { detail: String },
 }
 
-pub(crate) fn gate(root: &Path) -> Result<()> {
+/// How the gate treats formatting. `Fix` is the authoring default: the gate
+/// formats the tree so an edit never costs a second pass. `Check` verifies
+/// instead of writing, for a caller reviewing a tree it must not modify.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FmtMode {
+    Fix,
+    Check,
+}
+
+pub(crate) fn gate(root: &Path, args: &[String]) -> Result<()> {
+    let mode = parse_gate_mode(args)?;
+    let fmt_step: CompactGate = match mode {
+        FmtMode::Fix => gate_fmt_fix,
+        FmtMode::Check => gate_fmt_check,
+    };
     let steps = [
-        ("fmt", gate_fmt as CompactGate),
+        ("fmt", fmt_step),
         ("invariants", gate_invariants),
         ("docs-links", gate_docs_links),
         ("lint", gate_lint),
@@ -234,7 +248,7 @@ pub(crate) fn gate(root: &Path) -> Result<()> {
         match result? {
             GateResult::Pass { note } => report_gate_pass(name, note.as_deref()),
             GateResult::Fail { detail } => {
-                report_gate_failure(name, &detail);
+                report_gate_failure(name, &detail, gate_invocation(mode));
                 bail!("gate failed at {name}");
             }
         }
@@ -243,8 +257,34 @@ pub(crate) fn gate(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn gate_fmt(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
+fn parse_gate_mode(args: &[String]) -> Result<FmtMode> {
+    match args {
+        [] => Ok(FmtMode::Fix),
+        [flag] if flag == "--check" => Ok(FmtMode::Check),
+        _ => bail!("cargo xtask gate takes at most `--check`; run `cargo xtask gate --help`"),
+    }
+}
+
+fn gate_invocation(mode: FmtMode) -> &'static str {
+    match mode {
+        FmtMode::Fix => "cargo xtask gate",
+        FmtMode::Check => "cargo xtask gate --check",
+    }
+}
+
+fn gate_fmt_fix(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
     captured_cargo_gate(root, ["fmt", "--all"], &[], &[], None, progress)
+}
+
+fn gate_fmt_check(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
+    captured_cargo_gate(
+        root,
+        ["fmt", "--all", "--", "--check"],
+        &[],
+        &[],
+        None,
+        progress,
+    )
 }
 
 fn gate_invariants(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
@@ -427,6 +467,14 @@ fn report_timings(label: &str, wall_clock: Duration, timings: &[(String, Duratio
     eprintln!("  {:>8}  {label} wall clock", secs(wall_clock));
 }
 
+/// Banner for a verification task run on its own. Several of them (`invariants`,
+/// `docs-links`, `fmt`) pass in total silence, which reads the same as a crash
+/// to a caller who only sees the terminal; the banner makes the pass explicit
+/// and matches what the composite gate stack prints per step.
+pub(crate) fn report_task_pass(name: &str) {
+    report_gate_pass(name, None);
+}
+
 #[expect(
     clippy::print_stderr,
     reason = "xtask prints compact gate progress to the operator's stderr"
@@ -443,10 +491,10 @@ fn report_gate_pass(name: &str, note: Option<&str>) {
     clippy::print_stderr,
     reason = "xtask prints compact gate failures and the next action to stderr"
 )]
-fn report_gate_failure(name: &str, detail: &str) {
+fn report_gate_failure(name: &str, detail: &str, invocation: &str) {
     eprintln!("gate: fail at {name}");
     eprintln!("{detail}");
-    eprintln!("NEXT: fix the {name} errors above, then rerun `cargo xtask gate`");
+    eprintln!("NEXT: fix the {name} errors above, then rerun `{invocation}`");
 }
 
 #[expect(
@@ -605,6 +653,25 @@ mod tests {
         assert!(!semver_registry_baseline_missing(
             b"error: failed to retrieve index\nCaused by:\n    registry request failed"
         ));
+    }
+
+    #[test]
+    fn gate_defaults_to_fixing_and_check_only_verifies() {
+        assert_eq!(parse_gate_mode(&[]).unwrap(), FmtMode::Fix);
+        assert_eq!(
+            parse_gate_mode(&["--check".to_owned()]).unwrap(),
+            FmtMode::Check
+        );
+        let err = parse_gate_mode(&["--fix".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("takes at most `--check`"), "{err}");
+    }
+
+    #[test]
+    fn gate_failure_hint_repeats_the_invocation_that_ran() {
+        assert_eq!(gate_invocation(FmtMode::Fix), "cargo xtask gate");
+        assert_eq!(gate_invocation(FmtMode::Check), "cargo xtask gate --check");
     }
 
     #[test]
