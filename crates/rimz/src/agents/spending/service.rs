@@ -378,9 +378,8 @@ fn direct_fallback(
             .ensure_workspace_root()
             .map_err(|error| std::io::Error::other(error.to_string()))?;
     }
-    let mut walker = SpendingWalker::new();
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        super::engine::serve_direct(&mut walker, runtime, request)
+        super::engine::serve_direct(runtime, request)
     }))
     .map_err(|_| {
         SpendingServiceFailure::new(

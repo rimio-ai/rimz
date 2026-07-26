@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::agents::AgentDefinition;
 use crate::agents::definition::ThreadKey;
 
+use super::SpendingWalkResult;
 use super::cache::{CachedEntry, FileCacheEntry, SpendingDiskCache};
 use super::user_input::UserInputRecord;
 
@@ -185,18 +186,6 @@ pub struct DaySpend {
     pub tokens: u64,
 }
 
-pub(crate) struct CountedRollups {
-    pub(crate) spending: Spending,
-    pub(crate) workspace_tally: SpendTally,
-    pub(crate) workspace_headline_cutoff_secs: u64,
-    pub(crate) workspace_live_baselines: BTreeMap<String, f64>,
-    pub(crate) workspace_day: SpendWindow,
-    pub(crate) provider_day: BTreeMap<String, SpendWindow>,
-    pub(crate) day_cutoff_secs: u64,
-    pub(crate) days: BTreeMap<i64, DaySpend>,
-    pub(crate) models: BTreeMap<String, SpendTally>,
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct HeadlineContext<'a> {
     pub(crate) user_inputs: &'a [UserInputRecord],
@@ -211,7 +200,7 @@ pub(crate) fn aggregate_counted_rollups(
     workspace: Option<&SpendScope>,
     headline: HeadlineContext<'_>,
     include_history_rollups: bool,
-) -> CountedRollups {
+) -> SpendingWalkResult {
     let HeadlineContext {
         user_inputs,
         now_secs,
@@ -309,7 +298,7 @@ pub(crate) fn aggregate_counted_rollups(
             sessions.len().try_into().unwrap_or(u32::MAX);
     }
 
-    CountedRollups {
+    SpendingWalkResult {
         spending,
         workspace_tally,
         workspace_headline_cutoff_secs: workspace.map(|_| cutoffs.scoped()).unwrap_or_default(),
@@ -331,6 +320,7 @@ pub(crate) fn aggregate_counted_rollups(
         } else {
             BTreeMap::new()
         },
+        stats: Default::default(),
     }
 }
 

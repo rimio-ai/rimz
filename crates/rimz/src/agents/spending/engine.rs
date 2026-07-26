@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use crate::RuntimePaths;
 use crate::agents::spending::{
-    ProviderSpendingCache, SESSION_GAP_SECS, SpendProgress, SpendScope, SpendingCaches,
-    WorkspaceSpendingCache, compute_scoped_spending, read_provider_spending_cache, user_input,
+    HeadlineSpec, ProviderSpendingCache, SESSION_GAP_SECS, SpendProgress, SpendScope,
+    SpendingCaches, WorkspaceSpendingCache, compute_scoped_spending, read_provider_spending_cache,
+    user_input,
 };
 
 use super::{SPENDING_STALE_GRACE, unix_now_ms};
@@ -47,31 +48,45 @@ pub(super) fn serve_request(
     request: &crate::agents::spending::service::SpendingServiceRequest,
     progress: &mut dyn FnMut(SpendProgress),
 ) -> SpendingCaches {
-    let context = SpendingRequestContext {
-        project_root: request.project_root.as_deref(),
-        worktree_roots: &request.worktree_roots,
-        worktree_home: request.worktree_home.as_deref(),
-        origin_overrides: request.origin_overrides.clone(),
-        headline: &request.headline,
-        allow_local_fallback: false,
-    };
+    let context = request_context(request, false);
     compute_fleet_spending(walker, runtime, &context, progress)
 }
 
 pub(super) fn serve_direct(
-    walker: &mut crate::agents::spending::SpendingWalker,
     runtime: &RuntimePaths,
     request: &crate::agents::spending::service::SpendingServiceRequest,
 ) -> SpendingCaches {
+    let context = request_context(request, true);
+    serve_one_shot(runtime, &context, &mut |_| {})
+}
+
+/// Run one account-global spending refresh directly in this process. The CLI
+/// uses this path to retain per-file progress without traversing the framed
+/// warm-owner transport.
+#[doc(hidden)]
+pub fn refresh_global_spending_direct(
+    runtime: &RuntimePaths,
+    headline: &HeadlineSpec,
+    progress: &mut dyn FnMut(SpendProgress),
+) -> ProviderSpendingCache {
     let context = SpendingRequestContext {
-        project_root: request.project_root.as_deref(),
-        worktree_roots: &request.worktree_roots,
-        worktree_home: request.worktree_home.as_deref(),
-        origin_overrides: request.origin_overrides.clone(),
-        headline: &request.headline,
+        project_root: None,
+        worktree_roots: &[],
+        worktree_home: None,
+        origin_overrides: HashMap::new(),
+        headline,
         allow_local_fallback: true,
     };
-    compute_fleet_spending(walker, runtime, &context, &mut |_| {})
+    serve_one_shot(runtime, &context, progress).provider
+}
+
+fn serve_one_shot(
+    runtime: &RuntimePaths,
+    context: &SpendingRequestContext<'_>,
+    progress: &mut dyn FnMut(SpendProgress),
+) -> SpendingCaches {
+    let mut walker = crate::agents::spending::SpendingWalker::new();
+    compute_fleet_spending(&mut walker, runtime, context, progress)
 }
 
 /// Serve a fully fresh durable result without waiting for the warm walker. The
@@ -96,6 +111,20 @@ struct SpendingRequestContext<'a> {
     origin_overrides: HashMap<PathBuf, PathBuf>,
     headline: &'a crate::agents::spending::HeadlineSpec,
     allow_local_fallback: bool,
+}
+
+fn request_context<'a>(
+    request: &'a crate::agents::spending::service::SpendingServiceRequest,
+    allow_local_fallback: bool,
+) -> SpendingRequestContext<'a> {
+    SpendingRequestContext {
+        project_root: request.project_root.as_deref(),
+        worktree_roots: &request.worktree_roots,
+        worktree_home: request.worktree_home.as_deref(),
+        origin_overrides: request.origin_overrides.clone(),
+        headline: &request.headline,
+        allow_local_fallback,
+    }
 }
 
 fn compute_fleet_spending(
@@ -300,9 +329,9 @@ fn walk_fleet_spending_files(
 ) -> crate::agents::spending::SpendingCaches {
     use crate::agents::pricing;
     use crate::agents::spending::{
-        PROVIDER_SPENDING_VERSION, ProviderSpendingCache, SilentWalk, SpendScope, Spending,
-        SpendingCaches, WORKSPACE_SPENDING_VERSION, WalkRequest, WorkspaceSpendingCache,
-        read_provider_spending_cache, write_provider_spending_cache,
+        ProviderSpendingCache, SilentWalk, SpendProgress, SpendScope, SpendingCaches,
+        SpendingWalkResult, WORKSPACE_SPENDING_VERSION, WalkRequest, WorkspaceSpendingCache,
+        read_provider_spending_cache, write_provider_spending_cache_value,
         write_workspace_spending_cache,
     };
 
@@ -313,6 +342,10 @@ fn walk_fleet_spending_files(
         context.worktree_home,
     );
     let scope_hash = (!scope.is_empty()).then(|| scope.hash());
+    progress(SpendProgress {
+        finished_files: 0,
+        total_files: files.len(),
+    });
     if files.is_empty() {
         // A non-authoritative empty scan retains prior publications; an
         // authoritative empty index is a real deletion and publishes zero.
@@ -324,7 +357,7 @@ fn walk_fleet_spending_files(
             };
         }
         let refreshed_at_ms = unix_now_ms();
-        let spending = Spending::default();
+        let result = SpendingWalkResult::default();
         let user_inputs = user_input::load();
         let scoped = compute_scoped_spending(
             files,
@@ -344,10 +377,11 @@ fn walk_fleet_spending_files(
             day_cutoff_secs: scoped.day_cutoff_secs,
             live_baselines: scoped.live_baselines,
         };
+        let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
         if publish {
             // Stamp the empty result too: an agentless machine must not re-run
             // the (empty) discovery readdirs every tick.
-            write_provider_spending_cache(&provider_path, refreshed_at_ms, &spending);
+            write_provider_spending_cache_value(&provider_path, &provider);
             if let Some(scope_hash) = scope_hash.as_deref() {
                 write_workspace_spending_cache(
                     &runtime.workspace_spending_path(scope_hash),
@@ -357,15 +391,7 @@ fn walk_fleet_spending_files(
             }
         }
         return SpendingCaches {
-            provider: ProviderSpendingCache {
-                version: PROVIDER_SPENDING_VERSION,
-                refreshed_at_ms,
-                day_by_provider: Default::default(),
-                day_cutoff_secs: 0,
-                days: Default::default(),
-                models: Default::default(),
-                spending,
-            },
+            provider,
             workspace,
         };
     }
@@ -412,6 +438,7 @@ fn walk_fleet_spending_files(
         walker.walk_local(&cache_path, &req, &mut observer)
     };
     let refreshed_at_ms = unix_now_ms();
+    let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
     let workspace = if let Some(scope_hash) = scope_hash.as_deref() {
         reconciled_workspace_cache(
             scope_hash,
@@ -430,15 +457,7 @@ fn walk_fleet_spending_files(
         }
     };
     if publish {
-        crate::agents::spending::write_provider_spending_cache_with_day(
-            &provider_path,
-            refreshed_at_ms,
-            &result.spending,
-            &result.days,
-            &result.models,
-            &result.provider_day,
-            result.day_cutoff_secs,
-        );
+        write_provider_spending_cache_value(&provider_path, &provider);
         if let Some(scope_hash) = scope_hash.as_deref() {
             write_workspace_spending_cache(
                 &runtime.workspace_spending_path(scope_hash),
@@ -448,15 +467,7 @@ fn walk_fleet_spending_files(
         }
     }
     SpendingCaches {
-        provider: ProviderSpendingCache {
-            version: PROVIDER_SPENDING_VERSION,
-            refreshed_at_ms,
-            day_by_provider: result.provider_day,
-            day_cutoff_secs: result.day_cutoff_secs,
-            days: result.days,
-            models: result.models,
-            spending: result.spending,
-        },
+        provider,
         workspace,
     }
 }
@@ -488,14 +499,10 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
             self.spec,
         );
         let refreshed_at_ms = unix_now_ms();
-        crate::agents::spending::write_provider_spending_cache_with_day(
+        let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
+        crate::agents::spending::write_provider_spending_cache_value(
             &self.provider_path,
-            refreshed_at_ms,
-            &result.spending,
-            &result.days,
-            &result.models,
-            &result.provider_day,
-            result.day_cutoff_secs,
+            &provider,
         );
         if let Some(scope_hash) = self.scope_hash.as_deref() {
             let workspace = reconciled_workspace_cache(

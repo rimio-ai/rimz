@@ -15,13 +15,13 @@
 //! frame after five seconds, then repaints in place every minute and re-centres
 //! promptly after a width change.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use clap::Args;
@@ -34,16 +34,12 @@ use super::GlobalFlags;
 use crate::cli::render;
 use crate::cli::spinner::Spinner;
 use rimz::RuntimePaths;
-use rimz::agents::AgentDefinition;
-use rimz::agents::pricing;
 use rimz::agents::spending::{
-    DaySpend, ProviderSpendingCache, SilentWalk, SpendProgress, SpendTally, SpendWindow, Spending,
-    SpendingWalker, WalkObserver, WalkRequest, read_provider_spending_cache, unix_secs_now,
-    user_input, utc_date, write_provider_spending_cache_with_day,
+    DaySpend, ProviderSpendingCache, SpendProgress, SpendTally, SpendWindow, Spending,
+    read_provider_spending_cache, refresh_global_spending_direct, unix_secs_now, utc_date,
 };
 use rimz::config::{GlyphRole, MachineConfig, ThemeConfig};
 use rimz::store::paths::state_home;
-use rimz::store::single_flight::{Coalesced, coalesce};
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 
 const DAY_SECS: i64 = 86_400;
@@ -67,8 +63,6 @@ const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 const PROGRESS_BAR_WIDTH: usize = 20;
 const MIN_SHARE_BAR_WIDTH: usize = 10;
 const STAT_GUTTER: usize = 3;
-const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
-const SPENDING_WAIT_STEPS: u32 = 15;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const EMPTY_REFRESH_RETRY: Duration = Duration::from_secs(5);
 const REFRESH_POLL_TICK: Duration = Duration::from_millis(100);
@@ -254,8 +248,7 @@ fn load_stats_from_paths(paths: &RuntimePaths, human: bool) -> Result<LoadedStat
         return load_cold_stats_with_spinner(paths);
     }
 
-    let mut walker = SpendingWalker::new();
-    let stats = load_or_refresh_stats(paths, None, &mut walker)?;
+    let stats = load_or_refresh_stats(paths, None)?;
     Ok(LoadedStats {
         stats,
         header_printed: false,
@@ -271,47 +264,18 @@ fn load_published_stats(paths: &RuntimePaths) -> Option<Stats> {
 
 fn load_or_refresh_stats(
     paths: &RuntimePaths,
-    mut progress: Option<&mut dyn FnMut(SpendProgress)>,
-    walker: &mut SpendingWalker,
+    progress: Option<&mut dyn FnMut(SpendProgress)>,
 ) -> Result<Stats> {
     if let Some(stats) = load_published_stats(paths) {
         return Ok(stats);
     }
-    let fresh = || load_published_stats(paths);
-    match coalesce(
-        &paths.shared_spending_lock(),
-        SPENDING_WAIT_STEP,
-        SPENDING_WAIT_STEPS,
-        fresh,
-    ) {
-        Coalesced::Shared(stats) => Ok(stats),
-        Coalesced::Produce(_guard) => {
-            let now_secs = unix_secs_now();
-            let files = walker.discover_spending_files(now_secs);
-            if let Some(progress) = progress.as_deref_mut() {
-                progress(SpendProgress {
-                    finished_files: 0,
-                    total_files: files.len(),
-                });
-            }
-            Ok(compute_stats_from_files_at(
-                paths, files, true, progress, walker, now_secs,
-            ))
-        }
-        Coalesced::ProduceLocal => {
-            let now_secs = unix_secs_now();
-            let files = walker.discover_spending_files(now_secs);
-            if let Some(progress) = progress.as_deref_mut() {
-                progress(SpendProgress {
-                    finished_files: 0,
-                    total_files: files.len(),
-                });
-            }
-            Ok(compute_stats_from_files_at(
-                paths, files, false, progress, walker, now_secs,
-            ))
-        }
-    }
+    let spec = MachineConfig::load_lenient().headline_spec();
+    let provider = if let Some(progress) = progress {
+        refresh_global_spending_direct(paths, &spec, progress)
+    } else {
+        refresh_global_spending_direct(paths, &spec, &mut |_| {})
+    };
+    Ok(Stats::from_provider(provider))
 }
 
 fn load_or_refresh_stats_via_service(paths: &RuntimePaths) -> Result<Stats> {
@@ -336,103 +300,12 @@ fn load_direct_stats_with_progress(
     paths: &RuntimePaths,
     progress: &mut dyn FnMut(SpendProgress),
 ) -> Result<Stats> {
-    let mut walker = SpendingWalker::new();
-    load_or_refresh_stats(paths, Some(progress), &mut walker)
-}
-
-struct ProgressObserver<'a>(&'a mut dyn FnMut(SpendProgress));
-
-impl WalkObserver for ProgressObserver<'_> {
-    fn on_file(&mut self, progress: SpendProgress) {
-        (self.0)(progress);
-    }
-}
-
-#[cfg(test)]
-fn compute_stats_from_files(
-    paths: &RuntimePaths,
-    files: Vec<(&'static AgentDefinition, PathBuf)>,
-    publish: bool,
-    progress: Option<&mut dyn FnMut(SpendProgress)>,
-    walker: &mut SpendingWalker,
-) -> Stats {
-    compute_stats_from_files_at(paths, files, publish, progress, walker, unix_secs_now())
-}
-
-fn compute_stats_from_files_at(
-    paths: &RuntimePaths,
-    files: Vec<(&'static AgentDefinition, PathBuf)>,
-    publish: bool,
-    progress: Option<&mut dyn FnMut(SpendProgress)>,
-    walker: &mut SpendingWalker,
-    now_secs: u64,
-) -> Stats {
-    let cursor_path = paths.shared_spending_cursor_path();
-    let prices = if publish {
-        let unknowns = walker.recorded_unknown_models(&cursor_path, &files, now_secs);
-        Arc::new(pricing::load_for_spending(
-            &paths.shared_pricing_cache_path(),
-            &unknowns,
-        ))
-    } else {
-        pricing::cached_book(&paths.shared_pricing_cache_path())
-    };
-    let origin_overrides = HashMap::new();
-    let user_inputs = user_input::load();
-    let spec = MachineConfig::load_lenient().headline_spec();
-    let req = WalkRequest {
-        files: &files,
-        prices: &prices,
-        now_secs,
-        origin_overrides: &origin_overrides,
-        user_inputs: &user_inputs,
-        scope: None,
-        spec: &spec,
-    };
-    let result = match (publish, progress) {
-        (true, Some(progress)) => {
-            let mut observer = ProgressObserver(progress);
-            walker.walk(&cursor_path, &req, &mut observer)
-        }
-        (true, None) => {
-            let mut observer = SilentWalk;
-            walker.walk(&cursor_path, &req, &mut observer)
-        }
-        (false, _) => {
-            let mut observer = SilentWalk;
-            walker.walk_local(&cursor_path, &req, &mut observer)
-        }
-    };
-    if publish {
-        write_provider_spending_cache_with_day(
-            &paths.shared_provider_spending_path(),
-            unix_millis_now(),
-            &result.spending,
-            &result.days,
-            &result.models,
-            &result.provider_day,
-            result.day_cutoff_secs,
-        );
-    }
-    let Spending { total, by_provider } = result.spending;
-    Stats {
-        by_day: result.days,
-        by_model: result.models,
-        by_agent: by_provider,
-        total,
-    }
+    load_or_refresh_stats(paths, Some(progress))
 }
 
 fn ensure_shared_runtime(paths: &RuntimePaths) -> Result<()> {
     paths.ensure_shared_dirs()?;
     Ok(())
-}
-
-fn unix_millis_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

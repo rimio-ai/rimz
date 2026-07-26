@@ -26,7 +26,7 @@ mod time;
 pub mod user_input;
 
 use std::cell::Cell;
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -47,11 +47,12 @@ pub(crate) fn unix_now_ms() -> u64 {
         .map_or(0, |duration| duration.as_millis() as u64)
 }
 
+#[cfg(test)]
+pub(crate) use aggregate::CountedPayload;
 pub(crate) use aggregate::{
-    CountedLocation, CountedPayload, HeadlineContext, NO_BURST_CUTOFF, SESSION_GAP_SECS,
-    aggregate_counted_rollups, dedup_cached_entries, dedup_cached_entry_locations,
-    indexed_counted_entries, live_session_keys, origin_path, should_replace_usage_duplicate,
-    spending_files_signature,
+    CountedLocation, HeadlineContext, NO_BURST_CUTOFF, SESSION_GAP_SECS, aggregate_counted_rollups,
+    dedup_cached_entries, dedup_cached_entry_locations, indexed_counted_entries, live_session_keys,
+    origin_path, should_replace_usage_duplicate, spending_files_signature,
 };
 pub use aggregate::{
     DaySpend, HeadlineSpec, SpendScope, SpendTally, SpendWindow, SpendWindowMode, Spending,
@@ -72,7 +73,11 @@ pub use effort::{
     EffortParseMemo, EffortSessionRef, EffortTokens, SlotEffort, slot_effort,
     slot_effort_with_memo, sum_optional_cost,
 };
-pub(crate) use publish::{PROVIDER_SPENDING_VERSION, WORKSPACE_SPENDING_VERSION};
+#[doc(hidden)]
+pub use engine::refresh_global_spending_direct;
+pub(crate) use publish::{
+    PROVIDER_SPENDING_VERSION, WORKSPACE_SPENDING_VERSION, write_provider_spending_cache_value,
+};
 pub use publish::{
     ProviderSpendingCache, WorkspaceSpendingCache, read_provider_spending_cache,
     read_workspace_spending_cache, write_provider_spending_cache,
@@ -145,22 +150,27 @@ pub struct WalkStats {
     pub parse_bytes: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 type DiscoveredSpendingFiles = Vec<(&'static AgentDefinition, PathBuf)>;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 thread_local! {
     static DISCOVER_SPENDING_FILES_OVERRIDE: RefCell<Option<DiscoveredSpendingFiles>> =
         const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
     static PANIC_AFTER_REFRESH_FOR_TEST: Cell<bool> = const { Cell::new(false) };
 }
 
-#[cfg(test)]
-pub(crate) struct DiscoverSpendingFilesOverride {
+#[cfg(any(test, feature = "testkit"))]
+#[doc(hidden)]
+pub struct DiscoverSpendingFilesOverride {
     prior: Option<DiscoveredSpendingFiles>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 impl Drop for DiscoverSpendingFilesOverride {
     fn drop(&mut self) {
         let prior = self.prior.take();
@@ -170,8 +180,9 @@ impl Drop for DiscoverSpendingFilesOverride {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn override_discovered_spending_files_for_test(
+#[cfg(any(test, feature = "testkit"))]
+#[doc(hidden)]
+pub fn override_discovered_spending_files_for_test(
     files: DiscoveredSpendingFiles,
 ) -> DiscoverSpendingFilesOverride {
     let prior = DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| slot.replace(Some(files)));
@@ -240,7 +251,7 @@ impl SpendingWalker {
         &mut self,
         now_secs: u64,
     ) -> Vec<(&'static AgentDefinition, PathBuf)> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "testkit"))]
         if let Some(files) = DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| slot.borrow().clone()) {
             if files.is_empty() {
                 self.discovery.mark_non_authoritative_for_test();
@@ -385,7 +396,7 @@ impl SpendingWalker {
         self.ensure_memo(req.files, &mut stats);
         let locations = &self.memo.as_ref().expect("memo seeded above").counted;
         let counted = indexed_counted_entries(req.files, &self.cache, locations);
-        aggregate_walk_publish_from_counted(
+        let mut result = aggregate_counted_rollups(
             req.files,
             &self.cache,
             &counted,
@@ -395,8 +406,10 @@ impl SpendingWalker {
                 now_secs: req.now_secs,
                 spec: req.spec,
             },
-            stats,
-        )
+            true,
+        );
+        result.stats = stats;
+        result
     }
 
     fn sync_from_disk(&mut self, cache_path: &Path, stats: &mut WalkStats) {
@@ -624,7 +637,7 @@ pub(crate) fn aggregate_walk_publish(
     spec: &HeadlineSpec,
 ) -> SpendingWalkResult {
     let counted = dedup_cached_entries(files, cache).into_counted();
-    aggregate_walk_publish_from_counted(
+    aggregate_counted_rollups(
         files,
         cache,
         &counted,
@@ -634,32 +647,8 @@ pub(crate) fn aggregate_walk_publish(
             now_secs,
             spec,
         },
-        WalkStats::default(),
+        true,
     )
-}
-
-fn aggregate_walk_publish_from_counted<C: CountedPayload>(
-    files: &[(&'static AgentDefinition, PathBuf)],
-    cache: &SpendingDiskCache,
-    counted: &[C],
-    workspace: Option<&SpendScope>,
-    headline: HeadlineContext<'_>,
-    stats: WalkStats,
-) -> SpendingWalkResult {
-    let aggregate = aggregate_counted_rollups(files, cache, counted, workspace, headline, true);
-
-    SpendingWalkResult {
-        spending: aggregate.spending,
-        workspace_tally: aggregate.workspace_tally,
-        workspace_headline_cutoff_secs: aggregate.workspace_headline_cutoff_secs,
-        workspace_live_baselines: aggregate.workspace_live_baselines,
-        workspace_day: aggregate.workspace_day,
-        provider_day: aggregate.provider_day,
-        day_cutoff_secs: aggregate.day_cutoff_secs,
-        days: aggregate.days,
-        models: aggregate.models,
-        stats,
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
