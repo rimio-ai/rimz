@@ -29,58 +29,45 @@ pub struct LiveRoom {
     pub updated_at: jiff::Timestamp,
 }
 
-/// Every known workspace whose managed mux session is currently live.
-pub fn live_rooms() -> LiveRoomResult<Vec<LiveRoom>> {
-    live_rooms_with(&LiveSessions::probe())
+/// Every durable RimZ workspace partitioned by current mux-session liveness.
+pub struct RoomInventory {
+    pub live: Vec<LiveRoom>,
+    pub dormant: Vec<KnownWorkspace>,
 }
 
-/// Every known workspace whose managed mux session is live under this probe.
-pub fn live_rooms_with(live: &LiveSessions) -> LiveRoomResult<Vec<LiveRoom>> {
+/// Inventory every known workspace against one batch mux-session probe.
+pub fn room_inventory() -> LiveRoomResult<RoomInventory> {
+    room_inventory_with(&LiveSessions::probe())
+}
+
+/// Inventory every known workspace against an existing mux-session probe.
+pub fn room_inventory_with(live: &LiveSessions) -> LiveRoomResult<RoomInventory> {
     let known = crate::workspace::known_workspaces()
         .map_err(|source| LiveRoomErr::WorkspaceRecords { source })?;
-    Ok(live_rooms_from(known, |session| live.mux_of(session)))
+    Ok(room_inventory_from(known, |session| live.mux_of(session)))
 }
 
-/// Known workspaces without a live mux session, newest record first.
-pub fn dormant_workspaces(live: &LiveSessions) -> LiveRoomResult<Vec<KnownWorkspace>> {
-    let known = crate::workspace::known_workspaces()
-        .map_err(|source| LiveRoomErr::WorkspaceRecords { source })?;
-    Ok(dormant_workspaces_from(known, |session| {
-        live.mux_of(session).is_some()
-    }))
-}
-
-fn live_rooms_from(
+fn room_inventory_from(
     known: Vec<KnownWorkspace>,
     mux_of: impl Fn(&str) -> Option<MuxName>,
-) -> Vec<LiveRoom> {
-    let mut rooms = known
-        .into_iter()
-        .filter_map(|workspace| {
-            let mux = mux_of(&workspace.session_name)?;
-            Some(LiveRoom {
+) -> RoomInventory {
+    let mut live = Vec::new();
+    let mut dormant = Vec::new();
+    for workspace in known {
+        match mux_of(&workspace.session_name) {
+            Some(mux) => live.push(LiveRoom {
                 session_name: workspace.session_name,
                 mux,
                 project_root: workspace.project_root,
                 workspace_id: workspace.workspace_id,
                 updated_at: workspace.updated_at,
-            })
-        })
-        .collect::<Vec<_>>();
-    rooms.sort_by(|left, right| left.session_name.cmp(&right.session_name));
-    rooms
-}
-
-fn dormant_workspaces_from(
-    known: Vec<KnownWorkspace>,
-    is_live: impl Fn(&str) -> bool,
-) -> Vec<KnownWorkspace> {
-    let mut dormant = known
-        .into_iter()
-        .filter(|workspace| !is_live(&workspace.session_name))
-        .collect::<Vec<_>>();
+            }),
+            None => dormant.push(workspace),
+        }
+    }
+    live.sort_by(|left, right| left.session_name.cmp(&right.session_name));
     dormant.sort_by_key(|workspace| std::cmp::Reverse(workspace.updated_at));
-    dormant
+    RoomInventory { live, dormant }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -516,9 +503,10 @@ mod tests {
             _ => None,
         };
 
-        let rooms = live_rooms_from(workspaces.clone(), mux_of);
+        let inventory = room_inventory_from(workspaces, mux_of);
         assert_eq!(
-            rooms
+            inventory
+                .live
                 .iter()
                 .map(|room| (room.session_name.as_str(), room.mux))
                 .collect::<Vec<_>>(),
@@ -528,9 +516,9 @@ mod tests {
             ]
         );
 
-        let dormant = dormant_workspaces_from(workspaces, |session| mux_of(session).is_some());
         assert_eq!(
-            dormant
+            inventory
+                .dormant
                 .iter()
                 .map(|workspace| workspace.session_name.as_str())
                 .collect::<Vec<_>>(),

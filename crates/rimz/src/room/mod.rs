@@ -16,6 +16,7 @@ use crate::mux::{
     BackgroundViewOptions, CommandSpec, MuxBackend, MuxErr, PresencePluginOptions, SessionHealth,
     SessionOptions, SidebarPaneOptions, SidebarWidth,
 };
+use crate::remote_control::ReadinessSnapshot;
 use crate::store::workspace_record;
 use crate::workspace::ResolvedWorkspace;
 use crate::{RuntimePaths, StatePaths, Store, WorkspaceRecord};
@@ -122,7 +123,6 @@ pub struct RoomContext {
     detected_size: Option<(u16, u16)>,
     rimz_bin: PathBuf,
     runtime: RuntimePaths,
-    remote_control_readiness: Option<crate::remote_control::ReadinessSnapshot>,
 }
 
 impl RoomContext {
@@ -205,7 +205,6 @@ impl RoomContext {
             detected_size,
             rimz_bin,
             runtime,
-            remote_control_readiness: None,
         })
     }
 
@@ -237,13 +236,6 @@ impl RoomContext {
 
     pub fn backend(&self) -> &dyn MuxBackend {
         self.backend.as_ref()
-    }
-
-    pub fn set_remote_control_readiness(
-        &mut self,
-        readiness: crate::remote_control::ReadinessSnapshot,
-    ) {
-        self.remote_control_readiness = Some(readiness);
     }
 
     /// Probe a selected backend before first-run config can construct final context.
@@ -286,20 +278,10 @@ impl RoomContext {
         resume_tabs: Vec<crate::mux::ResumeTab>,
         refresh_ms: Option<u16>,
     ) -> SidebarPaneOptions {
-        self.sidebar_options_with_size(cwd, resume_tabs, refresh_ms, self.detected_size)
-    }
-
-    fn sidebar_options_with_size(
-        &self,
-        cwd: &Path,
-        resume_tabs: Vec<crate::mux::ResumeTab>,
-        refresh_ms: Option<u16>,
-        detected_size: Option<(u16, u16)>,
-    ) -> SidebarPaneOptions {
         let target = crate::sidebar::width_target::resolve(
             &self.runtime,
             self.width,
-            detected_size.map(|(cols, _)| cols),
+            self.detected_size.map(|(cols, _)| cols),
         );
         SidebarPaneOptions {
             session_name: self.workspace.session_name.clone(),
@@ -308,7 +290,7 @@ impl RoomContext {
             extra_env: self.extra_env.clone(),
             cwd: cwd.to_path_buf(),
             target,
-            detected_view_size: detected_size,
+            detected_view_size: self.detected_size,
             rimz_bin: self.rimz_bin.clone(),
             pristine_birth: false,
             config: self.mux_config.clone(),
@@ -346,12 +328,8 @@ impl RoomContext {
             .attach_command(&self.workspace.session_name, &self.mux_config)
     }
 
-    fn presence_options(&self, materialize_artifact: bool) -> Option<PresencePluginOptions> {
-        let wasm = if materialize_artifact {
-            crate::mux::zellij::ensure_presence_plugin_artifact()?
-        } else {
-            crate::mux::zellij::presence_plugin_path()?
-        };
+    fn presence_options(&self) -> Option<PresencePluginOptions> {
+        let wasm = crate::mux::zellij::presence_plugin_path()?;
         Some(PresencePluginOptions {
             session_name: self.workspace.session_name.clone(),
             workspace_id: self.workspace.workspace_id.clone(),
@@ -371,7 +349,7 @@ impl RoomContext {
     }
 
     fn load_presence(&self) {
-        let Some(opts) = self.presence_options(false) else {
+        let Some(opts) = self.presence_options() else {
             tracing::debug!(
                 session = %self.workspace.session_name,
                 "presence plugin unavailable; the producer keeps its pane poll",
@@ -405,14 +383,15 @@ impl RoomContext {
     }
 
     /// Assemble configured daemon view for a normal start flow.
-    fn background_view(&self, refresh_ms: Option<u16>) -> BackgroundViewOptions {
+    fn background_view(
+        &self,
+        readiness: &ReadinessSnapshot,
+        refresh_ms: Option<u16>,
+    ) -> BackgroundViewOptions {
         let rimz_bin = self.rimz_bin.clone();
-        let remote_control = self.remote_control_readiness.clone().unwrap_or_else(|| {
-            crate::remote_control::ReadinessSnapshot::probe(&self.machine_config.remote_control)
-        });
         BackgroundViewOptions {
             view: crate::daemon_view::daemon_view_spec(crate::daemon_view::DaemonViewSpecParams {
-                claude_host_argv: remote_control.claude_host_argv(),
+                claude_host_argv: readiness.claude_host_argv(),
                 daemon: &self.machine_config.daemon,
                 rimz_bin: &rimz_bin,
                 workspace_id: &self.workspace.workspace_id,
