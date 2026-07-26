@@ -50,8 +50,7 @@ pub(crate) struct SendFlags {
     /// goes first and stdin follows inside `<stdin>` tags. Conflicts with `--file`.
     #[arg(long, conflicts_with = "file")]
     pub(crate) stdin: bool,
-    /// Deliver the text verbatim with no `from @sender:` prefix, even for an agent
-    /// caller. No effect for a human caller, which is already verbatim.
+    /// Deliver the text verbatim with no message header.
     #[arg(long)]
     pub(crate) no_from: bool,
     /// Wait for the target agents' replies and print or gather their final messages.
@@ -197,12 +196,12 @@ pub(crate) fn warn_ignored_stdin() {
     }
 }
 
-/// The caller identity for `message`. RimZ-launched agents carry
-/// `RIMZ_AGENT_KIND`; ordinary room shells carry `RIMZ` identity vars without it,
-/// so they stay human-authored unless an agent kind is present.
+/// The caller identity for `message`. `--no-from` is deliberately unattributed
+/// system text so delivery stays verbatim. Otherwise RimZ-launched agents carry
+/// `RIMZ_AGENT_KIND`; ordinary room shells stay human-authored.
 pub(crate) fn sender_from_env(channel: Option<&str>, no_from: bool) -> MessageSender {
     if no_from {
-        return MessageSender::Human;
+        return MessageSender::System;
     }
     let Some(kind) = env_string(rimz::harness::run::ENV_AGENT_KIND) else {
         return MessageSender::Human;

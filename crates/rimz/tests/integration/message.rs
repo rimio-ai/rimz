@@ -559,7 +559,7 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
             .args(["message", "sweep"]),
         "message sweep",
     );
-    assert_text_then_enter(&trace_log, "due now");
+    assert_text_then_enter(&trace_log, &user_message("due now"));
     let messages = env.store().list_messages().expect("messages");
     let future = messages
         .iter()
@@ -640,7 +640,7 @@ fn message_after_rejects_cycles_then_delivers_cross_agent_relay() {
         "sweep relay",
     );
 
-    assert_text_then_enter(&trace_log, "read plan.md");
+    assert_text_then_enter(&trace_log, &user_message("read plan.md"));
     let sent = env
         .store()
         .list_messages()
@@ -707,7 +707,7 @@ fn resume_gate_waits_for_recovery_then_delivers() {
         "recovered resume delivery",
     );
 
-    assert_text_then_enter(&trace_log, "continue");
+    assert_text_then_enter(&trace_log, &user_message("continue"));
     assert_eq!(message_by_id(&env, &message_id).status, MessageStatus::Sent);
 }
 
@@ -858,7 +858,7 @@ fn message_steer_queued_record_respects_waiting_force_and_overrides_gate() {
     );
     let stdout = String::from_utf8_lossy(&steered.stdout);
     assert!(stdout.contains(&format!("sent to @claude ({message_id})")));
-    assert_text_then_enter(&trace_log, "push now");
+    assert_text_then_enter(&trace_log, &user_message("push now"));
     assert_eq!(
         message_by_id(&env, &MessageId::parse(&message_id).expect("message id")).status,
         MessageStatus::Sent
@@ -912,7 +912,7 @@ fn steer_enter_modes_respect_discrete_submit_key() {
         "steer",
     );
 
-    assert_text_then_enter(&trace_log, "y");
+    assert_text_then_enter(&trace_log, &user_message("y"));
 
     let trace_log = env.project_root.join("zellij-steer-quiet-trace.log");
     run_success(
@@ -929,7 +929,7 @@ fn steer_enter_modes_respect_discrete_submit_key() {
 
     let lines = trace_lines(&trace_log);
     assert!(
-        lines.iter().any(|line| is_paste(line, "y")),
+        lines.iter().any(|line| is_paste(line, &user_message("y"))),
         "expected a bracketed paste of `y`; trace: {lines:?}"
     );
     assert!(
@@ -1338,7 +1338,10 @@ fn steer_sends_a_file_as_the_prompt() {
         "steer --file",
     );
 
-    assert_text_then_enter(&trace_log, "keep \\n literal\nand a real break");
+    assert_text_then_enter(
+        &trace_log,
+        &user_message("keep \\n literal\nand a real break"),
+    );
 }
 
 #[test]
@@ -1369,7 +1372,7 @@ fn steer_combines_inline_text_with_piped_stdin() {
 
     assert_text_then_enter(
         &trace_log,
-        "review this\n\n<stdin>\ndiff --git a/file b/file\n-old\n+new\n</stdin>",
+        &user_message("review this\n\n<stdin>\ndiff --git a/file b/file\n-old\n+new\n</stdin>"),
     );
 }
 
@@ -1439,7 +1442,7 @@ fn message_warns_when_ignoring_buffered_stdin() {
 }
 
 #[test]
-fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
+fn steer_formats_human_and_agent_senders_and_no_from_stays_verbatim() {
     let env = Env::new();
     register_running_agent(
         &env,
@@ -1448,19 +1451,36 @@ fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
         &[("ZELLIJ_PANE_ID", "3")],
     );
 
-    let trace_log = env.project_root.join("zellij-from-steer-trace.log");
+    let trace_log = env.project_root.join("zellij-from-steer-user-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-from-steer-user-trace.log").args([
+            "message",
+            "--steer",
+            "@claude",
+            "--",
+            "from human",
+        ]),
+        "steer from human",
+    );
+    assert_text_then_enter(&trace_log, &user_message("from human"));
+
+    let trace_log = env.project_root.join("zellij-from-steer-agent-trace.log");
     let out = run_success(
-        traced_rimz(&env, "zellij-from-steer-trace.log")
+        traced_rimz(&env, "zellij-from-steer-agent-trace.log")
             .env("RIMZ_AGENT_KIND", "codex")
             .env("RIMZ_AGENT_NAME", "swift-otter")
             .args(["message", "--steer", "@claude", "--", "ping"]),
         "steer from agent",
     );
     assert_single_sigil_sent(&out.stdout);
-    assert_text_then_enter(&trace_log, "from @codex: ping");
+    assert_text_then_enter(
+        &trace_log,
+        "Type: AGENT_MESSAGE\nFrom: @codex\nContent:\nping",
+    );
     let sent = env
         .read_events()
         .into_iter()
+        .rev()
         .find(|event| event.method == "message.sent")
         .expect("sent event");
     let params = sent.params_value();
@@ -1479,10 +1499,17 @@ fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
         "steer --no-from from agent",
     );
     assert_text_then_enter(&trace_log, "exact");
+    let sent = env
+        .read_events()
+        .into_iter()
+        .rev()
+        .find(|event| event.method == "message.sent")
+        .expect("no-from sent event");
+    assert_eq!(sent.params_value()["sender"]["origin"], "system");
 }
 
 #[test]
-fn steer_sender_prefix_ignores_shadowed_co_resident_session() {
+fn steer_sender_header_ignores_shadowed_co_resident_session() {
     let env = Env::new();
     register_role_agent(
         &env,
@@ -1523,7 +1550,10 @@ fn steer_sender_prefix_ignores_shadowed_co_resident_session() {
             .args(["message", "--steer", "@reviewer", "--", "re-review"]),
         "steer from reborn agent",
     );
-    assert_text_then_enter(&trace_log, "from @coder: re-review");
+    assert_text_then_enter(
+        &trace_log,
+        "Type: AGENT_MESSAGE\nFrom: @coder\nContent:\nre-review",
+    );
 }
 
 #[test]
@@ -1554,7 +1584,7 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
     assert_single_sigil_sent(&sent.stdout);
     let sent_id = sent_id_from_stdout(&sent.stdout);
     assert!(env.store().list_pending_messages().unwrap().is_empty());
-    assert_text_then_enter(&trace_log, "go");
+    assert_text_then_enter(&trace_log, &user_message("go"));
     let fresh = message_by_id(&env, &MessageId::parse(&sent_id).expect("message id"));
     assert_eq!(fresh.status, MessageStatus::Sent);
     assert_eq!(fresh.attempts, 0, "fresh live send is not claimed");
@@ -1564,7 +1594,7 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
         json!({
             "hook_event_name": "UserPromptSubmit",
             "session_id": "sess-boundary",
-            "prompt": "go",
+            "prompt": user_message("go"),
             "worktree_branch": "feature-boundary",
         }),
         pane_env,
@@ -1607,7 +1637,7 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
             .args(["message", "deliver", "--message-id", &queued_id]),
         "deliver at boundary",
     );
-    assert_text_then_enter(&trace_log, "later");
+    assert_text_then_enter(&trace_log, &user_message("later"));
     assert_eq!(
         message_by_id(&env, &MessageId::parse(&queued_id).expect("message id")).status,
         MessageStatus::Sent
@@ -1618,7 +1648,7 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
         json!({
             "hook_event_name": "UserPromptSubmit",
             "session_id": "sess-boundary",
-            "prompt": "later",
+            "prompt": user_message("later"),
             "worktree_branch": "feature-boundary",
         }),
         pane_env,
@@ -1668,7 +1698,7 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
         "send-now message",
     );
     let message_id = sent_id_from_stdout(&out.stdout);
-    assert_text_then_enter(&first_trace, "recover me");
+    assert_text_then_enter(&first_trace, &user_message("recover me"));
     let first_last_sent_at =
         message_by_id(&env, &MessageId::parse(&message_id).expect("message id"))
             .last_sent_at
@@ -1682,7 +1712,7 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
             .args(["message", "sweep"]),
         "message sweep",
     );
-    assert_text_then_enter(&second_trace, "recover me");
+    assert_text_then_enter(&second_trace, &user_message("recover me"));
 
     let sent = env
         .store()
@@ -1704,7 +1734,7 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
         json!({
             "hook_event_name": "UserPromptSubmit",
             "session_id": "sess-reconcile",
-            "prompt": "recover me",
+            "prompt": user_message("recover me"),
             "worktree_branch": "feature-reconcile",
         }),
         pane_env,
@@ -1759,7 +1789,7 @@ fn shortened_reconcile_window_preserves_prompt_for_late_correlated_ack() {
         .find(|message| message.message_id == message_id)
         .expect("sent prompt");
     let last_sent_at = first_record.last_sent_at.expect("send timestamp");
-    assert_text_then_enter(&first_trace, "arrived once");
+    assert_text_then_enter(&first_trace, &user_message("arrived once"));
 
     std::thread::sleep(Duration::from_millis(5_100));
     let empty_panes = env.write_pane_fixture(&[]);
@@ -1786,7 +1816,7 @@ fn shortened_reconcile_window_preserves_prompt_for_late_correlated_ack() {
         json!({
             "hook_event_name": "UserPromptSubmit",
             "session_id": "sess-late-ack",
-            "prompt": "arrived once",
+            "prompt": user_message("arrived once"),
             "worktree_branch": "feature-late-ack",
         }),
         pane_env,
@@ -1854,7 +1884,7 @@ fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
             .args(["message", "sweep"]),
         "message sweep",
     );
-    assert_text_then_enter(&retry_trace, "retry me");
+    assert_text_then_enter(&retry_trace, &user_message("retry me"));
     let sent = env
         .store()
         .list_messages()
@@ -1901,7 +1931,7 @@ fn send_now_submit_failure_leaves_sent_record() {
     assert!(
         trace_lines(&trace_log)
             .iter()
-            .any(|line| is_paste(line, "submit once"))
+            .any(|line| is_paste(line, &user_message("submit once")))
     );
     assert!(
         trace_lines(&trace_log)
@@ -1968,7 +1998,7 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
         "message deliver",
     );
 
-    assert_text_then_enter(&trace_log, "read plan");
+    assert_text_then_enter(&trace_log, &user_message("read plan"));
     let messages = env.store().list_messages().expect("messages");
     let message = messages
         .iter()
@@ -2046,11 +2076,11 @@ fn queued_delivery_batches_compatible_prompts() {
         "batch delivery",
     );
 
-    let payload = "first\n\n\nsecond";
-    assert_text_then_enter(&trace_log, payload);
+    let payload = format!("{}\n\n{}", user_message("first\n"), user_message("second"));
+    assert_text_then_enter(&trace_log, &payload);
     let lines = trace_lines(&trace_log);
     assert_eq!(
-        lines.iter().filter(|line| is_paste(line, payload)).count(),
+        lines.iter().filter(|line| is_paste(line, &payload)).count(),
         1
     );
     assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
@@ -2107,7 +2137,9 @@ fn steer_auto_compact_runs_before_a_full_window() {
 
     let lines = trace_lines(&trace_log);
     let compact_at = lines.iter().position(|line| is_compact_command(line));
-    let paste_at = lines.iter().position(|line| is_paste(line, "go"));
+    let paste_at = lines
+        .iter()
+        .position(|line| is_paste(line, &user_message("go")));
     assert!(
         compact_at.is_some(),
         "expected a `/compact` write-chars; trace: {lines:?}"
@@ -2298,7 +2330,7 @@ fn boundary_auto_compact_defers_prompt_until_compaction_ends() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| is_paste(line, "go after compact"))
+            .filter(|line| is_paste(line, &user_message("go after compact")))
             .count(),
         0
     );
@@ -2356,7 +2388,7 @@ fn boundary_auto_compact_defers_prompt_until_compaction_ends() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| is_paste(line, "go after compact"))
+            .filter(|line| is_paste(line, &user_message("go after compact")))
             .count(),
         1
     );
@@ -2370,7 +2402,7 @@ fn boundary_auto_compact_defers_prompt_until_compaction_ends() {
         json!({
             "hook_event_name": "UserPromptSubmit",
             "session_id": "sess-ac-boundary",
-            "prompt": "go after compact",
+            "prompt": user_message("go after compact"),
             "worktree_branch": "feature-ac-boundary",
         }),
         &[("ZELLIJ_PANE_ID", "3")],
@@ -2442,7 +2474,9 @@ fn steer_auto_compact_suppresses_only_an_unchanged_baseline() {
     run_traced_smart_compact(&env, &first_trace, "go1");
     let first_lines = trace_lines(&first_trace);
     let compact_at = first_lines.iter().position(|line| is_compact_command(line));
-    let paste_at = first_lines.iter().position(|line| is_paste(line, "go1"));
+    let paste_at = first_lines
+        .iter()
+        .position(|line| is_paste(line, &user_message("go1")));
     assert!(compact_at.is_some() && compact_at < paste_at);
 
     let second_trace = env.project_root.join("zellij-ac-dupe-second-trace.log");
@@ -2504,7 +2538,7 @@ fn queue_waiting_agent_defers_unforced_and_force_delivers() {
         assert!(
             trace_lines(&trace_log)
                 .iter()
-                .all(|line| !is_paste(line, "go")),
+                .all(|line| !is_paste(line, &user_message("go"))),
             "nothing is pasted while the ask reserves input"
         );
     }
@@ -2537,7 +2571,7 @@ fn queue_waiting_agent_defers_unforced_and_force_delivers() {
             env.store().list_pending_messages().unwrap().is_empty(),
             "--force delivers past the waiting agent inline"
         );
-        assert_text_then_enter(&trace_log, "go");
+        assert_text_then_enter(&trace_log, &user_message("go"));
     }
 }
 
@@ -2628,7 +2662,7 @@ fn steer_fanout_requires_opt_in_then_reports_all_targets() {
     assert!(stdout.contains("sent 2 agent(s)"), "stdout: {stdout}");
     let pasted = trace_lines(&trace_log)
         .into_iter()
-        .filter(|line| is_paste_to_any_pane(line, "@claude, hello"))
+        .filter(|line| is_paste_to_any_pane(line, &user_message("@claude, hello")))
         .count();
     assert_eq!(pasted, 2);
 }
@@ -2725,7 +2759,7 @@ fn boundary_fanout_preserves_target_order_on_hook_failure() {
         assert_eq!(
             trace
                 .iter()
-                .any(|line| is_paste_to_any_pane(line, "@all, ordered effect")),
+                .any(|line| { is_paste_to_any_pane(line, &user_message("@all, ordered effect")) }),
             live_first
         );
         assert_eq!(records.len(), usize::from(live_first));
@@ -2776,7 +2810,7 @@ fn run_traced_smart_compact(env: &Env, trace_log: &Path, text: &str) -> std::pro
     assert!(
         trace_lines(trace_log)
             .iter()
-            .any(|line| is_paste(line, text))
+            .any(|line| is_paste(line, &user_message(text)))
     );
     output
 }
@@ -2798,6 +2832,10 @@ fn is_paste(line: &str, text: &str) -> bool {
     line.ends_with(&format!(
         "\taction\twrite\t--pane-id\t{TRACE_PANE}\t27\t91\t50\t48\t48\t126\t{payload}\t27\t91\t50\t48\t49\t126"
     ))
+}
+
+fn user_message(text: &str) -> String {
+    format!("Type: USER_MESSAGE\nFrom: @user\nContent:\n{text}")
 }
 
 fn is_paste_to_any_pane(line: &str, text: &str) -> bool {
@@ -3018,7 +3056,7 @@ impl ReplyAgentFixture {
             json!({
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": self.session_id,
-                "prompt": prompt,
+                "prompt": user_message(prompt),
                 "worktree_branch": self.branch,
                 "transcript_path": self.transcript_path,
             }),
@@ -3572,7 +3610,7 @@ fn steer_reaches_unbound_codex_pane() {
             .args(["message", "--steer", "@codex", "--", "continue"]),
         "steer to unbound codex pane",
     );
-    assert_text_then_enter(&trace_log, "continue");
+    assert_text_then_enter(&trace_log, &user_message("continue"));
 }
 
 #[test]
@@ -3596,7 +3634,7 @@ fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
             .args(["message", "@coder", "--", "read plan"]),
         "queue to provisional codex",
     );
-    assert_text_then_enter(&trace_log, "read plan");
+    assert_text_then_enter(&trace_log, &user_message("read plan"));
     let messages = env.store().list_messages().unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].status, MessageStatus::Sent);

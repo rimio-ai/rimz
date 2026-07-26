@@ -244,22 +244,30 @@ pub(super) fn record_conversation(
                     if segment.is_empty() {
                         continue;
                     }
-                    let (mut entry, delivered_text) = if let Some((sender, body)) =
-                        rimz::harness::target::parse_sender_prefix(segment)
-                    {
-                        let delivered_text = body.clone();
-                        let mut entry = entry_base(rimz::transcript::TranscriptKind::Message, body);
-                        entry.from = Some(sender);
-                        (entry, delivered_text)
-                    } else {
-                        (
-                            entry_base(
-                                rimz::transcript::TranscriptKind::Prompt,
+                    let (mut entry, delivered_text) =
+                        match rimz::harness::target::parse_message_header(segment) {
+                            Some((rimz::harness::target::HeaderKind::Agent, sender, body)) => {
+                                let delivered_text = body.clone();
+                                let mut entry =
+                                    entry_base(rimz::transcript::TranscriptKind::Message, body);
+                                entry.from = Some(sender);
+                                (entry, delivered_text)
+                            }
+                            Some((rimz::harness::target::HeaderKind::User, _, body)) => {
+                                let delivered_text = body.clone();
+                                (
+                                    entry_base(rimz::transcript::TranscriptKind::Prompt, body),
+                                    delivered_text,
+                                )
+                            }
+                            None => (
+                                entry_base(
+                                    rimz::transcript::TranscriptKind::Prompt,
+                                    segment.to_owned(),
+                                ),
                                 segment.to_owned(),
                             ),
-                            segment.to_owned(),
-                        )
-                    };
+                        };
                     let matched = if batch_aligned {
                         delivered.get(delivered_cursor).map(|message| (0, message))
                     } else {

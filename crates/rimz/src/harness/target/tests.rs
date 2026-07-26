@@ -246,8 +246,8 @@ fn pane_owner_shadows_co_resident_session_from_every_address() {
         channel: Some("main".to_owned()),
     };
     assert_eq!(
-        sender_prefix(&sender, &peers, Some("main")).as_deref(),
-        Some("from @coder: ")
+        message_header(&sender, &peers, Some("main")).as_deref(),
+        Some("Type: AGENT_MESSAGE\nFrom: @coder\nContent:\n")
     );
 }
 
@@ -612,7 +612,7 @@ fn handle_falls_back_to_petname_without_an_ordinal() {
 }
 
 #[test]
-fn sender_prefix_parser_round_trips_same_and_cross_channel_senders() {
+fn message_header_parser_round_trips_agent_and_human_senders() {
     let body = "ship it";
     let sender = MessageSender::Agent {
         kind: AgentKind::new_unchecked("codex"),
@@ -622,40 +622,80 @@ fn sender_prefix_parser_round_trips_same_and_cross_channel_senders() {
         channel: Some("design".to_owned()),
     };
 
-    let same_channel = sender_prefix(&sender, &[], Some("design")).unwrap() + body;
+    let same_channel = message_header(&sender, &[], Some("design")).unwrap() + body;
     assert_eq!(
-        parse_sender_prefix(&same_channel),
-        Some(("@codex".to_owned(), body.to_owned()))
+        parse_message_header(&same_channel),
+        Some((HeaderKind::Agent, "@codex".to_owned(), body.to_owned()))
     );
 
-    let cross_channel = sender_prefix(&sender, &[], Some("main")).unwrap() + body;
+    let cross_channel = message_header(&sender, &[], Some("main")).unwrap() + body;
     assert_eq!(
-        parse_sender_prefix(&cross_channel),
-        Some(("@codex#design".to_owned(), body.to_owned()))
+        parse_message_header(&cross_channel),
+        Some((
+            HeaderKind::Agent,
+            "@codex#design".to_owned(),
+            body.to_owned()
+        ))
     );
 
-    assert_eq!(sender_prefix(&MessageSender::Human, &[], None), None);
-    assert_eq!(parse_sender_prefix("@codex, ship it"), None);
-    assert_eq!(parse_sender_prefix("ordinary text: with colon"), None);
+    let human = message_header(&MessageSender::Human, &[], None).unwrap() + body;
+    assert_eq!(
+        parse_message_header(&human),
+        Some((HeaderKind::User, "@user".to_owned(), body.to_owned()))
+    );
+    assert_eq!(message_header(&MessageSender::System, &[], None), None);
 }
 
 #[test]
-fn split_batched_prompt_splits_only_on_prefixed_sections() {
+fn message_header_parser_rejects_near_misses() {
+    for text in [
+        "Type: SYSTEM_MESSAGE\nFrom: @rimz\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder\nship it",
+        "Type: AGENT_MESSAGE\nFrom: coder\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @code r\nContent:\nship it",
+        "ordinary text: with colon",
+    ] {
+        assert_eq!(parse_message_header(text), None, "{text}");
+    }
+}
+
+#[test]
+fn align_submitted_prompt_consumes_human_header() {
+    let recipient = agent("claude", "session-recipient", Some("main"), "terminal_1");
+    let record = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+        &recipient,
+        "ship it".to_owned(),
+        true,
+        crate::message::DeliveryGate::Done,
+    );
+    let prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nship it";
+
     assert_eq!(
-        split_batched_prompt("from @planner: first\n\nfrom @coder: second"),
-        vec!["from @planner: first", "from @coder: second"]
+        align_submitted_prompt(prompt, &[&record]),
+        Some(vec![prompt])
+    );
+}
+
+#[test]
+fn split_batched_prompt_splits_only_on_typed_sections() {
+    let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
+    let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
+    assert_eq!(
+        split_batched_prompt(&format!("{agent}\n\n{human}")),
+        vec![agent, human]
     );
     assert_eq!(
-        split_batched_prompt("human note\n\nfrom @coder: second"),
-        vec!["human note", "from @coder: second"]
+        split_batched_prompt(&format!("human note\n\n{agent}")),
+        vec!["human note", agent]
     );
     assert_eq!(
-        split_batched_prompt("from @planner: first\n\n\nfrom @coder: second"),
-        vec!["from @planner: first", "from @coder: second"]
+        split_batched_prompt(&format!("{agent}\n\n\n{human}")),
+        vec![agent, human]
     );
     assert_eq!(
-        split_batched_prompt("from @planner: first\n\nsecond paragraph"),
-        vec!["from @planner: first\n\nsecond paragraph"]
+        split_batched_prompt(&format!("{agent}\n\nsecond paragraph")),
+        vec![format!("{agent}\n\nsecond paragraph")]
     );
 }
 
@@ -916,7 +956,7 @@ fn shared_role_requires_fanout_and_degrades_to_profile_or_ordinal() {
 }
 
 #[test]
-fn sender_prefix_uses_live_handle_and_channel_only_when_crossing_channels() {
+fn message_header_uses_live_handle_and_channel_only_when_crossing_channels() {
     let mut snapshot = empty_snapshot();
     let mut sender = agent("claude", "session-sender", Some("docs"), "terminal_1");
     sender.name = Some("lucid-atlas".to_owned());
@@ -932,17 +972,17 @@ fn sender_prefix_uses_live_handle_and_channel_only_when_crossing_channels() {
     };
 
     assert_eq!(
-        sender_prefix(&sender, &peers, Some("docs")).unwrap(),
-        "from @claude: "
+        message_header(&sender, &peers, Some("docs")).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @claude\nContent:\n"
     );
     assert_eq!(
-        sender_prefix(&sender, &peers, Some("main")).unwrap(),
-        "from @claude#docs: "
+        message_header(&sender, &peers, Some("main")).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @claude#docs\nContent:\n"
     );
 }
 
 #[test]
-fn sender_prefix_uses_explicit_live_handle() {
+fn message_header_uses_explicit_live_handle() {
     let mut snapshot = empty_snapshot();
     let mut sender = agent("claude", "session-sender", Some("docs"), "terminal_1");
     sender.name = Some("writer".to_owned());
@@ -959,8 +999,8 @@ fn sender_prefix_uses_explicit_live_handle() {
     };
 
     assert_eq!(
-        sender_prefix(&sender, &peers, Some("docs")).unwrap(),
-        "from @writer: "
+        message_header(&sender, &peers, Some("docs")).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @writer\nContent:\n"
     );
 }
 
@@ -995,7 +1035,7 @@ fn recipient_channel_prefers_bound_then_pane_then_scope() {
 }
 
 #[test]
-fn sender_prefix_uses_recipient_channel_for_same_lane_fresh_pane() {
+fn message_header_uses_recipient_channel_for_same_lane_fresh_pane() {
     let target = fresh_pane("codex", "terminal_9");
     let sender = MessageSender::Agent {
         kind: AgentKind::new_unchecked("claude"),
@@ -1007,19 +1047,19 @@ fn sender_prefix_uses_recipient_channel_for_same_lane_fresh_pane() {
 
     let same_channel = recipient_channel(&target, None, Some("bandwidth-profiling"));
     assert_eq!(
-        sender_prefix(&sender, &[], same_channel.as_deref()).unwrap(),
-        "from @claude: "
+        message_header(&sender, &[], same_channel.as_deref()).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @claude\nContent:\n"
     );
 
     let cross_channel = recipient_channel(&target, None, Some("other"));
     assert_eq!(
-        sender_prefix(&sender, &[], cross_channel.as_deref()).unwrap(),
-        "from @claude#bandwidth-profiling: "
+        message_header(&sender, &[], cross_channel.as_deref()).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @claude#bandwidth-profiling\nContent:\n"
     );
 }
 
 #[test]
-fn sender_prefix_live_handle_disambiguates_same_kind_peers() {
+fn message_header_live_handle_disambiguates_same_kind_peers() {
     let mut snapshot = empty_snapshot();
     let mut one = agent("claude", "session-a", Some("main"), "terminal_1");
     one.name = Some("calm-fox".to_owned());
@@ -1038,13 +1078,13 @@ fn sender_prefix_live_handle_disambiguates_same_kind_peers() {
     };
 
     assert_eq!(
-        sender_prefix(&sender, &peers, Some("main")).unwrap(),
-        "from @claude-2: "
+        message_header(&sender, &peers, Some("main")).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @claude-2\nContent:\n"
     );
 }
 
 #[test]
-fn sender_prefix_falls_back_to_stored_identity_when_sender_is_absent() {
+fn message_header_falls_back_to_stored_identity_when_sender_is_absent() {
     let peers: Vec<&AgentState> = Vec::new();
     let sender = crate::message::MessageSender::Agent {
         kind: AgentKind::new_unchecked("codex"),
@@ -1055,17 +1095,17 @@ fn sender_prefix_falls_back_to_stored_identity_when_sender_is_absent() {
     };
 
     assert_eq!(
-        sender_prefix(&sender, &peers, Some("main")).unwrap(),
-        "from @reviewer#docs: "
+        message_header(&sender, &peers, Some("main")).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @reviewer#docs\nContent:\n"
     );
     assert_eq!(
-        sender_prefix(&sender, &peers, Some("docs")).unwrap(),
-        "from @reviewer: "
+        message_header(&sender, &peers, Some("docs")).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @reviewer\nContent:\n"
     );
 }
 
 #[test]
-fn sender_prefix_fallback_uses_profile_before_petname() {
+fn message_header_fallback_uses_profile_before_petname() {
     let mut snapshot = empty_snapshot();
     let mut other_planner = agent("claude", "session-other", Some("auth"), "terminal_2");
     other_planner.name = Some("bright-lark".to_owned());
@@ -1081,8 +1121,8 @@ fn sender_prefix_fallback_uses_profile_before_petname() {
     };
 
     assert_eq!(
-        sender_prefix(&sender, &peers, Some("auth")).unwrap(),
-        "from @planner: "
+        message_header(&sender, &peers, Some("auth")).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\n"
     );
 }
 

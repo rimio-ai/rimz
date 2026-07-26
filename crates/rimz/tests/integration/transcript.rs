@@ -447,7 +447,7 @@ fn transcript_hook_records_routed_prompt_as_message_entry() {
         &env,
         "sess-hook-routed",
         branch,
-        "from @claude: ship it",
+        "Type: AGENT_MESSAGE\nFrom: @claude\nContent:\nship it",
         "codex reply",
     );
 
@@ -461,7 +461,7 @@ fn transcript_hook_records_routed_prompt_as_message_entry() {
     assert_eq!(message.from.as_deref(), Some("@claude"));
     assert_eq!(message.text, "ship it");
     assert!(entries.iter().all(|entry| {
-        entry.entry != TranscriptKind::Prompt || !entry.text.starts_with("from @claude:")
+        entry.entry != TranscriptKind::Prompt || !entry.text.starts_with("Type: AGENT_MESSAGE")
     }));
 
     let output = run_ok(env.rimz().args(["transcript", "#hook-routed-transcript"]));
@@ -469,6 +469,28 @@ fn transcript_hook_records_routed_prompt_as_message_entry() {
     assert!(output.contains("\nship it"), "{output}");
     assert!(output.contains("@codex"), "{output}");
     assert!(output.contains("│ codex reply"), "{output}");
+}
+
+#[test]
+fn transcript_hook_strips_user_message_header_from_prompt_entry() {
+    let env = Env::new();
+    register_codex_turn(
+        &env,
+        "sess-hook-user",
+        "hook-user-transcript",
+        "Type: USER_MESSAGE\nFrom: @user\nContent:\ncheck this",
+        "checked",
+    );
+
+    let entries = rimz::transcript::read_all(env.store().paths()).expect("read log");
+    let prompt = entries
+        .iter()
+        .find(|entry| {
+            entry.agent_id.as_str() == "sess-hook-user" && entry.entry == TranscriptKind::Prompt
+        })
+        .expect("prompt entry");
+    assert_eq!(prompt.from, None);
+    assert_eq!(prompt.text, "check this");
 }
 
 #[test]

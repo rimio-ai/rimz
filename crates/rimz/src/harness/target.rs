@@ -866,7 +866,7 @@ pub fn channel_team<'a>(agents: &'a [AgentState], channel: &str) -> Option<&'a s
 ///
 /// A freshly launched pane may not have captured its channel yet; the addressed
 /// scope keeps same-channel hand-offs from rendering a spurious `#channel` on
-/// the `from @sender:` prefix.
+/// the structured message header.
 pub fn recipient_channel(
     target: &PaneAgent,
     bound: Option<&AgentState>,
@@ -908,18 +908,35 @@ pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: 
     }
 }
 
-/// Split a delivered prompt into its `from @sender: ` attribution and the body.
-/// The inverse of [`sender_prefix`]: `Some((handle, body))` for a peer-authored
-/// delivery (handle keeps any `#channel`), `None` for human-authored or
-/// `--no-from` text that carries no prefix.
-pub fn parse_sender_prefix(text: &str) -> Option<(String, String)> {
-    let rest = text.strip_prefix("from @")?;
-    let (handle, body) = rest.split_once(": ")?;
-    Some((format!("@{handle}"), body.to_owned()))
+/// The sender class named by a structured message header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderKind {
+    Agent,
+    User,
+}
+
+/// Split a delivered prompt into its structured header and body.
+///
+/// The inverse of [`message_header`]: the handle keeps its leading `@` and any
+/// `#channel` suffix. System and `--no-from` text carry no header.
+pub fn parse_message_header(text: &str) -> Option<(HeaderKind, String, String)> {
+    let (kind, rest) = text.split_once('\n')?;
+    let kind = match kind {
+        "Type: AGENT_MESSAGE" => HeaderKind::Agent,
+        "Type: USER_MESSAGE" => HeaderKind::User,
+        _ => return None,
+    };
+    let (from, rest) = rest.split_once('\n')?;
+    let handle = from.strip_prefix("From: @")?;
+    if handle.is_empty() || handle.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let body = rest.strip_prefix("Content:\n")?;
+    Some((kind, format!("@{handle}"), body.to_owned()))
 }
 
 /// Split a batched pane paste into prompt sections. A blank-line boundary starts
-/// a new section only when the following first line carries a sender prefix.
+/// a new section only when the following first line names a message type.
 pub fn split_batched_prompt(text: &str) -> Vec<&str> {
     let mut segments = Vec::new();
     let mut start = 0;
@@ -931,7 +948,7 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
             next_start += 1;
         }
         let first_line = text[next_start..].lines().next().unwrap_or_default();
-        if parse_sender_prefix(first_line).is_some() {
+        if matches!(first_line, "Type: AGENT_MESSAGE" | "Type: USER_MESSAGE") {
             segments.push(&text[start..boundary]);
             start = next_start;
         }
@@ -948,8 +965,8 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
 /// Align one submitted pane paste with the records written as its batch.
 ///
 /// Record text supplies the otherwise ambiguous boundaries between adjacent
-/// human-authored messages. Agent-authored records also consume their rendered
-/// `from @sender: ` attribution. Interior record whitespace matches verbatim;
+/// messages. Agent- and human-authored records consume their rendered headers;
+/// system records stay verbatim. Interior record whitespace matches verbatim;
 /// only the paste's outer first/last whitespace follows hook normalization.
 pub fn align_submitted_prompt<'a>(
     prompt: &'a str,
@@ -963,13 +980,19 @@ pub fn align_submitted_prompt<'a>(
     for (index, record) in records.iter().enumerate() {
         let segment = remaining;
         let mut body = segment;
-        if matches!(record.sender, MessageSender::Agent { .. }) {
-            let attributed = body.strip_prefix("from @")?;
-            let (handle, text) = attributed.split_once(": ")?;
-            if handle.is_empty() || handle.chars().any(char::is_whitespace) {
-                return None;
+        match record.sender {
+            MessageSender::Agent { .. } => {
+                let attributed = body.strip_prefix("Type: AGENT_MESSAGE\nFrom: @")?;
+                let (handle, text) = attributed.split_once("\nContent:\n")?;
+                if handle.is_empty() || handle.chars().any(char::is_whitespace) {
+                    return None;
+                }
+                body = text;
             }
-            body = text;
+            MessageSender::Human => {
+                body = body.strip_prefix("Type: USER_MESSAGE\nFrom: @user\nContent:\n")?;
+            }
+            MessageSender::System => {}
         }
         let first = index == 0;
         let last = index + 1 == records.len();
@@ -1001,14 +1024,19 @@ pub fn align_submitted_prompt<'a>(
     Some(segments)
 }
 
-/// The optional `from @sender: ` prefix for a peer-authored message. Human-authored
-/// text stays verbatim; agent-authored text uses the shortest live handle when the
-/// sender is visible in the snapshot and falls back to the launch env identity.
-pub fn sender_prefix(
+/// The structured header for a human- or agent-authored message.
+///
+/// Agent-authored text uses the shortest live handle when the sender is visible
+/// in the snapshot and falls back to the launch environment identity.
+/// System-authored text stays verbatim.
+pub fn message_header(
     sender: &MessageSender,
     peers: &[&AgentState],
     target_channel: Option<&str>,
 ) -> Option<String> {
+    if matches!(sender, MessageSender::Human) {
+        return Some("Type: USER_MESSAGE\nFrom: @user\nContent:\n".to_owned());
+    }
     let MessageSender::Agent {
         kind,
         name,
@@ -1027,7 +1055,7 @@ pub fn sender_prefix(
     {
         let include_channel = agent_channel(agent).as_deref() != target_channel;
         return Some(format!(
-            "from {}: ",
+            "Type: AGENT_MESSAGE\nFrom: {}\nContent:\n",
             agent_handle(agent, peers, include_channel)
         ));
     }
@@ -1037,7 +1065,7 @@ pub fn sender_prefix(
         handle.push('#');
         handle.push_str(channel);
     }
-    Some(format!("from {handle}: "))
+    Some(format!("Type: AGENT_MESSAGE\nFrom: {handle}\nContent:\n"))
 }
 
 fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {
