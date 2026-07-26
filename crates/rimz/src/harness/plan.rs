@@ -599,7 +599,7 @@ fn index_to_launch_ordinal(index: usize) -> u32 {
 }
 
 #[derive(Clone, Copy)]
-pub struct CompileLayoutPanes<'a> {
+pub struct LayoutPaneParams<'a> {
     pub cwd: &'a Path,
     pub cleanup_worktree: bool,
     pub in_place: bool,
@@ -615,7 +615,7 @@ pub struct CompileLayoutPanes<'a> {
 /// command cells in layout order.
 pub fn compile_layout_panes(
     layout: &LayoutSpec,
-    params: CompileLayoutPanes<'_>,
+    params: LayoutPaneParams<'_>,
 ) -> Result<LayoutPanes> {
     let agent_count = layout.agent_cells().count();
     if let Some(seeds) = params.resume_seeds
@@ -687,7 +687,7 @@ fn fresh_agent_pane(
     cell: &AgentCell,
     launch: &AgentLaunchIdentity,
     rimz_bin: &Path,
-    params: CompileLayoutPanes<'_>,
+    params: LayoutPaneParams<'_>,
 ) -> Result<PaneCmd> {
     validate_agent_name(&launch.name)?;
     Ok(PaneCmd {

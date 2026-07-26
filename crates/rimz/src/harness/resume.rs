@@ -22,7 +22,7 @@ use crate::agents::find_definition;
 use crate::agents::{AgentState, LocalSessionObservation};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::plan::{
-    CompileLayoutPanes, cohort_cells, compile_layout_panes, launch_identity_requests,
+    LayoutPaneParams, cohort_cells, compile_layout_panes, launch_identity_requests,
 };
 use crate::harness::run::PermissionMode;
 use crate::harness::spec::LayoutSpec;
@@ -1384,7 +1384,7 @@ pub fn materialize_team_restore_tab(
         .map_or(&[] as &[_], |batch| batch.identities());
     let layout = compile_layout_panes(
         &planned.layout,
-        CompileLayoutPanes {
+        LayoutPaneParams {
             cwd: &planned.cwd,
             cleanup_worktree: false,
             in_place: false,

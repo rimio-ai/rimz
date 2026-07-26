@@ -79,7 +79,7 @@ Both daily reads compare the cache's own `day_cutoff_secs` against the cutoff co
 | `budget.account.<kind>.json` | one login, machine-wide | a runtime raise or disable, and the park stamp |
 | `budget.scopes.json` | this room | per-agent turn baselines, parks, and interrupt throttles, plus fleet and account waivers, park thresholds, and interrupt throttles |
 
-The agent digest is the first 32 hex characters of a SHA-256 over the kind and session id, which keeps a session id out of a filename. [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs) reuses the same digest for its park records, so the two files for one agent sit side by side.
+The shared [`store/sidecar.rs`](../../../crates/rimz/src/store/sidecar.rs) digest is the first 32 hex characters of a SHA-256 over the kind and session id, which keeps a session id out of a filename. Budget ledgers use `budget.<digest>.json`, auto-continue parks use `auto-continue.<digest>.json`, and idle-compaction fire records use `idle-compact/<digest>.json`.
 
 All of these are cache-class: `write_temp_then_rename_cache`, rebuildable, and safe to delete. Losing one loses a park, not money. The two scope ledgers additionally take a lock file around read-modify-write, so a producer tick merging a fresh park cannot clobber a cap change a CLI made in the same instant. The producer merges only the `parked` field back and leaves the cap fields as it found them.
 

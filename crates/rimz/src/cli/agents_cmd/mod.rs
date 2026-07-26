@@ -44,7 +44,7 @@ pub(super) use crate::cli::Ctx;
 use crate::cli::supervised;
 use rimz::agents::AgentState;
 use rimz::harness::plan::{
-    CompileLayoutPanes, LaunchFinalizeOptions, Placement, ResolvedLaunch, apply_in_place_downgrade,
+    LaunchFinalizeOptions, LayoutPaneParams, Placement, ResolvedLaunch, apply_in_place_downgrade,
     cohort_cells, compile_layout_panes, launch_identity_requests, mint_launch_id,
     resolve_fork_placement, resolve_placement, validate_agent_name,
 };
