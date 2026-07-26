@@ -118,27 +118,10 @@ pub(in crate::backend::zellij) fn new_tab_template_dump(xdg: &Path, session: &st
     );
 }
 
-pub(in crate::backend::zellij) fn reconcile_until_observed(
-    xdg: &Path,
-    opts: &SidebarPaneOptions,
-    live: &SidebarLiveness,
-) -> SidebarRecovery {
-    reconcile_loop(xdg, opts, live, false)
-}
-
 pub(in crate::backend::zellij) fn reconcile_until_converged(
     xdg: &Path,
     opts: &SidebarPaneOptions,
     live: &SidebarLiveness,
-) -> SidebarRecovery {
-    reconcile_loop(xdg, opts, live, true)
-}
-
-fn reconcile_loop(
-    xdg: &Path,
-    opts: &SidebarPaneOptions,
-    live: &SidebarLiveness,
-    retry_deferral: bool,
 ) -> SidebarRecovery {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -150,7 +133,7 @@ fn reconcile_loop(
                 deferred: 0,
                 ..report
             } == SidebarRecovery::default();
-        let transient = report == SidebarRecovery::default() || (retry_deferral && deferral_only);
+        let transient = report == SidebarRecovery::default() || deferral_only;
         if !transient || Instant::now() >= deadline {
             return report;
         }
