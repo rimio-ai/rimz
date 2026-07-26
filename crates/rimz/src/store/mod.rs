@@ -71,7 +71,7 @@ pub use crate::store::snapshot::{
     AgentCard, DailyBudgetView, PaneAgent, PresenceSample, ProcessCard, ProcessState,
     RemoteControlBadge, RowCallSplit, RowCard, SidebarCohortEffort, SidebarLinkFreshness,
     SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel, SidebarRow,
-    SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
+    SidebarSeatEffort, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
     SidebarWorktreeKind, TruthNotice, WorktreePrCi, WorktreePrState, WorktreeTrunkSync,
     actionable_unread_count, lead_unread_row, triage_key,
 };

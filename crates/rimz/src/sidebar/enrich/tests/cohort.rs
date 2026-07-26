@@ -23,11 +23,12 @@ fn cohort_effort_projects_by_group_key_and_clears_misses() {
             cache_read: 4,
         },
         active_secs: Some(60),
+        ..crate::SidebarCohortEffort::default()
     };
     let cache = CohortSpendCache {
         version: COHORT_SPEND_CACHE_VERSION,
         refreshed_at_ms: 1,
-        groups: BTreeMap::from([(first.display().to_string(), expected)]),
+        groups: BTreeMap::from([(first.display().to_string(), expected.clone())]),
     };
 
     project_cohort_effort(&mut snapshot, &cache);

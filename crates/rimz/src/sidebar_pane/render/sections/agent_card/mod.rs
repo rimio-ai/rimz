@@ -63,6 +63,7 @@ pub(super) fn row_lines(
     row: &SidebarRow,
     selected: bool,
     gutter: Gutter,
+    seat_cost_usd: Option<f64>,
     mut meter_pixels: Option<&mut MeterPixels>,
 ) -> Vec<Line<'static>> {
     let cw = content_width(ctx.width);
@@ -94,7 +95,7 @@ pub(super) fn row_lines(
     // the shell anchor — the build or `sudo` install reads in full while line 1
     // stays the stable shell label. Idle process rows have no detail to add.
     if row.is_process() {
-        inner.push(identity_line(ctx, row, attention));
+        inner.push(identity_line(ctx, row, attention, seat_cost_usd));
         if let Some(line) = process_detail_line(ctx.theme, row, cw) {
             inner.push(line);
         }
@@ -102,7 +103,9 @@ pub(super) fn row_lines(
         let stage = CardStage::of(row);
         for slot in template(stage, status, ctx.card_density, selected) {
             match slot {
-                CardSlot::Identity => inner.push(identity_line(ctx, row, attention)),
+                CardSlot::Identity => {
+                    inner.push(identity_line(ctx, row, attention, seat_cost_usd));
+                }
                 CardSlot::Description => inner.push(description_line(ctx, row, attention)),
                 CardSlot::AwaitingDots => {
                     inner.push(awaiting_prompt_line(ctx.animation_phase, cw));
