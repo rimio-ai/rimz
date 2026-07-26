@@ -299,14 +299,16 @@ fn qwen_lifecycle(
     let transcript_path = optional_payload_string(payload, &["transcript_path"]);
     let subagent =
         matches!(event_name, "SubagentStart" | "SubagentStop").then(|| parse_subagent(payload));
-    let subagent_meta = (event_name == "SubagentStop").then_some(()).and_then(|()| {
-        let child = subagent.as_ref()?;
-        payloads::read_subagent_meta(
-            transcript_path.as_deref()?,
-            child.common.common.session_id.as_deref()?,
-            child.common.agent_id.as_deref()?,
-        )
-    });
+    let subagent_meta = matches!(event_name, "SubagentStart" | "SubagentStop")
+        .then_some(())
+        .and_then(|()| {
+            let child = subagent.as_ref()?;
+            payloads::read_subagent_meta(
+                transcript_path.as_deref()?,
+                child.common.common.session_id.as_deref()?,
+                child.common.agent_id.as_deref()?,
+            )
+        });
     let usage = matches!(event_name, "SessionStart" | "Stop")
         .then(|| transcript_path.as_deref().map(usage_from_transcript))
         .flatten()

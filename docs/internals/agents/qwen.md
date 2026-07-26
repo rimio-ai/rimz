@@ -14,13 +14,13 @@ Qwen Code is a standalone, eagerly registered adapter. RimZ installs native hook
 | `PostToolUse` / `PostToolUseFailure` | completed tool activity |
 | `PermissionRequest` | permission wait; the plan/question gate tools classify as plan/question waits |
 | `Stop` / `StopFailure` | clean or failed turn end; pending `background_tasks` or `crons` keep the parent parked |
-| `SubagentStart` / `SubagentStop` | child bracket; stop adds model and description from the child metadata sidecar |
+| `SubagentStart` / `SubagentStop` | child bracket; both ends best-effort add model and description from the child metadata sidecar |
 | `PreCompact` / `PostCompact` | compaction bracket |
 | `SessionEnd` | ended |
 
 **Two blocking events, one wait.** Hook stdout stays empty on the neutral path. `PermissionRequest` classifies the native approval stage. Auto-allowed question and plan tools can skip that event because executing the tool opens the dialog, so RimZ also installs a synchronous `PreToolUse` hook scoped by the `ask_user_question|exit_plan_mode` matcher. That execution event opens a typed wait keyed by `tool_use_id`, and the matching `PostToolUse` or `PostToolUseFailure` closes it without opening a new prompt boundary. Install refuses an async RimZ-managed entry for either blocking event, reclaims owned entries by the `rimz hooks feed --source qwen` command marker, and leaves unrelated hooks intact.
 
-**Subagents.** The child id is `agent_id`, the parent is the hook's root `session_id`, and `agent_type` labels the child. At `SubagentStop`, RimZ reads `<project>/subagents/<parent-session-id>/agent-<agent_id>.meta.json`; `persistedCliFlags.model` supplies the model and `description` supplies the child task description. Qwen writes that file only after the synchronous `SubagentStart` hook returns, so start-time enrichment stays absent. This wires the native child bracket and renders the tree.
+**Subagents.** The child id is `agent_id`, the parent is the hook's root `session_id`, and `agent_type` labels the child. At both `SubagentStart` and `SubagentStop`, RimZ best-effort reads `<project>/subagents/<parent-session-id>/agent-<agent_id>.meta.json`; `persistedCliFlags.model` supplies the model and `description` supplies the child task description. Qwen Code 0.21 and newer write that sidecar before the start hook, so running children receive the enrichment immediately; older releases may not expose it until stop. This wires the native child bracket and renders the tree.
 
 ## Launch and resume
 
