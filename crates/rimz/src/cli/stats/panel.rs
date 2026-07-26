@@ -495,7 +495,7 @@ pub(super) fn ramp_key(styles: &[anstyle::Style; 5]) -> String {
 /// The windows row: a static totals row in reports, a tab bar in held dashboards.
 pub(super) fn windows_lines(lines: &mut Vec<String>, stats: &Stats, active: Option<Window>) {
     let cells = Window::TABS.map(|window| {
-        let tokens = stats_tokens(&window.select(&stats.total));
+        let tokens = window.select(&stats.total).display_tokens();
         (window, window.label(), fmt_tokens(tokens))
     });
     let sep = render::paint(render::palette::muted(), "  ·  ");
@@ -726,7 +726,7 @@ pub(super) fn model_breakdown(
             continue;
         }
         if id.is_empty() || below_minimum_share(spend.usd, total_usd) {
-            fold_window(&mut other, &spend);
+            other.merge(&spend);
         } else {
             named.push((rimz::agents::model_display::display_model(id), spend));
         }
@@ -744,7 +744,7 @@ pub(super) fn model_breakdown(
     let natural_rows = named.len() + usize::from(other.tokens > 0);
     if natural_rows > cap {
         for (_, spend) in named.split_off(cap - 1) {
-            fold_window(&mut other, &spend);
+            other.merge(&spend);
         }
     }
     if other.tokens > 0 {
@@ -755,25 +755,6 @@ pub(super) fn model_breakdown(
 
 fn below_minimum_share(value: f64, total: f64) -> bool {
     total > 0.0 && value < total * MIN_BREAKDOWN_SHARE
-}
-
-pub(super) fn fold_window(acc: &mut SpendWindow, add: &SpendWindow) {
-    acc.usd += add.usd;
-    acc.tokens += add.tokens;
-    acc.input += add.input;
-    acc.output += add.output;
-    acc.cache_write += add.cache_write;
-    acc.cache_read += add.cache_read;
-    acc.tool_calls = acc.tool_calls.saturating_add(add.tool_calls);
-    for (name, count) in &add.tools {
-        let total = acc.tools.entry(name.clone()).or_default();
-        *total = total.saturating_add(*count);
-    }
-    acc.sessions += add.sessions;
-}
-
-pub(super) fn stats_tokens(window: &SpendWindow) -> u64 {
-    window.tokens + window.cache_read
 }
 
 pub(super) struct AgentBreakdown<'a> {
@@ -853,7 +834,7 @@ pub(super) fn agent_breakdown(
     let mut has_other = false;
     agents.retain(|agent| {
         if below_minimum_share(agent.window.sessions.into(), total_sessions.into()) {
-            fold_window(&mut other_window, &agent.window);
+            other_window.merge(&agent.window);
             other_share += agent.share;
             has_other = true;
             false
@@ -864,7 +845,7 @@ pub(super) fn agent_breakdown(
     let natural_rows = agents.len() + usize::from(has_other);
     if natural_rows > cap {
         for agent in agents.split_off(cap - 1) {
-            fold_window(&mut other_window, &agent.window);
+            other_window.merge(&agent.window);
             other_share += agent.share;
             has_other = true;
         }
@@ -907,7 +888,7 @@ pub(super) fn agent_cells(
             kind: agent.kind.to_owned(),
             name: agent.name.clone(),
             sessions: agent.window.sessions.to_string(),
-            tokens: fmt_tokens(stats_tokens(&agent.window)),
+            tokens: fmt_tokens(agent.window.display_tokens()),
             usd: fmt_usd(agent.window.usd),
             cache_hit: agent
                 .window

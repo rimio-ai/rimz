@@ -105,7 +105,7 @@ fn stats_json<'a>(
                 } else {
                     rimz::agents::model_display::display_model(id)
                 },
-                tokens: stats_tokens(&spend),
+                tokens: spend.display_tokens(),
                 input: spend.input,
                 output: spend.output,
                 cache_read: spend.cache_read,
@@ -134,7 +134,7 @@ fn stats_json<'a>(
             cache_hit_pct: agent.window.cache_hit_percent(),
             kind: agent.kind.to_owned(),
             name: agent.name,
-            tokens: stats_tokens(&agent.window),
+            tokens: agent.window.display_tokens(),
             usd: agent.window.usd,
             sessions: agent.window.sessions,
             tool_calls: agent.window.tool_calls,
@@ -164,19 +164,19 @@ fn stats_json<'a>(
             .map(|day| utc_date(day.max(0) as u64 * DAY_SECS as u64)),
         windows: WindowsJson {
             week: WindowJson {
-                tokens: stats_tokens(&stats.total.week),
+                tokens: stats.total.week.display_tokens(),
                 usd: stats.total.week.usd,
                 tool_calls: stats.total.week.tool_calls,
                 tools: stats.total.week.tools.clone(),
             },
             month: WindowJson {
-                tokens: stats_tokens(&stats.total.month),
+                tokens: stats.total.month.display_tokens(),
                 usd: stats.total.month.usd,
                 tool_calls: stats.total.month.tool_calls,
                 tools: stats.total.month.tools.clone(),
             },
             year: WindowJson {
-                tokens: stats_tokens(&stats.total.year),
+                tokens: stats.total.year.display_tokens(),
                 usd: stats.total.year.usd,
                 tool_calls: stats.total.year.tool_calls,
                 tools: stats.total.year.tools.clone(),

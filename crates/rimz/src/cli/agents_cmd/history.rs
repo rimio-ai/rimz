@@ -108,13 +108,21 @@ fn render_history(
         ]);
     }
     table.render(w)?;
-    let tokens = turns.iter().fold(0u64, |total, turn| {
-        total
-            .saturating_add(turn.fresh_input)
-            .saturating_add(turn.output)
-            .saturating_add(turn.cache_read)
-            .saturating_add(turn.cache_write)
-    });
+    let tokens = turns
+        .iter()
+        .fold(
+            rimz::agents::spending::EffortTokens::default(),
+            |mut total, turn| {
+                total.add_assign(rimz::agents::spending::EffortTokens {
+                    input: turn.fresh_input,
+                    output: turn.output,
+                    cache_read: turn.cache_read,
+                    cache_write: turn.cache_write,
+                });
+                total
+            },
+        )
+        .display_total();
     let cost = turns
         .iter()
         .filter_map(|turn| turn.cost_usd)
