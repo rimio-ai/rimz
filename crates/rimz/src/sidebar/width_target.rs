@@ -6,7 +6,6 @@ use std::num::NonZeroU16;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::ids::MuxName;
 use crate::mux::{SidebarWidth, WidthPermille};
 use crate::store::{RuntimePaths, atomic};
 
@@ -52,7 +51,6 @@ pub(crate) fn pinned(runtime: &RuntimePaths) -> Option<WidthPermille> {
 pub fn resolve(
     runtime: &RuntimePaths,
     width: SidebarWidth,
-    _mux: MuxName,
     view_cols: Option<u16>,
 ) -> crate::mux::SidebarTarget {
     let stored = load_file(runtime);
@@ -104,7 +102,6 @@ pub fn resolve(
 pub fn pin(
     runtime: &RuntimePaths,
     cols: NonZeroU16,
-    _mux: MuxName,
     view_cols: u16,
 ) -> atomic::Result<WidthPermille> {
     let view_cols = NonZeroU16::new(view_cols).ok_or_else(|| atomic::AtomicErr::Io {
@@ -168,26 +165,26 @@ mod tests {
 
         let width = SidebarWidth::default();
         assert_eq!(
-            resolve(&runtime, width, MuxName::Zellij, Some(200)).cols(Some(200)),
+            resolve(&runtime, width, Some(200)).cols(Some(200)),
             NonZeroU16::new(50).expect("nonzero"),
         );
         assert_eq!(load(&runtime), Some(WidthPermille::from_percent(25)));
         assert_eq!(pinned(&runtime), None);
         assert_eq!(
-            resolve(&runtime, width, MuxName::Tmux, Some(300)).cols(Some(300)),
+            resolve(&runtime, width, Some(300)).cols(Some(300)),
             NonZeroU16::new(72).expect("nonzero"),
         );
         assert_ne!(load(&runtime), Some(WidthPermille::from_percent(25)));
 
         fs::write(runtime.sidebar_width_path(), b"not json").expect("garbage file");
         assert_eq!(
-            resolve(&runtime, width, MuxName::Tmux, Some(120)).cols(Some(120)),
+            resolve(&runtime, width, Some(120)).cols(Some(120)),
             NonZeroU16::new(30).expect("nonzero"),
         );
 
         fs::write(runtime.sidebar_width_path(), br#"{"cols":90}"#).expect("old record");
         assert_eq!(
-            resolve(&runtime, width, MuxName::Tmux, Some(120)).cols(Some(120)),
+            resolve(&runtime, width, Some(120)).cols(Some(120)),
             NonZeroU16::new(30).expect("nonzero"),
         );
     }
@@ -201,7 +198,7 @@ mod tests {
         let width = SidebarWidth::from_config(&theme);
 
         assert_eq!(
-            resolve(&runtime, width, MuxName::Tmux, Some(213)).cols(Some(213)),
+            resolve(&runtime, width, Some(213)).cols(Some(213)),
             NonZeroU16::new(64).expect("nonzero"),
         );
     }
@@ -211,27 +208,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = runtime(dir.path());
         let cols = NonZeroU16::new(81).expect("nonzero");
-        let share = pin(&runtime, cols, MuxName::Zellij, 200).expect("pin width target");
+        let share = pin(&runtime, cols, 200).expect("pin width target");
         assert_eq!(share, WidthPermille::try_from(405).expect("valid share"));
         assert_eq!(pinned(&runtime), Some(share));
         assert_eq!(
-            resolve(
-                &runtime,
-                SidebarWidth::default(),
-                MuxName::Zellij,
-                Some(200),
-            )
-            .cols(Some(200)),
+            resolve(&runtime, SidebarWidth::default(), Some(200)).cols(Some(200)),
             cols,
         );
         assert_eq!(
-            resolve(
-                &runtime,
-                SidebarWidth::default(),
-                MuxName::Zellij,
-                Some(300),
-            )
-            .cols(Some(300)),
+            resolve(&runtime, SidebarWidth::default(), Some(300)).cols(Some(300)),
             NonZeroU16::new(122).expect("nonzero"),
             "a pin scales and is not clamped by max_cols",
         );
@@ -243,19 +228,13 @@ mod tests {
         let runtime = runtime(dir.path());
         let width = SidebarWidth::default();
         assert_eq!(
-            resolve(&runtime, width, MuxName::Tmux, Some(400)).cols(Some(400)),
+            resolve(&runtime, width, Some(400)).cols(Some(400)),
             width.max_cols,
         );
 
-        pin(
-            &runtime,
-            NonZeroU16::new(100).expect("nonzero"),
-            MuxName::Tmux,
-            200,
-        )
-        .expect("pin width target");
+        pin(&runtime, NonZeroU16::new(100).expect("nonzero"), 200).expect("pin width target");
         assert_eq!(
-            resolve(&runtime, width, MuxName::Tmux, Some(400)).cols(Some(400)),
+            resolve(&runtime, width, Some(400)).cols(Some(400)),
             NonZeroU16::new(200).expect("nonzero"),
         );
     }
@@ -267,7 +246,7 @@ mod tests {
         let width = SidebarWidth::default();
 
         assert_eq!(
-            resolve(&runtime, width, MuxName::Zellij, Some(400)).cols(Some(400)),
+            resolve(&runtime, width, Some(400)).cols(Some(400)),
             width.max_cols,
         );
     }
@@ -278,9 +257,9 @@ mod tests {
         let runtime = runtime(dir.path());
         let width = SidebarWidth::default();
 
-        let established = resolve(&runtime, width, MuxName::Tmux, Some(250));
+        let established = resolve(&runtime, width, Some(250));
         assert_eq!(established.cols(Some(250)), NonZeroU16::new(72).unwrap());
-        let without_geometry = resolve(&runtime, width, MuxName::Tmux, None);
+        let without_geometry = resolve(&runtime, width, None);
         assert_eq!(without_geometry.share, established.share);
         assert_eq!(
             without_geometry.cols(Some(250)),
@@ -295,12 +274,7 @@ mod tests {
         let runtime = runtime(dir.path());
         let mut theme = crate::config::ThemeConfig::default();
         theme.display.width_percent = Some(40);
-        let target = resolve(
-            &runtime,
-            SidebarWidth::from_config(&theme),
-            MuxName::Zellij,
-            None,
-        );
+        let target = resolve(&runtime, SidebarWidth::from_config(&theme), None);
         assert_eq!(target.cols(None), theme.display.max_cols);
         assert_eq!(target.percent(), 40);
         assert_eq!(load(&runtime), None, "a blind fallback is not persisted");
@@ -308,12 +282,7 @@ mod tests {
         clear(&runtime).expect("clear explicit target");
         theme.display.width_percent = None;
         theme.pets.enabled = true;
-        let target = resolve(
-            &runtime,
-            SidebarWidth::from_config(&theme),
-            MuxName::Zellij,
-            None,
-        );
+        let target = resolve(&runtime, SidebarWidth::from_config(&theme), None);
         assert_eq!(target.cols(None), theme.display.max_cols);
         assert_eq!(target.percent(), 30);
     }
@@ -322,13 +291,7 @@ mod tests {
     fn clear_removes_a_target_and_accepts_a_missing_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = runtime(dir.path());
-        pin(
-            &runtime,
-            NonZeroU16::new(81).expect("nonzero"),
-            MuxName::Tmux,
-            200,
-        )
-        .expect("pin target");
+        pin(&runtime, NonZeroU16::new(81).expect("nonzero"), 200).expect("pin target");
         clear(&runtime).expect("clear target");
         assert_eq!(load(&runtime), None);
         clear(&runtime).expect("clear missing target");

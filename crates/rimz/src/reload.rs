@@ -605,7 +605,7 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
     }
 
     let width = SidebarWidth::from_config(&machine_config.theme);
-    let target = crate::sidebar::width_target::resolve(runtime, width, *mux, None);
+    let target = crate::sidebar::width_target::resolve(runtime, width, None);
     let opts = SidebarPaneOptions {
         session_name: ws.session_name.clone(),
         workspace_id: ws.workspace_id.clone(),

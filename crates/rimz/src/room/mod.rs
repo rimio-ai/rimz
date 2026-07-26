@@ -299,7 +299,6 @@ impl RoomContext {
         let target = crate::sidebar::width_target::resolve(
             &self.runtime,
             self.width,
-            self.backend.name(),
             detected_size.map(|(cols, _)| cols),
         );
         SidebarPaneOptions {
