@@ -1,7 +1,8 @@
 //! JSONL-based spending aggregation over agent transcript history.
 //!
 //! Per-provider typed parsers live in each adapter's `spend.rs`; this module
-//! discovers transcript stores, refreshes the shared cursor cache through the
+//! discovers transcript stores, folds per-slot lifetime effort directly from
+//! session transcripts, refreshes the shared cursor cache through the
 //! elected [`service`] owner of one warm [`SpendingWalker`], aggregates
 //! account-global and workspace-scoped windows, and publishes stamped
 //! provider/workspace caches. Discovery and parsing
@@ -16,6 +17,7 @@
 mod aggregate;
 mod cache;
 mod discovery;
+mod effort;
 mod engine;
 mod publish;
 mod refresh;
@@ -65,6 +67,10 @@ pub use cache::{
 #[cfg(test)]
 pub(crate) use cache::{compact_spending_cache, peek_cache_version};
 pub use discovery::{SpendingSource, SpendingSourceGroup, SpendingSourceTree};
+pub use effort::{
+    EffortParseMemo, EffortSessionRef, EffortTokens, SlotEffort, slot_effort,
+    slot_effort_with_memo, sum_optional_cost,
+};
 pub(crate) use publish::{PROVIDER_SPENDING_VERSION, WORKSPACE_SPENDING_VERSION};
 pub use publish::{
     ProviderSpendingCache, WorkspaceSpendingCache, read_provider_spending_cache,

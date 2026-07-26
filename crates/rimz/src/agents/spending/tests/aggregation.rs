@@ -1075,3 +1075,35 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
     assert_eq!(by_model["gpt-5-old"].year.tokens, 330);
     assert_eq!(by_model["gpt-5-old"].month.tokens, 0);
 }
+#[test]
+fn spend_window_merge_preserves_every_displayed_dimension() {
+    let mut total = SpendWindow {
+        usd: 1.0,
+        tokens: 10,
+        input: 4,
+        output: 6,
+        cache_write: 1,
+        cache_read: 2,
+        tool_calls: 1,
+        tools: BTreeMap::from([("shell".to_owned(), 1)]),
+        sessions: 1,
+    };
+    total.merge(&SpendWindow {
+        usd: 2.0,
+        tokens: 20,
+        input: 8,
+        output: 12,
+        cache_write: 3,
+        cache_read: 4,
+        tool_calls: 2,
+        tools: BTreeMap::from([("shell".to_owned(), 1), ("apply_patch".to_owned(), 1)]),
+        sessions: 2,
+    });
+
+    assert_eq!(total.usd, 3.0);
+    assert_eq!(total.display_tokens(), 36);
+    assert_eq!(total.tool_calls, 3);
+    assert_eq!(total.tools["shell"], 2);
+    assert_eq!(total.tools["apply_patch"], 1);
+    assert_eq!(total.sessions, 3);
+}

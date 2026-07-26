@@ -66,6 +66,25 @@ impl SpendWindow {
         }
     }
 
+    pub fn merge(&mut self, other: &Self) {
+        self.usd += other.usd;
+        self.tokens += other.tokens;
+        self.input += other.input;
+        self.output += other.output;
+        self.cache_write += other.cache_write;
+        self.cache_read += other.cache_read;
+        self.tool_calls = self.tool_calls.saturating_add(other.tool_calls);
+        for (name, count) in &other.tools {
+            let total = self.tools.entry(name.clone()).or_default();
+            *total = total.saturating_add(*count);
+        }
+        self.sessions += other.sessions;
+    }
+
+    pub fn display_tokens(&self) -> u64 {
+        self.tokens.saturating_add(self.cache_read)
+    }
+
     pub fn cache_hit_percent(&self) -> Option<u8> {
         crate::agents::context::cache_hit_percent(self.cache_read, self.input)
     }

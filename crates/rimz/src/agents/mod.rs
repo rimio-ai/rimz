@@ -612,6 +612,16 @@ pub struct LocalSpendFold {
 }
 
 impl LocalSpendFold {
+    pub fn absorb(&mut self, entries: &[spending::CachedEntry]) {
+        for entry in entries {
+            self.total_usd += entry.cost_usd;
+            self.input = self.input.saturating_add(entry.input);
+            self.output = self.output.saturating_add(entry.output);
+            self.cache_write = self.cache_write.saturating_add(entry.cache_write);
+            self.cache_read = self.cache_read.saturating_add(entry.cache_read);
+        }
+    }
+
     pub fn session_usage(&self) -> Option<AgentSessionUsage> {
         (self.input > 0 || self.output > 0 || self.cache_write > 0 || self.cache_read > 0)
             .then_some(AgentSessionUsage {
