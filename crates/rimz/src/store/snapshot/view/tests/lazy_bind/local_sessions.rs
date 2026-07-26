@@ -650,6 +650,114 @@ fn identity_only_session_adopts_launch_identity_as_idle() {
 }
 
 #[test]
+fn ended_session_cannot_adopt_a_provisional_launch_identity() {
+    let mut provisional = agent("codex", "launch_abc", AgentStatus::Running, 1).in_pane("%1");
+    provisional.name = Some("writer".to_owned());
+    provisional.name_explicit = true;
+    provisional.role = Some("coder".to_owned());
+    provisional.channel = Some("auth".to_owned());
+    let pane = pane("%1", "codex", "/repo/main");
+    let mut snapshot = room(vec![provisional]);
+    snapshot.ended_sessions.insert((
+        AgentKind::new_unchecked("codex"),
+        AgentSessionId::from("session-dead"),
+    ));
+
+    let snapshot = snapshot.with_local_sessions(
+        std::slice::from_ref(&pane),
+        vec![identity_observation("codex", "session-dead", 1)],
+    );
+
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .all(|agent| agent.agent_id != "session-dead")
+    );
+    let provisional = rollup_agent(&snapshot, "launch_abc");
+    assert_eq!(provisional.name.as_deref(), Some("writer"));
+    assert_eq!(provisional.role.as_deref(), Some("coder"));
+    assert_eq!(provisional.channel.as_deref(), Some("auth"));
+    assert_eq!(provisional.pane.as_ref().unwrap().pane_id.raw(), "%1");
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .all(|agent| agent.transcript_path.as_deref() != Some("/codex/session-dead.jsonl"))
+    );
+}
+
+#[test]
+fn session_stamped_to_an_absent_pane_cannot_fresh_bind_elsewhere() {
+    let durable = agent("codex", "session-a", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%9");
+    let pane = pane("%1", "codex", "/repo/main");
+
+    let snapshot = room(vec![durable]).with_local_sessions(
+        std::slice::from_ref(&pane),
+        vec![identity_observation("codex", "session-a", 1)],
+    );
+
+    assert_eq!(
+        rollup_agent(&snapshot, "session-a")
+            .pane
+            .as_ref()
+            .unwrap()
+            .pane_id
+            .raw(),
+        "%9"
+    );
+}
+
+#[test]
+fn reborn_unstamped_session_can_fresh_bind() {
+    let durable = agent("codex", "session-a", AgentStatus::Running, 0).worktree("/repo/main");
+    let pane = pane("%1", "codex", "/repo/main");
+
+    let snapshot = room(vec![durable]).with_local_sessions(
+        std::slice::from_ref(&pane),
+        vec![identity_observation("codex", "session-a", 1)],
+    );
+
+    assert_eq!(
+        rollup_agent(&snapshot, "session-a")
+            .pane
+            .as_ref()
+            .unwrap()
+            .pane_id
+            .raw(),
+        "%1"
+    );
+}
+
+#[test]
+fn exact_resume_can_bind_an_ended_session() {
+    let mut pane = pane("%1", "codex", "/repo/main");
+    pane.resumed_session_id = Some(AgentSessionId::from("session-ended"));
+    let mut snapshot = room(Vec::new());
+    snapshot.ended_sessions.insert((
+        AgentKind::new_unchecked("codex"),
+        AgentSessionId::from("session-ended"),
+    ));
+
+    let snapshot = snapshot.with_local_sessions(
+        std::slice::from_ref(&pane),
+        vec![identity_observation("codex", "session-ended", 1)],
+    );
+
+    assert_eq!(
+        rollup_agent(&snapshot, "session-ended")
+            .pane
+            .as_ref()
+            .unwrap()
+            .pane_id
+            .raw(),
+        "%1"
+    );
+}
+
+#[test]
 fn provider_session_adopts_provisional_launch_identity() {
     let mut provisional = agent("kiro", "launch_abc", AgentStatus::Idle, 1).in_pane("%1");
     provisional.name = Some("writer".to_owned());

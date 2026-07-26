@@ -1,7 +1,7 @@
 //! Sidebar view-model assembly: the `Sidebar*` renderer contract and the
 //! grouping, ranking, capping, and status projection that fills it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use jiff::Timestamp;
@@ -66,7 +66,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 12;
+pub const SNAPSHOT_VERSION: u32 = 13;
 
 /// Sidebar view-model. The pane frame admits every rendered card; store,
 /// sidecars, and realtime events only enrich rows admitted from live panes.
@@ -279,6 +279,13 @@ pub struct SidebarSnapshot {
     /// which read as stale so a fresh fold replaces them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reflects_log: Option<event_log::LogExtent>,
+    /// Durable sessions whose rollup carries `ended_at` — every reap variant
+    /// and graceful end folds here. The local-session fresh-fallback binding
+    /// reads it so a dead session's on-disk rollout can never adopt an
+    /// unclaimed live pane. Stamped by `assemble_snapshot`; the pure reducer
+    /// path leaves it empty.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub ended_sessions: BTreeSet<(AgentKind, AgentSessionId)>,
     /// Latest terminal resume-gated prompt outcome per folded agent card.
     /// `None` means a pre-outcome snapshot and forces a fresh fold before the
     /// auto-continue producer reads it.
@@ -350,6 +357,7 @@ impl SidebarSnapshot {
             fleet_budget: None,
             link: None,
             reflects_log: None,
+            ended_sessions: BTreeSet::new(),
             resume_outcomes: Some(Vec::new()),
         }
     }

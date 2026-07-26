@@ -80,13 +80,35 @@ impl SidebarSnapshot {
             used_sessions.insert(observation_index);
             bindings.push((observation_index, pane.clone()));
         }
-        drop(binding_index);
-
         let mut fresh = observations
             .iter()
             .enumerate()
             .filter_map(|(index, observation)| {
                 if used_sessions.contains(&index) {
+                    return None;
+                }
+                // An ended session's rollout is durable history, not a live
+                // binding candidate: the store-blind provider cache
+                // re-discovers it forever, and adopting an unclaimed
+                // same-worktree pane would graft its dead identity onto
+                // whichever agent that pane actually hosts.
+                if self
+                    .ended_sessions
+                    .contains(&(observation.kind.clone(), observation.session_id.clone()))
+                {
+                    return None;
+                }
+                // A durable row for this exact session stamped to a pane absent
+                // from the live frame is a dead pane awaiting reap — hold the
+                // fresh fold rather than rebind the corpse. Mux rebirth clears
+                // pane stamps, so a reborn session re-enters here unstamped; a
+                // transiently degraded frame only delays binding one cycle.
+                if let Some(agent) = binding_index
+                    .root_index(&observation.kind, &observation.session_id)
+                    .and_then(|index| binding_index.agent(index))
+                    && let Some(stamped) = agent.pane.as_ref()
+                    && !panes.iter().any(|pane| pane.pane_id == stamped.pane_id)
+                {
                     return None;
                 }
                 Some((index, observation, observation.fresh_binding_at?))
@@ -118,6 +140,7 @@ impl SidebarSnapshot {
             used_panes.insert(pane.pane_id.clone());
             bindings.push((observation_index, pane.clone()));
         }
+        drop(binding_index);
 
         for (observation_index, pane) in bindings {
             merge_bound_local_session(&mut self.agents, &observations[observation_index], &pane);
