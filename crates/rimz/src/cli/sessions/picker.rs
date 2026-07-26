@@ -965,7 +965,11 @@ fn render_picker_block(
     let notice_height = u16::from(picker.notice.is_some());
     if let Some(notice) = picker.notice.as_deref() {
         frame.render_widget(
-            Paragraph::new(truncate_width(notice, usize::from(inner.width))).style(theme.alarm()),
+            Paragraph::new(crate::cli::render::clip_to_width(
+                notice,
+                usize::from(inner.width),
+            ))
+            .style(theme.alarm()),
             Rect::new(inner.x, inner.y, inner.width, 1),
         );
     }
@@ -1022,7 +1026,11 @@ fn render_new_session(
     let notice_height = u16::from(session.notice.is_some());
     if let Some(notice) = session.notice.as_deref() {
         frame.render_widget(
-            Paragraph::new(truncate_width(notice, usize::from(inner.width))).style(theme.alarm()),
+            Paragraph::new(crate::cli::render::clip_to_width(
+                notice,
+                usize::from(inner.width),
+            ))
+            .style(theme.alarm()),
             Rect::new(inner.x, inner.y, inner.width, 1),
         );
     }
@@ -1109,7 +1117,10 @@ fn render_new_session_rows(
                 ),
                 NewSessionRow::Directory { name, .. } => format!("{prefix}{name}/"),
             };
-            let mut item = ListItem::new(truncate_width(&content, usize::from(area.width)));
+            let mut item = ListItem::new(crate::cli::render::clip_to_width(
+                &content,
+                usize::from(area.width),
+            ));
             if selected {
                 item = item.style(theme.selected());
             }
@@ -1205,7 +1216,11 @@ fn room_lines(
     let repo_width = UnicodeWidthStr::width(repo.as_str());
     let path = room_path(&row.room);
     let (repo, gap, path) = if repo_width >= available {
-        (truncate_width(&repo, available), 0, String::new())
+        (
+            crate::cli::render::clip_to_width(&repo, available),
+            0,
+            String::new(),
+        )
     } else {
         let path = truncate_left_width(&path, available.saturating_sub(repo_width + 1));
         let gap = available.saturating_sub(repo_width + UnicodeWidthStr::width(path.as_str()));
@@ -1354,35 +1369,13 @@ fn truncate_spans_width(spans: Vec<Span<'static>>, max_width: usize) -> Vec<Span
         }
         if remaining > 0 {
             truncated.push(Span::styled(
-                truncate_width(span.content.as_ref(), remaining),
+                crate::cli::render::clip_to_width(span.content.as_ref(), remaining),
                 span.style,
             ));
         }
         break;
     }
     truncated
-}
-
-fn truncate_width(text: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= max_width {
-        return text.to_owned();
-    }
-    if max_width == 0 {
-        return String::new();
-    }
-    let content_width = max_width.saturating_sub(1);
-    let mut width = 0;
-    let mut out = String::new();
-    for character in text.chars() {
-        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
-        if width + character_width > content_width {
-            break;
-        }
-        width += character_width;
-        out.push(character);
-    }
-    out.push('…');
-    out
 }
 
 fn truncate_left_width(text: &str, max_width: usize) -> String {

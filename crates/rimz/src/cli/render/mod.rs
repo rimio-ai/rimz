@@ -756,9 +756,6 @@ pub(crate) fn clip_to_width(text: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
     }
-    if max_width == 1 {
-        return "…".to_owned();
-    }
     let mut out = String::new();
     let mut used = 0;
     let body_width = max_width - 1;
@@ -770,12 +767,8 @@ pub(crate) fn clip_to_width(text: &str, max_width: usize) -> String {
         out.push(ch);
         used += width;
     }
-    if out.is_empty() {
-        "…".to_owned()
-    } else {
-        out.push('…');
-        out
-    }
+    out.push('…');
+    out
 }
 
 /// A block of aligned `key: value` lines. Keys render in [`palette::muted()`]; the
@@ -874,9 +867,7 @@ mod tests {
     #[test]
     fn compact_json_has_one_trailing_newline() {
         let mut out = Vec::new();
-
         write_json(&mut out, &serde_json::json!({ "answer": 42 }), false).unwrap();
-
         assert_eq!(out, b"{\"answer\":42}\n");
     }
 
@@ -1194,6 +1185,8 @@ mod tests {
         assert_eq!(clip_to_width("abcd", 4), "abcd");
         assert_eq!(clip_to_width("abcdef", 4), "abc…");
         assert_eq!(clip_to_width("文字abc", 5), "文字…");
+        assert_eq!(clip_to_width("\u{301}ab", 1), "\u{301}…");
+        assert_eq!(clip_to_width("ab", 1), "…");
     }
 
     #[test]

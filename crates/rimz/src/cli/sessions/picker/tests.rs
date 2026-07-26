@@ -264,12 +264,6 @@ fn card_width_drops_tokens_then_sessions_and_left_truncates_paths() {
 }
 
 #[test]
-fn right_truncation_preserves_leading_zero_width_marks() {
-    assert_eq!(truncate_width("\u{301}ab", 1), "\u{301}…");
-    assert_eq!(crate::cli::render::clip_to_width("\u{301}ab", 1), "…");
-}
-
-#[test]
 fn session_and_money_metrics_use_cockpit_color_roles() {
     let theme = PickerTheme::resolve(&ThemeConfig::default(), false, false);
     let spans = metric_spans(rows()[0].stats.as_ref().unwrap(), true, true, &theme);
