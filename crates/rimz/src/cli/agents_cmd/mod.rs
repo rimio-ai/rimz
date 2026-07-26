@@ -44,9 +44,9 @@ pub(super) use crate::cli::Ctx;
 use crate::cli::supervised;
 use rimz::agents::AgentState;
 use rimz::harness::plan::{
-    LaunchFinalizeOptions, LayoutPaneParams, Placement, ResolvedLaunch, agent_pane_plans,
-    apply_in_place_downgrade, cohort_cells, launch_identity_requests, layout_panes_with_names,
-    mint_launch_id, resolve_fork_placement, resolve_placement, validate_agent_name,
+    CompileLayoutPanes, LaunchFinalizeOptions, Placement, ResolvedLaunch, apply_in_place_downgrade,
+    cohort_cells, compile_layout_panes, launch_identity_requests, mint_launch_id,
+    resolve_fork_placement, resolve_placement, validate_agent_name,
 };
 use rimz::harness::resume::{PostureDegrade, ResumePosture};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};

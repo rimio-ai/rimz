@@ -22,8 +22,7 @@ use crate::agents::find_definition;
 use crate::agents::{AgentState, LocalSessionObservation};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::plan::{
-    LayoutPaneParams, agent_pane_plans, cohort_cells, launch_identity_requests,
-    layout_panes_with_names,
+    CompileLayoutPanes, cohort_cells, compile_layout_panes, launch_identity_requests,
 };
 use crate::harness::run::PermissionMode;
 use crate::harness::spec::LayoutSpec;
@@ -1383,20 +1382,16 @@ pub fn materialize_team_restore_tab(
     let identities = batch
         .as_ref()
         .map_or(&[] as &[_], |batch| batch.identities());
-    let pane_plans = agent_pane_plans(
+    let layout = compile_layout_panes(
         &planned.layout,
-        Some(&planned.cohort.seeds),
-        identities,
-        planned.channel.as_deref(),
-    )?;
-    let layout = layout_panes_with_names(
-        &planned.layout,
-        LayoutPaneParams {
+        CompileLayoutPanes {
             cwd: &planned.cwd,
             cleanup_worktree: false,
             in_place: false,
+            resume_seeds: Some(&planned.cohort.seeds),
+            launch_identities: identities,
+            fallback_channel: planned.channel.as_deref(),
         },
-        &pane_plans,
     )
     .context("building team restore layout")?;
     Ok(ResumeTab {
