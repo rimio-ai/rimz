@@ -276,15 +276,16 @@ pub(super) fn launch_layout(
         |channel| format!("#{channel}"),
     );
     let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
-    let pane_plans = agent_pane_plans(&layout, None, launch_batch.identities(), None)?;
-    let panes = layout_panes_with_names(
+    let panes = compile_layout_panes(
         &layout,
-        LayoutPaneParams {
+        CompileLayoutPanes {
             cwd: &cwd,
             cleanup_worktree: worktree_launch,
             in_place,
+            resume_seeds: None,
+            launch_identities: launch_batch.identities(),
+            fallback_channel: None,
         },
-        &pane_plans,
     )?;
     super::placement::execute(
         backend,
@@ -424,20 +425,16 @@ fn launch_resume_layout(
         |channel| format!("#{channel}"),
     );
     let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
-    let pane_plans = agent_pane_plans(
+    let panes = compile_layout_panes(
         &layout,
-        Some(&plan.seeds),
-        launch_batch.identities(),
-        channel.as_deref(),
-    )?;
-    let panes = layout_panes_with_names(
-        &layout,
-        LayoutPaneParams {
+        CompileLayoutPanes {
             cwd: &cwd,
             cleanup_worktree: false,
             in_place,
+            resume_seeds: Some(&plan.seeds),
+            launch_identities: launch_batch.identities(),
+            fallback_channel: channel.as_deref(),
         },
-        &pane_plans,
     )?;
     if in_place {
         report_cohort_resume(&plan);

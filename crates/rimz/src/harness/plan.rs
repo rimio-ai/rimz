@@ -4,7 +4,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use crate::config::{LaunchPlacement, RoleBinding};
 use crate::harness::budget::BudgetSpec;
@@ -598,28 +598,27 @@ fn index_to_launch_ordinal(index: usize) -> u32 {
     u32::try_from(index).unwrap_or(u32::MAX)
 }
 
-#[derive(Debug)]
-enum AgentPanePlan<'a> {
-    Fresh(&'a AgentLaunchIdentity),
-    Resume {
-        agent: &'a crate::agents::AgentState,
-        fallback_channel: Option<&'a str>,
-    },
+#[derive(Clone, Copy)]
+pub struct CompileLayoutPanes<'a> {
+    pub cwd: &'a Path,
+    pub cleanup_worktree: bool,
+    pub in_place: bool,
+    pub resume_seeds: Option<&'a [CohortSeed]>,
+    pub launch_identities: &'a [AgentLaunchIdentity],
+    pub fallback_channel: Option<&'a str>,
 }
 
-/// Layout-aligned agent pane inputs. Construction validates every count before
-/// pane compilation can reach mux orchestration.
-#[derive(Debug)]
-pub struct AgentPanePlans<'a>(Vec<AgentPanePlan<'a>>);
-
-pub fn agent_pane_plans<'a>(
+/// Compile backend-neutral pane commands for a resolved layout.
+///
+/// This is the single layout-to-pane boundary: it validates launch inputs,
+/// keeps resumed and fresh agents aligned with their cells, and preserves
+/// command cells in layout order.
+pub fn compile_layout_panes(
     layout: &LayoutSpec,
-    resume_seeds: Option<&'a [CohortSeed]>,
-    launch_identities: &'a [AgentLaunchIdentity],
-    fallback_channel: Option<&'a str>,
-) -> Result<AgentPanePlans<'a>> {
+    params: CompileLayoutPanes<'_>,
+) -> Result<LayoutPanes> {
     let agent_count = layout.agent_cells().count();
-    if let Some(seeds) = resume_seeds
+    if let Some(seeds) = params.resume_seeds
         && seeds.len() != agent_count
     {
         bail!(
@@ -627,36 +626,9 @@ pub fn agent_pane_plans<'a>(
             seeds.len()
         );
     }
-    let mut launches = launch_identities.iter();
-    let mut plans = Vec::with_capacity(agent_count);
-    for index in 0..agent_count {
-        match resume_seeds.map(|seeds| &seeds[index]) {
-            Some(CohortSeed::Resume(agent)) => plans.push(AgentPanePlan::Resume {
-                agent,
-                fallback_channel,
-            }),
-            Some(CohortSeed::Fresh) | None => {
-                let Some(launch) = launches.next() else {
-                    bail!("launch plan missing identity for agent cell {index}");
-                };
-                plans.push(AgentPanePlan::Fresh(launch));
-            }
-        }
-    }
-    if launches.next().is_some() {
-        bail!("launch plan has more identities than fresh agent cells");
-    }
-    Ok(AgentPanePlans(plans))
-}
-
-/// Compile backend-neutral pane commands for a resolved layout.
-pub fn layout_panes_with_names(
-    layout: &LayoutSpec,
-    params: LayoutPaneParams<'_>,
-    plans: &AgentPanePlans<'_>,
-) -> Result<LayoutPanes> {
     let rimz_bin = crate::proc::rimz_exe();
     let mut agent_index = 0usize;
+    let mut launches = params.launch_identities.iter();
     let columns = layout
         .columns
         .iter()
@@ -665,25 +637,38 @@ pub fn layout_panes_with_names(
                 .rows
                 .iter()
                 .map(|cell| {
-                    let plan = if matches!(cell, Cell::Agent(_)) {
-                        let plan = plans.0.get(agent_index).with_context(|| {
-                            format!("pane plan missing agent cell {agent_index}")
-                        })?;
-                        agent_index = agent_index.saturating_add(1);
-                        Some(plan)
-                    } else {
-                        None
-                    };
-                    pane_cmd_with_name(
-                        cell,
-                        PaneCmdOptions {
-                            rimz_bin: &rimz_bin,
-                            cwd: params.cwd,
-                            cleanup_worktree: params.cleanup_worktree,
-                            in_place: params.in_place,
-                            plan,
+                    let pane = match cell {
+                        Cell::Command { argv } if argv.is_empty() => PaneCmd {
+                            argv: vec![crate::harness::launch::user_shell_program()],
                         },
-                    )
+                        Cell::Command { argv } => PaneCmd { argv: argv.clone() },
+                        Cell::Agent(cell) => {
+                            let seed = params.resume_seeds.map(|seeds| &seeds[agent_index]);
+                            let pane = match seed {
+                                Some(CohortSeed::Resume(agent)) => PaneCmd {
+                                    // The layout already resolved this cell from its profile or
+                                    // role binding, so the posture to replay is right here.
+                                    argv: crate::harness::resume::resume_command(
+                                        &rimz_bin,
+                                        agent,
+                                        params.fallback_channel,
+                                        &crate::harness::resume::ResumePosture::from_cell(cell),
+                                    ),
+                                },
+                                Some(CohortSeed::Fresh) | None => {
+                                    let Some(launch) = launches.next() else {
+                                        bail!(
+                                            "launch plan missing identity for agent cell {agent_index}"
+                                        );
+                                    };
+                                    fresh_agent_pane(cell, launch, &rimz_bin, params)?
+                                }
+                            };
+                            agent_index = agent_index.saturating_add(1);
+                            pane
+                        }
+                    };
+                    Ok(pane)
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(LayoutColumn {
@@ -692,75 +677,42 @@ pub fn layout_panes_with_names(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    if launches.next().is_some() {
+        bail!("launch plan has more identities than fresh agent cells");
+    }
     Ok(LayoutPanes { columns })
 }
 
-#[derive(Clone, Copy)]
-pub struct LayoutPaneParams<'a> {
-    pub cwd: &'a Path,
-    pub cleanup_worktree: bool,
-    pub in_place: bool,
-}
-
-pub struct PaneCmdOptions<'a> {
-    pub rimz_bin: &'a Path,
-    pub cwd: &'a Path,
-    pub cleanup_worktree: bool,
-    pub in_place: bool,
-    plan: Option<&'a AgentPanePlan<'a>>,
-}
-
-pub fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<PaneCmd> {
-    let argv = match cell {
-        Cell::Command { argv } if argv.is_empty() => {
-            vec![crate::harness::launch::user_shell_program()]
-        }
-        Cell::Command { argv } => argv.clone(),
-        Cell::Agent(cell) => {
-            let plan = options.plan.context("agent cell has no pane plan")?;
-            let launch = match plan {
-                AgentPanePlan::Fresh(launch) => launch,
-                AgentPanePlan::Resume {
-                    agent,
-                    fallback_channel,
-                } => {
-                    // The layout already resolved this cell from its profile or
-                    // role binding, so the posture to replay is right here.
-                    return Ok(PaneCmd {
-                        argv: crate::harness::resume::resume_command(
-                            options.rimz_bin,
-                            agent,
-                            *fallback_channel,
-                            &crate::harness::resume::ResumePosture::from_cell(cell),
-                        ),
-                    });
-                }
-            };
-            validate_agent_name(&launch.name)?;
-            crate::harness::launch::exec_argv(
-                options.rimz_bin,
-                &crate::harness::launch::ExecRequest {
-                    kind: cell.kind.clone(),
-                    action: crate::harness::launch::ExecAction::Launch {
-                        prompt: launch.prompt.clone(),
-                        extra_args: cell.args.clone(),
-                    },
-                    provider_account: crate::harness::launch::ProviderAccountState::Unbound,
-                    run_id: None,
-                    worktree_path: options.cleanup_worktree.then(|| options.cwd.to_path_buf()),
-                    close_pane_on_exit: !options.cleanup_worktree && !options.in_place,
-                    exit_on_run_completion: false,
-                    identity: crate::harness::launch::ExecIdentity {
-                        name: Some(launch.name.clone()),
-                        name_explicit: launch.name_explicit,
-                        launch_id: Some(launch.agent_id.to_string()),
-                        params: launch.launch.clone(),
-                    },
+fn fresh_agent_pane(
+    cell: &AgentCell,
+    launch: &AgentLaunchIdentity,
+    rimz_bin: &Path,
+    params: CompileLayoutPanes<'_>,
+) -> Result<PaneCmd> {
+    validate_agent_name(&launch.name)?;
+    Ok(PaneCmd {
+        argv: crate::harness::launch::exec_argv(
+            rimz_bin,
+            &crate::harness::launch::ExecRequest {
+                kind: cell.kind.clone(),
+                action: crate::harness::launch::ExecAction::Launch {
+                    prompt: launch.prompt.clone(),
+                    extra_args: cell.args.clone(),
                 },
-            )?
-        }
-    };
-    Ok(PaneCmd { argv })
+                provider_account: crate::harness::launch::ProviderAccountState::Unbound,
+                run_id: None,
+                worktree_path: params.cleanup_worktree.then(|| params.cwd.to_path_buf()),
+                close_pane_on_exit: !params.cleanup_worktree && !params.in_place,
+                exit_on_run_completion: false,
+                identity: crate::harness::launch::ExecIdentity {
+                    name: Some(launch.name.clone()),
+                    name_explicit: launch.name_explicit,
+                    launch_id: Some(launch.agent_id.to_string()),
+                    params: launch.launch.clone(),
+                },
+            },
+        )?,
+    })
 }
 
 pub fn validate_agent_name(name: &str) -> Result<()> {

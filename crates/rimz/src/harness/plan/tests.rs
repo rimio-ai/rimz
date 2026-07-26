@@ -1158,15 +1158,16 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
     };
     let mut identities = [identity("claude", "first"), identity("codex", "leader")];
     identities[1].prompt = Some("lead this".to_owned());
-    let plans = agent_pane_plans(&layout, None, &identities, None).expect("pane plans");
-    let panes = layout_panes_with_names(
+    let panes = compile_layout_panes(
         &layout,
-        LayoutPaneParams {
+        CompileLayoutPanes {
             cwd: Path::new("/tmp/project"),
             cleanup_worktree: false,
             in_place: false,
+            resume_seeds: None,
+            launch_identities: &identities,
+            fallback_channel: None,
         },
-        &plans,
     )
     .unwrap();
 
@@ -1178,6 +1179,10 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
         &panes.columns[1].panes[1].argv,
         RequestField::Prompt,
         "lead this",
+    );
+    assert_eq!(
+        panes.columns[1].panes[0].argv,
+        [crate::harness::launch::user_shell_program()]
     );
 }
 
@@ -1213,16 +1218,16 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     };
 
     let fresh = [fresh];
-    let plans =
-        agent_pane_plans(&layout, Some(&seeds), &fresh, Some("fallback")).expect("pane plans");
-    let panes = layout_panes_with_names(
+    let panes = compile_layout_panes(
         &layout,
-        LayoutPaneParams {
+        CompileLayoutPanes {
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
             in_place: false,
+            resume_seeds: Some(&seeds),
+            launch_identities: &fresh,
+            fallback_channel: Some("fallback"),
         },
-        &plans,
     )
     .expect("mixed panes");
 
@@ -1233,16 +1238,53 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     assert_request_field(&panes[2].argv, RequestField::Name, "bright-river");
     assert_request_field(&panes[2].argv, RequestField::Prompt, "fresh prompt");
 
-    let err = agent_pane_plans(
+    let err = compile_layout_panes(
         &layout,
-        Some(&[CohortSeed::Fresh, CohortSeed::Fresh]),
-        &[],
-        None,
+        CompileLayoutPanes {
+            cwd: Path::new("/repo"),
+            cleanup_worktree: false,
+            in_place: false,
+            resume_seeds: Some(&[CohortSeed::Fresh, CohortSeed::Fresh]),
+            launch_identities: &[],
+            fallback_channel: None,
+        },
     )
     .expect_err("identity count mismatch");
     assert_eq!(
         err.to_string(),
         "launch plan missing identity for agent cell 0"
+    );
+
+    let err = compile_layout_panes(
+        &layout,
+        CompileLayoutPanes {
+            cwd: Path::new("/repo"),
+            cleanup_worktree: false,
+            in_place: false,
+            resume_seeds: Some(&[CohortSeed::Fresh]),
+            launch_identities: &fresh,
+            fallback_channel: None,
+        },
+    )
+    .expect_err("resume seed count mismatch");
+    assert_eq!(err.to_string(), "resume plan has 1 seeds for 2 agent cells");
+
+    let surplus = [fresh[0].clone(), fresh[0].clone()];
+    let err = compile_layout_panes(
+        &layout,
+        CompileLayoutPanes {
+            cwd: Path::new("/repo"),
+            cleanup_worktree: false,
+            in_place: false,
+            resume_seeds: Some(&seeds),
+            launch_identities: &surplus,
+            fallback_channel: None,
+        },
+    )
+    .expect_err("surplus launch identity");
+    assert_eq!(
+        err.to_string(),
+        "launch plan has more identities than fresh agent cells"
     );
 }
 
@@ -1274,19 +1316,21 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         run_id: None,
         prompt: None,
     };
-    let plan = AgentPanePlan::Fresh(&launch);
-
-    let pane = pane_cmd_with_name(
-        &cell,
-        PaneCmdOptions {
-            rimz_bin: Path::new("/usr/bin/rimz"),
+    let layout = LayoutSpec::single(cell);
+    let launches = [launch];
+    let panes = compile_layout_panes(
+        &layout,
+        CompileLayoutPanes {
             cwd: Path::new("/tmp/project"),
             cleanup_worktree: false,
             in_place: false,
-            plan: Some(&plan),
+            resume_seeds: None,
+            launch_identities: &launches,
+            fallback_channel: None,
         },
     )
     .unwrap();
+    let pane = &panes.columns[0].panes[0];
 
     for (field, value) in [
         (RequestField::Name, "swift-otter"),
@@ -1308,18 +1352,24 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     assert!(exec_request(&pane.argv).close_pane_on_exit);
 
     for (cleanup_worktree, in_place) in [(false, true), (true, false)] {
-        let pane = pane_cmd_with_name(
-            &cell,
-            PaneCmdOptions {
-                rimz_bin: Path::new("/usr/bin/rimz"),
+        let panes = compile_layout_panes(
+            &layout,
+            CompileLayoutPanes {
                 cwd: Path::new("/tmp/project"),
                 cleanup_worktree,
                 in_place,
-                plan: Some(&plan),
+                resume_seeds: None,
+                launch_identities: &launches,
+                fallback_channel: None,
             },
         )
         .unwrap();
+        let pane = &panes.columns[0].panes[0];
         assert!(!exec_request(&pane.argv).close_pane_on_exit);
+        assert_eq!(
+            exec_request(&pane.argv).worktree_path.as_deref(),
+            cleanup_worktree.then_some(Path::new("/tmp/project"))
+        );
     }
 }
 
@@ -1352,26 +1402,21 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     agent.channel = Some("design".to_owned());
     agent.model = Some("old-model".to_owned());
     agent.effort = Some("old-effort".to_owned());
-    let seed = CohortSeed::Resume(Box::new(agent));
-    let CohortSeed::Resume(agent) = &seed else {
-        unreachable!()
-    };
-    let plan = AgentPanePlan::Resume {
-        agent,
-        fallback_channel: Some("new-channel"),
-    };
-
-    let pane = pane_cmd_with_name(
-        &cell,
-        PaneCmdOptions {
-            rimz_bin: Path::new("/usr/bin/rimz"),
+    let seeds = [CohortSeed::Resume(Box::new(agent))];
+    let layout = LayoutSpec::single(cell);
+    let panes = compile_layout_panes(
+        &layout,
+        CompileLayoutPanes {
             cwd: Path::new("/tmp/project"),
             cleanup_worktree: false,
             in_place: false,
-            plan: Some(&plan),
+            resume_seeds: Some(&seeds),
+            launch_identities: &[],
+            fallback_channel: Some("new-channel"),
         },
     )
     .unwrap();
+    let pane = &panes.columns[0].panes[0];
 
     for (field, value) in [
         (RequestField::Resume, "sess-1"),
