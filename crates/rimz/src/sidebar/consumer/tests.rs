@@ -770,6 +770,7 @@ fn read_published_snapshot_folds_subagent_context() {
         Some("trace the sidebar rows"),
     );
     assert_eq!(parent.sub_agents()[0].total_tokens, Some(12_400));
+    assert_eq!(parent.sub_agents()[0].cost_usd, Some(0.42));
 }
 
 #[test]
