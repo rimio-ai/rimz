@@ -13,10 +13,7 @@
 //! sidebar renderer reads this data only through the snapshot JSON, never this
 //! module, so "sidebar is read-only on the store" holds.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::path::PathBuf;
-
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::context::{SubagentContext, SubagentUsageCursor};
@@ -77,23 +74,32 @@ pub fn update(
     agent_id: &str,
     apply: impl FnOnce(Option<&SubagentContextRecord>) -> (SubagentContext, Option<SubagentUsageCursor>),
 ) -> Result<(), atomic::AtomicErr> {
-    let _lock = sidecar::RecordLock::acquire(
+    sidecar::update(
         &runtime.subagent_context_dir,
-        <SubagentContextRecord as sidecar::SidecarRecord>::FILE_PREFIX,
         kind,
         agent_id,
-    )?;
-    let prior = sidecar::read_one(&runtime.subagent_context_dir, kind, agent_id);
-    let (context, usage_cursor) = apply(prior.as_ref());
-    sidecar::write_record(
-        &runtime.subagent_context_dir,
-        &SubagentContextRecord {
+        || SubagentContextRecord {
             kind: AgentKind::new_unchecked(kind),
             agent_id: agent_id.into(),
-            context,
-            usage_cursor,
+            context: SubagentContext {
+                agent_type: None,
+                model: None,
+                description: None,
+                token_count: None,
+                cost_usd: None,
+                started_at: None,
+                observed_at: Timestamp::now(),
+            },
+            usage_cursor: None,
+        },
+        |record, existed| {
+            let (context, usage_cursor) = apply(existed.then_some(&*record));
+            record.context = context;
+            record.usage_cursor = usage_cursor;
+            true
         },
     )
+    .map(|_| ())
 }
 
 thread_local! {
@@ -101,8 +107,8 @@ thread_local! {
     /// freshly-written temp file, so `(mtime, len)` validates content; the
     /// long-lived consumer fetch thread re-reads these sidecars on every
     /// wakeup, and this caps its steady-state cost at one stat per file.
-    static SUBAGENT_PARSE_CACHE: RefCell<HashMap<PathBuf, sidecar::ParsedSidecar<SubagentContextRecord>>> =
-        RefCell::new(HashMap::new());
+    static SUBAGENT_PARSE_CACHE: sidecar::ParseCache<SubagentContextRecord> =
+        sidecar::ParseCache::default();
 }
 
 /// Read every child's context sidecar. Tolerant: an unreadable or malformed

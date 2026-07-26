@@ -18,10 +18,6 @@
 //! durable truth: nothing here reaches the event log, and the
 //! `cargo xtask invariants` greps enforce that boundary.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::path::PathBuf;
-
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -199,42 +195,19 @@ pub fn update_record(
     observed_at: Timestamp,
     update: impl FnOnce(&mut AgentContextRecord, bool) -> bool,
 ) -> Result<bool, atomic::AtomicErr> {
-    let _lock = sidecar::RecordLock::acquire(
+    sidecar::update(
         &runtime.agent_context_dir,
-        <AgentContextRecord as sidecar::SidecarRecord>::FILE_PREFIX,
         kind,
         agent_id,
-    )?;
-    let prior = read_one_unlocked(runtime, kind, agent_id);
-    let existed = prior.is_some();
-    let mut record =
-        prior.unwrap_or_else(|| new_record(kind, agent_id, AgentContext::new(kind, observed_at)));
-    if !update(&mut record, existed) {
-        return Ok(false);
-    }
-    write_record_unlocked(runtime, &record)?;
-    Ok(true)
-}
-
-fn write_record_unlocked(
-    runtime: &RuntimePaths,
-    record: &AgentContextRecord,
-) -> Result<(), atomic::AtomicErr> {
-    sidecar::write_record(&runtime.agent_context_dir, record)
+        || new_record(kind, agent_id, AgentContext::new(kind, observed_at)),
+        update,
+    )
 }
 
 /// Read one sidecar directly from disk, bypassing the long-lived parse cache.
 /// Writers use this before a read-modify-write so they merge against the latest
 /// published bytes, not the last value a sidebar consumer happened to parse.
 pub fn read_one(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> Option<AgentContextRecord> {
-    read_one_unlocked(runtime, kind, agent_id)
-}
-
-fn read_one_unlocked(
-    runtime: &RuntimePaths,
-    kind: &str,
-    agent_id: &str,
-) -> Option<AgentContextRecord> {
     sidecar::read_one(&runtime.agent_context_dir, kind, agent_id)
 }
 
@@ -473,8 +446,8 @@ thread_local! {
     /// freshly-written temp file, so `(mtime, len)` validates content; the
     /// long-lived consumer fetch thread re-reads these sidecars on every
     /// wakeup, and this caps its steady-state cost at one stat per file.
-    static CONTEXT_PARSE_CACHE: RefCell<HashMap<PathBuf, sidecar::ParsedSidecar<AgentContextRecord>>> =
-        RefCell::new(HashMap::new());
+    static CONTEXT_PARSE_CACHE: sidecar::ParseCache<AgentContextRecord> =
+        sidecar::ParseCache::default();
 }
 
 /// Read every session's context sidecar. Tolerant: an unreadable or malformed
@@ -489,17 +462,11 @@ pub fn read_all(runtime: &RuntimePaths) -> Vec<AgentContextRecord> {
 /// Remove a session's sidecar on `SessionEnd` or reap. Best-effort:
 /// a missing file is success.
 pub fn remove(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> std::io::Result<()> {
-    let _lock = sidecar::RecordLock::acquire(
-        &runtime.agent_context_dir,
-        <AgentContextRecord as sidecar::SidecarRecord>::FILE_PREFIX,
-        kind,
-        agent_id,
-    )
-    .map_err(|error| match error {
-        atomic::AtomicErr::Io { source, .. } => source,
-        atomic::AtomicErr::Json(source) => std::io::Error::other(source),
-    })?;
-    sidecar::remove::<AgentContextRecord>(&runtime.agent_context_dir, kind, agent_id)
+    sidecar::remove_locked::<AgentContextRecord>(&runtime.agent_context_dir, kind, agent_id)
+        .map_err(|error| match error {
+            atomic::AtomicErr::Io { source, .. } => source,
+            atomic::AtomicErr::Json(source) => std::io::Error::other(source),
+        })
 }
 
 #[cfg(test)]
