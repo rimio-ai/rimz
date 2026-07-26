@@ -6,7 +6,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use crate::agents::transcript_fs::{home_dir, read_spend_lines};
+use crate::agents::transcript_fs::{home_dir, read_transcript_lines};
 
 #[derive(Clone, Debug)]
 pub struct WireRecord {
@@ -441,7 +441,7 @@ pub struct WireSnapshot {
 
 impl WireSnapshot {
     pub fn read(path: &Path) -> Option<Self> {
-        let (bytes, consumed_offset) = read_spend_lines(path, 0)?;
+        let (bytes, consumed_offset) = read_transcript_lines(path, 0)?;
         let tail_byte_start = record_aligned_tail_start(&bytes);
         let mut records = Vec::new();
         let mut tail_start = 0;
@@ -627,7 +627,7 @@ fn loop_event(value: Value) -> LoopEvent {
 }
 
 pub fn read_records(path: &Path, offset: u64) -> Option<(Vec<WireRecord>, u64)> {
-    let (bytes, next) = read_spend_lines(path, offset)?;
+    let (bytes, next) = read_transcript_lines(path, offset)?;
     Some((records_from_bytes(&bytes), next))
 }
 

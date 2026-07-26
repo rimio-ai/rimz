@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::spending::origin_path;
-use crate::agents::transcript_fs::read_spend_lines;
+use crate::agents::transcript_fs::read_transcript_lines;
 
 use super::super::rollout::{
     CodexModelMetadata, CodexRawUsage, CodexTimestamp, RolloutKind, RolloutRecord, decode_line,
@@ -121,7 +121,7 @@ pub(super) fn parse_codex_session(
     from_offset: u64,
     state: &mut CodexSpendState,
 ) -> (Vec<CodexTokenEvent>, u64) {
-    let Some((content, next_offset)) = read_spend_lines(path, from_offset) else {
+    let Some((content, next_offset)) = read_transcript_lines(path, from_offset) else {
         return (Vec::new(), from_offset);
     };
     let fallback_timestamp = file_mtime_rfc3339(path);

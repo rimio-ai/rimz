@@ -54,7 +54,7 @@ use super::definition::{
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
-use super::observation::payload_context_pct;
+use super::observation::{payload_context_pct, payload_has_context_observation};
 use super::pricing::PriceBook;
 use super::{
     AgentLifecycleObservation, AnswerPlanErr, AnswerStep, AskReply, HookOutput, HookRouting,
@@ -366,18 +366,7 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
             .then(|| ask::answer_detail(payload))
             .flatten(),
         );
-        if [
-            "model",
-            "effort",
-            "rate_limits",
-            "total_cost_usd",
-            "context_window",
-            "total_tokens",
-            "context_pct",
-        ]
-        .into_iter()
-        .any(|key| payload.get(key).is_some())
-        {
+        if payload_has_context_observation(payload) {
             decoded.set_observed_context(pi_observed_context(self.spec().kind, payload));
         }
         if matches!(event_name, "subagent_started" | "subagent_stopped") {

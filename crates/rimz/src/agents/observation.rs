@@ -354,9 +354,49 @@ pub(crate) fn payload_total_tokens(payload: &Value, fallback: Option<u64>) -> Op
         .or(fallback)
 }
 
+/// Whether a hook payload carries any canonical context observation field.
+/// Presence is evidence even when the provider explicitly reports JSON null.
+pub(crate) fn payload_has_context_observation(payload: &Value) -> bool {
+    [
+        "model",
+        "effort",
+        "rate_limits",
+        "total_cost_usd",
+        "context_window",
+        "total_tokens",
+        "context_pct",
+    ]
+    .into_iter()
+    .any(|key| payload.get(key).is_some())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::AgentUsageSummary;
+    use serde_json::json;
+
+    use super::{AgentUsageSummary, payload_has_context_observation};
+
+    #[test]
+    fn context_observation_evidence_is_presence_based() {
+        assert!(!payload_has_context_observation(&json!({})));
+        assert!(!payload_has_context_observation(
+            &json!({"unrelated": null})
+        ));
+        for key in [
+            "model",
+            "effort",
+            "rate_limits",
+            "total_cost_usd",
+            "context_window",
+            "total_tokens",
+            "context_pct",
+        ] {
+            assert!(
+                payload_has_context_observation(&json!({key: null})),
+                "{key} presence is context evidence"
+            );
+        }
+    }
 
     #[test]
     fn usage_merge_carries_sparse_values_and_resolves_percentage_once() {
