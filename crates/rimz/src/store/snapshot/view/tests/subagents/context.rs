@@ -5,11 +5,13 @@ use crate::agents::context::SubagentContext;
 #[test]
 fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type() {
     let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-    let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+    let mut child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+    child.model = None;
     let mut fork = child_state("sess-root", "fork-1", AgentStatus::Running, 5);
     fork.task = None;
     let mut typed = child_state("sess-root", "typed-1", AgentStatus::Running, 5);
     typed.task = Some("review".to_owned());
+    typed.model = Some("lifecycle-model".to_owned());
     let started = ago(100);
 
     let snapshot = room(vec![parent, child, fork, typed]);
@@ -18,6 +20,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
             "child-1",
             SubagentContext {
                 agent_type: None,
+                model: Some("child-model".to_owned()),
                 description: Some("locate the render path".to_owned()),
                 token_count: Some(12_400),
                 cost_usd: Some(0.42),
@@ -29,6 +32,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
             "fork-1",
             SubagentContext {
                 agent_type: Some("Explore".to_owned()),
+                model: None,
                 description: Some("search the store".to_owned()),
                 token_count: Some(5_000),
                 cost_usd: None,
@@ -40,6 +44,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
             "typed-1",
             SubagentContext {
                 agent_type: Some("SomethingElse".to_owned()),
+                model: Some("sidecar-model".to_owned()),
                 description: None,
                 token_count: None,
                 cost_usd: None,
@@ -51,6 +56,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
             "ghost",
             SubagentContext {
                 agent_type: None,
+                model: None,
                 description: Some("nowhere".to_owned()),
                 token_count: None,
                 cost_usd: None,
@@ -68,6 +74,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
     assert_eq!(child.usage.total_tokens, Some(12_400));
     assert_eq!(child.subagent_cost_usd, Some(0.42));
     assert_eq!(child.subagent_started_at, Some(started));
+    assert_eq!(child.model.as_deref(), Some("child-model"));
 
     let fork = rollup_agent(&folded, "fork-1");
     assert_eq!(fork.task.as_deref(), Some("Explore"));
@@ -82,6 +89,11 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
         typed.task.as_deref(),
         Some("review"),
         "lifecycle-established task is not overwritten by enrichment",
+    );
+    assert_eq!(
+        typed.model.as_deref(),
+        Some("lifecycle-model"),
+        "lifecycle-established model is not overwritten by enrichment",
     );
     assert!(folded.agents.iter().all(|a| a.agent_id != "ghost"));
 }

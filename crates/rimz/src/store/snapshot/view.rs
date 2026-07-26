@@ -485,6 +485,12 @@ impl SidebarSnapshot {
                 if agent.task.is_none() {
                     agent.task = context.agent_type;
                 }
+                // Lifecycle learns Claude's child model only at SubagentStop;
+                // until then, paint the transcript-harvested model without
+                // replacing lifecycle-established truth.
+                if agent.model.is_none() {
+                    agent.model = context.model;
+                }
                 agent.subagent_description = context.description;
                 agent.subagent_cost_usd = context.cost_usd;
                 agent.subagent_started_at = context.started_at;
