@@ -100,10 +100,7 @@ fn open_delivery(
     else {
         return Ok(None);
     };
-    let mut snapshot = ctx.resolution_snapshot()?;
-    if rimz::RuntimePaths::for_workspace(record.workspace_id.clone()).is_ok() {
-        snapshot = ctx.fold_agent_context(snapshot);
-    }
+    let snapshot = ctx.fold_agent_context(ctx.resolution_snapshot()?);
     let check = deliver::explain(record, live_messages, &snapshot, now);
     let agents = rimz::harness::target::addressable_agents(&snapshot);
     let target = message_target(message, &agents);
