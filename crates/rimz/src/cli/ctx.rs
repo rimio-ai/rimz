@@ -44,51 +44,17 @@ impl Ctx {
         workspace_id: WorkspaceId,
         mux_hint: Option<MuxName>,
     ) -> Result<Self> {
-        Self::for_workspace_with(workspace_id, mux_hint, WorkspaceOpenContext::Helper)
-    }
-
-    /// Preserve the budget helper's established error contexts while sharing
-    /// the same detached-workspace boot.
-    pub(crate) fn for_budget_workspace(
-        workspace_id: WorkspaceId,
-        mux_hint: Option<MuxName>,
-    ) -> Result<Self> {
-        Self::for_workspace_with(workspace_id, mux_hint, WorkspaceOpenContext::Budget)
-    }
-
-    fn for_workspace_with(
-        workspace_id: WorkspaceId,
-        mux_hint: Option<MuxName>,
-        context: WorkspaceOpenContext,
-    ) -> Result<Self> {
-        let (paths, runtime) = match context {
-            WorkspaceOpenContext::Helper => (
-                StatePaths::for_workspace(workspace_id.clone()).context("preparing store paths")?,
-                RuntimePaths::for_workspace(workspace_id.clone())
-                    .context("preparing runtime paths")?,
-            ),
-            WorkspaceOpenContext::Budget => {
-                let runtime = RuntimePaths::for_workspace(workspace_id.clone())
-                    .context("preparing budget runtime paths")?;
-                let paths = StatePaths::for_workspace(workspace_id.clone())
-                    .context("preparing budget state paths")?;
-                (paths, runtime)
-            }
-        };
-        let record =
-            workspace_record::read(&paths.workspace_record).with_context(|| match context {
-                WorkspaceOpenContext::Helper => {
-                    format!(
-                        "reading workspace record `{}`",
-                        paths.workspace_record.display()
-                    )
-                }
-                WorkspaceOpenContext::Budget => "reading budget workspace record".to_owned(),
-            })?;
-        let store = Store::open(paths, runtime).with_context(|| match context {
-            WorkspaceOpenContext::Helper => "opening store",
-            WorkspaceOpenContext::Budget => "opening budget store",
+        let paths =
+            StatePaths::for_workspace(workspace_id.clone()).context("preparing store paths")?;
+        let runtime =
+            RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
+        let record = workspace_record::read(&paths.workspace_record).with_context(|| {
+            format!(
+                "reading workspace record `{}`",
+                paths.workspace_record.display()
+            )
         })?;
+        let store = Store::open(paths, runtime).context("opening store")?;
         let workspace = ResolvedWorkspace {
             workspace_id,
             project_root: record.project_root.clone(),
@@ -156,10 +122,4 @@ impl Ctx {
         self.resolution_snapshot()
             .map(|snapshot| self.fold_agent_context(snapshot))
     }
-}
-
-#[derive(Clone, Copy)]
-enum WorkspaceOpenContext {
-    Helper,
-    Budget,
 }
