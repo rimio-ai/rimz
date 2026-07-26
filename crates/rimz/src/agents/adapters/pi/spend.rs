@@ -38,7 +38,8 @@ use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, origin_path,
 
 use crate::agents::transcript_fs::{
     deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
-    deserialize_optional_string_lossy, deserialize_optional_u64_lossy, home_dir, read_spend_lines,
+    deserialize_optional_string_lossy, deserialize_optional_u64_lossy, home_dir,
+    read_transcript_lines,
 };
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
@@ -190,7 +191,7 @@ pub(crate) fn pi_config_dir() -> PathBuf {
 pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from_offset = resume.map_or(0, |cursor| cursor.offset);
     let mut state: PiSpendState = resume.map(SpendCursor::state_as).unwrap_or_default();
-    let Some((content, next_offset)) = read_spend_lines(path, from_offset) else {
+    let Some((content, next_offset)) = read_transcript_lines(path, from_offset) else {
         return SpendParse {
             origin: state.cwd.clone(),
             ..SpendParse::stalled(resume)

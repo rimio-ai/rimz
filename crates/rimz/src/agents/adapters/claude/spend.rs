@@ -36,7 +36,7 @@ use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, origin_path, price_split,
 };
 
-use crate::agents::transcript_fs::{bytes_contains, expand_tilde, home_dir, read_spend_lines};
+use crate::agents::transcript_fs::{bytes_contains, expand_tilde, home_dir, read_transcript_lines};
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
 
@@ -303,7 +303,7 @@ fn is_semver_prefix(value: &str) -> bool {
 /// the spending walk. A suffix parse therefore never needs the
 /// lines before its resume point.
 pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> SpendParse {
-    let Some((content, next_offset)) = read_spend_lines(path, from_offset) else {
+    let Some((content, next_offset)) = read_transcript_lines(path, from_offset) else {
         return SpendParse {
             entries: Vec::new(),
             origin: None,

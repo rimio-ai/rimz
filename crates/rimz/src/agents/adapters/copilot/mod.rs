@@ -38,6 +38,7 @@ use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPolicy};
+use super::observation::payload_has_context_observation;
 use super::{
     AgentLifecycleObservation, AgentTurnError, AskKind, HookOutput, HookRouting,
     LocalContextRefresh, LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin,
@@ -416,18 +417,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                 })
                 .flatten(),
         );
-        if [
-            "model",
-            "effort",
-            "rate_limits",
-            "total_cost_usd",
-            "context_window",
-            "total_tokens",
-            "context_pct",
-        ]
-        .into_iter()
-        .any(|key| payload.get(key).is_some())
-        {
+        if payload_has_context_observation(payload) {
             decoded.set_observed_context(self.observe_context(self.spec().kind, payload));
         }
         let signal = match event_name {

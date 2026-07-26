@@ -65,7 +65,7 @@ use super::definition::{
 };
 use super::hook_types::{BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
-use super::observation::payload_total_tokens;
+use super::observation::{payload_has_context_observation, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::{
     AgentHookClass, AgentLifecycleObservation, AgentTurnError, HookOutput, HookRouting, Result,
@@ -581,18 +581,7 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
             })
         });
         decoded.set_final_message(final_message);
-        if [
-            "model",
-            "effort",
-            "rate_limits",
-            "total_cost_usd",
-            "context_window",
-            "total_tokens",
-            "context_pct",
-        ]
-        .into_iter()
-        .any(|key| payload.get(key).is_some())
-        {
+        if payload_has_context_observation(payload) {
             decoded.set_observed_context(self.observe_context(self.spec().kind, payload));
         }
         Ok(decoded)
