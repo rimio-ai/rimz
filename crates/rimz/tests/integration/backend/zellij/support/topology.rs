@@ -78,13 +78,20 @@ pub(in crate::backend::zellij) fn write_topology_cache_from_list_panes(
     xdg: &Path,
     workspace_id: &WorkspaceId,
     session: &str,
-) {
-    write_topology_cache(
-        xdg,
-        workspace_id,
-        session,
-        &PaneSnapshot::expect(xdg, session),
+) -> PaneSnapshot {
+    let snapshot = super::actions::poll_until(
+        super::session::SPAWN_TIMEOUT,
+        || list_panes(xdg, session),
+        |snapshot| {
+            snapshot
+                .panes
+                .iter()
+                .any(|pane| !pane.is_plugin && !pane.is_suppressed && !pane.is_floating)
+        },
+        &format!("one tiled terminal pane in {session}"),
     );
+    write_topology_cache(xdg, workspace_id, session, &snapshot);
+    snapshot
 }
 
 pub(in crate::backend::zellij) struct TopologyCacheMirror {

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
-use rimz::mux::{SidebarLiveness, SidebarPaneOptions, SidebarWidth};
+use rimz::mux::{MuxBackend, SidebarLiveness, SidebarPaneOptions, SidebarWidth};
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::store::RuntimePaths;
 use tempfile::TempDir;
@@ -281,26 +281,23 @@ fn reconcile_defers_the_add_on_a_detached_session() {
 
     // A detached background session with a working pane and no sidebar.
     room.create_plain_background(cwd.path(), "60");
-    let before = wait_for_pane_count(xdg, &name, 1);
-    assert!(
-        !before.is_empty(),
-        "plain session should have a pane before reconcile: {before:?}",
-    );
 
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = sidebar_opts(&name, cwd.path(), stub, 120);
     write_topology_cache_from_list_panes(xdg, &opts.workspace_id, &name);
-    // A freshly born --create-background session whose only pane is still
-    // materializing is the case most prone to reconcile's transient-empty read,
-    // so retry until reconcile actually observes the working pane.
-    let report = reconcile_until_observed(xdg, &opts, &SidebarLiveness::default());
+    // Cache publication owns readiness for the freshly born working pane, so
+    // reconcile consumes that accepted snapshot once.
+    let report = room
+        .backend()
+        .reconcile_sidebars(&opts, &SidebarLiveness::default())
+        .expect("reconcile_sidebars");
 
     assert_eq!(report.deferred, 1, "the detached session's add is deferred");
     assert_eq!(report.recovered, 0, "nothing is added without a client");
     assert_eq!(report.failed, 0, "a deferral is not a failure");
     // Poll rather than read once: a recovered add would already have tripped the
     // `recovered == 0` assertion above, so here a single empty `list-panes` answer
-    // under load would only flake a settled result. `before` polls for the same reason.
+    // under load would only flake a settled result.
     let after = wait_for_pane_count(xdg, &name, 1);
     assert_eq!(after.len(), 1, "no pane was added detached: {after:?}");
     assert_eq!(
