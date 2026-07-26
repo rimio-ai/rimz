@@ -1667,18 +1667,16 @@ impl LoopState {
             let shown = self.ui.spend_ratchet.observe(epoch, usd);
             self.ui.tally.observe(shown, self.ui.animation_phase);
         }
-        // The per-card cost rolls fold beside it: observe each agent row's session
-        // cost under its durable row id (pruning rows the snapshot no longer
-        // carries), so a card's `$cost` ticks up on the next frames the same way.
-        // A row without the cost enrichment is simply not observed; when its first
-        // cost lands, the first observation snaps — never a `0 → cost` boot roll.
+        // The per-card cost rolls fold beside it: live cards observe session cost,
+        // while a finished cohort observes each durable seat's lifetime cost.
+        // Both use the same resolved target the renderer paints, keyed by durable
+        // row id, so finishing a group rolls each card up to the receipt figures.
+        // A row without cost enrichment is not observed; its first cost snaps.
         self.ui.cost_rolls.observe(
-            self.current.rows().filter_map(|row| {
-                row.as_agent()
-                    .and_then(|agent| agent.context.as_ref())
-                    .and_then(|context| context.cost.as_ref())
-                    .and_then(|cost| cost.total_cost_usd)
-                    .map(|usd| (row.id.clone(), usd))
+            self.current.worktree_groups.iter().flat_map(|group| {
+                group.rows.iter().filter_map(|row| {
+                    render::agent_card_cost_usd(group, row).map(|usd| (row.id.clone(), usd))
+                })
             }),
             self.ui.animation_phase,
         );

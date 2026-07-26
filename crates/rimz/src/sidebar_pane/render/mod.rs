@@ -39,6 +39,7 @@ use self::compose::{
     auto_scroll_reveal_group, auto_scroll_to_selection, build_bottom_chrome, scroll_thumb,
 };
 pub(crate) use self::interaction::{FrameInteractions, HitRegion, HitTarget, RenderedBlock};
+pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
 pub use self::ui_state::{Alert, UiState};
 pub(crate) use self::ui_state::{
     Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, ManualScroll, OrderHold,

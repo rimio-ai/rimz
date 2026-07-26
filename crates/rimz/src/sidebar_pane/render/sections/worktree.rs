@@ -105,17 +105,13 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
         let selected = this_row == ctx.selected_index;
         let gutter = if selected { Gutter::Selected } else { lane };
-        let seat_cost_usd = group
-            .cohort_effort
-            .as_ref()
-            .and_then(|effort| effort.seats.get(row.id.as_str()))
-            .and_then(|seat| seat.cost_usd);
+        let cost_usd = super::agent_card::agent_card_cost_usd(group, row);
         for line in row_lines(
             ctx,
             row,
             selected,
             gutter,
-            seat_cost_usd,
+            cost_usd,
             meter_pixels.as_deref_mut(),
         ) {
             block.push_row(line, this_row);

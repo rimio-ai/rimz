@@ -475,10 +475,31 @@ fn finished_roster_pins_the_member_cost() {
 
 #[test]
 fn expanded_finished_group_cards_show_seat_lifetime_cost() {
-    let live = group(vec![
+    let seats = BTreeMap::from([
+        (
+            "planner".to_owned(),
+            crate::SidebarSeatEffort {
+                cost_usd: Some(1.5),
+                ..crate::SidebarSeatEffort::default()
+            },
+        ),
+        (
+            "coder".to_owned(),
+            crate::SidebarSeatEffort {
+                cost_usd: Some(2.5),
+                ..crate::SidebarSeatEffort::default()
+            },
+        ),
+    ]);
+    let mut live = group(vec![
         agent_row_with_cost("planner", 0.42),
         agent_row_with_cost("coder", 0.58),
     ]);
+    live.cohort_effort = Some(crate::SidebarCohortEffort {
+        cost_usd: Some(4.0),
+        seats: seats.clone(),
+        ..crate::SidebarCohortEffort::default()
+    });
     let (live_texts, _, _) = render_group(&live, false);
     assert!(
         live_texts
@@ -500,22 +521,7 @@ fn expanded_finished_group_cards_show_seat_lifetime_cost() {
     finished.finished = true;
     finished.cohort_effort = Some(crate::SidebarCohortEffort {
         cost_usd: Some(4.0),
-        seats: BTreeMap::from([
-            (
-                "planner".to_owned(),
-                crate::SidebarSeatEffort {
-                    cost_usd: Some(1.5),
-                    ..crate::SidebarSeatEffort::default()
-                },
-            ),
-            (
-                "coder".to_owned(),
-                crate::SidebarSeatEffort {
-                    cost_usd: Some(2.5),
-                    ..crate::SidebarSeatEffort::default()
-                },
-            ),
-        ]),
+        seats,
         ..crate::SidebarCohortEffort::default()
     });
 
