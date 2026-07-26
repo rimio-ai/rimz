@@ -82,11 +82,18 @@ pub(super) fn load_catalog(globals: &GlobalFlags) -> Result<Vec<TeamReport>> {
         &rimz::store::paths::config_home(),
     )?;
     let snapshot = ctx.alive_snapshot()?;
+    let audit = ctx
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .context("reading audit agent rollup")?;
+    let prices = rimz::agents::pricing::cached_book(&ctx.runtime().shared_pricing_cache_path());
     Ok(build_catalog(
         &effective.teams,
         &effective.profiles,
         &machine.agents.commands,
         &snapshot.agents,
+        &audit.agents,
+        &prices,
         |name| team_source(&ctx.workspace.project_root, name),
     ))
 }
@@ -108,9 +115,11 @@ fn build_catalog(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
     agents: &[AgentState],
+    audit_agents: &[AgentState],
+    prices: &rimz::agents::PriceBook,
     source: impl Fn(&str) -> Option<String>,
 ) -> Vec<TeamReport> {
-    let live = live_instances(agents);
+    let live = live_instances(agents, audit_agents, prices);
     let mut reports = teams
         .0
         .iter()
@@ -287,7 +296,25 @@ fn cell_label(cell: &AgentCell) -> String {
         .to_owned()
 }
 
-fn live_instances(agents: &[AgentState]) -> BTreeMap<String, Vec<LiveInstance>> {
+fn live_instances(
+    agents: &[AgentState],
+    audit_agents: &[AgentState],
+    prices: &rimz::agents::PriceBook,
+) -> BTreeMap<String, Vec<LiveInstance>> {
+    let audit_refs = audit_agents.iter().collect::<Vec<_>>();
+    let mut effort_by_session = BTreeMap::new();
+    for records in rimz::agents::attribution::slot_groups(&audit_refs) {
+        let effort = rimz::agents::spending::slot_effort(
+            &records
+                .iter()
+                .map(|agent| rimz::agents::spending::EffortSessionRef::from_state(agent))
+                .collect::<Vec<_>>(),
+            prices,
+        );
+        for record in records {
+            effort_by_session.insert(record.agent_id.clone(), effort);
+        }
+    }
     let mut by_team: BTreeMap<String, Vec<LiveInstance>> = BTreeMap::new();
     for cohort in rimz::harness::target::team_cohorts(agents) {
         let members = cohort.members;
@@ -305,7 +332,9 @@ fn live_instances(agents: &[AgentState]) -> BTreeMap<String, Vec<LiveInstance>> 
                 kind: agent.kind.to_string(),
                 status: agent.effective_status().as_str().to_owned(),
                 context_fill_pct: agent.context_fill_pct(),
-                cost_usd: rimz::harness::budget::total_cost_usd(agent),
+                cost_usd: effort_by_session
+                    .get(&agent.agent_id)
+                    .and_then(|effort| effort.cost_usd),
             })
             .collect();
         by_team
@@ -486,6 +515,8 @@ mod tests {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             &[agent],
+            &[],
+            &rimz::agents::PriceBook::default(),
             |_| Some("/tmp/team.toml".to_owned()),
         );
 
@@ -502,6 +533,43 @@ mod tests {
     }
 
     #[test]
+    fn live_member_cost_comes_from_its_audit_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("opencode.db");
+        let connection = rusqlite::Connection::open(&transcript).unwrap();
+        connection
+            .execute_batch("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)")
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO message (id, session_id, data) VALUES (?1, ?2, ?3)",
+                (
+                    "message",
+                    "sess-planner",
+                    r#"{"cost":0.25,"modelID":"gpt","providerID":"openai","time":{"created":1780394400000},"tokens":{"input":10,"output":2,"cache":{"read":3,"write":4}}}"#,
+                ),
+            )
+            .unwrap();
+        drop(connection);
+        let mut agent = AgentState::stub("opencode", "sess-planner", AgentStatus::Running);
+        agent.team = Some("forge".to_owned());
+        agent.role = Some("planner".to_owned());
+        agent.channel = Some("feat-x".to_owned());
+        agent.transcript_path = Some(transcript.to_string_lossy().into_owned());
+        let reports = build_catalog(
+            &TeamsConfig(BTreeMap::from([("forge".to_owned(), team())])),
+            &ProfilesConfig::default(),
+            &CommandsConfig::default(),
+            &[agent.clone()],
+            &[agent],
+            &rimz::agents::PriceBook::default(),
+            |_| None,
+        );
+
+        assert_eq!(reports[0].instances[0].members[0].cost_usd, Some(0.25));
+    }
+
+    #[test]
     fn invalid_team_stays_visible_with_its_error() {
         let mut broken = team();
         broken.roles[0].profile = "missing".to_owned();
@@ -510,6 +578,8 @@ mod tests {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             &[],
+            &[],
+            &rimz::agents::PriceBook::default(),
             |_| None,
         );
 
@@ -551,6 +621,8 @@ mod tests {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             &[],
+            &[],
+            &rimz::agents::PriceBook::default(),
             |_| None,
         );
         let mut rendered = Vec::new();
