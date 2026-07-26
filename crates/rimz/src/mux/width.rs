@@ -268,9 +268,14 @@ pub(crate) fn width_undershot(before: u64, after: u64, target: u64) -> bool {
     before >= target && after < target
 }
 
-/// Zellij's built-in resize increment is approximately 5% of the view width.
+/// The nominal target increment for one Zellij resize keypress.
 pub(crate) fn zellij_resize_step_cols(view_cols: u64) -> u64 {
     (view_cols / 20).max(1)
+}
+
+/// The widest integer spacing produced by Zellij's approximately 5% resize.
+pub(crate) fn zellij_resize_stop_step_cols(view_cols: u64) -> u64 {
+    view_cols.div_ceil(20).max(1)
 }
 
 /// The invoking terminal's `(cols, rows)`, when any standard stream is
@@ -459,22 +464,37 @@ mod tests {
         assert!(sidebar_width_off_spec(71, 72, 1));
         assert!(sidebar_width_off_spec(73, 72, 1));
 
-        // A 213-column Zellij view has a ten-column step, so every width from
-        // the target through one column below the next step is settled.
-        let step = zellij_resize_step_cols(213);
-        assert_eq!(step, 10);
+        // A 213-column Zellij view alternates ten- and eleven-column native
+        // steps, so the stop band reserves the wider spacing.
+        let step = zellij_resize_stop_step_cols(213);
+        assert_eq!(step, 11);
         assert!(sidebar_width_off_spec(63, 64, step));
         assert!(!sidebar_width_off_spec(64, 64, step));
-        assert!(!sidebar_width_off_spec(73, 64, step));
-        assert!(sidebar_width_off_spec(74, 64, step));
+        assert!(!sidebar_width_off_spec(74, 64, step));
+        assert!(sidebar_width_off_spec(75, 64, step));
+
+        // Regression: the default 25% target is 54, between reachable widths
+        // 53 and 64. The upper width must be a fixed point.
+        assert!(sidebar_width_off_spec(53, 54, step));
+        assert!(!sidebar_width_off_spec(64, 54, step));
+        assert!(sidebar_width_off_spec(65, 54, step));
 
         // Regression: a full Zellij step and one tmux keypress both propagate.
-        assert!(sidebar_width_off_spec(54, 64, zellij_resize_step_cols(213)));
+        assert!(sidebar_width_off_spec(
+            53,
+            64,
+            zellij_resize_stop_step_cols(213)
+        ));
         assert!(sidebar_width_off_spec(63, 64, 1));
 
-        // Zero and tiny views still produce a one-column minimum step.
+        // Keypress targets retain the floor estimate while the stop band uses
+        // the ceiling; zero and tiny views still use a one-column minimum.
+        assert_eq!(zellij_resize_step_cols(213), 10);
+        assert_eq!(zellij_resize_stop_step_cols(213), 11);
         assert_eq!(zellij_resize_step_cols(0), 1);
         assert_eq!(zellij_resize_step_cols(19), 1);
+        assert_eq!(zellij_resize_stop_step_cols(0), 1);
+        assert_eq!(zellij_resize_stop_step_cols(19), 1);
     }
 
     #[test]

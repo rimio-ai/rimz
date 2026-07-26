@@ -96,7 +96,6 @@ impl WidthControl {
         self.learned_step
             .or(self.native_step.map(NonZeroU16::get))
             .unwrap_or(1)
-            .max(1)
     }
 
     fn needs_adjustment(&self, own_cols: u16) -> bool {

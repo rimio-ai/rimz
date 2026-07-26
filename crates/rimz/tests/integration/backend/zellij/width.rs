@@ -133,8 +133,19 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
 
     // The launch seed came from a 340-column terminal, but this attached client
     // is only 210 columns wide. The detached percentage seed therefore lands
-    // near 44 columns while the live narrow-view target is 52.
-    let _client = AttachedClient::attach(&room, 210, 60);
+    // near 44 columns while the live narrow-view target rounds up to 53.
+    const VIEW_COLS: u64 = 210;
+    let target_cols = u16::try_from(rimz::mux::SidebarWidth::default().target_cols(VIEW_COLS))
+        .expect("target fits u16");
+    let stop_step = VIEW_COLS.div_ceil(20);
+    let target_band = || {
+        u64::from(target_cols)
+            ..=u64::from(target_cols)
+                .saturating_add(stop_step)
+                .saturating_sub(1)
+    };
+    let _client =
+        AttachedClient::attach(&room, u16::try_from(VIEW_COLS).expect("view fits u16"), 60);
     write_topology_cache_from_list_panes(xdg, &sidebar.workspace_id, &name);
     let _mirror = topology_cache_mirror(xdg, &sidebar.workspace_id, &name);
     assert!(
@@ -144,12 +155,12 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     );
 
     assert_eq!(
-        converge_each_sidebar_with_nudges(&backend, xdg, &name, 52, 10),
+        converge_each_sidebar_with_nudges(&backend, xdg, &name, target_cols, stop_step),
         1,
     );
     assert!(
-        wait_for_sidebar_columns(xdg, &name, &[52..=61]),
-        "the birth pane converges at or just above the smaller view's 52-column target, got {:?}",
+        wait_for_sidebar_columns(xdg, &name, &[target_band()]),
+        "the birth pane converges at or just above the smaller view's {target_cols}-column target, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
 
@@ -158,16 +169,16 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     open_new_tab(xdg, &name);
     wait_for_tab_count(xdg, &name, 2);
     assert!(
-        wait_for_sidebar_columns(xdg, &name, &[52..=61, 42..=46]),
+        wait_for_sidebar_columns(xdg, &name, &[target_band(), 42..=46]),
         "the native template births the new tab from the cap-aware launch seed, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
     assert_eq!(
-        converge_each_sidebar_with_nudges(&backend, xdg, &name, 52, 10),
+        converge_each_sidebar_with_nudges(&backend, xdg, &name, target_cols, stop_step),
         1,
     );
     assert!(
-        wait_for_sidebar_columns(xdg, &name, &[52..=61, 52..=61]),
+        wait_for_sidebar_columns(xdg, &name, &[target_band(), target_band()]),
         "both tabs converge at or just above the 25% live target, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
@@ -177,30 +188,35 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     open_new_tab(xdg, &name);
     wait_for_tab_count(xdg, &name, 3);
     assert!(
-        wait_for_sidebar_columns(xdg, &name, &[52..=61, 52..=61, 42..=46]),
+        wait_for_sidebar_columns(xdg, &name, &[target_band(), target_band(), 42..=46]),
         "the new tab starts at the launch seed while converged tabs stay narrow, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
 
     // A shared target applies to every existing tab, including the two
     // background tabs, and every future tab.
+    let shared_band = || 40..=40_u64.saturating_add(stop_step).saturating_sub(1);
     assert_eq!(
-        converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, 10),
+        converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, stop_step),
         2,
     );
     assert!(wait_for_sidebar_columns(
         xdg,
         &name,
-        &[40..=49, 40..=49, 40..=49]
+        &[shared_band(), shared_band(), shared_band()]
     ));
     open_new_tab(xdg, &name);
     wait_for_tab_count(xdg, &name, 4);
     assert_eq!(
-        converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, 10),
+        converge_each_sidebar_with_nudges(&backend, xdg, &name, 40, stop_step),
         0,
     );
     assert!(
-        wait_for_sidebar_columns(xdg, &name, &[40..=49, 40..=49, 40..=49, 40..=49]),
+        wait_for_sidebar_columns(
+            xdg,
+            &name,
+            &[shared_band(), shared_band(), shared_band(), shared_band()],
+        ),
         "the shared target propagates to every tab, got {:?}",
         sidebar_columns_by_tab(xdg, &name),
     );
