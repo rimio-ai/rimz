@@ -460,6 +460,45 @@ fn terminal_subagent_stop_absorbs_a_reordered_start() {
 }
 
 #[test]
+fn repeated_running_subagent_start_enriches_without_resetting_identity() {
+    let start = raw_lifecycle_at(
+        "opencode",
+        1,
+        serde_json::json!({
+            "event_name": "SubagentStart",
+            "agent_id": "child-1",
+            "signal": { "signal": "subagent_started" },
+            "parent_agent_id": "sess-root",
+            "task": "review auth",
+        }),
+    );
+    let model_announcement = raw_lifecycle_at(
+        "opencode",
+        2,
+        serde_json::json!({
+            "event_name": "SubagentStart",
+            "agent_id": "child-1",
+            "signal": { "signal": "subagent_started" },
+            "parent_agent_id": "sess-root",
+            "model": "claude-sonnet-4-5",
+        }),
+    );
+
+    let agents = reduce_agent_states(&[start, model_announcement]);
+    let child = agents
+        .iter()
+        .find(|agent| agent.agent_id == "child-1")
+        .expect("child row");
+    assert_eq!(child.status, AgentStatus::Running);
+    assert_eq!(child.task.as_deref(), Some("review auth"));
+    assert_eq!(child.model.as_deref(), Some("claude-sonnet-4-5"));
+    assert_eq!(
+        child.registered_at,
+        Some(Timestamp::from_second(epoch().as_second() + 1).unwrap()),
+    );
+}
+
+#[test]
 fn subagent_stop_without_start_keeps_parent_link_and_spares_the_parent() {
     // Claude can report a typed child only at `SubagentStop`. That Stop
     // still carries `parent_agent_id`; adopting it keeps the finished child
