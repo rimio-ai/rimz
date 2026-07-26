@@ -34,6 +34,18 @@ pub struct WidthStep {
     pub view_cols: u16,
 }
 
+impl WidthStep {
+    /// Target delta for one keypress. An inexact shrink must clear the upward
+    /// stop band; an inexact grow must not skip the next reachable width.
+    pub(crate) fn adjustment_cols(self, dir: WidthAdjust) -> u16 {
+        if dir == WidthAdjust::Narrower && !self.exact {
+            self.band_cols
+        } else {
+            self.cols
+        }
+    }
+}
+
 /// Resolve the validated absolute target requested by one width keypress.
 /// Inexact backends reject a narrower step that would cross the minimum;
 /// exact backends clamp that step to the minimum instead.
@@ -47,7 +59,7 @@ pub(crate) fn adjust_target_cols(
         WidthAdjust::Wider => NonZeroU16::new(base.saturating_add(step.cols)),
         WidthAdjust::Narrower if base <= min_cols => None,
         WidthAdjust::Narrower => {
-            let target = base.saturating_sub(step.cols);
+            let target = base.saturating_sub(step.adjustment_cols(dir));
             if target >= min_cols {
                 NonZeroU16::new(target)
             } else if step.exact {
@@ -292,7 +304,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn width_adjustment_resolves_absolute_targets_and_floor() {
+    fn width_adjustment_uses_directional_inexact_magnitudes() {
         let inexact = WidthStep {
             cols: 10,
             band_cols: 11,
@@ -317,7 +329,12 @@ mod tests {
         );
         assert_eq!(
             adjust_target_cols(40, WidthAdjust::Narrower, inexact, 24),
-            NonZeroU16::new(30)
+            NonZeroU16::new(29)
+        );
+        assert_eq!(
+            adjust_target_cols(75, WidthAdjust::Narrower, inexact, 24),
+            NonZeroU16::new(64),
+            "a ceiling-sized Zellij shrink clears the upward stop band",
         );
         assert_eq!(
             adjust_target_cols(30, WidthAdjust::Narrower, inexact, 24),
