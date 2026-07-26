@@ -128,7 +128,7 @@ impl Fixture {
             &crate::store::workspace_record::WorkspaceRecord::from_resolved(&workspace),
         )
         .expect("workspace record");
-        crate::channel::register(&self.paths, name).expect("channel record");
+        crate::channel::register(&workspace, &self.paths, name).expect("channel record");
     }
 }
 

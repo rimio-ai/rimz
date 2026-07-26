@@ -48,8 +48,7 @@ pub fn run(args: ChannelArgs, globals: &GlobalFlags) -> Result<()> {
     let store = open_store(&workspace)?;
     match args.command {
         ChannelSubcmd::New { name } => {
-            ensure_named_channel_available(&workspace, &name)?;
-            let record = rimz::channel::register(store.paths(), &name)?;
+            let record = rimz::channel::register(&workspace, store.paths(), &name)?;
             open_channel_tab(&workspace, globals, &record.name);
             #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
             {
@@ -189,21 +188,6 @@ fn worktree_channels(workspace: &rimz::ResolvedWorkspace) -> Result<BTreeSet<Str
 
 fn worktree_channel_exists(workspace: &rimz::ResolvedWorkspace, name: &str) -> bool {
     worktree_channels(workspace).is_ok_and(|channels| channels.contains(name))
-}
-
-pub(crate) fn ensure_named_channel_available(
-    workspace: &rimz::ResolvedWorkspace,
-    name: &str,
-) -> Result<()> {
-    if worktree_channel_exists(workspace, name) {
-        bail!("channel `{name}` is backed by a worktree; use `--worktree {name}`");
-    }
-    Ok(())
-}
-
-pub(crate) fn named_channel_registered(store: &rimz::Store, name: &str) -> bool {
-    rimz::channel::list(&store.paths().channels_record)
-        .is_ok_and(|records| records.iter().any(|record| record.name == name))
 }
 
 fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, channel: &str) {

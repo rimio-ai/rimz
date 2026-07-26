@@ -223,8 +223,7 @@ pub(super) fn launch_layout(
         )?;
     }
     if let Some(channel) = args.launch.cohort.channel.as_deref() {
-        crate::cli::channel::ensure_named_channel_available(workspace, channel)?;
-        rimz::channel::register(store.paths(), channel)?;
+        rimz::channel::register(workspace, store.paths(), channel)?;
     }
     // An inferred lane joins the exact channel it was inferred from, rather than
     // one recomputed from the caller's cwd — a shell pane that has `cd`'d into a
