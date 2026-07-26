@@ -29,10 +29,7 @@ mod queue;
 mod reap;
 mod reset;
 
-pub use lifecycle::{
-    AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES,
-    DerivedLifecycleKind, DerivedLifecycleOutcome, LifecycleAppendOutcome,
-};
+pub use lifecycle::{AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES};
 pub(crate) use queue::DeliverySweepUpdate;
 pub use queue::{DeliveryAck, DeliveryFailureDisposition, EditOutcome, MessageEdit};
 
