@@ -556,7 +556,17 @@ fn rimz_command(root: &Path, args: &[OsString]) -> Command {
         Command::new(bin)
     } else {
         let mut command = Command::new("cargo");
-        command.args(["run", "--quiet", "-p", "rimz", "--bin", "rimz", "--"]);
+        command.args([
+            "run",
+            "--quiet",
+            "-p",
+            "rimz",
+            "--bin",
+            "rimz",
+            "--features",
+            "testkit",
+            "--",
+        ]);
         command
     };
     command.args(args).current_dir(root);

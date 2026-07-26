@@ -956,8 +956,6 @@ rimz help sidebar notify-test [hidden]
 
 rimz help sidebar record-focus-repair [hidden]
 
-rimz help sidebar render
-
 rimz help sidebar repair
 
 rimz help sidebar serve
@@ -1883,8 +1881,6 @@ rimz sidebar help notify-test [hidden]
 
 rimz sidebar help record-focus-repair [hidden]
 
-rimz sidebar help render
-
 rimz sidebar help repair
 
 rimz sidebar help serve
@@ -1935,16 +1931,6 @@ rimz sidebar record-focus-repair [hidden]
     --record-json <RECORD_JSON>  [action=set takes=1..=1 required]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
-    --zellij  [action=set-true takes=0..=0 global]
-
-rimz sidebar render
-    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
-    --height <HEIGHT>  [action=set takes=1..=1 default=24]
-    -h, --help  [action=help takes=0..=0]
-    --mux <MUX>  [action=set takes=1..=1 global]
-    --root <ROOT>  [action=set takes=1..=1 global]
-    --tmux  [action=set-true takes=0..=0 global]
-    --width <WIDTH>  [action=set takes=1..=1 default=80]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz sidebar repair
