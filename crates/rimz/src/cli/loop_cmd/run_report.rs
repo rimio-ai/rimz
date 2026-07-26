@@ -309,7 +309,7 @@ fn write_failure_forensics(
     if let Some(tail) = outcome_failure_tail(summary) {
         write_gutter_block(out, Some(ui::palette::alarm()), &tail)?;
     }
-    write_run_links(out, summary.record, RunLinkDetail::Summary)?;
+    write_summary_run_links(out, summary.record)?;
     writeln!(
         out,
         "{}",
@@ -344,7 +344,7 @@ fn write_completion_detail(
             )?;
         }
     }
-    write_run_links(out, summary.record, RunLinkDetail::Summary)
+    write_summary_run_links(out, summary.record)
 }
 
 fn outcome_exit_label(summary: &RunSummary<'_>) -> Option<String> {
@@ -461,7 +461,7 @@ pub(super) fn write_record_forensics(
             ui::paint(ui::palette::muted(), &format!("  cost: {spend}"))
         )?;
     }
-    write_run_links(out, record, RunLinkDetail::Stored(run_record.as_ref()))
+    write_stored_run_links(out, record, run_record.as_ref())
 }
 
 fn write_check_section(
@@ -511,50 +511,33 @@ fn write_verify_section(
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-enum RunLinkDetail<'a> {
-    Summary,
-    Stored(Option<&'a rimz::harness::run::RunRecord>),
+fn write_summary_run_links(out: &mut impl Write, record: &LoopRunRecord) -> std::io::Result<()> {
+    if let Some(run_id) = &record.run_id {
+        write_detail_link(out, "run", run_id)?;
+    }
+    if let Some(transcript) = &record.transcript_path {
+        write_detail_link(out, "transcript", transcript)?;
+    }
+    Ok(())
 }
 
-fn write_run_links(
+fn write_stored_run_links(
     out: &mut impl Write,
     record: &LoopRunRecord,
-    detail: RunLinkDetail<'_>,
+    run_record: Option<&rimz::harness::run::RunRecord>,
 ) -> std::io::Result<()> {
     if let Some(run_id) = &record.run_id {
-        writeln!(
-            out,
-            "{}",
-            ui::paint(ui::palette::muted(), &format!("  run: {run_id}"))
-        )?;
-        if let RunLinkDetail::Stored(run_record) = detail {
-            if let Some(tail) = run_record
-                .and_then(|record| record.failure_tail.as_deref())
-                .filter(|tail| !tail.trim().is_empty())
-            {
-                write_detail_label(out, "output tail")?;
-                write_gutter_block(out, None, tail)?;
-            }
-            if let Some(transcript) =
-                run_record.and_then(|record| record.transcript_path.as_deref())
-            {
-                writeln!(
-                    out,
-                    "{}",
-                    ui::paint(ui::palette::muted(), &format!("  transcript: {transcript}"))
-                )?;
-            }
+        write_detail_link(out, "run", run_id)?;
+        if let Some(tail) = run_record
+            .and_then(|record| record.failure_tail.as_deref())
+            .filter(|tail| !tail.trim().is_empty())
+        {
+            write_detail_label(out, "output tail")?;
+            write_gutter_block(out, None, tail)?;
         }
-    }
-    if matches!(detail, RunLinkDetail::Summary)
-        && let Some(transcript) = &record.transcript_path
-    {
-        writeln!(
-            out,
-            "{}",
-            ui::paint(ui::palette::muted(), &format!("  transcript: {transcript}"))
-        )?;
+        if let Some(transcript) = run_record.and_then(|record| record.transcript_path.as_deref()) {
+            write_detail_link(out, "transcript", transcript)?;
+        }
     }
     Ok(())
 }
@@ -597,6 +580,14 @@ fn write_detail_label(out: &mut impl Write, label: &str) -> std::io::Result<()> 
         out,
         "{}",
         ui::paint(ui::palette::muted(), &format!("  {label}:"))
+    )
+}
+
+fn write_detail_link(out: &mut impl Write, label: &str, value: &str) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{}",
+        ui::paint(ui::palette::muted(), &format!("  {label}: {value}"))
     )
 }
 
