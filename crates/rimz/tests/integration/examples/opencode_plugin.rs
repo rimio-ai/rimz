@@ -4,7 +4,7 @@
 
 #[test]
 #[cfg(unix)]
-fn plugin_preserves_measured_usage_across_zero_only_updates() {
+fn plugin_preserves_usage_and_announces_child_models() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let capability = std::process::Command::new("node")
@@ -62,6 +62,22 @@ const update = async (info) => await plugin.event({{
 }});
 const idle = async () => await plugin.event({{
   event: {{ type: "session.idle", properties: {{ sessionID: "ses-1" }} }},
+}});
+const createChild = async () => await plugin.event({{
+  event: {{
+    type: "session.created",
+    properties: {{
+      info: {{
+        id: "ses-child",
+        parentID: "ses-parent",
+        directory: {},
+        title: "review auth",
+      }},
+    }},
+  }},
+}});
+const stepFinish = async (part) => await plugin.event({{
+  event: {{ type: "message.part.updated", properties: {{ part }} }},
 }});
 const readPayloads = async () => {{
   try {{
@@ -131,10 +147,70 @@ assertTokens(second, {{
   cache_write_input_tokens: 0,
   total_tokens: 23,
 }});
+
+await createChild();
+const created = (await waitForPayloads(3))[2];
+if (
+  created.hook_event_name !== "SubagentStart" ||
+  created.session_id !== "ses-child" ||
+  created.parent_session_id !== "ses-parent" ||
+  created.prompt !== "review auth" ||
+  created.model !== undefined
+) {{
+  throw new Error(`unexpected child creation: ${{JSON.stringify(created)}}`);
+}}
+
+await update({{
+  sessionID: "ses-child",
+  modelID: "claude-sonnet-4-5",
+  providerID: "anthropic",
+  tokens: {{ input: 100, output: 20, cache: {{ read: 30, write: 0 }}, total: 150 }},
+}});
+const announced = (await waitForPayloads(4))[3];
+if (
+  announced.hook_event_name !== "SubagentStart" ||
+  announced.session_id !== "ses-child" ||
+  announced.parent_session_id !== "ses-parent" ||
+  announced.model !== "claude-sonnet-4-5" ||
+  announced.prompt !== undefined
+) {{
+  throw new Error(`unexpected child model announcement: ${{JSON.stringify(announced)}}`);
+}}
+assertTokens(announced, {{
+  input_tokens: 100,
+  output_tokens: 20,
+  cache_read_input_tokens: 30,
+  cache_write_input_tokens: 0,
+  total_tokens: 150,
+}});
+
+await update({{
+  sessionID: "ses-child",
+  modelID: "claude-sonnet-4-5",
+  providerID: "anthropic",
+  tokens: {{ input: 200, output: 40, cache: {{ read: 60, write: 0 }}, total: 300 }},
+}});
+await stepFinish({{
+  type: "step-finish",
+  sessionID: "ses-child",
+  modelID: "gpt-5-mini",
+  providerID: "openai",
+  tokens: {{ input: 40, output: 10, cache: {{ read: 5, write: 0 }}, total: 55 }},
+}});
+const switched = (await waitForPayloads(5))[4];
+if (switched.model !== "gpt-5-mini" || switched.prompt !== undefined) {{
+  throw new Error(`unexpected child model switch: ${{JSON.stringify(switched)}}`);
+}}
+await new Promise((resolve) => setTimeout(resolve, 250));
+const finalPayloads = await readPayloads();
+if (finalPayloads.length !== 5) {{
+  throw new Error(`child model was announced more than once: ${{JSON.stringify(finalPayloads)}}`);
+}}
 "#,
             serde_json::to_string(stub_path.to_str().unwrap()).unwrap(),
             serde_json::to_string(capture_path.to_str().unwrap()).unwrap(),
             serde_json::to_string(&format!("file://{}", plugin_path.display())).unwrap(),
+            serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
             serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
             serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
             serde_json::to_string(capture_path.to_str().unwrap()).unwrap(),

@@ -25,6 +25,7 @@ const RIMZ_ARGS = ["hooks", "feed", "--source", "opencode"];
 
 export const RimzPlugin: Plugin = async (input) => {
   const children = new Map<string, string>();
+  const childModels = new Map<string, string>();
   const gauge = new Map<string, Gauge>();
   const agents = new Map<string, string>();
   const roots = new Set<string>();
@@ -184,6 +185,16 @@ export const RimzPlugin: Plugin = async (input) => {
       contextWindow: prior?.model === model ? prior?.contextWindow : undefined,
     });
     resolveWindow(sessionID, providerID, model);
+  }
+
+  function announceChildModel(sessionID: string): void {
+    const parentID = children.get(sessionID);
+    if (!parentID) return;
+    const model = gauge.get(sessionID)?.model;
+    if (typeof model !== "string" || model.length === 0) return;
+    if (childModels.get(sessionID) === model) return;
+    childModels.set(sessionID, model);
+    send(base("SubagentStart", sessionID, { parent_session_id: parentID }));
   }
 
   function numberOrUndefined(value: unknown): number | undefined {
@@ -357,6 +368,7 @@ export const RimzPlugin: Plugin = async (input) => {
         if (typeof sessionID !== "string") return;
         if (children.has(sessionID) || (typeof info.parentID === "string" && info.parentID.length > 0)) {
           children.delete(sessionID);
+          childModels.delete(sessionID);
           gauge.delete(sessionID);
           agents.delete(sessionID);
           return;
@@ -373,6 +385,7 @@ export const RimzPlugin: Plugin = async (input) => {
           agents.set(sessionID, agent);
         }
         updateGauge(info);
+        if (typeof sessionID === "string") announceChildModel(sessionID);
         return;
       }
 
@@ -380,6 +393,7 @@ export const RimzPlugin: Plugin = async (input) => {
         const part = properties.part || {};
         if (part.type === "step-finish") {
           updateGauge(part);
+          if (typeof part.sessionID === "string") announceChildModel(part.sessionID);
         }
       }
     },
