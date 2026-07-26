@@ -56,7 +56,7 @@ use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use rimz::agents::AgentState;
-use rimz::ids::{AskId, MuxName};
+use rimz::ids::{AskId, MuxName, WorkspaceId};
 use rimz::{RuntimePaths, StatePaths, Store};
 
 pub(crate) use ctx::Ctx;
@@ -670,6 +670,12 @@ pub(crate) fn open_store(workspace: &rimz::ResolvedWorkspace) -> Result<Store> {
         .record_workspace(workspace)
         .context("recording workspace metadata")?;
     Ok(store)
+}
+
+pub(crate) fn runtime_paths_for(workspace_id: WorkspaceId) -> Result<RuntimePaths> {
+    let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
+    runtime.ensure_dirs().context("preparing runtime dirs")?;
+    Ok(runtime)
 }
 
 /// The agent roster the sidebar shows: the cached rollup with the daemon-mode

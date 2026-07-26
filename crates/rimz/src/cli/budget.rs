@@ -44,8 +44,8 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     let store = &ctx.store;
     let now = Timestamp::now();
     let scope = account.map_or(DailyBudgetScope::Fleet, DailyBudgetScope::Account);
-    let fleet_spend = matches!(scope, DailyBudgetScope::Fleet)
-        .then(|| live_fleet_spend(&ctx, globals, &config, now));
+    let fleet_spend =
+        matches!(scope, DailyBudgetScope::Fleet).then(|| live_fleet_spend(&ctx, &config, now));
     if args.value.is_none() {
         return inspect(store.runtime_paths(), &config, &scope, now, fleet_spend);
     }
@@ -93,15 +93,10 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     inspect(store.runtime_paths(), &config, &scope, now, fleet_spend)
 }
 
-fn live_fleet_spend(
-    ctx: &Ctx,
-    globals: &GlobalFlags,
-    config: &MachineConfig,
-    now: Timestamp,
-) -> f64 {
+fn live_fleet_spend(ctx: &Ctx, config: &MachineConfig, now: Timestamp) -> f64 {
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     let cache = rimz::harness::budget::workspace_day_cache(store.runtime_paths(), config, now);
-    let Ok(mut snapshot) = ctx.resolution_snapshot(globals) else {
+    let Ok(mut snapshot) = ctx.resolution_snapshot() else {
         return cache.day.usd;
     };
     snapshot = snapshot.with_project_root(Some(workspace.project_root.clone()));
@@ -110,8 +105,7 @@ fn live_fleet_spend(
     {
         snapshot = snapshot.with_worktree_home(Some(home));
     }
-    snapshot =
-        snapshot.with_agent_context(rimz::store::agent_context::read_all(store.runtime_paths()));
+    snapshot = ctx.fold_agent_context(snapshot);
     rimz::sidebar::refresh::apply_live_day_spend(&mut snapshot, &cache);
     snapshot.fleet_day_spend_usd.unwrap_or(cache.day.usd)
 }

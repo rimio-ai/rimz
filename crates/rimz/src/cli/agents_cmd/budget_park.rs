@@ -5,8 +5,8 @@ use clap::Args;
 
 use rimz::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use rimz::mux::{NamedKey, press_pane_key};
-use rimz::store::workspace_record;
-use rimz::{ResolvedWorkspace, RuntimePaths, StatePaths, Store};
+
+use super::Ctx;
 
 #[derive(Debug, Args)]
 pub struct BudgetParkArgs {
@@ -27,25 +27,11 @@ pub fn run_budget_park(args: BudgetParkArgs) -> Result<()> {
     let kind = AgentKind::new_unchecked(args.kind);
     let agent_id = AgentSessionId::from(args.agent_id.as_str());
     let pane_id = PaneId::parse(&args.pane).context("parsing pane id")?;
-    let runtime = RuntimePaths::for_workspace(workspace_id.clone())
-        .context("preparing budget runtime paths")?;
-    let paths =
-        StatePaths::for_workspace(workspace_id.clone()).context("preparing budget state paths")?;
-    let workspace_record = workspace_record::read(&paths.workspace_record)
-        .context("reading budget workspace record")?;
-    let store = Store::open(paths, runtime).context("opening budget store")?;
-    let workspace = ResolvedWorkspace {
-        workspace_id,
-        project_root: workspace_record.project_root.clone(),
-        root_class: workspace_record.root_class,
-        worktree_root: workspace_record.project_root,
-        worktree_branch: None,
-        session_name: workspace_record.session_name,
-        mux_hint: Some(pane_id.mux()),
-    };
-    let snapshot =
-        rimz::sidebar::produce::resolution_snapshot(&workspace, &store, Some(pane_id.mux()))
-            .context("reading budget interrupt snapshot")?;
+    let ctx = Ctx::for_budget_workspace(workspace_id, Some(pane_id.mux()))?;
+    let store = &ctx.store;
+    let snapshot = ctx
+        .resolution_snapshot()
+        .context("reading budget interrupt snapshot")?;
     snapshot
         .agent_panes
         .iter()

@@ -14,9 +14,8 @@ use rimz::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use rimz::message::{
     DeliveryGate, MessageBody, MessageRecord, MessageSender, deliver, send::already_compacted_at,
 };
-use rimz::store::workspace_record;
-use rimz::workspace::ResolvedWorkspace;
-use rimz::{RuntimePaths, StatePaths, Store};
+
+use super::Ctx;
 
 #[derive(Debug, Args)]
 pub struct IdleCompactArgs {
@@ -58,30 +57,12 @@ pub fn run_idle_compact(args: IdleCompactArgs) -> Result<()> {
         return Ok(());
     }
 
-    let paths = StatePaths::for_workspace(workspace_id.clone()).context("preparing store paths")?;
-    let runtime =
-        RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
-    let record = workspace_record::read(&paths.workspace_record).with_context(|| {
-        format!(
-            "reading workspace record `{}`",
-            paths.workspace_record.display()
-        )
-    })?;
-    let store = Store::open(paths, runtime).context("opening store")?;
-    let workspace = ResolvedWorkspace {
-        workspace_id: workspace_id.clone(),
-        project_root: record.project_root.clone(),
-        root_class: record.root_class,
-        worktree_root: record.project_root.clone(),
-        worktree_branch: None,
-        session_name: record.session_name,
-        mux_hint: Some(pane_id.mux()),
-    };
-    let mut snapshot =
-        rimz::sidebar::produce::resolution_snapshot(&workspace, &store, Some(pane_id.mux()))
-            .context("reading idle-compaction delivery snapshot")?;
-    snapshot =
-        snapshot.with_agent_context(rimz::store::agent_context::read_all(store.runtime_paths()));
+    let ctx = Ctx::for_workspace(workspace_id.clone(), Some(pane_id.mux()))?;
+    let snapshot = ctx
+        .resolution_snapshot_with_context()
+        .context("reading idle-compaction delivery snapshot")?;
+    let workspace = &ctx.workspace;
+    let store = &ctx.store;
     let agent = snapshot
         .agents
         .iter()
@@ -125,7 +106,7 @@ pub fn run_idle_compact(args: IdleCompactArgs) -> Result<()> {
             "idle-compaction context reading changed before helper validation",
         );
     }
-    if already_compacted_at(&store, agent, expected_command, occupied_tokens)
+    if already_compacted_at(store, agent, expected_command, occupied_tokens)
         || latest_delivered_was_compaction(
             &store
                 .list_message_history()
@@ -166,8 +147,8 @@ pub fn run_idle_compact(args: IdleCompactArgs) -> Result<()> {
     }
 
     let delivered = match deliver::deliver_one(
-        &workspace,
-        &store,
+        workspace,
+        store,
         &message_id,
         Duration::ZERO,
         Some(pane_id.mux()),

@@ -16,9 +16,8 @@ use std::time::Duration;
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use rimz::message::{DeliveryGate, deliver};
-use rimz::store::workspace_record;
-use rimz::workspace::ResolvedWorkspace;
-use rimz::{RuntimePaths, StatePaths, Store};
+
+use super::Ctx;
 
 #[derive(Debug, Args)]
 pub struct AutoContinueArgs {
@@ -59,30 +58,12 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         return Ok(());
     }
 
-    let paths = StatePaths::for_workspace(workspace_id.clone()).context("preparing store paths")?;
-    let runtime =
-        RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
-    let record = workspace_record::read(&paths.workspace_record).with_context(|| {
-        format!(
-            "reading workspace record `{}`",
-            paths.workspace_record.display()
-        )
-    })?;
-    let store = Store::open(paths, runtime).context("opening store")?;
-    let workspace = ResolvedWorkspace {
-        workspace_id: workspace_id.clone(),
-        project_root: record.project_root.clone(),
-        root_class: record.root_class,
-        worktree_root: record.project_root.clone(),
-        worktree_branch: None,
-        session_name: record.session_name,
-        mux_hint: Some(pane_id.mux()),
-    };
-    let mut snapshot =
-        rimz::sidebar::produce::resolution_snapshot(&workspace, &store, Some(pane_id.mux()))
-            .context("reading auto-continue delivery snapshot")?;
-    snapshot =
-        snapshot.with_agent_context(rimz::store::agent_context::read_all(store.runtime_paths()));
+    let ctx = Ctx::for_workspace(workspace_id, Some(pane_id.mux()))?;
+    let snapshot = ctx
+        .resolution_snapshot_with_context()
+        .context("reading auto-continue delivery snapshot")?;
+    let workspace = &ctx.workspace;
+    let store = &ctx.store;
     let agent = snapshot
         .agents
         .iter()
@@ -107,8 +88,8 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
             DeliveryGate::Resume
         };
         deliver::queue_nudge(
-            &workspace,
-            &store,
+            workspace,
+            store,
             agent,
             text.to_owned(),
             gate,
@@ -117,8 +98,8 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         .context("queueing auto-continue resume message")?
     };
     let delivered = deliver::deliver_one(
-        &workspace,
-        &store,
+        workspace,
+        store,
         &message_id,
         Duration::ZERO,
         Some(pane_id.mux()),

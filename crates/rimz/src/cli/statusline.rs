@@ -26,8 +26,7 @@ use clap::{Args, Subcommand};
 use serde_json::Value;
 use tracing::warn;
 
-use super::GlobalFlags;
-use rimz::RuntimePaths;
+use super::{GlobalFlags, runtime_paths_for};
 use rimz::agents::{
     AgentContext, AgentCost, AgentDefinition, PriceBook, StatusLineInvocation, definition_by_kind,
     pricing,
@@ -117,9 +116,7 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
         return Ok(());
     };
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let runtime =
-        RuntimePaths::for_workspace(workspace.workspace_id).context("preparing runtime paths")?;
-    runtime.ensure_dirs().context("preparing runtime dirs")?;
+    let runtime = runtime_paths_for(workspace.workspace_id)?;
     let prices = pricing::cached_book(&runtime.shared_pricing_cache_path());
     attach_context_cost(agent, &payload, &prices, &mut observation.context);
     rimz::store::agent_context::write(
@@ -165,9 +162,7 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
         return Ok(());
     }
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let runtime =
-        RuntimePaths::for_workspace(workspace.workspace_id).context("preparing runtime paths")?;
-    runtime.ensure_dirs().context("preparing runtime dirs")?;
+    let runtime = runtime_paths_for(workspace.workspace_id)?;
     let (prices, book_fingerprint) =
         pricing::cached_book_with_fingerprint(&runtime.shared_pricing_cache_path());
     for observation in &observations {

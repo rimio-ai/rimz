@@ -8,11 +8,10 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
-use rimz::RuntimePaths;
 use rimz::agents::runtime_control;
 use rimz::ids::WorkspaceId;
 
-use super::GlobalFlags;
+use super::{GlobalFlags, runtime_paths_for};
 
 #[derive(Debug, Args)]
 pub struct CodexArgs {
@@ -71,8 +70,7 @@ pub fn run(args: CodexArgs, _globals: &GlobalFlags) -> Result<()> {
 /// Run the per-session Codex app-server broker, bound to this workspace's socket.
 fn serve_app_server(workspace_id: &str, session_name: Option<&str>) -> Result<()> {
     let workspace_id: WorkspaceId = workspace_id.parse().context("parsing workspace id")?;
-    let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
-    runtime.ensure_dirs().context("preparing runtime dirs")?;
+    let runtime = runtime_paths_for(workspace_id)?;
     let socket = runtime.codex_app_server_socket_path();
     runtime_control::serve_broker(session_name, &socket).context("running codex app-server broker")
 }

@@ -729,8 +729,7 @@ fn resolve_snapshot_context(
         }
     };
     let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
-    let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
-    runtime.ensure_dirs().context("preparing runtime paths")?;
+    let runtime = super::runtime_paths_for(workspace_id)?;
     let session_name = command
         .session_name
         .clone()

@@ -95,7 +95,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         answer_exit(2, &format!("ask `{ask_id}` is no longer current"));
     }
 
-    let live = ctx.resolution_snapshot(globals)?;
+    let live = ctx.resolution_snapshot()?;
     let target = live
         .agent_panes
         .iter()
