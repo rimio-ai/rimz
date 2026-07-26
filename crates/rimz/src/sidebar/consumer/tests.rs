@@ -738,6 +738,7 @@ fn read_published_snapshot_folds_subagent_context() {
         "child-1",
         &crate::agents::context::SubagentContext {
             agent_type: Some("Explore".to_owned()),
+            model: None,
             description: Some("trace the sidebar rows".to_owned()),
             token_count: Some(12_400),
             cost_usd: Some(0.42),

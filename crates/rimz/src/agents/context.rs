@@ -560,6 +560,10 @@ pub struct SubagentUsageCursor {
     pub transcript_path: String,
     /// Byte offset just past the last complete JSONL record consumed.
     pub offset: u64,
+    /// Newest non-synthetic `message.model` consumed from the child transcript,
+    /// retained across incremental folds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Cumulative per-request-priced cost for every consumed child request.
     pub cost_usd: f64,
     /// At least one priceable request had no price, so the cumulative figure is
@@ -610,6 +614,10 @@ pub struct SubagentContext {
     /// provided one — the common case for fork agents that carry no `agent_type`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
+    /// Child-transcript model enrichment. Folds onto `AgentState.model` only
+    /// when the lifecycle bracket never established one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// What the parent asked this child to do (the Task tool's `description`).
     /// Painted after the child's type on the first row; absent before the first
     /// render.

@@ -2780,6 +2780,7 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
         Some("locate the render seam")
     );
     assert_eq!(records[0].context.token_count, Some(12_400));
+    assert_eq!(records[0].context.model.as_deref(), Some("child-model"));
     let first_cost = records[0]
         .context
         .cost_usd
@@ -2795,6 +2796,7 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
     assert_eq!(records[1].agent_id, "child-2");
     assert_eq!(records[1].context.token_count, Some(3_100));
     assert_eq!(records[1].context.cost_usd, None);
+    assert_eq!(records[1].context.model, None);
 
     let mut child = std::fs::OpenOptions::new()
         .append(true)
@@ -2827,9 +2829,9 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
         .subagent_contexts()
         .into_iter()
         .find(|record| record.agent_id == "child-1")
-        .and_then(|record| record.context.cost_usd)
-        .expect("grown child cost");
-    assert!(grown > first_cost);
+        .expect("grown child context");
+    assert!(grown.context.cost_usd.expect("grown child cost") > first_cost);
+    assert_eq!(grown.context.model.as_deref(), Some("child-model"));
 }
 
 /// Build the `rimz hooks feed --source codex` command with `RIMZ_CODEX_BIN`

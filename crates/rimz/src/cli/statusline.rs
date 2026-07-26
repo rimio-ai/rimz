@@ -188,6 +188,7 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
                     .or_else(|| prior_cursor.cloned());
                 let mut context = observation.context.clone();
                 context.cost_usd = cursor.as_ref().and_then(|cursor| cursor.display_cost());
+                context.model = cursor.as_ref().and_then(|cursor| cursor.model.clone());
                 (context, cursor)
             },
         )

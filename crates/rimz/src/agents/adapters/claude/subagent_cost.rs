@@ -40,6 +40,7 @@ pub(super) fn advance_cursor(
         .unwrap_or(SubagentUsageCursor {
             transcript_path,
             offset: 0,
+            model: None,
             cost_usd: 0.0,
             unpriced: false,
             book_fingerprint: None,
@@ -61,6 +62,15 @@ pub(super) fn advance_cursor(
         };
         if entry.agent_id.as_deref() != Some(child_id) {
             continue;
+        }
+        if let Some(model) = entry
+            .message
+            .model
+            .as_deref()
+            .filter(|model| !model.is_empty() && !model.starts_with('<'))
+            && cursor.model.as_deref() != Some(model)
+        {
+            cursor.model = Some(model.to_owned());
         }
         fold_entry(&mut cursor, &entry, prices);
     }
@@ -297,6 +307,20 @@ mod tests {
     }
 
     #[test]
+    fn cursor_captures_newest_model() {
+        let (_dir, parent, child) = session();
+        write_lines(
+            &child,
+            &[
+                line("msg-1", "req-1", "model-a", json!({"input_tokens": 2})),
+                line("msg-2", "req-2", "model-b", json!({"input_tokens": 3})),
+            ],
+        );
+
+        assert_eq!(advance(&parent, None).model.as_deref(), Some("model-b"));
+    }
+
+    #[test]
     fn prices_cache_creation_tiers_and_advisor_iterations() {
         let (_dir, parent, child) = session();
         write_lines(
@@ -473,6 +497,21 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_and_empty_models_do_not_claim_the_slot() {
+        let (_dir, parent, child) = session();
+        write_lines(
+            &child,
+            &[
+                line("msg-1", "req-1", "model-a", json!({"input_tokens": 2})),
+                line("msg-2", "req-2", "<synthetic>", json!({"input_tokens": 2})),
+                line("msg-3", "req-3", "", json!({"input_tokens": 2})),
+            ],
+        );
+
+        assert_eq!(advance(&parent, None).model.as_deref(), Some("model-a"));
+    }
+
+    #[test]
     fn positive_logged_cost_beats_the_price_table() {
         let (_dir, parent, child) = session();
         let mut logged: Value = serde_json::from_str(&line(
@@ -498,8 +537,10 @@ mod tests {
         let second = line("msg-2", "req-2", "model-b", json!({"output_tokens": 3}));
         write_lines(&child, std::slice::from_ref(&first));
         let cursor = advance(&parent, None);
+        assert_eq!(cursor.model.as_deref(), Some("model-a"));
         append_line(&child, &second);
         let incremental = advance(&parent, Some(&cursor));
+        assert_eq!(incremental.model.as_deref(), Some("model-b"));
 
         let full =
             advance_cursor(&parent, "child-1", None, &prices(), Some(BOOK_FINGERPRINT)).unwrap();
@@ -546,6 +587,7 @@ mod tests {
         );
         let truncated = advance(&parent, Some(&cursor));
         assert_eq!(truncated.display_cost(), Some(2.0));
+        assert_eq!(truncated.model.as_deref(), Some("model-a"));
 
         let other_parent = dir.path().join("other.jsonl");
         let other_child = dir
@@ -574,6 +616,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(changed.display_cost(), Some(9.0));
+        assert_eq!(changed.model.as_deref(), Some("model-b"));
         assert_ne!(changed.transcript_path, truncated.transcript_path);
     }
 

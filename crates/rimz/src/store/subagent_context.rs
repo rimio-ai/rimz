@@ -131,6 +131,7 @@ mod tests {
     fn ctx(observed_at: Timestamp) -> SubagentContext {
         SubagentContext {
             agent_type: None,
+            model: Some("child-model".to_owned()),
             description: Some("locate the render seam".to_owned()),
             token_count: Some(12_400),
             cost_usd: None,
@@ -149,6 +150,7 @@ mod tests {
         assert_eq!(all[0].kind, "claude");
         assert_eq!(all[0].agent_id, "child-1");
         assert_eq!(all[0].context.token_count, Some(12_400));
+        assert_eq!(all[0].context.model.as_deref(), Some("child-model"));
         assert_eq!(
             all[0].context.description.as_deref(),
             Some("locate the render seam")
@@ -175,6 +177,7 @@ mod tests {
         let cursor = SubagentUsageCursor {
             transcript_path: "/tmp/parent/subagents/agent-child-1.jsonl".to_owned(),
             offset: 412,
+            model: Some("child-model".to_owned()),
             cost_usd: 0.42,
             unpriced: false,
             book_fingerprint: Some("1700000000:412".to_owned()),
@@ -219,6 +222,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(record.context.cost_usd, None);
+        assert_eq!(record.context.model, None);
         assert_eq!(record.usage_cursor, None);
     }
 
@@ -230,6 +234,7 @@ mod tests {
         let cursor = SubagentUsageCursor {
             transcript_path: "child.jsonl".to_owned(),
             offset: 7,
+            model: Some("child-model".to_owned()),
             cost_usd: 0.12,
             unpriced: false,
             book_fingerprint: None,
