@@ -45,12 +45,7 @@ pub(crate) fn print_run_forensics<W: Write + ?Sized>(
             writeln!(err, "{}", render::paint(render::palette::faint(), tail))?;
         }
         if let Some(verify) = record.verify.as_ref().filter(|verify| !verify.passed) {
-            let status = verify_status_label(verify);
-            writeln!(
-                err,
-                "verify `{}` exited {status} (attempt {})",
-                verify.cmd, verify.attempts
-            )?;
+            write_verify_failure(err, verify, "", None)?;
             if !verify.output.trim().is_empty() {
                 writeln!(
                     err,
@@ -85,6 +80,23 @@ pub(crate) fn verify_status_label(verify: &rimz::harness::run::RunVerify) -> Str
             .code
             .map(|code| code.to_string())
             .unwrap_or_else(|| "signal".to_owned())
+    }
+}
+
+pub(crate) fn write_verify_failure<W: Write + ?Sized>(
+    out: &mut W,
+    verify: &rimz::harness::run::RunVerify,
+    prefix: &str,
+    style: Option<anstyle::Style>,
+) -> std::io::Result<()> {
+    let status = verify_status_label(verify);
+    let sentence = format!(
+        "{prefix}verify `{}` exited {status} (attempt {})",
+        verify.cmd, verify.attempts,
+    );
+    match style {
+        Some(style) => writeln!(out, "{}", render::paint(style, &sentence)),
+        None => writeln!(out, "{sentence}"),
     }
 }
 
@@ -307,6 +319,32 @@ mod tests {
         assert!(err.contains("rimz: run verify_failed (exit 123)"));
         assert!(err.contains("verify `cargo xtask test auth` exited 7 (attempt 3)"));
         assert!(err.contains("still broken"));
+    }
+
+    #[test]
+    fn verify_failure_writer_styles_the_full_prefixed_sentence() {
+        let verify = rimz::harness::run::RunVerify {
+            cmd: "cargo xtask gate".to_owned(),
+            attempts: 2,
+            passed: false,
+            code: None,
+            timed_out: true,
+            output: String::new(),
+        };
+        let mut out = Vec::new();
+
+        write_verify_failure(&mut out, &verify, "  ", Some(render::palette::muted())).unwrap();
+
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            format!(
+                "{}\n",
+                render::paint(
+                    render::palette::muted(),
+                    "  verify `cargo xtask gate` exited timeout (attempt 2)"
+                )
+            )
+        );
     }
 
     #[test]
