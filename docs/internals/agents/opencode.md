@@ -16,7 +16,7 @@ Native surface → internal mapping; the upstream hooks, bus payloads, SQLite sc
 | `session.idle` root | `session_idle` | lifecycle | `TurnEnded { errored: false, parked_on_background: false }` | latest token gauge stamped from `message.updated` |
 | `session.error` root | `session_error` | lifecycle | `TurnEnded { errored: true, parked_on_background: false }` | `error_class`, `error_message` |
 | `tool.execute.after` root mutating tool | `tool_after` | lifecycle | `ToolUsed { mutates: true, edits }` | `edit`/`write`/`apply_patch`/`patch` edit files; `bash` mutates only |
-| `session.created` with `parentID` | `SubagentStart` | lifecycle | `SubagentStarted` | child `session_id`, `parent_session_id`, sanitized title as task |
+| `session.created` with `parentID`; first child gauge update per model | `SubagentStart` | lifecycle | `SubagentStarted` | child `session_id`, `parent_session_id`, sanitized title as task at creation; resolved model and tokens on gauge re-emit |
 | `session.idle` / `session.error` child | `SubagentStop` | lifecycle | `SubagentStopped { errored }` | child `session_id`, `parent_session_id` |
 | `experimental.session.compacting` | `session_compacting` | lifecycle | `Compacting` | leading compaction head |
 | `session.compacted` | `session_compacted` | lifecycle | `CompactionEnded { auto: None }` | clears the compaction head |
@@ -28,7 +28,7 @@ Native surface → internal mapping; the upstream hooks, bus payloads, SQLite sc
 | `question.replied` | `question_replied` | lifecycle | `ToolUsed { mutates: false, edits: false }` → clears `waiting` | request id and per-question choices recorded |
 | `question.rejected` | `question_rejected` | lifecycle | `ToolUsed { mutates: false, edits: false }` → clears `waiting` | request id and rejected outcome recorded |
 
-OpenCode registers lazily: a pane can run `opencode` before a session id exists, and the first prompt creates the session. The descriptor sets `registers_lazily`, so the sidebar can synthesize an idle row for a wired-but-unprompted OpenCode pane and bind the later session by cwd. Subagents are bracket-grained: the plugin turns child `session.created` into `SubagentStart` and child `session.idle`/`session.error` into `SubagentStop`; child tool events are skipped so parent state does not move while a child runs.
+OpenCode registers lazily: a pane can run `opencode` before a session id exists, and the first prompt creates the session. The descriptor sets `registers_lazily`, so the sidebar can synthesize an idle row for a wired-but-unprompted OpenCode pane and bind the later session by cwd. Subagents are bracket-grained: the plugin turns child `session.created` into `SubagentStart` and child `session.idle`/`session.error` into `SubagentStop`. Because creation precedes the child's first message, the plugin re-emits `SubagentStart` once each time that child's assistant-message or step-finish gauge resolves a new model; the lifecycle fold keeps the original task and start time while adding the model and live token counts. Child tool events are skipped so parent state does not move while a child runs.
 
 OpenCode follows the latest root conversation inside one live pane. `/new` hands the pane to the new root at registration, or at its first prompt when registration lacked binding evidence, and same-process supersession collapses the replaced conversation's record. RimZ records no `Fresh` lineage because the wire does not distinguish `/new` from a fork copy.
 
@@ -48,7 +48,7 @@ OpenCode follows the latest root conversation inside one live pane. `/new` hands
 
 ## Context and transcript
 
-The plugin keeps an in-memory token gauge per session from assistant `message.updated` and `message.part.updated` step-finish events, then stamps the latest gauge onto every forwarded lifecycle envelope. OpenCode reports `tokens.input`, `tokens.output`, `tokens.cache.read`, `tokens.cache.write`, and `tokens.total`; RimZ stores those as distinct `fresh_input_tokens`, `cache_read_input_tokens`, `cache_write_input_tokens`, and `output_tokens`, so the context numerator is exact (`input + cache.read + cache.write`) and the card can render the `◍` cache-write column when a model reports it.
+The plugin keeps an in-memory token gauge per session from assistant `message.updated` and `message.part.updated` step-finish events, then stamps the latest gauge onto every forwarded lifecycle envelope. A child gauge that resolves a new model also re-emits its lifecycle start as described above. OpenCode reports `tokens.input`, `tokens.output`, `tokens.cache.read`, `tokens.cache.write`, and `tokens.total`; RimZ stores those as distinct `fresh_input_tokens`, `cache_read_input_tokens`, `cache_write_input_tokens`, and `output_tokens`, so the context numerator is exact (`input + cache.read + cache.write`) and the card can render the `◍` cache-write column when a model reports it.
 
 The gauge advances its token snapshot when at least one reported token component is positive. Streaming placeholders and aborted assistant updates with an all-zero or absent split preserve the last measured call, while a smaller positive call after compaction replaces the snapshot normally and retains any zero-valued sibling components.
 

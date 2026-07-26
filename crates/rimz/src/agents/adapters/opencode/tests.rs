@@ -551,13 +551,15 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
         &json!({
             "session_id": "ses_child",
             "parent_session_id": "ses_parent",
-            "prompt": "review auth"
+            "prompt": "review auth",
+            "model": "claude-sonnet-4-5"
         }),
     );
     assert_eq!(child.agent_id.as_deref(), Some("ses_child"));
     assert_eq!(child.parent_agent_id.as_deref(), Some("ses_parent"));
     assert_eq!(child.signal, LifecycleSignal::SubagentStarted);
     assert_eq!(child.task.as_deref(), Some("review auth"));
+    assert_eq!(child.launch.model.as_deref(), Some("claude-sonnet-4-5"));
 
     let child_stopped = hook_lifecycle(
         &OpencodeAdapter,
