@@ -193,16 +193,7 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
 fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Result<()> {
     let control = rimz::remote::link::validated_control_path()
         .context("checking SSH ControlMaster socket path")?;
-    let plan = rimz::remote::SshAttachPlan::new(rimz::remote::SshAttachOptions {
-        target: remote.target.clone(),
-        lineage: super::local_remote_lineage(&remote.target)?,
-        force_version: remote.force_version,
-        no_resume: remote.no_resume,
-        mux: remote.mux,
-        term: super::remote_term_plan(),
-        truecolor: rimz::tui::truecolor(),
-        client_size,
-    });
+    let plan = remote.attach_plan(client_size)?;
     let policy = rimz::remote::ReconnectPolicy::from_env();
     let mut reconnect = rimz::remote::ReconnectState::new();
     let dial_plan = super::supervisor::resolve_dial_plan(remote.target.ssh_destination().as_str());

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use rimz::agents::runtime_control::{self, RuntimeControlLiveness, RuntimeControlReadiness};
 use rimz::config::{ColorDepth, MachineConfig, ThemeMode};
 use rimz::ids::MuxName;
 use rimz::mux::{
@@ -944,23 +945,19 @@ pub(super) fn collect_remote_control(
             // A ready host is one that *can* start. Whether one is serving right
             // now is a separate question the provider's own record answers, and
             // doctor is the place a stalled host should become visible.
-            rimz::remote_control::HostState::Ready => match project_root
-                .map(|root| rimz::agents::runtime_control::host_liveness("claude", root))
-            {
-                Some(rimz::agents::runtime_control::RuntimeControlLiveness::Up) => {
-                    ("ready, host serving".to_owned(), true)
+            RuntimeControlReadiness::Ready { .. } => {
+                match project_root.map(|root| runtime_control::host_liveness("claude", root)) {
+                    Some(RuntimeControlLiveness::Up) => ("ready, host serving".to_owned(), true),
+                    Some(RuntimeControlLiveness::Down) => (
+                        "ready, but the host stopped serving this project".to_owned(),
+                        false,
+                    ),
+                    _ => ("ready".to_owned(), true),
                 }
-                Some(rimz::agents::runtime_control::RuntimeControlLiveness::Down) => (
-                    "ready, but the host stopped serving this project".to_owned(),
-                    false,
-                ),
-                _ => ("ready".to_owned(), true),
-            },
-            rimz::remote_control::HostState::Uninstalled(_) => {
-                ("enabled, not on PATH".to_owned(), false)
             }
-            rimz::remote_control::HostState::Blocked(_) => ("enabled, blocked".to_owned(), false),
-            rimz::remote_control::HostState::Disabled => ("ready".to_owned(), true),
+            RuntimeControlReadiness::Uninstalled(_) => ("enabled, not on PATH".to_owned(), false),
+            RuntimeControlReadiness::Blocked(_) => ("enabled, blocked".to_owned(), false),
+            RuntimeControlReadiness::Disabled => ("ready".to_owned(), true),
         };
         agents.push(model::RemoteAgent {
             kind: "claude",
@@ -971,12 +968,13 @@ pub(super) fn collect_remote_control(
     if config.enabled_for("codex") {
         let (detail, ready) =
             match readiness.for_host(rimz::remote_control::RemoteControlHost::Codex) {
-                rimz::remote_control::HostState::Uninstalled(_) => {
+                RuntimeControlReadiness::Uninstalled(_) => {
                     ("enabled, standalone install missing".to_owned(), false)
                 }
-                rimz::remote_control::HostState::Ready
-                | rimz::remote_control::HostState::Disabled => ("ready".to_owned(), true),
-                rimz::remote_control::HostState::Blocked(_) => {
+                RuntimeControlReadiness::Ready { .. } | RuntimeControlReadiness::Disabled => {
+                    ("ready".to_owned(), true)
+                }
+                RuntimeControlReadiness::Blocked(_) => {
                     ("enabled, standalone install missing".to_owned(), false)
                 }
             };
@@ -988,11 +986,15 @@ pub(super) fn collect_remote_control(
     }
 
     let skipped = match readiness.for_host(rimz::remote_control::RemoteControlHost::Codex) {
-        rimz::remote_control::HostState::Uninstalled(issue) => vec![issue.to_string()],
+        RuntimeControlReadiness::Uninstalled(issue) => {
+            vec![issue.to_string()]
+        }
         _ => Vec::new(),
     };
     let refusals = match readiness.for_host(rimz::remote_control::RemoteControlHost::Claude) {
-        rimz::remote_control::HostState::Blocked(issue) => vec![issue.to_string()],
+        RuntimeControlReadiness::Blocked(issue) => {
+            vec![issue.to_string()]
+        }
         _ => Vec::new(),
     };
     model::RemoteControl::On {

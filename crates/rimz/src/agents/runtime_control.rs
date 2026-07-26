@@ -64,10 +64,6 @@ impl RuntimeControlIssue {
     pub const fn code(&self) -> &'static str {
         self.code
     }
-
-    pub fn is_uninstalled_host(&self) -> bool {
-        matches!(self.code, "uninstalled" | "standalone_missing")
-    }
 }
 
 impl std::fmt::Display for RuntimeControlIssue {
@@ -98,10 +94,6 @@ pub fn readiness(kind: &str, enabled: bool) -> RuntimeControlReadiness {
     super::find_definition(kind).map_or(RuntimeControlReadiness::Disabled, |definition| {
         definition.runtime_control_readiness(enabled)
     })
-}
-
-pub fn host_argv(kind: &str) -> Option<Vec<String>> {
-    super::find_definition(kind)?.runtime_control_host_argv()
 }
 
 /// Ask an enabled host whether it is still serving `project_root`. Read-only

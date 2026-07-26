@@ -38,16 +38,8 @@ enum RemoteSubcmd {
     )]
     Add {
         name: String,
-        target: String,
-        /// Hand the link to a single ssh run instead of supervising reconnects.
-        #[arg(long)]
-        no_reconnect: bool,
-        /// Come up empty when this alias births a remote room.
-        #[arg(long)]
-        no_resume: bool,
-        /// Disable automatic forwarding of new remote listeners.
-        #[arg(long)]
-        no_auto_forward: bool,
+        #[command(flatten)]
+        args: saved_alias::Args,
     },
     /// Replace a saved remote target.
     #[command(
@@ -58,43 +50,16 @@ enum RemoteSubcmd {
             crate::cli::complete::remote_aliases
         ))]
         name: String,
-        target: String,
-        /// Hand the link to a single ssh run instead of supervising reconnects.
-        #[arg(long)]
-        no_reconnect: bool,
-        /// Come up empty when this alias births a remote room.
-        #[arg(long)]
-        no_resume: bool,
-        /// Disable automatic forwarding of new remote listeners.
-        #[arg(long)]
-        no_auto_forward: bool,
+        #[command(flatten)]
+        args: saved_alias::Args,
     },
     /// Connect to a remote alias or raw `[user@]host:<session-or-path>` target.
     Connect {
-        #[arg(add = clap_complete::ArgValueCandidates::new(
-            crate::cli::complete::remote_aliases
-        ))]
-        alias_or_target: String,
         /// Force a fresh remote room by passing `--no-resume` to the remote rimz.
         #[arg(long)]
         reset: bool,
-        /// Hand the link to a single ssh run instead of supervising reconnects.
-        #[arg(long)]
-        no_reconnect: bool,
-        /// Attach despite a minor version mismatch with the host.
-        #[arg(long)]
-        force_version: bool,
-        /// Open the remote Zellij room in the local browser through an SSH tunnel.
-        #[arg(long)]
-        web: bool,
-        /// Local tunnel port for `--web`.
-        #[arg(long, requires = "web")]
-        web_port: Option<u16>,
-        /// Disable automatic forwarding of new remote listeners.
-        #[arg(long)]
-        no_auto_forward: bool,
         #[command(flatten)]
-        attach: AttachFlags,
+        args: connection::Args,
     },
     /// Install rimz on a remote alias, `[user@]host:<session-or-path>` target, or `[user@]host`.
     Setup {
@@ -105,27 +70,8 @@ enum RemoteSubcmd {
     },
     /// Connect to a remote alias or raw target with `--no-resume`.
     Reset {
-        #[arg(add = clap_complete::ArgValueCandidates::new(
-            crate::cli::complete::remote_aliases
-        ))]
-        alias_or_target: String,
-        /// Hand the link to a single ssh run instead of supervising reconnects.
-        #[arg(long)]
-        no_reconnect: bool,
-        /// Attach despite a minor version mismatch with the host.
-        #[arg(long)]
-        force_version: bool,
-        /// Open the remote Zellij room in the local browser through an SSH tunnel.
-        #[arg(long)]
-        web: bool,
-        /// Local tunnel port for `--web`.
-        #[arg(long, requires = "web")]
-        web_port: Option<u16>,
-        /// Disable automatic forwarding of new remote listeners.
-        #[arg(long)]
-        no_auto_forward: bool,
         #[command(flatten)]
-        attach: AttachFlags,
+        args: connection::Args,
     },
     /// Delete a saved remote alias.
     Rm {
@@ -162,21 +108,63 @@ enum LinkStatsSubcmd {
     Ingest(link_stats::LinkStatsIngestArgs),
 }
 
-fn build_alias(
-    name: String,
-    target: String,
-    no_reconnect: bool,
-    no_resume: bool,
-    no_auto_forward: bool,
-    globals: &GlobalFlags,
-) -> RemoteAlias {
-    RemoteAlias {
-        name,
-        target,
-        reconnect: !no_reconnect,
-        no_resume,
-        mux: globals.mux,
-        auto_forward: !no_auto_forward,
+mod saved_alias {
+    use super::{MuxName, RemoteAlias};
+
+    #[derive(Debug, clap::Args)]
+    pub(super) struct Args {
+        pub(super) target: String,
+        /// Hand the link to a single ssh run instead of supervising reconnects.
+        #[arg(long)]
+        pub(super) no_reconnect: bool,
+        /// Come up empty when this alias births a remote room.
+        #[arg(long)]
+        pub(super) no_resume: bool,
+        /// Disable automatic forwarding of new remote listeners.
+        #[arg(long)]
+        pub(super) no_auto_forward: bool,
+    }
+
+    impl Args {
+        pub(super) fn into_alias(self, name: String, mux: Option<MuxName>) -> RemoteAlias {
+            RemoteAlias {
+                name,
+                target: self.target,
+                reconnect: !self.no_reconnect,
+                no_resume: self.no_resume,
+                mux,
+                auto_forward: !self.no_auto_forward,
+            }
+        }
+    }
+}
+
+mod connection {
+    use super::AttachFlags;
+
+    #[derive(Debug, clap::Args)]
+    pub(super) struct Args {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::remote_aliases
+        ))]
+        pub(super) alias_or_target: String,
+        /// Hand the link to a single ssh run instead of supervising reconnects.
+        #[arg(long)]
+        pub(super) no_reconnect: bool,
+        /// Attach despite a minor version mismatch with the host.
+        #[arg(long)]
+        pub(super) force_version: bool,
+        /// Open the remote Zellij room in the local browser through an SSH tunnel.
+        #[arg(long)]
+        pub(super) web: bool,
+        /// Local tunnel port for `--web`.
+        #[arg(long, requires = "web")]
+        pub(super) web_port: Option<u16>,
+        /// Disable automatic forwarding of new remote listeners.
+        #[arg(long)]
+        pub(super) no_auto_forward: bool,
+        #[command(flatten)]
+        pub(super) attach: AttachFlags,
     }
 }
 
@@ -199,22 +187,9 @@ impl RemoteArgs {
 
 pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        RemoteSubcmd::Add {
-            name,
-            target,
-            no_reconnect,
-            no_resume,
-            no_auto_forward,
-        } => {
+        RemoteSubcmd::Add { name, args } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
-            let entry = build_alias(
-                name,
-                target,
-                no_reconnect,
-                no_resume,
-                no_auto_forward,
-                globals,
-            );
+            let entry = args.into_alias(name, globals.mux);
             if aliases.contains(&entry.name)
                 && std::io::stdin().is_terminal()
                 && super::confirm(&format!(
@@ -229,73 +204,15 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             aliases.save().context("saving remote aliases")?;
             Ok(())
         }
-        RemoteSubcmd::Update {
-            name,
-            target,
-            no_reconnect,
-            no_resume,
-            no_auto_forward,
-        } => {
+        RemoteSubcmd::Update { name, args } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
-            aliases.update(build_alias(
-                name,
-                target,
-                no_reconnect,
-                no_resume,
-                no_auto_forward,
-                globals,
-            ))?;
+            aliases.update(args.into_alias(name, globals.mux))?;
             aliases.save().context("saving remote aliases")?;
             Ok(())
         }
-        RemoteSubcmd::Connect {
-            alias_or_target,
-            reset,
-            no_reconnect,
-            force_version,
-            web,
-            web_port,
-            no_auto_forward,
-            attach,
-        } => connect(
-            alias_or_target,
-            ConnectOptions {
-                reset,
-                no_reconnect,
-                force_version,
-                web: web::RemoteWebOptions {
-                    enabled: web,
-                    port: web_port,
-                },
-                no_auto_forward,
-            },
-            attach,
-            globals,
-        ),
+        RemoteSubcmd::Connect { reset, args } => connect(args, reset, globals),
         RemoteSubcmd::Setup { alias_or_host } => setup::run(alias_or_host, globals),
-        RemoteSubcmd::Reset {
-            alias_or_target,
-            no_reconnect,
-            force_version,
-            web,
-            web_port,
-            no_auto_forward,
-            attach,
-        } => connect(
-            alias_or_target,
-            ConnectOptions {
-                reset: true,
-                no_reconnect,
-                force_version,
-                web: web::RemoteWebOptions {
-                    enabled: web,
-                    port: web_port,
-                },
-                no_auto_forward,
-            },
-            attach,
-            globals,
-        ),
+        RemoteSubcmd::Reset { args } => connect(args, true, globals),
         RemoteSubcmd::Rm { name } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
             aliases.remove(&name)?;
@@ -331,12 +248,19 @@ struct RemoteConnect {
     auto_forward: bool,
 }
 
-struct ConnectOptions {
-    reset: bool,
-    no_reconnect: bool,
-    force_version: bool,
-    web: web::RemoteWebOptions,
-    no_auto_forward: bool,
+impl RemoteConnect {
+    fn attach_plan(&self, client_size: Option<(u16, u16)>) -> Result<SshAttachPlan> {
+        Ok(SshAttachPlan::new(SshAttachOptions {
+            target: self.target.clone(),
+            lineage: local_remote_lineage(&self.target)?,
+            force_version: self.force_version,
+            no_resume: self.no_resume,
+            mux: self.mux,
+            term: remote_term_plan(),
+            truecolor: rimz::tui::truecolor(),
+            client_size,
+        }))
+    }
 }
 
 fn resolve_connect(
@@ -387,23 +311,30 @@ fn resolve_setup_destination(input: &str, aliases: &RemoteAliases) -> Result<Ssh
     }
 }
 
-fn connect(
-    alias_or_target: String,
-    options: ConnectOptions,
-    attach: AttachFlags,
-    globals: &GlobalFlags,
-) -> Result<()> {
+fn connect(args: connection::Args, reset: bool, globals: &GlobalFlags) -> Result<()> {
+    let connection::Args {
+        alias_or_target,
+        no_reconnect,
+        force_version,
+        web,
+        web_port,
+        no_auto_forward,
+        attach,
+    } = args;
     let aliases = RemoteAliases::load().context("loading remote aliases")?;
     let mut remote = resolve_connect(
         &alias_or_target,
-        options.reset,
-        options.no_reconnect,
-        options.no_auto_forward,
+        reset,
+        no_reconnect,
+        no_auto_forward,
         globals.mux,
         &aliases,
     )?;
-    remote.force_version = options.force_version;
-    remote.web = options.web;
+    remote.force_version = force_version;
+    remote.web = web::RemoteWebOptions {
+        enabled: web,
+        port: web_port,
+    };
     attach_remote(remote, attach.mode())
 }
 
@@ -425,18 +356,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             if remote.web.enabled {
                 bail!("--web is web-only and has no SSH attach command; drop --print");
             }
-            let term = remote_term_plan();
-            let lineage = local_remote_lineage(&remote.target)?;
-            let plan = SshAttachPlan::new(SshAttachOptions {
-                target: remote.target,
-                lineage,
-                force_version: remote.force_version,
-                no_resume: remote.no_resume,
-                mux: remote.mux,
-                term,
-                truecolor: rimz::tui::truecolor(),
-                client_size,
-            });
+            let plan = remote.attach_plan(client_size)?;
             let plain_spec = plan.initial().plain();
             supervisor::print_remote_command(&plain_spec);
             Ok(())
@@ -452,18 +372,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             if remote.web.enabled {
                 return web::run_remote_web(&remote, client_size);
             }
-            let term = remote_term_plan();
-            let lineage = local_remote_lineage(&remote.target)?;
-            let plan = SshAttachPlan::new(SshAttachOptions {
-                target: remote.target,
-                lineage,
-                force_version: remote.force_version,
-                no_resume: remote.no_resume,
-                mux: remote.mux,
-                term,
-                truecolor: rimz::tui::truecolor(),
-                client_size,
-            });
+            let plan = remote.attach_plan(client_size)?;
             if remote.reconnect {
                 let control = rimz::remote::link::validated_control_path()
                     .context("checking SSH ControlMaster socket path")?;
@@ -561,14 +470,13 @@ mod tests {
             color: super::super::ColorWhen::Auto,
         };
 
-        let built_alias = build_alias(
-            "prod".to_owned(),
-            "prod-box:query-engine".to_owned(),
-            false,
-            false,
-            true,
-            &globals,
-        );
+        let built_alias = saved_alias::Args {
+            target: "prod-box:query-engine".to_owned(),
+            no_reconnect: false,
+            no_resume: false,
+            no_auto_forward: true,
+        }
+        .into_alias("prod".to_owned(), globals.mux);
 
         assert_eq!(built_alias.mux, Some(MuxName::Tmux));
         assert!(!built_alias.auto_forward);
