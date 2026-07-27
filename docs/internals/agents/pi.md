@@ -50,6 +50,8 @@ A single pi session can switch provider accounts mid-session, so the provider da
 
 `pi --session <session_id>` restores a rollup-recorded session (a partial UUID suffices); before re-firing `session_start` with `reason: "resume"`, the extension walks `sessionManager.getBranch()` to hydrate cumulative assistant cost, the latest usage split, and the session name. Older Pi releases without that read surface degrade to sparse enrichment and reconcile at the settled spend pass.
 
+RimZ renders typed prompt replacement through `pi --system-prompt <text>`. The full text is visible in the process argv, so RimZ rejects values over 120 KiB before exec. Pi's replacement is not hermetic: Pi still appends its native `APPEND_SYSTEM.md`, context files, skills, and cwd material after the replacement text.
+
 **Integration-blind modes.** `--no-extensions` disables discovered extensions (an explicit `-e` still loads). `-p` / `--mode json` run extensions without a UI; the RimZ extension stamps `has_ui: false`, so `ask_user_question` errors with `no_ui` without creating a stranded ask row.
 
 ## Context and transcript

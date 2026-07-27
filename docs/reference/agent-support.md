@@ -98,15 +98,15 @@ Claude Code is the reference integration and reads full across all six; each oth
 
 ## Launch-prompt replacement
 
-Profile `system-prompt-file` uses one provider-neutral contract: the user's resolved absolute file path replaces the provider's system prompt. RimZ does not copy or combine its contents. This launch capability is separate from the observation matrices above.
+Profile `system-prompt-file` plus ordered `append-system-prompt-files` use one provider-neutral contract: RimZ composes the pieces, then replaces the provider's system prompt.
 
 | Agent | Typed prompt replacement | Provider rendering |
 | --- | :--: | --- |
 | Claude Code | ✓ | `--system-prompt-file <path>` |
 | Codex | ✓ | `-c model_instructions_file=<path>` |
-| Qwen Code | ✓ | user path through `QWEN_SYSTEM_MD` |
+| Qwen Code | ✓ | composed artifact path through `QWEN_SYSTEM_MD` |
 | Droid | ✗ | native append only; use its flag through raw profile `args` |
-| Pi | ✗ | no verified replacement flag |
+| Pi | ✓ | prompt text through `--system-prompt` (120 KiB RimZ limit) |
 | OpenCode | ✗ | no verified replacement flag |
 | Antigravity | ✗ | no verified replacement flag |
 | Copilot | ✗ | no verified replacement flag |
@@ -115,9 +115,11 @@ Profile `system-prompt-file` uses one provider-neutral contract: the user's reso
 | Kiro CLI | ✗ | no verified replacement flag |
 | Kimi | ✗ | no verified replacement flag |
 | Grok Build | ✗ | no verified replacement flag |
-| Process plugin | declared by bundle | `[launch].system-prompt-file-flag` receives the user path |
+| Process plugin | declared by bundle | `[launch].system-prompt-file-flag` receives the composed artifact path |
 
 Unsupported typed prompt fields fail at launch rather than degrading to a provider default. Raw `args` remain the explicit provider-specific escape hatch.
+
+Pi is the non-hermetic exception: it still appends native `APPEND_SYSTEM.md`, context files, skills, and cwd material after RimZ's replacement text. Its full prompt is argv-visible and capped at 120 KiB.
 
 ## The wiring matrix
 

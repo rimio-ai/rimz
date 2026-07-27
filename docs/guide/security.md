@@ -31,13 +31,15 @@ A first interactive `rimz start` in an untrusted workspace offers the grant, and
 The hashed surface is every field that can cause a process to run:
 
 - `[[agents]]`: `name`, `launch_command`, `env`
-- `[profiles.<name>]`: `agent`, `mode`, `model`, `effort`, `system-prompt-file`, `args`
+- `[profiles.<name>]`: `agent`, `mode`, `model`, `effort`, `system-prompt-file`, `append-system-prompt-files`, `args`
 - `[agents.teams.<name>]`: `layout`, and each role's profile and launch fields
 - `[tasks.<name>]`: the loop `agent`, `prompt`, `check` and `verify` commands, and the run and schedule options
 - `[[hooks]]`: `event`, `command`
 - `[env]`: every key and value
 
 Room layout stays out of a repo's reach: a project config carrying a `[layout]` table (including tmux status `#(...)` and popup commands) is refused, with the fix to move it to your per-machine config. Any field RimZ can execute must enter this hash, and a unit test fails if one slips out. The mechanics, the grant record, and the diff are in [the trust internals](../internals/harness/trust.md); the command is in [the trust reference](../reference/cli/hooks-trust.md#project-trust).
+
+Composed prompt contents normally travel by private artifact path. Pi is the exception: its replacement surface is `--system-prompt`, so the full prompt is visible to same-user process inspection such as `ps`; RimZ caps it at 120 KiB.
 
 Per-machine loop schedules are separate: a `check = "<shell>"` line in your own `~/.config/rimz/loop.toml` is your command, not a repo's. A clone can supply only project `[tasks]`, and those need both a trust grant for the config and a machine-local `rimz loop enable <name>` before they run unattended. Until trust, a same-named machine task remains the runnable definition; after trust, the project definition is visible but defaults disabled here.
 
