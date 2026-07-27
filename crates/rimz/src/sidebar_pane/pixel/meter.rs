@@ -47,11 +47,9 @@ impl MeterRaster {
             .zip(apportion_pixels(&active, fill_px))
             .filter_map(|((_, color), width)| (width > 0).then_some((width, *color)))
             .collect::<Vec<_>>();
-        if fill_px == 0 {
+        // Health is only painted by an unsegmented fill; omit unused key data.
+        if fill_px == 0 || !runs.is_empty() {
             health = [0; 3];
-        }
-        if let Some((_, color)) = runs.first_mut() {
-            *color = health;
         }
         for (width, color) in runs.iter_mut().skip(1) {
             if *width <= 2 {
@@ -349,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn rasterize_uses_health_then_segment_colors_and_carves_notch() {
+    fn rasterize_uses_each_segment_color_and_carves_notch() {
         let image = rasterize(&MeterRaster::new(
             2,
             1.0,
@@ -357,11 +355,28 @@ mod tests {
             vec![(1, [9, 9, 9]), (1, [7, 8, 9])],
             [4, 5, 6],
         ));
-        assert_eq!(pixel(&image, 0, 6), [1, 2, 3, 255]);
+        assert_eq!(
+            pixel(&image, 0, 6),
+            [9, 9, 9, 255],
+            "the first run keeps its supplied composition color"
+        );
         assert_eq!(pixel(&image, 8, 6), [0, 0, 0, 0]);
         assert_eq!(pixel(&image, 9, 8), [0, 0, 0, 0]);
         assert_eq!(pixel(&image, 10, 6), [7, 8, 9, 255]);
         assert_eq!(pixel(&image, 15, 7), [7, 8, 9, 255]);
+
+        let seeded = rasterize(&MeterRaster::new(
+            2,
+            0.5,
+            [9, 9, 9],
+            vec![(1, [1, 2, 3])],
+            [4, 5, 6],
+        ));
+        assert_eq!(
+            pixel(&seeded, 0, 6),
+            [1, 2, 3, 255],
+            "a caller-seeded health color passes through unchanged"
+        );
     }
 
     #[test]
@@ -376,7 +391,7 @@ mod tests {
             MeterRaster::new(2, 1.0, [1, 2, 3], Vec::new(), [9, 8, 7]),
             "a full fill covers the track color"
         );
-        assert_eq!(
+        assert_ne!(
             MeterRaster::new(
                 2,
                 0.125,
@@ -391,7 +406,24 @@ mod tests {
                 vec![(1, [5, 5, 5]), (1, [8, 8, 8])],
                 [7, 8, 9],
             ),
-            "the first run uses health and a two-pixel later run is all notch"
+            "the visible first run keeps its supplied segment color"
+        );
+        assert_eq!(
+            MeterRaster::new(
+                2,
+                0.125,
+                [1, 2, 3],
+                vec![(1, [9, 9, 9]), (1, [4, 5, 6])],
+                [7, 8, 9],
+            ),
+            MeterRaster::new(
+                2,
+                0.125,
+                [9, 8, 7],
+                vec![(1, [9, 9, 9]), (1, [4, 5, 6])],
+                [7, 8, 9],
+            ),
+            "the fallback health color is absent from a composed raster"
         );
     }
 

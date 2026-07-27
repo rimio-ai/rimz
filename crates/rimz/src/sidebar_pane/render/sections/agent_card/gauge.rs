@@ -93,8 +93,8 @@ pub(super) fn bar_row(
 /// breakdown, every severity splits the fill into cache-read / cache-write /
 /// fresh-input segments. Components below 0.5% of the filled window fold into
 /// the lead run; each remaining accent starts with a gap-fronted `╺` cap, and
-/// the segmented fill ends flush at a whole cell. The `▣` glyph wears the same
-/// severity, so glyph, bar, and the `▤` line below speak one urgency. The value
+/// the segmented fill ends flush at a whole cell. The cache-read run carries
+/// severity when present; the `▣` glyph and `▤` line always carry it. The value
 /// prefers a one-decimal precise fraction (`78.2%`) over the integer gauge. An
 /// empty (0%) window reads the hollow `▢`; any usage fills it to `▣`.
 pub(super) fn gauge_line(
@@ -115,14 +115,12 @@ pub(super) fn gauge_line(
         fill
     };
     let severity = row_severity(row, bands);
-    // One health amount drives the whole row: the bar's filled run, the `▣`
-    // glyph, and the `▤` line below all use the same tone. The composition
-    // segments (where the window went) ride the bar at every severity; the
-    // dominant cache-read run carries the row health color while cache-write and
-    // fresh input stay flat accents beside it.
+    // One health amount drives the row's `▣` glyph and `▤` line. When present,
+    // the cache-read segment carries that same tone; without cache reads the bar
+    // keeps the flat cache-write and fresh-input composition tones.
     let amount = severity_heat_amount(severity, percent, row.context_used_tokens(), bands);
     let color = theme.heat_tone(amount);
-    let segments = gauge_segments(theme, row);
+    let segments = gauge_segments(theme, row, color);
     let glyph = if percent == 0 {
         theme.glyph(GlyphRole::MeterContextEmpty)
     } else {
@@ -150,8 +148,8 @@ pub(super) fn gauge_line(
                 return spans;
             }
             match &segments {
-                Some(segments) => context_gauge_spans(theme, amount, segments, fill, bar_width),
-                None => context_gauge_spans(theme, amount, &[], fill, bar_width),
+                Some(segments) => context_gauge_spans(theme, color, segments, fill, bar_width),
+                None => context_gauge_spans(theme, color, &[], fill, bar_width),
             }
         },
         width,
@@ -280,29 +278,33 @@ fn correlated_current_usage(row: &SidebarRow) -> Option<&AgentCurrentUsage> {
 }
 
 /// The context bar's color segments, when the per-message breakdown is known,
-/// left to right: cache reads (row health tone, seeded with green), cache writes
-/// (compaction/delegation violet), fresh `input` (the expense vermilion) — the
-/// same tones the context line's markers wear, so the line legends the bar by
-/// construction. The rich statusline blob is preferred; the row-level
-/// [`SidebarRow::call_split`] stands in when the blob carries no split. `None`
-/// when neither source reported one (a
+/// left to right: cache reads (the row health tone), cache writes
+/// (compaction/delegation violet), fresh `input` (the expense vermilion). The
+/// flat composition tones match the context line's markers, so the line legends
+/// the bar by construction. The rich statusline blob is preferred; the
+/// row-level [`SidebarRow::call_split`] stands in when the blob carries no split.
+/// `None` when neither source reported one (a
 /// fresh session, or a statusline blob cleared by `/compact` — a rollout-fed
 /// split refreshes with the next call instead), so the bar falls back to a
 /// single-color ramp.
-pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, Color); 3]> {
+pub(super) fn gauge_segments(
+    theme: &Theme,
+    row: &SidebarRow,
+    health: Color,
+) -> Option<[(u64, Color); 3]> {
     if let Some(usage) = correlated_current_usage(row) {
         let input = usage.input_tokens.unwrap_or(0);
         let writes = usage.cache_creation_input_tokens.unwrap_or(0);
         let reads = usage.cache_read_input_tokens.unwrap_or(0);
         return (input + writes + reads > 0).then_some([
-            (reads, theme.component(Component::CacheRead)),
+            (reads, health),
             (writes, theme.component(Component::CacheWrite)),
             (input, theme.component(Component::Input)),
         ]);
     }
     let split = row.call_split()?;
     (split.filled() > 0).then_some([
-        (split.cache_read, theme.component(Component::CacheRead)),
+        (split.cache_read, health),
         (split.cache_write, theme.component(Component::CacheWrite)),
         (split.fresh_input, theme.component(Component::Input)),
     ])
