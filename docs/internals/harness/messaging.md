@@ -261,7 +261,7 @@ Content:
 
 The agent handle is the shortest unique selector over addressable agents: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down this ladder. System records and `--no-from` sends stay verbatim.
 
-The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` becomes a first-class `Message` transcript entry with structured `from`; `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
+The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` becomes a first-class `Message` transcript entry with structured `from`; `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. When the agent has an open question, the first human `Prompt` segment instead becomes its id-stamped `Answer`; an agent-authored `Message` never answers it. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
 
 ## Smart compaction
 
@@ -360,11 +360,11 @@ Hook and delivery paths append to fixed 7-day buckets at `transcript/<bucket-sta
 
 | Kind | Records | Reads back as |
 | --- | --- | --- |
-| `Prompt` | a human prompt | `user: @receiver, text` |
+| `Prompt` | a human prompt when no question is open | `user: @receiver, text` |
 | `Message` | an inter-agent delivery, with structured `from` | `@sender: @receiver, text` |
 | `Assistant` | a root turn's final assistant message | `@receiver: text` |
 | `Ask` | a native question, when a blocking hook marks the agent waiting; `questions` carry option labels and descriptions | the agent's question |
-| `Answer` | the effective answer, when the pane answer releases the waiting row | `you` to the agent |
+| `Answer` | the effective answer from the native prompt UI or the first human prompt submitted while a question is open | `you` to the agent, folded into its ask card |
 | `Error` | a hook-path provider error newly merged into `AgentContext.turn_error` | `@receiver: error text`, styled as an error |
 
 ### Causality
@@ -389,7 +389,7 @@ An agent holding a permission prompt, plan approval, or question reserves its in
 
 A blocking hook mints an `ask_` id at ingestion and writes it onto the `AwaitingInput` signal. The reducer projects it to `AgentState.open_ask` and clears it on the same edges that clear `waiting_since`. Old events without an id still replay as waiting rows, just without a structured ask.
 
-Question and plan hooks append a transcript `Ask` entry carrying the same id, parsed questions, and the agent's ask-time assistant text. Permission hooks keep their short tool summary on `open_ask` and synthesize the adapter's safe options at read time, which avoids recording a transcript ask that has no native closing answer event. `rimz asks` treats `is_awaiting_input` plus `open_ask` as truth and joins the parsed questions and assistant text by id only, exposing that text as `context`.
+Question and plan hooks append a transcript `Ask` entry carrying the same id, parsed questions, and the agent's ask-time assistant text. Permission hooks keep their short tool summary on `open_ask` and synthesize the adapter's safe options at read time, which avoids recording a transcript ask that has no native closing answer event. A later turn-start hook classifies its first human prompt as an id-stamped free-text answer when that question remains open; this closes the durable ask even when the provider emitted no native answer event. `rimz asks` treats `is_awaiting_input` plus `open_ask` as truth and joins the parsed questions and assistant text by id only, exposing that text as `context`.
 
 `rimz answer` validates every selector before touching the pane, then re-reads the rollup and requires the target id to still be the agent's current open ask. That compare-and-swap is what stops a stale bridge response from answering a newer prompt. The Claude adapter maps user-question answers to native keys and paste actions, permission `allow` to digit 1, and plan `approve` to Shift-Tab. Each permission or plan ask lists only that single confirmable action; Escape-based rejection, persistent grants, refinement text, and manual-review approval fail before delivery and name the pane as the place to do it.
 

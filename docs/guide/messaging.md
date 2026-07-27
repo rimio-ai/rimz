@@ -210,7 +210,7 @@ rimz answer ask_0123456789abcdef 2
 
 One answer command submits the whole ask. Positional selectors cover one choice per question and comma-separated multi-select choices; JSON input carries mixed choices and free text across several questions. The ask id is a compare-and-swap token, so a prompt already answered or superseded receives no stale keystrokes.
 
-An answer differs from a message. A waiting prompt owns the agent's input and keeps ordinary messages parked; a supported answer enters the prompt UI, releases it, and confirms that lifecycle change before returning. Claude questions support picks, multi-select, and free text. A permission ask offers `allow` once, and a plan approval offers caution-marked `approve`, which enables auto-accept edits. Denial, persistent grants, keep-planning, refinement text, and manual-review approval stay in the Claude pane because their stable controls cannot provide the same confirmation contract.
+An answer differs from a message. A waiting prompt owns the agent's input and keeps ordinary messages parked; a supported answer enters the prompt UI, releases it, and confirms that lifecycle change before returning. Claude questions support picks, multi-select, and free text. You can also Escape a question and type free text directly in the pane; when that text starts the next turn, RimZ records it as the open question's answer rather than a new prompt. A permission ask offers `allow` once, and a plan approval offers caution-marked `approve`, which enables auto-accept edits. Denial, persistent grants, keep-planning, refinement text, and manual-review approval stay in the Claude pane because their stable controls cannot provide the same confirmation contract.
 
 ## See also
 

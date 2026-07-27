@@ -118,6 +118,11 @@ pub(super) fn split_rendered_handle(handle: &str) -> (&str, Option<&str>) {
 
 pub(super) fn dedup_asks(entries: Vec<TranscriptEntry>) -> Vec<TranscriptEntry> {
     let mut latest_asks: HashMap<AgentKey, (usize, jiff::Timestamp)> = HashMap::new();
+    let answered_ids = entries
+        .iter()
+        .filter(|entry| entry.entry == TranscriptKind::Answer)
+        .filter_map(|entry| entry.id.clone())
+        .collect::<HashSet<_>>();
     for (index, entry) in entries.iter().enumerate() {
         if entry.entry == TranscriptKind::Ask {
             let key = entry_key(entry);
@@ -137,8 +142,12 @@ pub(super) fn dedup_asks(entries: Vec<TranscriptEntry>) -> Vec<TranscriptEntry> 
         .filter_map(|(index, entry)| {
             if entry.entry == TranscriptKind::Ask {
                 let key = entry_key(&entry);
-                return (latest_asks.get(&key).map(|(latest, _)| *latest) == Some(index))
-                    .then_some(entry);
+                let is_latest = latest_asks.get(&key).map(|(latest, _)| *latest) == Some(index);
+                let is_answered = entry
+                    .id
+                    .as_ref()
+                    .is_some_and(|id| answered_ids.contains(id));
+                return (is_latest || is_answered).then_some(entry);
             }
             Some(entry)
         })
