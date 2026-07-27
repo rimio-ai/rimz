@@ -148,7 +148,8 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         (0, 5, "─────"),
         (100, 5, "━━━━━"),
     ] {
-        let spans = context_gauge_spans(&plain, 0.5, &[], f64::from(percent), width);
+        let spans =
+            context_gauge_spans(&plain, plain.heat_tone(0.5), &[], f64::from(percent), width);
         assert_eq!(text(&spans), expected, "{percent}% over width {width}");
         assert_no_fg(&spans);
     }
@@ -158,12 +159,24 @@ fn gauge_bars_map_severity_and_quantize_segments() {
     assert_eq!(filled_half_cells(87.5, 4), (3, true));
     assert_eq!(filled_half_cells(100.0, 4), (4, false));
     assert_eq!(
-        text(&context_gauge_spans(&plain, 0.5, &[], f64::EPSILON, 4)),
+        text(&context_gauge_spans(
+            &plain,
+            plain.heat_tone(0.5),
+            &[],
+            f64::EPSILON,
+            4,
+        )),
         "╸───",
         "a nonzero fill keeps a half-cell floor"
     );
     assert_eq!(
-        text(&context_gauge_spans(&plain, 0.5, &[], 87.5, 4)),
+        text(&context_gauge_spans(
+            &plain,
+            plain.heat_tone(0.5),
+            &[],
+            87.5,
+            4,
+        )),
         "━━━╸",
         "a fractional tail uses the themable heavy left half"
     );
@@ -175,7 +188,13 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         (5_000, plain.component(Component::CacheWrite)),
         (2_000, plain.component(Component::Input)),
     ];
-    let rendered = text(&context_gauge_spans(&plain, 0.6, &segments, 60.0, 10));
+    let rendered = text(&context_gauge_spans(
+        &plain,
+        plain.heat_tone(0.6),
+        &segments,
+        60.0,
+        10,
+    ));
     assert_eq!(rendered, "━━━╺━╺────");
     assert_eq!(
         rendered.chars().count(),
@@ -197,7 +216,13 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         4,
         "the track fills the remainder"
     );
-    assert_no_fg(&context_gauge_spans(&plain, 0.6, &segments, 60.0, 10));
+    assert_no_fg(&context_gauge_spans(
+        &plain,
+        plain.heat_tone(0.6),
+        &segments,
+        60.0,
+        10,
+    ));
 
     let lit = Theme::fixed(false);
     let regression = [
@@ -212,7 +237,13 @@ fn gauge_bars_map_severity_and_quantize_segments() {
             (11_000, lit.component(Component::CacheWrite)),
             (0, lit.component(Component::Input)),
         ];
-        let spans = context_gauge_spans(&lit, 0.0, &segments, f64::from(percent), width);
+        let spans = context_gauge_spans(
+            &lit,
+            lit.heat_tone(0.0),
+            &segments,
+            f64::from(percent),
+            width,
+        );
         assert_eq!(text(&spans), expected, "{percent}% over width {width}");
         assert_eq!(
             spans.iter().any(|span| {
@@ -223,7 +254,7 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         );
     }
 
-    let half_tail = context_gauge_spans(&lit, 0.0, &segments, 55.0, 10);
+    let half_tail = context_gauge_spans(&lit, lit.heat_tone(0.0), &segments, 55.0, 10);
     let half_tail_text = text(&half_tail);
     assert_eq!(half_tail_text, "━━━╺━╺────");
     assert!(
@@ -239,7 +270,13 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         "the last segment sits flush against the track"
     );
 
-    let narrow = text(&context_gauge_spans(&plain, 0.0, &segments, 20.0, 10));
+    let narrow = text(&context_gauge_spans(
+        &plain,
+        plain.heat_tone(0.0),
+        &segments,
+        20.0,
+        10,
+    ));
     assert_eq!(
         narrow, "━╺────────",
         "the smallest of three segments drops when only two cells fill"
@@ -250,7 +287,7 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         (9, lit.component(Component::CacheWrite)),
         (1, lit.component(Component::Input)),
     ];
-    let ordered_spans = context_gauge_spans(&lit, 0.0, &ordered, 50.0, 20);
+    let ordered_spans = context_gauge_spans(&lit, lit.heat_tone(0.0), &ordered, 50.0, 20);
     assert_eq!(text(&ordered_spans), "━━━━━╺━━━╺──────────");
     let ink = |color| {
         ordered_spans
@@ -282,7 +319,13 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         (6, plain.component(Component::Input)),
     ];
     assert_eq!(
-        text(&context_gauge_spans(&plain, 0.0, &forced, 30.0, 10)),
+        text(&context_gauge_spans(
+            &plain,
+            plain.heat_tone(0.0),
+            &forced,
+            30.0,
+            10,
+        )),
         "━╺╺───────",
         "minimum shapes win when fixed semantic order makes inversion unavoidable"
     );
@@ -294,7 +337,7 @@ fn gauge_bars_map_severity_and_quantize_segments() {
     ] {
         let rendered = text(&context_gauge_spans(
             &plain,
-            0.0,
+            plain.heat_tone(0.0),
             segments,
             percent as f64,
             width,
@@ -308,7 +351,7 @@ fn gauge_bars_map_severity_and_quantize_segments() {
     // A weightless split falls back to a single flat health run.
     let spans = context_gauge_spans(
         &plain,
-        0.5,
+        plain.heat_tone(0.5),
         &[
             (0, plain.component(Component::CacheRead)),
             (0, plain.component(Component::Input)),
@@ -321,14 +364,15 @@ fn gauge_bars_map_severity_and_quantize_segments() {
 
     // In truecolor the cache-read run uses the flat severity tone, while
     // cache-write and fresh input stay flat in their accents.
+    let amount = 0.6;
+    let health = truecolor.heat_tone(amount);
     let segments = [
-        (9_000_u64, truecolor.component(Component::CacheRead)),
+        (9_000_u64, health),
         (3_000, truecolor.component(Component::CacheWrite)),
         (1_500, truecolor.component(Component::Input)),
     ];
-    let amount = 0.6;
     let mut runs: Vec<Vec<Option<Color>>> = vec![Vec::new()];
-    for span in &context_gauge_spans(&truecolor, amount, &segments, 90.0, 16) {
+    for span in &context_gauge_spans(&truecolor, health, &segments, 90.0, 16) {
         let content = span.content.as_ref();
         if content == "╺" {
             runs.push(Vec::new());
@@ -382,7 +426,7 @@ fn context_gauge_drops_subscale_accents_and_seals_segmented_tail() {
 
     let noise = context_gauge_spans(
         &theme,
-        0.0,
+        theme.heat_tone(0.0),
         &[(87_000, read), (3_000, write), (2, input)],
         45.0,
         30,
@@ -398,7 +442,7 @@ fn context_gauge_drops_subscale_accents_and_seals_segmented_tail() {
 
     let threshold = context_gauge_spans(
         &theme,
-        0.0,
+        theme.heat_tone(0.0),
         &[(199, read), (0, write), (1, input)],
         100.0,
         10,
@@ -408,7 +452,7 @@ fn context_gauge_drops_subscale_accents_and_seals_segmented_tail() {
 
     let sealed = text(&context_gauge_spans(
         &theme,
-        0.0,
+        theme.heat_tone(0.0),
         &[(183_000, read), (0, write), (1_000, input)],
         92.0,
         30,
@@ -418,8 +462,8 @@ fn context_gauge_drops_subscale_accents_and_seals_segmented_tail() {
 
     let flat = context_gauge_spans(
         &theme,
-        2.0 / 3.0,
-        &[(90_000, read), (0, write), (2, input)],
+        theme.heat_tone(2.0 / 3.0),
+        &[(90_000, theme.heat_tone(2.0 / 3.0)), (0, write), (2, input)],
         f64::EPSILON,
         30,
     );
@@ -443,9 +487,9 @@ fn context_gauge_collapsed_split_keeps_half_tail_in_health_tone() {
 
     let spans = context_gauge_spans(
         &theme,
-        amount,
+        health,
         &[
-            (202_000, read),
+            (202_000, health),
             (0, theme.component(Component::CacheWrite)),
             (994, input),
         ],
@@ -464,6 +508,57 @@ fn context_gauge_collapsed_split_keeps_half_tail_in_health_tone() {
             .iter()
             .all(|span| span.style.fg != Some(read) && span.style.fg != Some(input)),
         "collapsed component colors fold into the flat health run"
+    );
+}
+
+#[test]
+fn context_gauge_uses_the_first_surviving_segments_tone() {
+    let theme = Theme::fixed(false);
+    let health = theme.heat_tone(0.0);
+    let write = theme.component(Component::CacheWrite);
+    let input = theme.component(Component::Input);
+
+    let write_only = context_gauge_spans(
+        &theme,
+        health,
+        &[(0, health), (26_000, write), (0, input)],
+        50.0,
+        10,
+    );
+    assert_eq!(text(&write_only), "━━━━━─────");
+    assert!(
+        write_only
+            .iter()
+            .filter(|span| span.content.contains('━'))
+            .all(|span| span.style.fg == Some(write)),
+        "a cache-write-only fill stays violet instead of inheriting health"
+    );
+
+    let composed = context_gauge_spans(
+        &theme,
+        health,
+        &[(0, health), (20_000, write), (6_000, input)],
+        50.0,
+        10,
+    );
+    let write_at = composed
+        .iter()
+        .position(|span| span.style.fg == Some(write))
+        .expect("cache-write lead");
+    let input_at = composed
+        .iter()
+        .position(|span| span.style.fg == Some(input))
+        .expect("fresh-input accent");
+    assert!(
+        write_at < input_at,
+        "cache-write leads fresh input in composition order"
+    );
+    assert!(
+        composed
+            .iter()
+            .filter(|span| span.content.contains('━') || span.content == "╺")
+            .all(|span| span.style.fg != Some(health)),
+        "an absent cache-read segment contributes no health-colored fill"
     );
 }
 
@@ -846,7 +941,7 @@ fn nerd_font_glyph_set_reaches_token_and_meter_labels() {
         "\u{ed58} 76k \u{f103} 12k \u{f102} 64k \u{f1978} 68k"
     );
 
-    let spans = context_gauge_spans(&theme, 0.5, &[], 50.0, 4);
+    let spans = context_gauge_spans(&theme, theme.heat_tone(0.5), &[], 50.0, 4);
     assert_eq!(text(&spans), "━━──", "drawn meter bars stay Unicode");
 
     let spans = context_breakdown_spans(

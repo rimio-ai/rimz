@@ -817,11 +817,10 @@ fn pi_card_renders_cache_write_in_the_per_call_composition() {
 
 /// The context bar reads left to right like the context line, segment order
 /// driven by the row-level split. Style-level, since text goldens cannot see
-/// the segment colors. Two inputs prove the ladder: a Codex two-bucket fill
-/// (cache-read then fresh-input — no cache-write segment exists to paint, so the
-/// context line stays the bar's legend by construction), and a Claude
-/// three-bucket fill where the cache-write accent slots between the cache-read
-/// health run and the fresh-input tail.
+/// the segment colors. Cache-write-only and cache-write-plus-input cases prove
+/// that an absent cache-read run contributes no health tone. Codex and Claude
+/// cases with cache reads prove that common two- and three-bucket compositions
+/// retain their existing order and colors.
 #[test]
 fn calm_context_bar_orders_segments_left_to_right() {
     let theme = Theme::fixed(false);
@@ -846,6 +845,62 @@ fn calm_context_bar_orders_segments_left_to_right() {
     let cache_write = theme
         .style(theme.component(Component::CacheWrite), Modifier::empty())
         .fg;
+    let health = theme.style(theme.heat_tone(0.0), Modifier::empty()).fg;
+
+    let context_agent = |name: &str, writes: u64, input: u64| {
+        let mut agent = agent(
+            name,
+            "claude",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            Some("index docs"),
+        );
+        let mut context = claude_context(fixed_now());
+        context.tokens = Some(AgentTokenUsage {
+            context_window_size: Some(100_000),
+            used_percentage: Some(26),
+            remaining_percentage: Some(74),
+            current_context_tokens: None,
+            current_usage: Some(AgentCurrentUsage {
+                input_tokens: Some(input),
+                output_tokens: Some(0),
+                cache_creation_input_tokens: Some(writes),
+                cache_read_input_tokens: Some(0),
+            }),
+            session_usage: None,
+        });
+        agent.context = Some(context);
+        agent
+    };
+
+    let write_only = bar_styles_for(context_agent("claude-write", 26_000, 0));
+    assert!(
+        write_only.iter().any(|style| *style == cache_write),
+        "a cache-write-only fill uses the cache-write tone: {write_only:?}"
+    );
+    assert!(
+        write_only.iter().all(|style| *style != health),
+        "a cache-write-only fill does not inherit the absent cache-read health tone: {write_only:?}"
+    );
+
+    let write_and_input = bar_styles_for(context_agent("claude-mixed", 20_000, 6_000));
+    let write_at = write_and_input
+        .iter()
+        .position(|style| *style == cache_write)
+        .expect("the cache-write lead");
+    let input_at = write_and_input
+        .iter()
+        .position(|style| *style == input)
+        .expect("the fresh-input accent");
+    assert!(
+        write_at < input_at,
+        "cache-write leads fresh input when cache-read is absent: {write_and_input:?}"
+    );
+    assert!(
+        write_and_input.iter().all(|style| *style != health),
+        "a mixed fill without cache reads has no health-colored run: {write_and_input:?}"
+    );
 
     // Two-bucket Codex fill from the row-level split: cache-read run then the
     // fresh-input accent, with no cache-write segment to paint.

@@ -266,8 +266,8 @@ fn two_tone_bar(
 /// axes just like [`ContextSeverity::classify`]. A missing or stale axis falls
 /// back to the tier anchor so the tone never understates a stamped severity:
 /// green starts warming toward yellow, then yellow toward amber, then amber
-/// toward red. This amount also drives the bar's filled health tone, so glyph,
-/// bar, and `▤` line read one urgency.
+/// toward red. This amount drives the `▣` and `▤` glyphs and, when present, the
+/// bar's cache-read run.
 pub(in crate::sidebar_pane::render) fn severity_heat_amount(
     severity: ContextSeverity,
     percent: u8,
@@ -404,18 +404,19 @@ pub(in crate::sidebar_pane::render) fn window_style(theme: &Theme, window: u64) 
 /// Keep a segment at ≥ 1/200th (0.5%) of the filled window; smaller is noise.
 const SEGMENT_VISIBILITY_FLOOR: u128 = 200;
 
-/// The context meter's health bar: the first visible segment paints in the
-/// row's current health tone (`theme.heat_tone(amount)`), while later accent
-/// segments (cache-write, fresh input) stay flat in their own tones. Components
-/// below 0.5% of the filled window fold into the lead run; each remaining accent
-/// starts with a gap-fronted half-rule cap (`╺` by default). A segmented bar
-/// quantizes to whole cells so its last cap sits flush against the track, while
-/// a flat bar keeps nearest-half-cell resolution. Segments too numerous for the
-/// filled run drop smallest-first. Under `NO_COLOR` color collapses while the
-/// leading gap in each accent cap keeps composition boundaries legible by shape.
+/// The context meter's health bar paints every visible segment in its supplied
+/// tone. The caller seeds cache reads with the row's health tone; cache-write
+/// and fresh-input segments keep their flat composition tones. Components below
+/// 0.5% of the filled window fold into the lead run; each remaining accent starts
+/// with a gap-fronted half-rule cap (`╺` by default). A segmented bar quantizes
+/// to whole cells so its last cap sits flush against the track, while a flat bar
+/// keeps nearest-half-cell resolution. Segments too numerous for the filled run
+/// drop smallest-first. The fallback tone covers a bar with no composition data.
+/// Under `NO_COLOR` color collapses while the leading gap in each accent cap
+/// keeps composition boundaries legible by shape.
 pub(in crate::sidebar_pane::render) fn context_gauge_spans(
     theme: &Theme,
-    amount: f32,
+    fallback: Color,
     segments: &[(u64, Color)],
     fill_pct: f64,
     width: usize,
@@ -438,8 +439,9 @@ pub(in crate::sidebar_pane::render) fn context_gauge_spans(
         (drawn < width).then(|| Span::styled(bar_track.repeat(width - drawn), theme.faint()))
     };
     if filled == 0 || weight == 0 || survivors.len() <= 1 {
-        // No split to draw: the whole filled run uses the current health tone.
-        let color = theme.heat_tone(amount);
+        let color = survivors
+            .first()
+            .map_or(fallback, |(index, _)| segments[*index].1);
         let mut spans = filled_run_spans(theme, color, filled);
         if trailing_half {
             spans.push(Span::styled(
@@ -519,7 +521,7 @@ pub(in crate::sidebar_pane::render) fn context_gauge_spans(
     let mut spans = Vec::with_capacity(active.len() * 2 + 1);
     spans.extend(filled_run_spans(
         theme,
-        theme.heat_tone(amount),
+        segments[active[0].0].1,
         lead_ink / 2,
     ));
     for (index, _, ink) in accents {
