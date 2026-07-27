@@ -58,14 +58,18 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
         &config,
         args.value.as_deref().expect("value checked"),
     )?;
-    let affected = snapshot.root_agents().filter(|agent| {
-        !agent.agent_id.is_empty()
-            && !agent.agent_id.is_provisional()
-            && match &scope {
-                DailyBudgetScope::Fleet => true,
-                DailyBudgetScope::Account(kind) => agent.kind == *kind,
-            }
-    });
+    let affected = snapshot
+        .agents
+        .iter()
+        .filter(|agent| !agent.is_provider_subagent())
+        .filter(|agent| {
+            !agent.agent_id.is_empty()
+                && !agent.agent_id.is_provisional()
+                && match &scope {
+                    DailyBudgetScope::Fleet => true,
+                    DailyBudgetScope::Account(kind) => agent.kind == *kind,
+                }
+        });
     let continue_text = config.resume.auto_continue_text.trim();
     for agent in affected {
         rimz::harness::budget::clear_budget_park(

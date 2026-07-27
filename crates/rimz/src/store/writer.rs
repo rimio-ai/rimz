@@ -375,13 +375,14 @@ impl Store {
         })
     }
 
-    /// Bind one resumed session to the pane its wrapper occupies. Placement
-    /// evidence only: the fold moves `pane` and `runtime_owner` and nothing else.
+    /// Bind one resumed session to the pane its wrapper occupies and persist
+    /// the stable identity exported to that process.
     #[must_use = "durability barrier; check the result"]
     pub fn attach_agent_pane(
         &self,
         kind: &crate::ids::AgentKind,
         agent_id: &crate::ids::AgentSessionId,
+        launch_id: Option<&crate::ids::AgentSessionId>,
         session_name: &str,
         pane_id: &crate::ids::PaneId,
     ) -> Result<()> {
@@ -394,6 +395,7 @@ impl Store {
                 kind,
                 AgentAttachPayload {
                     agent_id: agent_id.clone(),
+                    launch_id: launch_id.cloned(),
                     pane_id: pane_id.clone(),
                     pane_pid: Some(std::process::id()),
                     runtime_owner,

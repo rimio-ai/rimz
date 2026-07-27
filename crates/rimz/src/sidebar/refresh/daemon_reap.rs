@@ -52,7 +52,7 @@ fn should_probe_codex_daemon_reap(agents: &[AgentState], codex_rc_enabled: bool)
         || agents.iter().any(|agent| {
             let daemon_hooked = crate::agents::spec_by_kind(agent.kind.as_str())
                 .is_some_and(|definition| definition.capabilities.daemon_hooked_sessions);
-            daemon_hooked && agent.parent_agent_id.is_none()
+            daemon_hooked && !agent.is_provider_subagent()
         })
 }
 

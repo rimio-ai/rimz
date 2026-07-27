@@ -161,10 +161,11 @@ fn attach_agent_pane_records_process_owned_placement() {
     let store = Store::open(paths, runtime_paths).expect("open store");
     let kind = AgentKind::new_unchecked("codex");
     let agent_id = AgentSessionId::from("sess-resumed");
+    let launch_id = AgentSessionId::from("launch-resumed");
     let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%4");
 
     store
-        .attach_agent_pane(&kind, &agent_id, "rimz-test", &pane_id)
+        .attach_agent_pane(&kind, &agent_id, Some(&launch_id), "rimz-test", &pane_id)
         .expect("attach resumed agent");
 
     let events = store.read_events().expect("read attach");
@@ -179,6 +180,7 @@ fn attach_agent_pane_records_process_owned_placement() {
         panic!("agent attach event")
     };
     assert_eq!(payload.agent_id, agent_id);
+    assert_eq!(payload.launch_id, Some(launch_id));
     assert_eq!(payload.pane_id, pane_id);
     assert_eq!(payload.pane_pid, Some(std::process::id()));
     assert_eq!(

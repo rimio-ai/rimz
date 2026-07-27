@@ -522,7 +522,7 @@ mod parse {
             );
         }
 
-        let resume = minimal_exec_request(
+        let mut resume = minimal_exec_request(
             "codex",
             ExecAction::Resume {
                 session_id: "sess-resume".to_owned(),
@@ -535,6 +535,13 @@ mod parse {
                 AgentKind::new_unchecked("codex"),
                 AgentSessionId::from("sess-resume"),
             ))
+        );
+        resume.identity.launch_id = Some("sess-resume".to_owned());
+        assert!(
+            super::exec::exec_launch_identity(&resume)
+                .expect("resume-only launch identity")
+                .is_none(),
+            "a resume id stamps the existing session rather than creating a provisional launch"
         );
         for action in [
             ExecAction::Launch {

@@ -736,7 +736,7 @@ struct ResumeCandidate {
 
 impl ResumeCandidate {
     fn from_agent(agent: &AgentState, conversation_present: impl FnOnce() -> bool) -> Option<Self> {
-        if !root_session(agent) {
+        if !full_session(agent) {
             return None;
         }
         Some(Self::from_agent_identity(agent, conversation_present()))
@@ -990,7 +990,7 @@ fn resolve_scope_lane(
     let scope = raw_scope.strip_prefix('#').unwrap_or(raw_scope);
     if let Some(agent) = agents
         .iter()
-        .filter(|agent| root_session(agent))
+        .filter(|agent| full_session(agent))
         .filter(|agent| crate::harness::target::agent_in_worktree(agent, scope))
         .min_by(|left, right| {
             newest_cmp(
@@ -1047,7 +1047,7 @@ fn resolve_current_lane(
     }
     let agent = agents
         .iter()
-        .filter(|agent| root_session(agent))
+        .filter(|agent| full_session(agent))
         .filter(|agent| normalized_agent_worktree(agent).as_deref() == Some(current.as_path()))
         .min_by(|left, right| {
             newest_cmp(
@@ -1090,7 +1090,7 @@ fn worktree_matches_scope(worktree: &LaneWorktree, scope: &str) -> bool {
 fn current_lane_candidates(agents: &[AgentState], lane: &ResolvedLane) -> Vec<AgentState> {
     let mut candidates = agents
         .iter()
-        .filter(|agent| root_session(agent))
+        .filter(|agent| full_session(agent))
         .filter(|agent| normalized_agent_worktree(agent).as_deref() == Some(lane.path.as_path()))
         .filter(|agent| {
             lane.channel.as_deref().is_none_or(|channel| {
@@ -1119,8 +1119,8 @@ fn current_lane_candidates(agents: &[AgentState], lane: &ResolvedLane) -> Vec<Ag
     candidates
 }
 
-fn root_session(agent: &AgentState) -> bool {
-    agent.parent_agent_id.is_none()
+fn full_session(agent: &AgentState) -> bool {
+    !agent.is_provider_subagent()
         && !agent.agent_id.is_empty()
         && agent
             .worktree_path
@@ -1307,7 +1307,7 @@ fn lane_summaries(
 ) -> Vec<LaneSummary> {
     let mut groups = BTreeMap::<(PathBuf, Option<String>), Vec<AgentState>>::new();
     let root = crate::worktree::normalize_path_lexical(project_root);
-    for agent in agents.iter().filter(|agent| root_session(agent)) {
+    for agent in agents.iter().filter(|agent| full_session(agent)) {
         let Some(path) = normalized_agent_worktree(agent) else {
             continue;
         };
@@ -1393,6 +1393,27 @@ pub fn materialize_team_restore_tab(
         crate::worktree::exclude_team_scratch(&planned.cwd, &team.scratch_files);
     }
     let team_roles = team.map(|team| team.roles.as_slice());
+    let mut resume_ancestries = planned.cohort.seeds.iter().filter_map(|seed| {
+        let CohortSeed::Resume(agent) = seed else {
+            return None;
+        };
+        Some(agent.parent_agent_id.clone().zip(agent.launch_depth).map(
+            |(parent_agent_id, launch_depth)| {
+                crate::harness::plan::LaunchAncestry {
+                    parent_agent_id,
+                    parent_agent_kind: agent
+                        .parent_agent_kind
+                        .clone()
+                        .unwrap_or_else(|| agent.kind.clone()),
+                    launch_depth,
+                }
+            },
+        ))
+    });
+    let mut ancestry = resume_ancestries.next().flatten();
+    if resume_ancestries.any(|candidate| candidate != ancestry) {
+        ancestry = None;
+    }
     let launch_requests = launch_identity_requests(
         &planned.layout,
         None,
@@ -1402,7 +1423,7 @@ pub fn materialize_team_restore_tab(
         planned.channel.as_deref(),
         None,
         Some(&planned.cohort),
-        None,
+        ancestry.as_ref(),
     )?;
     let batch = if launch_requests.is_empty() {
         None
@@ -1440,7 +1461,7 @@ pub fn materialize_team_restore_tab(
     })
 }
 
-/// Plan restorable named-team tabs from prior root agents.
+/// Plan restorable named-team tabs from prior full agent sessions.
 pub fn plan_team_restore_tabs(
     agents: &[AgentState],
     teams: &TeamsConfig,
@@ -1452,7 +1473,7 @@ pub fn plan_team_restore_tabs(
 ) -> Vec<PlannedTeamTab> {
     let mut groups: BTreeMap<(String, PathBuf), Vec<&AgentState>> = BTreeMap::new();
     for agent in agents {
-        if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
+        if agent.is_provider_subagent() || agent.agent_id.is_empty() {
             continue;
         }
         let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
@@ -1591,14 +1612,14 @@ fn newest_cmp(
 /// `std::env::current_exe()`).
 ///
 /// A candidate qualifies when it is in the caller-supplied roster scope, is a
-/// root agent (subagents ride their parent), still carries a session id and a
-/// worktree, and was not cleanly ended. A pane stamp identifies the incarnation
-/// being replaced when present; a `session.rebirth` boundary retires old stamps,
-/// so an unstamped durable candidate remains resumable and dedupes by provider
-/// session identity. One pane hosts one agent: a relaunch that re-used a pane id
-/// collapses to its newest stamp — the same rule the live sidebar binds by
-/// (`stamped_agent_for_pane`, in `store::snapshot::panes`) — while distinct
-/// sessions without stamps each remain candidates.
+/// full session (provider-native subagents ride their parent), still carries a
+/// session id and worktree, and was not cleanly ended. A pane stamp identifies
+/// the incarnation being replaced when present; a `session.rebirth` boundary
+/// retires old stamps, so an unstamped durable candidate remains resumable and
+/// dedupes by provider session identity. One pane hosts one agent: a relaunch
+/// that re-used a pane id collapses to its newest stamp — the same rule the live
+/// sidebar binds by (`stamped_agent_for_pane`, in `store::snapshot::panes`) —
+/// while distinct sessions without stamps each remain candidates.
 /// The environment one resume plan is built against: where the room lives, what
 /// binary its panes re-enter through, how many panes it may seed, and the
 /// profiles its members replay their posture from.
@@ -1881,7 +1902,7 @@ fn cohort_candidates(
 ) -> Vec<&AgentState> {
     agents
         .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| !agent.agent_id.is_empty())
         .filter(|agent| agent_worktree(agent).is_some_and(|path| worktree_exists(&path)))
         .collect()
@@ -1923,7 +1944,7 @@ pub fn inspect_cohort_relaunch(
     let candidates = agents
         .iter()
         .filter(|agent| {
-            agent.parent_agent_id.is_none()
+            !agent.is_provider_subagent()
                 && agent.worktree_path.as_deref().is_some_and(|path| {
                     crate::worktree::normalize_path_lexical(Path::new(path)) == target
                 })
@@ -2356,7 +2377,13 @@ fn candidate_resume_command(
             identity: crate::harness::launch::ExecIdentity {
                 name: candidate.name.clone(),
                 name_explicit: candidate.name_explicit,
-                launch_id: candidate.launch_id.as_ref().map(ToString::to_string),
+                launch_id: Some(
+                    candidate
+                        .launch_id
+                        .as_ref()
+                        .unwrap_or(&candidate.session_id)
+                        .to_string(),
+                ),
                 params,
             },
         },
@@ -2386,7 +2413,7 @@ pub fn relaunch_spec(
     }
 }
 
-/// Distinct relaunch specs for the closed, resume-capable root members of a
+/// Distinct relaunch specs for the closed, resume-capable full members of a
 /// scoped roster, newest first. When an explicit `--resume` spec matches
 /// nothing, these name what the same scope can actually resume.
 pub fn closed_cohort_specs(
@@ -2395,7 +2422,7 @@ pub fn closed_cohort_specs(
 ) -> Vec<String> {
     let mut members = agents
         .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| !agent.agent_id.is_empty())
         .filter(|agent| !matches!(liveness(agent), AgentLiveness::Live { .. }))
         .filter(|agent| supports_agent_resume(agent))

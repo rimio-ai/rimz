@@ -852,7 +852,11 @@ pub fn enforce(
             scopes: &scopes,
             scope_state: &mut scope_state,
         };
-        for agent in snapshot.root_agents() {
+        for agent in snapshot
+            .agents
+            .iter()
+            .filter(|agent| !agent.is_provider_subagent())
+        {
             enforce_agent(agent, &mut ctx);
         }
     }
@@ -904,7 +908,9 @@ fn evaluate_scopes(
         &runtime.shared_provider_spending_path(),
     );
     let root_kinds = snapshot
-        .root_agents()
+        .agents
+        .iter()
+        .filter(|agent| !agent.is_provider_subagent())
         .map(|agent| agent.kind.clone())
         .collect::<BTreeSet<_>>();
     let mut daily = vec![DailyScopeVerdict {

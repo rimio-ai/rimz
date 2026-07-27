@@ -61,6 +61,7 @@ pub(super) fn rows_from_panes(
 ) -> RowProjection {
     let mut rows = Vec::new();
     let mut agent_panes = Vec::new();
+    let mut nested_agents = Vec::new();
     let mut diagnostics = Vec::new();
     let index = PaneBindingIndex::new(agents);
     let computed_pairings;
@@ -85,7 +86,7 @@ pub(super) fn rows_from_panes(
                 agent_panes.push(push_agent_row(&mut rows, agent, pane, now));
             }
             PaneBindingDisposition::NestedAgent(agent) => {
-                agent_panes.push(pane_agent_from_agent(agent, pane));
+                nested_agents.push((agent, pane));
             }
             PaneBindingDisposition::Idle(row) => {
                 let row = *row;
@@ -122,6 +123,24 @@ pub(super) fn rows_from_panes(
                 }
             }
             PaneBindingDisposition::Ignored => {}
+        }
+    }
+    for (agent, pane) in nested_agents {
+        let parent_kind = agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind);
+        let parent_rendered = agent.parent_agent_id.as_ref().is_some_and(|parent_id| {
+            rows.iter().any(|row| {
+                row.as_agent().is_some()
+                    && row.name == parent_kind.as_str()
+                    && row.id == parent_id.as_str()
+            })
+        });
+        if parent_rendered {
+            agent_panes.push(pane_agent_from_agent(agent, pane));
+        } else {
+            // A pane-backed child can outlive its launching parent. Keep the
+            // normal nested rendering while that parent has a row, but promote
+            // the live child rather than making its pane disappear with it.
+            agent_panes.push(push_agent_row(&mut rows, agent, pane, now));
         }
     }
 

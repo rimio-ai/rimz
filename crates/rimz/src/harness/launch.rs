@@ -204,7 +204,8 @@ pub struct ExecIdentity {
     /// minted and soft names. Carried in the hidden request, not an env var.
     #[serde(default)]
     pub name_explicit: bool,
-    /// Stable RimZ launch id; valid only alongside `name`.
+    /// Stable RimZ launch id. Fresh launches also carry `name`; resumed
+    /// provider sessions may have only their durable session identity.
     pub launch_id: Option<String>,
     /// Canonical launch parameters. `kind_ordinal` remains display-only and is
     /// deliberately absent from wrapper argv and environment wiring.
@@ -770,7 +771,10 @@ pub fn decode_exec_request(
 }
 
 fn validate_exec_request(request: &ExecRequest) -> Result<(), ExecWireErr> {
-    if request.identity.launch_id.is_some() && request.identity.name.is_none() {
+    if request.identity.launch_id.is_some()
+        && request.identity.name.is_none()
+        && !matches!(request.action, ExecAction::Resume { .. })
+    {
         return Err(ExecWireErr::OrphanLaunchId);
     }
     if request.exit_on_run_completion && request.run_id.is_none() {

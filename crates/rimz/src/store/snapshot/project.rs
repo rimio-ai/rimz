@@ -136,7 +136,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
             }
             EventKind::AgentAttach(payload) => {
                 let kind = AgentKind::new_unchecked(envelope.source.clone());
-                reduce_agent_attach(&mut map, &kind, payload);
+                reduce_agent_attach(&mut map, envelope, &kind, payload);
             }
             EventKind::AgentLifecycle(payload) => {
                 reduce_lifecycle_event(&mut map, &mut identity, envelope, payload);
@@ -163,20 +163,35 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
 
 fn reduce_agent_attach(
     map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    event: &EventEnvelope,
     kind: &AgentKind,
     payload: &AgentAttachPayload,
 ) {
     let key = (kind.clone(), payload.agent_id.clone());
-    let Some(state) = map.get_mut(&key) else {
+    if !map.contains_key(&key) && payload.launch_id.is_none() {
         debug!(
             target: "rimz::agent::binding",
             kind = %kind,
             agent_id = %payload.agent_id,
             pane_id = %payload.pane_id,
-            "agent.attached event for unknown session ignored",
+            "legacy agent.attached event for unknown session ignored",
         );
         return;
-    };
+    }
+    // A discovered provider session may have no prior RimZ event. The resume
+    // wrapper knows enough durable identity to seed it before the provider
+    // process starts, so the process can launch children immediately.
+    let state = map.entry(key).or_insert_with(|| {
+        AgentState::seed(
+            kind.clone(),
+            payload.agent_id.clone(),
+            AgentStatus::Idle,
+            event.timestamp,
+        )
+    });
+    if let Some(launch_id) = &payload.launch_id {
+        state.launch_id = Some(launch_id.clone());
+    }
     state.pane = Some(PaneRef {
         pane_pid: payload.pane_pid,
         ..PaneRef::from_id(payload.pane_id.clone())

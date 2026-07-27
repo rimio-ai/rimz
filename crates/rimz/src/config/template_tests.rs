@@ -51,12 +51,16 @@ fn template_defaults_deserialize_to_machine_defaults() {
     )
     .expect("template defaults parse");
 
-    assert_eq!(parsed, MachineConfig::default());
+    assert_eq!(
+        parsed,
+        template_comparison_defaults(MachineConfig::default())
+    );
 }
 
 #[test]
 fn template_covers_serialized_default_leaves() {
-    let serialized = toml::to_string(&MachineConfig::default()).expect("serialize defaults");
+    let serialized = toml::to_string(&template_comparison_defaults(MachineConfig::default()))
+        .expect("serialize defaults");
     let value: toml::Value = toml::from_str(&serialized).expect("parse serialized defaults");
     let mut expected = BTreeSet::new();
     collect_leaf_paths("", &value, &mut expected);
@@ -83,6 +87,14 @@ fn template_covers_serialized_default_leaves() {
             "template default {path} is not a serialized default leaf"
         );
     }
+}
+
+fn template_comparison_defaults(mut config: MachineConfig) -> MachineConfig {
+    // Scheduled runs apply this effective default only at execution time so a
+    // missing value can still participate correctly in layered config.
+    config.r#loop.default_timeout =
+        Some(crate::harness::schedule::runner::SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned());
+    config
 }
 
 #[test]
@@ -212,10 +224,9 @@ fn active_default_assignment(line: &str) -> Option<(&str, &str)> {
 
 fn default_assignment(rest: &str) -> Option<(&str, &str)> {
     let (key, value) = rest.split_once(" = ")?;
-    if key != "max-launch-depth"
-        && !key
-            .chars()
-            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    if !key
+        .chars()
+        .all(|ch| ch == '-' || ch == '_' || ch.is_ascii_alphanumeric())
     {
         return None;
     }

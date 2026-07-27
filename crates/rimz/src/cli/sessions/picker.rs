@@ -277,7 +277,9 @@ impl RoomStats {
                 .as_ref()
                 .map_or_else(SpendWindow::default, |tally| tally.headline.clone()),
             last_prompt_at: snapshot
-                .root_agents()
+                .agents
+                .iter()
+                .filter(|agent| !agent.is_provider_subagent())
                 .filter_map(|agent| agent.turn_started_at)
                 .max(),
         }
@@ -294,7 +296,9 @@ impl RoomAgents {
         let mut by_kind = BTreeMap::new();
         let mut attention = 0;
         for agent in snapshot
-            .root_agents()
+            .agents
+            .iter()
+            .filter(|agent| !agent.is_provider_subagent())
             .filter(|agent| live_agent_ids.contains(&agent.agent_id))
         {
             *by_kind.entry(agent.kind.clone()).or_insert(0) += 1;

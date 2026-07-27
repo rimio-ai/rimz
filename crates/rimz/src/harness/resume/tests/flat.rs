@@ -210,6 +210,31 @@ fn filters_subagents_and_ended_candidates_but_resumes_paneless_roots() {
 }
 
 #[test]
+fn resumes_pane_backed_launched_children_with_their_ancestry() {
+    let launched = AgentState {
+        parent_agent_id: Some("parent".into()),
+        parent_agent_kind: Some(AgentKind::new_unchecked("codex")),
+        launch_depth: Some(1),
+        ..agent("claude", "child", "/code/query-engine", 1)
+    };
+
+    let plan = plan(&[launched]);
+
+    assert_eq!(plan.tabs.len(), 1);
+    let request = decode_exec_request(&single_column(&plan.tabs[0])[0]);
+    assert_eq!(request.identity.launch_id.as_deref(), Some("child"));
+    assert_eq!(
+        request.identity.params.parent_agent_id.as_deref(),
+        Some("parent")
+    );
+    assert_eq!(
+        request.identity.params.parent_agent_kind.as_deref(),
+        Some("codex")
+    );
+    assert_eq!(request.identity.params.launch_depth, Some(1));
+}
+
+#[test]
 fn disambiguates_reborn_tabs_with_the_same_basename() {
     let agents = vec![
         agent("claude", "a1", "/work/repoA/main", 5),
@@ -319,6 +344,11 @@ fn resume_command_replays_launch_identity() {
     );
     assert!(request.close_pane_on_exit);
     assert_eq!(request.identity.name.as_deref(), Some("swift-otter"));
+    assert_eq!(
+        request.identity.launch_id.as_deref(),
+        Some("a1"),
+        "pre-launch-id rows seed a stable identity from the provider session"
+    );
     assert_eq!(
         request.identity.params.profile.as_deref(),
         Some("claude-planner")

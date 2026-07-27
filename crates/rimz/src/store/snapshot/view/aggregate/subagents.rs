@@ -45,6 +45,10 @@ pub(super) fn attach_sub_agents_indexed(
             .collect::<Vec<_>>();
         let Some(row_index) = row_by_parent.get(parent_key).copied() else {
             for child in visible {
+                let child_key = (child.kind.clone(), child.agent_id.clone());
+                if child.is_launched_child() && row_by_parent.contains_key(&child_key) {
+                    continue;
+                }
                 let parent_id = child.parent_agent_id.as_deref().unwrap_or_default();
                 // Transient projection state: the child was observed before its
                 // parent's row materialized within this fold. Keep it locally

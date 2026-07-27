@@ -71,6 +71,46 @@ fn launch_ancestry_flattens_to_the_root_and_enforces_true_depth() {
     assert!(!message.contains("--top-level"));
 }
 
+#[test]
+fn launch_caller_uses_durable_identity_and_only_legacy_missing_ids_use_the_pane() {
+    let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%7");
+    let mut caller =
+        crate::agents::AgentState::stub("claude", "provider-session", AgentStatus::Running);
+    caller.launch_id = Some(AgentSessionId::from("launch-stable"));
+    caller.pane = Some(crate::pane::PaneRef::from_id(pane_id.clone()));
+    let agents = vec![caller];
+
+    assert_eq!(
+        resolve_launch_caller(&agents, "claude", Some("launch-stable"), None)
+            .expect("durable launch identity")
+            .agent_id,
+        "provider-session"
+    );
+    assert_eq!(
+        resolve_launch_caller(&agents, "claude", None, Some(&pane_id))
+            .expect("legacy pane identity")
+            .agent_id,
+        "provider-session"
+    );
+    assert!(
+        resolve_launch_caller(&agents, "claude", Some("stale-launch"), Some(&pane_id)).is_err(),
+        "a non-empty stale identity never falls back to the pane"
+    );
+
+    let mut duplicate = agents[0].clone();
+    duplicate.agent_id = AgentSessionId::from("duplicate");
+    assert!(
+        resolve_launch_caller(
+            &[agents[0].clone(), duplicate],
+            "claude",
+            None,
+            Some(&pane_id)
+        )
+        .is_err(),
+        "legacy pane identity must be unambiguous"
+    );
+}
+
 #[derive(Clone, Copy, Debug)]
 enum RequestField {
     Resume,

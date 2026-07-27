@@ -285,7 +285,7 @@ Each observation spans `[created_at, last_activity]`. Transitive interval overla
 
 A resumed pane runs `rimz agents exec <kind>` with a `Resume` action carrying the provider session id and the prior RimZ identity (name, profile, role, team, launch group, launch ordinal, channel). Its **posture** comes from `resume::resolve_posture`, the one pure seam every relaunch path shares: model and effort argv, the typed system-prompt file path, permission mode, budget, and profile `args`. Provider-process compilation gives that same resolved path to the adapter on every spawn. A session that launched as `@planner` comes back as a planner.
 
-Once the provider process stage is ready, the resident exec wrapper appends `agent.attached` before it starts or execs the provider. That placement record binds the exact resumed session to the wrapper's pane and live process owner, so a reborn agent is addressable before a lazily-registering provider emits its first hook.
+Once the provider process stage is ready, the resident exec wrapper appends `agent.attached` before it starts or execs the provider. That record binds the exact resumed session to the stable launch id exported to its process, the wrapper's pane, and the live process owner. A pre-launch-id row uses its provider session id for the new stable stamp, and a provider-store discovery gets an idle durable seed, so either can launch a child or be addressed before a lazily-registering provider emits its first hook.
 
 Team restore and cohort resume read posture straight off the layout cell their team or role binding already resolved. Flat and lane resume resolve the stored profile name against the effective config. The launch event's recorded permission mode fills in when the profile declares none.
 

@@ -80,9 +80,20 @@ pub fn resolve_launch_ancestry(
     }))
 }
 
+/// Whether this process identifies itself as an agent caller. Human launches
+/// and the explicit top-level escape can skip the audit projection entirely.
+pub fn launch_ancestry_required(top_level: bool) -> bool {
+    !top_level
+        && std::env::var(crate::harness::run::ENV_AGENT_KIND)
+            .ok()
+            .is_some_and(|value| !value.is_empty())
+}
+
 /// Resolve the launching process through its stable launch id. Kind
 /// corroborates the match so stale cross-provider environment cannot attach a
-/// child to the wrong durable row.
+/// child to the wrong durable row. An agent process already running across an
+/// upgrade has no launch id; only that missing-id case may use an unambiguous
+/// live pane stamp as legacy identity.
 pub fn resolve_launch_ancestry_from_env(
     agents: &[crate::agents::AgentState],
     top_level: bool,
@@ -99,19 +110,48 @@ pub fn resolve_launch_ancestry_from_env(
     };
     let launch_id = std::env::var(crate::harness::run::ENV_AGENT_ID)
         .ok()
-        .filter(|value| !value.is_empty())
-        .ok_or(LaunchAncestryError::UnresolvedCaller)?;
-    let caller = agents
-        .iter()
-        .find(|agent| {
+        .filter(|value| !value.is_empty());
+    let pane_id = launch_id
+        .is_none()
+        .then(crate::mux::ambient_pane_id)
+        .flatten();
+    let caller = resolve_launch_caller(agents, &kind, launch_id.as_deref(), pane_id.as_ref())?;
+    resolve_launch_ancestry(Some(caller), false, max_depth)
+}
+
+fn resolve_launch_caller<'a>(
+    agents: &'a [crate::agents::AgentState],
+    kind: &str,
+    launch_id: Option<&str>,
+    pane_id: Option<&crate::ids::PaneId>,
+) -> std::result::Result<&'a crate::agents::AgentState, LaunchAncestryError> {
+    let caller = if let Some(launch_id) = launch_id {
+        agents.iter().find(|agent| {
             agent.kind == kind
                 && agent
                     .launch_id
                     .as_ref()
-                    .is_some_and(|candidate| candidate == launch_id.as_str())
+                    .is_some_and(|candidate| candidate == launch_id)
         })
-        .ok_or(LaunchAncestryError::UnresolvedCaller)?;
-    resolve_launch_ancestry(Some(caller), false, max_depth)
+    } else {
+        let pane_id = pane_id.ok_or(LaunchAncestryError::UnresolvedCaller)?;
+        let mut matches = agents.iter().filter(|agent| {
+            agent.kind == kind
+                && !agent.is_provider_subagent()
+                && agent.ended_at.is_none()
+                && agent
+                    .pane
+                    .as_ref()
+                    .is_some_and(|pane| &pane.pane_id == pane_id)
+        });
+        let caller = matches.next();
+        if matches.next().is_some() {
+            return Err(LaunchAncestryError::UnresolvedCaller);
+        }
+        caller
+    }
+    .ok_or(LaunchAncestryError::UnresolvedCaller)?;
+    Ok(caller)
 }
 
 #[derive(Debug, thiserror::Error)]

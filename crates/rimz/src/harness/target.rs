@@ -333,8 +333,9 @@ pub fn pane_binding<'snapshot, 'pane>(
             kind: PaneBindingKind::Exact,
         });
     }
-    if let Some(agent) = snapshot.root_agents().find(|agent| {
-        agent.kind == pane.kind
+    if let Some(agent) = snapshot.agents.iter().find(|agent| {
+        !agent.is_provider_subagent()
+            && agent.kind == pane.kind
             && agent.agent_id.is_provisional()
             && agent_channel(agent) == pane.channel()
     }) {
@@ -823,7 +824,7 @@ pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
     let mut grouped: BTreeMap<(&str, String), Vec<&AgentState>> = BTreeMap::new();
     for agent in agents
         .iter()
-        .filter(|agent| agent.parent_agent_id.is_none() && agent.ended_at.is_none())
+        .filter(|agent| !agent.is_provider_subagent() && agent.ended_at.is_none())
     {
         let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
             continue;

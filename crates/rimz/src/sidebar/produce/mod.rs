@@ -154,7 +154,16 @@ pub fn live_roster_from_snapshot(
     snapshot
         .agent_panes
         .iter()
-        .filter(|agent| rendered_agent_panes.contains(&agent.pane_id))
+        .filter(|pane_agent| {
+            rendered_agent_panes.contains(&pane_agent.pane_id)
+                || pane_agent.agent_id.as_ref().is_some_and(|agent_id| {
+                    snapshot.agents.iter().any(|agent| {
+                        agent.kind == pane_agent.kind
+                            && &agent.agent_id == agent_id
+                            && agent.is_launched_child()
+                    })
+                })
+        })
         .filter_map(|agent| {
             agent
                 .agent_id
@@ -264,7 +273,9 @@ pub fn resolution_snapshot(
 fn rollup_resolution_snapshot(store: &Store) -> Result<SidebarSnapshot> {
     let mut snapshot = store.snapshot_cached()?;
     snapshot.agent_panes = snapshot
-        .root_agents()
+        .agents
+        .iter()
+        .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| !agent.agent_id.is_provisional())
         .filter_map(|agent| {
             let pane = agent.pane.as_ref()?;
@@ -629,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn live_roster_keeps_only_pane_backed_root_agents() {
+    fn live_roster_keeps_pane_backed_full_sessions() {
         let now = Timestamp::now();
         let live_pane = test_support::pane("live", Some("claude"), Some("/repo/live"));
         let daemon_pane = test_support::pane("daemon", Some("codex"), Some("/repo/daemon"));
@@ -637,6 +648,7 @@ mod tests {
             test_support::pane("provisional", Some("codex"), Some("/repo/provisional"));
         let empty_pane = test_support::pane("empty", Some("codex"), Some("/repo/empty"));
         let wired_pane = test_support::pane("wired", Some("pi"), Some("/repo/wired"));
+        let launched_pane = test_support::pane("launched", Some("codex"), Some("/repo/launched"));
         let mut live = agent("claude", "live", now);
         live.pane = Some(live_pane.clone());
         let unknown = agent("codex", "unknown", now);
@@ -653,6 +665,11 @@ mod tests {
         ));
         let mut child = agent("claude", "child", now);
         child.parent_agent_id = Some("live".into());
+        let mut launched = agent("codex", "launched", now);
+        launched.parent_agent_id = Some("live".into());
+        launched.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+        launched.launch_depth = Some(1);
+        launched.pane = Some(launched_pane.clone());
         let mut provisional = agent("codex", "launch_abc", now);
         provisional.pane = Some(provisional_pane.clone());
         let mut empty = agent("codex", "", now);
@@ -665,6 +682,7 @@ mod tests {
                 daemon,
                 paneless_daemon,
                 child,
+                launched,
                 provisional,
                 empty,
             ],
@@ -678,6 +696,7 @@ mod tests {
                 provisional_pane,
                 empty_pane,
                 wired_pane,
+                launched_pane,
             ],
             None,
         );
@@ -689,6 +708,7 @@ mod tests {
             [
                 (AgentKind::new_unchecked("claude"), "live".into()),
                 (AgentKind::new_unchecked("codex"), "daemon".into()),
+                (AgentKind::new_unchecked("codex"), "launched".into()),
             ]
             .into_iter()
             .collect()
