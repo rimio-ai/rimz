@@ -86,8 +86,8 @@ use super::TranscriptRole;
 use super::context::AgentContext;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
-    ThreadKey, ToolClassification, UserCoverage,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, ThreadKey,
+    ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -190,9 +190,6 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         daemon_hooked_sessions: true,
         direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
-        realtime_usage: RealtimeUsageChannel {
-            windows_defer_to_fresh_realtime: false,
-        },
         remote_control: RemoteControlCapability {
             pane_sessions: true,
             background_sessions: true,

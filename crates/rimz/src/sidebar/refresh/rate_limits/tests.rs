@@ -176,6 +176,64 @@ fn producer_persisted_windows_feed_idle_consumers() {
     apply_rate_limit_cache(&mut consumer, &runtime, false);
     assert_eq!(consumer.providers[0].windows[0].used_percentage, Some(60));
 }
+
+#[test]
+fn authoritative_publication_survives_live_session_exit() {
+    let (_dir, workspace, runtime) = runtime();
+    let future = Timestamp::from_second(4_000_000_000).unwrap();
+    let identity = AccountUsageIdentity {
+        account_key: Some("claude-account".to_owned()),
+        ..Default::default()
+    };
+    merge_account_rate_limits(
+        &runtime,
+        "claude",
+        identity.clone(),
+        AgentRateLimits {
+            windows: vec![
+                authoritative(rl_window_mins(0, None, 300)),
+                authoritative(rl_window_mins(0, None, 10_080)),
+            ],
+        },
+    );
+    merge_account_rate_limits(
+        &runtime,
+        "claude",
+        identity,
+        AgentRateLimits {
+            windows: vec![
+                authoritative(rl_window_mins(36, Some(future), 300)),
+                authoritative(rl_window_mins(4, Some(future), 10_080)),
+            ],
+        },
+    );
+
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    assert_eq!(
+        cache.entries["claude"].account_key.as_deref(),
+        Some("claude-account")
+    );
+    assert_eq!(
+        cache_window(&cache, "claude", RateLimitWindowKey::Duration(Some(300))).used_percentage,
+        Some(36)
+    );
+    assert_eq!(
+        cache_window(&cache, "claude", RateLimitWindowKey::Duration(Some(10_080)),).used_percentage,
+        Some(4)
+    );
+
+    let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    apply_rate_limit_cache(&mut idle, &runtime, false);
+    assert_eq!(
+        idle.providers[0]
+            .windows
+            .iter()
+            .map(|window| (window.used_percentage, window.resets_at))
+            .collect::<Vec<_>>(),
+        [(Some(36), Some(future)), (Some(4), Some(future))]
+    );
+}
+
 #[test]
 fn account_scope_isolates_cached_windows() {
     let (_dir, workspace, runtime) = runtime();
@@ -506,6 +564,81 @@ fn elapsed_longest_idle_cache_shows_unknown_without_persisting_projection() {
         Some(80)
     );
 }
+
+#[test]
+fn elapsed_undated_cache_shows_unknown_and_opens_refresh_episode() {
+    let (_dir, workspace, runtime) = runtime();
+    let past = Timestamp::from_second(1_000_000_000).unwrap();
+    let observed = |window| RateLimitWindow {
+        observed_at: Some(past),
+        ..authoritative(window)
+    };
+    write_claude_windows(
+        &runtime,
+        vec![
+            observed(rl_window_mins(0, None, 300)),
+            observed(rl_window_mins(0, None, 10_080)),
+        ],
+    );
+
+    let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    apply_rate_limit_cache(&mut idle, &runtime, true);
+
+    assert!(
+        idle.providers[0]
+            .windows
+            .iter()
+            .all(|window| window.used_percentage.is_none() && window.resets_at.is_none())
+    );
+    assert!(unknown_since_ms(&runtime, "claude").is_some());
+}
+
+#[test]
+fn dated_long_window_keeps_undated_lifted_window_cache_fresh() {
+    let (_dir, workspace, runtime) = runtime();
+    let past = Timestamp::from_second(1_000_000_000).unwrap();
+    let future = Timestamp::from_second(4_000_000_000).unwrap();
+    write_rate_limits_cache(
+        &runtime.shared_rate_limits_path(),
+        &kind_wide_cache(
+            1,
+            BTreeMap::from([(
+                "codex".to_owned(),
+                AgentRateLimits {
+                    windows: vec![
+                        RateLimitWindow {
+                            used_percentage: None,
+                            observed_at: Some(past),
+                            source: WindowSource::Authoritative,
+                            lifted: true,
+                            ..rl_window_mins(0, None, 300)
+                        },
+                        RateLimitWindow {
+                            observed_at: Some(past),
+                            source: WindowSource::Authoritative,
+                            ..rl_window_mins(4, Some(future), 10_080)
+                        },
+                    ],
+                },
+            )]),
+            BTreeMap::new(),
+        ),
+    );
+
+    let mut idle = snapshot_with_panels(workspace, vec![provider_panel("codex", Vec::new())]);
+    apply_rate_limit_cache(&mut idle, &runtime, true);
+
+    assert!(idle.providers[0].windows[0].lifted);
+    assert_eq!(
+        (
+            idle.providers[0].windows[1].used_percentage,
+            idle.providers[0].windows[1].resets_at,
+        ),
+        (Some(4), Some(future))
+    );
+    assert_eq!(unknown_since_ms(&runtime, "codex"), None);
+}
+
 #[test]
 fn producer_cache_tracks_logged_in_panels() {
     let (_dir, workspace, runtime) = runtime();

@@ -34,8 +34,8 @@ use serde_json::json;
 use super::AskKind;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
-    ThreadKey, ToolClassification, UserCoverage,
+    HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, ThreadKey,
+    ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -78,9 +78,6 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
         daemon_hooked_sessions: false,
         direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::FollowLatest,
-        realtime_usage: RealtimeUsageChannel {
-            windows_defer_to_fresh_realtime: false,
-        },
         remote_control: RemoteControlCapability {
             pane_sessions: false,
             background_sessions: false,

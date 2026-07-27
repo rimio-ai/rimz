@@ -166,7 +166,6 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
             env.workspace_id.as_str(),
             "--claim-id",
             &claim_id,
-            "--merge-windows",
         ])
         .env(
             "RIMZ_CLAUDE_OAUTH_USAGE_URL",
@@ -252,7 +251,6 @@ fn claude_refresh_usage_refuses_an_untrusted_override_without_publishing_usage()
             env.workspace_id.as_str(),
             "--claim-id",
             &claim_id,
-            "--merge-windows",
         ])
         .env(
             "RIMZ_CLAUDE_OAUTH_USAGE_URL",
@@ -315,7 +313,6 @@ fn claude_refresh_usage_retries_transient_http_failures() {
             env.workspace_id.as_str(),
             "--claim-id",
             &claim_id,
-            "--merge-windows",
         ])
         .env(
             "RIMZ_CLAUDE_OAUTH_USAGE_URL",

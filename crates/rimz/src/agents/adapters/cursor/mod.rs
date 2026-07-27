@@ -25,8 +25,8 @@ use serde_json::{Value, json};
 
 use super::definition::{
     AgentSpec, BinIdentity, Brand, Capabilities, CapabilityLevel, ConcernCoverage,
-    CoverageAnnotations, HookCoverage, LifecycleAnnotations, PlanLabel, RealtimeUsageChannel,
-    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
+    CoverageAnnotations, HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, catalog_contains, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -70,9 +70,6 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
         // new conversation in this process and pane. Cursor has no fork surface,
         // and derived subagents carry parent linkage and never compete for the pane.
         same_pane_session: super::SamePaneSessionPolicy::FollowLatest,
-        realtime_usage: RealtimeUsageChannel {
-            windows_defer_to_fresh_realtime: false,
-        },
         remote_control: RemoteControlCapability {
             pane_sessions: false,
             background_sessions: false,

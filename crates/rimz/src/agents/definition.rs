@@ -913,9 +913,6 @@ pub struct Capabilities {
     /// Which co-resident root session owns a live pane when one agent process
     /// carries more than one session id.
     pub same_pane_session: SamePaneSessionPolicy,
-    /// How this provider's realtime usage channel interacts with the uniform
-    /// account-usage driver.
-    pub realtime_usage: RealtimeUsageChannel,
     /// Remote-control surfaces the provider can host.
     pub remote_control: RemoteControlCapability,
 }
@@ -927,15 +924,6 @@ pub enum SamePaneSessionPolicy {
     KeepPrimary,
     /// Hand the pane to the most recently registered active conversation.
     FollowLatest,
-}
-
-/// How a provider's realtime usage channel interacts with the uniform direct
-/// account-usage driver.
-#[derive(Clone, Copy, Debug)]
-pub struct RealtimeUsageChannel {
-    /// A content-fresh realtime windows reading owns the included-budget
-    /// windows, so the direct merge defers to it.
-    pub windows_defer_to_fresh_realtime: bool,
 }
 
 /// Static remote-control capability. Dynamic "enabled on this machine" state
