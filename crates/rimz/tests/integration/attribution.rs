@@ -283,6 +283,23 @@ fn attribution_default_stays_in_the_callers_checkout() {
                 &observation,
             ))
             .expect("register attribution agent");
+        let active_start = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1);
+        rimz::store::active_time::record_progress(
+            &env.runtime_paths(),
+            "codex",
+            session,
+            active_start,
+            180,
+        )
+        .expect("open active span");
+        rimz::store::active_time::record_stop(
+            &env.runtime_paths(),
+            "codex",
+            session,
+            active_start + jiff::SignedDuration::from_secs(1),
+            180,
+        )
+        .expect("close active span");
     }
 
     let default = env

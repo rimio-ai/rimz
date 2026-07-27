@@ -73,6 +73,16 @@ pub struct AttributionMember {
     pub cost_usd: Option<f64>,
 }
 
+impl AttributionMember {
+    fn has_contribution(&self) -> bool {
+        self.active_secs.unwrap_or(0) > 0
+            || self.tool_calls > 0
+            || self.compactions > 0
+            || self.tokens != TokenSplit::default()
+            || self.cost_usd.is_some()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct EffortTotals {
     pub agents: u32,
@@ -148,6 +158,7 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
             (team, member)
         })
         .collect::<Vec<_>>();
+    members.retain(|(_, member)| member.has_contribution());
     members.sort_by(|left, right| member_order(&left.1, &right.1));
 
     let mut by_team = BTreeMap::<String, Vec<AttributionMember>>::new();

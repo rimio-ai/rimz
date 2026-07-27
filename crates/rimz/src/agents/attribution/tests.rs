@@ -141,10 +141,12 @@ fn team_roles_and_provider_kinds_keep_distinct_slots() {
     planner.team = Some("forge".to_owned());
     planner.role = Some("planner".to_owned());
     planner.launch_ordinal = Some(0);
+    planner.tool_calls.insert("read".to_owned(), 1);
     let mut coder = agent("coder", "codex", 11);
     coder.team = Some("forge".to_owned());
     coder.role = Some("coder".to_owned());
     coder.launch_ordinal = Some(1);
+    coder.tool_calls.insert("exec".to_owned(), 1);
     let mut other_kind = coder.clone();
     other_kind.agent_id = "claude-coder".into();
     other_kind.kind = AgentKind::new_unchecked("claude");
@@ -159,10 +161,12 @@ fn identical_team_roles_in_different_lanes_keep_distinct_slots() {
     auth.team = Some("forge".to_owned());
     auth.role = Some("coder".to_owned());
     auth.channel = Some("auth".to_owned());
+    auth.tool_calls.insert("exec".to_owned(), 1);
     let mut docs = agent("docs-coder", "codex", 20);
     docs.team = Some("forge".to_owned());
     docs.role = Some("coder".to_owned());
     docs.channel = Some("docs".to_owned());
+    docs.tool_calls.insert("exec".to_owned(), 1);
 
     let report = build_for(&[auth, docs]);
     assert_eq!(report.groups[0].members.len(), 2);
@@ -180,6 +184,7 @@ fn roleless_cohorts_and_reused_panes_fold() {
     let mut first = agent("one", "codex", 10);
     first.launch_group = Some("group".to_owned());
     first.launch_ordinal = Some(0);
+    first.tool_calls.insert("exec".to_owned(), 1);
     let mut continuation = agent("two", "codex", 20);
     continuation.launch_group = Some("group".to_owned());
     continuation.launch_ordinal = Some(0);
@@ -187,6 +192,7 @@ fn roleless_cohorts_and_reused_panes_fold() {
     pane_first.pane = Some(crate::pane::PaneRef::from_id(
         crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1"),
     ));
+    pane_first.tool_calls.insert("read".to_owned(), 1);
     let mut pane_second = agent("pane-two", "claude", 40);
     pane_second.pane = pane_first.pane.clone();
 
@@ -205,7 +211,9 @@ fn exited_presence_wall_clock_and_teamless_order_are_honest() {
     team.team = Some("forge".to_owned());
     team.role = Some("coder".to_owned());
     team.ended_at = Some(at(20));
-    let stray = agent("stray", "claude", 30);
+    team.tool_calls.insert("exec".to_owned(), 1);
+    let mut stray = agent("stray", "claude", 30);
+    stray.tool_calls.insert("read".to_owned(), 1);
 
     let report = build_for(&[team, stray]);
     assert_eq!(report.groups.len(), 2);
@@ -214,4 +222,29 @@ fn exited_presence_wall_clock_and_teamless_order_are_honest() {
     assert_eq!(report.groups[0].members[0].presence, Presence::Exited);
     assert_eq!(report.totals.wall_clock_secs, 30);
     assert_eq!(report.totals.cost_usd, None);
+}
+
+#[test]
+fn agents_without_a_recorded_contribution_are_omitted() {
+    let mut idle = agent("idle", "claude", 10);
+    idle.team = Some("idle-team".to_owned());
+    idle.role = Some("planner".to_owned());
+    let mut contributor = agent("contributor", "codex", 20);
+    contributor.team = Some("forge".to_owned());
+    contributor.role = Some("coder".to_owned());
+    contributor.tool_calls.insert("exec".to_owned(), 1);
+
+    let report = build_for(&[idle, contributor]);
+
+    assert_eq!(report.totals.agents, 1);
+    assert_eq!(report.groups.len(), 1);
+    assert_eq!(
+        report.groups[0]
+            .team
+            .as_ref()
+            .map(|team| team.name.as_str()),
+        Some("forge")
+    );
+    assert_eq!(report.groups[0].members[0].handle, "@coder");
+    assert_eq!(report.groups[0].members[0].active_secs, None);
 }
