@@ -68,6 +68,10 @@ pub struct AgentLaunchPayload {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentAttachPayload {
     pub agent_id: AgentSessionId,
+    /// Stable identity exported by the resume wrapper. Older attach events and
+    /// wrappers that predate launch identity leave this unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<AgentSessionId>,
     pub pane_id: PaneId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_pid: Option<u32>,

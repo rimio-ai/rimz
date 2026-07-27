@@ -77,7 +77,15 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         record_own_launch_pane(&invocation, identity);
     }
     if let Some(target) = attach_target.as_ref() {
-        record_own_resume_pane(&invocation, target);
+        record_own_resume_pane(
+            &invocation,
+            target,
+            request
+                .identity
+                .launch_id
+                .as_deref()
+                .map(AgentSessionId::from),
+        );
     }
     let (program, rest) = process.argv.split_first().ok_or_else(|| {
         anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
@@ -494,6 +502,14 @@ pub(super) fn exec_launch_identity(
         request.identity.name.as_deref(),
     ) {
         (None, None) => Ok(None),
+        (Some(_), None)
+            if matches!(
+                request.action,
+                rimz::harness::launch::ExecAction::Resume { .. }
+            ) =>
+        {
+            Ok(None)
+        }
         (Some(_), None) => bail!("--launch-id requires --agent-name"),
         (None, Some(_)) => Ok(None),
         (Some(launch_id), Some(name)) => {
@@ -569,13 +585,20 @@ fn record_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
 fn record_own_resume_pane(
     invocation: &ExecInvocationContext<'_>,
     target: &(AgentKind, AgentSessionId),
+    launch_id: Option<AgentSessionId>,
 ) {
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
         return;
     };
     let workspace = invocation.workspace;
     if let Err(err) = invocation.store().and_then(|store| {
-        store.attach_agent_pane(&target.0, &target.1, &workspace.session_name, &pane_id)?;
+        store.attach_agent_pane(
+            &target.0,
+            &target.1,
+            launch_id.as_ref(),
+            &workspace.session_name,
+            &pane_id,
+        )?;
         Ok(())
     }) {
         tracing::debug!(

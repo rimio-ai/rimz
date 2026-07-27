@@ -94,6 +94,7 @@ fn resume_argv(kind: &str, id: &str, name: &str) -> Vec<String> {
             exit_on_run_completion: false,
             identity: ExecIdentity {
                 name: Some(name.to_owned()),
+                launch_id: Some(id.to_owned()),
                 ..ExecIdentity::default()
             },
         },

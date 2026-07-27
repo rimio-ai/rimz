@@ -1402,11 +1402,17 @@ fn team_cohorts_group_live_root_members_by_team_and_lane() {
     let mut child = agent("codex", "child", Some("auth"), "terminal_4");
     child.team = Some("forge".to_owned());
     child.parent_agent_id = Some(planner.agent_id.clone());
+    let mut launched = agent("codex", "launched", Some("auth"), "terminal_6");
+    launched.team = Some("forge".to_owned());
+    launched.channel = Some("auth".to_owned());
+    launched.parent_agent_id = Some(planner.agent_id.clone());
+    launched.parent_agent_kind = Some(planner.kind.clone());
+    launched.launch_depth = Some(1);
     let mut ended = agent("codex", "ended", Some("auth"), "terminal_5");
     ended.team = Some("forge".to_owned());
     ended.ended_at = Some(Timestamp::UNIX_EPOCH);
 
-    let agents = [planner, coder, docs, child, ended];
+    let agents = [planner, coder, docs, child, launched, ended];
     let cohorts = team_cohorts(&agents);
 
     assert_eq!(cohorts.len(), 2);
@@ -1415,6 +1421,6 @@ fn team_cohorts_group_live_root_members_by_team_and_lane() {
             .iter()
             .map(|cohort| (cohort.team, cohort.channel.as_str(), cohort.members.len()))
             .collect::<Vec<_>>(),
-        vec![("forge", "auth", 2), ("forge", "docs", 1)]
+        vec![("forge", "auth", 3), ("forge", "docs", 1)]
     );
 }

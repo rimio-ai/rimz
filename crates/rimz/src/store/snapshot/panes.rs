@@ -138,8 +138,9 @@ impl<'a> PaneBindingIndex<'a> {
 
 pub(super) enum PaneBindingDisposition<'a> {
     Agent(&'a AgentState),
-    /// A pane-backed launched child remains addressable but contributes no
-    /// top-level row; it renders inside its root parent's card.
+    /// A pane-backed launched child remains addressable and normally renders
+    /// inside its root parent's card. The row projection promotes it when that
+    /// parent has no live row.
     NestedAgent(&'a AgentState),
     Idle(Box<SidebarRow>),
     DuplicatePane,

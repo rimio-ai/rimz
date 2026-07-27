@@ -548,6 +548,9 @@ fn fleet_enforcement_arms_resume_after_interrupting_a_running_agent() {
 
     let mut running = idle;
     running.status = AgentStatus::Running;
+    running.parent_agent_id = Some("parent".into());
+    running.parent_agent_kind = Some(AgentKind::new_unchecked("codex"));
+    running.launch_depth = Some(1);
     let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id, vec![running.clone()], now);
     snapshot.fleet_day_spend_usd = Some(6.0);
     snapshot.fleet_day_spend_epoch_secs = Some(cutoff);

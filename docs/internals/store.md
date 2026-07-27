@@ -128,7 +128,7 @@ The payload is an `EventEnvelope`: schema version, event id, workspace id, sessi
 | Method | Carries | Folded into |
 | --- | --- | --- |
 | `agent.lifecycle` | One lifecycle signal plus the observation around it: session id, pane stamp, status, turn, context, tokens, subagents. | The agent rollup ([model.md](./agents/model.md)) |
-| `agent.attached` | Placement evidence for a resumed session: pane stamp and live runtime owner. | Moves the pane stamp and runtime owner, nothing else |
+| `agent.attached` | Resume identity and placement: provider session id, stable RimZ launch id, pane stamp, and live runtime owner. | Re-stamps identity and placement; an identified discovered resume seeds its row before the provider starts |
 | `agent.launched` | The launch RimZ itself performed: identity, profile, role, team, worktree, permission mode, and a `Starting`/`Bound`/`Failed` state. | Launch admission and resume posture |
 | `message.*` | One of eleven terminal or transitional message outcomes: `queued`, `edited`, `after_met`, `when_met`, `sent`, `delivered`, `timed_out`, `errored`, `canceled`, `abandoned`, `archived`. | The message audit trail ([messaging.md](./harness/messaging.md)) |
 | `session.rebirth` | Nothing. It is a boundary marker. | Clears every pane stamp recorded before it |
@@ -137,7 +137,7 @@ The payload is an `EventEnvelope`: schema version, event id, workspace id, sessi
 
 The unknown-method arm matters more than it looks. A record written by a newer RimZ decodes as `Other` and survives every fold, so a downgrade reads an intact log rather than a corrupt one.
 
-`session.rebirth` unstamps; it never ends a session. A reborn mux session renumbers panes from zero, so every stamp recorded before the boundary names a pane that no longer exists. The fold clears them all at that point in the log, which is what keeps a prior incarnation's session off a reused pane id. Each resumed wrapper then appends `agent.attached` to re-establish its precise placement and live runtime owner.
+`session.rebirth` unstamps; it never ends a session. A reborn mux session renumbers panes from zero, so every stamp recorded before the boundary names a pane that no longer exists. The fold clears them all at that point in the log, which is what keeps a prior incarnation's session off a reused pane id. Each resumed wrapper then appends `agent.attached` to re-establish its stable launch identity, precise placement, and live runtime owner. A provider-store session RimZ had not recorded before can start with this identified attach; legacy attach events without an identity still cannot mint a row.
 
 Lifecycle records carry forward rather than restamping. High-cadence progress events omit `transcript_path`, worktree, pane identity, role, team, channel, profile, and the smart-compact stamp, inheriting them from the prior rollup instead. Missing optional keys decode as absent, and `runtime_owner` is reconstructed from the agent's process identity. That is what keeps the hot log compact under a busy fleet.
 

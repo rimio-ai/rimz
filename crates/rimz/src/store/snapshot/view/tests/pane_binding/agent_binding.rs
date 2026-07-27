@@ -349,3 +349,33 @@ fn live_agent_and_process_rows_are_pane_backed() {
     assert_eq!(parent.sub_agents().len(), 1);
     assert_eq!(parent.sub_agents()[0].id, "child-1");
 }
+
+#[test]
+fn live_launched_child_promotes_when_its_parent_has_no_row() {
+    let mut child = agent("codex", "child-1", AgentStatus::Running, 1_000)
+        .worktree("/repo/child")
+        .in_pane("%2");
+    child.parent_agent_id = Some("parent-gone".into());
+    child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+    child.launch_depth = Some(1);
+
+    let snapshot =
+        room(vec![child]).with_live_panes(vec![pane("%2", "codex", "/repo/child")], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "child-1");
+    assert!(rows[0].is_agent());
+    assert_eq!(
+        rows[0].pane.as_ref().map(|pane| pane.pane_id.raw()),
+        Some("%2")
+    );
+    assert_eq!(
+        snapshot
+            .agent_panes
+            .iter()
+            .find_map(|pane| pane.agent_id.as_deref()),
+        Some("child-1"),
+        "promotion preserves pane addressing"
+    );
+}

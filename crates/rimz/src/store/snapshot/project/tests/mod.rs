@@ -74,6 +74,7 @@ fn launch_event(kind: &str, payload: AgentLaunchPayload) -> EventEnvelope {
 fn attach_event(
     kind: &str,
     agent_id: &str,
+    launch_id: Option<&str>,
     pane_id: &str,
     pane_pid: Option<u32>,
     owner_pid: u32,
@@ -84,6 +85,7 @@ fn attach_event(
         &AgentKind::new_unchecked(kind),
         AgentAttachPayload {
             agent_id: AgentSessionId::from(agent_id),
+            launch_id: launch_id.map(AgentSessionId::from),
             pane_id: PaneId::parse(pane_id).expect("pane id"),
             pane_pid,
             runtime_owner: RuntimeOwner::new(
@@ -159,6 +161,7 @@ fn attach_moves_only_pane_and_runtime_owner() {
         &[attach_event(
             "codex",
             "sess-resumed",
+            Some("launch-resumed"),
             "tmux:%4",
             Some(84),
             84,
@@ -176,6 +179,7 @@ fn attach_moves_only_pane_and_runtime_owner() {
     assert_eq!(attached.kind_ordinal, prior.kind_ordinal);
     assert_eq!(attached.name, prior.name);
     let mut expected = prior;
+    expected.launch_id = Some(AgentSessionId::from("launch-resumed"));
     expected.pane = Some(PaneRef {
         pane_pid: Some(84),
         ..PaneRef::from_id(PaneId::parse("tmux:%4").expect("pane id"))
@@ -190,10 +194,42 @@ fn attach_moves_only_pane_and_runtime_owner() {
 }
 
 #[test]
-fn attach_for_unknown_session_mints_no_card() {
+fn legacy_attach_for_unknown_session_mints_no_card() {
     assert!(
-        reduce_agent_states(&[attach_event("codex", "unknown", "tmux:%4", Some(84), 84,)])
-            .is_empty()
+        reduce_agent_states(&[attach_event(
+            "codex",
+            "unknown",
+            None,
+            "tmux:%4",
+            Some(84),
+            84,
+        )])
+        .is_empty()
+    );
+}
+
+#[test]
+fn identified_attach_seeds_a_discovered_resume() {
+    let states = reduce_agent_states(&[attach_event(
+        "codex",
+        "sess-discovered",
+        Some("sess-discovered"),
+        "tmux:%4",
+        Some(84),
+        84,
+    )]);
+    let state = states
+        .iter()
+        .find(|state| state.kind == "codex" && state.agent_id == "sess-discovered")
+        .expect("identified attach seeds session");
+    assert_eq!(
+        state.launch_id.as_deref(),
+        Some("sess-discovered"),
+        "the exported resume identity is durable before the provider starts"
+    );
+    assert_eq!(
+        state.pane.as_ref().map(|pane| &pane.pane_id),
+        Some(&PaneId::parse("tmux:%4").expect("pane id"))
     );
 }
 
@@ -215,7 +251,14 @@ fn later_registration_in_attached_pane_supersedes_resumed_card() {
                 },
             }),
         ),
-        attach_event("codex", "sess-resumed", "tmux:%4", Some(84), 84),
+        attach_event(
+            "codex",
+            "sess-resumed",
+            Some("launch-resumed"),
+            "tmux:%4",
+            Some(84),
+            84,
+        ),
         raw_lifecycle_at(
             "codex",
             2,

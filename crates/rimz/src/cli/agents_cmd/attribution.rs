@@ -31,7 +31,9 @@ pub(super) fn attribution(
     let default_worktree =
         (!all && channel.is_none()).then_some(ctx.workspace.worktree_root.as_path());
     let agents = snapshot
-        .root_agents()
+        .agents
+        .iter()
+        .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| {
             if let Some(filter) = channel.as_deref() {
                 rimz::harness::target::agent_in_worktree(agent, filter)

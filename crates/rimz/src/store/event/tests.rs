@@ -295,6 +295,7 @@ fn attach_event_uses_typed_compact_wire_shape() {
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%4");
     let payload = AgentAttachPayload {
         agent_id: AgentSessionId::from("sess-1"),
+        launch_id: Some(AgentSessionId::from("launch-1")),
         pane_id: pane_id.clone(),
         pane_pid: Some(84),
         runtime_owner: RuntimeOwner::new(
@@ -318,6 +319,7 @@ fn attach_event_uses_typed_compact_wire_shape() {
         params_value(&event),
         json!({
             "agent_id": "sess-1",
+            "launch_id": "launch-1",
             "pane_id": "tmux:%4",
             "pane_pid": 84,
             "runtime_owner": {

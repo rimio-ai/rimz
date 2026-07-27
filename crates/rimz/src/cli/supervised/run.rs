@@ -340,12 +340,16 @@ fn prepare_supervised(
     let agent_cell = agent_cells[0];
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
-    let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    let ancestry = rimz::harness::plan::resolve_launch_ancestry_from_env(
-        &projection.agents,
-        request.top_level,
-        machine_config.agents.max_launch_depth,
-    )?;
+    let ancestry = if rimz::harness::plan::launch_ancestry_required(request.top_level) {
+        let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+        rimz::harness::plan::resolve_launch_ancestry_from_env(
+            &projection.agents,
+            false,
+            machine_config.agents.max_launch_depth,
+        )?
+    } else {
+        None
+    };
     let launch = rimz::worktree::resolve_launch_checkout(
         &workspace,
         &machine_config.agents.worktree,

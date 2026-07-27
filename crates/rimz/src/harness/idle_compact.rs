@@ -151,11 +151,15 @@ fn teammate_working(snapshot: &SidebarSnapshot, candidate: &AgentState) -> bool 
     let Some(channel) = crate::harness::target::agent_channel(candidate) else {
         return false;
     };
-    snapshot.root_agents().any(|agent| {
-        !(agent.kind == candidate.kind && agent.agent_id == candidate.agent_id)
-            && crate::harness::target::agent_channel(agent).as_deref() == Some(channel.as_str())
-            && agent.effective_status() == AgentStatus::Running
-    })
+    snapshot
+        .agents
+        .iter()
+        .filter(|agent| !agent.is_provider_subagent())
+        .any(|agent| {
+            !(agent.kind == candidate.kind && agent.agent_id == candidate.agent_id)
+                && crate::harness::target::agent_channel(agent).as_deref() == Some(channel.as_str())
+                && agent.effective_status() == AgentStatus::Running
+        })
 }
 
 fn worktree_pr_open(agent: &AgentState, cache: &crate::sidebar::refresh::pr::PrStateCache) -> bool {
