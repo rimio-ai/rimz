@@ -144,8 +144,9 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
 
     let mut members = folded
         .into_iter()
-        .map(|(_, records)| {
+        .filter_map(|(_, records)| {
             let team = newest(&records).and_then(|agent| agent.team.clone());
+            let opened_turn = records.iter().any(|agent| agent.turn_started_at.is_some());
             let member = member(
                 &records,
                 &peer_representatives,
@@ -155,10 +156,9 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
                 &active_records,
                 &prices,
             );
-            (team, member)
+            (opened_turn || member.has_contribution()).then_some((team, member))
         })
         .collect::<Vec<_>>();
-    members.retain(|(_, member)| member.has_contribution());
     members.sort_by(|left, right| member_order(&left.1, &right.1));
 
     let mut by_team = BTreeMap::<String, Vec<AttributionMember>>::new();
