@@ -447,8 +447,13 @@ fn group_header(
         .as_deref()
         .filter(|team| !group.label.ends_with(&format!("/{team}")))
         .map(|team| format!(" · {team}"));
+    let qualifier_suffix = group
+        .label_qualifier
+        .as_deref()
+        .map(|qualifier| format!(" · {qualifier}"));
     let full_label = format!(
-        "{label_with_prefix}{}",
+        "{label_with_prefix}{}{}",
+        qualifier_suffix.as_deref().unwrap_or_default(),
         team_suffix.as_deref().unwrap_or_default()
     );
     let left = ellipsize(&full_label, label_width);
@@ -505,6 +510,12 @@ fn group_header(
     };
     let mut spans = if left == full_label {
         let mut spans = vec![Span::styled(label_with_prefix, label_style)];
+        if let Some(suffix) = qualifier_suffix {
+            spans.push(Span::styled(
+                suffix,
+                theme.styled(Component::WorktreeQualifier, Modifier::empty()),
+            ));
+        }
         if let Some(suffix) = team_suffix {
             spans.push(Span::styled(
                 suffix,

@@ -73,6 +73,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     slow.worktree_groups = vec![crate::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
+        label_qualifier: None,
         kind: crate::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
@@ -693,6 +694,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
         snap.worktree_groups = vec![crate::SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
+            label_qualifier: None,
             kind: crate::SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,

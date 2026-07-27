@@ -26,6 +26,7 @@ fn group(key: &str, rows: Vec<SidebarRow>) -> SidebarWorktreeGroup {
     SidebarWorktreeGroup {
         key: key.to_owned(),
         label: key.to_owned(),
+        label_qualifier: None,
         kind: SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,

@@ -170,6 +170,79 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
     }
 }
 
+/// Qualify groups whose final display labels collide with the shortest
+/// distinguishing trailing checkout path.
+pub fn disambiguate_group_labels(snapshot: &mut SidebarSnapshot) {
+    let mut by_label = BTreeMap::<String, Vec<(usize, Vec<String>, usize)>>::new();
+
+    for (index, group) in snapshot.worktree_groups.iter_mut().enumerate() {
+        group.label_qualifier = None;
+        if group.kind == SidebarWorktreeKind::Channel {
+            continue;
+        }
+        let Some(path) = worktree_group_path_fields(&group.key, &group.rows) else {
+            continue;
+        };
+        let components = Path::new(path)
+            .components()
+            .filter(|component| !matches!(component, std::path::Component::RootDir))
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        if !components.is_empty() {
+            by_label
+                .entry(group.label.clone())
+                .or_default()
+                .push((index, components, 1));
+        }
+    }
+
+    for (label, mut candidates) in by_label
+        .into_iter()
+        .filter(|(_, candidates)| candidates.len() > 1)
+    {
+        let mut path_counts = BTreeMap::<Vec<String>, usize>::new();
+        for (_, components, _) in &candidates {
+            *path_counts.entry(components.clone()).or_default() += 1;
+        }
+        loop {
+            let mut by_suffix = BTreeMap::<String, Vec<usize>>::new();
+            for (candidate, (_, components, depth)) in candidates.iter().enumerate() {
+                by_suffix
+                    .entry(trailing_path_suffix(components, *depth))
+                    .or_default()
+                    .push(candidate);
+            }
+            let mut deepened = false;
+            for collisions in by_suffix.values().filter(|indices| indices.len() > 1) {
+                for &candidate in collisions {
+                    let (_, components, depth) = &mut candidates[candidate];
+                    if *depth < components.len() {
+                        *depth += 1;
+                        deepened = true;
+                    }
+                }
+            }
+            if !deepened {
+                break;
+            }
+        }
+
+        for (index, components, depth) in candidates {
+            if path_counts.get(&components).copied().unwrap_or_default() > 1 {
+                continue;
+            }
+            let suffix = trailing_path_suffix(&components, depth);
+            if suffix != label {
+                snapshot.worktree_groups[index].label_qualifier = Some(suffix);
+            }
+        }
+    }
+}
+
+fn trailing_path_suffix(components: &[String], depth: usize) -> String {
+    components[components.len().saturating_sub(depth)..].join("/")
+}
+
 pub fn project_cohort_effort(snapshot: &mut SidebarSnapshot, cache: &CohortSpendCache) {
     for group in &mut snapshot.worktree_groups {
         group.cohort_effort = cache.groups.get(&group.key).cloned();
@@ -641,6 +714,7 @@ fn enrich_core(
         lanes,
     );
     project_diff_stats(&mut folded, &diff_cache);
+    disambiguate_group_labels(&mut folded);
     project_cohort_effort(&mut folded, &cohort_spend_cache);
     if let Some(lanes) = lanes {
         project_pr_state_map(&mut folded, &lanes.pr_states, &lanes.branch_ci, &diff_cache);

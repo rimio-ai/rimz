@@ -789,6 +789,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
     snapshot.worktree_groups = vec![crate::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
+        label_qualifier: None,
         kind: crate::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,

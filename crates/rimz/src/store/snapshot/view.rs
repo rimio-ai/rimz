@@ -66,7 +66,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 13;
+pub const SNAPSHOT_VERSION: u32 = 14;
 
 /// Sidebar view-model. The pane frame admits every rendered card; store,
 /// sidecars, and realtime events only enrich rows admitted from live panes.

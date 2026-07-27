@@ -307,6 +307,7 @@ fn inactive_groups_sink_below_process_groups() {
     snapshot.worktree_groups.push(SidebarWorktreeGroup {
         key: "/repo/b".to_owned(),
         label: "b".to_owned(),
+        label_qualifier: None,
         kind: SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
@@ -624,6 +625,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
     row_snapshot.worktree_groups = vec![SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
+        label_qualifier: None,
         kind: SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,

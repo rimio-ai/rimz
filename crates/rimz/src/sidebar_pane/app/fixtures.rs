@@ -61,6 +61,7 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
     snapshot.worktree_groups = vec![crate::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
+        label_qualifier: None,
         kind: crate::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
@@ -126,6 +127,7 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     snapshot.worktree_groups = vec![crate::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
+        label_qualifier: None,
         kind: crate::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,

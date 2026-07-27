@@ -154,6 +154,11 @@ pub struct SidebarCohortEffort {
 pub struct SidebarWorktreeGroup {
     pub key: String,
     pub label: String,
+    /// Dim repo qualifier appended to the header when another group renders
+    /// the same label: the shortest trailing path suffix distinguishing the
+    /// colliding checkouts. `None` when the label is unambiguous.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_qualifier: Option<String>,
     pub kind: SidebarWorktreeKind,
     /// The unique non-empty team carried by this group's team-stamped rows.
     /// Roleless processes and stray agents do not hide a cohort label; two
@@ -372,6 +377,7 @@ mod tests {
         SidebarWorktreeGroup {
             key: "group".to_owned(),
             label: "group".to_owned(),
+            label_qualifier: None,
             kind: SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,

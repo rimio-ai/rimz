@@ -115,6 +115,7 @@ fn worktree_group(spec: WorktreeGroupSpec) -> rimz::SidebarWorktreeGroup {
     rimz::SidebarWorktreeGroup {
         key: spec.key.to_owned(),
         label: spec.label.to_owned(),
+        label_qualifier: None,
         kind: rimz::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
