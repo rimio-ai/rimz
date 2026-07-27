@@ -847,7 +847,7 @@ fn calm_context_bar_orders_segments_left_to_right() {
         .fg;
     let health = theme.style(theme.heat_tone(0.0), Modifier::empty()).fg;
 
-    let context_agent = |name: &str, writes: u64, input: u64| {
+    let context_agent = |name: &str, percent: u8, reads: u64, writes: u64, input: u64| {
         let mut agent = agent(
             name,
             "claude",
@@ -859,14 +859,14 @@ fn calm_context_bar_orders_segments_left_to_right() {
         let mut context = claude_context(fixed_now());
         context.tokens = Some(AgentTokenUsage {
             context_window_size: Some(100_000),
-            used_percentage: Some(26),
-            remaining_percentage: Some(74),
+            used_percentage: Some(percent),
+            remaining_percentage: Some(100 - percent),
             current_context_tokens: None,
             current_usage: Some(AgentCurrentUsage {
                 input_tokens: Some(input),
                 output_tokens: Some(0),
                 cache_creation_input_tokens: Some(writes),
-                cache_read_input_tokens: Some(0),
+                cache_read_input_tokens: Some(reads),
             }),
             session_usage: None,
         });
@@ -874,7 +874,7 @@ fn calm_context_bar_orders_segments_left_to_right() {
         agent
     };
 
-    let write_only = bar_styles_for(context_agent("claude-write", 26_000, 0));
+    let write_only = bar_styles_for(context_agent("claude-write", 26, 0, 26_000, 0));
     assert!(
         write_only.contains(&cache_write),
         "a cache-write-only fill uses the cache-write tone: {write_only:?}"
@@ -884,7 +884,7 @@ fn calm_context_bar_orders_segments_left_to_right() {
         "a cache-write-only fill does not inherit the absent cache-read health tone: {write_only:?}"
     );
 
-    let write_and_input = bar_styles_for(context_agent("claude-mixed", 20_000, 6_000));
+    let write_and_input = bar_styles_for(context_agent("claude-mixed", 26, 0, 20_000, 6_000));
     let write_at = write_and_input
         .iter()
         .position(|style| *style == cache_write)
@@ -900,6 +900,22 @@ fn calm_context_bar_orders_segments_left_to_right() {
     assert!(
         write_and_input.iter().all(|style| *style != health),
         "a mixed fill without cache reads has no health-colored run: {write_and_input:?}"
+    );
+
+    let hot_health = theme
+        .style(theme.heat_tone(2.0 / 3.0), Modifier::empty())
+        .fg;
+    let flat_read = theme
+        .style(theme.component(Component::CacheRead), Modifier::empty())
+        .fg;
+    assert_ne!(
+        hot_health, flat_read,
+        "the fixture must distinguish health from the flat cache-read tone"
+    );
+    let hot_reads = bar_styles_for(context_agent("claude-hot", 80, 80_000, 0, 0));
+    assert!(
+        hot_reads.iter().all(|style| *style == hot_health),
+        "an amber cache-read run carries the source-seeded health tone: {hot_reads:?}"
     );
 
     // Two-bucket Codex fill from the row-level split: cache-read run then the

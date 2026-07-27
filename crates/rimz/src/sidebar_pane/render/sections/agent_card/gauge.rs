@@ -314,17 +314,18 @@ pub(super) fn gauge_segments(
 /// truth retains the `▤` form: `▤` is
 /// `input + cache_write + cache_read` of the latest API call — exactly the
 /// numerator the `▣` meter scales — so the bar's percent and this absolute
-/// figure read as one measurement, and the `▤` head wears the bar's severity
-/// tone to seal that pairing. A `·` seam separates the headline from the
-/// latest call's composition, ordered by how the window filled: `◌` read back
-/// from cache, `◍` newly written to it, `↘` fresh input, `↗` output generated
-/// (which joins the window next turn) — each marker in its bar-segment color,
-/// so the line doubles as the bar's legend. The `◇` totals stay the cockpit /
-/// fleet-store / subagent vocabulary. An authoritative occupancy scalar with
-/// no matching composition renders as a bare `▤` total and flat meter. When no
-/// current-window occupancy is available but the provider exposes cumulative
-/// session counters, the line instead uses that shared `◇ ↘ ↗ ◌` grammar
-/// without implying occupancy. The
+/// figure read as one measurement. The `▤` head always wears the row severity
+/// tone, matching the bar when it has a cache-read run and keeping severity
+/// visible beside a reads-absent composition. A `·` seam separates the headline
+/// from the latest call's composition, ordered by how the window filled: `◌`
+/// read back from cache, `◍` newly written to it, `↘` fresh input, `↗` output
+/// generated (which joins the window next turn) — each marker in its
+/// bar-segment color, so the line doubles as the bar's legend. The `◇` totals
+/// stay the cockpit / fleet-store / subagent vocabulary. An authoritative
+/// occupancy scalar with no matching composition renders as a bare `▤` total
+/// and flat meter. When no current-window occupancy is available but the
+/// provider exposes cumulative session counters, the line instead uses that
+/// shared `◇ ↘ ↗ ◌` grammar without implying occupancy. The
 /// rich statusline blob is preferred; the row-level
 /// [`SidebarRow::call_split`] stands in when the blob carries no split. The
 /// exact latest-call `▤` composition wins over cumulative `◇` session totals;
@@ -354,9 +355,9 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
             )]
         })
         .unwrap_or_default();
-    // The `▤` head mirrors the bar's row-specific severity tone, so the absolute
-    // figure and the meter above it read at one urgency. A row with no gauge
-    // percent folds to 0 and lets the token overlay alone speak.
+    // The `▤` head carries row severity, matching a cache-read run when present
+    // and retaining urgency beside a reads-absent composition. A row with no
+    // gauge percent folds to 0 and lets the token overlay alone speak.
     let severity = row_severity_color(theme, row, bands, row_severity(row, bands));
     let mut left = vec![Span::raw("  ")];
     if let Some(usage) = correlated_current_usage(row) {
