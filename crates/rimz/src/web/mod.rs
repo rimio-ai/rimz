@@ -24,7 +24,7 @@ mod ttyd;
 
 pub use gate::{GateAuth, RelayTarget};
 
-const TTYD_AMBIENT_CONTEXT_ENV: [&str; 16] = [
+const TTYD_AMBIENT_CONTEXT_ENV: [&str; 27] = [
     "ZELLIJ",
     "ZELLIJ_PANE_ID",
     "ZELLIJ_SESSION_NAME",
@@ -32,8 +32,19 @@ const TTYD_AMBIENT_CONTEXT_ENV: [&str; 16] = [
     "TMUX_PANE",
     crate::workspace::ENV_WORKSPACE_ID,
     crate::workspace::ENV_PROJECT_ROOT,
+    crate::harness::run::ENV_RUN_ID,
+    crate::harness::run::ENV_AGENT_KIND,
+    crate::harness::run::ENV_AGENT_NAME,
+    crate::harness::run::ENV_AGENT_PROFILE,
+    crate::harness::run::ENV_AGENT_ROLE,
+    crate::harness::run::ENV_TEAM,
+    crate::harness::run::ENV_LAUNCH_GROUP,
+    crate::harness::run::ENV_LAUNCH_ORDINAL,
     crate::harness::run::ENV_WORKTREE_PATH,
     crate::harness::run::ENV_CHANNEL,
+    crate::harness::run::ENV_AGENT_MODEL,
+    crate::harness::run::ENV_AGENT_EFFORT,
+    crate::harness::run::ENV_AGENT_BUDGET,
     crate::mux::CLIENT_SIZE_ENV,
     crate::remote::REMOTE_RECONNECT_ENV,
     crate::remote::ATTACH_MARK_ENV,
@@ -681,6 +692,8 @@ mod tests {
         let spec =
             without_ttyd_launch_context(CommandSpec::new("ttyd").env_remove("ALREADY_REMOVED"));
 
+        assert!(spec.env_remove.contains("ZELLIJ_SESSION_NAME"));
+        assert!(spec.env_remove.contains("RIMZ_AGENT_KIND"));
         for key in TTYD_AMBIENT_CONTEXT_ENV {
             assert!(spec.env_remove.contains(key), "{key} remains inherited");
         }
@@ -692,6 +705,7 @@ mod tests {
             "RIMZ_TTYD_BIN",
             "RIMZ_ZELLIJ_BIN",
             "RIMZ_WEB_FONTS_OFFLINE",
+            "RIMZ_RTK",
             "RUST_LOG",
         ] {
             assert!(!spec.env_remove.contains(key), "{key} should be inherited");

@@ -75,6 +75,8 @@ pub(super) struct DaemonRecord {
     pub(super) gate: Option<GateRecord>,
     #[serde(default)]
     pub(super) basic_upstream: bool,
+    #[serde(default)]
+    pub(super) launch_context_scrubbed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) pixel_protocol: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -98,6 +100,7 @@ impl DaemonRecord {
             trusted_proxies: Vec::new(),
             gate: None,
             basic_upstream: true,
+            launch_context_scrubbed: true,
             pixel_protocol: None,
             index_key: None,
         }
@@ -388,6 +391,7 @@ fn desired_spec(config: &MachineConfig) -> Result<DaemonSpec> {
 
 fn record_matches(record: &DaemonRecord, desired: &DaemonSpec, profile: &ClientProfile) -> bool {
     record.basic_upstream
+        && record.launch_context_scrubbed
         && record.port == desired.port
         && record.interface == desired.interface
         && record.auth == desired.auth
@@ -591,6 +595,7 @@ fn start_daemon_with_profile(
         trusted_proxies: desired.trusted_proxies.clone(),
         gate,
         basic_upstream: true,
+        launch_context_scrubbed: true,
         pixel_protocol: profile.pixel_protocol,
         index_key: profile.index_key.clone(),
     };
@@ -1126,6 +1131,8 @@ mod tests {
                 .iter()
                 .all(|key| spec.env_remove.contains(*key))
         );
+        assert!(spec.env_remove.contains("ZELLIJ_SESSION_NAME"));
+        assert!(spec.env_remove.contains("RIMZ_AGENT_KIND"));
     }
 
     #[test]
@@ -1228,6 +1235,7 @@ mod tests {
                 upstream_port: 41820,
             }),
             basic_upstream: true,
+            launch_context_scrubbed: true,
             pixel_protocol: Some(crate::web::TTYD_PIXEL_PROTOCOL),
             index_key: Some("generated-index-key".to_owned()),
         };
@@ -1236,7 +1244,7 @@ mod tests {
     }
 
     #[test]
-    fn old_daemon_state_defaults_to_a_non_reusable_basic_upstream() {
+    fn old_daemon_state_defaults_to_non_reusable_markers() {
         let daemon: DaemonRecord =
             serde_json::from_str(r#"{"pid":42,"port":8200}"#).expect("old record");
         assert_eq!(daemon.pid, 42);
@@ -1244,6 +1252,7 @@ mod tests {
         assert!(daemon.auth_users.is_empty());
         assert!(daemon.gate.is_none());
         assert!(!daemon.basic_upstream);
+        assert!(!daemon.launch_context_scrubbed);
         assert_eq!(daemon.index_key, None);
     }
 
@@ -1317,13 +1326,16 @@ mod tests {
     }
 
     #[test]
-    fn daemon_reuse_requires_the_generated_index_key() {
+    fn daemon_reuse_requires_context_marker_and_generated_index_key() {
         let config = MachineConfig::default();
         let desired = desired_spec(&config).expect("desired daemon");
         let mut daemon = DaemonRecord::basic_loopback(42, config.web.port);
         let mut profile = ClientProfile::default();
 
         assert!(record_matches(&daemon, &desired, &profile));
+        daemon.launch_context_scrubbed = false;
+        assert!(!record_matches(&daemon, &desired, &profile));
+        daemon.launch_context_scrubbed = true;
         daemon.basic_upstream = false;
         assert!(!record_matches(&daemon, &desired, &profile));
         daemon.basic_upstream = true;

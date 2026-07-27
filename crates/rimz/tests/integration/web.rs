@@ -683,6 +683,7 @@ fn read_only_broadcast_allowlist_reuses_restarts_and_stops_its_daemon() {
     let first_daemon: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("first share record"))
             .expect("first share JSON");
+    assert_eq!(first_daemon["launch_context_scrubbed"], true);
     assert!(
         first_daemon["index_key"]
             .as_str()
@@ -922,6 +923,7 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("trusted-header daemon record"))
             .expect("trusted-header daemon JSON");
     assert_eq!(record["basic_upstream"], true);
+    assert_eq!(record["launch_context_scrubbed"], true);
     let initial_pid = record["pid"].as_u64().expect("initial ttyd pid");
     let gate_pid = record["gate"]["pid"].as_u64().expect("gate pid") as u32;
     let upstream_port = record["gate"]["upstream_port"]
@@ -958,6 +960,10 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
         .as_object_mut()
         .expect("daemon object")
         .remove("basic_upstream");
+    record
+        .as_object_mut()
+        .expect("daemon object")
+        .remove("launch_context_scrubbed");
     std::fs::write(
         &daemon_path,
         serde_json::to_vec(&record).expect("serialize stale record"),
@@ -974,6 +980,7 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
             .expect("migrated daemon JSON");
     assert_ne!(migrated["pid"], initial_pid, "stale record reused ttyd");
     assert_eq!(migrated["basic_upstream"], true);
+    assert_eq!(migrated["launch_context_scrubbed"], true);
 
     let token = fixture
         .command()
