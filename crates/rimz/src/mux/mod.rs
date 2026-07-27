@@ -23,6 +23,7 @@ pub use capabilities::{drops_desktop_osc, lists_full_cmdline, view_kind, wraps_o
 pub use command::CommandSpec;
 pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
 pub use focus_key::{FocusChord, FocusKeyBinding};
+pub(crate) use keys::paste_payload;
 pub use keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, UnknownKey};
 pub(crate) use reconcile::{
     ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
@@ -859,11 +860,13 @@ pub trait MuxBackend: Send + Sync {
     /// Inject `text` into the pane as one bracketed paste (`ESC[200~` …
     /// `ESC[201~`), so an agent composer takes the whole payload as pasted
     /// content and a following submit Enter reads as a keystroke instead of a
-    /// folded newline. Use only on panes running a TUI with bracketed-paste
-    /// mode enabled (agent REPLs) — a bare shell renders the markers literally,
-    /// so the raw [`Self::send_keys`] path stays for generic pane sends. The
-    /// submit Enter is not included; callers follow with [`Self::send_key`] so
-    /// the trailing `\r` lands outside the paste.
+    /// folded newline. Logical LF and CRLF line endings are carried as CR
+    /// inside the paste, matching terminal paste behavior and what agent
+    /// composers recognize as a newline. Use only on panes running a TUI with
+    /// bracketed-paste mode enabled (agent REPLs) — a bare shell renders the
+    /// markers literally, so the raw [`Self::send_keys`] path stays for generic
+    /// pane sends. The submit Enter is not included; callers follow with
+    /// [`Self::send_key`] so the trailing `\r` lands outside the paste.
     fn paste_text(&self, pane: &PaneId, text: &str) -> Result<()>;
     /// Birth (or heal) the session's working view with its sidebar. When `daemon`
     /// is `Some`, the session is born with that `sidebar | content | hosts…`

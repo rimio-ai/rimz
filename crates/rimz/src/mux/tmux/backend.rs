@@ -21,7 +21,8 @@ use crate::mux::{
     ReconcilePaneRole, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
     SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
     WidthStep, WidthSyncOptions, ensure_pane_backend, execute_reconcile_plan,
-    group_reconcile_panes, memoized_version, prove_sidebar_mount, sidebar_build_identity,
+    group_reconcile_panes, memoized_version, paste_payload, prove_sidebar_mount,
+    sidebar_build_identity,
 };
 
 /// tmux per-keypress sidebar resize step, in columns. Zellij has no CLI
@@ -433,6 +434,7 @@ impl MuxBackend for TmuxBackend {
 
     fn paste_text(&self, pane: &PaneId, text: &str) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
+        let payload = paste_payload(text);
         // Open marker, literal text, close marker — each `-l` so tmux never
         // re-reads the bytes as key names, all in one client invocation.
         let literal = |body: &str| {
@@ -447,7 +449,7 @@ impl MuxBackend for TmuxBackend {
         };
         self.batch(&[
             literal(BRACKET_PASTE_OPEN),
-            literal(text),
+            literal(&payload),
             literal(BRACKET_PASTE_CLOSE),
         ])
     }
