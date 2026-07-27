@@ -210,8 +210,8 @@ impl PresetField {
 pub enum PresetArgMatcher {
     /// A single-use named flag: `--model VALUE` or `--model=VALUE`.
     Flag(Vec<String>),
-    /// A flag whose value is prompt text rather than a file path.
-    TextFlag(Vec<String>),
+    /// An environment variable whose value is a replacement file path.
+    EnvPathVar(String),
     /// A repeatable config override carrying the field as `<flag> <key>=VALUE`.
     ConfigKey { flags: Vec<String>, key: String },
 }
@@ -228,7 +228,7 @@ impl PresetArgMatcher {
         let mut index = 0;
         while index < argv.len() {
             let occurrence = match self {
-                Self::Flag(flags) | Self::TextFlag(flags) => flags.iter().find_map(|flag| {
+                Self::Flag(flags) => flags.iter().find_map(|flag| {
                     if argv[index] == *flag {
                         argv.get(index + 1).map(|value| PresetArgOccurrence {
                             argv_range: index..index + 2,
@@ -264,6 +264,7 @@ impl PresetArgMatcher {
                             })
                     }
                 }),
+                Self::EnvPathVar(_) => None,
             };
             if let Some(occurrence) = occurrence {
                 index = occurrence.argv_range.end;
@@ -277,10 +278,11 @@ impl PresetArgMatcher {
 
     pub(crate) fn display_setting(&self, value: &str) -> String {
         match self {
-            Self::Flag(flags) | Self::TextFlag(flags) => flags
+            Self::Flag(flags) => flags
                 .first()
                 .map_or_else(|| value.to_owned(), |flag| format!("{flag} {value}")),
             Self::ConfigKey { key, .. } => format!("{key} {value}"),
+            Self::EnvPathVar(key) => format!("{key}={value}"),
         }
     }
 }

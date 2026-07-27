@@ -740,6 +740,8 @@ struct ExecutableProfile<'a> {
     model: Option<&'a str>,
     effort: Option<&'a str>,
     system_prompt_file: Option<&'a str>,
+    // Keep the legacy projection key so configs without fragments retain
+    // their pinned surface hash (integration::trust::config_without_prompt_fragments_keeps_legacy_surface_hash).
     #[serde(rename = "append_system_prompt_file")]
     append_system_prompt_files: Option<&'a [String]>,
     args: Option<&'a str>,
@@ -760,6 +762,8 @@ struct ExecutableRole<'a> {
     model: Option<&'a str>,
     effort: Option<&'a str>,
     system_prompt_file: Option<String>,
+    // Keep the legacy projection key so configs without fragments retain
+    // their pinned surface hash (integration::trust::config_without_prompt_fragments_keeps_legacy_surface_hash).
     #[serde(rename = "append_system_prompt_file")]
     append_system_prompt_files: Option<Vec<String>>,
     args: Option<&'a str>,

@@ -662,7 +662,7 @@ mod launch_options {
         let effective =
             rimz::config::effective::load(&machine.agents, root, &root.join("config-home"))?;
         let kind_override = resolve_agent_override(args.launch.agent.as_deref())?;
-        let resolved = rimz::harness::plan::resolve_launch_with_kind_override(
+        let resolved = rimz::harness::plan::resolve_launch(
             &effective,
             &machine.agents.commands,
             args.launch.spec.as_deref(),
@@ -778,6 +778,7 @@ mod launch_options {
             &effective,
             &machine.agents.commands,
             args.launch.spec.as_deref(),
+            None,
         )
         .expect("resolve warning-capable layout");
 

@@ -55,7 +55,7 @@ pub(super) fn prepare_supervised_launch_layout(
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
-    let mut resolved = rimz::harness::plan::resolve_launch_with_kind_override(
+    let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
         &machine_config.agents.commands,
         Some(spec),

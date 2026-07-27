@@ -464,6 +464,16 @@ pub fn compile_agent_process(
     request: &ExecRequest,
     cwd: &Path,
 ) -> AgentProcessResult<CompiledAgentProcess> {
+    compile_agent_process_with_extra_env(project_root, rtk, request, cwd, &BTreeMap::new())
+}
+
+fn compile_agent_process_with_extra_env(
+    project_root: &Path,
+    rtk: crate::config::RtkMode,
+    request: &ExecRequest,
+    cwd: &Path,
+    extra_env: &BTreeMap<String, String>,
+) -> AgentProcessResult<CompiledAgentProcess> {
     let kind = request.kind.as_str();
     let adapter = crate::agents::find_definition(kind).ok_or_else(|| {
         AgentProcessCompileErr::UnknownAgent {
@@ -483,6 +493,7 @@ pub fn compile_agent_process(
         adapter,
         rtk,
         request,
+        extra_env,
     )?;
     let argv = login_shell_argv(&env, &provider_argv);
     Ok(CompiledAgentProcess {
@@ -529,13 +540,14 @@ pub fn compile_agent_process_stage(
     request: &ExecRequest,
     cwd: &Path,
     rimz_bin: &Path,
+    extra_env: &BTreeMap<String, String>,
 ) -> Result<AgentProcessStage, AgentProcessStageErr> {
     let bound = !matches!(&request.provider_account, ProviderAccountState::Unbound);
     if bound && !matches!(&request.action, ExecAction::Launch { .. }) {
         return Err(AgentProcessStageErr::InvalidProviderBinding);
     }
 
-    let process = compile_agent_process(project_root, rtk, request, cwd)?;
+    let process = compile_agent_process_with_extra_env(project_root, rtk, request, cwd, extra_env)?;
     let managed_launch = if bound {
         let adapter = crate::agents::find_definition(request.kind.as_str()).ok_or_else(|| {
             AgentProcessCompileErr::UnknownAgent {
@@ -595,10 +607,12 @@ fn compose_agent_env(
     adapter: &crate::agents::AgentDefinition,
     rtk: crate::config::RtkMode,
     request: &ExecRequest,
+    extra_env: &BTreeMap<String, String>,
 ) -> AgentProcessResult<BTreeMap<String, String>> {
     for (key, value) in adapter.launch_env() {
         env.insert(key.to_owned(), value.to_owned());
     }
+    env.extend(extra_env.clone());
     env.extend(exec_identity_env(request));
     env.insert(
         crate::harness::run::ENV_RTK.to_owned(),

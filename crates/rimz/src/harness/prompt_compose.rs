@@ -1,5 +1,6 @@
 //! Materialize profile prompt fragments into one provider replacement value.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,12 @@ impl SystemPromptSources {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MaterializedSystemPrompt {
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PromptComposeErr {
     #[error("unknown agent kind `{kind}`")]
@@ -56,9 +63,9 @@ pub fn materialize_system_prompt(
     kind: &AgentKind,
     sources: &SystemPromptSources,
     runtime: &RuntimePaths,
-) -> Result<Vec<String>, PromptComposeErr> {
+) -> Result<MaterializedSystemPrompt, PromptComposeErr> {
     if sources.is_empty() {
-        return Ok(Vec::new());
+        return Ok(MaterializedSystemPrompt::default());
     }
     let adapter = crate::agents::find_definition(kind.as_str())
         .ok_or_else(|| PromptComposeErr::UnknownAdapter { kind: kind.clone() })?;
@@ -76,20 +83,27 @@ pub fn materialize_system_prompt(
             .as_deref()
             .expect("non-empty sources without fragments contain a base prompt");
         return match matcher {
-            PresetArgMatcher::TextFlag(flags) => {
-                render_flag(flags, read_prompt(path)?, adapter.spec().kind)
+            PresetArgMatcher::Flag(flags) => Ok(MaterializedSystemPrompt {
+                args: render_flag(
+                    flags,
+                    path.to_string_lossy().into_owned(),
+                    adapter.spec().kind,
+                )?,
+                env: BTreeMap::new(),
+            }),
+            PresetArgMatcher::ConfigKey { flags, key } => Ok(MaterializedSystemPrompt {
+                args: render_config_key(
+                    flags,
+                    key,
+                    path.to_string_lossy().into_owned(),
+                    adapter.spec().kind,
+                )?,
+                env: BTreeMap::new(),
+            }),
+            PresetArgMatcher::EnvPathVar(key) => {
+                let artifact = write_artifact(runtime, &read_prompt(path)?)?;
+                Ok(env_path(key, artifact))
             }
-            PresetArgMatcher::Flag(flags) => render_flag(
-                flags,
-                path.to_string_lossy().into_owned(),
-                adapter.spec().kind,
-            ),
-            PresetArgMatcher::ConfigKey { flags, key } => render_config_key(
-                flags,
-                key,
-                path.to_string_lossy().into_owned(),
-                adapter.spec().kind,
-            ),
         };
     }
 
@@ -105,23 +119,32 @@ pub fn materialize_system_prompt(
     }
     let composed = compose(&pieces);
     match matcher {
-        PresetArgMatcher::TextFlag(flags) => render_flag(flags, composed, adapter.spec().kind),
         PresetArgMatcher::Flag(flags) => {
             let path = write_artifact(runtime, &composed)?;
-            render_flag(
-                flags,
-                path.to_string_lossy().into_owned(),
-                adapter.spec().kind,
-            )
+            Ok(MaterializedSystemPrompt {
+                args: render_flag(
+                    flags,
+                    path.to_string_lossy().into_owned(),
+                    adapter.spec().kind,
+                )?,
+                env: BTreeMap::new(),
+            })
         }
         PresetArgMatcher::ConfigKey { flags, key } => {
             let path = write_artifact(runtime, &composed)?;
-            render_config_key(
-                flags,
-                key,
-                path.to_string_lossy().into_owned(),
-                adapter.spec().kind,
-            )
+            Ok(MaterializedSystemPrompt {
+                args: render_config_key(
+                    flags,
+                    key,
+                    path.to_string_lossy().into_owned(),
+                    adapter.spec().kind,
+                )?,
+                env: BTreeMap::new(),
+            })
+        }
+        PresetArgMatcher::EnvPathVar(key) => {
+            let path = write_artifact(runtime, &composed)?;
+            Ok(env_path(key, path))
         }
     }
 }
@@ -148,6 +171,15 @@ fn write_artifact(runtime: &RuntimePaths, contents: &str) -> Result<PathBuf, Pro
         .join(format!("sys.{}.md", &digest[..32]));
     crate::store::atomic::write_cache_bytes_atomically(&path, contents.as_bytes())?;
     Ok(path)
+}
+
+fn env_path(key: String, path: PathBuf) -> MaterializedSystemPrompt {
+    MaterializedSystemPrompt {
+        args: Vec::new(),
+        env: [(key, path.to_string_lossy().into_owned())]
+            .into_iter()
+            .collect(),
+    }
 }
 
 fn render_flag(
@@ -214,32 +246,40 @@ mod tests {
         let claude =
             materialize_system_prompt(&AgentKind::new_unchecked("claude"), &sources, &runtime)
                 .expect("claude prompt");
-        assert_eq!(claude[0], "--system-prompt-file");
-        let artifact = PathBuf::from(&claude[1]);
+        assert_eq!(claude.args[0], "--system-prompt-file");
+        let artifact = PathBuf::from(&claude.args[1]);
         assert_eq!(
             std::fs::read_to_string(&artifact).expect("artifact"),
             "base\n\nfirst\n\nsecond\n"
         );
         assert_eq!(
             materialize_system_prompt(&AgentKind::new_unchecked("claude"), &sources, &runtime,)
-                .expect("stable prompt")[1],
-            claude[1]
+                .expect("stable prompt")
+                .args[1],
+            claude.args[1]
         );
 
         let codex =
             materialize_system_prompt(&AgentKind::new_unchecked("codex"), &sources, &runtime)
                 .expect("codex prompt");
         assert_eq!(
-            codex,
+            codex.args,
             vec![
                 "-c".to_owned(),
                 format!("model_instructions_file={}", artifact.display())
             ]
         );
+        let qwen = materialize_system_prompt(&AgentKind::new_unchecked("qwen"), &sources, &runtime)
+            .expect("qwen prompt");
+        assert!(qwen.args.is_empty());
+        assert_eq!(
+            qwen.env.get("QWEN_SYSTEM_MD").map(String::as_str),
+            artifact.to_str()
+        );
     }
 
     #[test]
-    fn text_adapter_receives_contents_and_single_path_adapter_keeps_source() {
+    fn env_adapter_receives_artifact_and_single_path_adapter_keeps_source() {
         let dir = tempfile::tempdir().expect("temp dir");
         let prompt = dir.path().join("prompt.md");
         std::fs::write(&prompt, "voice").expect("prompt");
@@ -255,16 +295,20 @@ mod tests {
 
         assert_eq!(
             materialize_system_prompt(&AgentKind::new_unchecked("claude"), &sources, &runtime)
-                .expect("claude"),
+                .expect("claude")
+                .args,
             [
                 "--system-prompt-file".to_owned(),
                 prompt.to_string_lossy().into_owned()
             ]
         );
+        let qwen = materialize_system_prompt(&AgentKind::new_unchecked("qwen"), &sources, &runtime)
+            .expect("qwen");
+        assert!(qwen.args.is_empty());
+        let artifact = qwen.env.get("QWEN_SYSTEM_MD").expect("qwen env path");
         assert_eq!(
-            materialize_system_prompt(&AgentKind::new_unchecked("qwen"), &sources, &runtime)
-                .expect("qwen"),
-            ["--system-prompt".to_owned(), "voice".to_owned()]
+            std::fs::read_to_string(artifact).expect("qwen artifact"),
+            "voice"
         );
     }
 

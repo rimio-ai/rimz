@@ -104,7 +104,7 @@ Profile `system-prompt-file` and ordered `append-system-prompt-files` use one pr
 | --- | :--: | --- |
 | Claude Code | ✓ | `--system-prompt-file <path>` |
 | Codex | ✓ | `-c model_instructions_file=<path>` |
-| Qwen Code | ✓ | file contents through `--system-prompt <text>` |
+| Qwen Code | ✓ | private artifact path through `QWEN_SYSTEM_MD` |
 | Droid | ✗ | native append only; use its flag through raw profile `args` |
 | Pi | ✗ | no verified replacement flag |
 | OpenCode | ✗ | no verified replacement flag |

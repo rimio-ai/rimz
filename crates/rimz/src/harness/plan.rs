@@ -67,14 +67,6 @@ pub fn resolve_launch(
     launch: &crate::config::effective::LaunchAgents,
     commands: &crate::config::CommandsConfig,
     spec: Option<&str>,
-) -> std::result::Result<ResolvedLaunch, ResolveLaunchError> {
-    resolve_launch_with_kind_override(launch, commands, spec, None)
-}
-
-pub fn resolve_launch_with_kind_override(
-    launch: &crate::config::effective::LaunchAgents,
-    commands: &crate::config::CommandsConfig,
-    spec: Option<&str>,
     kind_override: Option<&crate::ids::AgentKind>,
 ) -> std::result::Result<ResolvedLaunch, ResolveLaunchError> {
     let layout = match crate::harness::spec::resolve_spec_with_kind_override(
@@ -129,7 +121,9 @@ fn validate_agent_prompt_files(
                     .launch
                     .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile)
             })
-            .is_some_and(|matcher| matches!(matcher, crate::agents::PresetArgMatcher::TextFlag(_)));
+            .is_some_and(|matcher| {
+                matches!(matcher, crate::agents::PresetArgMatcher::EnvPathVar(_))
+            });
     let prompt_files = cell
         .system_prompt_file
         .as_ref()
@@ -203,6 +197,10 @@ pub enum LaunchFinalizeWarning {
         field: &'static str,
         value: String,
     },
+    DeclaredPromptWins {
+        profile: String,
+        setting: String,
+    },
 }
 
 impl fmt::Display for LaunchFinalizeWarning {
@@ -225,6 +223,10 @@ impl fmt::Display for LaunchFinalizeWarning {
                 formatter,
                 "warning: profile `{profile}` args set {setting}; declared {field} {value} wins"
             ),
+            Self::DeclaredPromptWins { profile, setting } => write!(
+                formatter,
+                "warning: profile `{profile}` args set {setting}; declared system prompt wins"
+            ),
         }
     }
 }
@@ -236,11 +238,11 @@ pub enum LaunchFinalizeError {
     #[error(transparent)]
     PromptFile(#[from] ProfilePromptFileError),
     #[error(
-        "{agent} does not support --{field}; remove it or put provider-specific flags in `args`"
+        "{agent} does not support {setting}; remove it or put provider-specific flags in `args`"
     )]
     UnsupportedPresetField {
         agent: &'static str,
-        field: &'static str,
+        setting: &'static str,
     },
     #[error("{agent} does not support --max-turns")]
     UnsupportedMaxTurns {
@@ -316,6 +318,11 @@ fn finalize_agent_cell(
         if !options.preset.append_system_prompt_files.is_empty() {
             cell.append_system_prompt_files
                 .clone_from(&options.preset.append_system_prompt_files);
+        }
+        if options.preset.system_prompt_file.is_some()
+            || !options.preset.append_system_prompt_files.is_empty()
+        {
+            overridden.push(crate::agents::PresetField::SystemPromptFile);
         }
         cell.args.extend(
             adapter
@@ -433,6 +440,31 @@ fn reconcile_preset_args(
         remove_occurrences(&mut cell.args, &occurrences);
         cell.args.extend(canonical);
     }
+
+    if cell.system_prompt_file.is_some() || !cell.append_system_prompt_files.is_empty() {
+        let matcher = adapter
+            .spec()
+            .launch
+            .preset_arg_matcher(PresetField::SystemPromptFile)
+            .expect("prompt support was validated before preset reconciliation");
+        let occurrences = matcher.occurrences(&cell.args);
+        if !overridden.contains(&PresetField::SystemPromptFile) {
+            for occurrence in &occurrences {
+                let matches_declared_path = cell.append_system_prompt_files.is_empty()
+                    && cell
+                        .system_prompt_file
+                        .as_ref()
+                        .is_some_and(|path| path.to_string_lossy() == occurrence.value);
+                if !matches_declared_path {
+                    warnings.push(LaunchFinalizeWarning::DeclaredPromptWins {
+                        profile: label.clone(),
+                        setting: matcher.display_setting(&occurrence.value),
+                    });
+                }
+            }
+        }
+        remove_occurrences(&mut cell.args, &occurrences);
+    }
     Ok(())
 }
 
@@ -440,14 +472,14 @@ pub fn validate_system_prompt_support(
     cell: &AgentCell,
     adapter: Option<&crate::agents::AgentDefinition>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
-    let field = if !cell.append_system_prompt_files.is_empty() {
-        Some("append-system-prompt-files")
+    let setting = if !cell.append_system_prompt_files.is_empty() {
+        Some("config key `append-system-prompt-files` / flag `--append-system-prompt-file`")
     } else if cell.system_prompt_file.is_some() {
-        Some("system-prompt-file")
+        Some("config key `system-prompt-file` / flag `--system-prompt-file`")
     } else {
         None
     };
-    let Some(field) = field else {
+    let Some(setting) = setting else {
         return Ok(());
     };
     let adapter = adapter.ok_or_else(|| LaunchFinalizeError::UnknownAdapter {
@@ -461,7 +493,7 @@ pub fn validate_system_prompt_support(
     {
         return Err(LaunchFinalizeError::UnsupportedPresetField {
             agent: adapter.spec().kind,
-            field,
+            setting,
         });
     }
     Ok(())
@@ -476,7 +508,13 @@ fn remove_occurrences(args: &mut Vec<String>, occurrences: &[crate::agents::Pres
 fn unsupported_preset_error(err: crate::agents::PresetErr) -> LaunchFinalizeError {
     match err {
         crate::agents::PresetErr::UnsupportedField { agent, field } => {
-            LaunchFinalizeError::UnsupportedPresetField { agent, field }
+            let setting = match field {
+                "model" => "--model",
+                "effort" => "--effort",
+                "system-prompt-file" => "--system-prompt-file",
+                _ => field,
+            };
+            LaunchFinalizeError::UnsupportedPresetField { agent, setting }
         }
     }
 }

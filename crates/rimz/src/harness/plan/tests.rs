@@ -185,7 +185,7 @@ fn profile_prompt_validation_requires_declared_files() {
         ),
     );
     let launch = effective_launch(&machine, dir.path());
-    let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"))
+    let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
         .expect("resolve profile");
     validate_profile_prompt_files(&resolved.layout).expect("present prompt files pass");
 
@@ -206,7 +206,7 @@ fn profile_prompt_validation_requires_declared_files() {
             configured_profile("claude", None, None, None, system, append, None),
         );
         let launch = effective_launch(&machine, dir.path());
-        let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"))
+        let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
             .expect("resolve missing prompt profile");
         let err =
             validate_profile_prompt_files(&resolved.layout).expect_err("missing prompt fails");
@@ -220,7 +220,7 @@ fn profile_prompt_validation_requires_declared_files() {
         configured_profile("claude", None, None, None, None, Some(invalid), None),
     );
     let launch = effective_launch(&machine, dir.path());
-    let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"))
+    let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
         .expect("resolve invalid prompt profile");
     let err =
         validate_profile_prompt_files(&resolved.layout).expect_err("non-text prompt fails early");
@@ -251,7 +251,7 @@ fn cli_prompt_fragments_replace_profile_list_and_require_replacement_support() {
     );
     let launch = effective_launch(&machine, dir.path());
     let mut resolved =
-        resolve_launch(&launch, &machine.agents.commands, Some("planner")).expect("resolve");
+        resolve_launch(&launch, &machine.agents.commands, Some("planner"), None).expect("resolve");
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
@@ -285,7 +285,7 @@ fn cli_prompt_fragments_replace_profile_list_and_require_replacement_support() {
         .agent = "droid".to_owned();
     let launch = effective_launch(&machine, dir.path());
     let mut resolved =
-        resolve_launch(&launch, &machine.agents.commands, Some("planner")).expect("resolve");
+        resolve_launch(&launch, &machine.agents.commands, Some("planner"), None).expect("resolve");
     let err = finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
@@ -299,7 +299,7 @@ fn cli_prompt_fragments_replace_profile_list_and_require_replacement_support() {
     .expect_err("droid cannot replace prompts");
     assert_eq!(
         err.to_string(),
-        "droid does not support --append-system-prompt-files; remove it or put provider-specific flags in `args`"
+        "droid does not support config key `append-system-prompt-files` / flag `--append-system-prompt-file`; remove it or put provider-specific flags in `args`"
     );
 }
 
@@ -321,7 +321,7 @@ fn provider_override_carries_profile_fields_and_renders_with_new_adapter() {
     );
     let launch = effective_launch(&machine, dir.path());
     let claude = AgentKind::new_unchecked("claude");
-    let resolved = resolve_launch_with_kind_override(
+    let resolved = resolve_launch(
         &launch,
         &machine.agents.commands,
         Some("coder"),
@@ -348,7 +348,7 @@ fn provider_override_carries_profile_fields_and_renders_with_new_adapter() {
     );
 
     let kimi = AgentKind::new_unchecked("kimi");
-    let err = resolve_launch_with_kind_override(
+    let err = resolve_launch(
         &launch,
         &machine.agents.commands,
         Some("coder"),
@@ -390,8 +390,8 @@ fn resolved_launch_finalizes_profile_cli_and_passthrough_precedence() {
         "model_reasoning_effort=medium".to_owned(),
     ];
 
-    let mut resolved =
-        resolve_launch(&launch, &machine.agents.commands, Some("planner")).expect("resolve launch");
+    let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
+        .expect("resolve launch");
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
@@ -454,7 +454,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     );
     let launch = effective_launch(&machine, dir.path());
     let preset = crate::agents::LaunchPreset::default();
-    let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("asked,codex"))
+    let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("asked,codex"), None)
         .expect("resolve launch");
     finalize_launch_layout(
         &mut resolved.layout,
@@ -477,7 +477,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
         [Some(PermissionMode::Ask), Some(PermissionMode::Yolo)]
     );
 
-    let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("claude"))
+    let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("claude"), None)
         .expect("resolve supervised launch");
     finalize_launch_layout(
         &mut resolved.layout,
@@ -503,7 +503,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     assert_eq!(args, &["--permission-mode", "auto", "--max-turns", "3"]);
     assert_eq!(model, &None);
 
-    let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("codex"))
+    let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("codex"), None)
         .expect("resolve codex launch");
     let err = finalize_launch_layout(
         &mut resolved.layout,
@@ -699,6 +699,37 @@ fn declared_model_replaces_different_args_and_dedupes_equal_args_silently() {
     );
     assert!(matches!(&equal.columns[0].rows[0],
         Cell::Agent(AgentCell { args, .. }) if args == &["--model", "gpt-5.6-max"]));
+}
+
+#[test]
+fn declared_prompt_removes_raw_replacement_args_before_exec_materializes_it() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let typed = dir.path().join("typed.md");
+    std::fs::write(&typed, "typed").expect("typed prompt");
+    let mut cell = preset_cell(
+        "claude",
+        &["--system-prompt-file", "/raw.md", "--debug"],
+        None,
+        None,
+    );
+    let Cell::Agent(agent_cell) = &mut cell else {
+        unreachable!("preset_cell always returns an agent");
+    };
+    agent_cell.system_prompt_file = Some(typed);
+    let mut layout = LayoutSpec::single(cell);
+
+    assert_eq!(
+        finalize(&mut layout, &Default::default(), &[])
+            .expect("finalize launch")
+            .into_iter()
+            .map(|warning| warning.to_string())
+            .collect::<Vec<_>>(),
+        [
+            "warning: profile `claude-coder` args set --system-prompt-file /raw.md; declared system prompt wins"
+        ]
+    );
+    assert!(matches!(&layout.columns[0].rows[0],
+        Cell::Agent(AgentCell { args, .. }) if args == &["--debug"]));
 }
 
 #[test]
