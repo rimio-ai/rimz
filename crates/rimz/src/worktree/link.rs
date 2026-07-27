@@ -8,8 +8,6 @@
 
 use std::path::{Component, Path};
 
-use super::git_stdout;
-
 const LINK_FILE: &str = ".worktreelink";
 
 /// Symlink directories listed in `<repo_root>/.worktreelink` into `worktree`,
