@@ -1231,6 +1231,16 @@ fn is_transient_server_error(lower: &str) -> bool {
         || lower.contains("timed out")
         || lower.contains("timeout")
         || lower.contains("connection error")
+        || lower.contains("connection closed")
+        || lower.contains("connection reset")
+        || lower.contains("connection refused")
+        || lower.contains("connection lost")
+        || lower.contains("socket hang up")
+        || lower.contains("broken pipe")
+        || lower.contains("econnreset")
+        || lower.contains("mid-response")
+        || lower.contains("mid-stream")
+        || lower.contains("fetch failed")
         || lower.contains("network error")
 }
 
@@ -1687,6 +1697,41 @@ mod tests {
                 TurnErrorClass::PausedOverloaded,
             ),
             (
+                "API Error: Connection closed mid-response. The response above may be incomplete.",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "API Error: connection closed",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "API Error: connection reset",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "API Error: connection refused",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "API Error: connection lost",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "API Error: socket hang up",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            ("API Error: broken pipe", TurnErrorClass::PausedOverloaded),
+            ("API Error: ECONNRESET", TurnErrorClass::PausedOverloaded),
+            (
+                "API Error: response ended mid-response",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "API Error: response ended mid-stream",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            ("API Error: fetch failed", TurnErrorClass::PausedOverloaded),
+            (
                 "Selected model is at capacity. Please try a different model.",
                 TurnErrorClass::PausedOverloaded,
             ),
@@ -1710,6 +1755,7 @@ mod tests {
                 "compacted 1200 tokens, http request ok, 540 remaining",
                 TurnErrorClass::Failed,
             ),
+            ("API Error: invalid API key", TurnErrorClass::Failed),
             ("API Error: Bad Request", TurnErrorClass::Failed),
         ] {
             assert_eq!(
