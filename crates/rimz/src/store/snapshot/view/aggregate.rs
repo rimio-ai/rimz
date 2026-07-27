@@ -172,6 +172,7 @@ pub(super) fn build_worktree_groups_from_rows(
             SidebarWorktreeGroup {
                 key,
                 label,
+                label_qualifier: None,
                 kind,
                 team,
                 cohort_effort: None,

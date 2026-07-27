@@ -82,6 +82,7 @@ fn row_snapshot_at(
     snap.worktree_groups = vec![SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
+        label_qualifier: None,
         kind: crate::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
@@ -157,6 +158,7 @@ fn snapshot_in_group(
     let group = SidebarWorktreeGroup {
         key: key.to_owned(),
         label: key.to_owned(),
+        label_qualifier: None,
         kind,
         team: None,
         cohort_effort: None,

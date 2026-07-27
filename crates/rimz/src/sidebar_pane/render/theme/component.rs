@@ -36,6 +36,8 @@ pub(crate) enum Component {
     /// A worktree group header — a neutral, authoritative heading (`body`) that
     /// anchors the group without competing with attention or selection.
     WorktreeHeader,
+    /// The dim repo qualifier after a colliding worktree group label.
+    WorktreeQualifier,
     /// The `· team` cohort label after an active worktree name.
     TeamLabel,
     /// The `#N` linked-PR badge after a worktree name — steady cool link tone;
@@ -114,6 +116,7 @@ impl Component {
         Component::Sessions,
         Component::LaneSpine,
         Component::WorktreeHeader,
+        Component::WorktreeQualifier,
         Component::TeamLabel,
         Component::WorktreePrBadge,
         Component::BranchDelta,
@@ -163,7 +166,7 @@ impl Component {
             TeamLabel | SubagentHeader | ProcIo | CacheWrite => palette.meta,
             RemoteControlDown | WorktreePrClosed | PrCiFailing => palette.alarm,
             Input => palette.expense,
-            WorktreeMerged | WindowMedium => palette.muted,
+            WorktreeQualifier | WorktreeMerged | WindowMedium => palette.muted,
         })
     }
 }

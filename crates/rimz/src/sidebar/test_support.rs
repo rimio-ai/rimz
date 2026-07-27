@@ -163,6 +163,7 @@ pub(crate) fn worktree_group(path: &Path, rows: Vec<crate::SidebarRow>) -> Sideb
     SidebarWorktreeGroup {
         key: path.display().to_string(),
         label: "wt".to_owned(),
+        label_qualifier: None,
         kind: SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,

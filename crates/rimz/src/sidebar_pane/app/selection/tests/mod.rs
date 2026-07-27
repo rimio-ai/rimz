@@ -86,6 +86,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     snapshot.worktree_groups = vec![crate::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
+        label_qualifier: None,
         kind: crate::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
@@ -219,6 +220,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         crate::SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
+            label_qualifier: None,
             kind: crate::SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,
@@ -255,6 +257,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         crate::SidebarWorktreeGroup {
             key: "/repo/feature".to_owned(),
             label: "feature".to_owned(),
+            label_qualifier: None,
             kind: crate::SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,

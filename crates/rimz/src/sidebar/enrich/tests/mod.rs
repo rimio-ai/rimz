@@ -22,6 +22,7 @@ mod agents;
 mod cohort;
 mod frame;
 mod git;
+mod labels;
 mod paths;
 mod spend;
 

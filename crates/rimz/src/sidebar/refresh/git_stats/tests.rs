@@ -115,6 +115,7 @@ fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
     SidebarWorktreeGroup {
         key: format!("channel:{label}"),
         label: label.to_owned(),
+        label_qualifier: None,
         kind: SidebarWorktreeKind::Channel,
         team: None,
         cohort_effort: None,

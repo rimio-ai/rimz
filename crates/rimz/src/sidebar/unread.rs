@@ -460,6 +460,7 @@ mod tests {
         snapshot.worktree_groups = vec![SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
+            label_qualifier: None,
             kind: crate::SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,

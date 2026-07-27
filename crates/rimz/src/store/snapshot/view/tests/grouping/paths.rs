@@ -95,6 +95,28 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
 }
 
 #[test]
+fn same_branch_in_distinct_paths_keeps_distinct_group_identity() {
+    let snapshot = room_with_agent_panes(vec![
+        agent("claude", "rimz", AgentStatus::Running, 10)
+            .worktree("/workspace/rimz")
+            .branch("main"),
+        agent("codex", "agents", AgentStatus::Running, 20)
+            .worktree("/home/me/.agents")
+            .branch("main"),
+    ]);
+
+    assert_eq!(snapshot.worktree_groups.len(), 2);
+    assert_eq!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .map(|group| (group.key.as_str(), group.label.as_str()))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([("/home/me/.agents", "main"), ("/workspace/rimz", "main"),])
+    );
+}
+
+#[test]
 fn unstamped_rimz_worktree_rows_fold_into_channel_pods() {
     let project_root = PathBuf::from("/repo/rimz");
     let worktree_home = PathBuf::from("/repo/rimz-worktrees");

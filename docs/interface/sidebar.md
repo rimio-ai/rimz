@@ -132,6 +132,8 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `zᶻ idle` / `zᶻ idle · 17m` / `zᶻ away` | AFK presence in the footer — input has been idle for the configured idle window (`[sidebar] afk_after_secs`, 15 minutes by default) on tmux, with elapsed minutes added after the first minute, or no terminal client is attached |
 | `⇄ remote 210ms` | remote SSH link badge in the footer — RTT EWMA; loss appears only above `10%`, and `⇄ remote ?` means the last stats are stale |
 
+When two checkout groups render the same branch name, each header adds a muted `· repo` qualifier naming the shortest path suffix that distinguishes its checkout; unambiguous headers stay unchanged.
+
 The AFK badge is quiet chrome: it appears only while away, uses the muted tone, and takes the footer's left edge. The remote-link badge yields to it and appears after two spaces only when the line still fits before `? for help`.
 
 Remote-link badge tones are color-only: a healthy link reads green, then latency and loss slide it continuously through yellow and amber to red, bold at the critical end; a warming link stays neutral until it has an RTT sample. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge in the common active case, and `? for help` pins to the footer's right edge.

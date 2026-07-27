@@ -128,6 +128,64 @@ fn render_active_team_header_tolerates_strays_and_yields_to_git_facts() {
 }
 
 #[test]
+fn render_colliding_group_qualifiers_are_muted_and_ellipsize_with_the_label() {
+    let mut snapshot = snapshot_with(vec![
+        agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            Some("/workspace/rimz"),
+            Some("main"),
+            Some("design API"),
+        ),
+        agent(
+            "codex-1",
+            "codex",
+            AgentStatus::Idle,
+            Some("/home/me/.agents"),
+            Some("main"),
+            None,
+        ),
+    ]);
+    for group in &mut snapshot.worktree_groups {
+        group.label_qualifier = group.key.rsplit('/').next().map(ToOwned::to_owned);
+    }
+
+    let theme = Theme::fixed(false);
+    let expected_suffix = format!(
+        " · {}",
+        snapshot.worktree_groups[0]
+            .label_qualifier
+            .as_deref()
+            .expect("first group qualifier")
+    );
+    let header = &group_lines(&snapshot, &theme, 0)[0];
+    let qualifier = header
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == expected_suffix)
+        .expect("repo qualifier span");
+    assert_eq!(
+        qualifier.style,
+        theme.styled(Component::WorktreeQualifier, Modifier::empty())
+    );
+
+    let rendered = snapshot_to_screen(&snapshot, 44, 30);
+    assert!(
+        rendered.contains("· rimz") && rendered.contains("· .agents"),
+        "both colliding headers carry checkout context:\n{rendered}"
+    );
+    assert_snapshot("colliding_group_qualifiers", rendered);
+
+    let narrow = snapshot_to_screen(&snapshot, 18, 30);
+    assert!(
+        narrow.contains('…'),
+        "qualifiers ellipsize with their labels:\n{narrow}"
+    );
+    assert_snapshot("colliding_group_qualifiers_narrow", narrow);
+}
+
+#[test]
 fn render_worktree_channel_leads_with_merge_glyph() {
     let mut design = agent(
         "claude-1",
