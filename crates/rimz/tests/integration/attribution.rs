@@ -177,6 +177,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
     assert!(markdown.starts_with("<details>\n"));
     assert!(markdown.contains("<code>forge</code> team"));
     assert!(markdown.contains("- **planner** — Codex `gpt-5.5@high`"));
+    assert!(!markdown.contains("  - calls: "));
     assert!(markdown.contains("  - tokens: "));
 }
 

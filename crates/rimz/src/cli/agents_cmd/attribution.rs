@@ -144,6 +144,9 @@ pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io:
             )?;
             let mut details = render::KeyVals::new().indent(6);
             details.push("effort", render::cell(effort_label(member)));
+            if let Some(calls) = calls_label(member) {
+                details.push("calls", render::cell(calls));
+            }
             details.push("tokens", render::cell(token_label(member)));
             details.render(w)?;
         }
@@ -182,6 +185,9 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
                 markdown_model_label(member),
             )?;
             writeln!(w, "  - effort: {}", markdown_escape(&effort_label(member)))?;
+            if let Some(calls) = calls_label(member) {
+                writeln!(w, "  - calls: {}", markdown_escape(&calls))?;
+            }
             writeln!(w, "  - tokens: {}", markdown_escape(&token_label(member)))?;
         }
     }
@@ -257,17 +263,22 @@ fn effort_label(member: &AttributionMember) -> String {
         .cost_usd
         .map(rimz::theme::fmt::dollars2)
         .unwrap_or_else(|| "cost unknown".to_owned());
-    let tools = match member.tool_calls {
-        0 => "no tool calls".to_owned(),
-        1 => "1 tool call".to_owned(),
-        count => format!("{count} tool calls"),
-    };
-    let compactions = match member.compactions {
-        0 => "no compactions".to_owned(),
-        1 => "1 compaction".to_owned(),
-        count => format!("{count} compactions"),
-    };
-    format!("{active} · {cost} · {tools}, {compactions}")
+    format!("{active} · {cost}")
+}
+
+fn calls_label(member: &AttributionMember) -> Option<String> {
+    let mut parts = Vec::with_capacity(2);
+    match member.tool_calls {
+        0 => {}
+        1 => parts.push("1 tool call".to_owned()),
+        count => parts.push(format!("{count} tool calls")),
+    }
+    match member.compactions {
+        0 => {}
+        1 => parts.push("1 compaction".to_owned()),
+        count => parts.push(format!("{count} compactions")),
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 fn token_label(member: &AttributionMember) -> String {
@@ -458,13 +469,15 @@ mod tests {
         forge team · 1 agent · 1h05m active · $1.25
 
           @planner (plan|ner) · Claude · fable`2@high
-              effort: 1h05m active · $1.25 · 7 tool calls, 1 compaction
+              effort: 1h05m active · $1.25
+              calls:  7 tool calls · 1 compaction
               tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
 
         Other agents · 1 agent · 1h05m active · $1.25
 
           @codex · Codex · gpt-5.5@high
-              effort: 1h05m active · $1.25 · 7 tool calls, 1 compaction
+              effort: 1h05m active · $1.25
+              calls:  7 tool calls · 1 compaction
               tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
 
         Total · 2 agents · 2h10m active · $2.50
@@ -482,7 +495,8 @@ mod tests {
         render_panel(&mut output, &report).expect("render panel");
         insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @r"
           @codex · Codex · gpt-5.5@high
-              effort: 1h05m active · $1.25 · 7 tool calls, 1 compaction
+              effort: 1h05m active · $1.25
+              calls:  7 tool calls · 1 compaction
               tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
 
         Total · 1 agent · 1h05m active · $1.25
@@ -500,13 +514,15 @@ mod tests {
         **forge team**
 
         - **plan|ner** — Claude fable&#96;2@high
-          - effort: 1h05m active · $1.25 · 7 tool calls, 1 compaction
+          - effort: 1h05m active · $1.25
+          - calls: 7 tool calls · 1 compaction
           - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
 
         **Other agents**
 
         - **@codex** — Codex `gpt-5.5@high`
-          - effort: 1h05m active · $1.25 · 7 tool calls, 1 compaction
+          - effort: 1h05m active · $1.25
+          - calls: 7 tool calls · 1 compaction
           - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
 
         </details>
@@ -561,6 +577,55 @@ mod tests {
 
         assert_eq!(identity_label(&matching), "@planner#auth");
         assert_eq!(identity_label(&displaced), "@quiet-fox (planner)");
+    }
+
+    #[test]
+    fn call_labels_name_only_recorded_components() {
+        let mut sample = member("@coder", Some("coder"), "Codex", "gpt-5.5");
+        sample.tool_calls = 0;
+        sample.compactions = 0;
+        assert_eq!(calls_label(&sample), None);
+
+        sample.tool_calls = 1;
+        assert_eq!(calls_label(&sample).as_deref(), Some("1 tool call"));
+
+        sample.tool_calls = 0;
+        sample.compactions = 1;
+        assert_eq!(calls_label(&sample).as_deref(), Some("1 compaction"));
+
+        sample.tool_calls = 2;
+        sample.compactions = 3;
+        assert_eq!(
+            calls_label(&sample).as_deref(),
+            Some("2 tool calls · 3 compactions")
+        );
+    }
+
+    #[test]
+    fn renderers_omit_calls_when_none_are_recorded() {
+        let mut report = report();
+        for group in &mut report.groups {
+            for member in &mut group.members {
+                member.tool_calls = 0;
+                member.compactions = 0;
+            }
+        }
+
+        let mut panel = anstream::StripStream::new(Vec::new());
+        render_panel(&mut panel, &report).expect("render panel");
+        assert!(
+            !String::from_utf8(panel.into_inner())
+                .expect("utf8")
+                .contains("calls:")
+        );
+
+        let mut markdown = Vec::new();
+        render_markdown(&mut markdown, &report).expect("render markdown");
+        assert!(
+            !String::from_utf8(markdown)
+                .expect("utf8")
+                .contains("  - calls:")
+        );
     }
 
     #[test]
