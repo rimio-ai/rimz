@@ -946,6 +946,8 @@ fn team_validation_rejects_unsafe_scratch_patterns() {
     for (pattern, reason) in [
         ("", "patterns cannot be empty"),
         (" \t ", "patterns cannot be empty"),
+        (" /plan.md", "leading or trailing whitespace is not allowed"),
+        ("/plan.md ", "leading or trailing whitespace is not allowed"),
         ("../plan.md", "`..` path segments are not allowed"),
         ("notes/../plan.md", "`..` path segments are not allowed"),
         ("!plan.md", "negation patterns are not allowed"),
