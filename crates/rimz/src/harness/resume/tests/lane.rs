@@ -339,14 +339,32 @@ fn lane_all_closed_restores_team_first_within_the_cap() {
 
 #[test]
 fn lane_recovery_materializes_team_first_and_fails_strictly() {
-    let (teams, profiles, commands) = team_configs();
+    let dir = tempfile::tempdir().expect("test root");
+    let lane = dir.path().join("lane");
+    std::fs::create_dir(&lane).expect("lane");
+    let Ok(init) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&lane)
+        .args(["init", "-q", "-b", "main"])
+        .status()
+    else {
+        return;
+    };
+    if !init.success() {
+        return;
+    }
+    std::fs::write(lane.join("plan.md"), "scratch\n").expect("scratch file");
+    let lane = lane.to_string_lossy().into_owned();
+
+    let (mut teams, profiles, commands) = team_configs();
+    teams.0.get_mut("forge").expect("forge team").scratch_files = vec!["/plan.md".to_owned()];
     let agents = [
-        team_agent("claude", "planner", "planner", "/lane", 1),
-        team_agent("codex", "coder", "coder", "/lane", 2),
-        agent("codex", "flat", "/lane", 3),
+        team_agent("claude", "planner", "planner", &lane, 1),
+        team_agent("codex", "coder", "coder", &lane, 2),
+        agent("codex", "flat", &lane, 3),
     ];
     let action = LaneCase::new(LaneResumeSelector::Current, &agents)
-        .current_root("/lane")
+        .current_root(&lane)
         .max(3)
         .restore(|| {
             Ok(LaneRestoreConfig {
@@ -360,7 +378,6 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
     let LaneResumeAction::RestoreClosed { plan, .. } = action else {
         panic!("expected closed restore");
     };
-    let dir = tempfile::tempdir().expect("store root");
     let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
     let paths =
         crate::store::paths::StatePaths::under(workspace.clone(), &dir.path().join("state"))
@@ -376,6 +393,14 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
     assert_eq!(tabs.len(), 2);
     assert_eq!(tabs[0].pane_count(), 2);
     assert_eq!(tabs[1].pane_count(), 1);
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&lane)
+        .args(["status", "--porcelain=v1", "--untracked-files=all"])
+        .output()
+        .expect("git status");
+    assert!(status.status.success());
+    assert_eq!(status.stdout, b"");
 
     let mut broken = plan;
     let team = broken

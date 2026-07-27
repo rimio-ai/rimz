@@ -1345,7 +1345,8 @@ fn path_label(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// Allocate fresh team members and compile one planned team restore tab.
+/// Register team scratch exclusions, allocate fresh members, and compile one
+/// planned team restore tab.
 pub fn materialize_team_restore_tab(
     store: &Store,
     session_name: &str,

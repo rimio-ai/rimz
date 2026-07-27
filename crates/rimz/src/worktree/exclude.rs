@@ -10,12 +10,16 @@ use super::git_stdout;
 /// Register every team scratch pattern in the checkout's effective
 /// `info/exclude`. Best-effort: failures warn and never block a launch.
 pub fn exclude_team_scratch(checkout: &Path, patterns: &[String]) {
-    for pattern in patterns {
-        ensure_excluded(checkout, pattern);
+    if !patterns.is_empty() {
+        ensure_excluded_patterns(checkout, patterns.iter().map(String::as_str));
     }
 }
 
 pub(super) fn ensure_excluded(checkout: &Path, pattern: &str) {
+    ensure_excluded_patterns(checkout, [pattern]);
+}
+
+fn ensure_excluded_patterns<'a>(checkout: &Path, patterns: impl IntoIterator<Item = &'a str>) {
     let Some(exclude) = exclude_path(checkout) else {
         return;
     };
@@ -27,21 +31,36 @@ pub(super) fn ensure_excluded(checkout: &Path, pattern: &str) {
             return;
         }
     };
-    if text.lines().any(|line| line == pattern) {
+    let mut changed = false;
+    for pattern in patterns {
+        if text.lines().any(|line| line == pattern) {
+            continue;
+        }
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(pattern);
+        text.push('\n');
+        changed = true;
+    }
+    if !changed {
         return;
     }
-    if !text.is_empty() && !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text.push_str(pattern);
-    text.push('\n');
     if let Err(err) = crate::store::atomic::write_bytes_atomically(&exclude, text.as_bytes()) {
         tracing::warn!(path = %exclude.display(), error = %err, "writing git info/exclude");
     }
 }
 
 pub(super) fn exclude_path(checkout: &Path) -> Option<PathBuf> {
-    let raw = git_stdout(checkout, ["rev-parse", "--git-path", "info/exclude"]).ok()?;
+    let raw = match git_stdout(checkout, ["rev-parse", "--git-path", "info/exclude"]) {
+        Ok(raw) => raw,
+        Err(err) => {
+            if checkout.join(".git").exists() {
+                tracing::warn!(path = %checkout.display(), error = %err, "resolving git info/exclude");
+            }
+            return None;
+        }
+    };
     if raw.is_empty() {
         return None;
     }

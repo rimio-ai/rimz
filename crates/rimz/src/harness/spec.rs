@@ -1384,6 +1384,8 @@ fn prepare_team<'a>(
 fn invalid_scratch_pattern(pattern: &str) -> Option<&'static str> {
     if pattern.trim().is_empty() {
         Some("patterns cannot be empty")
+    } else if pattern != pattern.trim() {
+        Some("leading or trailing whitespace is not allowed")
     } else if pattern.starts_with('!') {
         Some("negation patterns are not allowed")
     } else if pattern.starts_with('#') {
