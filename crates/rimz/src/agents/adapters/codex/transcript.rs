@@ -625,7 +625,7 @@ fn death_warning_from_frame_scan(frame: &str) -> Option<DeathWarning> {
             continue;
         }
         let class = TurnErrorClass::classify_label(Some(line));
-        if class == TurnErrorClass::Failed && !banner {
+        if !banner && !class.is_limit() {
             continue;
         }
         let anchor = trim_banner_ornaments(line);

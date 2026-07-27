@@ -881,6 +881,13 @@ again at 6:35 AM.
         None,
         "prompt echoes are not provider warnings"
     );
+    assert_eq!(
+        death_warning_from_frame(
+            "└ test client::reconnect ... FAILED: connection reset by peer\n› \n"
+        ),
+        None,
+        "ordinary agent output is not a provider warning"
+    );
 }
 
 #[test]

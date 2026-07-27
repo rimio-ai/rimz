@@ -1233,14 +1233,12 @@ fn is_transient_server_error(lower: &str) -> bool {
         || lower.contains("connection error")
         || lower.contains("connection closed")
         || lower.contains("connection reset")
-        || lower.contains("connection refused")
         || lower.contains("connection lost")
         || lower.contains("socket hang up")
         || lower.contains("broken pipe")
         || lower.contains("econnreset")
         || lower.contains("mid-response")
         || lower.contains("mid-stream")
-        || lower.contains("fetch failed")
         || lower.contains("network error")
 }
 
@@ -1709,10 +1707,6 @@ mod tests {
                 TurnErrorClass::PausedOverloaded,
             ),
             (
-                "API Error: connection refused",
-                TurnErrorClass::PausedOverloaded,
-            ),
-            (
                 "API Error: connection lost",
                 TurnErrorClass::PausedOverloaded,
             ),
@@ -1730,7 +1724,6 @@ mod tests {
                 "API Error: response ended mid-stream",
                 TurnErrorClass::PausedOverloaded,
             ),
-            ("API Error: fetch failed", TurnErrorClass::PausedOverloaded),
             (
                 "Selected model is at capacity. Please try a different model.",
                 TurnErrorClass::PausedOverloaded,
@@ -1755,6 +1748,8 @@ mod tests {
                 "compacted 1200 tokens, http request ok, 540 remaining",
                 TurnErrorClass::Failed,
             ),
+            ("API Error: connection refused", TurnErrorClass::Failed),
+            ("API Error: fetch failed", TurnErrorClass::Failed),
             ("API Error: invalid API key", TurnErrorClass::Failed),
             ("API Error: Bad Request", TurnErrorClass::Failed),
         ] {
