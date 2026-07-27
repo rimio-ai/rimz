@@ -41,6 +41,9 @@ deny = [
     { name = "fs2", reason = "unmaintained; use std `File` locking instead" },
 ]
 skip = [
+    # The HTTP stack and headless browser fixture still pin base64 0.22 while
+    # RimZ's direct browser-input codec tracks 0.23; drop when those roots move.
+    { crate = "base64@0.22.1", reason = "ureq and headless_chrome pin base64 0.22; workspace direct dependency is 0.23" },
     # The `ring` crypto backend reached via `ureq`/`rustls` pins older support
     # crates than the rest of the tree; isolated to the TLS stack, drop when ring
     # catches up. (The former wit-bindgen and windows-sys skips left with the
