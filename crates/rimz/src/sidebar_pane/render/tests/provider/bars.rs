@@ -370,7 +370,8 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    assert!(row_text.contains("$7/$50"), "{row_text:?}");
+    assert!(row_text.contains("$50"), "{row_text:?}");
+    assert!(!row_text.contains("$7"), "{row_text:?}");
 
     panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
     assert_eq!(
@@ -419,6 +420,28 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
         vec!["5h", "7d"],
         "disabled extra usage pairs the short window with the binding spent one"
     );
+}
+
+#[test]
+fn extra_usage_value_is_the_rounded_whole_dollar_budget() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, Some((100, 40)));
+
+    for (used, limit, expected) in [(10.03, 50.0, "$50"), (7.0, 49.5, "$50")] {
+        panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+            Some(used),
+            None,
+            Some(limit),
+        ));
+        let values = metered_bar_rows(&theme, &panel)[1]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .filter(|value| value.starts_with('$'))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![expected.to_owned()]);
+    }
 }
 
 #[test]

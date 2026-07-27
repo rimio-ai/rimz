@@ -1534,19 +1534,13 @@ fn money_value_spans(theme: &Theme, value: &str) -> Vec<Span<'static>> {
 
 fn extra_value_label(theme: &Theme, credits: &ExtraCredits) -> String {
     let infinity = theme.glyph(GlyphRole::ChromeInfinity);
-    match (
-        credits.used_usd(),
-        credits.remaining_usd(),
-        credits.limit_usd(),
-    ) {
-        (Some(used), _, Some(limit)) => {
-            format!("{}/{}", dollars_compact(used), dollars_compact(limit))
-        }
-        (_, Some(remaining), _) => dollars_compact(remaining),
-        (Some(used), _, None) => dollars_compact(used),
-        (None, None, Some(limit)) => format!("?/{}", dollars_compact(limit)),
-        (None, None, None) => infinity.to_owned(),
+    if let Some(limit) = credits.limit_usd() {
+        return dollars_compact(limit.round());
     }
+    credits
+        .remaining_usd()
+        .or_else(|| credits.used_usd())
+        .map_or_else(|| infinity.to_owned(), dollars_compact)
 }
 
 fn dollars_compact(usd: f64) -> String {
