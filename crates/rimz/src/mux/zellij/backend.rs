@@ -24,7 +24,8 @@ use crate::mux::{
     ReconcilePaneRole, Result, SessionHealth, SessionLiveness, SessionOptions, SidebarLiveness,
     SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement,
     SplitTarget, TabOptions, WidthStep, ensure_pane_backend, execute_reconcile_plan,
-    group_reconcile_panes, memoized_version, prove_sidebar_mount, sidebar_build_identity,
+    group_reconcile_panes, memoized_version, paste_payload, prove_sidebar_mount,
+    sidebar_build_identity,
 };
 use crate::store::RuntimePaths;
 use serde::Deserialize;
@@ -794,6 +795,7 @@ impl MuxBackend for ZellijBackend {
 
     fn paste_text(&self, pane: &PaneId, text: &str) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
+        let payload = paste_payload(text);
         let target = ZellijPaneId::try_from(pane)
             .map_err(|err| MuxErr::Output {
                 program: "zellij".to_owned(),
@@ -805,7 +807,7 @@ impl MuxBackend for ZellijBackend {
         // untouched, so a marker-looking byte inside `text` is never re-parsed.
         let bytes = BRACKET_PASTE_OPEN
             .bytes()
-            .chain(text.bytes())
+            .chain(payload.bytes())
             .chain(BRACKET_PASTE_CLOSE.bytes())
             .map(|byte| byte.to_string());
         self.cmd()

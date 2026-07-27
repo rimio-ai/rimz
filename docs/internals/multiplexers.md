@@ -92,7 +92,7 @@ Selection is stable across worktrees: every worktree of one repository resolves 
 | --- | --- | --- |
 | Session lifecycle | `ensure_session`, `attach_command`, `detach`, `kill_session`, `list_sessions`, `session_liveness`, `version` | `attach_command` hands a `CommandSpec` to the CLI attach runner rather than running it. |
 | Pane inventory | `list_panes`, `cached_pane_roster`, `client_view` | See [reading the room](#reading-the-room). |
-| Pane I/O | `capture_pane`, `send_keys`, `send_key`, `paste_text` | `paste_text` wraps one bracketed paste; the submit Enter follows separately as a keystroke. |
+| Pane I/O | `capture_pane`, `send_keys`, `send_key`, `paste_text` | `paste_text` wraps one bracketed paste and converts logical newlines to CR; the submit Enter follows separately as a keystroke. |
 | Structure | `split_pane`, `open_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. |
 | Focus and geometry | `focus_pane`, `sidebar_width_step`, `nudge_sidebar_width`, `record_sidebar_width_default`, `register_focus_key` | |
 | Health | `probe_session_health`, `ensure_clean_session`, `reconcile_sidebars`, `purge_resurrection_cache`, `resurrection_cache_paths`, `session_accepts_agent_close` | Several default to a no-op because they answer a Zellij-only question. |

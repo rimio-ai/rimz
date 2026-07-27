@@ -12,6 +12,16 @@ pub const BRACKET_PASTE_OPEN: &str = "\u{1b}[200~";
 /// Bracketed-paste close marker (`ESC[201~`).
 pub const BRACKET_PASTE_CLOSE: &str = "\u{1b}[201~";
 
+/// Encode logical line endings the way a terminal carries them inside a
+/// bracketed paste.
+///
+/// Agent composers normalize CR back to a newline but drop a bare LF. Real
+/// terminal pastes (including tmux's `paste-buffer`) therefore carry CR, with
+/// CRLF collapsed so one logical newline stays one composer newline.
+pub(crate) fn paste_payload(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\n', "\r")
+}
+
 /// Small named-key vocabulary RimZ exposes for pane automation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NamedKey {
@@ -122,5 +132,10 @@ mod tests {
         // exact bytes both backends emit.
         assert_eq!(BRACKET_PASTE_OPEN.as_bytes(), &[27, 91, 50, 48, 48, 126]);
         assert_eq!(BRACKET_PASTE_CLOSE.as_bytes(), &[27, 91, 50, 48, 49, 126]);
+    }
+
+    #[test]
+    fn paste_payload_normalizes_logical_line_endings_to_carriage_return() {
+        assert_eq!(paste_payload("a\nb\r\nc\rd"), "a\rb\rc\rd");
     }
 }
