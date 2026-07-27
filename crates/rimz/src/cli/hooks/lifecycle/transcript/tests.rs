@@ -173,14 +173,24 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
             .turn_opened_by
             .is_empty()
     );
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    let answer = entries.last().unwrap();
+    assert_eq!(answer.entry, rimz::transcript::TranscriptKind::Answer);
     assert_eq!(
-        rimz::transcript::read_all(store.paths())
-            .unwrap()
-            .last()
-            .unwrap()
-            .message_id,
-        None
+        answer.id.as_ref().map(rimz::ids::AskId::as_str),
+        Some("ask_0123456789abcdef")
     );
+    assert_eq!(answer.from.as_deref(), Some("you"));
+    assert_eq!(answer.text, "typed directly");
+    assert_eq!(
+        answer.answers,
+        vec![rimz::transcript::AskAnswer {
+            question: None,
+            chosen: vec!["typed directly".to_owned()],
+            note: None,
+        }]
+    );
+    assert_eq!(answer.message_id, None);
 }
 
 #[test]
@@ -216,6 +226,88 @@ fn user_message_header_records_prompt_without_envelope() {
     assert_eq!(entries[0].from, None);
     assert_eq!(entries[0].text, "from a human");
     assert_eq!(entries[0].message_id.as_ref(), Some(&message.message_id));
+}
+
+#[test]
+fn agent_message_does_not_answer_open_ask() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let mut ask = rimz::transcript::TranscriptEntry::new(
+        jiff::Timestamp::UNIX_EPOCH,
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::ids::AgentSessionId::from("sess-1"),
+        rimz::transcript::TranscriptKind::Ask,
+        String::new(),
+    );
+    ask.id = Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap());
+    rimz::transcript::append(store.paths(), &ask).unwrap();
+    let message = rimz::message::MessageRecord::new(
+        workspace.workspace_id.clone(),
+        &agent,
+        "new context".to_owned(),
+        true,
+        rimz::message::DeliveryGate::Done,
+    );
+    let mut started = recorded(LifecycleSignal::TurnStarted);
+    started.observation.prompt =
+        Some("Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nnew context".to_owned());
+
+    record_conversation(
+        &workspace,
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &started,
+        None,
+        &[],
+        std::slice::from_ref(&message),
+    )
+    .unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Message);
+    assert!(has_open_native_ask(&store, "claude", "sess-1"));
+}
+
+#[test]
+fn prompt_after_answered_ask_starts_a_new_turn() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let ask_id = rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap();
+    let mut ask = rimz::transcript::TranscriptEntry::new(
+        jiff::Timestamp::UNIX_EPOCH,
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::ids::AgentSessionId::from("sess-1"),
+        rimz::transcript::TranscriptKind::Ask,
+        String::new(),
+    );
+    ask.id = Some(ask_id.clone());
+    let mut answer = ask.clone();
+    answer.at = "1970-01-01T00:00:01Z".parse().unwrap();
+    answer.entry = rimz::transcript::TranscriptKind::Answer;
+    rimz::transcript::append(store.paths(), &ask).unwrap();
+    rimz::transcript::append(store.paths(), &answer).unwrap();
+    let mut started = recorded(LifecycleSignal::TurnStarted);
+    started.observation.prompt = Some("next task".to_owned());
+
+    record_conversation(
+        &workspace,
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &started,
+        None,
+        &[],
+        &[],
+    )
+    .unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(
+        entries.last().unwrap().entry,
+        rimz::transcript::TranscriptKind::Prompt
+    );
+    assert_eq!(entries.last().unwrap().text, "next task");
 }
 
 #[test]

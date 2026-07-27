@@ -1,6 +1,6 @@
 //! `rimz transcript` — inspect agent and channel conversations from local logs.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write;
 
 use anyhow::{Context, Result, bail};

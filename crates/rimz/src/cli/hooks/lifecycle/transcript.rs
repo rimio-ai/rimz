@@ -227,6 +227,9 @@ pub(super) fn record_conversation(
             let mut entries = Vec::new();
             let mut matched_ids = Vec::new();
             let mut delivered_cursor = 0;
+            let mut open_ask_id =
+                latest_open_native_ask(store, agent.spec().kind, agent_id.as_str())
+                    .map(|ask| ask.id);
             if let Some(prompt) = observation
                 .prompt
                 .as_deref()
@@ -268,6 +271,20 @@ pub(super) fn record_conversation(
                                 segment.to_owned(),
                             ),
                         };
+                    // ponytail: agent messages do not answer an open ask; add
+                    // explicit sender semantics before classifying them.
+                    if entry.entry == rimz::transcript::TranscriptKind::Prompt
+                        && let Some(ask_id) = open_ask_id.take()
+                    {
+                        entry.entry = rimz::transcript::TranscriptKind::Answer;
+                        entry.id = ask_id;
+                        entry.from = Some("you".to_owned());
+                        entry.answers = vec![rimz::transcript::AskAnswer {
+                            question: None,
+                            chosen: vec![entry.text.clone()],
+                            note: None,
+                        }];
+                    }
                     let matched = if batch_aligned {
                         delivered.get(delivered_cursor).map(|message| (0, message))
                     } else {
@@ -287,7 +304,11 @@ pub(super) fn record_conversation(
             }
             replace_turn_opened_by(store, agent, &agent_id, matched_ids);
             for entry in entries {
-                rimz::transcript::append(store.paths(), &entry)?;
+                if entry.entry == rimz::transcript::TranscriptKind::Answer {
+                    rimz::transcript::append_answer_if_missing(store.paths(), &entry)?;
+                } else {
+                    rimz::transcript::append(store.paths(), &entry)?;
+                }
             }
         }
         LifecycleSignal::TurnEnded { .. } => {

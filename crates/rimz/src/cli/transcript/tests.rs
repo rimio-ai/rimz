@@ -637,6 +637,40 @@ fn latest_ask_view_skips_log_when_agent_not_waiting() {
 }
 
 #[test]
+fn dedup_keeps_answered_history_and_latest_open_ask() {
+    let mut answered = transcript_entry(
+        TranscriptKind::Ask,
+        "answered context",
+        "2026-06-01T00:00:00Z",
+    );
+    answered.id = Some(rimz::ids::AskId::parse("ask_0000000000000001").unwrap());
+    let mut answer = transcript_entry(TranscriptKind::Answer, "safe", "2026-06-01T00:00:01Z");
+    answer.id = answered.id.clone();
+    let mut superseded = transcript_entry(
+        TranscriptKind::Ask,
+        "superseded context",
+        "2026-06-01T00:00:02Z",
+    );
+    superseded.id = Some(rimz::ids::AskId::parse("ask_0000000000000002").unwrap());
+    let mut latest = transcript_entry(
+        TranscriptKind::Ask,
+        "latest context",
+        "2026-06-01T00:00:03Z",
+    );
+    latest.id = Some(rimz::ids::AskId::parse("ask_0000000000000003").unwrap());
+
+    let entries = dedup_asks(vec![answered, answer, superseded, latest]);
+
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["answered context", "safe", "latest context"]
+    );
+}
+
+#[test]
 fn message_entry_projects_structured_sender_and_receiver() {
     let mut entry = log_entry(
         "claude",
@@ -757,6 +791,66 @@ fn chat_groups_same_sender_receiver_inside_window() {
 
     assert_eq!(out.matches(" user  → @claude").count(), 2, "{out}");
     assert!(out.contains("first\nsecond"), "{out}");
+}
+
+#[test]
+fn ask_continues_same_agent_block_without_a_time_window() {
+    let prompt = entry("2026-06-28T03:59:00Z", "Review the rollout.");
+    let assistant = assistant_entry("2026-06-28T04:00:00Z", "The safe route is staged.");
+    let mut ask = ask_entry("2026-06-28T04:10:01Z", "One choice remains.");
+    ask.chat.questions = vec![rimz::transcript::AskQuestion {
+        question: "Choose deployment path?".to_owned(),
+        options: vec![ask_option("safe"), ask_option("fast")],
+        multi_select: false,
+        has_option_previews: false,
+    }];
+
+    let out = render_threaded(&[prompt, assistant, ask], jiff::civil::date(2026, 6, 28));
+
+    assert_eq!(out.matches("│ @claude  ").count(), 1, "{out}");
+    assert!(
+        out.contains(
+            "│ The safe route is staged.\n│ One choice remains.\n│ │ Choose deployment path?"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn ask_context_repeated_from_preceding_message_renders_once() {
+    let assistant = assistant_entry("2026-06-28T04:00:00Z", "The safe route is staged.");
+    let mut ask = ask_entry("2026-06-28T04:10:01Z", "  The safe route is staged.  ");
+    ask.chat.questions = vec![rimz::transcript::AskQuestion {
+        question: "Choose deployment path?".to_owned(),
+        options: vec![ask_option("safe"), ask_option("fast")],
+        multi_select: false,
+        has_option_previews: false,
+    }];
+
+    let out = render(&[assistant, ask], jiff::civil::date(2026, 6, 28));
+
+    assert_eq!(out.matches("The safe route is staged.").count(), 1, "{out}");
+    assert!(out.contains("│ Choose deployment path?"), "{out}");
+}
+
+#[test]
+fn intervening_sender_breaks_ask_continuation() {
+    let assistant = assistant_entry("2026-06-28T04:00:00Z", "First brief.");
+    let mut other = assistant_entry("2026-06-28T04:05:00Z", "Other agent.");
+    other.agent = agent_key_for("codex", "sess-2");
+    other.chat.from = "@codex".to_owned();
+    let mut ask = ask_entry("2026-06-28T04:06:00Z", "");
+    ask.chat.questions = vec![rimz::transcript::AskQuestion {
+        question: "Continue?".to_owned(),
+        options: vec![ask_option("yes"), ask_option("no")],
+        multi_select: false,
+        has_option_previews: false,
+    }];
+
+    let out = render(&[assistant, other, ask], jiff::civil::date(2026, 6, 28));
+
+    assert_eq!(out.matches("@claude  ").count(), 2, "{out}");
+    assert_eq!(out.matches("@codex  ").count(), 1, "{out}");
 }
 
 #[test]

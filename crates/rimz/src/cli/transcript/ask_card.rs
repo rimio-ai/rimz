@@ -6,11 +6,12 @@ pub(super) fn write_ask_card(
     out: &mut impl Write,
     ask: &RenderEntry,
     answer: Option<&RenderEntry>,
+    show_context: bool,
 ) -> Result<()> {
     if ask.chat.questions.is_empty() {
         return write_text_card(out, ask, answer);
     }
-    if !ask.chat.text.is_empty() {
+    if show_context && !ask.chat.text.is_empty() {
         write_body_lines(out, &ask.chat.text)?;
     }
     write_structured_ask_card(out, &ask.chat.questions, answer)

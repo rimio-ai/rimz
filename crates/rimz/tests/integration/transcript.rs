@@ -243,6 +243,97 @@ fn transcript_records_native_ask_question_context_and_answer() {
 }
 
 #[test]
+fn transcript_records_pane_typed_prompt_as_open_ask_answer() {
+    let env = Env::new();
+    let branch = "pane-answer-transcript";
+    let session_id = "sess-pane-answer";
+    let claude_path = env.home_root.join("pane-answer-chat.jsonl");
+    write_claude_ask_transcript(&claude_path, "here is my read");
+    let transcript = claude_path.to_string_lossy().into_owned();
+
+    run_hook(
+        &env,
+        "claude",
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": session_id,
+            "worktree_branch": branch,
+            "transcript_path": transcript.as_str(),
+        }),
+    );
+    run_hook(
+        &env,
+        "claude",
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": session_id,
+            "prompt": "review deployment options",
+            "worktree_branch": branch,
+            "transcript_path": transcript.as_str(),
+        }),
+    );
+    run_hook(
+        &env,
+        "claude",
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": session_id,
+            "tool_name": "AskUserQuestion",
+            "tool_input": {
+                "questions": [{
+                    "question": "Choose deployment path?",
+                    "options": [
+                        { "label": "safe" },
+                        { "label": "fast" }
+                    ]
+                }]
+            },
+            "worktree_branch": branch,
+            "transcript_path": transcript.as_str(),
+        }),
+    );
+    run_hook(
+        &env,
+        "claude",
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": session_id,
+            "prompt": "Ship after staging finishes.",
+            "worktree_branch": branch,
+            "transcript_path": transcript.as_str(),
+        }),
+    );
+
+    let output = run_ok(env.rimz().args(["transcript", &format!("#{branch}")]));
+    assert!(output.contains("│ │ Choose deployment path?"), "{output}");
+    assert!(
+        output.contains("│ │ ● other: Ship after staging finishes. — you"),
+        "{output}"
+    );
+    assert!(!output.contains("◌ unanswered"), "{output}");
+    assert_eq!(output.matches(" user  → @claude").count(), 1, "{output}");
+
+    let entries = rimz::transcript::read_all(env.store().paths()).expect("read transcript");
+    let ask = entries
+        .iter()
+        .find(|entry| entry.entry == TranscriptKind::Ask)
+        .expect("ask entry");
+    let answer = entries
+        .iter()
+        .find(|entry| entry.entry == TranscriptKind::Answer)
+        .expect("answer entry");
+    assert_eq!(answer.id, ask.id);
+    assert_eq!(answer.from.as_deref(), Some("you"));
+    assert_eq!(answer.answers[0].chosen, ["Ship after staging finishes."]);
+    assert!(
+        !entries.iter().any(|entry| {
+            entry.entry == TranscriptKind::Prompt && entry.text == "Ship after staging finishes."
+        }),
+        "{entries:#?}"
+    );
+}
+
+#[test]
 fn transcript_groups_chronological_entries_across_append_order() {
     let env = Env::new();
     let branch = "chronological-transcript";

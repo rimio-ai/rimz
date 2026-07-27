@@ -196,6 +196,7 @@ pub(super) fn render_display_chat_to(
     let mut first_entry = true;
     let mut follows_day_delimiter = false;
     let mut last_group: Option<GroupState> = None;
+    let mut previous_entry: Option<&RenderEntry> = None;
     let mut previous_block = None;
     let newest_archived_at = entries
         .iter()
@@ -228,10 +229,19 @@ pub(super) fn render_display_chat_to(
             last_group = None;
         }
         let is_ask = entry.kind == TranscriptKind::Ask;
-        let continuation = !is_ask
-            && last_group
-                .as_ref()
-                .is_some_and(|group| group.matches(display, grouped, entry_date));
+        let continuation = last_group.as_ref().is_some_and(|group| {
+            if is_ask {
+                group.matches_without_window(display, grouped, entry_date)
+            } else {
+                group.matches(display, grouped, entry_date)
+            }
+        });
+        let suppress_ask_context = is_ask
+            && continuation
+            && previous_entry.is_some_and(|previous| {
+                !entry.chat.text.trim().is_empty()
+                    && entry.chat.text.trim() == previous.chat.text.trim()
+            });
         if !continuation && !first_entry && !follows_day_delimiter {
             if previous_block == Some(display.block) && !display.lane.is_margin() {
                 writeln!(out, "{}", render::paint(render::palette::faint(), "│"))?;
@@ -249,6 +259,7 @@ pub(super) fn render_display_chat_to(
                 entry,
                 answer,
                 continuation,
+                suppress_ask_context,
                 grouped,
                 &brands,
                 tz,
@@ -268,6 +279,7 @@ pub(super) fn render_display_chat_to(
                 entry,
                 answer,
                 continuation,
+                suppress_ask_context,
                 grouped,
                 &brands,
                 tz,
@@ -282,6 +294,7 @@ pub(super) fn render_display_chat_to(
         }
         first_entry = false;
         follows_day_delimiter = false;
+        previous_entry = Some(entry);
         previous_block = Some(display.block);
     }
     Ok(())
@@ -293,6 +306,7 @@ fn write_entry_content(
     entry: &RenderEntry,
     answer: Option<&RenderEntry>,
     continuation: bool,
+    suppress_ask_context: bool,
     grouped: bool,
     brands: &BrandColors,
     tz: &TimeZone,
@@ -302,7 +316,7 @@ fn write_entry_content(
         write_entry_header(out, entry, grouped, brands, tz, show_date)?;
     }
     if entry.kind == TranscriptKind::Ask {
-        write_ask_card(out, entry, answer)
+        write_ask_card(out, entry, answer, !suppress_ask_context)
     } else if entry.chat.error {
         write_body_lines_with(out, &entry.chat.text, Some(render::palette::alarm()))
     } else {
@@ -385,11 +399,7 @@ impl GroupState {
     }
 
     fn matches(&self, entry: &DisplayEntry, grouped: bool, date: Option<Date>) -> bool {
-        if self.lane != entry.lane.group_key() {
-            return false;
-        }
-        let (from, to) = group_key(&entry.entry, grouped);
-        if self.from != from || self.to != to || self.date != date {
+        if !self.matches_without_window(entry, grouped, date) {
             return false;
         }
         let (Some(previous), Some(current)) = (self.at, entry.entry.chat.at) else {
@@ -397,6 +407,19 @@ impl GroupState {
         };
         let gap = current.duration_since(previous);
         !gap.is_negative() && gap.as_secs() <= GROUP_WINDOW_SECS
+    }
+
+    fn matches_without_window(
+        &self,
+        entry: &DisplayEntry,
+        grouped: bool,
+        date: Option<Date>,
+    ) -> bool {
+        if self.lane != entry.lane.group_key() {
+            return false;
+        }
+        let (from, to) = group_key(&entry.entry, grouped);
+        self.from == from && self.to == to && self.date == date
     }
 }
 
