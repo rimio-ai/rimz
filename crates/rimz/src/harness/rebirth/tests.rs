@@ -743,6 +743,7 @@ fn team_machine() -> MachineConfig {
             ],
             leader: None,
             layout: Some("planner,coder".to_owned()),
+            scratch_files: Vec::new(),
         },
     );
     machine

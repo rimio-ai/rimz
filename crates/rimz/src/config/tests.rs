@@ -797,6 +797,34 @@ fn agent_profiles_commands_and_teams_parse() {
 }
 
 #[test]
+fn team_scratch_files_parse_default_and_round_trip() {
+    let team: Team = toml::from_str(
+        "layout = \"planner\"\n\
+         scratch-files = [\"/plan.md\", \"/*-notes.md\"]\n\
+         [[roles]]\n\
+         role = \"planner\"\n\
+         profile = \"claude\"\n",
+    )
+    .expect("parse team");
+    assert_eq!(team.scratch_files, ["/plan.md", "/*-notes.md"]);
+
+    let encoded = toml::to_string(&team).expect("serialize team");
+    assert!(encoded.contains("scratch-files = ["));
+    assert_eq!(
+        toml::from_str::<Team>(&encoded).expect("round-trip team"),
+        team
+    );
+
+    let defaulted: Team = toml::from_str("").expect("parse empty team");
+    assert!(defaulted.scratch_files.is_empty());
+    assert!(
+        !toml::to_string(&defaulted)
+            .expect("serialize default team")
+            .contains("scratch-files")
+    );
+}
+
+#[test]
 fn profile_system_prompt_file_resolves_against_the_config_dir() {
     let dir = tempdir().expect("tempdir");
     let config = load_no_fragments(&write_named(

@@ -513,6 +513,7 @@ mod tests {
             }],
             leader: Some("planner".to_owned()),
             layout: None,
+            scratch_files: Vec::new(),
         }
     }
 

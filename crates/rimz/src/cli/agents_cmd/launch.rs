@@ -216,6 +216,9 @@ pub(super) fn launch_layout(
         args.launch.cohort.worktree.as_deref(),
         args.launch.cohort.from_pr.as_ref(),
     )?;
+    if let Some(team) = team_name.as_deref().and_then(|name| teams.0.get(name)) {
+        rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_files);
+    }
     if let Some(reason) = launch.review_only_reason.as_deref() {
         writeln!(
             std::io::stderr(),
@@ -355,6 +358,9 @@ fn launch_resume_layout(
         .cwd
         .clone()
         .context("cohort resume matched no working directory")?;
+    if let Some(team) = team_name.as_deref().and_then(|name| teams.0.get(name)) {
+        rimz::worktree::exclude_team_scratch(&cwd, &team.scratch_files);
+    }
     let channel = rimz::harness::target::resolve_room_channel(
         &workspace.project_root,
         &cwd,

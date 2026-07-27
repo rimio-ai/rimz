@@ -53,6 +53,7 @@ fn team(roles: Vec<RoleBinding>) -> Team {
         roles,
         leader: None,
         layout: None,
+        scratch_files: Vec::new(),
     }
 }
 
@@ -61,6 +62,7 @@ fn team_with_layout(roles: Vec<RoleBinding>, layout: &str) -> Team {
         roles,
         leader: None,
         layout: Some(layout.to_owned()),
+        scratch_files: Vec::new(),
     }
 }
 
@@ -928,6 +930,51 @@ fn team_validation_rejects_invalid_roles_and_layouts() {
 }
 
 #[test]
+fn team_validation_rejects_unsafe_scratch_patterns() {
+    let profiles = profiles([("planner", profile("claude"))]);
+    let error = |pattern: &str| {
+        let mut candidate = team(vec![role("planner", "planner")]);
+        candidate.scratch_files = vec![pattern.to_owned()];
+        validate_config(
+            &profiles,
+            &no_commands(),
+            &TeamsConfig(BTreeMap::from([("review".to_owned(), candidate)])),
+        )
+        .expect_err("invalid scratch pattern")
+    };
+
+    for (pattern, reason) in [
+        ("", "patterns cannot be empty"),
+        (" \t ", "patterns cannot be empty"),
+        ("../plan.md", "`..` path segments are not allowed"),
+        ("notes/../plan.md", "`..` path segments are not allowed"),
+        ("!plan.md", "negation patterns are not allowed"),
+        ("# plan", "comment lines are not patterns"),
+        ("plan\nreview", "ASCII control characters are not allowed"),
+        ("plan\rreview", "ASCII control characters are not allowed"),
+        ("plan\0review", "ASCII control characters are not allowed"),
+    ] {
+        assert!(matches!(
+            error(pattern),
+            LayoutErr::InvalidScratchPattern {
+                team,
+                pattern: actual,
+                reason: actual_reason,
+            } if team == "review" && actual == pattern && actual_reason == reason
+        ));
+    }
+
+    let mut anchored = team(vec![role("planner", "planner")]);
+    anchored.scratch_files = vec!["/plan.md".to_owned(), "/*-notes.md".to_owned()];
+    validate_config(
+        &profiles,
+        &no_commands(),
+        &TeamsConfig(BTreeMap::from([("review".to_owned(), anchored)])),
+    )
+    .expect("leading slash is a valid gitignore root anchor");
+}
+
+#[test]
 fn default_team_defers_role_budget_validation() {
     let profiles = profiles([("planner", profile("claude"))]);
     let mut budget_role = role("planner", "planner");
@@ -1002,6 +1049,7 @@ fn team_leader_validation_accepts_one_target() {
         roles: Vec::new(),
         leader: Some(leader.to_owned()),
         layout: Some(layout.to_owned()),
+        scratch_files: Vec::new(),
     };
     validate(layout_only("claude", "claude,codex")).expect("unique layout leader");
     assert!(matches!(
