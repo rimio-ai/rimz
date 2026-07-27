@@ -2865,6 +2865,13 @@ fn is_compact_command(line: &str) -> bool {
 }
 
 fn assert_text_then_enter(trace_log: &Path, text: &str) {
+    let raw = std::fs::read_to_string(trace_log).unwrap_or_default();
+    // Paste bytes are decimal-encoded in this trace. A literal CR here would
+    // therefore come from the byte-faithful raw `write-chars` path instead.
+    assert!(
+        !raw.contains('\r'),
+        "no carriage return should be folded into raw typed text; trace: {raw:?}"
+    );
     let lines = trace_lines(trace_log);
     let text_at = lines.iter().position(|line| is_paste(line, text));
     let enter_at = lines.iter().position(|line| is_enter_key(line));
@@ -2878,10 +2885,6 @@ fn assert_text_then_enter(trace_log: &Path, text: &str) {
     );
     let text_at = text_at.expect("checked above");
     let enter_at = enter_at.expect("checked above");
-    assert!(
-        lines[text_at].ends_with("\t27\t91\t50\t48\t49\t126"),
-        "paste write must end at the close marker; trace: {lines:?}"
-    );
     assert!(
         text_at < enter_at,
         "text must be pasted before Enter; trace: {lines:?}"

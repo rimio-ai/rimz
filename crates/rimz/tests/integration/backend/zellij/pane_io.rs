@@ -318,12 +318,12 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
     );
 }
 
-/// `paste_text` writes one bracketed paste (`ESC[200~` … `ESC[201~`) wrapping
-/// the payload as a raw decimal byte list — the message delivery path. A raw
-/// reader captures the exact PTY bytes. A leading dash is the regression guard:
-/// the byte-write path must never re-read the payload as a flag or key.
+/// `paste_text` writes one bracketed paste (`ESC[200~` … `ESC[201~`) with
+/// terminal-style CR line endings — the message delivery path. A raw reader
+/// captures the exact PTY bytes. A leading dash also guards that the byte-write
+/// path never re-reads the payload as a flag or key.
 #[test]
-fn paste_text_delivers_the_literal_payload() {
+fn paste_text_encodes_newlines_and_delivers_exact_pty_bytes() {
     require_zellij!();
 
     let room = LiveZellijSession::new("paste");
@@ -340,8 +340,10 @@ fn paste_text_delivers_the_literal_payload() {
     let reader_ready = marker_dir.path().join("reader-ready");
     let pasted_bytes = marker_dir.path().join("pasted-bytes");
 
-    let payload = "-rf rimz-paste-marker";
-    let expected = format!("{BRACKET_PASTE_OPEN}{payload}{BRACKET_PASTE_CLOSE}").into_bytes();
+    let payload = "-rf rimz-paste-marker\nsecond line";
+    let expected =
+        format!("{BRACKET_PASTE_OPEN}-rf rimz-paste-marker\rsecond line{BRACKET_PASTE_CLOSE}")
+            .into_bytes();
 
     let shell_marker_command = format!(
         "printf ready > {}; while [ ! -e {} ]; do sleep 0.05; done",
