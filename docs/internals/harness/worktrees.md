@@ -32,7 +32,8 @@ The marker lives in the worktree's Git admin directory (`.git/worktrees/<name>/r
 | [`worktree.rs`](../../../crates/rimz/src/worktree.rs) | The marker, creation, the dirty and landed status, the removal policy, discovery, and the shared `git` helpers. |
 | [`worktree/pr.rs`](../../../crates/rimz/src/worktree/pr.rs) | `--from-pr`: strategy selection, forge-CLI head resolution, fork remote wiring, PR ref fetching. |
 | [`worktree/include.rs`](../../../crates/rimz/src/worktree/include.rs) | `.worktreeinclude` file copying and its containment rules. |
-| [`worktree/link.rs`](../../../crates/rimz/src/worktree/link.rs) | `.worktreelink` directory symlinks and the `info/exclude` registration. |
+| [`worktree/link.rs`](../../../crates/rimz/src/worktree/link.rs) | `.worktreelink` directory symlinks. |
+| [`worktree/exclude.rs`](../../../crates/rimz/src/worktree/exclude.rs) | Shared `info/exclude` registration for linked directories and team scratch files. |
 | [`cli/worktree.rs`](../../../crates/rimz/src/cli/worktree.rs) | `rimz worktree new`, `list`, `remove`, and the hidden `cleanup` helper. |
 | [`cli/worktree_protection.rs`](../../../crates/rimz/src/cli/worktree_protection.rs) | Runtime pane and agent fact gathering for explicit removal, wrapper cleanup, and automatic gc. |
 | [`cli/gc.rs`](../../../crates/rimz/src/cli/gc.rs) | The `rimz gc` worktree sweep and its report. |
@@ -88,6 +89,12 @@ Both skip blank lines and `#` comments, and both confine every source to the pro
 Seeding is best-effort enrichment layered on top of creation. A missing file is a silent no-op; a pattern matching nothing, a failed copy, or an unlinkable directory warns through `tracing` and is skipped, and the tree and its agents still launch. Neither file can run a command, which is why both stay outside the trust hash ([trust.md](./trust.md)).
 
 Because the `info/exclude` a linked directory is registered in is commonly the repository's shared one, the same branch-independent directory ends up excluded in the main checkout and in sibling worktrees too.
+
+### Team scratch files
+
+A team definition's `scratch-files` entries are verbatim gitignore patterns for ephemeral cooperation records. Fresh launch, explicit cohort resume (including the relaunch reconciliation path), and place-first team restore all register the patterns in the checkout's effective `info/exclude` before panes start. Registration is idempotent, uses an atomic whole-file replacement, and stays best-effort: a Git or filesystem failure warns but does not block the team.
+
+Git commonly resolves a linked worktree's effective exclude file to the repository's shared `.git/info/exclude`. Team scratch patterns therefore hide matching untracked names in the main checkout and every sibling worktree too. Removing the appended lines reverses the registration; RimZ does not remove them automatically because another team or checkout may still depend on them.
 
 ## Status: dirty and landed
 

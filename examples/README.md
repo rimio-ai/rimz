@@ -33,7 +33,7 @@ zellij setup --check
 
 ## Forge agent team — `teams/forge/`
 
-[`teams/forge`](./teams/forge/) is one RimZ drop-in fragment for the plan → code → review loop: `@planner` runs Claude, `@coder` runs Codex, and `@reviewer` runs Claude. Its `team.toml` declares the three profiles and the team, and the three Markdown files are the role prompts. The [teams README](./teams/README.md) walks the whole loop: roles, hand-offs, install, and customization.
+[`teams/forge`](./teams/forge/) is one RimZ drop-in fragment for the plan → code → review loop: `@planner` runs Claude, `@coder` runs Codex, and `@reviewer` runs Claude. Its `team.toml` declares the three profiles, layout, and git-excluded scratch files, and the three Markdown files are the role prompts. The [teams README](./teams/README.md) walks the whole loop: roles, hand-offs, install, and customization.
 
 Install the release-matched bundle from GitHub:
 

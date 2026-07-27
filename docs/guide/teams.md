@@ -96,6 +96,7 @@ A team in `agents.toml` (or a drop-in fragment like forge's `team.toml`) is a li
 
 [agents.teams.forge]
 layout = "planner,coder+reviewer"
+scratch-files = ["/plan.md", "/result.md", "/review.md"]
 
 [[agents.teams.forge.roles]]
 role = "planner"
@@ -123,6 +124,8 @@ effort = "xhigh"
 args = "--strict-mcp-config --tools 'Bash,Read,Edit,Write,WebFetch,WebSearch,Skill'"
 system-prompt-file = "reviewer.md"
 ```
+
+`scratch-files` declares the workflow's ephemeral team memory as verbatim gitignore patterns. On every launch or resume, RimZ appends missing patterns to the repository's `.git/info/exclude`; the leading `/` anchors these names at the checkout root. Linked worktrees commonly share that exclude file with the main checkout, so a declared name is ignored as untracked everywhere in the repository, not only in this team's worktree. To reverse it, delete those pattern lines from `.git/info/exclude`.
 
 Launching the team name opens every member in that layout, and each answers to its role handle: `@reviewer` inside the team's channel, `forge.reviewer` from anywhere in the workspace. The optional `leader` names the role that receives a trailing launch prompt; without it, the first declared role leads. `rimz teams forge -w feat-x "task"` therefore seeds the planner directly, while the rest of the team starts ready for its hand-offs. `rimz agents forge.reviewer` launches or re-adds that one role with the same identity it has inside the full team, and from a pane in the team's own channel the bare `rimz agents reviewer` means the same thing.
 
