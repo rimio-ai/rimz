@@ -16,8 +16,10 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let run_context = run_exec_context(&request, &invocation)?;
     let launch_identity = exec_launch_identity(&request)?;
     let attach_target = exec_attach_target(&request);
-    if !request.system_prompt.is_empty() {
-        let prompt_args = (|| -> Result<Vec<String>> {
+    let materialized_prompt = if request.system_prompt.is_empty() {
+        rimz::harness::prompt_compose::MaterializedSystemPrompt::default()
+    } else {
+        let materialized = (|| -> Result<_> {
             let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
                 .context("preparing prompt runtime")?;
             runtime.ensure_dirs().context("preparing prompt runtime")?;
@@ -28,15 +30,19 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             )
             .context("materializing system prompt")
         })();
-        match prompt_args {
-            Ok(prompt_args) => request.action.extra_args_mut().extend(prompt_args),
+        match materialized {
+            Ok(materialized) => materialized,
             Err(err) => {
                 mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
                 fail_run_on_exec_precondition(run_context.as_ref());
                 return Err(err);
             }
         }
-    }
+    };
+    request
+        .action
+        .extra_args_mut()
+        .extend(materialized_prompt.args.iter().cloned());
     let entered_worktree = match request.worktree_path.as_deref() {
         Some(path) => match enter_worktree(path) {
             Ok(path) => Some(path),
@@ -66,6 +72,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &request,
         &provider_cwd,
         &rimz::proc::rimz_exe(),
+        &materialized_prompt.env,
     );
     let stage = match stage {
         Ok(stage) => stage,

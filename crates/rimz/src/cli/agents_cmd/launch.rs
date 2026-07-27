@@ -51,7 +51,7 @@ pub(super) fn launch_layout(
         }
     }
     let kind_override = resolve_agent_override(args.launch.agent.as_deref())?;
-    let mut resolved = rimz::harness::plan::resolve_launch_with_kind_override(
+    let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
         &machine_config.agents.commands,
         args.launch.spec.as_deref(),

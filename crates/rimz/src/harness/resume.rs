@@ -229,6 +229,9 @@ pub enum ResumeSkipReason {
     NoConversation,
     /// Dropped to stay within the resume cap.
     OverCap,
+    /// The profile now requires system-prompt replacement that the provider
+    /// cannot express.
+    PromptUnsupported,
 }
 
 impl ResumeSkipReason {
@@ -237,6 +240,7 @@ impl ResumeSkipReason {
             Self::NoResumeSupport => "no resume CLI",
             Self::NoConversation => "no saved conversation",
             Self::OverCap => "over the resume cap",
+            Self::PromptUnsupported => "no prompt replacement",
         }
     }
 }
@@ -1693,6 +1697,10 @@ fn plan_resume_candidates_detailed(
                     .as_ref()
                     .map(|reason| format!("{reason}; not resuming")),
             );
+            plan.skipped.push(ResumeSkip {
+                label,
+                reason: ResumeSkipReason::PromptUnsupported,
+            });
             continue;
         }
         plan.warnings.extend(

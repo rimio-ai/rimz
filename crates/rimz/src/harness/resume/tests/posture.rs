@@ -157,6 +157,34 @@ fn a_profile_prompt_file_that_vanished_degrades_instead_of_refusing() {
 }
 
 #[test]
+fn unsupported_prompt_replacement_is_reported_as_a_resume_skip() {
+    let prompt = tempfile::NamedTempFile::new().expect("temp prompt file");
+    let profiles = profiles(
+        "planner",
+        Profile {
+            system_prompt_file: Some(prompt.path().to_path_buf()),
+            ..profile("droid")
+        },
+    );
+    let agent = AgentState {
+        profile: Some("planner".to_owned()),
+        ..agent("droid", "a1", "/code/qe", 1)
+    };
+
+    let plan = plan_profiled(agent, &profiles);
+
+    assert!(plan.tabs.is_empty());
+    assert_eq!(plan.warnings.len(), 1);
+    assert_eq!(
+        plan.skipped,
+        [ResumeSkip {
+            label: "droid:qe".to_owned(),
+            reason: ResumeSkipReason::PromptUnsupported,
+        }]
+    );
+}
+
+#[test]
 fn posture_reports_a_provider_switch_rather_than_refusing() {
     // Restart and fork escalate this; unattended resume degrades on it. Either
     // way the resolver reports rather than fails.

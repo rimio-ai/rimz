@@ -131,6 +131,49 @@ fn process_compiler_composes_adapter_identity_and_rtk_environment() {
 }
 
 #[test]
+fn process_stage_applies_prompt_path_env_without_putting_prompt_text_in_argv() {
+    let project = tempfile::tempdir().expect("project");
+    let request = request(
+        "qwen",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    let prompt_path = "/runtime/private/prompt/sys.0123456789abcdef.md";
+    let extra_env = env(&[("QWEN_SYSTEM_MD", prompt_path)]);
+
+    let AgentProcessStage::Ready(process) = compile_agent_process_stage(
+        project.path(),
+        crate::config::RtkMode::Auto,
+        &request,
+        project.path(),
+        Path::new("/bin/rimz"),
+        &extra_env,
+    )
+    .expect("qwen process") else {
+        panic!("unbound qwen launch is ready");
+    };
+
+    assert_eq!(
+        process.env.get("QWEN_SYSTEM_MD").map(String::as_str),
+        Some(prompt_path)
+    );
+    assert!(
+        process
+            .provider_argv
+            .iter()
+            .all(|arg| arg != "--system-prompt" && !arg.contains(prompt_path))
+    );
+    assert!(
+        process
+            .argv
+            .iter()
+            .any(|arg| arg == &format!("QWEN_SYSTEM_MD={prompt_path}"))
+    );
+}
+
+#[test]
 fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
     let adapter = crate::agents::find_definition("copilot").expect("copilot");
     let params = crate::agents::LaunchParams {
@@ -154,8 +197,14 @@ fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
         (crate::harness::run::ENV_RTK, "project"),
     ]);
 
-    let composed = compose_agent_env(project, adapter, crate::config::RtkMode::Off, &invocation)
-        .expect("launch env");
+    let composed = compose_agent_env(
+        project,
+        adapter,
+        crate::config::RtkMode::Off,
+        &invocation,
+        &BTreeMap::new(),
+    )
+    .expect("launch env");
 
     assert_eq!(
         composed["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"],
@@ -181,6 +230,7 @@ fn process_compiler_names_invalid_environment_key() {
         adapter,
         crate::config::RtkMode::Auto,
         &invocation,
+        &BTreeMap::new(),
     )
     .expect_err("invalid key");
 
@@ -485,6 +535,7 @@ fn provider_account_stage_validates_and_reenters_once() {
             &input,
             project.path(),
             Path::new("/bin/rimz"),
+            &BTreeMap::new(),
         )
         .expect_err("binding scope");
         assert_eq!(
@@ -509,6 +560,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         &pending,
         project.path(),
         Path::new("/bin/rimz"),
+        &BTreeMap::new(),
     )
     .expect("pending stage");
     let AgentProcessStage::LoginShellReentry { argv, .. } = stage else {
@@ -530,6 +582,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         &finalized,
         project.path(),
         Path::new("/bin/rimz"),
+        &BTreeMap::new(),
     )
     .expect_err("unresolved account mismatches");
     assert!(err.is_finalized_provider_mismatch());
@@ -555,6 +608,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         &unbound,
         project.path(),
         Path::new("/bin/rimz"),
+        &BTreeMap::new(),
     )
     .expect("ordinary stage") else {
         panic!("unbound launch is ready");

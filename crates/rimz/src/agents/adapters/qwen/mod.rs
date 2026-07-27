@@ -115,7 +115,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
         compact_command: Some("/compress"),
         presets: super::PresetMatchers {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
-            system_prompt_file: Some(super::StaticPresetMatcher::TextFlag(&["--system-prompt"])),
+            system_prompt_file: Some(super::StaticPresetMatcher::EnvPathVar("QWEN_SYSTEM_MD")),
             ..super::PresetMatchers::EMPTY
         },
     },

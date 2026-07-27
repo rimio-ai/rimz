@@ -28,6 +28,7 @@ This mirror was refreshed against Qwen Code **0.19.10** at source commit [`095bd
 | Structured message types | [`packages/cli/src/nonInteractive/types.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/cli/src/nonInteractive/types.ts) |
 | Headless mode and exits | <https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/> |
 | CLI option definitions | [`packages/cli/src/config/config.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/cli/src/config/config.ts) |
+| System-prompt file environment | [`packages/core/src/core/prompts.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/core/prompts.ts#L115-L152) |
 | Permission modes | <https://qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode/> |
 | Subagents | <https://qwenlm.github.io/qwen-code-docs/en/users/features/sub-agents/> |
 | ACP daemon/server mode | <https://qwenlm.github.io/qwen-code-docs/en/users/qwen-serve/> |
@@ -445,6 +446,7 @@ Error results carry an `error` object instead of result text. Preserve unknown f
 | `--session-id <id>` | caller-selected identity; version-gate |
 | `--model <id>` | startup model override |
 | `--system-prompt <text>` / `--append-system-prompt <text>` | direct prompt override/append; these accept text rather than file paths |
+| `QWEN_SYSTEM_MD=<path>` | replace the base prompt verbatim from a file; a missing enabled file is a hard error |
 | `--approval-mode <plan|default|auto-edit|auto|yolo>` | permission mapping |
 | `--yolo` | full auto-approval |
 | `--allowed-tools` / `--exclude-tools` | confirmation bypass / tool removal |
