@@ -19,7 +19,6 @@ fn role_binding(role: &str) -> RoleBinding {
         effort: None,
         budget: None,
         system_prompt_file: None,
-        append_system_prompt_files: None,
         args: None,
     }
 }
@@ -29,7 +28,6 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
         kind: AgentKind::new_unchecked("claude"),
         args: Vec::new(),
         system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
         launch: LaunchParams {
             profile: role.map(|role| format!("{role}-profile")),
             role: role.map(ToOwned::to_owned),
@@ -104,7 +102,6 @@ fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&s
         kind: AgentKind::new_unchecked(kind),
         args: args.iter().map(|value| (*value).to_owned()).collect(),
         system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
         launch: LaunchParams {
             profile: Some(format!("{kind}-coder")),
             model: model.map(str::to_owned),
@@ -137,7 +134,6 @@ fn configured_profile(
     model: Option<&str>,
     effort: Option<&str>,
     system_prompt_file: Option<PathBuf>,
-    append_system_prompt_files: Option<PathBuf>,
     args: Option<&str>,
 ) -> Profile {
     Profile {
@@ -147,7 +143,6 @@ fn configured_profile(
         effort: effort.map(str::to_owned),
         budget: None,
         system_prompt_file,
-        append_system_prompt_files: append_system_prompt_files.map(|path| vec![path]),
         args: args.map(str::to_owned),
     }
 }
@@ -169,74 +164,16 @@ fn profile_prompt_validation_requires_declared_files() {
     let dir = tempfile::tempdir().expect("temp dir");
     let present = dir.path().join("planner.md");
     std::fs::write(&present, "be terse").expect("write prompt");
-    let present_append = dir.path().join("append.md");
-    std::fs::write(&present_append, "follow house style").expect("write append prompt");
     let mut machine = MachineConfig::default();
     machine.agents.profiles.0.insert(
         "planner".to_owned(),
-        configured_profile(
-            "claude",
-            None,
-            None,
-            None,
-            Some(present),
-            Some(present_append),
-            None,
-        ),
+        configured_profile("claude", None, None, None, Some(present), None),
     );
     let launch = effective_launch(&machine, dir.path());
     let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
         .expect("resolve profile");
     validate_profile_prompt_files(&resolved.layout).expect("present prompt files pass");
 
-    for (system, append, fragment) in [
-        (
-            Some(dir.path().join("absent.md")),
-            None,
-            "system-prompt-file",
-        ),
-        (
-            None,
-            Some(dir.path().join("absent-append.md")),
-            "append-system-prompt-files",
-        ),
-    ] {
-        machine.agents.profiles.0.insert(
-            "planner".to_owned(),
-            configured_profile("claude", None, None, None, system, append, None),
-        );
-        let launch = effective_launch(&machine, dir.path());
-        let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
-            .expect("resolve missing prompt profile");
-        let err =
-            validate_profile_prompt_files(&resolved.layout).expect_err("missing prompt fails");
-        assert!(err.to_string().contains(fragment), "{err}");
-    }
-
-    let invalid = dir.path().join("invalid.md");
-    std::fs::write(&invalid, [0xff]).expect("write invalid prompt");
-    machine.agents.profiles.0.insert(
-        "planner".to_owned(),
-        configured_profile("claude", None, None, None, None, Some(invalid), None),
-    );
-    let launch = effective_launch(&machine, dir.path());
-    let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
-        .expect("resolve invalid prompt profile");
-    let err =
-        validate_profile_prompt_files(&resolved.layout).expect_err("non-text prompt fails early");
-    assert!(err.to_string().contains("cannot be read as text"), "{err}");
-}
-
-#[test]
-fn cli_prompt_fragments_replace_profile_list_and_require_replacement_support() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let profile_fragment = dir.path().join("profile.md");
-    let first = dir.path().join("first.md");
-    let second = dir.path().join("second.md");
-    for path in [&profile_fragment, &first, &second] {
-        std::fs::write(path, path.display().to_string()).expect("write prompt");
-    }
-    let mut machine = MachineConfig::default();
     machine.agents.profiles.0.insert(
         "planner".to_owned(),
         configured_profile(
@@ -244,10 +181,41 @@ fn cli_prompt_fragments_replace_profile_list_and_require_replacement_support() {
             None,
             None,
             None,
-            None,
-            Some(profile_fragment),
+            Some(dir.path().join("absent.md")),
             None,
         ),
+    );
+    let launch = effective_launch(&machine, dir.path());
+    let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
+        .expect("resolve missing prompt profile");
+    let err = validate_profile_prompt_files(&resolved.layout).expect_err("missing prompt fails");
+    assert!(err.to_string().contains("system-prompt-file"), "{err}");
+
+    let invalid = dir.path().join("invalid.md");
+    std::fs::write(&invalid, [0xff]).expect("write invalid prompt");
+    machine.agents.profiles.0.insert(
+        "planner".to_owned(),
+        configured_profile("claude", None, None, None, Some(invalid), None),
+    );
+    let launch = effective_launch(&machine, dir.path());
+    let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
+        .expect("resolve invalid prompt profile");
+    validate_profile_prompt_files(&resolved.layout)
+        .expect("RimZ passes prompt paths without reading their contents");
+}
+
+#[test]
+fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let profile_prompt = dir.path().join("profile.md");
+    let cli_prompt = dir.path().join("cli.md");
+    for path in [&profile_prompt, &cli_prompt] {
+        std::fs::write(path, path.display().to_string()).expect("write prompt");
+    }
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "planner".to_owned(),
+        configured_profile("claude", None, None, None, Some(profile_prompt), None),
     );
     let launch = effective_launch(&machine, dir.path());
     let mut resolved =
@@ -257,7 +225,7 @@ fn cli_prompt_fragments_replace_profile_list_and_require_replacement_support() {
         LaunchFinalizeOptions {
             permission_mode: None,
             preset: &crate::agents::LaunchPreset {
-                append_system_prompt_files: vec![first.clone(), second.clone()],
+                system_prompt_file: Some(cli_prompt.clone()),
                 ..Default::default()
             },
             passthrough: &[],
@@ -272,8 +240,8 @@ fn cli_prompt_fragments_replace_profile_list_and_require_replacement_support() {
             .agent_cells()
             .next()
             .unwrap()
-            .append_system_prompt_files,
-        [first, second]
+            .system_prompt_file,
+        Some(cli_prompt)
     );
 
     machine
@@ -299,7 +267,7 @@ fn cli_prompt_fragments_replace_profile_list_and_require_replacement_support() {
     .expect_err("droid cannot replace prompts");
     assert_eq!(
         err.to_string(),
-        "droid does not support config key `append-system-prompt-files` / flag `--append-system-prompt-file`; remove it or put provider-specific flags in `args`"
+        "droid does not support config key `system-prompt-file` / flag `--system-prompt-file`; remove it or put provider-specific flags in `args`"
     );
 }
 
@@ -314,7 +282,6 @@ fn provider_override_carries_profile_fields_and_renders_with_new_adapter() {
             Some(PermissionMode::Auto),
             Some("profile-model"),
             Some("high"),
-            None,
             None,
             Some("--raw profile"),
         ),
@@ -372,7 +339,6 @@ fn resolved_launch_finalizes_profile_cli_and_passthrough_precedence() {
             None,
             Some("profile"),
             Some("high"),
-            None,
             None,
             Some("--model raw-profile --config=model_reasoning_effort=low"),
         ),
@@ -442,15 +408,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     let mut machine = MachineConfig::default();
     machine.agents.profiles.0.insert(
         "asked".to_owned(),
-        configured_profile(
-            "codex",
-            Some(PermissionMode::Ask),
-            None,
-            None,
-            None,
-            None,
-            None,
-        ),
+        configured_profile("codex", Some(PermissionMode::Ask), None, None, None, None),
     );
     let launch = effective_launch(&machine, dir.path());
     let preset = crate::agents::LaunchPreset::default();
@@ -531,7 +489,6 @@ fn launch_options_apply_without_overwriting_spec_identity() {
             kind: AgentKind::new_unchecked("codex"),
             args,
             system_prompt_file: None,
-            append_system_prompt_files: Vec::new(),
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
                 mode,
@@ -623,7 +580,6 @@ fn default_launch_models_stamp_only_cells_without_models() {
         kind: AgentKind::new_unchecked("codex"),
         args: vec!["--model".to_owned(), "o3".to_owned()],
         system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
         launch: LaunchParams {
             model: Some("o3".to_owned()),
             ..Default::default()
@@ -702,7 +658,7 @@ fn declared_model_replaces_different_args_and_dedupes_equal_args_silently() {
 }
 
 #[test]
-fn declared_prompt_removes_raw_replacement_args_before_exec_materializes_it() {
+fn declared_prompt_removes_raw_replacement_args_before_process_compilation() {
     let dir = tempfile::tempdir().expect("temp dir");
     let typed = dir.path().join("typed.md");
     std::fs::write(&typed, "typed").expect("typed prompt");
@@ -1127,7 +1083,6 @@ fn single_role_team_launch_takes_over_caller_pane() {
             effort: None,
             budget: None,
             system_prompt_file: None,
-            append_system_prompt_files: None,
             args: None,
         },
     )]));
@@ -1174,7 +1129,6 @@ fn launch_request_names_and_metadata() {
         kind: AgentKind::new_unchecked("codex"),
         args: Vec::new(),
         system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
         launch: LaunchParams {
             profile: Some("codex-coder".to_owned()),
             mode: Some(PermissionMode::Yolo),
@@ -1473,7 +1427,6 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         kind: AgentKind::new_unchecked("claude"),
         args: Vec::new(),
         system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
         launch: LaunchParams::default(),
     });
     let launch = AgentLaunchIdentity {
@@ -1561,7 +1514,6 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
         kind: AgentKind::new_unchecked("claude"),
         args: vec!["--profile-declared".to_owned()],
         system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
         launch: LaunchParams {
             profile: Some("new-profile".to_owned()),
             role: Some("new-role".to_owned()),

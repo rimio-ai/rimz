@@ -64,7 +64,6 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
         agent: None,
         model: Some(" gpt-5 ".to_owned()),
         system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
         effort: Some(" low ".to_owned()),
         budget: None,
         max_turns: None,

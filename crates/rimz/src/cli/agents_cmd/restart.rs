@@ -116,7 +116,7 @@ pub(in crate::cli) fn restart_resolved(
                 extra_args,
             },
         },
-        system_prompt: posture.system_prompt.clone(),
+        system_prompt_file: posture.system_prompt_file.clone(),
         provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -236,7 +236,6 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
         kind: agent.kind.clone(),
         args: posture.args.clone(),
         system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
             role: agent.role.clone(),

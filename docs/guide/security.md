@@ -31,7 +31,7 @@ A first interactive `rimz start` in an untrusted workspace offers the grant, and
 The hashed surface is every field that can cause a process to run:
 
 - `[[agents]]`: `name`, `launch_command`, `env`
-- `[profiles.<name>]`: `agent`, `mode`, `model`, `effort`, `system-prompt-file`, `append-system-prompt-files`, `args`
+- `[profiles.<name>]`: `agent`, `mode`, `model`, `effort`, `system-prompt-file`, `args`
 - `[agents.teams.<name>]`: `layout`, and each role's profile and launch fields
 - `[tasks.<name>]`: the loop `agent`, `prompt`, `check` and `verify` commands, and the run and schedule options
 - `[[hooks]]`: `event`, `command`

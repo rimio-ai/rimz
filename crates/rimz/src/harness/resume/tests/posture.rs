@@ -6,7 +6,7 @@ use super::*;
 #[test]
 fn resume_replays_the_profile_declared_posture() {
     // A session that launched as `@planner` comes back as a planner: the
-    // profile's model, effort, and appended system prompt ride the resume argv,
+    // profile's model, effort, and system prompt ride the resume request,
     // not just the `@planner` handle.
     let prompt = tempfile::NamedTempFile::new().expect("temp prompt file");
     let profiles = profiles(
@@ -14,7 +14,7 @@ fn resume_replays_the_profile_declared_posture() {
         Profile {
             model: Some("opus".to_owned()),
             effort: Some("high".to_owned()),
-            append_system_prompt_files: Some(vec![prompt.path().to_path_buf()]),
+            system_prompt_file: Some(prompt.path().to_path_buf()),
             ..profile("claude")
         },
     );
@@ -43,6 +43,7 @@ fn resume_replays_the_profile_declared_posture() {
     );
     assert_eq!(request.identity.params.model.as_deref(), Some("opus"));
     assert_eq!(request.identity.params.effort.as_deref(), Some("high"));
+    assert_eq!(request.system_prompt_file.as_deref(), Some(prompt.path()));
 }
 
 #[test]

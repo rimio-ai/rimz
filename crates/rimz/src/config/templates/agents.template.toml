@@ -36,7 +36,6 @@
 ## effort = "low"
 ## budget = "5"                       # session cap; use "20/day" for a local-calendar-day cap
 ## system-prompt-file = "~/.config/rimz/prompts/slim.md"
-## append-system-prompt-files = ["~/.config/rimz/prompts/extra.md"]
 ## args = "--max-turns 4"
 
 [agents.commands]

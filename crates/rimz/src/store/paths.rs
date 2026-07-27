@@ -298,11 +298,6 @@ impl RuntimePaths {
         sidecar::path(&self.agent_context_dir, "ctx", kind, agent_id)
     }
 
-    /// Content-addressed replacement prompts generated for provider launches.
-    pub fn system_prompt_dir(&self) -> PathBuf {
-        self.root.join("prompt")
-    }
-
     /// Sidecar file for one subagent's `subagentStatusLine` enrichment, keyed by
     /// `(kind, agent_id)` and digested to a safe, fixed-width name like
     /// [`Self::agent_context_path`].

@@ -41,7 +41,7 @@ Codex shares the same keyed subagent identity as Claude (`resolve_subagent_ident
 
 ### Session registration and launch quirks
 
-Codex renders typed system-prompt replacement as `-c model_instructions_file=<path>`. With ordered `append-system-prompt-files`, the shared exec wrapper composes the base and fragments into a content-addressed runtime artifact before provider argv compilation; Codex receives only that replacement path.
+Codex renders typed system-prompt replacement as `-c model_instructions_file=<path>`, using the user's resolved absolute path directly.
 
 Codex registers its session lazily. A plain CLI launch fires no `SessionStart`; the first prompt fires `SessionStart` and `UserPromptSubmit` together, both carrying the session id. So a freshly launched Codex is an agent instance with no session id until its first turn, which is why the sidebar synthesizes an idle row for it ([model.md → The instance lifecycle](./model.md#the-instance-lifecycle)). A native resume already carries its prior session id, so the exec wrapper attaches that durable card to the new pane and live owner before Codex registers; rebirth placement no longer depends on the first prompt. Codex 0.144.5 also fires `SessionStart` on `/clear` / `/new`, creating a pane-less registered record before the new conversation's first prompt.
 

@@ -33,7 +33,6 @@ fn planner_profiles() -> ProfilesConfig {
             effort: None,
             budget: None,
             system_prompt_file: None,
-            append_system_prompt_files: None,
             args: None,
         },
     );
@@ -68,7 +67,7 @@ fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
         kind: AgentKind::new_unchecked(kind),
         action,
-        system_prompt: Default::default(),
+        system_prompt_file: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -137,7 +136,7 @@ mod parse {
         );
         assert!(args.launch.cohort.bg);
 
-        let argv: Vec<_> = "rimz claude fix-auth --from-pr https://gitlab.com/org/repo/-/merge_requests/12 --worktree review-12 --model opus --description port-auth --effort high --system-prompt-file /abs/prompt.md --append-system-prompt-file /abs/append.md -p --max-turns 3 --retries 2 --verify true --max-attempts 4 -n swift-otter"
+        let argv: Vec<_> = "rimz claude fix-auth --from-pr https://gitlab.com/org/repo/-/merge_requests/12 --worktree review-12 --model opus --description port-auth --effort high --system-prompt-file /abs/prompt.md -p --max-turns 3 --retries 2 --verify true --max-attempts 4 -n swift-otter"
             .split_ascii_whitespace()
             .collect();
         let args = parse_agents(&argv);
@@ -150,10 +149,6 @@ mod parse {
                 args.launch.cohort.description.as_deref(),
                 args.launch.effort.as_deref(),
                 args.launch.system_prompt_file.as_deref(),
-                args.launch
-                    .append_system_prompt_files
-                    .first()
-                    .map(PathBuf::as_path),
                 args.launch.max_turns,
             ),
             (
@@ -164,7 +159,6 @@ mod parse {
                 Some("port-auth"),
                 Some("high"),
                 Some(Path::new("/abs/prompt.md")),
-                Some(Path::new("/abs/append.md")),
                 Some(3),
             )
         );
@@ -313,13 +307,25 @@ mod parse {
             &["--ask"],
             &["--yolo"],
             &["--system-prompt-file", "/x"],
-            &["--append-system-prompt-file", "/x"],
             &["-p"],
             &["--", "--debug"],
         ] {
             let argv = [vec!["rimz", "claude", "--resume"], override_args.to_vec()].concat();
             assert_clap_error(&argv, ArgumentConflict);
         }
+    }
+
+    #[test]
+    fn removed_append_prompt_flag_is_rejected() {
+        assert_clap_error(
+            &[
+                "rimz",
+                "claude",
+                "--append-system-prompt-file",
+                "/prompt.md",
+            ],
+            clap::error::ErrorKind::UnknownArgument,
+        );
     }
 
     #[test]
@@ -398,7 +404,7 @@ mod parse {
                 prompt: Some("fix it".to_owned()),
                 extra_args: launch_extra,
             },
-            system_prompt: Default::default(),
+            system_prompt_file: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: Some(
                 "run_0123456789abcdef0123456789abcdef"
@@ -682,49 +688,27 @@ mod launch_options {
     fn prompt_file_flags_resolve_and_reject_bad_paths() {
         let dir = tempfile::tempdir().expect("temp dir");
         let prompt = dir.path().join("prompt.md");
-        let append = dir.path().join("append.md");
-        let second = dir.path().join("second.md");
         std::fs::write(&prompt, "be concise").expect("write prompt");
-        std::fs::write(&append, "follow project rules").expect("write append");
-        std::fs::write(&second, "then verify").expect("write second");
         let system_flag = format!("--system-prompt-file={}", prompt.display());
-        let append_flag = format!("--append-system-prompt-file={}", append.display());
-        let second_flag = format!("--append-system-prompt-file={}", second.display());
-        let args = parse_agents(&[
-            "rimz",
-            "claude",
-            "hi",
-            &system_flag,
-            &append_flag,
-            &second_flag,
-        ]);
+        let args = parse_agents(&["rimz", "claude", "hi", &system_flag]);
         let preset = launch_override_preset(&args).expect("resolve prompt files");
         assert_eq!(
-            (preset.system_prompt_file, preset.append_system_prompt_files),
-            (
-                Some(prompt.canonicalize().unwrap()),
-                vec![
-                    append.canonicalize().unwrap(),
-                    second.canonicalize().unwrap()
-                ]
-            )
+            preset.system_prompt_file,
+            Some(prompt.canonicalize().unwrap())
         );
 
-        for flag in ["--system-prompt-file", "--append-system-prompt-file"] {
-            let dir_path = dir.path().to_str().expect("utf8 dir path");
-            let args = parse_agents(&["rimz", "claude", "hi", flag, dir_path]);
-            let err = launch_override_preset(&args).expect_err("reject a directory");
-            assert!(err.to_string().contains("is not a regular file"), "{err:#}");
-        }
+        let dir_path = dir.path().to_str().expect("utf8 dir path");
+        let args = parse_agents(&["rimz", "claude", "hi", "--system-prompt-file", dir_path]);
+        let err = launch_override_preset(&args).expect_err("reject a directory");
+        assert!(err.to_string().contains("is not a regular file"), "{err:#}");
 
-        let missing = dir.path().join("missing-append.md");
+        let missing = dir.path().join("missing.md");
         let missing_path = missing.to_str().expect("utf8 missing path");
-        let missing_flag = format!("--append-system-prompt-file={missing_path}");
+        let missing_flag = format!("--system-prompt-file={missing_path}");
         let args = parse_agents(&["rimz", "claude", "hi", &missing_flag]);
-        let err = launch_override_preset(&args).expect_err("reject missing append path");
+        let err = launch_override_preset(&args).expect_err("reject missing prompt path");
         assert!(
-            err.to_string()
-                .contains("reading --append-system-prompt-file"),
+            err.to_string().contains("reading --system-prompt-file"),
             "{err:#}"
         );
     }
@@ -763,7 +747,6 @@ mod launch_options {
                 effort: None,
                 budget: None,
                 system_prompt_file: None,
-                append_system_prompt_files: None,
                 args: Some("--model raw".to_owned()),
             },
         );
@@ -1321,7 +1304,7 @@ fn bare_exec_args() -> ExecRequest {
             prompt: None,
             extra_args: Vec::new(),
         },
-        system_prompt: Default::default(),
+        system_prompt_file: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,

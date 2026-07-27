@@ -674,8 +674,6 @@ pub struct ProjectProfile {
     pub effort: Option<String>,
     #[serde(rename = "system-prompt-file")]
     pub system_prompt_file: Option<String>,
-    #[serde(rename = "append-system-prompt-files")]
-    pub append_system_prompt_files: Option<Vec<String>>,
     pub args: Option<String>,
 }
 
@@ -740,10 +738,14 @@ struct ExecutableProfile<'a> {
     model: Option<&'a str>,
     effort: Option<&'a str>,
     system_prompt_file: Option<&'a str>,
-    // Keep the legacy projection key so configs without fragments retain
-    // their pinned surface hash (integration::trust::config_without_prompt_fragments_keeps_legacy_surface_hash).
+    // Vestigial serialization slot, always `None`: the retired
+    // `append-system-prompt-file` config field is gone, but the canonical JSON
+    // has always carried this key (as null), so dropping it would change every
+    // legacy executable-surface hash and re-prompt users for trust with no
+    // semantic change. Pinned by
+    // integration::trust::config_without_retired_prompt_field_keeps_legacy_surface_hash.
     #[serde(rename = "append_system_prompt_file")]
-    append_system_prompt_files: Option<&'a [String]>,
+    retired_append_system_prompt_file: Option<()>,
     args: Option<&'a str>,
 }
 
@@ -762,10 +764,14 @@ struct ExecutableRole<'a> {
     model: Option<&'a str>,
     effort: Option<&'a str>,
     system_prompt_file: Option<String>,
-    // Keep the legacy projection key so configs without fragments retain
-    // their pinned surface hash (integration::trust::config_without_prompt_fragments_keeps_legacy_surface_hash).
+    // Vestigial serialization slot, always `None`: the retired
+    // `append-system-prompt-file` config field is gone, but the canonical JSON
+    // has always carried this key (as null), so dropping it would change every
+    // legacy executable-surface hash and re-prompt users for trust with no
+    // semantic change. Pinned by
+    // integration::trust::config_without_retired_prompt_field_keeps_legacy_surface_hash.
     #[serde(rename = "append_system_prompt_file")]
-    append_system_prompt_files: Option<Vec<String>>,
+    retired_append_system_prompt_file: Option<()>,
     args: Option<&'a str>,
 }
 
@@ -826,7 +832,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     model: p.model.as_deref(),
                     effort: p.effort.as_deref(),
                     system_prompt_file: p.system_prompt_file.as_deref(),
-                    append_system_prompt_files: p.append_system_prompt_files.as_deref(),
+                    retired_append_system_prompt_file: None,
                     args: p.args.as_deref(),
                 })
                 .collect(),
@@ -849,15 +855,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                                 .system_prompt_file
                                 .as_ref()
                                 .map(|path| path.to_string_lossy().into_owned()),
-                            append_system_prompt_files: role
-                                .append_system_prompt_files
-                                .as_ref()
-                                .map(|paths| {
-                                    paths
-                                        .iter()
-                                        .map(|path| path.to_string_lossy().into_owned())
-                                        .collect()
-                                }),
+                            retired_append_system_prompt_file: None,
                             args: role.args.as_deref(),
                         })
                         .collect(),
@@ -1390,7 +1388,6 @@ mod tests {
             "[profiles.x]\nagent = \"claude\"\nmodel = \"opus\"\n",
             "[profiles.x]\nagent = \"claude\"\neffort = \"low\"\n",
             "[profiles.x]\nagent = \"claude\"\nsystem-prompt-file = \"prompts/x.md\"\n",
-            "[profiles.x]\nagent = \"claude\"\nappend-system-prompt-files = [\"prompts/x-extra.md\"]\n",
             "[profiles.x]\nagent = \"claude\"\nargs = \"--profile x\"\n",
             "[profiles.y]\nagent = \"claude\"\n",
             "[agents.teams.review]\nlayout = \"planner,coder\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
@@ -1401,7 +1398,6 @@ mod tests {
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nmodel = \"opus\"\n",
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\neffort = \"low\"\n",
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
-            "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nappend-system-prompt-files = [\"prompts/planner-extra.md\"]\n",
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nargs = \"--role planner\"\n",
             "[tasks.x]\nagent = \"codex\"\n",
             "[tasks.y]\nagent = \"codex\"\n",

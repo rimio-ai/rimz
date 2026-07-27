@@ -98,13 +98,13 @@ Claude Code is the reference integration and reads full across all six; each oth
 
 ## Launch-prompt replacement
 
-Profile `system-prompt-file` and ordered `append-system-prompt-files` use one provider-neutral contract: RimZ composes the declared pieces, then replaces the provider's system prompt. The CLI keeps the repeatable singular spelling `--append-system-prompt-file`. This launch capability is separate from the observation matrices above.
+Profile `system-prompt-file` uses one provider-neutral contract: the user's resolved absolute file path replaces the provider's system prompt. RimZ does not copy or combine its contents. This launch capability is separate from the observation matrices above.
 
 | Agent | Typed prompt replacement | Provider rendering |
 | --- | :--: | --- |
 | Claude Code | ✓ | `--system-prompt-file <path>` |
 | Codex | ✓ | `-c model_instructions_file=<path>` |
-| Qwen Code | ✓ | private artifact path through `QWEN_SYSTEM_MD` |
+| Qwen Code | ✓ | user path through `QWEN_SYSTEM_MD` |
 | Droid | ✗ | native append only; use its flag through raw profile `args` |
 | Pi | ✗ | no verified replacement flag |
 | OpenCode | ✗ | no verified replacement flag |
@@ -115,7 +115,7 @@ Profile `system-prompt-file` and ordered `append-system-prompt-files` use one pr
 | Kiro CLI | ✗ | no verified replacement flag |
 | Kimi | ✗ | no verified replacement flag |
 | Grok Build | ✗ | no verified replacement flag |
-| Process plugin | declared by bundle | `[launch].system-prompt-file-flag` receives the composed artifact path |
+| Process plugin | declared by bundle | `[launch].system-prompt-file-flag` receives the user path |
 
 Unsupported typed prompt fields fail at launch rather than degrading to a provider default. Raw `args` remain the explicit provider-specific escape hatch.
 

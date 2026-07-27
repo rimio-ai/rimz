@@ -24,8 +24,8 @@ The state is derived on every read from the live hash and the on-disk record ([`
 Every field that can cause a process to run enters the hash. The projection is [`ExecutableSurface`](../../../crates/rimz/src/trust.rs), and each entry below is one of its fields:
 
 - `[[agents]]` — `name`, `launch_command`, `env`.
-- `[profiles.<name>]` — `agent`, `mode`, `model`, `effort`, `system-prompt-file`, `append-system-prompt-files`, `args`.
-- `[agents.teams.<name>]` — `layout`, plus each role's `role`, `profile`, `mode`, `model`, `effort`, `system-prompt-file`, `append-system-prompt-files`, `args`.
+- `[profiles.<name>]` — `agent`, `mode`, `model`, `effort`, `system-prompt-file`, `args`.
+- `[agents.teams.<name>]` — `layout`, plus each role's `role`, `profile`, `mode`, `model`, `effort`, `system-prompt-file`, `args`.
 - `[tasks.<name>]` — `agent`, `prompt`, `prompt-file`, `check`, `verify`, `max-attempts`, `on`, `worktree`, `mode`, `effort`, `system-prompt-file`, `timeout`, `at`, `every`, `cron`.
 - `[[hooks]]` — `event`, `command`.
 - `[env]` — every key and value.
