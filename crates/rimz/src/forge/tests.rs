@@ -292,6 +292,7 @@ fn builds_github_bulk_query_with_ordered_escaped_aliases() {
     assert!(query.contains(
         r#"pr0: pullRequests(first: 10, headRefName: "feature", states: [OPEN, MERGED, CLOSED]"#
     ));
+    assert!(query.contains("nodes { number state createdAt statusCheckRollup"));
     assert!(query.contains(r#"pr1: pullRequests(first: 10, headRefName: "quote\"branch""#));
     assert!(query.contains(r#"sha0: object(oid: "head-one")"#));
     assert!(query.contains(r#"sha1: object(oid: "head\"two")"#));
@@ -308,14 +309,14 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
                     "pr0": {"nodes": [
                         {"number": 10, "state": "CLOSED", "statusCheckRollup": null, "mergeCommit": null},
                         {"number": 11, "state": "MERGED", "statusCheckRollup": {"state": "FAILURE"}, "mergeCommit": {"oid": "old-merge", "statusCheckRollup": {"state": "SUCCESS"}}},
-                        {"number": 12, "state": "OPEN", "statusCheckRollup": {"state": "PENDING"}, "mergeCommit": null},
+                        {"number": 12, "state": "OPEN", "createdAt": "2026-07-18T01:25:14Z", "statusCheckRollup": {"state": "PENDING"}, "mergeCommit": null},
                         {"number": 13, "state": "OPEN", "statusCheckRollup": {"state": "FAILURE"}, "mergeCommit": null}
                     ]},
                     "pr1": {"nodes": [
-                        {"number": 20, "state": "MERGED", "statusCheckRollup": {"state": "FAILURE"}, "mergeCommit": {"oid": "merge-sha", "statusCheckRollup": {"state": "SUCCESS"}}}
+                        {"number": 20, "state": "MERGED", "createdAt": "2026-07-18T01:26:14Z", "statusCheckRollup": {"state": "FAILURE"}, "mergeCommit": {"oid": "merge-sha", "statusCheckRollup": {"state": "SUCCESS"}}}
                     ]},
                     "pr2": {"nodes": [
-                        {"number": 30, "state": "CLOSED", "statusCheckRollup": {"state": "ERROR"}, "mergeCommit": null}
+                        {"number": 30, "state": "CLOSED", "createdAt": "not-a-timestamp", "statusCheckRollup": {"state": "ERROR"}, "mergeCommit": null}
                     ]},
                     "pr3": {"nodes": []},
                     "pr4": {"nodes": [
@@ -339,6 +340,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
             Some(GhBulkPr {
                 number: 12,
                 state: WorktreePrState::Open,
+                created_at: Some("2026-07-18T01:25:14Z".parse().unwrap()),
                 head_ci: Some(WorktreePrCi::Pending),
                 merge_sha: None,
                 merge_ci: None,
@@ -346,6 +348,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
             Some(GhBulkPr {
                 number: 20,
                 state: WorktreePrState::Merged,
+                created_at: Some("2026-07-18T01:26:14Z".parse().unwrap()),
                 head_ci: Some(WorktreePrCi::Failing),
                 merge_sha: Some("merge-sha".to_owned()),
                 merge_ci: Some(WorktreePrCi::Passing),
@@ -353,6 +356,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
             Some(GhBulkPr {
                 number: 30,
                 state: WorktreePrState::Closed,
+                created_at: None,
                 head_ci: Some(WorktreePrCi::Failing),
                 merge_sha: None,
                 merge_ci: None,
@@ -361,6 +365,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
             Some(GhBulkPr {
                 number: 40,
                 state: WorktreePrState::Merged,
+                created_at: None,
                 head_ci: Some(WorktreePrCi::Pending),
                 merge_sha: None,
                 merge_ci: None,
@@ -420,12 +425,14 @@ fn rejects_incomplete_or_error_github_bulk_responses() {
 
 #[test]
 fn parses_tea_pr_list_and_detail_json() {
-    let list = r#"[{"index":"916","state":"merged","head":"mill-cli"}]"#;
+    let list =
+        r#"[{"index":"916","state":"merged","head":"mill-cli","created":"2026-07-18T01:25:14Z"}]"#;
     assert_eq!(
         parse_tea_pr_list_json(list, "mill-cli").unwrap(),
         Some(PrCandidate {
             number: 916,
             state: WorktreePrState::Merged,
+            created_at: Some("2026-07-18T01:25:14Z".parse().unwrap()),
         })
     );
     assert_eq!(
@@ -433,6 +440,7 @@ fn parses_tea_pr_list_and_detail_json() {
             r#"{
                 "state":"closed",
                 "merged":true,
+                "created_at":"2026-07-18T01:20:14Z",
                 "merged_at":"2026-07-18T03:25:14+02:00",
                 "merge_commit_sha":"ed3c062267135fa5195374b7b561c458ac399a98",
                 "head":{"sha":"4c915ee98590bad6897a7a864cd635b7cdfe937d"}
@@ -441,6 +449,7 @@ fn parses_tea_pr_list_and_detail_json() {
         .unwrap(),
         TeaPrDetail {
             state: Some(WorktreePrState::Merged),
+            created_at: Some("2026-07-18T01:20:14Z".parse().unwrap()),
             merged_sha: Some("ed3c062267135fa5195374b7b561c458ac399a98".to_owned()),
             head_sha: Some("4c915ee98590bad6897a7a864cd635b7cdfe937d".to_owned()),
         }
@@ -457,6 +466,7 @@ fn parses_tea_pr_list_and_detail_json() {
         .unwrap(),
         TeaPrDetail {
             state: Some(WorktreePrState::Closed),
+            created_at: None,
             merged_sha: None,
             head_sha: Some("closed-head-sha".to_owned()),
         }
@@ -480,6 +490,7 @@ fn parses_tea_pr_list_links_by_head_branch() {
         Some(&PrCandidate {
             number: 9,
             state: WorktreePrState::Merged,
+            created_at: None,
         })
     );
     assert_eq!(
@@ -491,6 +502,7 @@ fn parses_tea_pr_list_links_by_head_branch() {
         Some(&PrCandidate {
             number: 10,
             state: WorktreePrState::Open,
+            created_at: None,
         })
     );
     assert!(parse_tea_pr_list_links("{}").is_err());

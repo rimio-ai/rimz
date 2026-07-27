@@ -449,6 +449,7 @@ mod tests {
 
         let open = PrLink {
             branch: Some("feat/cache".to_owned()),
+            incarnation: None,
             state: WorktreePrState::Open,
             number: None,
             url: None,
