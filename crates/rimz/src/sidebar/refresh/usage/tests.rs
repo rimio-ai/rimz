@@ -230,40 +230,101 @@ fn account_usage_completion_offline_skips_publication_and_probe() {
 }
 
 #[test]
-fn fresh_realtime_claude_windows_do_not_suppress_authoritative_publication() {
+fn authoritative_direct_completion_survives_live_session_exit() {
     let (_dir, runtime) = account_usage_runtime();
     let future = Timestamp::from_second(4_000_000_000).unwrap();
-    let mut live = snapshot_with_panels(
-        runtime.workspace_id.clone(),
-        vec![provider_panel(
-            "claude",
-            vec![RateLimitWindow {
-                duration_mins: Some(300),
-                used_percentage: Some(12),
-                resets_at: Some(future),
-                observed_at: Some(Timestamp::now()),
-                ..Default::default()
-            }],
-        )],
+    let identity = AccountUsageIdentity {
+        account_key: Some("claude-account".to_owned()),
+        ..Default::default()
+    };
+    super::super::credits::write_credits_cache(
+        &runtime.shared_credits_path(),
+        &CreditsCache {
+            entries: BTreeMap::from([(
+                "claude".to_owned(),
+                ProviderCreditsEntry {
+                    account_key: identity.account_key.clone(),
+                    ok: true,
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
     );
-    super::super::apply_rate_limit_cache(&mut live, &runtime, true);
-
-    assert!(publish_account_usage_snapshot(
+    super::super::merge_account_rate_limits(
         &runtime,
         "claude",
-        ProviderAccountScope::KindWide,
-        AccountUsageSnapshot {
-            rate_limits: Some(usage_windows(36)),
-            ..Default::default()
+        identity.clone(),
+        AgentRateLimits {
+            windows: vec![
+                RateLimitWindow {
+                    duration_mins: Some(300),
+                    used_percentage: Some(0),
+                    source: crate::agents::context::WindowSource::Authoritative,
+                    ..Default::default()
+                },
+                RateLimitWindow {
+                    duration_mins: Some(10_080),
+                    used_percentage: Some(0),
+                    source: crate::agents::context::WindowSource::Authoritative,
+                    ..Default::default()
+                },
+            ],
+        },
+    );
+    let claim = claim_provider_account_usage(&runtime, "claude", Some(identity.clone())).unwrap();
+    assert!(complete_direct_account_usage(
+        &runtime,
+        "claude",
+        claim,
+        crate::agents::AccountUsageProbe::Found {
+            identity,
+            snapshot: AccountUsageSnapshot {
+                rate_limits: Some(AgentRateLimits {
+                    windows: vec![
+                        RateLimitWindow {
+                            duration_mins: Some(300),
+                            used_percentage: Some(36),
+                            resets_at: Some(future),
+                            source: crate::agents::context::WindowSource::Authoritative,
+                            ..Default::default()
+                        },
+                        RateLimitWindow {
+                            duration_mins: Some(10_080),
+                            used_percentage: Some(4),
+                            resets_at: Some(future),
+                            source: crate::agents::context::WindowSource::Authoritative,
+                            ..Default::default()
+                        },
+                    ],
+                }),
+                ..Default::default()
+            },
         },
     ));
 
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries["claude"]
-            .limits
-            .windows[0]
-            .used_percentage,
+        cache.entries["claude"].limits.windows[0].used_percentage,
         Some(36)
+    );
+    assert_eq!(
+        cache.entries["claude"].limits.windows[1].used_percentage,
+        Some(4)
+    );
+
+    let mut idle = snapshot_with_panels(
+        runtime.workspace_id.clone(),
+        vec![provider_panel("claude", Vec::new())],
+    );
+    super::super::apply_rate_limit_cache(&mut idle, &runtime, false);
+    assert_eq!(
+        idle.providers[0]
+            .windows
+            .iter()
+            .map(|window| (window.used_percentage, window.resets_at))
+            .collect::<Vec<_>>(),
+        [(Some(36), Some(future)), (Some(4), Some(future))]
     );
 }
 

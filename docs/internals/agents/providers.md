@@ -144,7 +144,7 @@ A session ending or going idle would otherwise empty the dashboard, so the produ
 | a shorter duration window's reset passes while the longest cached duration window is still future | full, with the reset rolled one window-length forward, until a live reading overwrites it |
 | a named durationless window's last reported reset passes | unknown, independently: named windows never roll forward |
 | the account freshness ceiling (the longest dated window) passes with no fresh reading | every bar for that provider as an unknown empty track |
-| every cached window is undated and the newest observation ages past the longest reported duration | every bar for that provider as an unknown empty track |
+| every cached window is undated and the newest observation ages past the shortest reported duration | every bar for that provider as an unknown empty track |
 
 An undated reading therefore remains bounded by its own window shape instead of claiming a confident budget forever. An all-unknown dashboard is a refresh trigger, not only a paint state. Once a kind's panel holds no usable value, from an aged-out freshness ceiling, expired named quotas, or a cold start whose cache was never written, the producer forces that kind's authoritative probe on the spot rather than waiting out the read cadence. An `unknown_since_ms` marker carries the open episode, so the force fires on the transition into unknown and once per episode; the durable claim keeps the fetch single-flight, and completion restamps the read on success and failure alike, so a provider that stays unreachable falls back to ordinary throttling. A usable window painting again clears the marker and re-arms the next episode.
 

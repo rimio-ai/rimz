@@ -197,10 +197,6 @@ pub const PR_STATE_RETRY_TTL: Duration = Duration::from_secs(30);
 /// balance as current.
 pub const CREDITS_DISPLAY_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// How recently a realtime account-usage reading may defer merging OAuth
-/// windows for kinds whose live transport owns fresh bars.
-pub const CREDITS_TTL: Duration = Duration::from_secs(60);
-
 /// Cadence for the authoritative OAuth account-usage probe, independent of the
 /// realtime/app-server credits freshness.
 pub const OAUTH_USAGE_TTL: Duration = Duration::from_secs(5 * 60);

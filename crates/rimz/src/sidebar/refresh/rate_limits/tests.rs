@@ -178,63 +178,6 @@ fn producer_persisted_windows_feed_idle_consumers() {
 }
 
 #[test]
-fn authoritative_publication_survives_live_session_exit() {
-    let (_dir, workspace, runtime) = runtime();
-    let future = Timestamp::from_second(4_000_000_000).unwrap();
-    let identity = AccountUsageIdentity {
-        account_key: Some("claude-account".to_owned()),
-        ..Default::default()
-    };
-    merge_account_rate_limits(
-        &runtime,
-        "claude",
-        identity.clone(),
-        AgentRateLimits {
-            windows: vec![
-                authoritative(rl_window_mins(0, None, 300)),
-                authoritative(rl_window_mins(0, None, 10_080)),
-            ],
-        },
-    );
-    merge_account_rate_limits(
-        &runtime,
-        "claude",
-        identity,
-        AgentRateLimits {
-            windows: vec![
-                authoritative(rl_window_mins(36, Some(future), 300)),
-                authoritative(rl_window_mins(4, Some(future), 10_080)),
-            ],
-        },
-    );
-
-    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    assert_eq!(
-        cache.entries["claude"].account_key.as_deref(),
-        Some("claude-account")
-    );
-    assert_eq!(
-        cache_window(&cache, "claude", RateLimitWindowKey::Duration(Some(300))).used_percentage,
-        Some(36)
-    );
-    assert_eq!(
-        cache_window(&cache, "claude", RateLimitWindowKey::Duration(Some(10_080)),).used_percentage,
-        Some(4)
-    );
-
-    let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    apply_rate_limit_cache(&mut idle, &runtime, false);
-    assert_eq!(
-        idle.providers[0]
-            .windows
-            .iter()
-            .map(|window| (window.used_percentage, window.resets_at))
-            .collect::<Vec<_>>(),
-        [(Some(36), Some(future)), (Some(4), Some(future))]
-    );
-}
-
-#[test]
 fn account_scope_isolates_cached_windows() {
     let (_dir, workspace, runtime) = runtime();
     let international = ProviderAccountScope::sub_provider("alibaba", "international");
@@ -566,11 +509,11 @@ fn elapsed_longest_idle_cache_shows_unknown_without_persisting_projection() {
 }
 
 #[test]
-fn elapsed_undated_cache_shows_unknown_and_opens_refresh_episode() {
+fn shortest_elapsed_undated_window_opens_unknown_refresh_episode() {
     let (_dir, workspace, runtime) = runtime();
-    let past = Timestamp::from_second(1_000_000_000).unwrap();
+    let observed_at = Timestamp::from_second(2_000_000_000).unwrap();
     let observed = |window| RateLimitWindow {
-        observed_at: Some(past),
+        observed_at: Some(observed_at),
         ..authoritative(window)
     };
     write_claude_windows(
@@ -582,6 +525,7 @@ fn elapsed_undated_cache_shows_unknown_and_opens_refresh_episode() {
     );
 
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    idle.now = observed_at + SignedDuration::from_mins(301);
     apply_rate_limit_cache(&mut idle, &runtime, true);
 
     assert!(
@@ -591,6 +535,26 @@ fn elapsed_undated_cache_shows_unknown_and_opens_refresh_episode() {
             .all(|window| window.used_percentage.is_none() && window.resets_at.is_none())
     );
     assert!(unknown_since_ms(&runtime, "claude").is_some());
+}
+
+#[test]
+fn lone_undated_weekly_window_keeps_its_weeklong_ceiling() {
+    let (_dir, workspace, runtime) = runtime();
+    let observed_at = Timestamp::from_second(2_000_000_000).unwrap();
+    write_claude_windows(
+        &runtime,
+        vec![RateLimitWindow {
+            observed_at: Some(observed_at),
+            ..authoritative(rl_window_mins(4, None, 10_080))
+        }],
+    );
+
+    let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    idle.now = observed_at + SignedDuration::from_hours(6 * 24);
+    apply_rate_limit_cache(&mut idle, &runtime, true);
+
+    assert_eq!(idle.providers[0].windows[0].used_percentage, Some(4));
+    assert_eq!(unknown_since_ms(&runtime, "claude"), None);
 }
 
 #[test]
