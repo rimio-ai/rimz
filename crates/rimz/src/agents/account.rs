@@ -31,7 +31,10 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
-use super::{AgentRateLimits, ProviderAccountScope, RateLimitWindow, context::RateLimitWindowKey};
+use super::{
+    AgentRateLimits, ProviderAccountScope, RateLimitWindow,
+    context::{RateLimitWindowKey, WindowSource},
+};
 use crate::RuntimePaths;
 use crate::ids::AgentKind;
 
@@ -177,7 +180,12 @@ impl ProviderCapacity {
         let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
         let entry = cache.entries.get(kind)?;
         entry_matches_binding(entry, binding).then(|| Self {
-            windows: entry.limits.windows.clone(),
+            windows: entry
+                .bound_limits
+                .as_ref()
+                .unwrap_or(&entry.limits)
+                .windows
+                .clone(),
             pacing_max_mins: Some(7 * 24 * 60),
         })
     }
@@ -375,6 +383,11 @@ pub struct RateLimitCacheEntry {
     pub account_key: Option<String>,
     #[serde(default)]
     pub limits: AgentRateLimits,
+    /// Authoritative windows tied to `account_key` for exact-account controls.
+    /// Display readers use fused `limits`; bound controls prefer this copy so a
+    /// scope-only live reading cannot acquire the cached credential identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_limits: Option<AgentRateLimits>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending: Vec<PendingRefill>,
     /// When this kind's display first went unknown, marking the open episode so
@@ -394,6 +407,7 @@ impl std::fmt::Debug for RateLimitCacheEntry {
                 &self.account_key.as_ref().map(|_| "<redacted>"),
             )
             .field("limits", &self.limits)
+            .field("bound_limits", &self.bound_limits)
             .field("pending", &self.pending)
             .field("unknown_since_ms", &self.unknown_since_ms)
             .finish()
@@ -407,6 +421,11 @@ pub struct PendingRefill {
     pub scope_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_mins: Option<u32>,
+    /// Source whose repeated drop owns the confirmation clock. Existing cache
+    /// records predate authoritative candidates and therefore default safely to
+    /// best-effort.
+    #[serde(default, skip_serializing_if = "WindowSource::is_best_effort")]
+    pub source: WindowSource,
     pub used_percentage: u8,
     pub first_seen_at: Timestamp,
 }

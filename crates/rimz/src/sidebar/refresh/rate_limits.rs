@@ -91,11 +91,16 @@ pub fn merge_account_rate_limits(
     // the producer clears the marker once a real value paints, so a provider that
     // answers with nothing forces one fetch instead of one per frame.
     let unknown_since_ms = prior_entry.and_then(|entry| entry.unknown_since_ms);
-    let prior = prior_entry
+    let prior_fused = prior_entry
         .map(|entry| entry.limits.windows.as_slice())
         .unwrap_or_default();
-    complete_omitted_duration_windows(prior, &mut windows);
-    let prior: BTreeMap<RateLimitWindowKey, RateLimitWindow> = prior
+    let prior_bound = prior_entry
+        .and_then(|entry| entry.bound_limits.as_ref())
+        .map(|limits| limits.windows.as_slice())
+        .unwrap_or(prior_fused);
+    complete_omitted_duration_windows(prior_bound, &mut windows);
+    let bound_limits = identity.account_key.is_some().then(|| windows.clone());
+    let prior: BTreeMap<RateLimitWindowKey, RateLimitWindow> = prior_fused
         .iter()
         .map(|window| (window.key(), window.clone()))
         .collect();
@@ -128,6 +133,7 @@ pub fn merge_account_rate_limits(
             scope: identity.scope,
             account_key: identity.account_key,
             limits: AgentRateLimits { windows: fused },
+            bound_limits,
             pending,
             unknown_since_ms,
         },
@@ -397,12 +403,12 @@ fn apply_rate_limit_cache_with(
         let mut live_limits = AgentRateLimits {
             windows: std::mem::take(&mut panel.windows),
         };
-        complete_omitted_duration_windows(
-            prior_entry
-                .map(|entry| entry.limits.windows.as_slice())
-                .unwrap_or_default(),
-            &mut live_limits,
-        );
+        let prior_authoritative = prior_entry
+            .and_then(|entry| entry.bound_limits.as_ref())
+            .map(|limits| limits.windows.as_slice())
+            .or_else(|| prior_entry.map(|entry| entry.limits.windows.as_slice()))
+            .unwrap_or_default();
+        complete_omitted_duration_windows(prior_authoritative, &mut live_limits);
         let live: BTreeMap<RateLimitWindowKey, RateLimitWindow> = live_limits
             .windows
             .into_iter()
@@ -508,20 +514,29 @@ fn apply_rate_limit_cache_with(
         // refill, and the open unknown episode's marker. Display-only reset
         // projections and unknown windows are recomputed each frame.
         if persist && (!truth.is_empty() || !pending.is_empty() || unknown_since_ms.is_some()) {
-            let mut entry = match prior_entry.filter(|entry| entry.account_key.is_some()) {
+            let limits = AgentRateLimits {
+                windows: truth.values().cloned().collect(),
+            };
+            let mut entry = if let Some(prior) = prior_entry {
+                let mut entry = prior.clone();
                 // A provider panel carries display scope but no credential
-                // identity. Keep exact-account control truth owned by the
-                // authoritative account probe while still fusing it for paint.
-                Some(prior) => prior.clone(),
-                None => RateLimitCacheEntry {
+                // identity. Preserve a bound authoritative copy for exact-account
+                // controls while publishing the fused truth for every reader.
+                if entry.account_key.is_some() && entry.bound_limits.is_none() {
+                    entry.bound_limits = Some(entry.limits.clone());
+                }
+                entry.limits = limits;
+                entry.pending = pending;
+                entry
+            } else {
+                RateLimitCacheEntry {
                     scope: panel.account_scope.clone(),
                     account_key: None,
-                    limits: AgentRateLimits {
-                        windows: truth.values().cloned().collect(),
-                    },
+                    limits,
+                    bound_limits: None,
                     pending,
                     unknown_since_ms: None,
-                },
+                }
             };
             entry.unknown_since_ms = unknown_since_ms;
             next.entries.insert(panel.kind.clone(), entry);
@@ -563,17 +578,18 @@ pub(crate) fn fuse_window(
         // No live reading this frame: carry the prior truth and its marker.
         return (prior.cloned(), pending.cloned());
     };
+    let Some(prior) = prior else {
+        // First reading for this identity: adopt it, nothing pending. With no
+        // prior to carry, the observation horizon cannot improve the result.
+        return (Some(live.clone()), None);
+    };
     // Coarse backstop: ignore a wildly old live reading (content-staleness is
     // already filtered upstream by the snapshot view's reading-level check).
     if let Some(observed_at) = live.observed_at
         && now.duration_since(observed_at).as_secs() > LIVE_HORIZON_SECS
     {
-        return (prior.cloned(), pending.cloned());
+        return (Some(prior.clone()), pending.cloned());
     }
-    let Some(prior) = prior else {
-        // First reading for this identity: adopt it, nothing pending.
-        return (Some(live.clone()), None);
-    };
     let prior_used = prior.used_percentage.unwrap_or(0);
     let live_used = live.used_percentage.unwrap_or(0);
 
@@ -623,7 +639,9 @@ pub(crate) fn fuse_window(
     // the current low reading. A drop that vanishes (a climb back to/above prior)
     // takes the branch above and clears the marker, so one stray sample can't
     // dip the bar.
-    let first_seen_at = pending.map_or(now, |parked| parked.first_seen_at);
+    let first_seen_at = pending
+        .filter(|parked| parked.source == live.source)
+        .map_or(now, |parked| parked.first_seen_at);
     if now.duration_since(first_seen_at).as_secs() >= REFILL_CONFIRM_SECS {
         (Some(live.clone()), None)
     } else {
@@ -632,6 +650,7 @@ pub(crate) fn fuse_window(
             Some(PendingRefill {
                 scope_id: live.scope.as_ref().map(|scope| scope.id.clone()),
                 duration_mins: live.duration_mins,
+                source: live.source,
                 used_percentage: live_used,
                 first_seen_at,
             }),

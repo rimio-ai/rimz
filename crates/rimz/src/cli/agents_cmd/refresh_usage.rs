@@ -7,9 +7,10 @@
 //! single-flighted and folded into the shared `credits.json`/`rate_limits.json`
 //! caches. An adapter may expose a pollable realtime account channel; the helper
 //! reads it first, then runs the direct channel on its own shared cadence. When
-//! direct-query windows are available, they merge after the realtime fold:
-//! climbs land immediately, while a same-epoch drop contested by stamped
-//! realtime truth waits for confirmation.
+//! direct-query windows are available, they merge after the realtime fold, so a
+//! fresh credential read can replace a stale warm realtime process. Climbs land
+//! immediately, while a same-epoch drop contested by stamped statusline truth
+//! waits for confirmation.
 //! Best-effort and quiet: every provider-side failure exits successfully with
 //! the shared cache recording the retry state.
 

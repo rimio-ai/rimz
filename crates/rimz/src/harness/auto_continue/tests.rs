@@ -119,6 +119,7 @@ fn exact_qwen_cache_does_not_arm_session_resume_controls() {
                     limits: AgentRateLimits {
                         windows: vec![window(20, 9_000)],
                     },
+                    bound_limits: None,
                     pending: Vec::new(),
                     unknown_since_ms: None,
                 },
