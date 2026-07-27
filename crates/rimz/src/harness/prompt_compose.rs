@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::agents::{PresetArgMatcher, PresetField};
@@ -12,10 +11,9 @@ use crate::store::RuntimePaths;
 
 const TEXT_PROMPT_LIMIT: usize = 120 * 1024;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SystemPromptSources {
     pub system_prompt_file: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub append_system_prompt_files: Vec<PathBuf>,
 }
 
@@ -46,6 +44,10 @@ pub enum PromptComposeErr {
         "{agent} does not support system prompt replacement; remove the prompt fields or put provider-specific flags in `args`"
     )]
     Unsupported { agent: &'static str },
+    #[error(
+        "{agent} append-system-prompt-files requires a base system-prompt-file; add one to the profile, role, or launch command"
+    )]
+    MissingBase { agent: &'static str },
     #[error("cannot read prompt file `{}`: {source}", path.display())]
     Read {
         path: PathBuf,
@@ -94,16 +96,7 @@ pub fn materialize_system_prompt(
         return render(matcher, path, agent);
     }
 
-    let base = sources
-        .system_prompt_file
-        .as_deref()
-        .ok_or(PromptComposeErr::Unsupported { agent })?;
-    let mut pieces = Vec::with_capacity(1 + sources.append_system_prompt_files.len());
-    pieces.push(read_prompt(base)?);
-    for path in &sources.append_system_prompt_files {
-        pieces.push(read_prompt(path)?);
-    }
-    let composed = compose(&pieces);
+    let composed = read_composed(sources, agent)?;
     let artifact = write_artifact(runtime, &composed)?;
     render(matcher, &artifact, agent)
 }
@@ -123,20 +116,7 @@ pub fn validate_text_prompt_size(
     if !matches!(matcher, PresetArgMatcher::TextFlag(_)) {
         return Ok(());
     }
-    let base = sources
-        .system_prompt_file
-        .as_deref()
-        .ok_or(PromptComposeErr::Unsupported { agent })?;
-    let contents = if sources.append_system_prompt_files.is_empty() {
-        read_prompt(base)?
-    } else {
-        let mut pieces = Vec::with_capacity(1 + sources.append_system_prompt_files.len());
-        pieces.push(read_prompt(base)?);
-        for path in &sources.append_system_prompt_files {
-            pieces.push(read_prompt(path)?);
-        }
-        compose(&pieces)
-    };
+    let contents = read_composed(sources, agent)?;
     ensure_text_prompt_size(agent, &contents)
 }
 
@@ -186,6 +166,25 @@ fn read_prompt(path: &Path) -> Result<String, PromptComposeErr> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+fn read_composed(
+    sources: &SystemPromptSources,
+    agent: &'static str,
+) -> Result<String, PromptComposeErr> {
+    let base = sources
+        .system_prompt_file
+        .as_deref()
+        .ok_or(PromptComposeErr::MissingBase { agent })?;
+    if sources.append_system_prompt_files.is_empty() {
+        return read_prompt(base);
+    }
+    let mut pieces = Vec::with_capacity(1 + sources.append_system_prompt_files.len());
+    pieces.push(read_prompt(base)?);
+    for path in &sources.append_system_prompt_files {
+        pieces.push(read_prompt(path)?);
+    }
+    Ok(compose(&pieces))
 }
 
 fn compose(pieces: &[String]) -> String {
@@ -333,5 +332,25 @@ mod tests {
             qwen.env.get("QWEN_SYSTEM_MD").map(String::as_str),
             prompt.to_str()
         );
+    }
+
+    #[test]
+    fn fragment_without_base_names_the_missing_requirement() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let fragment = dir.path().join("fragment.md");
+        std::fs::write(&fragment, "voice").expect("fragment");
+        let err = materialize_system_prompt(
+            &AgentKind::new_unchecked("claude"),
+            &SystemPromptSources {
+                system_prompt_file: None,
+                append_system_prompt_files: vec![fragment],
+            },
+            &RuntimePaths::shared(),
+        )
+        .expect_err("base is required");
+        assert!(matches!(
+            err,
+            PromptComposeErr::MissingBase { agent: "claude" }
+        ));
     }
 }

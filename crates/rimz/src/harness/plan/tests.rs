@@ -407,6 +407,46 @@ fn cli_fragments_replace_profile_list_and_require_a_base() {
 }
 
 #[test]
+fn prompt_validation_reports_capability_before_base_and_files_before_pi_size() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let fragment = dir.path().join("fragment.md");
+    std::fs::write(&fragment, "fragment").expect("write fragment");
+
+    let mut unsupported = preset_cell("amp", &[], None, None);
+    let Cell::Agent(cell) = &mut unsupported else {
+        unreachable!()
+    };
+    cell.append_system_prompt_files = vec![fragment];
+    let err = finalize(
+        &mut LayoutSpec::single(unsupported),
+        &Default::default(),
+        &[],
+    )
+    .expect_err("amp does not support prompt replacement");
+    assert!(matches!(
+        err,
+        LaunchFinalizeError::UnsupportedSystemPrompt { agent: "amp" }
+    ));
+
+    let missing = dir.path().join("missing.md");
+    let mut pi = preset_cell("pi", &[], None, None);
+    let Cell::Agent(cell) = &mut pi else {
+        unreachable!()
+    };
+    cell.system_prompt_file = Some(missing.clone());
+    let err = finalize(&mut LayoutSpec::single(pi), &Default::default(), &[])
+        .expect_err("missing pi prompt is a file error");
+    assert!(matches!(&err, LaunchFinalizeError::PromptFile(_)));
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "profile `pi-coder` system-prompt-file `{}` not found; create it or fix the launch config",
+            missing.display()
+        )
+    );
+}
+
+#[test]
 fn provider_override_carries_profile_fields_and_renders_with_new_adapter() {
     let dir = tempfile::tempdir().expect("temp dir");
     let mut machine = MachineConfig::default();

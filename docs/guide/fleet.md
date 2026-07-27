@@ -285,6 +285,8 @@ Each field renders into the base CLI's own flag, so a profile can pin anything t
 
 The system prompt and `args` are what make a profile targeted. RimZ separates prompt pieces with blank lines and sends the complete composition through the adapter's single replacement mechanism. Parent fragments come first, child fragments follow, and team-role fragments come last. Claude, Codex, Qwen, and Pi support this typed surface; other agents fail fast rather than silently ignoring it.
 
+Raw `args` remain the provider-specific escape hatch — including Droid's native append flag — and there is no RimZ-specific tools setting: narrow the toolset with the agent's own flags through `args` (`--tools` for Claude, `--sandbox` for Codex).
+
 When does a bare kind stop being enough? The moment you type the same shaping flags a second time. One planner prompt you keep reusing, a reviewer that must never commit, a cheap low-effort triage agent — each is a profile.
 
 Override any field for one launch with the matching flag, which wins over the profile:

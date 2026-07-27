@@ -225,6 +225,16 @@ pub(crate) struct PresetArgOccurrence {
 }
 
 impl PresetArgMatcher {
+    /// Remove every occurrence of this typed setting from provider argv.
+    ///
+    /// The exec wrapper uses this at the final provider boundary so recovery
+    /// paths cannot reintroduce a raw value that planning already reconciled.
+    pub fn remove_occurrences(&self, argv: &mut Vec<String>) {
+        for occurrence in self.occurrences(argv).iter().rev() {
+            argv.drain(occurrence.argv_range.clone());
+        }
+    }
+
     pub(crate) fn occurrences(&self, argv: &[String]) -> Vec<PresetArgOccurrence> {
         let mut occurrences = Vec::new();
         let mut index = 0;

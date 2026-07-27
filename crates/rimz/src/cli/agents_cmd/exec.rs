@@ -43,10 +43,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             }
         }
     };
-    request
-        .action
-        .extra_args_mut()
-        .extend(materialized_prompt.args.iter().cloned());
+    apply_materialized_system_prompt(&mut request, &materialized_prompt);
     let entered_worktree = match request.worktree_path.as_deref() {
         Some(path) => match enter_worktree(path) {
             Ok(path) => Some(path),
@@ -158,6 +155,28 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         entered_worktree.as_deref(),
         outcome,
     )
+}
+
+fn apply_materialized_system_prompt(
+    request: &mut rimz::harness::launch::ExecRequest,
+    materialized: &rimz::harness::prompt_compose::MaterializedSystemPrompt,
+) {
+    if !materialized.args.is_empty() {
+        // Materialization already proved that the adapter and matcher exist.
+        let matcher = rimz::agents::find_definition(request.kind.as_str())
+            .and_then(|adapter| {
+                adapter
+                    .spec()
+                    .launch
+                    .preset_arg_matcher(rimz::agents::PresetField::SystemPromptFile)
+            })
+            .expect("materialized prompt args require a validated prompt matcher");
+        matcher.remove_occurrences(request.action.extra_args_mut());
+    }
+    request
+        .action
+        .extra_args_mut()
+        .extend(materialized.args.iter().cloned());
 }
 
 fn settle_after_exit(
@@ -1013,6 +1032,182 @@ fn close_own_pane(globals: &GlobalFlags, session_name: &str) {
             pane = %own,
             error = %err,
             "supervised run wrapper could not close its pane",
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rimz::harness::launch::{
+        AgentProcessStage, ExecAction, ExecIdentity, ExecRequest, ProviderAccountState,
+    };
+    use rimz::harness::prompt_compose::MaterializedSystemPrompt;
+
+    fn request(kind: &str, action: ExecAction) -> ExecRequest {
+        ExecRequest {
+            kind: AgentKind::new_unchecked(kind),
+            action,
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+            provider_account: ProviderAccountState::Unbound,
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: false,
+            exit_on_run_completion: false,
+            identity: ExecIdentity::default(),
+        }
+    }
+
+    fn action_with_args(action: &str, args: Vec<String>) -> ExecAction {
+        match action {
+            "launch" => ExecAction::Launch {
+                prompt: None,
+                extra_args: args,
+            },
+            "resume" => ExecAction::Resume {
+                session_id: "session".to_owned(),
+                extra_args: args,
+            },
+            "fork" => ExecAction::Fork {
+                session_id: "session".to_owned(),
+                extra_args: args,
+            },
+            _ => unreachable!("test action is known"),
+        }
+    }
+
+    #[test]
+    fn materialized_prompt_replaces_raw_prompt_args_for_every_action() {
+        let materialized = MaterializedSystemPrompt {
+            args: vec![
+                "--system-prompt-file".to_owned(),
+                "/runtime/prompt/sys.composed.md".to_owned(),
+            ],
+            env: BTreeMap::new(),
+        };
+        for action in ["launch", "resume", "fork"] {
+            let mut request = request(
+                "claude",
+                action_with_args(
+                    action,
+                    vec![
+                        "--system-prompt-file".to_owned(),
+                        "/raw.md".to_owned(),
+                        "--verbose".to_owned(),
+                    ],
+                ),
+            );
+            apply_materialized_system_prompt(&mut request, &materialized);
+            assert_eq!(
+                request.action.extra_args(),
+                [
+                    "--verbose",
+                    "--system-prompt-file",
+                    "/runtime/prompt/sys.composed.md"
+                ],
+                "{action}"
+            );
+        }
+
+        let mut codex = request(
+            "codex",
+            action_with_args(
+                "resume",
+                vec![
+                    "-c".to_owned(),
+                    "model_instructions_file=/raw.md".to_owned(),
+                ],
+            ),
+        );
+        apply_materialized_system_prompt(
+            &mut codex,
+            &MaterializedSystemPrompt {
+                args: vec![
+                    "-c".to_owned(),
+                    "model_instructions_file=/runtime/prompt/sys.composed.md".to_owned(),
+                ],
+                env: BTreeMap::new(),
+            },
+        );
+        assert_eq!(
+            codex.action.extra_args(),
+            [
+                "-c",
+                "model_instructions_file=/runtime/prompt/sys.composed.md"
+            ]
+        );
+
+        let mut pi = request(
+            "pi",
+            action_with_args(
+                "fork",
+                vec!["--system-prompt".to_owned(), "raw text".to_owned()],
+            ),
+        );
+        apply_materialized_system_prompt(
+            &mut pi,
+            &MaterializedSystemPrompt {
+                args: vec![
+                    "--system-prompt".to_owned(),
+                    "base text\n\nfragment text\n".to_owned(),
+                ],
+                env: BTreeMap::new(),
+            },
+        );
+        assert_eq!(
+            pi.action.extra_args(),
+            ["--system-prompt", "base text\n\nfragment text\n"]
+        );
+    }
+
+    #[test]
+    fn prompt_environment_reaches_qwen_without_entering_argv() {
+        let project = tempfile::tempdir().expect("project");
+        let mut request = request(
+            "qwen",
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        );
+        let materialized = MaterializedSystemPrompt {
+            args: Vec::new(),
+            env: [(
+                "QWEN_SYSTEM_MD".to_owned(),
+                "/runtime/prompt/sys.composed.md".to_owned(),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        apply_materialized_system_prompt(&mut request, &materialized);
+        let provider_argv = rimz::harness::launch::compile_provider_argv(
+            rimz::agents::find_definition("qwen").expect("qwen"),
+            "qwen",
+            &request.action,
+            project.path(),
+        )
+        .expect("compile qwen provider argv");
+        assert!(
+            provider_argv
+                .iter()
+                .all(|arg| !arg.contains("sys.composed.md") && arg != "--system-prompt")
+        );
+        let stage = rimz::harness::launch::compile_agent_process_stage_with_extra_env(
+            project.path(),
+            rimz::config::RtkMode::Off,
+            &request,
+            project.path(),
+            Path::new("/bin/rimz"),
+            &materialized.env,
+        )
+        .expect("compile qwen process");
+        let AgentProcessStage::Ready(process) = stage else {
+            panic!("unbound qwen launch is ready");
+        };
+        assert_eq!(
+            process.env.get("QWEN_SYSTEM_MD").map(String::as_str),
+            Some("/runtime/prompt/sys.composed.md")
         );
     }
 }
