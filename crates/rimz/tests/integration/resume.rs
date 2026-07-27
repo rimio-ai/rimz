@@ -87,6 +87,7 @@ fn resume_argv(kind: &str, id: &str, name: &str) -> Vec<String> {
                 extra_args: Vec::new(),
             },
             system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
             provider_account: ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

@@ -264,6 +264,7 @@ pub struct ResumeSkip {
 pub struct ResumePosture {
     pub args: Vec<String>,
     pub system_prompt_file: Option<PathBuf>,
+    pub append_system_prompt_files: Vec<PathBuf>,
     pub mode: Option<PermissionMode>,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -299,6 +300,7 @@ impl ResumePosture {
         Self {
             args: cell.args.clone(),
             system_prompt_file: cell.system_prompt_file.clone(),
+            append_system_prompt_files: cell.append_system_prompt_files.clone(),
             mode: cell.launch.mode,
             model: cell.launch.model.clone(),
             effort: cell.launch.effort.clone(),
@@ -2369,6 +2371,7 @@ fn candidate_resume_command(
                 extra_args: posture.args.clone(),
             },
             system_prompt_file: posture.system_prompt_file.clone(),
+            append_system_prompt_files: posture.append_system_prompt_files.clone(),
             provider_account: crate::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

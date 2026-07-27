@@ -133,7 +133,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
         presets: super::PresetMatchers {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--thinking"])),
-            system_prompt_file: None,
+            system_prompt_file: Some(super::StaticPresetMatcher::TextFlag(&["--system-prompt"])),
         },
     },
 };

@@ -33,6 +33,7 @@ fn planner_profiles() -> ProfilesConfig {
             effort: None,
             budget: None,
             system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
             args: None,
         },
     );
@@ -68,6 +69,7 @@ fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
         kind: AgentKind::new_unchecked(kind),
         action,
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -332,19 +334,6 @@ mod parse {
     }
 
     #[test]
-    fn removed_append_prompt_flag_is_rejected() {
-        assert_clap_error(
-            &[
-                "rimz",
-                "claude",
-                "--append-system-prompt-file",
-                "/prompt.md",
-            ],
-            clap::error::ErrorKind::UnknownArgument,
-        );
-    }
-
-    #[test]
     fn invalid_supervised_output_combinations_fail_fast() {
         for (argv, output, fragment) in [
             (
@@ -422,6 +411,7 @@ mod parse {
                 extra_args: launch_extra,
             },
             system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
             provider_account: ProviderAccountState::Unbound,
             run_id: Some(
                 "run_0123456789abcdef0123456789abcdef"
@@ -721,6 +711,26 @@ mod launch_options {
             preset.system_prompt_file,
             Some(prompt.canonicalize().unwrap())
         );
+        let fragment = dir.path().join("fragment.md");
+        std::fs::write(&fragment, "shared rules").expect("write fragment");
+        let fragment_path = fragment.to_str().expect("utf8 fragment");
+        let args = parse_agents(&[
+            "rimz",
+            "claude",
+            "hi",
+            "--append-system-prompt-file",
+            fragment_path,
+            "--append-system-prompt-file",
+            fragment_path,
+        ]);
+        let preset = launch_override_preset(&args).expect("resolve fragments");
+        assert_eq!(
+            preset.append_system_prompt_files,
+            [
+                fragment.canonicalize().unwrap(),
+                fragment.canonicalize().unwrap()
+            ]
+        );
 
         let dir_path = dir.path().to_str().expect("utf8 dir path");
         let args = parse_agents(&["rimz", "claude", "hi", "--system-prompt-file", dir_path]);
@@ -772,6 +782,7 @@ mod launch_options {
                 effort: None,
                 budget: None,
                 system_prompt_file: None,
+                append_system_prompt_files: Vec::new(),
                 args: Some("--model raw".to_owned()),
             },
         );
@@ -1330,6 +1341,7 @@ fn bare_exec_args() -> ExecRequest {
             extra_args: Vec::new(),
         },
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,

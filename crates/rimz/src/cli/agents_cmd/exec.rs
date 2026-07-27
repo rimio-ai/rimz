@@ -6,7 +6,7 @@ use std::sync::mpsc;
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the agent launch workspace")?;
-    let request = rimz::harness::launch::decode_exec_request(
+    let mut request = rimz::harness::launch::decode_exec_request(
         &args.kind,
         args.worktree_path.as_deref(),
         &args.request,
@@ -16,6 +16,37 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let run_context = run_exec_context(&request, &invocation)?;
     let launch_identity = exec_launch_identity(&request)?;
     let attach_target = exec_attach_target(&request);
+    let prompt_sources = rimz::harness::prompt_compose::SystemPromptSources {
+        system_prompt_file: request.system_prompt_file.clone(),
+        append_system_prompt_files: request.append_system_prompt_files.clone(),
+    };
+    let materialized_prompt = if prompt_sources.is_empty() {
+        rimz::harness::prompt_compose::MaterializedSystemPrompt::default()
+    } else {
+        let materialized = (|| -> Result<_> {
+            let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+                .context("preparing prompt runtime")?;
+            runtime.ensure_dirs().context("preparing prompt runtime")?;
+            rimz::harness::prompt_compose::materialize_system_prompt(
+                &request.kind,
+                &prompt_sources,
+                &runtime,
+            )
+            .context("materializing system prompt")
+        })();
+        match materialized {
+            Ok(materialized) => materialized,
+            Err(err) => {
+                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+                fail_run_on_exec_precondition(run_context.as_ref());
+                return Err(err);
+            }
+        }
+    };
+    request
+        .action
+        .extra_args_mut()
+        .extend(materialized_prompt.args.iter().cloned());
     let entered_worktree = match request.worktree_path.as_deref() {
         Some(path) => match enter_worktree(path) {
             Ok(path) => Some(path),
@@ -39,12 +70,13 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .clone()
             .unwrap_or_else(|| workspace.worktree_root.clone()),
     };
-    let stage = rimz::harness::launch::compile_agent_process_stage(
+    let stage = rimz::harness::launch::compile_agent_process_stage_with_extra_env(
         &workspace.project_root,
         machine_config.harness.rtk,
         &request,
         &provider_cwd,
         &rimz::proc::rimz_exe(),
+        &materialized_prompt.env,
     );
     let stage = match stage {
         Ok(stage) => stage,

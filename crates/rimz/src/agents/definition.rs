@@ -78,6 +78,9 @@ impl LaunchSpec {
             StaticPresetMatcher::Flag(flags) => {
                 PresetArgMatcher::Flag(flags.iter().map(|flag| (*flag).to_owned()).collect())
             }
+            StaticPresetMatcher::TextFlag(flags) => {
+                PresetArgMatcher::TextFlag(flags.iter().map(|flag| (*flag).to_owned()).collect())
+            }
             StaticPresetMatcher::EnvPathVar(key) => PresetArgMatcher::EnvPathVar((*key).to_owned()),
             StaticPresetMatcher::ConfigKey { flags, key } => PresetArgMatcher::ConfigKey {
                 flags: flags.iter().map(|flag| (*flag).to_owned()).collect(),
@@ -127,7 +130,7 @@ impl LaunchSpec {
                     })?;
                     argv.extend([flag.clone(), format!("{key}={value}")]);
                 }
-                PresetArgMatcher::EnvPathVar(_) => {
+                PresetArgMatcher::TextFlag(_) | PresetArgMatcher::EnvPathVar(_) => {
                     return Err(PresetErr::UnsupportedField {
                         agent: agent_kind,
                         field: field_name,
@@ -233,6 +236,7 @@ impl PresetMatchers {
 #[derive(Clone, Copy, Debug)]
 pub enum StaticPresetMatcher {
     Flag(&'static [&'static str]),
+    TextFlag(&'static [&'static str]),
     EnvPathVar(&'static str),
     ConfigKey {
         flags: &'static [&'static str],

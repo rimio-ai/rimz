@@ -50,6 +50,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         kind: AgentKind::new_unchecked(kind),
         action,
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -127,106 +128,6 @@ fn process_compiler_composes_adapter_identity_and_rtk_environment() {
             .get(crate::harness::run::ENV_RTK)
             .map(String::as_str),
         Some("on")
-    );
-}
-
-#[test]
-fn process_stage_applies_prompt_path_env_without_putting_prompt_text_in_argv() {
-    let project = tempfile::tempdir().expect("project");
-    let mut request = request(
-        "qwen",
-        ExecAction::Launch {
-            prompt: None,
-            extra_args: Vec::new(),
-        },
-    );
-    let prompt_path = "/home/user/prompts/qwen.md";
-    request.system_prompt_file = Some(PathBuf::from(prompt_path));
-
-    let AgentProcessStage::Ready(process) = compile_agent_process_stage(
-        project.path(),
-        crate::config::RtkMode::Auto,
-        &request,
-        project.path(),
-        Path::new("/bin/rimz"),
-    )
-    .expect("qwen process") else {
-        panic!("unbound qwen launch is ready");
-    };
-
-    assert_eq!(
-        process.env.get("QWEN_SYSTEM_MD").map(String::as_str),
-        Some(prompt_path)
-    );
-    assert!(
-        process
-            .provider_argv
-            .iter()
-            .all(|arg| arg != "--system-prompt" && !arg.contains(prompt_path))
-    );
-    assert!(
-        process
-            .argv
-            .iter()
-            .any(|arg| arg == &format!("QWEN_SYSTEM_MD={prompt_path}"))
-    );
-}
-
-#[test]
-fn process_compilation_passes_the_user_prompt_path_to_argv_adapters() {
-    let project = tempfile::tempdir().expect("project");
-    let prompt_path = PathBuf::from("/home/user/prompts/system.md");
-
-    let mut claude = request(
-        "claude",
-        ExecAction::Resume {
-            session_id: "sess-1".to_owned(),
-            extra_args: argv(&["--system-prompt-file", "/raw.md", "--debug"]),
-        },
-    );
-    claude.system_prompt_file = Some(prompt_path.clone());
-    let process = compile_agent_process(
-        project.path(),
-        crate::config::RtkMode::Auto,
-        &claude,
-        project.path(),
-    )
-    .expect("claude process");
-    assert_eq!(
-        process.provider_argv,
-        argv(&[
-            "claude",
-            "--resume",
-            "sess-1",
-            "--debug",
-            "--system-prompt-file",
-            "/home/user/prompts/system.md",
-        ])
-    );
-
-    let mut codex = request(
-        "codex",
-        ExecAction::Launch {
-            prompt: None,
-            extra_args: argv(&["-c", "model_instructions_file=/raw.md", "--search"]),
-        },
-    );
-    codex.system_prompt_file = Some(prompt_path);
-    let process = compile_agent_process(
-        project.path(),
-        crate::config::RtkMode::Auto,
-        &codex,
-        project.path(),
-    )
-    .expect("codex process");
-    assert_eq!(
-        process.provider_argv,
-        argv(&[
-            "codex",
-            "--search",
-            "-c",
-            "model_instructions_file=/home/user/prompts/system.md",
-        ])
     );
 }
 
@@ -325,6 +226,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
             extra_args,
         },
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         provider_account: ProviderAccountState::Unbound,
         run_id: Some(
             "run_0123456789abcdef0123456789abcdef"

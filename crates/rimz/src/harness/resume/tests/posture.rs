@@ -158,6 +158,27 @@ fn a_profile_prompt_file_that_vanished_degrades_instead_of_refusing() {
 }
 
 #[test]
+fn a_profile_prompt_fragment_that_vanished_degrades_instead_of_refusing() {
+    let base = tempfile::NamedTempFile::new().expect("base prompt");
+    let dir = tempfile::tempdir().expect("temp dir");
+    let profiles = profiles(
+        "planner",
+        Profile {
+            system_prompt_file: Some(base.path().to_path_buf()),
+            append_system_prompt_files: vec![dir.path().join("missing.md")],
+            ..profile("codex")
+        },
+    );
+
+    let posture = posture_for("codex", Some("planner"), None, &profiles);
+
+    assert!(matches!(
+        posture.degraded,
+        Some(PostureDegrade::PromptFileMissing { .. })
+    ));
+}
+
+#[test]
 fn unsupported_prompt_replacement_is_reported_as_a_resume_skip() {
     let prompt = tempfile::NamedTempFile::new().expect("temp prompt file");
     let profiles = profiles(
