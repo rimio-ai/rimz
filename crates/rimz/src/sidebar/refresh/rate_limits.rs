@@ -140,7 +140,7 @@ pub(crate) fn project_window(cached: RateLimitWindow, now: Timestamp) -> RateLim
 
 /// Whether the cached account reading has aged past its longest freshness
 /// ceiling. A dated duration or named quota supplies its own deadline. If every
-/// window is undated, the newest observation may live for at most the longest
+/// window is undated, the newest observation may live for at most the shortest
 /// reported duration. Past that point RimZ no longer knows the account's budget
 /// shape, so display switches to unknown bars until a provider reading refreshes
 /// it while the cache remains ground truth for persistence.
@@ -168,7 +168,7 @@ fn longest_cached_window_expired(
             let duration_mins = prev
                 .values()
                 .filter_map(|window| window.duration_mins)
-                .max()?;
+                .min()?;
             observed_at
                 .checked_add(SignedDuration::from_mins(i64::from(duration_mins)))
                 .ok()
