@@ -231,7 +231,10 @@ authoritative drop against stamped best-effort truth must persist through the
 two-minute refill confirmation before it replaces the higher reading. Newer
 authoritative truth still replaces an authoritative, unprovenanced, or
 epoch-less prior immediately, and consumers only mirror the producer's
-persisted confirmation state.
+persisted confirmation state. An exact-account entry may additionally retain
+its authoritative windows for bound managed-launch controls; that copy is not
+read by the sidebar or `rimz providers`, so a scope-only live reading cannot
+acquire the cached credential identity.
 
 ### Sidecars
 

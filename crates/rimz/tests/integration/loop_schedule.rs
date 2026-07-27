@@ -892,6 +892,7 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
                             },
                         ],
                     },
+                    bound_limits: None,
                     pending: Vec::new(),
                     unknown_since_ms: None,
                 },

@@ -46,9 +46,16 @@ fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
                     windows: vec![
                         window(now, Some(20), 3_600, Some(300)),
                         window(now, Some(50), 2 * 86_400, Some(7 * 24 * 60)),
-                        window(now, Some(100), 20 * 86_400, Some(30 * 24 * 60)),
+                        window(now, Some(20), 20 * 86_400, Some(30 * 24 * 60)),
                     ],
                 },
+                bound_limits: Some(AgentRateLimits {
+                    windows: vec![
+                        window(now, Some(20), 3_600, Some(300)),
+                        window(now, Some(50), 2 * 86_400, Some(7 * 24 * 60)),
+                        window(now, Some(100), 20 * 86_400, Some(30 * 24 * 60)),
+                    ],
+                }),
                 pending: Vec::new(),
                 unknown_since_ms: None,
             },
