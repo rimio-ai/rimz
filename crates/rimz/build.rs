@@ -321,6 +321,8 @@ fn resolve_raw_json() -> String {
 
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let generated = manifest.join(GENERATED_SNAPSHOT);
+    // The snapshot is optional, so watch its tracked directory: Cargo treats missing
+    // watched paths as dirty, and pricing/.gitignore preserves the directory in clean checkouts.
     println!("cargo:rerun-if-changed={PRICING_DIR}");
     match fs::read_to_string(&generated) {
         Ok(raw) => raw,
