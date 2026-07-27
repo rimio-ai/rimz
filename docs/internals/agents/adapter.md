@@ -66,7 +66,6 @@ The launch block is declarative on purpose. Because permission argv, resume shap
 | `daemon_hooked_sessions` | hooks fire from a per-user daemon that outlives any one conversation |
 | `direct_account_usage` | an authoritative identity-bearing account-usage probe exists ([providers.md](./providers.md#refresh-cadences)) |
 | `same_pane_session` | which co-resident root session owns a pane: `KeepPrimary` or `FollowLatest` |
-| `realtime_usage` | whether a fresh realtime windows reading outranks the direct account query |
 | `remote_control` | which remote-control surfaces the provider hosts (pane sessions, background sessions) |
 
 ### The traits: behavior

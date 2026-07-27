@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 
 #[cfg(test)]
 use crate::agents::ProviderAccountScope;
@@ -138,11 +138,12 @@ pub(crate) fn project_window(cached: RateLimitWindow, now: Timestamp) -> RateLim
     cached.projected_at(now)
 }
 
-/// Whether the cached account reading has aged past its longest dated window.
-/// At that point RimZ no longer knows the account's budget shape: the short
-/// window may have refilled several times, and the long cap may have refilled
-/// too. The cache remains ground truth for persistence, but display switches to
-/// unknown bars until a provider reading refreshes it.
+/// Whether the cached account reading has aged past its longest freshness
+/// ceiling. A dated duration or named quota supplies its own deadline. If every
+/// window is undated, the newest observation may live for at most the longest
+/// reported duration. Past that point RimZ no longer knows the account's budget
+/// shape, so display switches to unknown bars until a provider reading refreshes
+/// it while the cache remains ground truth for persistence.
 fn longest_cached_window_expired(
     prev: &BTreeMap<RateLimitWindowKey, RateLimitWindow>,
     now: Timestamp,
@@ -158,6 +159,19 @@ fn longest_cached_window_expired(
                 .filter(|window| window.scope.is_some())
                 .filter_map(|window| window.resets_at)
                 .max()
+        })
+        .or_else(|| {
+            let observed_at = prev
+                .values()
+                .filter_map(|window| window.observed_at)
+                .max()?;
+            let duration_mins = prev
+                .values()
+                .filter_map(|window| window.duration_mins)
+                .max()?;
+            observed_at
+                .checked_add(SignedDuration::from_mins(i64::from(duration_mins)))
+                .ok()
         })
         .is_some_and(|resets_at| resets_at <= now)
 }

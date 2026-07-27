@@ -368,16 +368,6 @@ fn capability_honesty() {
             );
         }
 
-        if capabilities.realtime_usage.windows_defer_to_fresh_realtime {
-            assert!(
-                adapter
-                    .spec()
-                    .concern_coverage(IntegrationConcern::RichContext)
-                    .is_wired(),
-                "{kind} realtime account-usage channel requires wired RichContext coverage"
-            );
-        }
-
         assert_eq!(
             capabilities.local_session_discovery,
             conformance.local_session.is_some(),

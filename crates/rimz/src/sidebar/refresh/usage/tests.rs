@@ -32,7 +32,6 @@ fn account_usage_completion_decision_matrix() {
         AccountUsageCompletionDecision {
             publish_realtime: false,
             run_direct: true,
-            merge_direct_windows: true,
         }
     );
     assert_eq!(
@@ -40,7 +39,6 @@ fn account_usage_completion_decision_matrix() {
         AccountUsageCompletionDecision {
             publish_realtime: true,
             run_direct: false,
-            merge_direct_windows: false,
         }
     );
 
@@ -51,7 +49,6 @@ fn account_usage_completion_decision_matrix() {
         AccountUsageCompletionDecision {
             publish_realtime: true,
             run_direct: true,
-            merge_direct_windows: false,
         }
     );
 
@@ -62,7 +59,6 @@ fn account_usage_completion_decision_matrix() {
         AccountUsageCompletionDecision {
             publish_realtime: true,
             run_direct: true,
-            merge_direct_windows: false,
         }
     );
 
@@ -73,7 +69,6 @@ fn account_usage_completion_decision_matrix() {
         AccountUsageCompletionDecision {
             publish_realtime: true,
             run_direct: true,
-            merge_direct_windows: true,
         }
     );
 
@@ -90,7 +85,6 @@ fn account_usage_completion_decision_matrix() {
         AccountUsageCompletionDecision {
             publish_realtime: true,
             run_direct: true,
-            merge_direct_windows: true,
         }
     );
 }
@@ -125,10 +119,9 @@ fn forced_account_usage_refresh_invalidates_throttle_before_direct_claim() {
     assert!(refresh_account_usage_now_with(
         &runtime,
         "claude",
-        |runtime, kind, merge_windows| {
+        |runtime, kind| {
             called = true;
             assert_eq!(kind, "claude");
-            assert!(merge_windows);
             let cache = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
             let entry = &cache.entries[kind];
             assert_eq!(entry.oauth_read_at_ms, 0);
@@ -158,7 +151,7 @@ fn account_usage_completion_publishes_complete_realtime_without_fallback() {
     realtime.rate_limits = Some(usage_windows(12));
 
     let wrote =
-        complete_realtime_account_usage_with(&runtime, "codex", true, Some(realtime), |_, _, _| {
+        complete_realtime_account_usage_with(&runtime, "codex", true, Some(realtime), |_, _| {
             unreachable!("complete realtime usage needs no direct fallback")
         });
 
@@ -187,8 +180,7 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
         "codex",
         true,
         Some(realtime),
-        |runtime, kind, merge_windows| {
-            assert!(merge_windows);
+        |runtime, kind| {
             publish_account_usage_snapshot(
                 runtime,
                 kind,
@@ -197,7 +189,6 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
                     rate_limits: Some(usage_windows(34)),
                     ..Default::default()
                 },
-                merge_windows,
             )
         },
     );
@@ -223,7 +214,7 @@ fn account_usage_completion_offline_skips_publication_and_probe() {
         "codex",
         false,
         Some(complete_realtime()),
-        |_, _, _| {
+        |_, _| {
             called.set(true);
             true
         },
@@ -239,49 +230,41 @@ fn account_usage_completion_offline_skips_publication_and_probe() {
 }
 
 #[test]
-fn fresh_realtime_claude_windows_defer_direct_window_publication() {
-    let mut snapshot = SidebarSnapshot::build_with_agents(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/usage-refresh")),
-        vec![crate::testkit::agent_state(
+fn fresh_realtime_claude_windows_do_not_suppress_authoritative_publication() {
+    let (_dir, runtime) = account_usage_runtime();
+    let future = Timestamp::from_second(4_000_000_000).unwrap();
+    let mut live = snapshot_with_panels(
+        runtime.workspace_id.clone(),
+        vec![provider_panel(
             "claude",
-            "one",
-            Timestamp::now(),
+            vec![RateLimitWindow {
+                duration_mins: Some(300),
+                used_percentage: Some(12),
+                resets_at: Some(future),
+                observed_at: Some(Timestamp::now()),
+                ..Default::default()
+            }],
         )],
-        Timestamp::now(),
     );
-    snapshot.agents[0].context = Some(crate::agents::AgentContext::new("claude", snapshot.now));
-    snapshot.agents[0].context.as_mut().unwrap().rate_limits = Some(AgentRateLimits {
-        windows: vec![RateLimitWindow {
-            duration_mins: Some(300),
-            used_percentage: Some(12),
-            resets_at: snapshot
-                .now
-                .checked_add(jiff::SignedDuration::from_hours(1))
-                .ok(),
-            ..Default::default()
-        }],
-    });
-    assert!(!merge_windows_hint(&snapshot, "claude"));
-    assert!(merge_windows_hint(&snapshot, "codex"));
-}
+    super::super::apply_rate_limit_cache(&mut live, &runtime, true);
 
-#[test]
-fn realtime_window_fallback_preserves_explicit_statusline_defer() {
-    assert!(!direct_windows_should_publish(false, None, true));
-    assert!(direct_windows_should_publish(false, None, false));
-    assert!(direct_windows_should_publish(
-        false,
-        Some(&AccountUsageSnapshot::default()),
-        true,
-    ));
-    assert!(!direct_windows_should_publish(
-        false,
-        Some(&AccountUsageSnapshot {
-            rate_limits: Some(AgentRateLimits::default()),
+    assert!(publish_account_usage_snapshot(
+        &runtime,
+        "claude",
+        ProviderAccountScope::KindWide,
+        AccountUsageSnapshot {
+            rate_limits: Some(usage_windows(36)),
             ..Default::default()
-        }),
-        true,
+        },
     ));
+
+    assert_eq!(
+        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries["claude"]
+            .limits
+            .windows[0]
+            .used_percentage,
+        Some(36)
+    );
 }
 
 fn owned_usage_runtime(owner: &str) -> (tempfile::TempDir, RuntimePaths) {
@@ -361,7 +344,6 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
                 ..Default::default()
             },
         },
-        true,
     ));
     assert_eq!(windows(&runtime)[0].used_percentage, Some(12));
     assert_eq!(
@@ -378,7 +360,6 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
         "antigravity",
         claim(&runtime),
         crate::agents::AccountUsageProbe::Failed(usage_identity(Some("owner-b"))),
-        true,
     ));
     assert!(windows(&runtime).is_empty());
 
@@ -389,7 +370,6 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
             "antigravity",
             claim(&runtime),
             crate::agents::AccountUsageProbe::Failed(failed_identity),
-            true,
         ));
         assert_eq!(windows(&runtime)[0].used_percentage, Some(88));
     }
@@ -406,7 +386,6 @@ fn unknown_owner_source_reuses_same_scope_owner_until_ttl() {
             identity: usage_identity(Some("owner-a")),
             snapshot: AccountUsageSnapshot::default(),
         },
-        true,
     ));
 
     assert_eq!(
@@ -457,13 +436,13 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
     let snapshot = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
     let mut spawn_attempts = 0;
 
-    refresh_account_usage_with(&snapshot, &runtime, |_, _, _, _| {
+    refresh_account_usage_with(&snapshot, &runtime, |_, _, _| {
         spawn_attempts += 1;
         true
     });
 
     assert_eq!(spawn_attempts, 0);
-    assert!(!merge_account_usage_if_due(&runtime, "claude", true));
+    assert!(!merge_account_usage_if_due(&runtime, "claude"));
     assert_eq!(
         super::super::credits::read_credits_cache(&runtime.shared_credits_path()).entries["claude"]
             .direct_query_claim,
@@ -513,7 +492,7 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
     let snapshot = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
     let mut spawn_attempts = 0;
 
-    refresh_account_usage_with(&snapshot, &runtime, |_, _, _, _| {
+    refresh_account_usage_with(&snapshot, &runtime, |_, _, _| {
         spawn_attempts += 1;
         true
     });
@@ -536,7 +515,7 @@ fn metered_adapter_without_usage_source_creates_no_claim_or_helper() {
     runtime.ensure_dirs().unwrap();
     let snapshot = snapshot_with_panels(workspace, vec![provider_panel("cursor", Vec::new())]);
     let mut spawn_attempts = 0;
-    refresh_account_usage_with(&snapshot, &runtime, |_, _, _, _| {
+    refresh_account_usage_with(&snapshot, &runtime, |_, _, _| {
         spawn_attempts += 1;
         true
     });
@@ -573,7 +552,7 @@ fn failed_spawn_cancels_claim_for_immediate_retry() {
     );
     let snapshot = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
     let mut spawn_attempts = 0;
-    refresh_account_usage_with(&snapshot, &runtime, |_, _, _, _| {
+    refresh_account_usage_with(&snapshot, &runtime, |_, _, _| {
         spawn_attempts += 1;
         false
     });
@@ -624,7 +603,7 @@ fn simultaneous_schedulers_spawn_once_per_provider_kind() {
     std::thread::scope(|scope| {
         for _ in 0..2 {
             scope.spawn(|| {
-                refresh_account_usage_with(&snapshot, &runtime, |_, _, _, _| {
+                refresh_account_usage_with(&snapshot, &runtime, |_, _, _| {
                     spawns.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     true
                 });

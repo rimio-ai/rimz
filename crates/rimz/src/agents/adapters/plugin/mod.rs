@@ -28,8 +28,8 @@ use super::account::AccountProbe;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
     HookCoverage, LaunchPermissionArgs, LaunchSpec, LifecycleAnnotations, PlanLabel,
-    PresetMatchers, PromptStyle, RealtimeUsageChannel, RemoteControlCapability,
-    StaticPresetMatcher, ThreadKey, ToolClassification, UserCoverage,
+    PresetMatchers, PromptStyle, RemoteControlCapability, StaticPresetMatcher, ThreadKey,
+    ToolClassification, UserCoverage,
 };
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
@@ -420,9 +420,6 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
             daemon_hooked_sessions: false,
             direct_account_usage: manifest.probes.account.is_some(),
             same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
-            realtime_usage: RealtimeUsageChannel {
-                windows_defer_to_fresh_realtime: false,
-            },
             remote_control: RemoteControlCapability {
                 pane_sessions: false,
                 background_sessions: false,

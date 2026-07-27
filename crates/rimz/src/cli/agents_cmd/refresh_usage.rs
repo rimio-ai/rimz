@@ -7,7 +7,7 @@
 //! single-flighted and folded into the shared `credits.json`/`rate_limits.json`
 //! caches. An adapter may expose a pollable realtime account channel; the helper
 //! reads it first, then runs the direct channel on its own shared cadence. When
-//! direct-query windows are requested, they merge after the realtime fold so a
+//! direct-query windows are available, they merge after the realtime fold so a
 //! fresh credential read can replace a stale warm realtime process.
 //! Best-effort and quiet: every provider-side failure exits successfully with
 //! the shared cache recording the retry state.
@@ -29,10 +29,6 @@ pub(super) struct RefreshUsageArgs {
     /// Workspace whose runtime cache the account usage is written into.
     #[arg(long)]
     workspace_id: String,
-    /// Also merge included-budget windows from the OAuth read into the shared
-    /// rate-limit cache. Unset when a fresh realtime reading already owns them.
-    #[arg(long)]
-    merge_windows: bool,
     /// Internal nonce of the producer's durable refresh claim.
     #[arg(long, hide = true)]
     claim_id: uuid::Uuid,
@@ -42,8 +38,7 @@ pub(super) fn run_refresh_usage(args: RefreshUsageArgs, _globals: &GlobalFlags) 
     let workspace_id: WorkspaceId = args.workspace_id.parse().context("parsing workspace id")?;
     let runtime = runtime_paths_for(workspace_id)?;
 
-    let wrote =
-        refresh_claimed_account_usage(&runtime, &args.kind, args.claim_id, args.merge_windows);
+    let wrote = refresh_claimed_account_usage(&runtime, &args.kind, args.claim_id);
     if wrote {
         let _ = rimz::store::wakeup::wake_sidebars(&runtime);
     }
