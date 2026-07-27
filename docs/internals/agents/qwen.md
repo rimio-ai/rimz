@@ -24,7 +24,7 @@ Qwen Code is a standalone, eagerly registered adapter. RimZ installs native hook
 
 ## Launch and resume
 
-RimZ preserves Qwen's configured model by default because `security.auth.selectedType` can route to provider-specific catalogs; an `agents.toml` model preset adds `--model` explicitly. For `system-prompt-file`, provider-process compilation sets `QWEN_SYSTEM_MD` to the user's resolved absolute path. Qwen reads that file as the verbatim replacement base prompt, so prompt contents never enter process argv. A user-supplied `--system-prompt` in raw profile `args` retains Qwen's higher CLI precedence and deliberately bypasses the typed file replacement. Manual compaction sends `/compress` (`/summarize` is Qwen's alias).
+RimZ preserves Qwen's configured model by default because `security.auth.selectedType` can route to provider-specific catalogs; an `agents.toml` model preset adds `--model` explicitly. For `system-prompt-file`, the exec wrapper sets `QWEN_SYSTEM_MD` to the user's resolved absolute base path when there are no fragments and to a content-addressed composed artifact when fragments exist. Qwen reads that file as the verbatim replacement base prompt, so prompt contents never enter process argv. A user-supplied `--system-prompt` in raw profile `args` retains Qwen's higher CLI precedence and deliberately bypasses the typed file replacement. Manual compaction sends `/compress` (`/summarize` is Qwen's alias).
 
 ## Context and transcript
 

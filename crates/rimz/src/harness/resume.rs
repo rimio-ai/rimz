@@ -381,6 +381,19 @@ pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -
             },
         );
     }
+    if let Err(err) = crate::harness::plan::validate_system_prompt_support(
+        &cell,
+        find_definition(cell.kind.as_str()),
+    ) {
+        return ResumePosture::degrade(
+            request.stamped_mode,
+            request.kind,
+            PostureDegrade::PromptUnsupported {
+                profile: name.to_owned(),
+                reason: err.to_string(),
+            },
+        );
+    }
     let layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(cell.clone()));
     if let Err(err) = crate::harness::plan::validate_profile_prompt_files(&layout) {
         return ResumePosture::degrade(
@@ -392,10 +405,7 @@ pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -
             },
         );
     }
-    if let Err(err) = crate::harness::plan::validate_system_prompt_support(
-        &cell,
-        find_definition(cell.kind.as_str()),
-    ) {
+    if let Err(err) = crate::harness::plan::validate_system_prompt_text(&cell) {
         return ResumePosture::degrade(
             request.stamped_mode,
             request.kind,

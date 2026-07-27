@@ -455,6 +455,7 @@ fn finalize_agent_cell(
     }
     validate_system_prompt_support(cell, adapter)?;
     validate_agent_prompt_files(cell)?;
+    validate_system_prompt_text(cell)?;
     cell.args.extend(options.passthrough.iter().cloned());
     if let Some(budget) = options.budget {
         cell.launch.budget = Some(budget.to_string());
@@ -582,11 +583,6 @@ pub fn validate_system_prompt_support(
     let adapter = adapter.ok_or_else(|| LaunchFinalizeError::UnknownAdapter {
         kind: cell.kind.to_string(),
     })?;
-    if cell.system_prompt_file.is_none() {
-        return Err(LaunchFinalizeError::MissingSystemPromptBase {
-            agent: adapter.spec().kind,
-        });
-    }
     if adapter
         .spec()
         .launch
@@ -596,6 +592,20 @@ pub fn validate_system_prompt_support(
         return Err(LaunchFinalizeError::UnsupportedSystemPrompt {
             agent: adapter.spec().kind,
         });
+    }
+    if cell.system_prompt_file.is_none() {
+        return Err(LaunchFinalizeError::MissingSystemPromptBase {
+            agent: adapter.spec().kind,
+        });
+    }
+    Ok(())
+}
+
+pub fn validate_system_prompt_text(
+    cell: &AgentCell,
+) -> std::result::Result<(), LaunchFinalizeError> {
+    if cell.system_prompt_file.is_none() && cell.append_system_prompt_files.is_empty() {
+        return Ok(());
     }
     crate::harness::prompt_compose::validate_text_prompt_size(
         &cell.kind,
@@ -847,9 +857,12 @@ pub fn compile_layout_panes(
     layout: &LayoutSpec,
     params: LayoutPaneParams<'_>,
 ) -> Result<LayoutPanes> {
-    validate_profile_prompt_files(layout)?;
     for cell in layout.agent_cells() {
         validate_system_prompt_support(cell, crate::agents::find_definition(cell.kind.as_str()))?;
+    }
+    validate_profile_prompt_files(layout)?;
+    for cell in layout.agent_cells() {
+        validate_system_prompt_text(cell)?;
     }
     let agent_count = layout.agent_cells().count();
     if let Some(seeds) = params.resume_seeds
