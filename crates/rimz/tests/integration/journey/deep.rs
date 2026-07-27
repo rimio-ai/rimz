@@ -691,8 +691,16 @@ fn real_agent_room(env: &Env, agent_session: &str) -> (PathBuf, String, String, 
     std::fs::copy("/bin/sh", &agent).expect("copy steer agent shell");
     let server = TmuxServerGuard::with_dir(socket.clone(), server_dir);
     let session = workspace_session(env);
-    let script =
-        "printf 'READY\\n'; IFS= read -r line; printf 'SUBMITTED:%s\\n' \"$line\"; sleep 30";
+    // The default human sender envelope contributes three newline-terminated
+    // header lines. Consume those first so only the discrete Enter after the
+    // bracketed paste can finish the body read and produce SUBMITTED.
+    let script = "printf 'READY\\n'; \
+        IFS= read -r type; \
+        IFS= read -r from; \
+        IFS= read -r content; \
+        IFS= read -r line; \
+        printf 'SUBMITTED:%s\\n' \"$line\"; \
+        sleep 30";
     tmux(
         &socket,
         &[
