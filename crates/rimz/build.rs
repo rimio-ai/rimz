@@ -29,6 +29,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 const GENERATED_SNAPSHOT: &str = "pricing/litellm-pricing.json";
+const PRICING_DIR: &str = "pricing";
 const THEME_CATALOG_DIR: &str = "themes/alacritty";
 const PRESENCE_PLUGIN_ENV: &str = "RIMZ_EMBED_PRESENCE_PLUGIN";
 const BUILD_PROFILE_OVERRIDE_ENV: &str = "RIMZ_BUILD_PROFILE_OVERRIDE";
@@ -320,10 +321,7 @@ fn resolve_raw_json() -> String {
 
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let generated = manifest.join(GENERATED_SNAPSHOT);
-    // Register the path even before its first generation: pricing-refresh
-    // builds this helper binary, then creates the snapshot, so the next build
-    // must replace that run's empty embed.
-    println!("cargo:rerun-if-changed={}", generated.display());
+    println!("cargo:rerun-if-changed={PRICING_DIR}");
     match fs::read_to_string(&generated) {
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => "{}".to_owned(),

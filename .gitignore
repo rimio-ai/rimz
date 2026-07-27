@@ -32,9 +32,6 @@ flamegraph.svg
 coverage/
 lcov.info
 
-# Generated pricing snapshot
-/crates/rimz/pricing/litellm-pricing.json
-
 # Agent Harness
 /blackboard.md
 /*-notes.md
