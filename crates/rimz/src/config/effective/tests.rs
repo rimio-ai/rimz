@@ -14,6 +14,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         effort: None,
         budget: None,
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         args: args.map(ToOwned::to_owned),
     }
 }
@@ -63,6 +64,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
         effort: None,
         budget: None,
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         args: None,
     }
 }

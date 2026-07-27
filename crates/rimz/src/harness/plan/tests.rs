@@ -19,6 +19,7 @@ fn role_binding(role: &str) -> RoleBinding {
         effort: None,
         budget: None,
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         args: None,
     }
 }
@@ -28,6 +29,7 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
         kind: AgentKind::new_unchecked("claude"),
         args: Vec::new(),
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         launch: LaunchParams {
             profile: role.map(|role| format!("{role}-profile")),
             role: role.map(ToOwned::to_owned),
@@ -177,6 +179,7 @@ fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&s
         kind: AgentKind::new_unchecked(kind),
         args: args.iter().map(|value| (*value).to_owned()).collect(),
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         launch: LaunchParams {
             profile: Some(format!("{kind}-coder")),
             model: model.map(str::to_owned),
@@ -218,6 +221,7 @@ fn configured_profile(
         effort: effort.map(str::to_owned),
         budget: None,
         system_prompt_file,
+        append_system_prompt_files: Vec::new(),
         args: args.map(str::to_owned),
     }
 }
@@ -344,6 +348,62 @@ fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
         err.to_string(),
         "droid does not support config key `system-prompt-file` / flag `--system-prompt-file`; remove it or put provider-specific flags in `args`"
     );
+}
+
+#[test]
+fn cli_fragments_replace_profile_list_and_require_a_base() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let base = dir.path().join("base.md");
+    let profile_fragment = dir.path().join("profile.md");
+    let cli_fragment = dir.path().join("cli.md");
+    for path in [&base, &profile_fragment, &cli_fragment] {
+        std::fs::write(path, path.display().to_string()).expect("write prompt");
+    }
+    let mut machine = MachineConfig::default();
+    let mut profile = configured_profile("claude", None, None, None, Some(base), None);
+    profile.append_system_prompt_files = vec![profile_fragment];
+    machine
+        .agents
+        .profiles
+        .0
+        .insert("planner".to_owned(), profile);
+    let launch = effective_launch(&machine, dir.path());
+    let mut resolved =
+        resolve_launch(&launch, &machine.agents.commands, Some("planner"), None).expect("resolve");
+    finalize(
+        &mut resolved.layout,
+        &crate::agents::LaunchPreset {
+            append_system_prompt_files: vec![cli_fragment.clone()],
+            ..Default::default()
+        },
+        &[],
+    )
+    .expect("finalize");
+    assert_eq!(
+        resolved
+            .layout
+            .agent_cells()
+            .next()
+            .expect("cell")
+            .append_system_prompt_files,
+        [cli_fragment]
+    );
+
+    let mut cell = preset_cell("claude", &[], None, None);
+    let Cell::Agent(cell) = &mut cell else {
+        unreachable!()
+    };
+    cell.append_system_prompt_files = vec![dir.path().join("cli.md")];
+    let err = finalize(
+        &mut LayoutSpec::single(Cell::Agent(cell.clone())),
+        &Default::default(),
+        &[],
+    )
+    .expect_err("fragment without base");
+    assert!(matches!(
+        err,
+        LaunchFinalizeError::MissingSystemPromptBase { .. }
+    ));
 }
 
 #[test]
@@ -564,6 +624,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
             kind: AgentKind::new_unchecked("codex"),
             args,
             system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
                 mode,
@@ -655,6 +716,7 @@ fn default_launch_models_stamp_only_cells_without_models() {
         kind: AgentKind::new_unchecked("codex"),
         args: vec!["--model".to_owned(), "o3".to_owned()],
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         launch: LaunchParams {
             model: Some("o3".to_owned()),
             ..Default::default()
@@ -1158,6 +1220,7 @@ fn single_role_team_launch_takes_over_caller_pane() {
             effort: None,
             budget: None,
             system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
             args: None,
         },
     )]));
@@ -1204,6 +1267,7 @@ fn launch_request_names_and_metadata() {
         kind: AgentKind::new_unchecked("codex"),
         args: Vec::new(),
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         launch: LaunchParams {
             profile: Some("codex-coder".to_owned()),
             mode: Some(PermissionMode::Yolo),
@@ -1521,6 +1585,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         kind: AgentKind::new_unchecked("claude"),
         args: Vec::new(),
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         launch: LaunchParams::default(),
     });
     let launch = AgentLaunchIdentity {
@@ -1608,6 +1673,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
         kind: AgentKind::new_unchecked("claude"),
         args: vec!["--profile-declared".to_owned()],
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         launch: LaunchParams {
             profile: Some("new-profile".to_owned()),
             role: Some("new-role".to_owned()),

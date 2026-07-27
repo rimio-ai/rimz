@@ -170,6 +170,7 @@ mod tests {
                 effort: Some("high".to_owned()),
                 mode: Some("auto".to_owned()),
                 system_prompt_file: Some("planner.md".into()),
+                append_system_prompt_files: Vec::new(),
             }],
             valid: true,
             error: None,

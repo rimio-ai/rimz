@@ -29,14 +29,16 @@
 
 [agents.profiles]
 # Profiles are named main agents addressed as `@<profile>`. `agent` names a
-# built-in kind or another profile; the nearest profile wins for every field,
-# including `args` (replace, not append). A profile named like a kind overrides
+# built-in kind or another profile; the nearest profile wins for every field
+# except prompt fragments, which concatenate parent-first. `args` replaces.
+# A profile named like a kind overrides
 # bare kind cells and virtual cells such as `claude-auto` / `claude-plan`.
 ## [agents.profiles.claude-slim]
 ## agent = "claude"
 ## effort = "low"
 ## budget = "5"                       # session cap; use "20/day" for a local-calendar-day cap
 ## system-prompt-file = "~/.config/rimz/prompts/slim.md"
+## append-system-prompt-files = ["~/.config/rimz/prompts/rust.md"]
 ## args = "--max-turns 4"
 
 [agents.commands]

@@ -71,8 +71,6 @@ pub enum AgentProcessCompileErr {
     NoFork { kind: String },
     #[error("agent `{kind}` produced an empty launch command")]
     EmptyCommand { kind: String },
-    #[error("agent `{kind}` does not support system prompt replacement")]
-    UnsupportedSystemPrompt { kind: String },
     #[error(transparent)]
     Trust(#[from] crate::trust::TrustErr),
     #[error(
@@ -380,6 +378,8 @@ pub struct ExecRequest {
     pub action: ExecAction,
     #[serde(default)]
     pub system_prompt_file: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub append_system_prompt_files: Vec<PathBuf>,
     #[serde(default)]
     pub provider_account: ProviderAccountState,
     pub run_id: Option<RunId>,
@@ -467,14 +467,23 @@ pub fn compile_agent_process(
     request: &ExecRequest,
     cwd: &Path,
 ) -> AgentProcessResult<CompiledAgentProcess> {
+    compile_agent_process_with_extra_env(project_root, rtk, request, cwd, &BTreeMap::new())
+}
+
+fn compile_agent_process_with_extra_env(
+    project_root: &Path,
+    rtk: crate::config::RtkMode,
+    request: &ExecRequest,
+    cwd: &Path,
+    extra_env: &BTreeMap<String, String>,
+) -> AgentProcessResult<CompiledAgentProcess> {
     let kind = request.kind.as_str();
     let adapter = crate::agents::find_definition(kind).ok_or_else(|| {
         AgentProcessCompileErr::UnknownAgent {
             kind: kind.to_owned(),
         }
     })?;
-    let (action, system_prompt_env) = action_with_system_prompt(adapter, request)?;
-    let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
+    let provider_argv = compile_provider_argv(adapter, kind, &request.action, cwd)?;
     let provider_program =
         provider_argv
             .first()
@@ -487,7 +496,7 @@ pub fn compile_agent_process(
         adapter,
         rtk,
         request,
-        &system_prompt_env,
+        extra_env,
     )?;
     let argv = login_shell_argv(&env, &provider_argv);
     Ok(CompiledAgentProcess {
@@ -496,59 +505,6 @@ pub fn compile_agent_process(
         argv,
         env,
     })
-}
-
-/// Apply the adapter's replacement mechanism to the user's resolved prompt
-/// path. Matching raw argv is removed here as the final provider boundary so
-/// fresh launch, restart, fork, resume, and rebirth all honor the typed field.
-fn action_with_system_prompt(
-    adapter: &crate::agents::AgentDefinition,
-    request: &ExecRequest,
-) -> AgentProcessResult<(ExecAction, BTreeMap<String, String>)> {
-    let mut action = request.action.clone();
-    let Some(path) = request.system_prompt_file.as_deref() else {
-        return Ok((action, BTreeMap::new()));
-    };
-    let kind = adapter.spec().kind;
-    let matcher = adapter
-        .spec()
-        .launch
-        .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile)
-        .ok_or_else(|| AgentProcessCompileErr::UnsupportedSystemPrompt {
-            kind: kind.to_owned(),
-        })?;
-    let occurrences = matcher.occurrences(action.extra_args());
-    for occurrence in occurrences.iter().rev() {
-        action.extra_args_mut().drain(occurrence.argv_range.clone());
-    }
-    let value = path.to_string_lossy().into_owned();
-    let mut env = BTreeMap::new();
-    match matcher {
-        crate::agents::PresetArgMatcher::Flag(flags) => {
-            let flag =
-                flags
-                    .first()
-                    .ok_or_else(|| AgentProcessCompileErr::UnsupportedSystemPrompt {
-                        kind: kind.to_owned(),
-                    })?;
-            action.extra_args_mut().extend([flag.clone(), value]);
-        }
-        crate::agents::PresetArgMatcher::ConfigKey { flags, key } => {
-            let flag =
-                flags
-                    .first()
-                    .ok_or_else(|| AgentProcessCompileErr::UnsupportedSystemPrompt {
-                        kind: kind.to_owned(),
-                    })?;
-            action
-                .extra_args_mut()
-                .extend([flag.clone(), format!("{key}={value}")]);
-        }
-        crate::agents::PresetArgMatcher::EnvPathVar(key) => {
-            env.insert(key, value);
-        }
-    }
-    Ok((action, env))
 }
 
 /// Compile one process and resolve managed-account applicability from its final inputs.
@@ -588,12 +544,30 @@ pub fn compile_agent_process_stage(
     cwd: &Path,
     rimz_bin: &Path,
 ) -> Result<AgentProcessStage, AgentProcessStageErr> {
+    compile_agent_process_stage_with_extra_env(
+        project_root,
+        rtk,
+        request,
+        cwd,
+        rimz_bin,
+        &BTreeMap::new(),
+    )
+}
+
+pub fn compile_agent_process_stage_with_extra_env(
+    project_root: &Path,
+    rtk: crate::config::RtkMode,
+    request: &ExecRequest,
+    cwd: &Path,
+    rimz_bin: &Path,
+    extra_env: &BTreeMap<String, String>,
+) -> Result<AgentProcessStage, AgentProcessStageErr> {
     let bound = !matches!(&request.provider_account, ProviderAccountState::Unbound);
     if bound && !matches!(&request.action, ExecAction::Launch { .. }) {
         return Err(AgentProcessStageErr::InvalidProviderBinding);
     }
 
-    let process = compile_agent_process(project_root, rtk, request, cwd)?;
+    let process = compile_agent_process_with_extra_env(project_root, rtk, request, cwd, extra_env)?;
     let managed_launch = if bound {
         let adapter = crate::agents::find_definition(request.kind.as_str()).ok_or_else(|| {
             AgentProcessCompileErr::UnknownAgent {
@@ -719,6 +693,7 @@ pub fn preflight_agent_kind(
                 extra_args: Vec::new(),
             },
             system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
             provider_account: ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

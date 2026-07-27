@@ -68,11 +68,11 @@ pub(super) fn prepare_supervised_launch_layout(
         &machine_config.agents.commands,
         &effective.teams,
     )?;
-    rimz::harness::plan::validate_profile_prompt_files(&resolved.layout)?;
     let preset = rimz::agents::LaunchPreset {
         model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
         effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
         system_prompt_file: request.system_prompt_file.clone(),
+        append_system_prompt_files: request.append_system_prompt_files.clone(),
     };
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
@@ -371,6 +371,7 @@ fn prepare_supervised(
             extra_args: agent_cell.args.clone(),
         },
         system_prompt_file: agent_cell.system_prompt_file.clone(),
+        append_system_prompt_files: agent_cell.append_system_prompt_files.clone(),
         provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -489,6 +490,7 @@ fn execute_attempt(
         cleanup_worktree: (request.worktree.is_some() || request.from_pr.is_some()) && retries == 0,
         permission_args: &agent_cell.args,
         system_prompt_file: agent_cell.system_prompt_file.as_deref(),
+        append_system_prompt_files: &agent_cell.append_system_prompt_files,
         self_cleanup_on_completion: request.background && !request.keep,
         provider_account_binding: prepared.managed_launch.binding(),
     })?;

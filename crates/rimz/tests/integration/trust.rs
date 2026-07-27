@@ -20,6 +20,7 @@ fn exec_request(kind: &str, action: ExecAction) -> ExecRequest {
         kind: AgentKind::new_unchecked(kind),
         action,
         system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -192,23 +193,17 @@ fn trust_rejects_project_layout_table_with_per_machine_fix() {
 }
 
 #[test]
-fn trust_rejects_removed_append_prompt_keys_with_replacements() {
+fn trust_rejects_singular_append_prompt_key_with_plural_fix() {
     let env = Env::new();
-    for field in [
-        "append-system-prompt-file = \"x.md\"",
-        "append-system-prompt-files = [\"x.md\"]",
-    ] {
-        env.write_config(
-            &env.project_root,
-            &format!("[profiles.x]\nagent = \"claude\"\n{field}\n"),
-        );
-        env.rimz()
-            .args(["trust", "status"])
-            .assert()
-            .failure()
-            .stderr(contains("native context files"))
-            .stderr(contains("system-prompt-file"));
-    }
+    env.write_config(
+        &env.project_root,
+        "[profiles.x]\nagent = \"claude\"\nappend-system-prompt-file = \"x.md\"\n",
+    );
+    env.rimz()
+        .args(["trust", "status"])
+        .assert()
+        .failure()
+        .stderr(contains("append-system-prompt-files"));
 }
 
 #[test]

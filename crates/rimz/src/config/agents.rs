@@ -103,6 +103,13 @@ pub struct Profile {
         skip_serializing_if = "Option::is_none"
     )]
     pub system_prompt_file: Option<PathBuf>,
+    /// Prompt fragments composed in order after `system_prompt_file`.
+    #[serde(
+        default,
+        rename = "append-system-prompt-files",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub append_system_prompt_files: Vec<PathBuf>,
     #[serde(default)]
     pub args: Option<String>,
 }
@@ -152,13 +159,18 @@ pub struct RoleBinding {
         skip_serializing_if = "Option::is_none"
     )]
     pub system_prompt_file: Option<PathBuf>,
+    /// Ordered prompt fragments appended after the resolved profile chain.
+    #[serde(
+        default,
+        rename = "append-system-prompt-files",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub append_system_prompt_files: Vec<PathBuf>,
     #[serde(default)]
     pub args: Option<String>,
 }
 
-/// Locate either retired prompt-fragment key in machine or project config.
-/// These paths execute commands, so silently ignoring a removed key would
-/// launch a posture the user did not declare.
+/// Locate the retired singular prompt-fragment key in machine or project config.
 pub(crate) fn retired_append_prompt_key(doc: &toml::Table) -> Option<String> {
     let agents = doc.get("agents").and_then(toml::Value::as_table);
     for profiles in [
@@ -170,15 +182,13 @@ pub(crate) fn retired_append_prompt_key(doc: &toml::Table) -> Option<String> {
     .into_iter()
     .flatten()
     {
-        if let Some((name, key)) = profiles.iter().find_map(|(name, profile)| {
-            let profile = profile.as_table()?;
-            ["append-system-prompt-file", "append-system-prompt-files"]
-                .into_iter()
-                .find(|key| profile.contains_key(*key))
-                .map(|key| (name, key))
+        if let Some((name, _)) = profiles.iter().find(|(_, profile)| {
+            profile
+                .as_table()
+                .is_some_and(|profile| profile.contains_key("append-system-prompt-file"))
         }) {
             return Some(format!(
-                "profile `{name}` field `{key}` was removed; use the agent's native context files for additive guidance or `system-prompt-file` for full replacement"
+                "profile `{name}` key `append-system-prompt-file` was renamed to `append-system-prompt-files`; use an array of paths"
             ));
         }
     }
@@ -197,16 +207,13 @@ pub(crate) fn retired_append_prompt_key(doc: &toml::Table) -> Option<String> {
             let Some(role) = role.as_table() else {
                 continue;
             };
-            if let Some(key) = ["append-system-prompt-file", "append-system-prompt-files"]
-                .into_iter()
-                .find(|key| role.contains_key(*key))
-            {
+            if role.contains_key("append-system-prompt-file") {
                 let role_name = role
                     .get("role")
                     .and_then(toml::Value::as_str)
                     .unwrap_or("<unnamed>");
                 return Some(format!(
-                    "team `{team_name}` role `{role_name}` field `{key}` was removed; use the agent's native context files for additive guidance or `system-prompt-file` for full replacement"
+                    "team `{team_name}` role `{role_name}` key `append-system-prompt-file` was renamed to `append-system-prompt-files`; use an array of paths"
                 ));
             }
         }

@@ -75,6 +75,7 @@ fn collect_workspace_runtime(
     let subagent_context_dir = workspace_root.join("subagent_context");
     let telemetry_dir = workspace_root.join("agent-telemetry");
     let idle_compact_dir = workspace_root.join("idle-compact");
+    let prompt_dir = workspace_root.join("prompt");
     for dir in [
         &heartbeat_dir,
         &sock_dir,
@@ -85,6 +86,7 @@ fn collect_workspace_runtime(
         &subagent_context_dir,
         &telemetry_dir,
         &idle_compact_dir,
+        &prompt_dir,
         workspace_root,
     ] {
         sweep.remember_dir_size(dir);
@@ -101,6 +103,7 @@ fn collect_workspace_runtime(
     collect_stale_sidecars(&context_dir, older_than, sweep, report)?;
     collect_stale_sidecars(&subagent_context_dir, older_than, sweep, report)?;
     collect_stale_sidecars(&idle_compact_dir, older_than, sweep, report)?;
+    collect_stale_sidecars(&prompt_dir, older_than, sweep, report)?;
     if !room_is_live {
         collect_stale_sidecars(&telemetry_dir, older_than, sweep, report)?;
     }
@@ -112,6 +115,7 @@ fn collect_workspace_runtime(
     sweep.remove_dir_if_empty(&context_dir, report)?;
     sweep.remove_dir_if_empty(&subagent_context_dir, report)?;
     sweep.remove_dir_if_empty(&idle_compact_dir, report)?;
+    sweep.remove_dir_if_empty(&prompt_dir, report)?;
     if !room_is_live {
         sweep.remove_dir_if_empty(&telemetry_dir, report)?;
     }
@@ -574,6 +578,9 @@ mod tests {
         let stale_idle_compact = rt.root.join("idle-compact").join("deadbeef.json");
         fs::create_dir_all(stale_idle_compact.parent().unwrap()).unwrap();
         fs::write(&stale_idle_compact, b"{}").unwrap();
+        let stale_prompt = rt.system_prompt_dir().join("sys.deadbeef.md");
+        fs::create_dir_all(stale_prompt.parent().unwrap()).unwrap();
+        fs::write(&stale_prompt, b"prompt").unwrap();
         let old = SystemTime::now() - Duration::from_secs(7200);
         for path in [
             &stale_read_marks,
@@ -583,6 +590,7 @@ mod tests {
             &stale_subagent,
             &stale_telemetry,
             &stale_idle_compact,
+            &stale_prompt,
         ] {
             fs::File::open(path).unwrap().set_modified(old).unwrap();
         }
@@ -591,7 +599,7 @@ mod tests {
             collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
                 .unwrap();
 
-        assert_eq!(report.sidecar_files_removed, 7);
+        assert_eq!(report.sidecar_files_removed, 8);
         assert!(
             !rt.read_marks_dir.exists(),
             "the emptied read-marks dir is removed"
@@ -619,6 +627,10 @@ mod tests {
         assert!(
             !rt.root.join("idle-compact").exists(),
             "the emptied idle-compact dir is removed"
+        );
+        assert!(
+            !rt.system_prompt_dir().exists(),
+            "the emptied prompt dir is removed"
         );
         assert!(
             !rt.agent_activity_dir.parent().unwrap().exists(),
