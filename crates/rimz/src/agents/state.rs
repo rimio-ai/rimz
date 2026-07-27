@@ -384,6 +384,11 @@ pub(crate) fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &st
 #[serde(from = "AgentStateWire")]
 pub struct AgentState {
     pub agent_id: AgentSessionId,
+    /// Stable RimZ launch identity. Unlike `agent_id`, this survives adoption
+    /// of the provider's native session id and remains equal to the id exported
+    /// to the launched process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<AgentSessionId>,
     pub kind: AgentKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -445,12 +450,20 @@ pub struct AgentState {
     pub pane: Option<PaneRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_owner: Option<RuntimeOwner>,
-    /// The root session id this agent is a *child* of, set only when a
-    /// `SubagentStart` established it (identity, carried forward). `None` for a
-    /// root agent. The sidebar nests a child under its parent row by
-    /// `(kind, parent_agent_id)` and never renders a child as a top-level row.
+    /// The root session id this agent is a *child* of, set by a provider
+    /// subagent observation or by an agent-launched child stamp and carried
+    /// forward. `None` for a root agent. The sidebar nests a child under its
+    /// parent row and never renders a child as a top-level row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_agent_id: Option<AgentSessionId>,
+    /// Provider kind of `parent_agent_id`; absent for legacy and same-kind
+    /// provider-native subagent records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_agent_kind: Option<AgentKind>,
+    /// True nesting depth for pane-backed agent-launched children. Provider
+    /// subagents stay `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_depth: Option<u8>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub task: Option<String>,
@@ -598,6 +611,8 @@ pub struct AgentState {
 #[derive(Deserialize)]
 struct AgentStateWire {
     agent_id: AgentSessionId,
+    #[serde(default)]
+    launch_id: Option<AgentSessionId>,
     kind: AgentKind,
     name: Option<String>,
     #[serde(default)]
@@ -623,6 +638,10 @@ struct AgentStateWire {
     agent_process_start: Option<String>,
     runtime_owner: Option<RuntimeOwner>,
     parent_agent_id: Option<AgentSessionId>,
+    #[serde(default)]
+    parent_agent_kind: Option<AgentKind>,
+    #[serde(default)]
+    launch_depth: Option<u8>,
     worktree_path: Option<String>,
     worktree_branch: Option<String>,
     task: Option<String>,
@@ -681,6 +700,7 @@ impl From<AgentStateWire> for AgentState {
         });
         Self {
             agent_id: wire.agent_id,
+            launch_id: wire.launch_id,
             kind: wire.kind,
             name: wire.name,
             name_explicit: wire.name_explicit,
@@ -698,6 +718,8 @@ impl From<AgentStateWire> for AgentState {
             pane: wire.pane,
             runtime_owner,
             parent_agent_id: wire.parent_agent_id,
+            parent_agent_kind: wire.parent_agent_kind,
+            launch_depth: wire.launch_depth,
             worktree_path: wire.worktree_path,
             worktree_branch: wire.worktree_branch,
             task: wire.task,
@@ -746,6 +768,7 @@ impl AgentState {
     ) -> Self {
         Self {
             agent_id,
+            launch_id: None,
             kind,
             name: None,
             name_explicit: false,
@@ -766,6 +789,8 @@ impl AgentState {
             pane: None,
             runtime_owner: None,
             parent_agent_id: None,
+            parent_agent_kind: None,
+            launch_depth: None,
             worktree_path: None,
             worktree_branch: None,
             task: None,
@@ -802,6 +827,16 @@ impl AgentState {
 
     pub fn card_ref(&self) -> AgentCardRef<'_> {
         AgentCardRef::new(&self.kind, &self.agent_id, self.name.as_deref())
+    }
+
+    /// A pane-backed child created by another RimZ-launched agent.
+    pub fn is_launched_child(&self) -> bool {
+        self.parent_agent_id.is_some() && self.launch_depth.is_some()
+    }
+
+    /// A provider-native, paneless child rather than a full agent session.
+    pub fn is_provider_subagent(&self) -> bool {
+        self.parent_agent_id.is_some() && self.launch_depth.is_none()
     }
 
     /// Whether this agent is inside the bounded compaction window.

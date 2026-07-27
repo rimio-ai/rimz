@@ -710,6 +710,22 @@ fn removed_append_prompt_keys_point_to_context_or_replacement() {
 }
 
 #[test]
+fn agent_launch_depth_defaults_and_parses_machine_override() {
+    let dir = tempdir().expect("tempdir");
+    let defaulted = load_no_fragments(&write_named(&dir, "agents.toml", ""))
+        .expect("load default agents config");
+    assert_eq!(defaulted.agents.max_launch_depth, 1);
+
+    let tuned = load_no_fragments(&write_named(
+        &dir,
+        "agents.toml",
+        "[agents]\nmax-launch-depth = 3\n",
+    ))
+    .expect("load launch depth override");
+    assert_eq!(tuned.agents.max_launch_depth, 3);
+}
+
+#[test]
 fn forward_compat_keys_and_retired_sections_are_ignored() {
     let dir = tempdir().expect("tempdir");
     let config = load_no_fragments(&write(

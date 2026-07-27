@@ -17,6 +17,9 @@ pub struct AgentsConfig {
     /// Declared before the table fields so the section serializes as valid
     /// TOML (a scalar after a sub-table would bind to the wrong table).
     pub placement: LaunchPlacement,
+    /// Maximum number of agent-launched descendant layers.
+    #[serde(default = "default_max_launch_depth", rename = "max-launch-depth")]
+    pub max_launch_depth: u8,
     pub worktree: WorktreeConfig,
     pub attention: AttentionConfig,
     #[serde(default)]
@@ -31,6 +34,7 @@ impl Default for AgentsConfig {
     fn default() -> Self {
         Self {
             placement: LaunchPlacement::default(),
+            max_launch_depth: default_max_launch_depth(),
             worktree: WorktreeConfig::default(),
             attention: AttentionConfig::default(),
             profiles: ProfilesConfig::default(),
@@ -38,6 +42,10 @@ impl Default for AgentsConfig {
             teams: default_machine_teams(),
         }
     }
+}
+
+const fn default_max_launch_depth() -> u8 {
+    1
 }
 
 fn default_machine_teams() -> TeamsConfig {

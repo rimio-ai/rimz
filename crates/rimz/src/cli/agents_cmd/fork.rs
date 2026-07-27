@@ -240,7 +240,7 @@ fn validate_fork_source(
     session_backed: impl FnOnce(&AgentState) -> bool,
     worktree_exists: impl FnOnce(&Path) -> bool,
 ) -> Result<ForkSeed> {
-    if agent.parent_agent_id.is_some() {
+    if agent.is_provider_subagent() {
         bail!(
             "agent `{}` is a subagent; fork its parent instead",
             agent.agent_id

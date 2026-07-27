@@ -66,7 +66,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 14;
+pub const SNAPSHOT_VERSION: u32 = 15;
 
 /// Sidebar view-model. The pane frame admits every rendered card; store,
 /// sidecars, and realtime events only enrich rows admitted from live panes.
@@ -372,8 +372,8 @@ impl SidebarSnapshot {
         }
     }
 
-    /// Top-level agent sessions in this snapshot; subagents stay attached to
-    /// their parent card and are not independently addressable.
+    /// Top-level agent sessions in this snapshot; children stay attached to
+    /// their parent card rather than producing their own row.
     pub fn root_agents(&self) -> impl Iterator<Item = &AgentState> {
         self.agents
             .iter()

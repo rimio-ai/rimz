@@ -450,6 +450,7 @@ impl Store {
             &identity.kind,
             AgentLaunchPayload {
                 agent_id: identity.agent_id.clone(),
+                launch_id: Some(identity.agent_id.clone()),
                 agent_name: identity.name.clone(),
                 agent_name_explicit: identity.name_explicit,
                 launch,

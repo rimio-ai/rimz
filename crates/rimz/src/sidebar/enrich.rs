@@ -598,7 +598,7 @@ fn enrich_core(
             snapshot
                 .agents
                 .iter()
-                .filter(|agent| agent.parent_agent_id.is_none())
+                .filter(|agent| !agent.is_provider_subagent())
                 .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
         );
         snapshot = snapshot.with_active_time(&active_time);

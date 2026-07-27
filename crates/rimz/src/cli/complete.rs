@@ -53,7 +53,7 @@ pub(crate) fn handles() -> Vec<CompletionCandidate> {
 fn handles_from_agents(agents: &[AgentState]) -> Vec<CompletionCandidate> {
     let peers: Vec<_> = agents
         .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| !agent.is_provider_subagent())
         .collect();
     let unqualified: Vec<_> = peers
         .iter()

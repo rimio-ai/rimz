@@ -90,6 +90,12 @@ pub(super) fn launch_layout(
         layout,
         team_name,
     } = resolved;
+    let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let ancestry = rimz::harness::plan::resolve_launch_ancestry_from_env(
+        &projection.agents,
+        args.launch.cohort.top_level,
+        machine_config.agents.max_launch_depth,
+    )?;
     let prompt = args
         .launch
         .prompt
@@ -140,6 +146,7 @@ pub(super) fn launch_layout(
             team_name,
             single_cell,
             worktree_filter.as_deref(),
+            ancestry.as_ref(),
         );
     }
     let worktree_launch =
@@ -206,6 +213,7 @@ pub(super) fn launch_layout(
                     team_name,
                     single_cell,
                     Some(&path),
+                    ancestry.as_ref(),
                 );
             }
             reconcile::Reconciled::Continue => {}
@@ -255,6 +263,7 @@ pub(super) fn launch_layout(
         room_channel.as_deref(),
         prompt.zip(prompt_agent_index),
         None,
+        ancestry.as_ref(),
     )?;
     let launch_batch = store.begin_agent_launch_batch(
         &launch_requests,
@@ -329,6 +338,7 @@ fn launch_resume_layout(
     team_name: Option<String>,
     single_cell: bool,
     worktree_filter: Option<&Path>,
+    ancestry: Option<&rimz::harness::plan::LaunchAncestry>,
 ) -> Result<()> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
@@ -415,6 +425,7 @@ fn launch_resume_layout(
         channel.as_deref(),
         None,
         Some(&plan),
+        ancestry,
     )?;
     let launch_batch = store.begin_agent_launch_batch(
         &launch_requests,

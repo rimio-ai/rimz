@@ -713,6 +713,7 @@ enum ResumeCandidateKey {
 struct ResumeCandidate {
     kind: AgentKind,
     session_id: AgentSessionId,
+    launch_id: Option<AgentSessionId>,
     name: Option<String>,
     name_explicit: bool,
     profile: Option<String>,
@@ -724,6 +725,9 @@ struct ResumeCandidate {
     launch_group: Option<String>,
     launch_ordinal: Option<u32>,
     channel: Option<String>,
+    parent_agent_id: Option<AgentSessionId>,
+    parent_agent_kind: Option<AgentKind>,
+    launch_depth: Option<u8>,
     cwd: PathBuf,
     pane_id: Option<PaneId>,
     last_activity: Timestamp,
@@ -742,6 +746,7 @@ impl ResumeCandidate {
         Self {
             kind: agent.kind.clone(),
             session_id: agent.agent_id.clone(),
+            launch_id: agent.launch_id.clone(),
             name: agent.name.clone(),
             name_explicit: agent.name_explicit,
             profile: agent.profile.clone(),
@@ -751,6 +756,9 @@ impl ResumeCandidate {
             launch_group: agent.launch_group.clone(),
             launch_ordinal: agent.launch_ordinal,
             channel: agent.channel.clone(),
+            parent_agent_id: agent.parent_agent_id.clone(),
+            parent_agent_kind: agent.parent_agent_kind.clone(),
+            launch_depth: agent.launch_depth,
             cwd: agent_worktree(agent).unwrap_or_default(),
             pane_id: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
             last_activity: agent.last_activity,
@@ -765,6 +773,7 @@ impl ResumeCandidate {
         Some(Self {
             kind: observation.kind.clone(),
             session_id: observation.session_id.clone(),
+            launch_id: None,
             name: None,
             name_explicit: false,
             profile: None,
@@ -774,6 +783,9 @@ impl ResumeCandidate {
             launch_group: None,
             launch_ordinal: None,
             channel: None,
+            parent_agent_id: None,
+            parent_agent_kind: None,
+            launch_depth: None,
             cwd: observation.workspace.clone(),
             pane_id: None,
             last_activity: observation.last_activity,
@@ -1390,6 +1402,7 @@ pub fn materialize_team_restore_tab(
         planned.channel.as_deref(),
         None,
         Some(&planned.cohort),
+        None,
     )?;
     let batch = if launch_requests.is_empty() {
         None
@@ -2310,6 +2323,9 @@ fn candidate_resume_command(
         .filter(|channel| !channel.is_empty())
         .or_else(|| channel.filter(|channel| !channel.is_empty()));
     let params = crate::agents::LaunchParams {
+        parent_agent_id: candidate.parent_agent_id.clone(),
+        parent_agent_kind: candidate.parent_agent_kind.clone(),
+        launch_depth: candidate.launch_depth,
         profile: candidate.profile.clone(),
         role: candidate.role.clone(),
         team: candidate.team.clone(),
@@ -2340,8 +2356,8 @@ fn candidate_resume_command(
             identity: crate::harness::launch::ExecIdentity {
                 name: candidate.name.clone(),
                 name_explicit: candidate.name_explicit,
+                launch_id: candidate.launch_id.as_ref().map(ToString::to_string),
                 params,
-                ..crate::harness::launch::ExecIdentity::default()
             },
         },
     );

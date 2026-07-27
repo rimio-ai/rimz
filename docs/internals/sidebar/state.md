@@ -148,7 +148,7 @@ Producer and consumer run one ordered spine in [`enrich.rs`](../../../crates/rim
 Worktree-group construction stamps `SidebarWorktreeGroup.team` in this renderer-independent fold.
 The derivation selects the unique non-empty team carried by agent rows in the group: rows without a team are tolerated, while two distinct team names yield no group label.
 CLI and sidebar renderers consume that one projected field, so active headers, finished receipts, and fleet tables stay aligned.
-After cached git facts finalize branch labels, the same fold stamps `SidebarWorktreeGroup.label_qualifier` only for colliding checkout labels, using the shortest distinguishing trailing path suffix. Snapshot schema version 14 carries that optional field; older persisted projections are rejected by the existing version gate.
+After cached git facts finalize branch labels, the same fold stamps `SidebarWorktreeGroup.label_qualifier` only for colliding checkout labels, using the shortest distinguishing trailing path suffix. Snapshot schema version 15 carries the launch identity and cross-provider ancestry fields used by pane-backed children; older persisted projections are rejected by the existing version gate.
 
 `project_local` is the renderer-local half: classify session presence against this reader's clock, resolve this renderer's own view, and drop this renderer's own pane from the roster. Splitting there is what makes the producer's fold shareable at all.
 

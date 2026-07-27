@@ -212,9 +212,10 @@ fn active_default_assignment(line: &str) -> Option<(&str, &str)> {
 
 fn default_assignment(rest: &str) -> Option<(&str, &str)> {
     let (key, value) = rest.split_once(" = ")?;
-    if !key
-        .chars()
-        .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    if key != "max-launch-depth"
+        && !key
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
     {
         return None;
     }

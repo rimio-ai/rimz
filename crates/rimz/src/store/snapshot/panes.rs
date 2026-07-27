@@ -98,6 +98,21 @@ impl<'a> PaneBindingIndex<'a> {
             .min_by(|left, right| compare_same_pane_owners(left, right))
     }
 
+    pub(super) fn stamped_launched_child(&self, pane: &PaneRef) -> Option<&'a AgentState> {
+        self.stamped_by_pane
+            .get(&pane.pane_id)?
+            .iter()
+            .filter_map(|index| self.agents.get(*index))
+            .filter(|agent| agent.is_launched_child())
+            .filter(|agent| {
+                agent
+                    .pane
+                    .as_ref()
+                    .is_some_and(|stamped| stamped_agent_matches_live_pane(agent, stamped, pane))
+            })
+            .min_by(|left, right| compare_same_pane_owners(left, right))
+    }
+
     pub(super) fn live_foreign_owner(
         &self,
         evidence: PaneBindingEvidence<'_>,
@@ -123,6 +138,9 @@ impl<'a> PaneBindingIndex<'a> {
 
 pub(super) enum PaneBindingDisposition<'a> {
     Agent(&'a AgentState),
+    /// A pane-backed launched child remains addressable but contributes no
+    /// top-level row; it renders inside its root parent's card.
+    NestedAgent(&'a AgentState),
     Idle(Box<SidebarRow>),
     DuplicatePane,
     Conflict {
@@ -176,6 +194,9 @@ impl<'a> PaneBinder<'a> {
         if let Some(agent) = self.index.stamped_agent(pane) {
             return self.bind(agent, pane);
         }
+        if let Some(agent) = self.index.stamped_launched_child(pane) {
+            return self.bind_nested(agent, pane);
+        }
         if let Some(bind) = lazy::agent_pane_for_pane(
             pane,
             self.index.agents,
@@ -214,6 +235,13 @@ impl<'a> PaneBinder<'a> {
         self.bound_agents.insert(key.clone());
         self.bound_agent_panes.insert(key, pane.pane_id.clone());
         PaneBindingDisposition::Agent(agent)
+    }
+
+    fn bind_nested(&mut self, agent: &'a AgentState, pane: &PaneRef) -> PaneBindingDisposition<'a> {
+        let key = (agent.kind.clone(), agent.agent_id.clone());
+        self.bound_agents.insert(key.clone());
+        self.bound_agent_panes.insert(key, pane.pane_id.clone());
+        PaneBindingDisposition::NestedAgent(agent)
     }
 
     fn conflict(&self, kind: AgentKind, agent_id: AgentSessionId) -> PaneBindingDisposition<'a> {

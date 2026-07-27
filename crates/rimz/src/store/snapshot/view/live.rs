@@ -356,12 +356,12 @@ impl SidebarSnapshot {
         self
     }
 
-    /// Stamp root-only estimated active time from the runtime accumulator.
-    /// Children retain their existing wall-span elapsed clock.
+    /// Stamp pane-backed sessions' estimated active time from the runtime
+    /// accumulator. Provider-native children retain their wall-span clock.
     pub fn with_active_time(mut self, records: &[ActiveTimeRecord]) -> Self {
         let grace_secs = self.attention.active_grace_secs.get();
         for agent in &mut self.agents {
-            if agent.parent_agent_id.is_some() {
+            if agent.is_provider_subagent() {
                 continue;
             }
             let Some(record) = records

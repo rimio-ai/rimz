@@ -38,6 +38,10 @@ pub enum AgentLaunchState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentLaunchPayload {
     pub agent_id: AgentSessionId,
+    /// Stable RimZ identity exported to the launched process. The rollup keeps
+    /// it when the provisional `agent_id` is replaced by a provider session id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<AgentSessionId>,
     pub agent_name: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent_name_explicit: bool,

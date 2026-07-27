@@ -366,7 +366,9 @@ pub fn bind_agent<'a>(
         .find(|binding| binding.matches_agent(agent))
 }
 
-/// The root agents that can be named in this snapshot.
+/// The full agent sessions that can be named in this snapshot. Provider-native
+/// subagents remain display-only; pane-backed launched children are peers for
+/// messaging and pane operations even though they render under a parent card.
 ///
 /// One physical agent instance contributes at most one addressable row. Handle
 /// rendering uses this same set so [`agent_handle`] stays the inverse of
@@ -374,7 +376,9 @@ pub fn bind_agent<'a>(
 /// shadowing, and therefore yields every root.
 pub fn addressable_agents(snapshot: &SidebarSnapshot) -> Vec<&AgentState> {
     snapshot
-        .root_agents()
+        .agents
+        .iter()
+        .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| !shadowed_by_pane_owner(snapshot, agent))
         .collect()
 }

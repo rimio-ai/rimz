@@ -344,7 +344,7 @@ pub(crate) fn live_session_refreshes(snapshot: &SidebarSnapshot) -> Vec<LiveSess
     snapshot
         .agents
         .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| !agent.agent_id.is_empty())
         .filter(|agent| crate::agents::find_definition(agent.kind.as_str()).is_some())
         .map(|agent| LiveSessionRefresh {

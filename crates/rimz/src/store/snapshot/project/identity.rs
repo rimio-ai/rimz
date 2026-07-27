@@ -93,10 +93,10 @@ impl CardIdentityAllocator {
         };
         allocator.names.retain(|_, owner| {
             map.get(owner)
-                .is_some_and(|state| state.parent_agent_id.is_none())
+                .is_some_and(|state| !state.is_provider_subagent())
         });
         for ((kind, agent_id), state) in map {
-            if state.parent_agent_id.is_none()
+            if !state.is_provider_subagent()
                 && let Some(name) = state.name.as_deref().filter(|name| usable_name(name))
             {
                 allocator
@@ -203,7 +203,7 @@ impl CardIdentityAllocator {
     ) -> CardIdentity {
         let key = (kind.clone(), agent_id.clone());
         let child = observation.parent_agent_id.is_some()
-            || prior.is_some_and(|state| state.parent_agent_id.is_some());
+            || prior.is_some_and(AgentState::is_provider_subagent);
         let name = if child {
             self.names.retain(|_, owner| owner != &key);
             self.assign_child_name(observation.agent_name.as_deref(), prior, agent_id)
@@ -255,7 +255,7 @@ impl CardIdentityAllocator {
         prior: Option<&AgentState>,
     ) -> CardIdentity {
         let key = (kind.clone(), agent_id.clone());
-        let name = if prior.is_some_and(|state| state.parent_agent_id.is_some()) {
+        let name = if prior.is_some_and(AgentState::is_provider_subagent) {
             self.assign_child_name(None, prior, agent_id)
         } else {
             self.assign_name_candidate(&key, None, prior, agent_id)

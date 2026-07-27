@@ -337,10 +337,7 @@ fn release_stamped_provisional_for_existing(
     key: &(AgentKind, AgentSessionId),
     observation: &AgentLifecycleObservation,
 ) {
-    if map
-        .get(key)
-        .is_some_and(|state| state.parent_agent_id.is_some())
-    {
+    if map.get(key).is_some_and(AgentState::is_provider_subagent) {
         return;
     }
     if map.get(key).is_none_or(|state| state.pane.is_some()) {
@@ -480,6 +477,7 @@ fn carried_base(
 ) -> AgentState {
     let mut state = AgentState::seed(kind.clone(), agent_id.clone(), AgentStatus::Idle, event_ts);
     if let Some(prior) = prior {
+        state.launch_id = prior.launch_id.clone();
         state.profile = prior.profile.clone();
         state.mode = prior.mode;
         state.role = prior.role.clone();
@@ -490,6 +488,8 @@ fn carried_base(
         state.pane = prior.pane.clone();
         state.runtime_owner = prior.runtime_owner.clone();
         state.parent_agent_id = prior.parent_agent_id.clone();
+        state.parent_agent_kind = prior.parent_agent_kind.clone();
+        state.launch_depth = prior.launch_depth;
         state.worktree_path = prior.worktree_path.clone();
         state.worktree_branch = prior.worktree_branch.clone();
         state.task = prior.task.clone();
@@ -513,6 +513,15 @@ fn carried_base(
 }
 
 fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
+    if let Some(parent_agent_id) = &launch.parent_agent_id {
+        state.parent_agent_id = Some(parent_agent_id.clone());
+    }
+    if let Some(parent_agent_kind) = &launch.parent_agent_kind {
+        state.parent_agent_kind = Some(parent_agent_kind.clone());
+    }
+    if let Some(launch_depth) = launch.launch_depth {
+        state.launch_depth = Some(launch_depth);
+    }
     if let Some(profile) = &launch.profile {
         state.profile = Some(profile.clone());
     }
@@ -578,10 +587,12 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         input.event_name,
     );
     let runtime_owner = runtime_projection(input.observation, input.prior, input.agent_id);
+    let provider_subagent =
+        parent_agent_id.is_some() && input.prior.is_none_or(|prior| prior.launch_depth.is_none());
     let prompt = prompt_projection(
         input.observation,
         input.prior,
-        parent_agent_id.is_some(),
+        provider_subagent,
         input.event_task,
     );
     state.name = Some(input.card_identity.name);
@@ -651,6 +662,9 @@ fn assemble_launch_state(
     card_identity: CardIdentity,
 ) -> AgentState {
     let mut state = carried_base(kind, &payload.agent_id, prior, event.timestamp);
+    if let Some(launch_id) = &payload.launch_id {
+        state.launch_id = Some(launch_id.clone());
+    }
     fold_launch_params(&mut state, &payload.launch);
     if let Some(pane_id) = &payload.pane_id {
         state.pane = Some(PaneRef::from_id(pane_id.clone()));
@@ -690,7 +704,6 @@ fn assemble_launch_state(
     state.name = Some(card_identity.name);
     state.name_explicit = card_identity.name_explicit;
     state.kind_ordinal = Some(card_identity.kind_ordinal);
-    state.parent_agent_id = None;
     state.task = prompt.clone();
     state.prompt = prompt;
     if let Some(description) = &payload.description {

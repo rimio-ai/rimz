@@ -60,7 +60,7 @@ pub(super) fn room_with_agent_panes_and_capacities(
 ) -> SidebarSnapshot {
     let mut panes = Vec::new();
     for (idx, agent) in agents.iter_mut().enumerate() {
-        if agent.parent_agent_id.is_some() {
+        if agent.is_provider_subagent() {
             continue;
         }
         let mut pane = agent.pane.clone().unwrap_or_else(|| {

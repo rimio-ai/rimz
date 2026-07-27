@@ -133,7 +133,7 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     let mut views = snapshot
         .agents
         .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| agent.is_awaiting_input() && agent.open_ask.is_some())
         .filter(|agent| {
             all || channel.is_none_or(|channel| {

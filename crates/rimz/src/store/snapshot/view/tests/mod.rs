@@ -94,6 +94,28 @@ fn active_time_fold_stamps_only_roots_and_preserves_existing_clocks() {
 }
 
 #[test]
+fn active_time_fold_includes_launched_children() {
+    let mut child = agent("codex", "child", AgentStatus::Running, 1);
+    child.parent_agent_id = Some("root".into());
+    child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+    child.launch_depth = Some(1);
+    let record = ActiveTimeRecord {
+        kind: child.kind.clone(),
+        agent_id: child.agent_id.clone(),
+        credited_ms: 12_500,
+        last_progress: ago(30),
+        active: false,
+    };
+
+    let snapshot = room(vec![child]).with_active_time(&[record]);
+
+    assert_eq!(
+        rollup_agent(&snapshot, "child").estimated_active_secs,
+        Some(12)
+    );
+}
+
+#[test]
 fn inactive_active_time_record_projects_frozen_credit() {
     let root = agent("codex", "root", AgentStatus::Idle, 0);
     let record = ActiveTimeRecord {

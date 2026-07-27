@@ -257,7 +257,7 @@ fn provider_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
         snapshot
             .agents
             .iter()
-            .filter(|agent| agent.parent_agent_id.is_none())
+            .filter(|agent| !agent.is_provider_subagent())
             .filter_map(|agent| {
                 crate::agents::find_definition(agent.kind.as_str()).map(|_| agent.kind.to_string())
             }),
@@ -522,7 +522,7 @@ fn merge_context_versions(
 fn context_versions(snapshot: &SidebarSnapshot) -> BTreeMap<String, String> {
     let mut versions = BTreeMap::<String, (jiff::Timestamp, String)>::new();
     for agent in &snapshot.agents {
-        if agent.parent_agent_id.is_some() {
+        if agent.is_provider_subagent() {
             continue;
         }
         let Some(context) = agent.context.as_ref() else {
@@ -552,7 +552,7 @@ fn active_version_probe_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
     snapshot
         .agents
         .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| !agent.is_provider_subagent())
         .filter_map(|agent| {
             crate::agents::find_definition(agent.kind.as_str()).map(|_| agent.kind.to_string())
         })

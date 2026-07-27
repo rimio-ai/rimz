@@ -210,6 +210,7 @@ fn reject_launch_flags_without_name(
         || launch.budget.is_some()
         || launch.bg
         || launch.new_tab
+        || launch.top_level
     {
         bail!("team launch options require a team name");
     }

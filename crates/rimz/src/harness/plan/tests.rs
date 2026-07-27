@@ -8,7 +8,7 @@ use crate::agents::{AgentStatus, LaunchParams};
 use crate::config::{MachineConfig, Profile, Team, TeamsConfig};
 use crate::harness::run::PermissionMode;
 use crate::harness::spec::Column;
-use crate::ids::AgentKind;
+use crate::ids::{AgentKind, AgentSessionId};
 
 fn role_binding(role: &str) -> RoleBinding {
     RoleBinding {
@@ -34,6 +34,41 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
             ..Default::default()
         },
     })
+}
+
+#[test]
+fn launch_ancestry_flattens_to_the_root_and_enforces_true_depth() {
+    assert_eq!(resolve_launch_ancestry(None, false, 1).unwrap(), None);
+
+    let root = crate::agents::AgentState::stub("claude", "root", AgentStatus::Running);
+    assert_eq!(resolve_launch_ancestry(Some(&root), true, 0).unwrap(), None);
+    assert_eq!(
+        resolve_launch_ancestry(Some(&root), false, 1).unwrap(),
+        Some(LaunchAncestry {
+            parent_agent_id: AgentSessionId::from("root"),
+            parent_agent_kind: AgentKind::new_unchecked("claude"),
+            launch_depth: 1,
+        })
+    );
+
+    let mut child = crate::agents::AgentState::stub("codex", "child", AgentStatus::Running);
+    child.parent_agent_id = Some(AgentSessionId::from("root"));
+    child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+    child.launch_depth = Some(1);
+    assert_eq!(
+        resolve_launch_ancestry(Some(&child), false, 2).unwrap(),
+        Some(LaunchAncestry {
+            parent_agent_id: AgentSessionId::from("root"),
+            parent_agent_kind: AgentKind::new_unchecked("claude"),
+            launch_depth: 2,
+        })
+    );
+
+    let error = resolve_launch_ancestry(Some(&child), false, 1).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("nesting depth 1"));
+    assert!(message.contains("do not retry"));
+    assert!(!message.contains("--top-level"));
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1139,6 +1174,11 @@ fn launch_request_names_and_metadata() {
         },
     }));
 
+    let ancestry = LaunchAncestry {
+        parent_agent_id: AgentSessionId::from("root-session"),
+        parent_agent_kind: AgentKind::new_unchecked("claude"),
+        launch_depth: 2,
+    };
     let requests = launch_identity_requests(
         &layout,
         Some("docs"),
@@ -1148,6 +1188,7 @@ fn launch_request_names_and_metadata() {
         Some("design"),
         Some(("draft it", 0)),
         None,
+        Some(&ancestry),
     )
     .unwrap();
     assert_eq!(requests.len(), 1);
@@ -1163,12 +1204,22 @@ fn launch_request_names_and_metadata() {
     assert_eq!(requests[0].launch.effort.as_deref(), Some("high"));
     assert_eq!(requests[0].launch.team.as_deref(), Some("forge"));
     assert_eq!(requests[0].launch.channel.as_deref(), Some("design"));
+    assert_eq!(
+        requests[0].launch.parent_agent_id.as_deref(),
+        Some("root-session")
+    );
+    assert_eq!(
+        requests[0].launch.parent_agent_kind.as_ref(),
+        Some(&AgentKind::new_unchecked("claude"))
+    );
+    assert_eq!(requests[0].launch.launch_depth, Some(2));
     assert_eq!(requests[0].prompt.as_deref(), Some("draft it"));
 
     let requests = launch_identity_requests(
         &layout,
         None,
         Some("my_feature"),
+        None,
         None,
         None,
         None,
@@ -1181,14 +1232,16 @@ fn launch_request_names_and_metadata() {
         AgentLaunchName::Soft("my_feature".to_owned())
     );
     assert_eq!(
-        launch_identity_requests(&layout, None, None, None, None, None, None, None).unwrap()[0]
-            .name,
+        launch_identity_requests(&layout, None, None, None, None, None, None, None, None,).unwrap()
+            [0]
+        .name,
         AgentLaunchName::Mint
     );
     assert!(
         launch_identity_requests(
             &layout,
             Some("my_feature"),
+            None,
             None,
             None,
             None,
@@ -1229,6 +1282,7 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
         None,
         Some(("implement", 1)),
         None,
+        None,
     )
     .unwrap();
     assert_eq!(requests[0].launch.launch_ordinal, Some(1));
@@ -1249,7 +1303,7 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
     )
     .unwrap();
     let requests =
-        launch_identity_requests(&inline, None, None, None, None, None, None, None).unwrap();
+        launch_identity_requests(&inline, None, None, None, None, None, None, None, None).unwrap();
     let group = requests[0].launch.launch_group.as_deref().unwrap();
     assert!(group.starts_with("launch_"));
     assert_eq!(requests[1].launch.launch_group.as_deref(), Some(group));
@@ -1258,7 +1312,7 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
 
     let single = LayoutSpec::single(agent_cell_with_role(None));
     let requests =
-        launch_identity_requests(&single, None, None, None, None, None, None, None).unwrap();
+        launch_identity_requests(&single, None, None, None, None, None, None, None, None).unwrap();
     assert_eq!(requests[0].launch.launch_group, None);
     assert_eq!(requests[0].launch.launch_ordinal, None);
 }

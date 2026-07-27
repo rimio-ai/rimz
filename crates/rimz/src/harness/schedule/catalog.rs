@@ -455,7 +455,7 @@ pub fn delivery_target_alive(
     let store = Store::open(paths, runtime)?;
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     Ok(snapshot.agents.iter().any(|agent| {
-        agent.parent_agent_id.is_none()
+        !agent.is_provider_subagent()
             && agent.kind.as_str() == target.kind.as_str()
             && agent.agent_id.as_str() == target.session
     }))

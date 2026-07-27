@@ -309,7 +309,7 @@ pub(crate) fn resolve_open_ask<'a>(
     if raw.starts_with("ask_") {
         let ask_id = AskId::parse(raw)?;
         return Ok(snapshot.agents.iter().find(|agent| {
-            (!root_awaiting_only || (agent.parent_agent_id.is_none() && agent.is_awaiting_input()))
+            (!root_awaiting_only || (!agent.is_provider_subagent() && agent.is_awaiting_input()))
                 && agent.open_ask.as_ref().is_some_and(|ask| ask.id == ask_id)
         }));
     }

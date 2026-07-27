@@ -139,6 +139,7 @@ struct PreparedRun {
     output_format: OutputFormat,
     stream_text: bool,
     managed_launch: rimz::agents::ManagedLaunchState,
+    ancestry: Option<rimz::harness::plan::LaunchAncestry>,
 }
 
 struct PresentationWaiter {
@@ -339,6 +340,12 @@ fn prepare_supervised(
     let agent_cell = agent_cells[0];
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
+    let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let ancestry = rimz::harness::plan::resolve_launch_ancestry_from_env(
+        &projection.agents,
+        request.top_level,
+        machine_config.agents.max_launch_depth,
+    )?;
     let launch = rimz::worktree::resolve_launch_checkout(
         &workspace,
         &machine_config.agents.worktree,
@@ -405,6 +412,7 @@ fn prepare_supervised(
         output_format: presentation.output_format,
         stream_text: presentation.stream_text,
         managed_launch,
+        ancestry,
     })
 }
 
@@ -443,6 +451,7 @@ fn execute_attempt(
         prepared.room_channel.as_deref(),
         Some((prompt, 0)),
         None,
+        prepared.ancestry.as_ref(),
     )?;
     for request in &mut launch_requests {
         if attempt > 0

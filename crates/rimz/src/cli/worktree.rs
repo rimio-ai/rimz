@@ -255,7 +255,7 @@ fn root_agents(workspace: &ResolvedWorkspace) -> Vec<AgentState> {
             snapshot
                 .agents
                 .into_iter()
-                .filter(|agent| agent.parent_agent_id.is_none())
+                .filter(|agent| !agent.is_provider_subagent())
                 .collect()
         })
         .unwrap_or_default()

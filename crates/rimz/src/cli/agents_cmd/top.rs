@@ -98,7 +98,7 @@ fn sample(
     let agents: Vec<AgentState> = snapshot
         .agents
         .into_iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| in_room.contains_key(&agent.agent_id))
         .filter(|agent| channel.is_none_or(|filter| target::agent_in_worktree(agent, filter)))
         .collect();

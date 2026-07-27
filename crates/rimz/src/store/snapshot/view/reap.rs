@@ -148,9 +148,9 @@ impl SidebarSnapshot {
         let now = self.now;
         retain_unsuperseded(&mut self.agents, session_death::supersedes);
         self.agents.retain(|agent| {
-            // Subagents are never reaped here — kept until their parent leaves,
-            // when the projection's orphan-drop hides them.
-            if agent.parent_agent_id.is_some() {
+            // Provider-native subagents are kept until their parent leaves.
+            // Pane-backed launched children follow ordinary session liveness.
+            if agent.is_provider_subagent() {
                 return true;
             }
             !(session_death::agent_is_pidless(agent)
@@ -207,8 +207,8 @@ impl SidebarSnapshot {
     }
 }
 
-/// Retain only root sessions not superseded under `supersedes(older, newer)`;
-/// subagents always remain because they leave transitively with their parent.
+/// Retain only full sessions not superseded under `supersedes(older, newer)`;
+/// provider-native subagents leave transitively with their parent.
 fn retain_unsuperseded(
     agents: &mut Vec<AgentState>,
     supersedes: impl Fn(&AgentState, &AgentState) -> bool,
@@ -220,10 +220,10 @@ fn retain_unsuperseded(
     let superseded: Vec<bool> = agents
         .iter()
         .map(|older| {
-            older.parent_agent_id.is_none()
+            !older.is_provider_subagent()
                 && agents
                     .iter()
-                    .any(|newer| newer.parent_agent_id.is_none() && supersedes(older, newer))
+                    .any(|newer| !newer.is_provider_subagent() && supersedes(older, newer))
         })
         .collect();
     // `Vec::retain` visits each element once, front to back, so a cursor over
@@ -231,6 +231,6 @@ fn retain_unsuperseded(
     let mut superseded = superseded.into_iter();
     agents.retain(|agent| {
         let is_superseded = superseded.next().unwrap_or(false);
-        agent.parent_agent_id.is_some() || !is_superseded
+        agent.is_provider_subagent() || !is_superseded
     });
 }

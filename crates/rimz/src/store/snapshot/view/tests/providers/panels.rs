@@ -487,6 +487,31 @@ fn provider_active_sessions_count_bound_identity_panes_not_durable_rows() {
 }
 
 #[test]
+fn launched_child_counts_as_a_live_provider_session() {
+    let parent = agent("claude", "root", AgentStatus::Running, 10)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    let mut child = agent("codex", "child", AgentStatus::Running, 20)
+        .worktree("/repo/main")
+        .in_pane("%2");
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    let snapshot = room_with_agent_panes(vec![parent, child]).with_provider_aggregates(
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+
+    let codex = snapshot
+        .providers
+        .iter()
+        .find(|panel| panel.kind == "codex")
+        .expect("launched child's provider panel");
+    assert_eq!(codex.active_sessions, 1);
+}
+
+#[test]
 fn active_session_count_does_not_replace_real_provider_history() {
     let session = agent("claude", "c1", AgentStatus::Running, 10)
         .worktree("/repo/main")

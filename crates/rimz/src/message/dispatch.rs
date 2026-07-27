@@ -404,7 +404,7 @@ fn durable_target_agents(store: &Store) -> Result<Vec<AgentState>> {
         .runtime_projection(crate::RuntimeScope::Audit)?
         .agents
         .into_iter()
-        .filter(|agent| agent.parent_agent_id.is_none() && agent.ended_at.is_none())
+        .filter(|agent| !agent.is_provider_subagent() && agent.ended_at.is_none())
         .collect())
 }
 
@@ -988,7 +988,9 @@ fn turn_openers_for_sender(snapshot: &SidebarSnapshot, sender: &MessageSender) -
         return Vec::new();
     };
     snapshot
-        .root_agents()
+        .agents
+        .iter()
+        .filter(|agent| !agent.is_provider_subagent())
         .find(|agent| agent.kind == *kind && agent.name.as_deref() == Some(name))
         .and_then(|agent| agent.context.as_ref())
         .map(|context| context.turn_opened_by.clone())

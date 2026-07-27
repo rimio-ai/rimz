@@ -17,7 +17,7 @@ pub(super) fn live_root_agents(workspace: &rimz::ResolvedWorkspace) -> Vec<LiveR
             snapshot
                 .agents
                 .into_iter()
-                .filter(|agent| agent.parent_agent_id.is_none())
+                .filter(|agent| !agent.is_provider_subagent())
                 .map(|agent| {
                     let channel = rimz::harness::target::agent_channel(&agent);
                     LiveRootAgent {
