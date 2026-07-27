@@ -658,6 +658,80 @@ fn account_merge_preserves_other_kinds() {
     );
     assert!(cache.entries.contains_key("claude"));
 }
+
+#[test]
+fn account_merge_fuses_authoritative_drops_and_confirms_persistent_readings() {
+    let (_dir, _workspace, runtime) = runtime();
+    let now = Timestamp::now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let first_seen_at = now - SignedDuration::from_secs(10);
+    write_rate_limits_cache(
+        &runtime.shared_rate_limits_path(),
+        &kind_wide_cache(
+            1,
+            BTreeMap::from([(
+                "claude".to_owned(),
+                AgentRateLimits {
+                    windows: vec![
+                        be(100, reset, now - SignedDuration::from_secs(60)),
+                        RateLimitWindow {
+                            duration_mins: Some(10_080),
+                            ..be(80, reset, now - SignedDuration::from_secs(60))
+                        },
+                    ],
+                },
+            )]),
+            BTreeMap::from([(
+                "claude".to_owned(),
+                vec![PendingRefill {
+                    scope_id: None,
+                    duration_mins: Some(300),
+                    used_percentage: 35,
+                    first_seen_at,
+                }],
+            )]),
+        ),
+    );
+    let reading = AgentRateLimits {
+        windows: vec![auth(36, reset, now)],
+    };
+
+    super::merge_account_rate_limits(&runtime, "claude", Default::default(), reading.clone());
+    let mut cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    assert_eq!(
+        cache_window(&cache, "claude", RateLimitWindowKey::Duration(Some(300))).used_percentage,
+        Some(100),
+        "a lone authoritative drop cannot clobber corroborated truth"
+    );
+    assert_eq!(cache.entries["claude"].pending[0].used_percentage, 36);
+    assert_eq!(
+        cache.entries["claude"].pending[0].first_seen_at,
+        first_seen_at
+    );
+    assert_eq!(
+        cache.entries["claude"].limits.windows.len(),
+        1,
+        "a prior best-effort window omitted by the full reading is dropped"
+    );
+
+    cache.entries.get_mut("claude").unwrap().pending[0].first_seen_at =
+        now - SignedDuration::from_secs(REFILL_CONFIRM_SECS + 1);
+    write_rate_limits_cache(&runtime.shared_rate_limits_path(), &cache);
+    super::merge_account_rate_limits(&runtime, "claude", Default::default(), reading);
+
+    let confirmed = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    assert_eq!(
+        cache_window(
+            &confirmed,
+            "claude",
+            RateLimitWindowKey::Duration(Some(300)),
+        )
+        .used_percentage,
+        Some(36)
+    );
+    assert!(confirmed.entries["claude"].pending.is_empty());
+}
+
 #[test]
 fn authoritative_omissions_track_lifted_duration_windows() {
     let (_dir, _workspace, runtime) = runtime();
@@ -1087,8 +1161,8 @@ fn fuse_window_selects_truth_by_source_freshness_and_epoch() {
             None,
         ),
         (
-            "fresh authoritative drop wins",
-            Some(be(80, reset, now)),
+            "newer authoritative drop replaces authoritative truth",
+            Some(auth(80, reset, older)),
             Some(auth(2, reset, now)),
             None,
             true,
@@ -1117,6 +1191,27 @@ fn fuse_window_selects_truth_by_source_freshness_and_epoch() {
             None,
         ),
         (
+            "authoritative reset advance proves a new epoch",
+            Some(be(80, reset, now)),
+            Some(auth(2, later_reset, now)),
+            None,
+            true,
+            Some(auth(2, later_reset, now)),
+            None,
+        ),
+        (
+            "authoritative drop replaces epoch-less truth",
+            Some(RateLimitWindow {
+                resets_at: None,
+                ..be(80, reset, now)
+            }),
+            Some(auth(2, reset, now)),
+            None,
+            true,
+            Some(auth(2, reset, now)),
+            None,
+        ),
+        (
             "reset advance proves a new epoch",
             Some(be(80, reset, now)),
             Some(be(1, later_reset, now)),
@@ -1135,9 +1230,9 @@ fn fuse_window_selects_truth_by_source_freshness_and_epoch() {
             None,
         ),
         (
-            "consumer cannot lower truth",
+            "consumer cannot confirm an authoritative same-epoch drop",
             Some(be(75, reset, now)),
-            Some(be(1, reset, now)),
+            Some(auth(1, reset, now)),
             None,
             false,
             Some(be(75, reset, now)),
@@ -1182,6 +1277,57 @@ fn fuse_window_selects_truth_by_source_freshness_and_epoch() {
         );
         assert_eq!(actual, (expected_truth, expected_pending), "{name}");
     }
+}
+
+#[test]
+fn authoritative_same_epoch_drop_requires_confirmation() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let prior = be(75, reset, now);
+    let candidate = auth(36, reset, now);
+    let (truth, pending) = fuse_window(Some(&prior), Some(&candidate), None, now, true);
+    assert_eq!(truth.unwrap().used_percentage, Some(75));
+    let parked = pending.unwrap();
+    assert_eq!(parked.used_percentage, 36);
+
+    let before = now + SignedDuration::from_secs(REFILL_CONFIRM_SECS - 1);
+    let (truth, pending) = fuse_window(
+        Some(&prior),
+        Some(&auth(35, reset, before)),
+        Some(&parked),
+        before,
+        true,
+    );
+    assert_eq!(truth.unwrap().used_percentage, Some(75));
+    assert_eq!(
+        pending.as_ref().map(|pending| pending.first_seen_at),
+        Some(now)
+    );
+
+    let (truth, pending) = fuse_window(
+        Some(&prior),
+        Some(&be(76, reset, before)),
+        pending.as_ref(),
+        before,
+        true,
+    );
+    assert_eq!(truth.unwrap().used_percentage, Some(76));
+    assert!(pending.is_none(), "a corroborating climb cancels the drop");
+
+    let after = now + SignedDuration::from_secs(REFILL_CONFIRM_SECS + 1);
+    let (truth, pending) = fuse_window(
+        Some(&prior),
+        Some(&auth(34, reset, after)),
+        Some(&parked),
+        after,
+        true,
+    );
+    assert_eq!(truth.unwrap().used_percentage, Some(34));
+    assert!(pending.is_none());
+
+    let (truth, pending) = fuse_window(Some(&prior), Some(&candidate), Some(&parked), after, false);
+    assert_eq!(truth.unwrap().used_percentage, Some(75));
+    assert_eq!(pending, Some(parked));
 }
 
 #[test]

@@ -223,6 +223,16 @@ The fetch worker publishes process metrics and group roots alongside pane produc
 | `rate_limits.json` | Account-global | Per-account budget windows. |
 | `credits.json` | Account-global | Provider-reported paid and extra usage. |
 
+`rate_limits.json` is the single fused source of truth for every sidebar and
+`rimz providers` reader. Every writer, including out-of-band OAuth usage reads,
+fuses by stable window identity before publishing. Usage climbs are adopted at
+once. A reset-timer advance proves a new epoch; within the same epoch, an
+authoritative drop against stamped best-effort truth must persist through the
+two-minute refill confirmation before it replaces the higher reading. Newer
+authoritative truth still replaces an authoritative, unprovenanced, or
+epoch-less prior immediately, and consumers only mirror the producer's
+persisted confirmation state.
+
 ### Sidecars
 
 Per-session sidecars (`agent_context/`, `subagent_context/`, `agent-activity/`, `active-time/`) are the one exception to producer ownership: CLI hook and statusline runs write the context and activity records, the hook updates active-time accumulators under per-record locks, and the elder's transcript watcher refreshes transcript-tail context between hooks ([push channels](#push-channels)). Every renderer reads them fresh behind stat-gated parse caches.

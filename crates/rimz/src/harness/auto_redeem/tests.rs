@@ -566,7 +566,7 @@ fn stamp_round_trips_atomically() {
 
 #[test]
 fn producer_reserves_a_spawn_and_paces_the_next_tick() {
-    let now = ts(1_700_000_000);
+    let now = Timestamp::now();
     let dir = tempfile::tempdir().unwrap();
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
