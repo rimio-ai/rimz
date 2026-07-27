@@ -24,6 +24,31 @@ mod ttyd;
 
 pub use gate::{GateAuth, RelayTarget};
 
+const TTYD_AMBIENT_CONTEXT_ENV: [&str; 16] = [
+    "ZELLIJ",
+    "ZELLIJ_PANE_ID",
+    "ZELLIJ_SESSION_NAME",
+    "TMUX",
+    "TMUX_PANE",
+    crate::workspace::ENV_WORKSPACE_ID,
+    crate::workspace::ENV_PROJECT_ROOT,
+    crate::harness::run::ENV_WORKTREE_PATH,
+    crate::harness::run::ENV_CHANNEL,
+    crate::mux::CLIENT_SIZE_ENV,
+    crate::remote::REMOTE_RECONNECT_ENV,
+    crate::remote::ATTACH_MARK_ENV,
+    crate::remote::OUTER_SCROLL_BRACKET_ENV,
+    crate::remote::REMOTE_LINEAGE_ENV,
+    crate::remote::REMOTE_CLIENT_VERSION_ENV,
+    crate::remote::REMOTE_FORCE_VERSION_ENV,
+];
+
+fn without_ttyd_launch_context(spec: CommandSpec) -> CommandSpec {
+    TTYD_AMBIENT_CONTEXT_ENV
+        .into_iter()
+        .fold(spec, |spec, key| spec.env_remove(key))
+}
+
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
 pub const TTYD_SESSION_OSC: u16 = 7717;
 pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 3;
@@ -650,6 +675,28 @@ pub fn encode_query_value(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ttyd_launch_context_scrub_preserves_machine_environment() {
+        let spec =
+            without_ttyd_launch_context(CommandSpec::new("ttyd").env_remove("ALREADY_REMOVED"));
+
+        for key in TTYD_AMBIENT_CONTEXT_ENV {
+            assert!(spec.env_remove.contains(key), "{key} remains inherited");
+        }
+        assert!(spec.env_remove.contains("ALREADY_REMOVED"));
+        for key in [
+            "HOME",
+            "PATH",
+            "XDG_STATE_HOME",
+            "RIMZ_TTYD_BIN",
+            "RIMZ_ZELLIJ_BIN",
+            "RIMZ_WEB_FONTS_OFFLINE",
+            "RUST_LOG",
+        ] {
+            assert!(!spec.env_remove.contains(key), "{key} should be inherited");
+        }
+    }
 
     #[test]
     fn session_sync_osc_sets_and_clears_the_browser_target() {

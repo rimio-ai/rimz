@@ -197,7 +197,7 @@ fn share_broadcast_views_without_auth_and_drops_input() {
 }
 
 #[test]
-fn zellij_room_attaches_through_shared_daemon() {
+fn zellij_room_attaches_when_daemon_starts_inside_target_room() {
     let stack = require_web_stack!("zellij");
     let fixture = LiveZellijWebFixture::new(&stack);
     let opened = fixture.open();

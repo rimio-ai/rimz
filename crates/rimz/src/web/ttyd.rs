@@ -878,12 +878,13 @@ fn spawn_spec_for(
     let mut spec =
         CommandSpec::new(program.display().to_string()).args(["-W", "-O", "-a", "-P", "3600"]);
     spec = spec.arg("-c").arg(format!("rimz:{}", credential.secret));
-    Ok(spec
-        .args(["-i", &interface.to_string(), "-p"])
-        .arg(port.to_string())
-        .args(extra_args.iter().cloned())
-        .arg(rimz_exe.display().to_string())
-        .args(["web", "exec"]))
+    Ok(super::without_ttyd_launch_context(
+        spec.args(["-i", &interface.to_string(), "-p"])
+            .arg(port.to_string())
+            .args(extra_args.iter().cloned())
+            .arg(rimz_exe.display().to_string())
+            .args(["web", "exec"]),
+    ))
 }
 
 pub(super) fn spawn_detached(spec: CommandSpec) -> Result<u32> {
@@ -1120,6 +1121,11 @@ mod tests {
             ]
         );
         assert!(spec.args.windows(2).any(|args| args == ["-P", "3600"]));
+        assert!(
+            super::super::TTYD_AMBIENT_CONTEXT_ENV
+                .iter()
+                .all(|key| spec.env_remove.contains(*key))
+        );
     }
 
     #[test]
