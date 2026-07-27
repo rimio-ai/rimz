@@ -533,7 +533,10 @@ impl LiveZellijWebFixture {
                 self.namespace.path().join(".config/zellij"),
             )
             .env("RIMZ_TTYD_BIN", &self.ttyd)
-            .env("RIMZ_WEB_FONTS_OFFLINE", "1");
+            .env("RIMZ_WEB_FONTS_OFFLINE", "1")
+            .env("ZELLIJ", "0")
+            .env("ZELLIJ_PANE_ID", "1")
+            .env("ZELLIJ_SESSION_NAME", &self.workspace.session_name);
         command
     }
 }

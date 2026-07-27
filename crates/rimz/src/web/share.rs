@@ -376,12 +376,14 @@ fn spawn_spec_for(
     port: u16,
     extra_args: &[String],
 ) -> CommandSpec {
-    CommandSpec::new(program.display().to_string())
-        .args(["-O", "-a", "-P", "3600", "-i", &interface.to_string(), "-p"])
-        .arg(port.to_string())
-        .args(extra_args.iter().cloned())
-        .arg(rimz_exe.display().to_string())
-        .args(["web", "exec", "--share"])
+    super::without_ttyd_launch_context(
+        CommandSpec::new(program.display().to_string())
+            .args(["-O", "-a", "-P", "3600", "-i", &interface.to_string(), "-p"])
+            .arg(port.to_string())
+            .args(extra_args.iter().cloned())
+            .arg(rimz_exe.display().to_string())
+            .args(["web", "exec", "--share"]),
+    )
 }
 
 fn ensure_share_port_available(address: SocketAddr) -> Result<()> {
@@ -474,6 +476,11 @@ mod tests {
         assert!(spec.args.windows(2).any(|args| args == ["-P", "3600"]));
         assert!(!spec.args.iter().any(|arg| arg == "-W"));
         assert!(!spec.args.iter().any(|arg| arg == "-c"));
+        assert!(
+            super::super::TTYD_AMBIENT_CONTEXT_ENV
+                .iter()
+                .all(|key| spec.env_remove.contains(*key))
+        );
     }
 
     #[test]
