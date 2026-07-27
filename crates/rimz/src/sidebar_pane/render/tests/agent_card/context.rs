@@ -876,7 +876,7 @@ fn calm_context_bar_orders_segments_left_to_right() {
 
     let write_only = bar_styles_for(context_agent("claude-write", 26_000, 0));
     assert!(
-        write_only.iter().any(|style| *style == cache_write),
+        write_only.contains(&cache_write),
         "a cache-write-only fill uses the cache-write tone: {write_only:?}"
     );
     assert!(
