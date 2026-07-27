@@ -304,6 +304,8 @@ A logical member can span several session records. Provider compaction continuat
 
 The figures keep their source boundaries. The audit rollup supplies identity, timestamps, tool calls, and compaction counts. Each session's adapter parses its provider transcript once, and the shared price book supplies the four-way token split and dollars from those same entries. Per-session active-time sidecars supply estimated active seconds under the configured silence grace. Runtime GC can remove those sidecars before the audit record or provider transcript disappears, so an unavailable active-time figure stays `null`; absent transcript pricing likewise stays `null` rather than becoming zero.
 
+Membership drops only a seat that never opened a turn and has no active time, tool calls, compactions, tokens, or recorded cost. The audit rollup's durable `turn_started_at` keeps a contributor eligible after runtime GC removes its active-time sidecar, including adapters whose transcripts supply no spend or named-tool signal.
+
 ## Enrichment
 
 The store and explicit events decide routing, ranking, and state; enrichment paints the row. `task`, `context_pct`, `context_window`, and `total_tokens` are enrichment: display-only and redactable. A missing value means "the agent did not report it", never zero. The sidebar still paints a context bar for every observed agent, drawing an unreported gauge at a visible 0% baseline.

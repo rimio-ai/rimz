@@ -233,18 +233,39 @@ fn agents_without_a_recorded_contribution_are_omitted() {
     contributor.team = Some("forge".to_owned());
     contributor.role = Some("coder".to_owned());
     contributor.tool_calls.insert("exec".to_owned(), 1);
+    let mut turn_contributor = agent("turn-contributor", "antigravity", 30);
+    turn_contributor.team = Some("durable".to_owned());
+    turn_contributor.role = Some("reviewer".to_owned());
+    turn_contributor.turn_started_at = Some(at(35));
 
-    let report = build_for(&[idle, contributor]);
+    let report = build_for(&[idle, contributor, turn_contributor]);
 
-    assert_eq!(report.totals.agents, 1);
-    assert_eq!(report.groups.len(), 1);
-    assert_eq!(
-        report.groups[0]
-            .team
-            .as_ref()
-            .map(|team| team.name.as_str()),
-        Some("forge")
+    assert_eq!(report.totals.agents, 2);
+    assert_eq!(report.groups.len(), 2);
+    assert!(
+        report
+            .groups
+            .iter()
+            .filter_map(|group| group.team.as_ref())
+            .all(|team| team.name != "idle-team")
     );
-    assert_eq!(report.groups[0].members[0].handle, "@coder");
-    assert_eq!(report.groups[0].members[0].active_secs, None);
+    let members = report
+        .groups
+        .iter()
+        .flat_map(|group| group.members.iter())
+        .collect::<Vec<_>>();
+    assert!(
+        members
+            .iter()
+            .any(|member| member.handle == "@coder" && member.active_secs.is_none())
+    );
+    let durable = members
+        .iter()
+        .find(|member| member.handle == "@reviewer")
+        .expect("turn contributor");
+    assert_eq!(durable.active_secs, None);
+    assert_eq!(durable.tool_calls, 0);
+    assert_eq!(durable.compactions, 0);
+    assert_eq!(durable.tokens, TokenSplit::default());
+    assert_eq!(durable.cost_usd, None);
 }
