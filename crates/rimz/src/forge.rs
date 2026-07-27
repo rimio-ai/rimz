@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
 
 const GH_HEAD_FIELDS: &str = "headRefName,headRepository,headRepositoryOwner,isCrossRepository";
-const TEA_LIST_FIELDS: &str = "index,state,head";
+const TEA_LIST_FIELDS: &str = "index,state,head,created";
 const LIST_LIMIT: &str = "500";
 const HEAD_FIELDS: &str = "head head_branch headRefName source_branch sourceBranch";
 const HEAD_OBJECT_FIELDS: &str = "ref name branch label";
@@ -58,12 +58,14 @@ pub struct PrHead {
 pub struct PrCandidate {
     pub number: u64,
     pub state: WorktreePrState,
+    pub created_at: Option<jiff::Timestamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GhBulkPr {
     pub(crate) number: u64,
     pub(crate) state: WorktreePrState,
+    pub(crate) created_at: Option<jiff::Timestamp>,
     pub(crate) head_ci: Option<WorktreePrCi>,
     pub(crate) merge_sha: Option<String>,
     pub(crate) merge_ci: Option<WorktreePrCi>,
@@ -78,6 +80,7 @@ pub(crate) struct GhBulkResponse {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeaPrDetail {
     pub state: Option<WorktreePrState>,
+    pub created_at: Option<jiff::Timestamp>,
     pub merged_sha: Option<String>,
     pub head_sha: Option<String>,
 }
@@ -449,7 +452,7 @@ pub(crate) fn github_bulk_query(repo_slug: &str, branches: &[&str], oids: &[&str
     fields.push("id".to_owned());
     for (index, branch) in branches.iter().enumerate() {
         fields.push(format!(
-            "pr{index}: pullRequests(first: 10, headRefName: {}, states: [OPEN, MERGED, CLOSED], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number state statusCheckRollup {{ state }} mergeCommit {{ oid statusCheckRollup {{ state }} }} }} }}",
+            "pr{index}: pullRequests(first: 10, headRefName: {}, states: [OPEN, MERGED, CLOSED], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number state createdAt statusCheckRollup {{ state }} mergeCommit {{ oid statusCheckRollup {{ state }} }} }} }}",
             graphql_string(branch)
         ));
     }
@@ -498,6 +501,8 @@ pub(crate) fn parse_github_bulk_response(
     struct Pull {
         number: u64,
         state: String,
+        #[serde(rename = "createdAt")]
+        created_at: Option<String>,
         #[serde(rename = "statusCheckRollup")]
         status_check_rollup: Option<Rollup>,
         #[serde(rename = "mergeCommit")]
@@ -548,6 +553,10 @@ pub(crate) fn parse_github_bulk_response(
                 Some(GhBulkPr {
                     number: pull.number,
                     state,
+                    created_at: pull
+                        .created_at
+                        .as_deref()
+                        .and_then(|created_at| created_at.parse().ok()),
                     head_ci: pull
                         .status_check_rollup
                         .as_ref()
@@ -663,6 +672,11 @@ pub fn parse_tea_pr_detail_json(raw: &str) -> Result<TeaPrDetail, String> {
     };
     Ok(TeaPrDetail {
         state: pr_state_from_value(&value),
+        created_at: value
+            .get("created_at")
+            .or_else(|| value.get("created"))
+            .and_then(Value::as_str)
+            .and_then(|created_at| created_at.parse().ok()),
         merged_sha: text(value.get("merge_commit_sha")),
         head_sha: text(value.get("head").and_then(|head| head.get("sha"))),
     })
@@ -762,6 +776,11 @@ fn tea_pr_candidate(value: &Value) -> Option<(String, PrCandidate)> {
     let candidate = PrCandidate {
         number: pr_number(value)?,
         state: pr_state_from_value(value)?,
+        created_at: value
+            .get("created")
+            .or_else(|| value.get("created_at"))
+            .and_then(Value::as_str)
+            .and_then(|created_at| created_at.parse().ok()),
     };
     Some((pr_head_branch(value)?, candidate))
 }

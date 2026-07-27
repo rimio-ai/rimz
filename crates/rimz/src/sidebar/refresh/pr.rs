@@ -26,6 +26,8 @@ const PR_STATE_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PARALLEL_PR_PROBES: usize = 8;
 const GH_BULK_MAX_ALIASES: usize = 100;
 const UNSUPPORTED_REPO_KEY: &str = "<unsupported>";
+// Local worktree creation and forge PR creation use different clocks.
+const TERMINAL_PR_CLOCK_SKEW: jiff::SignedDuration = jiff::SignedDuration::from_mins(5);
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct PrStateCache {
@@ -55,6 +57,10 @@ pub struct PrLink {
     /// stamp and are re-resolved before reuse.
     #[serde(default)]
     pub branch: Option<String>,
+    /// RimZ worktree creation time this link was resolved for. Legacy links
+    /// have no stamp and are re-resolved before reuse by managed worktrees.
+    #[serde(default)]
+    pub incarnation: Option<jiff::Timestamp>,
     pub state: WorktreePrState,
     #[serde(default)]
     pub number: Option<u64>,
@@ -372,6 +378,8 @@ struct Target {
     remote: forge::RemoteRepo,
     worktree: PathBuf,
     head_sha: Option<String>,
+    marker_created_at: Option<jiff::Timestamp>,
+    from_pr: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -392,6 +400,7 @@ impl Target {
     ) -> PrLink {
         PrLink {
             branch: Some(self.branch.clone()),
+            incarnation: self.marker_created_at,
             state,
             number: Some(number),
             url: self.remote.pr_web_url(number),
@@ -402,10 +411,29 @@ impl Target {
 
     fn stamp_pr_url(&self, mut link: PrLink) -> PrLink {
         link.branch = Some(self.branch.clone());
+        link.incarnation = self.marker_created_at;
         link.url = link
             .number
             .and_then(|number| self.remote.pr_web_url(number));
         link
+    }
+
+    fn owns_link(&self, link: &PrLink) -> bool {
+        link.branch.as_deref() == Some(self.branch.as_str())
+            && link.incarnation == self.marker_created_at
+    }
+
+    fn accepts_terminal_pr(&self, number: u64, created_at: Option<jiff::Timestamp>) -> bool {
+        if self.from_pr == Some(number) {
+            return true;
+        }
+        let (Some(marker_created_at), Some(created_at)) = (self.marker_created_at, created_at)
+        else {
+            return true;
+        };
+        created_at
+            .checked_add(TERMINAL_PR_CLOCK_SKEW)
+            .map_or(true, |created_at| created_at >= marker_created_at)
     }
 }
 
@@ -432,6 +460,9 @@ fn build_targets(needed: &[String], diff_cache: &DiffStatsCache) -> Vec<Target> 
         let Some(forge_cli) = remote.forge_cli() else {
             continue;
         };
+        let marker = crate::worktree::read_marker_from_checkout_metadata(worktree)
+            .ok()
+            .flatten();
         let repo_slug = remote.repo_slug().map(str::to_owned);
         targets.push(Target {
             path: path.clone(),
@@ -443,6 +474,8 @@ fn build_targets(needed: &[String], diff_cache: &DiffStatsCache) -> Vec<Target> 
             remote,
             worktree: worktree.to_path_buf(),
             head_sha: target_head_sha(diff_cache, path).map(str::to_owned),
+            marker_created_at: marker.as_ref().map(|marker| marker.created_at),
+            from_pr: marker.and_then(|marker| marker.from_pr),
         });
     }
     targets
@@ -592,7 +625,7 @@ fn assign_states(
         }
         if let Some(link) = prior
             .get(&target.path)
-            .filter(|link| link.branch.as_deref() == Some(target.branch.as_str()))
+            .filter(|link| target.owns_link(link))
             .cloned()
             .map(|link| target.stamp_pr_url(link))
         {
@@ -832,6 +865,8 @@ fn project_github_group(
     for (target_index, target) in group.targets.iter().enumerate() {
         if !target.trunk
             && let Some(pr) = prs.get(&target_index)
+            && (pr.state == WorktreePrState::Open
+                || target.accepts_terminal_pr(pr.number, pr.created_at))
         {
             let link = match pr.state {
                 WorktreePrState::Open => target.pr_link(pr.state, pr.number, pr.head_ci, None),
@@ -904,7 +939,7 @@ fn probe_tea_repo_group(
             ok = false;
             if let Some(link) = prior
                 .get(&target.path)
-                .filter(|link| link.branch.as_deref() == Some(target.branch.as_str()))
+                .filter(|link| target.owns_link(link))
                 .cloned()
             {
                 states.insert(target.path.clone(), link);
@@ -948,7 +983,7 @@ fn carry_prior_states(
         .filter_map(|target| {
             prior
                 .get(&target.path)
-                .filter(|link| link.branch.as_deref() == Some(target.branch.as_str()))
+                .filter(|link| target.owns_link(link))
                 .cloned()
                 .map(|link| (target.path.clone(), link))
         })
@@ -993,12 +1028,9 @@ fn probe_tea(target: &Target, prior_number: Option<u64>) -> ProbeState {
     let repo = target.repo_slug.as_deref();
     if let Some(number) = prior_number
         && let Some(repo) = repo
-        && let Some(link) = probe_tea_detail(target, repo, number)
+        && let Some(state) = probe_tea_detail(target, repo, number)
     {
-        return ProbeState {
-            state: Some(link),
-            ok: true,
-        };
+        return state;
     }
     let list_args = forge::tea_pr_list_args("all", repo);
     let Some(output) = command_stdout(worktree, "tea", &list_args) else {
@@ -1029,10 +1061,15 @@ fn probe_tea(target: &Target, prior_number: Option<u64>) -> ProbeState {
         candidate.state,
         WorktreePrState::Closed | WorktreePrState::Merged
     ) && let Some(repo) = repo
-        && let Some(link) = probe_tea_detail(target, repo, candidate.number)
+        && let Some(state) = probe_tea_detail(target, repo, candidate.number)
+    {
+        return state;
+    }
+    if candidate.state != WorktreePrState::Open
+        && !target.accepts_terminal_pr(candidate.number, candidate.created_at)
     {
         return ProbeState {
-            state: Some(link),
+            state: None,
             ok: true,
         };
     }
@@ -1042,13 +1079,19 @@ fn probe_tea(target: &Target, prior_number: Option<u64>) -> ProbeState {
     }
 }
 
-fn probe_tea_detail(target: &Target, repo: &str, number: u64) -> Option<PrLink> {
+fn probe_tea_detail(target: &Target, repo: &str, number: u64) -> Option<ProbeState> {
     let worktree = &target.worktree;
     let detail_args = tea_pr_detail_args(number, repo);
     let refs = detail_args.iter().map(String::as_str).collect::<Vec<_>>();
     let output = command_stdout(worktree, "tea", &refs)?;
     let detail = forge::parse_tea_pr_detail_json(&output).ok()?;
     let state = detail.state?;
+    if state != WorktreePrState::Open && !target.accepts_terminal_pr(number, detail.created_at) {
+        return Some(ProbeState {
+            state: None,
+            ok: true,
+        });
+    }
     let merge_sha = (state == WorktreePrState::Merged)
         .then(|| {
             detail
@@ -1074,7 +1117,10 @@ fn probe_tea_detail(target: &Target, repo: &str, number: u64) -> Option<PrLink> 
                 })
         })
         .flatten();
-    Some(target.pr_link(state, number, ci, merge_sha))
+    Some(ProbeState {
+        state: Some(target.pr_link(state, number, ci, merge_sha)),
+        ok: true,
+    })
 }
 
 fn probe_tea_ci(worktree: &Path, repo_slug: &str, branch: &str) -> Option<WorktreePrCi> {

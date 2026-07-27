@@ -23,6 +23,7 @@ fn pr_state_projection_uses_the_given_map() {
         worktree.display().to_string(),
         PrLink {
             branch: None,
+            incarnation: None,
             state: crate::WorktreePrState::Closed,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
@@ -51,6 +52,7 @@ fn pr_state_projection_uses_the_given_map() {
         worktree.display().to_string(),
         PrLink {
             branch: None,
+            incarnation: None,
             state: crate::WorktreePrState::Open,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
@@ -73,6 +75,7 @@ fn pr_state_projection_uses_the_given_map() {
         worktree.display().to_string(),
         PrLink {
             branch: None,
+            incarnation: None,
             state: crate::WorktreePrState::Merged,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
@@ -118,6 +121,7 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
         worktree.display().to_string(),
         PrLink {
             branch: None,
+            incarnation: None,
             state: crate::WorktreePrState::Merged,
             number: Some(91),
             url: None,
@@ -141,6 +145,7 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
         worktree.display().to_string(),
         PrLink {
             branch: None,
+            incarnation: None,
             state: crate::WorktreePrState::Merged,
             number: Some(91),
             url: None,
@@ -179,6 +184,7 @@ fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
             path.display().to_string(),
             PrLink {
                 branch: Some(branch.to_owned()),
+                incarnation: None,
                 state: crate::WorktreePrState::Merged,
                 number: Some(number),
                 url: Some(format!("https://github.com/org/repo/pull/{number}")),
