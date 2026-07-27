@@ -103,12 +103,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
         },
         max_turn_flag: None,
         compact_command: Some("/compact"),
-        presets: super::PresetMatchers {
-            append_system_prompt_file: Some(super::StaticPresetMatcher::Flag(&[
-                "--append-system-prompt-file",
-            ])),
-            ..super::PresetMatchers::EMPTY
-        },
+        presets: super::PresetMatchers::EMPTY,
     },
 };
 

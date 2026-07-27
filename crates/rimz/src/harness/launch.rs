@@ -309,6 +309,14 @@ impl ExecAction {
             | Self::Fork { extra_args, .. } => extra_args,
         }
     }
+
+    pub fn extra_args_mut(&mut self) -> &mut Vec<String> {
+        match self {
+            Self::Launch { extra_args, .. }
+            | Self::Resume { extra_args, .. }
+            | Self::Fork { extra_args, .. } => extra_args,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -367,6 +375,8 @@ impl ProviderAccountState {
 pub struct ExecRequest {
     pub kind: AgentKind,
     pub action: ExecAction,
+    #[serde(default)]
+    pub system_prompt: crate::harness::prompt_compose::SystemPromptSources,
     #[serde(default)]
     pub provider_account: ProviderAccountState,
     pub run_id: Option<RunId>,
@@ -648,6 +658,7 @@ pub fn preflight_agent_kind(
                 prompt: None,
                 extra_args: Vec::new(),
             },
+            system_prompt: Default::default(),
             provider_account: ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

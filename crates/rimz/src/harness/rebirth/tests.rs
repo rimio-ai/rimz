@@ -697,7 +697,7 @@ fn team_machine() -> MachineConfig {
             effort: None,
             budget: None,
             system_prompt_file: None,
-            append_system_prompt_file: None,
+            append_system_prompt_files: None,
             args: None,
         },
     );
@@ -710,7 +710,7 @@ fn team_machine() -> MachineConfig {
             effort: None,
             budget: None,
             system_prompt_file: None,
-            append_system_prompt_file: None,
+            append_system_prompt_files: None,
             args: None,
         },
     );
@@ -726,7 +726,7 @@ fn team_machine() -> MachineConfig {
                     effort: None,
                     budget: None,
                     system_prompt_file: None,
-                    append_system_prompt_file: None,
+                    append_system_prompt_files: None,
                     args: None,
                 },
                 RoleBinding {
@@ -737,7 +737,7 @@ fn team_machine() -> MachineConfig {
                     effort: None,
                     budget: None,
                     system_prompt_file: None,
-                    append_system_prompt_file: None,
+                    append_system_prompt_files: None,
                     args: None,
                 },
             ],

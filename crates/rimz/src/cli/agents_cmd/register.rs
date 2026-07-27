@@ -101,6 +101,7 @@ bin = "{kind}"
 args = []
 # model-flag = "--model"
 # effort-flag = "--effort"
+# system-prompt-file-flag = "--system-prompt-file"
 # resume = ["{kind}", "--resume", "{{session_id}}"]
 # compact-command = "/compact"
 

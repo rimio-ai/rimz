@@ -243,7 +243,6 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
                 flags: &["-c", "--config"],
                 key: "model_instructions_file",
             }),
-            append_system_prompt_file: None,
         },
     },
 };

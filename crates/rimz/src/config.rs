@@ -53,6 +53,7 @@ mod web;
 mod worktree;
 
 pub use accounts::{AccountBudgetConfigError, AccountsConfig, UsageLimitUsd};
+pub(crate) use agents::retired_append_prompt_key;
 pub use agents::{
     AgentsConfig, CommandsConfig, LaunchPlacement, Profile, ProfilesConfig, RoleBinding, Team,
     TeamsConfig,
@@ -291,6 +292,8 @@ pub enum ConfigErr {
         "removed config table in {path}: {detail} (run `rimz config init --print` for the current shape)"
     )]
     RemovedTable { path: PathBuf, detail: String },
+    #[error("removed config key in {path}: {detail}")]
+    RemovedKey { path: PathBuf, detail: String },
 }
 
 impl ConfigErr {
@@ -303,7 +306,8 @@ impl ConfigErr {
             | Self::Notifications { path, .. }
             | Self::Loop { path, .. }
             | Self::AccountBudget { path, .. }
-            | Self::RemovedTable { path, .. } => path,
+            | Self::RemovedTable { path, .. }
+            | Self::RemovedKey { path, .. } => path,
         }
     }
 
@@ -316,7 +320,9 @@ impl ConfigErr {
             Self::Notifications { source, .. } => source.to_string(),
             Self::Loop { source, .. } => source.to_string(),
             Self::AccountBudget { source, .. } => source.to_string(),
-            Self::Io { .. } | Self::RemovedTable { .. } => self.to_string(),
+            Self::Io { .. } | Self::RemovedTable { .. } | Self::RemovedKey { .. } => {
+                self.to_string()
+            }
         }
     }
 
@@ -967,10 +973,17 @@ fn check_removed_agents_tables(path: &Path, text: &str) -> Result<()> {
             ));
         }
     }
+    if let Some(detail) = agents::retired_append_prompt_key(&doc) {
+        return Err(ConfigErr::RemovedKey {
+            path: path.to_path_buf(),
+            detail,
+        });
+    }
     Ok(())
 }
 
 fn parse_agents_fragment_text(path: &Path, text: &str) -> Result<AgentsFragment> {
+    check_removed_agents_tables(path, text)?;
     let mut file: AgentsFragmentFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
         diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),

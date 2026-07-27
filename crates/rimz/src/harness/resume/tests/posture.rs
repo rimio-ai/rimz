@@ -14,7 +14,7 @@ fn resume_replays_the_profile_declared_posture() {
         Profile {
             model: Some("opus".to_owned()),
             effort: Some("high".to_owned()),
-            append_system_prompt_file: Some(prompt.path().to_path_buf()),
+            append_system_prompt_files: Some(vec![prompt.path().to_path_buf()]),
             ..profile("claude")
         },
     );

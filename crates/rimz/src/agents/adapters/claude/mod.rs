@@ -155,9 +155,6 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
             system_prompt_file: Some(super::StaticPresetMatcher::Flag(&["--system-prompt-file"])),
-            append_system_prompt_file: Some(super::StaticPresetMatcher::Flag(&[
-                "--append-system-prompt-file",
-            ])),
         },
     },
 };

@@ -6,7 +6,7 @@ use std::sync::mpsc;
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the agent launch workspace")?;
-    let request = rimz::harness::launch::decode_exec_request(
+    let mut request = rimz::harness::launch::decode_exec_request(
         &args.kind,
         args.worktree_path.as_deref(),
         &args.request,
@@ -16,6 +16,27 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let run_context = run_exec_context(&request, &invocation)?;
     let launch_identity = exec_launch_identity(&request)?;
     let attach_target = exec_attach_target(&request);
+    if !request.system_prompt.is_empty() {
+        let prompt_args = (|| -> Result<Vec<String>> {
+            let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+                .context("preparing prompt runtime")?;
+            runtime.ensure_dirs().context("preparing prompt runtime")?;
+            rimz::harness::prompt_compose::materialize_system_prompt(
+                &request.kind,
+                &request.system_prompt,
+                &runtime,
+            )
+            .context("materializing system prompt")
+        })();
+        match prompt_args {
+            Ok(prompt_args) => request.action.extra_args_mut().extend(prompt_args),
+            Err(err) => {
+                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+                fail_run_on_exec_precondition(run_context.as_ref());
+                return Err(err);
+            }
+        }
+    }
     let entered_worktree = match request.worktree_path.as_deref() {
         Some(path) => match enter_worktree(path) {
             Ok(path) => Some(path),

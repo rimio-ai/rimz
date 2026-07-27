@@ -128,6 +128,7 @@ pub(super) struct RunPaneCmdArgs<'a> {
     pub(super) prompt: &'a str,
     pub(super) cleanup_worktree: bool,
     pub(super) permission_args: &'a [String],
+    pub(super) system_prompt: &'a rimz::harness::prompt_compose::SystemPromptSources,
     pub(super) self_cleanup_on_completion: bool,
     pub(super) provider_account_binding: Option<&'a rimz::agents::ProviderAccountBinding>,
 }
@@ -142,6 +143,7 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
                 prompt: Some(args.prompt.to_owned()),
                 extra_args: args.permission_args.to_vec(),
             },
+            system_prompt: args.system_prompt.clone(),
             provider_account: args.provider_account_binding.map_or(
                 rimz::harness::launch::ProviderAccountState::Unbound,
                 |binding| rimz::harness::launch::ProviderAccountState::Pending {

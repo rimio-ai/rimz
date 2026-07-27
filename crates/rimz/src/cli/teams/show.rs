@@ -103,16 +103,21 @@ fn write_report(w: &mut impl Write, report: &TeamReport) -> Result<()> {
 }
 
 fn role_cells(role: &RoleReport) -> [render::Cell; 7] {
-    let prompt = match (
-        role.system_prompt_file.as_deref(),
-        role.append_system_prompt_file.as_deref(),
-    ) {
-        (Some(replace), Some(append)) => {
-            format!("{} +{}", replace.display(), append.display())
-        }
-        (Some(replace), None) => replace.display().to_string(),
-        (None, Some(append)) => format!("+{}", append.display()),
-        (None, None) => "-".to_owned(),
+    let mut prompt = role
+        .system_prompt_file
+        .as_deref()
+        .map(|path| path.display().to_string())
+        .into_iter()
+        .collect::<Vec<_>>();
+    prompt.extend(
+        role.append_system_prompt_files
+            .iter()
+            .map(|path| format!("+{}", path.display())),
+    );
+    let prompt = if prompt.is_empty() {
+        "-".to_owned()
+    } else {
+        prompt.join(" ")
     };
     [
         render::cell(&role.role).fg(render::palette::accent()),
@@ -170,7 +175,7 @@ mod tests {
                 effort: Some("high".to_owned()),
                 mode: Some("auto".to_owned()),
                 system_prompt_file: Some("planner.md".into()),
-                append_system_prompt_file: None,
+                append_system_prompt_files: Vec::new(),
             }],
             valid: true,
             error: None,

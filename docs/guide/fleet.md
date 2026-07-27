@@ -259,6 +259,10 @@ model = "fable"
 mode = "auto"
 effort = "high"
 system-prompt-file = "~/.agents/prompts/claude-planner.md"  # its role, craft, and boundaries
+append-system-prompt-files = [                             # composed after the base, in this order
+  "~/.agents/prompts/review-policy.md",
+  "~/.agents/prompts/rust-style.md",
+]
 args = "--strict-mcp-config --tools 'Bash,Read,Edit,Write,AskUserQuestion,WebFetch,WebSearch,Skill,Agent(Explore,Plan)'"  # plan and explore, nothing that ships
 ```
 
@@ -274,12 +278,12 @@ Each field renders into the base CLI's own flag, so a profile can pin anything t
 | `model` | the model to run | `--model opus` |
 | `effort` | reasoning effort, on the provider's own ladder | `--effort high` |
 | `budget` | dollar cap for the session, or per local day with `/day` | kept and enforced by RimZ ([budgets](./budget.md)) |
-| `system-prompt-file` | replace the system prompt with the role's craft and rules | `--system-prompt-file …` |
-| `append-system-prompt-file` | keep the base prompt and add rules on top | `--append-system-prompt-file …` |
+| `system-prompt-file` | first prompt piece; replaces the provider's system prompt | `--system-prompt-file …` |
+| `append-system-prompt-files` | ordered prompt pieces composed after the first; the whole composition replaces the provider prompt | repeat `--append-system-prompt-file …` |
 | `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) | see [permission modes](#set-a-permission-mode) |
 | `args` | raw flags handed to the stock CLI | verbatim |
 
-The system prompt and `args` are what make a profile targeted. There is no RimZ-specific tools setting: you narrow the toolset with the agent's own flags through `args` — `--tools` for Claude, `--sandbox` for Codex — and a narrow tool surface plus a focused prompt is what keeps a specialized agent fast and on-task.
+The system prompt and `args` are what make a profile targeted. RimZ separates prompt pieces with blank lines and sends the composition through the adapter's replacement mechanism. Claude, Codex, and Qwen support that typed surface; other agents fail fast rather than silently ignoring it. Raw `args` remain the provider-specific escape hatch — including Droid's native append flag — and there is no RimZ-specific tools setting: narrow the toolset with the agent's own flags through `args` (`--tools` for Claude, `--sandbox` for Codex).
 
 When does a bare kind stop being enough? The moment you type the same shaping flags a second time. One planner prompt you keep reusing, a reviewer that must never commit, a cheap low-effort triage agent — each is a profile.
 
@@ -287,7 +291,18 @@ Override any field for one launch with the matching flag, which wins over the pr
 
 ```sh
 rimz agents claude --model opus --effort xhigh --budget 5 --system-prompt-file ./review.md
+rimz agents claude-planner --append-system-prompt-file ./local.md --append-system-prompt-file ./task.md
 ```
+
+A repeated `--append-system-prompt-file` preserves command-line order and replaces the profile's entire `append-system-prompt-files` list for that launch. The old singular configuration key is a hard error; use the plural array even for one fragment.
+
+To try a profile on a different provider without changing it, add `--agent`:
+
+```sh
+rimz agents claude-planner --agent codex --model gpt-5.3-codex
+```
+
+The launched handle is still `@claude-planner`. Its configured model, effort, and raw `args` carry to Codex before command-line overrides apply, so incompatible typed settings fail before a pane opens rather than disappearing. This override is fresh-launch only and is not written back to the profile; a later interactive restart refuses the provider mismatch and points to an explicit fresh `--agent` launch.
 
 On budgets specifically: `--budget 5` parks the agent when its session cost reaches $5, `--budget 20/day` caps each local calendar day instead, and `rimz agents budget @coder` inspects or changes the cap while the agent runs. The same dollar-cap model scales up to loop tasks, the room, and a provider login: the [budgets guide](./budget.md) owns it.
 

@@ -19,6 +19,7 @@ fn exec_request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
         kind: AgentKind::new_unchecked(kind),
         action,
+        system_prompt: Default::default(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -188,6 +189,30 @@ fn trust_rejects_project_layout_table_with_per_machine_fix() {
         .failure()
         .stderr(contains("[layout]"))
         .stderr(contains("per-machine"));
+}
+
+#[test]
+fn trust_rejects_singular_append_prompt_key_with_plural_fix() {
+    let env = Env::new();
+    env.write_config(
+        &env.project_root,
+        "[profiles.x]\nagent = \"claude\"\nappend-system-prompt-file = \"x.md\"\n",
+    );
+    env.rimz()
+        .args(["trust", "status"])
+        .assert()
+        .failure()
+        .stderr(contains("append-system-prompt-files"));
+}
+
+#[test]
+fn config_without_prompt_fragments_keeps_legacy_surface_hash() {
+    let config: rimz::trust::ProjectConfig =
+        toml::from_str("[profiles.x]\nagent = \"claude\"\n").expect("config");
+    assert_eq!(
+        rimz::trust::executable_surface_hash(&config),
+        "sha256:74540a29de2af542ed3c03114b07a7e1f51189584dab6ed978f0fa2002ba407e"
+    );
 }
 
 #[test]

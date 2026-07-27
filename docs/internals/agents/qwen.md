@@ -24,7 +24,7 @@ Qwen Code is a standalone, eagerly registered adapter. RimZ installs native hook
 
 ## Launch and resume
 
-RimZ preserves Qwen's configured model by default because `security.auth.selectedType` can route to provider-specific catalogs; an `agents.toml` model preset adds `--model` explicitly. Manual compaction sends `/compress` (`/summarize` is Qwen's alias).
+RimZ preserves Qwen's configured model by default because `security.auth.selectedType` can route to provider-specific catalogs; an `agents.toml` model preset adds `--model` explicitly. Qwen's system-prompt flag takes text rather than a file path, so the shared exec materializer reads `system-prompt-file`, composes any ordered `append-system-prompt-files`, and passes the result through `--system-prompt`. This gives Qwen the same replacement semantics as path-flag adapters without putting provider-specific text in the profile model. Manual compaction sends `/compress` (`/summarize` is Qwen's alias).
 
 ## Context and transcript
 
@@ -64,7 +64,6 @@ The transcript groups explicit and implicit cache hits in `cachedContentTokenCou
 
 Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
 
-- **System-prompt presets are rejected.** Qwen 0.19.9 exposes direct `--system-prompt` text, while RimZ presets model system prompts as file paths. Qwen system-prompt presets stay rejected until the shared preset abstraction can express text or a safe file-to-text rendering contract.
 - **The runtime sidecar stays unread.** Hooks bind the session to the pane through the hook child process and `RIMZ_AGENT_PID`. Qwen's `<session>.runtime.json` can establish that binding before the first hook and recover it after hook gaps, but consuming it needs a shared adapter-owned pane/session attribution seam with descendant-process and PID-reuse validation. The adapter leaves it deferred rather than adding a Qwen-only binding path.
 - **Dual output stays optional.** `--json-file` plus `--input-file` can improve prompt and permission coverage, but adopting it changes pane launch ownership and adds control-channel races. Hooks and the native pane remain the current decision path.
 - **Multi-provider endpoints, subscription metering, and provider-specific off-book pricing** are the declared cost gaps.

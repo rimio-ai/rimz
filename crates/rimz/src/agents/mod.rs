@@ -164,9 +164,9 @@ pub struct LaunchPreset {
     /// Absolute path to a file whose contents replace the agent's base system
     /// prompt. Resolved and existence-checked by the launcher before render.
     pub system_prompt_file: Option<PathBuf>,
-    /// Absolute path to a file whose contents are appended to the agent's base
-    /// system prompt. Resolved and existence-checked by the launcher before render.
-    pub append_system_prompt_file: Option<PathBuf>,
+    /// Absolute paths composed in order into the replacement system prompt.
+    /// A non-empty launch override replaces the profile's complete list.
+    pub append_system_prompt_files: Vec<PathBuf>,
 }
 
 impl LaunchPreset {
@@ -174,7 +174,7 @@ impl LaunchPreset {
         self.model.as_deref().is_none_or(str::is_empty)
             && self.effort.as_deref().is_none_or(str::is_empty)
             && self.system_prompt_file.is_none()
-            && self.append_system_prompt_file.is_none()
+            && self.append_system_prompt_files.is_empty()
     }
 }
 
@@ -183,7 +183,6 @@ pub enum PresetField {
     Model,
     Effort,
     SystemPromptFile,
-    AppendSystemPromptFile,
 }
 
 impl PresetField {
@@ -192,7 +191,6 @@ impl PresetField {
             Self::Model => "model",
             Self::Effort => "effort",
             Self::SystemPromptFile => "system-prompt-file",
-            Self::AppendSystemPromptFile => "append-system-prompt-file",
         }
     }
 
@@ -202,7 +200,6 @@ impl PresetField {
             Self::Model => preset.model = Some(value),
             Self::Effort => preset.effort = Some(value),
             Self::SystemPromptFile => preset.system_prompt_file = Some(value.into()),
-            Self::AppendSystemPromptFile => preset.append_system_prompt_file = Some(value.into()),
         }
         preset
     }
@@ -213,6 +210,8 @@ impl PresetField {
 pub enum PresetArgMatcher {
     /// A single-use named flag: `--model VALUE` or `--model=VALUE`.
     Flag(Vec<String>),
+    /// A flag whose value is prompt text rather than a file path.
+    TextFlag(Vec<String>),
     /// A repeatable config override carrying the field as `<flag> <key>=VALUE`.
     ConfigKey { flags: Vec<String>, key: String },
 }
@@ -229,7 +228,7 @@ impl PresetArgMatcher {
         let mut index = 0;
         while index < argv.len() {
             let occurrence = match self {
-                Self::Flag(flags) => flags.iter().find_map(|flag| {
+                Self::Flag(flags) | Self::TextFlag(flags) => flags.iter().find_map(|flag| {
                     if argv[index] == *flag {
                         argv.get(index + 1).map(|value| PresetArgOccurrence {
                             argv_range: index..index + 2,
@@ -278,7 +277,7 @@ impl PresetArgMatcher {
 
     pub(crate) fn display_setting(&self, value: &str) -> String {
         match self {
-            Self::Flag(flags) => flags
+            Self::Flag(flags) | Self::TextFlag(flags) => flags
                 .first()
                 .map_or_else(|| value.to_owned(), |flag| format!("{flag} {value}")),
             Self::ConfigKey { key, .. } => format!("{key} {value}"),

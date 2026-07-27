@@ -33,7 +33,7 @@ fn planner_profiles() -> ProfilesConfig {
             effort: None,
             budget: None,
             system_prompt_file: None,
-            append_system_prompt_file: None,
+            append_system_prompt_files: None,
             args: None,
         },
     );
@@ -68,6 +68,7 @@ fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
         kind: AgentKind::new_unchecked(kind),
         action,
+        system_prompt: Default::default(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -149,7 +150,10 @@ mod parse {
                 args.launch.cohort.description.as_deref(),
                 args.launch.effort.as_deref(),
                 args.launch.system_prompt_file.as_deref(),
-                args.launch.append_system_prompt_file.as_deref(),
+                args.launch
+                    .append_system_prompt_files
+                    .first()
+                    .map(PathBuf::as_path),
                 args.launch.max_turns,
             ),
             (
@@ -303,6 +307,7 @@ mod parse {
             &["--name", "swift-otter"],
             &["--description", "work"],
             &["--model", "opus"],
+            &["--agent", "codex"],
             &["--effort", "high"],
             &["--budget", "5"],
             &["--ask"],
@@ -393,6 +398,7 @@ mod parse {
                 prompt: Some("fix it".to_owned()),
                 extra_args: launch_extra,
             },
+            system_prompt: Default::default(),
             provider_account: ProviderAccountState::Unbound,
             run_id: Some(
                 "run_0123456789abcdef0123456789abcdef"
@@ -629,6 +635,25 @@ mod launch_options {
         assert_eq!(request.effort.as_deref(), Some(" low "));
     }
 
+    #[test]
+    fn agent_override_parses_and_unknown_kind_lists_choices() {
+        let args = parse_agents(&["rimz", "coder", "--agent", "claude"]);
+        assert_eq!(args.launch.agent.as_deref(), Some("claude"));
+        assert_eq!(
+            resolve_agent_override(args.launch.agent.as_deref())
+                .expect("known")
+                .as_ref()
+                .map(AgentKind::as_str),
+            Some("claude")
+        );
+
+        let err = resolve_agent_override(Some("ghost")).expect_err("unknown");
+        let message = err.to_string();
+        assert!(message.contains("unknown agent kind `ghost`"), "{message}");
+        assert!(message.contains("claude"), "{message}");
+        assert!(message.contains("codex"), "{message}");
+    }
+
     fn resolve_and_validate(
         args: &AgentsArgs,
         machine: &MachineConfig,
@@ -636,10 +661,12 @@ mod launch_options {
     ) -> Result<(ResolvedLaunch, LaunchPreset)> {
         let effective =
             rimz::config::effective::load(&machine.agents, root, &root.join("config-home"))?;
-        let resolved = rimz::harness::plan::resolve_launch(
+        let kind_override = resolve_agent_override(args.launch.agent.as_deref())?;
+        let resolved = rimz::harness::plan::resolve_launch_with_kind_override(
             &effective,
             &machine.agents.commands,
             args.launch.spec.as_deref(),
+            kind_override.as_ref(),
         )?;
         let preset = validate_resolved_launch_inputs(
             args,
@@ -656,17 +683,30 @@ mod launch_options {
         let dir = tempfile::tempdir().expect("temp dir");
         let prompt = dir.path().join("prompt.md");
         let append = dir.path().join("append.md");
+        let second = dir.path().join("second.md");
         std::fs::write(&prompt, "be concise").expect("write prompt");
         std::fs::write(&append, "follow project rules").expect("write append");
+        std::fs::write(&second, "then verify").expect("write second");
         let system_flag = format!("--system-prompt-file={}", prompt.display());
         let append_flag = format!("--append-system-prompt-file={}", append.display());
-        let args = parse_agents(&["rimz", "claude", "hi", &system_flag, &append_flag]);
+        let second_flag = format!("--append-system-prompt-file={}", second.display());
+        let args = parse_agents(&[
+            "rimz",
+            "claude",
+            "hi",
+            &system_flag,
+            &append_flag,
+            &second_flag,
+        ]);
         let preset = launch_override_preset(&args).expect("resolve prompt files");
         assert_eq!(
-            (preset.system_prompt_file, preset.append_system_prompt_file),
+            (preset.system_prompt_file, preset.append_system_prompt_files),
             (
                 Some(prompt.canonicalize().unwrap()),
-                Some(append.canonicalize().unwrap())
+                vec![
+                    append.canonicalize().unwrap(),
+                    second.canonicalize().unwrap()
+                ]
             )
         );
 
@@ -723,7 +763,7 @@ mod launch_options {
                 effort: None,
                 budget: None,
                 system_prompt_file: None,
-                append_system_prompt_file: None,
+                append_system_prompt_files: None,
                 args: Some("--model raw".to_owned()),
             },
         );
@@ -1280,6 +1320,7 @@ fn bare_exec_args() -> ExecRequest {
             prompt: None,
             extra_args: Vec::new(),
         },
+        system_prompt: Default::default(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,

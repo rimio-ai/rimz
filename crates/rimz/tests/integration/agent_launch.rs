@@ -27,6 +27,7 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
             prompt: prompt.map(ToOwned::to_owned),
             extra_args: Vec::new(),
         },
+        system_prompt: Default::default(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -62,6 +63,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             session_id: session_id.to_string(),
             extra_args: Vec::new(),
         },
+        system_prompt: Default::default(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -117,6 +119,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
         let request = ExecRequest {
             kind: kind.clone(),
             action,
+            system_prompt: Default::default(),
             provider_account: ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

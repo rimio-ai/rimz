@@ -39,15 +39,27 @@ pub enum ResolveLaunchError {
     Effective(#[from] crate::config::effective::EffectiveConfigErr),
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "{origin} {field} `{}` not found; create it or fix the launch config",
-    path.display()
-)]
-pub struct ProfilePromptFileError {
-    pub origin: String,
-    pub field: &'static str,
-    pub path: PathBuf,
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ProfilePromptFileError {
+    #[error(
+        "{origin} {field} `{}` not found; create it or fix the launch config",
+        path.display()
+    )]
+    Missing {
+        origin: String,
+        field: &'static str,
+        path: PathBuf,
+    },
+    #[error(
+        "{origin} {field} `{}` cannot be read as text: {reason}",
+        path.display()
+    )]
+    Unreadable {
+        origin: String,
+        field: &'static str,
+        path: PathBuf,
+        reason: String,
+    },
 }
 
 /// Resolve effective profiles/teams without applying runtime launch options.
@@ -56,16 +68,30 @@ pub fn resolve_launch(
     commands: &crate::config::CommandsConfig,
     spec: Option<&str>,
 ) -> std::result::Result<ResolvedLaunch, ResolveLaunchError> {
-    let layout =
-        match crate::harness::spec::resolve_spec(spec, &launch.profiles, commands, &launch.teams) {
-            Ok(layout) => layout,
-            Err(err @ crate::harness::spec::LayoutErr::UnknownTeam { .. })
-            | Err(err @ crate::harness::spec::LayoutErr::UnknownCell { .. }) => {
-                launch.block_untrusted_reference(spec, commands)?;
-                return Err(err.into());
-            }
-            Err(err) => return Err(err.into()),
-        };
+    resolve_launch_with_kind_override(launch, commands, spec, None)
+}
+
+pub fn resolve_launch_with_kind_override(
+    launch: &crate::config::effective::LaunchAgents,
+    commands: &crate::config::CommandsConfig,
+    spec: Option<&str>,
+    kind_override: Option<&crate::ids::AgentKind>,
+) -> std::result::Result<ResolvedLaunch, ResolveLaunchError> {
+    let layout = match crate::harness::spec::resolve_spec_with_kind_override(
+        spec,
+        &launch.profiles,
+        commands,
+        &launch.teams,
+        kind_override,
+    ) {
+        Ok(layout) => layout,
+        Err(err @ crate::harness::spec::LayoutErr::UnknownTeam { .. })
+        | Err(err @ crate::harness::spec::LayoutErr::UnknownCell { .. }) => {
+            launch.block_untrusted_reference(spec, commands)?;
+            return Err(err.into());
+        }
+        Err(err) => return Err(err.into()),
+    };
     let team_name = spec
         .and_then(|spec| crate::harness::spec::spec_team(spec, &launch.teams))
         .map(str::to_owned);
@@ -81,30 +107,54 @@ pub fn validate_profile_prompt_files(
     layout: &LayoutSpec,
 ) -> std::result::Result<(), ProfilePromptFileError> {
     for cell in layout.agent_cells() {
-        for (field, path) in [
-            ("system-prompt-file", cell.system_prompt_file.as_ref()),
-            (
-                "append-system-prompt-file",
-                cell.append_system_prompt_file.as_ref(),
-            ),
-        ] {
-            let Some(path) = path else {
-                continue;
-            };
-            if std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
-                continue;
-            }
-            let origin = match (cell.launch.role.as_deref(), cell.launch.profile.as_deref()) {
-                (Some(role), Some(profile)) => format!("role `{role}` profile `{profile}`"),
-                (Some(role), None) => format!("role `{role}`"),
-                (None, Some(profile)) => format!("profile `{profile}`"),
-                (None, None) => "agent cell".to_owned(),
-            };
-            return Err(ProfilePromptFileError {
-                origin,
+        validate_agent_prompt_files(cell)?;
+    }
+    Ok(())
+}
+
+fn validate_agent_prompt_files(
+    cell: &AgentCell,
+) -> std::result::Result<(), ProfilePromptFileError> {
+    let origin = || match (cell.launch.role.as_deref(), cell.launch.profile.as_deref()) {
+        (Some(role), Some(profile)) => format!("role `{role}` profile `{profile}`"),
+        (Some(role), None) => format!("role `{role}`"),
+        (None, Some(profile)) => format!("profile `{profile}`"),
+        (None, None) => "agent cell".to_owned(),
+    };
+    let text_base = !cell.append_system_prompt_files.is_empty()
+        || crate::agents::find_definition(cell.kind.as_str())
+            .and_then(|adapter| {
+                adapter
+                    .spec()
+                    .launch
+                    .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile)
+            })
+            .is_some_and(|matcher| matches!(matcher, crate::agents::PresetArgMatcher::TextFlag(_)));
+    let prompt_files = cell
+        .system_prompt_file
+        .as_ref()
+        .map(|path| ("system-prompt-file", path, text_base))
+        .into_iter()
+        .chain(
+            cell.append_system_prompt_files
+                .iter()
+                .map(|path| ("append-system-prompt-files", path, true)),
+        );
+    for (field, path, require_text) in prompt_files {
+        if !std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
+            return Err(ProfilePromptFileError::Missing {
+                origin: origin(),
                 field,
                 path: path.clone(),
             });
+        }
+        if require_text {
+            std::fs::read_to_string(path).map_err(|source| ProfilePromptFileError::Unreadable {
+                origin: origin(),
+                field,
+                path: path.clone(),
+                reason: source.to_string(),
+            })?;
         }
     }
     Ok(())
@@ -183,7 +233,11 @@ impl fmt::Display for LaunchFinalizeWarning {
 pub enum LaunchFinalizeError {
     #[error("unknown agent kind `{kind}`")]
     UnknownAdapter { kind: String },
-    #[error("{agent} does not support --{field}")]
+    #[error(transparent)]
+    PromptFile(#[from] ProfilePromptFileError),
+    #[error(
+        "{agent} does not support --{field}; remove it or put provider-specific flags in `args`"
+    )]
     UnsupportedPresetField {
         agent: &'static str,
         field: &'static str,
@@ -199,7 +253,9 @@ impl LaunchFinalizeError {
     pub fn warnings(&self) -> &[LaunchFinalizeWarning] {
         match self {
             Self::UnsupportedMaxTurns { warnings, .. } => warnings,
-            Self::UnknownAdapter { .. } | Self::UnsupportedPresetField { .. } => &[],
+            Self::UnknownAdapter { .. }
+            | Self::PromptFile(_)
+            | Self::UnsupportedPresetField { .. } => &[],
         }
     }
 }
@@ -254,6 +310,13 @@ fn finalize_agent_cell(
         let adapter = adapter.ok_or_else(|| LaunchFinalizeError::UnknownAdapter {
             kind: cell.kind.to_string(),
         })?;
+        if let Some(path) = options.preset.system_prompt_file.as_ref() {
+            cell.system_prompt_file = Some(path.clone());
+        }
+        if !options.preset.append_system_prompt_files.is_empty() {
+            cell.append_system_prompt_files
+                .clone_from(&options.preset.append_system_prompt_files);
+        }
         cell.args.extend(
             adapter
                 .spec()
@@ -279,6 +342,8 @@ fn finalize_agent_cell(
             overridden.push(crate::agents::PresetField::Effort);
         }
     }
+    validate_system_prompt_support(cell, adapter)?;
+    validate_agent_prompt_files(cell)?;
     cell.args.extend(options.passthrough.iter().cloned());
     if let Some(budget) = options.budget {
         cell.launch.budget = Some(budget.to_string());
@@ -323,18 +388,6 @@ fn reconcile_preset_args(
     let declared = [
         (PresetField::Model, cell.launch.model.clone()),
         (PresetField::Effort, cell.launch.effort.clone()),
-        (
-            PresetField::SystemPromptFile,
-            cell.system_prompt_file
-                .as_deref()
-                .map(|path| path.to_string_lossy().into_owned()),
-        ),
-        (
-            PresetField::AppendSystemPromptFile,
-            cell.append_system_prompt_file
-                .as_deref()
-                .map(|path| path.to_string_lossy().into_owned()),
-        ),
     ];
 
     for (field, value) in declared {
@@ -379,6 +432,37 @@ fn reconcile_preset_args(
             .map_err(unsupported_preset_error)?;
         remove_occurrences(&mut cell.args, &occurrences);
         cell.args.extend(canonical);
+    }
+    Ok(())
+}
+
+pub fn validate_system_prompt_support(
+    cell: &AgentCell,
+    adapter: Option<&crate::agents::AgentDefinition>,
+) -> std::result::Result<(), LaunchFinalizeError> {
+    let field = if !cell.append_system_prompt_files.is_empty() {
+        Some("append-system-prompt-files")
+    } else if cell.system_prompt_file.is_some() {
+        Some("system-prompt-file")
+    } else {
+        None
+    };
+    let Some(field) = field else {
+        return Ok(());
+    };
+    let adapter = adapter.ok_or_else(|| LaunchFinalizeError::UnknownAdapter {
+        kind: cell.kind.to_string(),
+    })?;
+    if adapter
+        .spec()
+        .launch
+        .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile)
+        .is_none()
+    {
+        return Err(LaunchFinalizeError::UnsupportedPresetField {
+            agent: adapter.spec().kind,
+            field,
+        });
     }
     Ok(())
 }
@@ -617,6 +701,10 @@ pub fn compile_layout_panes(
     layout: &LayoutSpec,
     params: LayoutPaneParams<'_>,
 ) -> Result<LayoutPanes> {
+    validate_profile_prompt_files(layout)?;
+    for cell in layout.agent_cells() {
+        validate_system_prompt_support(cell, crate::agents::find_definition(cell.kind.as_str()))?;
+    }
     let agent_count = layout.agent_cells().count();
     if let Some(seeds) = params.resume_seeds
         && seeds.len() != agent_count
@@ -699,6 +787,7 @@ fn fresh_agent_pane(
                     prompt: launch.prompt.clone(),
                     extra_args: cell.args.clone(),
                 },
+                system_prompt: crate::harness::prompt_compose::SystemPromptSources::from_cell(cell),
                 provider_account: crate::harness::launch::ProviderAccountState::Unbound,
                 run_id: None,
                 worktree_path: params.cleanup_worktree.then(|| params.cwd.to_path_buf()),

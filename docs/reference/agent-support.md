@@ -96,6 +96,29 @@ One row per agent, ordered by support tier — Claude and Codex, then the alpha 
 
 Claude Code is the reference integration and reads full across all six; each other agent exposes less of itself to a local observer. Breadth here is independent of support tier — an experimental agent can carry a wide surface, and a daily driver can leave a cell partial by choice. A ✗ is a declared absence the sidebar and `rimz doctor` read from the same place, so a missing surface renders as a stated gap rather than a silent bug.
 
+## Launch-prompt replacement
+
+Profile `system-prompt-file` and ordered `append-system-prompt-files` use one provider-neutral contract: RimZ composes the declared pieces, then replaces the provider's system prompt. The CLI keeps the repeatable singular spelling `--append-system-prompt-file`. This launch capability is separate from the observation matrices above.
+
+| Agent | Typed prompt replacement | Provider rendering |
+| --- | :--: | --- |
+| Claude Code | ✓ | `--system-prompt-file <path>` |
+| Codex | ✓ | `-c model_instructions_file=<path>` |
+| Qwen Code | ✓ | file contents through `--system-prompt <text>` |
+| Droid | ✗ | native append only; use its flag through raw profile `args` |
+| Pi | ✗ | no verified replacement flag |
+| OpenCode | ✗ | no verified replacement flag |
+| Antigravity | ✗ | no verified replacement flag |
+| Copilot | ✗ | no verified replacement flag |
+| Cursor | ✗ | no verified replacement flag |
+| Amp | ✗ | no verified replacement flag |
+| Kiro CLI | ✗ | no verified replacement flag |
+| Kimi | ✗ | no verified replacement flag |
+| Grok Build | ✗ | no verified replacement flag |
+| Process plugin | declared by bundle | `[launch].system-prompt-file-flag` receives the composed artifact path |
+
+Unsupported typed prompt fields fail at launch rather than degrading to a provider default. Raw `args` remain the explicit provider-specific escape hatch.
+
 ## The wiring matrix
 
 Under the six capabilities sits the mechanism: seventeen integration concerns naming what each adapter reads from its agent. This is the grid to consult when a capability reads partial and you want the specific reason, or when you are [building an adapter](../contributing/agent-adapters.md).

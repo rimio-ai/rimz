@@ -116,6 +116,7 @@ pub(in crate::cli) fn restart_resolved(
                 extra_args,
             },
         },
+        system_prompt: posture.system_prompt.clone(),
         provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -213,8 +214,11 @@ fn restart_posture(
     );
     match &posture.degraded {
         Some(reason @ PostureDegrade::KindChanged { .. }) => {
-            bail!("{reason}; launch it fresh to change providers")
+            bail!(
+                "{reason}; launch it fresh to change providers (rimz agents <profile> --agent <kind>)"
+            )
         }
+        Some(reason @ PostureDegrade::PromptUnsupported { .. }) => bail!("{reason}"),
         Some(reason) => writeln!(
             crate::cli::render::err(),
             "rimz: {reason}; restarting as bare {}",
@@ -232,7 +236,7 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
         kind: agent.kind.clone(),
         args: posture.args.clone(),
         system_prompt_file: None,
-        append_system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
             role: agent.role.clone(),

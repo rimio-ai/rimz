@@ -163,6 +163,7 @@ fn zellij_agent_exec_command(
             session_id: agent_id.to_owned(),
             extra_args: Vec::new(),
         },
+        system_prompt: Default::default(),
         provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
