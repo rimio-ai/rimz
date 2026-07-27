@@ -60,8 +60,8 @@ The tables show the default Unicode set. `[theme.glyphs]` can select Nerd Font o
 | glyph | state | meaning | needs you |
 |-------|-------|---------|-----------|
 | `?`   | waiting    | asked you something; answer in its pane | yes |
-| `!`   | attention  | a failed turn, a turn dead on a provider API error, or a working agent gone silent past the stall window | yes |
-| `⏸`   | paused     | stopped mid-turn on a provider rate-limit or overload; resumes when the provider recovers or the window resets | on recovery |
+| `!`   | attention  | a failed turn, a turn dead on a non-transient provider API error, or a working agent gone silent past the stall window | yes |
+| `⏸`   | paused     | stopped mid-turn on a provider rate-limit, overload, or dropped/interrupted connection; resumes when the provider recovers or the window resets | on recovery |
 | `⢿`   | working    | running and editing; the animation cycles through the braille frames (`⣾`, `⣽`, …), so any of them reads as working | no |
 | `⠁`   | thinking   | running, before the turn's first file edit | no |
 | `⠙`   | resolving  | a working-family spinner (the themable `resolving` animation, kin to `⠁` and `⢿`); a row wearing it is active and counts as working | no |

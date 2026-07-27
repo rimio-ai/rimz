@@ -782,6 +782,14 @@ mod tests {
             TurnErrorClass::PausedOverloaded
         );
         assert_eq!(
+            detect_turn_error(&entry(
+                "API Error: Connection closed mid-response. The response above may be incomplete."
+            ))
+            .unwrap()
+            .class,
+            TurnErrorClass::PausedOverloaded
+        );
+        assert_eq!(
             detect_turn_error(&entry(temporary_500)).unwrap().class,
             TurnErrorClass::PausedOverloaded
         );
