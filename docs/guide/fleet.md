@@ -178,7 +178,7 @@ START             DUR  TOKENS       COST     OUTCOME  PROMPT
 
 ```console
 $ rimz agents attribution
-forge team · 3 agents · 36m active · $29.39
+forge team · 2 agents · 36m active · $29.39
 
   @planner · Claude · claude-opus-5@xhigh
       effort: 15m active · $16.72 · 84 tool calls, no compactions
@@ -188,11 +188,7 @@ forge team · 3 agents · 36m active · $29.39
       effort: 21m active · $12.67 · 106 tool calls, no compactions
       tokens: 294k input, 41k output, 19m cache read
 
-  @reviewer · Claude · claude-opus-5@xhigh
-      effort: active unknown · cost unknown · no tool calls, no compactions
-      tokens: none recorded
-
-Total · 3 agents · 36m active · $29.39
+Total · 2 agents · 36m active · $29.39
 ```
 
 **Find what is burning CPU or tokens.** When the machine gets loud, `rimz agents top` ranks the live fleet by the resources each agent's pane process tree is using. It streams by default; `--once` takes a sample and exits for a script:
