@@ -227,15 +227,17 @@ pub(super) fn record_conversation(
             let mut entries = Vec::new();
             let mut matched_ids = Vec::new();
             let mut delivered_cursor = 0;
-            let mut open_ask_id =
-                latest_open_native_ask(store, agent.spec().kind, agent_id.as_str())
-                    .map(|ask| ask.id);
             if let Some(prompt) = observation
                 .prompt
                 .as_deref()
                 .map(str::trim)
                 .filter(|prompt| !prompt.is_empty())
             {
+                let mut open_ask_id = recorded
+                    .waiting_cleared
+                    .then(|| latest_open_native_ask(store, agent.spec().kind, agent_id.as_str()))
+                    .flatten()
+                    .and_then(|ask| ask.id);
                 let delivered_refs = delivered.iter().collect::<Vec<_>>();
                 let aligned =
                     rimz::harness::target::align_submitted_prompt(prompt, &delivered_refs);
@@ -271,20 +273,6 @@ pub(super) fn record_conversation(
                                 segment.to_owned(),
                             ),
                         };
-                    // ponytail: agent messages do not answer an open ask; add
-                    // explicit sender semantics before classifying them.
-                    if entry.entry == rimz::transcript::TranscriptKind::Prompt
-                        && let Some(ask_id) = open_ask_id.take()
-                    {
-                        entry.entry = rimz::transcript::TranscriptKind::Answer;
-                        entry.id = ask_id;
-                        entry.from = Some("you".to_owned());
-                        entry.answers = vec![rimz::transcript::AskAnswer {
-                            question: None,
-                            chosen: vec![entry.text.clone()],
-                            note: None,
-                        }];
-                    }
                     let matched = if batch_aligned {
                         delivered.get(delivered_cursor).map(|message| (0, message))
                     } else {
@@ -299,16 +287,30 @@ pub(super) fn record_conversation(
                         matched_ids.push(message.message_id.clone());
                         delivered_cursor += offset + 1;
                     }
-                    entries.push(entry);
+                    // ponytail: agent messages do not answer an open ask; add
+                    // explicit sender semantics before classifying them.
+                    let fallback_prompt = if entry.entry == rimz::transcript::TranscriptKind::Prompt
+                        && let Some(ask_id) = open_ask_id.take()
+                    {
+                        let fallback = entry.clone();
+                        entry.entry = rimz::transcript::TranscriptKind::Answer;
+                        entry.id = Some(ask_id);
+                        entry.from = Some("you".to_owned());
+                        entry.answers = vec![rimz::transcript::AskAnswer {
+                            question: None,
+                            chosen: vec![entry.text.clone()],
+                            note: None,
+                        }];
+                        Some(fallback)
+                    } else {
+                        None
+                    };
+                    entries.push((entry, fallback_prompt));
                 }
             }
             replace_turn_opened_by(store, agent, &agent_id, matched_ids);
-            for entry in entries {
-                if entry.entry == rimz::transcript::TranscriptKind::Answer {
-                    rimz::transcript::append_answer_if_missing(store.paths(), &entry)?;
-                } else {
-                    rimz::transcript::append(store.paths(), &entry)?;
-                }
+            for (entry, fallback_prompt) in entries {
+                append_turn_entry(store.paths(), &entry, fallback_prompt.as_ref())?;
             }
         }
         LifecycleSignal::TurnEnded { .. } => {
@@ -341,6 +343,20 @@ pub(super) fn record_conversation(
             rimz::transcript::append(store.paths(), &entry)?;
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn append_turn_entry(
+    paths: &rimz::StatePaths,
+    entry: &rimz::transcript::TranscriptEntry,
+    fallback_prompt: Option<&rimz::transcript::TranscriptEntry>,
+) -> rimz::transcript::Result<()> {
+    let Some(fallback_prompt) = fallback_prompt else {
+        return rimz::transcript::append(paths, entry);
+    };
+    if !rimz::transcript::append_answer_if_missing(paths, entry)? {
+        rimz::transcript::append(paths, fallback_prompt)?;
     }
     Ok(())
 }

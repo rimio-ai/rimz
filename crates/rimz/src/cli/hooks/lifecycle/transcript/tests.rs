@@ -155,6 +155,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
     );
 
     let mut hand_typed = recorded(LifecycleSignal::TurnStarted);
+    hand_typed.waiting_cleared = true;
     hand_typed.observation.prompt = Some("typed directly".to_owned());
     record_conversation(
         &workspace,
@@ -250,6 +251,7 @@ fn agent_message_does_not_answer_open_ask() {
         rimz::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted);
+    started.waiting_cleared = true;
     started.observation.prompt =
         Some("Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nnew context".to_owned());
 
@@ -267,6 +269,76 @@ fn agent_message_does_not_answer_open_ask() {
     let entries = rimz::transcript::read_all(store.paths()).unwrap();
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Message);
+    assert!(has_open_native_ask(&store, "claude", "sess-1"));
+}
+
+#[test]
+fn prompt_without_waiting_transition_does_not_answer_stale_ask() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let mut ask = rimz::transcript::TranscriptEntry::new(
+        jiff::Timestamp::UNIX_EPOCH,
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::ids::AgentSessionId::from("sess-1"),
+        rimz::transcript::TranscriptKind::Ask,
+        String::new(),
+    );
+    ask.id = Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap());
+    rimz::transcript::append(store.paths(), &ask).unwrap();
+    let mut started = recorded(LifecycleSignal::TurnStarted);
+    started.observation.prompt = Some("new task".to_owned());
+
+    record_conversation(
+        &workspace,
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &started,
+        None,
+        &[],
+        &[],
+    )
+    .unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(
+        entries.last().unwrap().entry,
+        rimz::transcript::TranscriptKind::Prompt
+    );
+    assert!(has_open_native_ask(&store, "claude", "sess-1"));
+}
+
+#[test]
+fn idless_ask_does_not_capture_prompt() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let ask = rimz::transcript::TranscriptEntry::new(
+        jiff::Timestamp::UNIX_EPOCH,
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::ids::AgentSessionId::from("sess-1"),
+        rimz::transcript::TranscriptKind::Ask,
+        String::new(),
+    );
+    rimz::transcript::append(store.paths(), &ask).unwrap();
+    let mut started = recorded(LifecycleSignal::TurnStarted);
+    started.waiting_cleared = true;
+    started.observation.prompt = Some("new task".to_owned());
+
+    record_conversation(
+        &workspace,
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &started,
+        None,
+        &[],
+        &[],
+    )
+    .unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(
+        entries.last().unwrap().entry,
+        rimz::transcript::TranscriptKind::Prompt
+    );
     assert!(has_open_native_ask(&store, "claude", "sess-1"));
 }
 
@@ -289,6 +361,7 @@ fn prompt_after_answered_ask_starts_a_new_turn() {
     rimz::transcript::append(store.paths(), &ask).unwrap();
     rimz::transcript::append(store.paths(), &answer).unwrap();
     let mut started = recorded(LifecycleSignal::TurnStarted);
+    started.waiting_cleared = true;
     started.observation.prompt = Some("next task".to_owned());
 
     record_conversation(
@@ -308,6 +381,32 @@ fn prompt_after_answered_ask_starts_a_new_turn() {
         rimz::transcript::TranscriptKind::Prompt
     );
     assert_eq!(entries.last().unwrap().text, "next task");
+}
+
+#[test]
+fn duplicate_answer_race_preserves_prompt() {
+    let (_dir, store) = store();
+    let ask_id = rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap();
+    let prompt = rimz::transcript::TranscriptEntry::new(
+        jiff::Timestamp::UNIX_EPOCH,
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::ids::AgentSessionId::from("sess-1"),
+        rimz::transcript::TranscriptKind::Prompt,
+        "next task".to_owned(),
+    );
+    let mut answer = prompt.clone();
+    answer.entry = rimz::transcript::TranscriptKind::Answer;
+    answer.id = Some(ask_id);
+    let mut existing_answer = answer.clone();
+    existing_answer.at = "1970-01-01T00:00:01Z".parse().unwrap();
+    rimz::transcript::append(store.paths(), &existing_answer).unwrap();
+
+    append_turn_entry(store.paths(), &answer, Some(&prompt)).unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Prompt);
+    assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Answer);
 }
 
 #[test]
