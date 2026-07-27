@@ -12,7 +12,7 @@ Forge carries one change from idea to open PR through three roles, each with its
 - **@coder** (Codex, on the current GPT) starts fresh from the plan: a clean window, the exact files to touch, the decisions already made. It treats the plan as a hypothesis to verify against the real code, implements, and resolves review findings.
 - **@reviewer** (Claude, on Opus) is a third fresh window. It reviews the full diff blind — findings drafted before it ever opens the coder's report — then reconciles that report claim by claim, conceding only to the code, and ships the settled work as a PR.
 
-The fragment is four files: [`team.toml`](./forge/team.toml) declares the team and each role's agent kind, model, effort, launch args, prompt, and layout; [`planner.md`](./forge/planner.md), [`coder.md`](./forge/coder.md), and [`reviewer.md`](./forge/reviewer.md) are the role prompts, each stating the role's craft plus the shared team protocol.
+The fragment is four files: [`team.toml`](./forge/team.toml) declares the team, its git-excluded scratch files, and each role's agent kind, model, effort, launch args, prompt, and layout; [`planner.md`](./forge/planner.md), [`coder.md`](./forge/coder.md), and [`reviewer.md`](./forge/reviewer.md) are the role prompts, each stating the role's craft plus the shared team protocol.
 
 ### How the loop runs
 
@@ -20,7 +20,7 @@ The fragment is four files: [`team.toml`](./forge/team.toml) declares the team a
 user → @planner —plan→ @coder —result→ @reviewer —review→ @coder ⇄ @reviewer —settled→ @reviewer —PR→ done
 ```
 
-The team shares one worktree; @coder works on a feature branch so commits accumulate for the reviewer's diff and the final PR. Three git-ignored scratch files at the worktree root carry the substance — `plan.md`, `result.md`, `review.md` — and hand-offs are short `rimz message` lines that point at them:
+The team shares one worktree; @coder works on a feature branch so commits accumulate for the reviewer's diff and the final PR. Three scratch files declared in `team.toml` are git-excluded at launch — `plan.md`, `result.md`, `review.md` — and hand-offs are short `rimz message` lines that point at them:
 
 1. **Plan.** @planner drafts the design with you, gates included, and writes `plan.md`. Its `# <Title>` H1 seeds the PR title.
 2. **Implement.** @coder implements and verifies the plan, taking open design calls back to @planner, and reports to `result.md`.

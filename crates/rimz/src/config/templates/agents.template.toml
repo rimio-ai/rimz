@@ -56,6 +56,7 @@ layout = "claude,codex"
 ## [agents.teams.review]
 ## leader = "planner"  # role that receives the launch prompt; default: the first role
 ## layout = "planner+reviewer,coder+term"
+## scratch-files = ["/plan.md", "/*-notes.md"]  # gitignore patterns for ephemeral team memory
 ## [[agents.teams.review.roles]]
 ## role = "planner"
 ## profile = "planner"

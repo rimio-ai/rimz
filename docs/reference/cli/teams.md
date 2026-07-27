@@ -4,6 +4,7 @@
 
 A team is a configured set of role bindings and a layout.
 Each role keeps its own model, prompt, context window, and address while the team shares one lane.
+The definition may set `leader`, `layout`, and `scratch-files` alongside its `roles`; `scratch-files` is a list of verbatim gitignore patterns for ephemeral team memory, registered on launch and resume.
 The [teams guide](../../guide/teams.md) explains how to design a team; this page owns the command forms.
 
 ## List teams
