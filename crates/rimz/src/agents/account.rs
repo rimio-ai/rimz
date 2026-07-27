@@ -400,7 +400,7 @@ impl std::fmt::Debug for RateLimitCacheEntry {
     }
 }
 
-/// A best-effort drop awaiting confirmation by rate-limit fusion.
+/// An uncorroborated drop awaiting confirmation by rate-limit fusion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingRefill {
     #[serde(default, skip_serializing_if = "Option::is_none")]

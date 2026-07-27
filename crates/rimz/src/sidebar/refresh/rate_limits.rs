@@ -17,11 +17,11 @@ use crate::{RuntimePaths, SidebarSnapshot};
 #[cfg(test)]
 mod tests;
 
-/// How long a best-effort drop — a candidate mid-window free reset with no
-/// authoritative reading and no reset-timer change to corroborate it — must
-/// persist before the bar follows it down. Shorter, a single lagging or garbled
-/// sample could dip the bar; longer is needless lag on a real refill. Tuned
-/// against captured reset traces (see [`trace_rate_limits`]).
+/// How long an uncorroborated drop must persist before the bar follows it down.
+/// This covers a best-effort free-reset candidate and an authoritative
+/// same-epoch drop contested by stamped best-effort truth. Shorter, a single
+/// lagging or garbled sample could dip the bar; longer is needless lag on a real
+/// refill. Tuned against captured reset traces (see [`trace_rate_limits`]).
 pub(crate) const REFILL_CONFIRM_SECS: i64 = 120;
 /// Coarse backstop: a live candidate captured longer ago than this is ignored.
 /// Content-staleness is already caught upstream — the snapshot view drops a
@@ -77,9 +77,9 @@ pub fn merge_account_rate_limits(
     };
     let mut cache = read_rate_limits_cache(&path);
     cache.refreshed_at_ms = unix_now_ms();
-    // Authoritative fetch: stamp the capture instant so the fusion ranks it as
-    // truth, and clear any in-flight best-effort refill for this kind — the
-    // official reading settles the question the debounce was waiting on.
+    // Stamp the authoritative capture instant, then pass every reported window
+    // through the same fusion used by the sidebar producer. A same-epoch drop
+    // against stamped best-effort truth must survive the shared debounce.
     let observed_at = Timestamp::now();
     let mut windows = windows.stamped_at(observed_at);
     let prior_entry = cache
@@ -95,13 +95,40 @@ pub fn merge_account_rate_limits(
         .map(|entry| entry.limits.windows.as_slice())
         .unwrap_or_default();
     complete_omitted_duration_windows(prior, &mut windows);
+    let prior: BTreeMap<RateLimitWindowKey, RateLimitWindow> = prior
+        .iter()
+        .map(|window| (window.key(), window.clone()))
+        .collect();
+    let prior_pending: BTreeMap<RateLimitWindowKey, PendingRefill> = prior_entry
+        .into_iter()
+        .flat_map(|entry| entry.pending.iter())
+        .map(|pending| (pending.key(), pending.clone()))
+        .collect();
+    let live: BTreeMap<RateLimitWindowKey, RateLimitWindow> = windows
+        .windows
+        .into_iter()
+        .map(|window| (window.key(), window))
+        .collect();
+    let mut fused = Vec::with_capacity(live.len());
+    let mut pending = Vec::new();
+    for (key, live) in live {
+        let (truth, refill) = fuse_window(
+            prior.get(&key),
+            Some(&live),
+            prior_pending.get(&key),
+            observed_at,
+            true,
+        );
+        fused.extend(truth);
+        pending.extend(refill);
+    }
     cache.entries.insert(
         kind.to_owned(),
         RateLimitCacheEntry {
             scope: identity.scope,
             account_key: identity.account_key,
-            limits: windows,
-            pending: Vec::new(),
+            limits: AgentRateLimits { windows: fused },
+            pending,
             unknown_since_ms,
         },
     );
@@ -506,16 +533,18 @@ fn apply_rate_limit_cache_with(
 
 /// Fuse one stable window identity's prior truth with this frame's live reading
 /// into the new ground truth, carrying or advancing the debounce marker that
-/// guards a best-effort refill.
+/// guards an uncorroborated drop.
 ///
 /// Usage only climbs within a live window, so a reading at or above the prior is
 /// real consumption and is adopted at once — stable against parallel sessions
 /// reporting the same budget at different instants. A *drop* is a refill, earned
 /// rather than assumed, in order:
-/// - an authoritative-source reading lowers the bar immediately, but only when
-///   its capture is no older than the prior's (an out-of-order sidecar can't
-///   undo a newer reading);
-/// - a later reset instant (a new window epoch) lowers it immediately;
+/// - an out-of-order authoritative reading cannot undo newer truth;
+/// - a later reset instant (a new window epoch) lowers the bar immediately;
+/// - a current authoritative reading lowers authoritative, unprovenanced, or
+///   epoch-less truth immediately;
+/// - a same-epoch authoritative drop against stamped best-effort truth is parked
+///   until it has stood for [`REFILL_CONFIRM_SECS`];
 /// - a best-effort drop toward full (at or below [`REFILL_FLOOR_PCT`], the
 ///   free-reset signature) is parked and the higher bar held until the drop has
 ///   stood for [`REFILL_CONFIRM_SECS`]; a mid-range best-effort drop is jitter
@@ -555,32 +584,37 @@ pub(crate) fn fuse_window(
 
     // --- a drop is a refill, earned not assumed ---
 
-    // The official API is truth, but only when its capture is at least as recent
-    // as the prior: an out-of-order sidecar with an older `observed_at` must not
-    // lower a newer bar. A stale authoritative reading holds the prior and never
-    // seeds the best-effort debounce below.
+    // An out-of-order authoritative sidecar cannot lower newer truth. A current
+    // reading settles an authoritative, unprovenanced, or epoch-less prior at
+    // once; against stamped best-effort truth in the same epoch it must earn the
+    // drop through the shared confirmation below.
     if live.source.is_authoritative() {
-        return if authoritative_supersedes(live, prior) {
-            (Some(live.clone()), None)
-        } else {
-            (Some(prior.clone()), pending.cloned())
-        };
+        if !authoritative_supersedes(live, prior) {
+            return (Some(prior.clone()), pending.cloned());
+        }
+        if reset_advanced(prior.resets_at, live.resets_at)
+            || prior.source.is_authoritative()
+            || prior.observed_at.is_none()
+            || prior.resets_at.is_none()
+        {
+            return (Some(live.clone()), None);
+        }
+    } else {
+        // A best-effort reading whose reset instant advanced is a free reset with
+        // a moved timer — a new window epoch, trusted at once.
+        if reset_advanced(prior.resets_at, live.resets_at) {
+            return (Some(live.clone()), None);
+        }
+
+        // A best-effort drop is a refill candidate only when it lands at or below
+        // the reset floor (near-full). A mid-range drop is jitter — hold the
+        // most-drained prior, carrying any in-flight marker untouched.
+        if live_used > REFILL_FLOOR_PCT {
+            return (Some(prior.clone()), pending.cloned());
+        }
     }
 
-    // A best-effort reading whose reset instant advanced is a free reset with a
-    // moved timer — a new window epoch, trusted at once.
-    if reset_advanced(prior.resets_at, live.resets_at) {
-        return (Some(live.clone()), None);
-    }
-
-    // A best-effort drop is a refill candidate only when it lands at or below the
-    // reset floor (near-full). A mid-range drop is jitter — hold the most-drained
-    // prior, carrying any in-flight marker untouched.
-    if live_used > REFILL_FLOOR_PCT {
-        return (Some(prior.clone()), pending.cloned());
-    }
-
-    // Best-effort refill candidate, no authoritative or epoch corroboration.
+    // Uncorroborated refill candidate.
     if !allow_confirm {
         // A consumer holds the producer's persisted (higher) truth.
         return (Some(prior.clone()), pending.cloned());

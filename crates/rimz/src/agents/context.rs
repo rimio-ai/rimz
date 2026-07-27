@@ -1004,14 +1004,16 @@ fn is_false(value: &bool) -> bool {
 
 /// Where a [`RateLimitWindow`] reading came from, deciding how far the fusion
 /// trusts it. Usage only climbs within a live window, so a reading that lowers
-/// the bar is a refill that must be earned: an official-API query moves the bar
-/// down at once, while a statusline-derived reading is held until confirmed.
+/// the bar is a refill that must be earned. An official-API climb is adopted at
+/// once, while its same-epoch drop is confirmed when fresh statusline-derived
+/// truth contests it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowSource {
     /// Queried from the provider's official usage API (Claude OAuth usage,
     /// Codex app-server `account/rateLimits/read`). Truth at its `observed_at`:
-    /// it overrides older readings and may lower the bar immediately.
+    /// it overrides older readings, while a same-epoch drop against stamped
+    /// best-effort truth waits for confirmation.
     Authoritative,
     /// Derived from the agent's statusline payload. Current while the agent
     /// works, but an idle session re-emits a stale payload, so a downward move
@@ -1027,8 +1029,7 @@ impl WindowSource {
         matches!(self, WindowSource::BestEffort)
     }
 
-    /// Whether this reading came from an official-API query and may lower the
-    /// bar without waiting for confirmation.
+    /// Whether this reading came from an official-API query.
     pub fn is_authoritative(&self) -> bool {
         matches!(self, WindowSource::Authoritative)
     }
