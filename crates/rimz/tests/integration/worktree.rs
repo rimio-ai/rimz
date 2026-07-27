@@ -35,7 +35,7 @@ fn worktree_exec_request(worktree: &Path) -> ExecRequest {
             prompt: None,
             extra_args: Vec::new(),
         },
-        system_prompt: Default::default(),
+        system_prompt_file: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: Some(worktree.to_path_buf()),

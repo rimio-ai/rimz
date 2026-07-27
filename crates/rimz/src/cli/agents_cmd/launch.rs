@@ -651,7 +651,6 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         || args.launch.agent.is_some()
         || args.launch.cohort.description.is_some()
         || args.launch.system_prompt_file.is_some()
-        || !args.launch.append_system_prompt_files.is_empty()
         || args.launch.max_turns.is_some()
         || args.launch.retries.is_some()
     {
@@ -668,13 +667,10 @@ pub(super) fn launch_override_preset(args: &AgentsArgs) -> Result<rimz::agents::
         args.launch.system_prompt_file.as_deref(),
         "--system-prompt-file",
     )?;
-    let append_system_prompt_files =
-        resolve_launch_prompt_files(&args.launch.append_system_prompt_files)?;
     Ok(rimz::agents::LaunchPreset {
         model: rimz::harness::plan::normalized_preset_value(args.launch.model.as_deref()),
         effort: rimz::harness::plan::normalized_preset_value(args.launch.effort.as_deref()),
         system_prompt_file,
-        append_system_prompt_files,
     })
 }
 
@@ -692,16 +688,6 @@ pub(super) fn resolve_launch_prompt_file(
         bail!("{flag} `{}` is not a regular file", path.display());
     }
     Ok(Some(resolved))
-}
-
-pub(super) fn resolve_launch_prompt_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    paths
-        .iter()
-        .map(|path| {
-            resolve_launch_prompt_file(Some(path), "--append-system-prompt-file")
-                .map(|path| path.expect("a supplied path resolves to one path"))
-        })
-        .collect()
 }
 
 pub(super) fn resolve_agent_override(value: Option<&str>) -> Result<Option<rimz::ids::AgentKind>> {

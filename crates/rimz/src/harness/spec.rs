@@ -95,8 +95,6 @@ pub struct AgentCell {
     pub kind: AgentKind,
     pub args: Vec<String>,
     pub system_prompt_file: Option<PathBuf>,
-    /// Ordered prompt fragments composed into the replacement system prompt.
-    pub append_system_prompt_files: Vec<PathBuf>,
     /// Canonical shared launch identity selected by profiles, roles, and CLI overlays.
     pub launch: crate::agents::LaunchParams,
 }
@@ -117,7 +115,6 @@ impl Cell {
             kind,
             args: Vec::new(),
             system_prompt_file: None,
-            append_system_prompt_files: Vec::new(),
             launch: crate::agents::LaunchParams::default(),
         })
     }
@@ -133,7 +130,6 @@ pub struct ResolvedProfile {
     pub kind: AgentKind,
     pub launch: crate::agents::LaunchParams,
     pub system_prompt_file: Option<PathBuf>,
-    pub append_system_prompt_files: Option<Vec<PathBuf>>,
     pub args: Option<String>,
 }
 
@@ -143,7 +139,6 @@ impl ResolvedProfile {
             kind: AgentKind::new_unchecked(kind),
             launch: crate::agents::LaunchParams::default(),
             system_prompt_file: None,
-            append_system_prompt_files: None,
             args: None,
         }
     }
@@ -162,10 +157,6 @@ impl ResolvedProfile {
         if self.system_prompt_file.is_none() {
             self.system_prompt_file
                 .clone_from(&layer.system_prompt_file);
-        }
-        if self.append_system_prompt_files.is_none() {
-            self.append_system_prompt_files
-                .clone_from(&layer.append_system_prompt_files);
         }
         if self.args.is_none() {
             self.args.clone_from(&layer.args);
@@ -188,10 +179,6 @@ impl ResolvedProfile {
         if binding.system_prompt_file.is_some() {
             self.system_prompt_file
                 .clone_from(&binding.system_prompt_file);
-        }
-        if binding.append_system_prompt_files.is_some() {
-            self.append_system_prompt_files
-                .clone_from(&binding.append_system_prompt_files);
         }
         if binding.args.is_some() {
             self.args.clone_from(&binding.args);
@@ -350,21 +337,11 @@ pub fn resolve_prompt_paths(
         if let Some(path) = profile.system_prompt_file.as_mut() {
             *path = resolve_prompt_path(path, source_dir);
         }
-        if let Some(paths) = profile.append_system_prompt_files.as_mut() {
-            for path in paths {
-                *path = resolve_prompt_path(path, source_dir);
-            }
-        }
     }
     for team in teams.0.values_mut() {
         for binding in &mut team.roles {
             if let Some(path) = binding.system_prompt_file.as_mut() {
                 *path = resolve_prompt_path(path, source_dir);
-            }
-            if let Some(paths) = binding.append_system_prompt_files.as_mut() {
-                for path in paths {
-                    *path = resolve_prompt_path(path, source_dir);
-                }
             }
         }
     }
@@ -1139,10 +1116,6 @@ fn agent_cell_from(
         kind: resolved.kind.clone(),
         args,
         system_prompt_file: resolved.system_prompt_file.clone(),
-        append_system_prompt_files: resolved
-            .append_system_prompt_files
-            .clone()
-            .unwrap_or_default(),
         launch: crate::agents::LaunchParams {
             profile,
             mode,

@@ -153,7 +153,7 @@ Long-running commands animate their phase and elapsed time on an interactive std
 
 ## Adapter-owned launch surface
 
-A run's permission posture is `auto` by default, `--ask`, or `--yolo`; those two flags are mutually exclusive. A virtual cell in the spec overrides the flag, so `rimz agents claude-plan ... -p` runs in plan mode even though `-p` exposes no `--plan` flag. Model and effort render through each adapter's `render_preset`. System-prompt source paths stay typed through planning and render only in the hidden exec wrapper, where every spawn can regenerate the composition before compiling provider argv.
+A run's permission posture is `auto` by default, `--ask`, or `--yolo`; those two flags are mutually exclusive. A virtual cell in the spec overrides the flag, so `rimz agents claude-plan ... -p` runs in plan mode even though `-p` exposes no `--plan` flag. Model and effort render through each adapter's `render_preset`. The resolved system-prompt file path stays typed through planning and is mapped directly to the adapter's argv or environment during provider-process compilation.
 
 After profile and CLI arguments merge, launch reconciles adapter-declared model, effort, and matching system-prompt replacement flags against raw `args`, adopts an args-only model as identity, and stamps an adapter default only when no model was selected. Prompt-file existence and replacement support validate before a pane opens. An adapter with no native rendering for a typed parameter **refuses the launch and names the unsupported setting** rather than dropping the intent. Supervised `--max-turns` renders through a separate per-adapter turn-limit hook. The per-kind mappings live in the adapter docs indexed under [the agent layer](../README.md#the-agent-layer).
 

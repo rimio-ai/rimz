@@ -460,7 +460,6 @@ fn agents_toml_entries_override_agents_home_fragments() {
             effort: None,
             budget: None,
             system_prompt_file: None,
-            append_system_prompt_files: None,
             args: None,
         },
     );
@@ -521,8 +520,7 @@ fn agents_home_team_prompt_paths_resolve_against_fragment_dir() {
              [[agents.teams.review.roles]]\n\
              role = \"planner\"\n\
              profile = \"planner\"\n\
-             system-prompt-file = \"planner.md\"\n\
-             append-system-prompt-files = [\"prompts/shared.md\"]\n",
+             system-prompt-file = \"planner.md\"\n",
     );
 
     let mut agents = AgentsConfig::default();
@@ -540,15 +538,6 @@ fn agents_home_team_prompt_paths_resolve_against_fragment_dir() {
         .join("review")
         .join("planner.md");
     assert_eq!(role.system_prompt_file.as_deref(), Some(expected.as_path()));
-    let expected_append = root
-        .path()
-        .join(AGENTS_HOME_TEAMS_SUBDIR)
-        .join("review")
-        .join("prompts/shared.md");
-    assert_eq!(
-        role.append_system_prompt_files.as_deref(),
-        Some([expected_append].as_slice())
-    );
 }
 
 #[test]
@@ -582,7 +571,6 @@ fn absent_agents_home_is_noop_and_malformed_fragment_leaves_config_unchanged() {
             effort: None,
             budget: None,
             system_prompt_file: None,
-            append_system_prompt_files: None,
             args: None,
         },
     );
@@ -703,16 +691,18 @@ fn removed_agents_tables_fail_fast_with_the_rename() {
 }
 
 #[test]
-fn singular_append_prompt_key_fails_with_plural_rename() {
+fn removed_append_prompt_keys_point_to_context_or_replacement() {
     let dir = tempdir().expect("tempdir");
     for legacy in [
         "[agents.profiles.planner]\nagent = \"claude\"\nappend-system-prompt-file = \"planner.md\"\n",
+        "[agents.profiles.planner]\nagent = \"claude\"\nappend-system-prompt-files = [\"planner.md\"]\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"claude\"\nappend-system-prompt-file = \"planner.md\"\n",
+        "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"claude\"\nappend-system-prompt-files = [\"planner.md\"]\n",
     ] {
         match load_no_fragments(&write_named(&dir, "agents.toml", legacy)) {
             Err(ConfigErr::RemovedKey { detail, .. }) => {
-                assert!(detail.contains("append-system-prompt-files"), "{detail}");
-                assert!(detail.contains("use an array of paths"), "{detail}");
+                assert!(detail.contains("native context files"), "{detail}");
+                assert!(detail.contains("system-prompt-file"), "{detail}");
             }
             other => panic!("expected RemovedKey for {legacy:?}, got {other:?}"),
         }
@@ -763,7 +753,6 @@ fn agent_profiles_commands_and_teams_parse() {
              [agents.profiles.planner]\n\
              agent = \"claude\"\n\
              system-prompt-file = \"/prompts/planner.md\"\n\
-             append-system-prompt-files = [\"/prompts/planner-extra.md\"]\n\
              [agents.teams.stacked]\n\
              layout = \"planner+coder\"\n\
              [[agents.teams.stacked.roles]]\n\
@@ -787,7 +776,6 @@ fn agent_profiles_commands_and_teams_parse() {
             effort: Some("high".to_owned()),
             budget: None,
             system_prompt_file: None,
-            append_system_prompt_files: None,
             args: Some("--model gpt-5-codex -c model_reasoning_effort=high".to_owned())
         })
     );
@@ -800,7 +788,6 @@ fn agent_profiles_commands_and_teams_parse() {
             effort: None,
             budget: None,
             system_prompt_file: Some("/prompts/planner.md".into()),
-            append_system_prompt_files: Some(vec!["/prompts/planner-extra.md".into()]),
             args: None,
         })
     );

@@ -259,10 +259,6 @@ model = "fable"
 mode = "auto"
 effort = "high"
 system-prompt-file = "~/.agents/prompts/claude-planner.md"  # its role, craft, and boundaries
-append-system-prompt-files = [                             # composed after the base, in this order
-  "~/.agents/prompts/review-policy.md",
-  "~/.agents/prompts/rust-style.md",
-]
 args = "--strict-mcp-config --tools 'Bash,Read,Edit,Write,AskUserQuestion,WebFetch,WebSearch,Skill,Agent(Explore,Plan)'"  # plan and explore, nothing that ships
 ```
 
@@ -278,12 +274,13 @@ Each field renders into the base CLI's own flag, so a profile can pin anything t
 | `model` | the model to run | `--model opus` |
 | `effort` | reasoning effort, on the provider's own ladder | `--effort high` |
 | `budget` | dollar cap for the session, or per local day with `/day` | kept and enforced by RimZ ([budgets](./budget.md)) |
-| `system-prompt-file` | first prompt piece; replaces the provider's system prompt | `--system-prompt-file …` |
-| `append-system-prompt-files` | ordered prompt pieces composed after the first; the whole composition replaces the provider prompt | repeat `--append-system-prompt-file …` |
+| `system-prompt-file` | complete replacement for the provider's system prompt | `--system-prompt-file …` |
 | `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) | see [permission modes](#set-a-permission-mode) |
 | `args` | raw flags handed to the stock CLI | verbatim |
 
-The system prompt and `args` are what make a profile targeted. RimZ separates prompt pieces with blank lines and sends the composition through the adapter's replacement mechanism. Claude, Codex, and Qwen support that typed surface; other agents fail fast rather than silently ignoring it. Raw `args` remain the provider-specific escape hatch — including Droid's native append flag — and there is no RimZ-specific tools setting: narrow the toolset with the agent's own flags through `args` (`--tools` for Claude, `--sandbox` for Codex).
+The system prompt and `args` are what make a profile targeted. RimZ resolves `system-prompt-file` once and gives that same path to the adapter as a full replacement. Claude, Codex, and Qwen support that typed surface; other agents fail fast rather than silently ignoring it. Raw `args` remain the provider-specific escape hatch — including Droid's native append flag — and there is no RimZ-specific tools setting: narrow the toolset with the agent's own flags through `args` (`--tools` for Claude, `--sandbox` for Codex).
+
+Put additive house and project guidance in the context files each agent already discovers, such as `AGENTS.md`, `CLAUDE.md`, or `QWEN.md`. RimZ does not combine those files with `system-prompt-file`; maintain one complete replacement file yourself when the guidance must be system-role text.
 
 When does a bare kind stop being enough? The moment you type the same shaping flags a second time. One planner prompt you keep reusing, a reviewer that must never commit, a cheap low-effort triage agent — each is a profile.
 
@@ -291,10 +288,7 @@ Override any field for one launch with the matching flag, which wins over the pr
 
 ```sh
 rimz agents claude --model opus --effort xhigh --budget 5 --system-prompt-file ./review.md
-rimz agents claude-planner --append-system-prompt-file ./local.md --append-system-prompt-file ./task.md
 ```
-
-A repeated `--append-system-prompt-file` preserves command-line order and replaces the profile's entire `append-system-prompt-files` list for that launch. The old singular configuration key is a hard error; use the plural array even for one fragment.
 
 To try a profile on a different provider without changing it, add `--agent`:
 

@@ -86,7 +86,7 @@ fn resume_argv(kind: &str, id: &str, name: &str) -> Vec<String> {
                 session_id: id.to_owned(),
                 extra_args: Vec::new(),
             },
-            system_prompt: Default::default(),
+            system_prompt_file: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

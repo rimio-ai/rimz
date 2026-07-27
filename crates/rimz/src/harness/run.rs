@@ -80,7 +80,6 @@ pub struct SupervisedRunRequest {
     pub agent: Option<crate::ids::AgentKind>,
     pub model: Option<String>,
     pub system_prompt_file: Option<PathBuf>,
-    pub append_system_prompt_files: Vec<PathBuf>,
     pub effort: Option<String>,
     pub budget: Option<crate::harness::budget::BudgetSpec>,
     pub max_turns: Option<u32>,

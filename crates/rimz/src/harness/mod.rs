@@ -8,7 +8,6 @@ pub mod idle_compact;
 pub mod launch;
 pub mod petname;
 pub mod plan;
-pub mod prompt_compose;
 pub mod rebirth;
 pub mod resume;
 pub mod run;

@@ -42,8 +42,6 @@ pub(super) struct RoleReport {
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt_file: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub append_system_prompt_files: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -243,7 +241,6 @@ fn role_report(role: String, cell: &AgentCell) -> RoleReport {
         effort: cell.launch.effort.clone(),
         mode: cell.launch.mode.map(|mode| mode.to_string()),
         system_prompt_file: cell.system_prompt_file.clone(),
-        append_system_prompt_files: cell.append_system_prompt_files.clone(),
     }
 }
 
@@ -275,15 +272,6 @@ fn unresolved_roles(team: &Team, profiles: &ProfilesConfig) -> Vec<RoleReport> {
                         .as_ref()
                         .and_then(|profile| profile.system_prompt_file.clone())
                 }),
-                append_system_prompt_files: binding
-                    .append_system_prompt_files
-                    .clone()
-                    .or_else(|| {
-                        resolved
-                            .as_ref()
-                            .and_then(|profile| profile.append_system_prompt_files.clone())
-                    })
-                    .unwrap_or_default(),
             }
         })
         .collect()
@@ -510,7 +498,6 @@ mod tests {
                 effort: Some("high".to_owned()),
                 budget: None,
                 system_prompt_file: Some("planner.md".into()),
-                append_system_prompt_files: None,
                 args: None,
             }],
             leader: Some("planner".to_owned()),

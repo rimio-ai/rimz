@@ -49,7 +49,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
         kind: AgentKind::new_unchecked(kind),
         action,
-        system_prompt: Default::default(),
+        system_prompt_file: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -133,15 +133,15 @@ fn process_compiler_composes_adapter_identity_and_rtk_environment() {
 #[test]
 fn process_stage_applies_prompt_path_env_without_putting_prompt_text_in_argv() {
     let project = tempfile::tempdir().expect("project");
-    let request = request(
+    let mut request = request(
         "qwen",
         ExecAction::Launch {
             prompt: None,
             extra_args: Vec::new(),
         },
     );
-    let prompt_path = "/runtime/private/prompt/sys.0123456789abcdef.md";
-    let extra_env = env(&[("QWEN_SYSTEM_MD", prompt_path)]);
+    let prompt_path = "/home/user/prompts/qwen.md";
+    request.system_prompt_file = Some(PathBuf::from(prompt_path));
 
     let AgentProcessStage::Ready(process) = compile_agent_process_stage(
         project.path(),
@@ -149,7 +149,6 @@ fn process_stage_applies_prompt_path_env_without_putting_prompt_text_in_argv() {
         &request,
         project.path(),
         Path::new("/bin/rimz"),
-        &extra_env,
     )
     .expect("qwen process") else {
         panic!("unbound qwen launch is ready");
@@ -170,6 +169,64 @@ fn process_stage_applies_prompt_path_env_without_putting_prompt_text_in_argv() {
             .argv
             .iter()
             .any(|arg| arg == &format!("QWEN_SYSTEM_MD={prompt_path}"))
+    );
+}
+
+#[test]
+fn process_compilation_passes_the_user_prompt_path_to_argv_adapters() {
+    let project = tempfile::tempdir().expect("project");
+    let prompt_path = PathBuf::from("/home/user/prompts/system.md");
+
+    let mut claude = request(
+        "claude",
+        ExecAction::Resume {
+            session_id: "sess-1".to_owned(),
+            extra_args: argv(&["--system-prompt-file", "/raw.md", "--debug"]),
+        },
+    );
+    claude.system_prompt_file = Some(prompt_path.clone());
+    let process = compile_agent_process(
+        project.path(),
+        crate::config::RtkMode::Auto,
+        &claude,
+        project.path(),
+    )
+    .expect("claude process");
+    assert_eq!(
+        process.provider_argv,
+        argv(&[
+            "claude",
+            "--resume",
+            "sess-1",
+            "--debug",
+            "--system-prompt-file",
+            "/home/user/prompts/system.md",
+        ])
+    );
+
+    let mut codex = request(
+        "codex",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: argv(&["-c", "model_instructions_file=/raw.md", "--search"]),
+        },
+    );
+    codex.system_prompt_file = Some(prompt_path);
+    let process = compile_agent_process(
+        project.path(),
+        crate::config::RtkMode::Auto,
+        &codex,
+        project.path(),
+    )
+    .expect("codex process");
+    assert_eq!(
+        process.provider_argv,
+        argv(&[
+            "codex",
+            "--search",
+            "-c",
+            "model_instructions_file=/home/user/prompts/system.md",
+        ])
     );
 }
 
@@ -266,7 +323,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
             prompt: Some("fix it".to_owned()),
             extra_args,
         },
-        system_prompt: Default::default(),
+        system_prompt_file: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: Some(
             "run_0123456789abcdef0123456789abcdef"
@@ -535,7 +592,6 @@ fn provider_account_stage_validates_and_reenters_once() {
             &input,
             project.path(),
             Path::new("/bin/rimz"),
-            &BTreeMap::new(),
         )
         .expect_err("binding scope");
         assert_eq!(
@@ -560,7 +616,6 @@ fn provider_account_stage_validates_and_reenters_once() {
         &pending,
         project.path(),
         Path::new("/bin/rimz"),
-        &BTreeMap::new(),
     )
     .expect("pending stage");
     let AgentProcessStage::LoginShellReentry { argv, .. } = stage else {
@@ -582,7 +637,6 @@ fn provider_account_stage_validates_and_reenters_once() {
         &finalized,
         project.path(),
         Path::new("/bin/rimz"),
-        &BTreeMap::new(),
     )
     .expect_err("unresolved account mismatches");
     assert!(err.is_finalized_provider_mismatch());
@@ -608,7 +662,6 @@ fn provider_account_stage_validates_and_reenters_once() {
         &unbound,
         project.path(),
         Path::new("/bin/rimz"),
-        &BTreeMap::new(),
     )
     .expect("ordinary stage") else {
         panic!("unbound launch is ready");

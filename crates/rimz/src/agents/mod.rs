@@ -164,9 +164,6 @@ pub struct LaunchPreset {
     /// Absolute path to a file whose contents replace the agent's base system
     /// prompt. Resolved and existence-checked by the launcher before render.
     pub system_prompt_file: Option<PathBuf>,
-    /// Absolute paths composed in order into the replacement system prompt.
-    /// A non-empty launch override replaces the profile's complete list.
-    pub append_system_prompt_files: Vec<PathBuf>,
 }
 
 impl LaunchPreset {
@@ -174,7 +171,6 @@ impl LaunchPreset {
         self.model.as_deref().is_none_or(str::is_empty)
             && self.effort.as_deref().is_none_or(str::is_empty)
             && self.system_prompt_file.is_none()
-            && self.append_system_prompt_files.is_empty()
     }
 }
 
