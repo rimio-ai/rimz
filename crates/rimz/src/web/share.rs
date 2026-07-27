@@ -29,6 +29,8 @@ pub(super) struct DaemonRecord {
     pub(super) port: u16,
     #[serde(default = "default_interface")]
     pub(super) interface: String,
+    #[serde(default)]
+    pub(super) launch_context_scrubbed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) pixel_protocol: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -275,6 +277,7 @@ fn start_fresh_locked_prepared(
         pid,
         port: desired.port,
         interface: desired.interface.clone(),
+        launch_context_scrubbed: true,
         pixel_protocol: profile.pixel_protocol,
         index_key: profile.index_key,
     };
@@ -308,7 +311,8 @@ fn record_matches(
     desired: &DaemonSpec,
     profile: &ttyd::client::ClientProfile,
 ) -> bool {
-    record.port == desired.port
+    record.launch_context_scrubbed
+        && record.port == desired.port
         && record.interface == desired.interface
         && record.index_key == profile.index_key
 }
@@ -481,6 +485,8 @@ mod tests {
                 .iter()
                 .all(|key| spec.env_remove.contains(*key))
         );
+        assert!(spec.env_remove.contains("ZELLIJ_SESSION_NAME"));
+        assert!(spec.env_remove.contains("RIMZ_AGENT_KIND"));
     }
 
     #[test]
@@ -502,7 +508,35 @@ mod tests {
     }
 
     #[test]
-    fn daemon_reuse_requires_the_generated_index_key() {
+    fn daemon_state_roundtrips_the_launch_context_marker() {
+        let daemon = DaemonRecord {
+            pid: 42,
+            port: 8201,
+            interface: "0.0.0.0".to_owned(),
+            launch_context_scrubbed: true,
+            pixel_protocol: Some(crate::web::TTYD_PIXEL_PROTOCOL),
+            index_key: Some("generated-index-key".to_owned()),
+        };
+        let bytes = serde_json::to_vec(&daemon).expect("serialize daemon state");
+
+        assert_eq!(
+            serde_json::from_slice::<DaemonRecord>(&bytes).expect("parse daemon state"),
+            daemon
+        );
+    }
+
+    #[test]
+    fn old_daemon_state_defaults_to_unscrubbed_launch_context() {
+        let daemon: DaemonRecord =
+            serde_json::from_str(r#"{"pid":42,"port":8201}"#).expect("old record");
+
+        assert!(!daemon.launch_context_scrubbed);
+        assert_eq!(daemon.pixel_protocol, None);
+        assert_eq!(daemon.index_key, None);
+    }
+
+    #[test]
+    fn daemon_reuse_requires_context_marker_and_generated_index_key() {
         let desired = DaemonSpec {
             port: 8201,
             interface: "127.0.0.1".to_owned(),
@@ -511,11 +545,19 @@ mod tests {
             pid: 42,
             port: desired.port,
             interface: desired.interface.clone(),
+            launch_context_scrubbed: true,
             pixel_protocol: None,
             index_key: None,
         };
 
         assert!(record_matches(&daemon, &desired, &profile_with_index(None)));
+        daemon.launch_context_scrubbed = false;
+        assert!(!record_matches(
+            &daemon,
+            &desired,
+            &profile_with_index(None)
+        ));
+        daemon.launch_context_scrubbed = true;
         assert!(!record_matches(
             &daemon,
             &desired,
