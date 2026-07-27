@@ -3568,6 +3568,7 @@ fn seed_provisional_codex_launch(
         &kind,
         AgentLaunchPayload {
             agent_id: AgentSessionId::from(launch_id),
+            launch_id: None,
             agent_name: agent_name.to_owned(),
             agent_name_explicit: false,
             launch: LaunchParams {
@@ -3591,6 +3592,7 @@ fn seed_provisional_codex_launch(
                 channel: None,
 
                 kind_ordinal: Some(1),
+                ..LaunchParams::default()
             },
             state: AgentLaunchState::Starting,
             run_id: None,

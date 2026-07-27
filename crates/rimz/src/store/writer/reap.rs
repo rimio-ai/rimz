@@ -39,7 +39,7 @@ impl Store {
         let victims = projection
             .agents
             .iter()
-            .filter(|agent| agent.parent_agent_id.is_none())
+            .filter(|agent| !agent.is_provider_subagent())
             .filter(|agent| agent.ended_at.is_none())
             .filter(|agent| {
                 agent.worktree_path.as_deref().is_some_and(|path| {
@@ -84,17 +84,17 @@ impl Store {
         let victims = projection
             .agents
             .iter()
-            .filter(|agent| agent.parent_agent_id.is_none())
+            .filter(|agent| !agent.is_provider_subagent())
             .filter(|agent| agent.ended_at.is_none())
             .filter_map(|agent| {
                 let superseded = projection.agents.iter().any(|newer| {
-                    newer.parent_agent_id.is_none()
+                    !newer.is_provider_subagent()
                         && newer.ended_at.is_none()
                         && session_death::supersedes(agent, newer)
                 });
                 let interrupted = !superseded
                     && projection.agents.iter().any(|newer| {
-                        newer.parent_agent_id.is_none()
+                        !newer.is_provider_subagent()
                             && newer.ended_at.is_none()
                             && session_death::interrupted_conversation_candidate(agent, newer)
                     })
@@ -102,7 +102,7 @@ impl Store {
                         .and_then(|adapter| adapter.probe_resting_interruption(&agent.agent_id))
                         .is_some_and(|interrupted_at| {
                             projection.agents.iter().any(|newer| {
-                                newer.parent_agent_id.is_none()
+                                !newer.is_provider_subagent()
                                     && newer.ended_at.is_none()
                                     && session_death::interrupted_conversation_supersedes(
                                         agent,

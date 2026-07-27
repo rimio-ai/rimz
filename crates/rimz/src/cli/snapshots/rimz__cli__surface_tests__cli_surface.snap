@@ -49,6 +49,7 @@ rimz agents
     --system-prompt-file <PATH>  [action=set takes=1..=1]
     --timeout <TIMEOUT>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
+    --top-level  [action=set-true takes=0..=0]
     --verify <CMD>  [action=set takes=1..=1]
     -w, --worktree <NAME>  [action=set takes=0..=1]
     --yolo  [action=set-true takes=0..=0]
@@ -273,6 +274,7 @@ rimz agents launch
     --system-prompt-file <PATH>  [action=set takes=1..=1]
     --timeout <TIMEOUT>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
+    --top-level  [action=set-true takes=0..=0]
     --verify <CMD>  [action=set takes=1..=1]
     -w, --worktree <NAME>  [action=set takes=0..=1]
     --yolo  [action=set-true takes=0..=0]
@@ -2065,6 +2067,7 @@ rimz teams
     --resume  [action=set-true takes=0..=0 long-aliases=continue]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
+    --top-level  [action=set-true takes=0..=0]
     -w, --worktree <NAME>  [action=set takes=0..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
@@ -2124,6 +2127,7 @@ rimz teams launch
     --resume  [action=set-true takes=0..=0 long-aliases=continue]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
+    --top-level  [action=set-true takes=0..=0]
     -w, --worktree <NAME>  [action=set takes=0..=1]
     --zellij  [action=set-true takes=0..=0 global]
 

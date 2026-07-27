@@ -11,7 +11,7 @@ use crate::harness::budget::BudgetSpec;
 use crate::harness::resume::{CohortCell, CohortResumePlan, CohortSeed};
 use crate::harness::run::PermissionMode;
 use crate::harness::spec::{AgentCell, Cell, LayoutSpec};
-use crate::ids::{AgentSessionId, EventId};
+use crate::ids::{AgentKind, AgentSessionId, EventId};
 use crate::mux::{LayoutColumn, LayoutPanes, PaneCmd};
 use crate::store::{AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
 
@@ -29,6 +29,89 @@ pub struct ResolvedLaunch {
     pub teams: crate::config::TeamsConfig,
     pub layout: LayoutSpec,
     pub team_name: Option<String>,
+}
+
+/// Flattened parent stamp for one pane-backed agent launched by another agent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaunchAncestry {
+    pub parent_agent_id: AgentSessionId,
+    pub parent_agent_kind: AgentKind,
+    pub launch_depth: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum LaunchAncestryError {
+    #[error(
+        "launch refused: RimZ could not resolve the calling agent's durable launch identity, so it cannot safely verify the configured nesting limit. Launching another agent from here is not permitted; do not retry this command."
+    )]
+    UnresolvedCaller,
+    #[error(
+        "launch refused: this agent is at agent-launch nesting depth {current_depth}, so another agent would exceed this workspace's maximum of {max_depth}. Launching another agent from here is not permitted; do not retry this command."
+    )]
+    DepthExceeded { current_depth: u8, max_depth: u8 },
+}
+
+/// Resolve the flattened display parent while retaining true launch depth.
+pub fn resolve_launch_ancestry(
+    caller: Option<&crate::agents::AgentState>,
+    top_level: bool,
+    max_depth: u8,
+) -> std::result::Result<Option<LaunchAncestry>, LaunchAncestryError> {
+    let Some(caller) = caller.filter(|_| !top_level) else {
+        return Ok(None);
+    };
+    let current_depth = caller.launch_depth.unwrap_or(0);
+    if current_depth >= max_depth {
+        return Err(LaunchAncestryError::DepthExceeded {
+            current_depth,
+            max_depth,
+        });
+    }
+    Ok(Some(LaunchAncestry {
+        parent_agent_id: caller
+            .parent_agent_id
+            .clone()
+            .unwrap_or_else(|| caller.agent_id.clone()),
+        parent_agent_kind: caller
+            .parent_agent_kind
+            .clone()
+            .unwrap_or_else(|| caller.kind.clone()),
+        launch_depth: current_depth.saturating_add(1),
+    }))
+}
+
+/// Resolve the launching process through its stable launch id. Kind
+/// corroborates the match so stale cross-provider environment cannot attach a
+/// child to the wrong durable row.
+pub fn resolve_launch_ancestry_from_env(
+    agents: &[crate::agents::AgentState],
+    top_level: bool,
+    max_depth: u8,
+) -> std::result::Result<Option<LaunchAncestry>, LaunchAncestryError> {
+    if top_level {
+        return Ok(None);
+    }
+    let Some(kind) = std::env::var(crate::harness::run::ENV_AGENT_KIND)
+        .ok()
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let launch_id = std::env::var(crate::harness::run::ENV_AGENT_ID)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or(LaunchAncestryError::UnresolvedCaller)?;
+    let caller = agents
+        .iter()
+        .find(|agent| {
+            agent.kind == kind
+                && agent
+                    .launch_id
+                    .as_ref()
+                    .is_some_and(|candidate| candidate == launch_id.as_str())
+        })
+        .ok_or(LaunchAncestryError::UnresolvedCaller)?;
+    resolve_launch_ancestry(Some(caller), false, max_depth)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -573,6 +656,7 @@ pub fn launch_identity_requests(
     channel: Option<&str>,
     prompt: Option<(&str, usize)>,
     resume: Option<&CohortResumePlan>,
+    ancestry: Option<&LaunchAncestry>,
 ) -> Result<Vec<AgentLaunchRequest>> {
     let agent_cells: Vec<&AgentCell> = layout.agent_cells().collect();
     let agent_count = agent_cells.len();
@@ -622,6 +706,11 @@ pub fn launch_identity_requests(
         launch.launch_ordinal = launch_ordinal;
         launch.channel = channel.map(ToOwned::to_owned);
         launch.kind_ordinal = None;
+        if let Some(ancestry) = ancestry {
+            launch.parent_agent_id = Some(ancestry.parent_agent_id.clone());
+            launch.parent_agent_kind = Some(ancestry.parent_agent_kind.clone());
+            launch.launch_depth = Some(ancestry.launch_depth);
+        }
         requests.push(AgentLaunchRequest {
             kind: cell.kind.clone(),
             agent_id: mint_launch_id(),

@@ -34,7 +34,13 @@ impl<'a> AgentProjectionIndex<'a> {
         for agent in agents {
             if let Some(parent_id) = &agent.parent_agent_id {
                 children
-                    .entry((agent.kind.clone(), parent_id.clone()))
+                    .entry((
+                        agent
+                            .parent_agent_kind
+                            .clone()
+                            .unwrap_or_else(|| agent.kind.clone()),
+                        parent_id.clone(),
+                    ))
                     .or_default()
                     .push(agent);
             } else {

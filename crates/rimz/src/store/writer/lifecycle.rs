@@ -265,6 +265,16 @@ fn root_parent_id(
         .unwrap_or_else(|| parent_id.clone())
 }
 
+fn root_parent_kind(
+    agents: &[AgentState],
+    kind: &AgentKind,
+    parent_id: &AgentSessionId,
+) -> AgentKind {
+    find_agent(agents, kind, parent_id)
+        .and_then(|state| state.parent_agent_kind.clone())
+        .unwrap_or_else(|| kind.clone())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn append_adoption(
     workspace_id: &WorkspaceId,
@@ -291,7 +301,11 @@ fn append_adoption(
         return;
     }
     observation.signal = signal;
+    let parent_kind = root_parent_kind(agents, &intent.agent_kind, parent_id);
     observation.parent_agent_id = Some(root_parent_id(agents, &intent.agent_kind, parent_id));
+    if parent_kind != intent.agent_kind {
+        observation.launch.parent_agent_kind = Some(parent_kind);
+    }
     let transition = primary_transition.map_or_else(
         || {
             lifecycle_transition(agents, &intent.agent_kind, &observation)
@@ -356,6 +370,10 @@ fn append_reconciliation(
     observation.task = None;
     observation.prompt = None;
     observation.parent_agent_id = Some(root_parent_id);
+    let parent_kind = root_parent_kind(agents, &intent.agent_kind, parent_id);
+    if parent_kind != intent.agent_kind {
+        observation.launch.parent_agent_kind = Some(parent_kind);
+    }
     let errored = child_state.status == AgentStatus::Failed;
     observation.signal = LifecycleSignal::SubagentStopped { errored };
     let transition = lifecycle_transition(agents, &intent.agent_kind, &observation)

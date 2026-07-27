@@ -316,6 +316,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         effort: Some("high".to_owned()),
         budget: Some("$12.50/day".to_owned()),
         kind_ordinal: Some(99),
+        ..crate::agents::LaunchParams::default()
     };
     let invocation = ExecRequest {
         kind: AgentKind::new_unchecked("claude"),
@@ -426,6 +427,7 @@ fn exec_identity_env_maps_identity_fields() {
     );
     invocation.identity = ExecIdentity {
         name: Some("swift-otter".to_owned()),
+        launch_id: Some("launch_swift_otter".to_owned()),
         params,
         ..ExecIdentity::default()
     };
@@ -436,6 +438,10 @@ fn exec_identity_env_maps_identity_fields() {
             (
                 crate::harness::run::ENV_AGENT_KIND.to_owned(),
                 "claude".to_owned()
+            ),
+            (
+                crate::harness::run::ENV_AGENT_ID.to_owned(),
+                "launch_swift_otter".to_owned()
             ),
             (
                 crate::harness::run::ENV_RUN_ID.to_owned(),
@@ -481,6 +487,15 @@ fn exec_identity_env_maps_identity_fields() {
         ])
     );
     assert!(!exec_identity_env(&invocation).contains_key("RIMZ_AGENT_MODE"));
+
+    invocation.identity.launch_id = None;
+    assert_eq!(
+        exec_identity_env(&invocation)
+            .get(crate::harness::run::ENV_AGENT_ID)
+            .map(String::as_str),
+        Some(""),
+        "missing ids overwrite rather than inherit an ambient caller id"
+    );
 }
 
 #[test]

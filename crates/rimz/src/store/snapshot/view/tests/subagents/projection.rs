@@ -127,3 +127,64 @@ fn sub_agent_retention_tracks_the_parent_turn_boundary() {
         assert_eq!(!rows[0].sub_agents().is_empty(), expect_kept, "{label}");
     }
 }
+
+#[test]
+fn launched_cross_kind_child_nests_without_losing_its_pane() {
+    let parent = agent("claude", "root", AgentStatus::Running, 10)
+        .worktree("/repo/main")
+        .in_pane("%root");
+    let mut child = agent("codex", "child", AgentStatus::Running, 20)
+        .worktree("/repo/main")
+        .in_pane("%child");
+    child.name = Some("helper".to_owned());
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+
+    assert_eq!(rows(&snapshot).len(), 1);
+    assert_eq!(snapshot.agent_panes.len(), 2);
+    let children = row(&snapshot, "root").sub_agents();
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].id, "child");
+    assert_eq!(children[0].name, "helper");
+    assert!(snapshot.agent_panes.iter().any(|pane| {
+        pane.agent_id
+            .as_ref()
+            .is_some_and(|agent_id| agent_id == "child")
+            && pane.pane_id.raw() == "%child"
+    }));
+    let target = crate::harness::target::resolve_targets(&snapshot, "@helper", None, None)
+        .expect("launched child remains addressable");
+    assert_eq!(target.len(), 1);
+    assert_eq!(target[0].pane_id.raw(), "%child");
+}
+
+#[test]
+fn launched_child_visibility_uses_its_own_lifetime_not_the_parent_turn() {
+    let mut parent = agent("claude", "root", AgentStatus::Running, 100);
+    parent.turn_started_at = Some(ago(10));
+    let mut child = agent("codex", "child", AgentStatus::Running, 5).active_ago(60);
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(2);
+
+    let mut rows = vec![row_from_agent(&parent, epoch())];
+    attach_sub_agents(&mut rows, &[parent.clone(), child.clone()], epoch());
+    assert_eq!(
+        rows[0].sub_agents().len(),
+        1,
+        "a newer parent turn does not supersede a pane-backed child"
+    );
+
+    child.status = AgentStatus::Success;
+    child.ended_at = Some(ago(GHOST_SESSION_TTL_SECS + 1));
+    child.last_activity = ago(GHOST_SESSION_TTL_SECS + 1);
+    let mut rows = vec![row_from_agent(&parent, epoch())];
+    attach_sub_agents(&mut rows, &[parent, child], epoch());
+    assert!(
+        rows[0].sub_agents().is_empty(),
+        "an ended child expires after the ghost TTL"
+    );
+}

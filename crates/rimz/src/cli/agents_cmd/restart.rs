@@ -92,6 +92,9 @@ pub(in crate::cli) fn restart_resolved(
         Some(identity.name.as_str())
     });
     let restart_params = rimz::agents::LaunchParams {
+        parent_agent_id: agent.parent_agent_id.clone(),
+        parent_agent_kind: agent.parent_agent_kind.clone(),
+        launch_depth: agent.launch_depth,
         profile: agent.profile.clone(),
         role: agent.role.clone(),
         team: agent.team.clone(),
@@ -126,7 +129,9 @@ pub(in crate::cli) fn restart_resolved(
             name: identity_name.map(ToOwned::to_owned),
             name_explicit: fresh_identity
                 .map_or(agent.name_explicit, |identity| identity.name_explicit),
-            launch_id: fresh_identity.map(|identity| identity.agent_id.to_string()),
+            launch_id: fresh_identity
+                .map(|identity| identity.agent_id.to_string())
+                .or_else(|| agent.launch_id.as_ref().map(ToString::to_string)),
             params: restart_params,
         },
     };
@@ -276,6 +281,7 @@ fn append_fresh_launch(
         agent.channel.as_deref(),
         None,
         None,
+        None,
     )?;
     let request = requests
         .first_mut()
@@ -284,6 +290,9 @@ fn append_fresh_launch(
         AgentLaunchName::Soft(name.clone())
     });
     request.launch.profile = agent.profile.clone();
+    request.launch.parent_agent_id = agent.parent_agent_id.clone();
+    request.launch.parent_agent_kind = agent.parent_agent_kind.clone();
+    request.launch.launch_depth = agent.launch_depth;
     request.launch.mode = mode;
     request.launch.role = agent.role.clone();
     request.launch.team = agent.team.clone();

@@ -84,6 +84,9 @@ pub(super) fn rows_from_panes(
             PaneBindingDisposition::Agent(agent) => {
                 agent_panes.push(push_agent_row(&mut rows, agent, pane, now));
             }
+            PaneBindingDisposition::NestedAgent(agent) => {
+                agent_panes.push(pane_agent_from_agent(agent, pane));
+            }
             PaneBindingDisposition::Idle(row) => {
                 let row = *row;
                 agent_panes.push(pane_agent_from_idle(&row, pane));
@@ -164,6 +167,19 @@ fn push_agent_row(
         row.pane = Some(pane.clone());
         rows.push(row);
     }
+    pane_agent_from_agent_with_worktree(agent, pane, worktree_path)
+}
+
+fn pane_agent_from_agent(agent: &AgentState, pane: &PaneRef) -> PaneAgent {
+    let worktree_path = agent.worktree_path.clone().or_else(|| pane.cwd.clone());
+    pane_agent_from_agent_with_worktree(agent, pane, worktree_path)
+}
+
+fn pane_agent_from_agent_with_worktree(
+    agent: &AgentState,
+    pane: &PaneRef,
+    worktree_path: Option<String>,
+) -> PaneAgent {
     PaneAgent {
         kind: agent.kind.clone(),
         kind_ordinal: agent.kind_ordinal,

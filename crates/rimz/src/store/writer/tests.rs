@@ -24,6 +24,9 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
         agent_id: AgentSessionId::from("launch_follow_up"),
         name: AgentLaunchName::Explicit("writer".to_owned()),
         launch: LaunchParams {
+            parent_agent_id: Some(AgentSessionId::from("parent-session")),
+            parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+            launch_depth: Some(2),
             profile: Some("codex-coder".to_owned()),
             mode: Some(crate::harness::run::PermissionMode::Yolo),
             role: Some("coder".to_owned()),
@@ -82,11 +85,21 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
     }
     for payload in &payloads {
         assert_eq!(payload.agent_id, identity.agent_id);
+        assert_eq!(payload.launch_id.as_ref(), Some(&identity.agent_id));
         assert_eq!(payload.agent_name, "writer");
         assert!(payload.agent_name_explicit);
         assert_eq!(payload.launch, identity.launch);
         assert_eq!(payload.run_id, Some(run_id.clone()));
         assert_eq!(payload.prompt.as_deref(), Some("  build it  "));
+        assert_eq!(
+            payload.launch.parent_agent_id.as_deref(),
+            Some("parent-session")
+        );
+        assert_eq!(
+            payload.launch.parent_agent_kind.as_ref(),
+            Some(&AgentKind::new_unchecked("claude"))
+        );
+        assert_eq!(payload.launch.launch_depth, Some(2));
     }
 
     let starting = &payloads[0];
@@ -545,6 +558,7 @@ fn rotation_carryover_keeps_live_and_recently_ended_agents() {
             &kind,
             AgentLaunchPayload {
                 agent_id: AgentSessionId::from(agent_id),
+                launch_id: None,
                 agent_name: name.to_owned(),
                 agent_name_explicit: false,
                 launch: LaunchParams::default(),
@@ -664,6 +678,7 @@ fn rotation_carryover_drops_consumed_launch_tombstones() {
             &kind,
             AgentLaunchPayload {
                 agent_id: AgentSessionId::from("launch_a"),
+                launch_id: None,
                 agent_name: "lucid-atlas".to_owned(),
                 agent_name_explicit: false,
                 launch: LaunchParams::default(),

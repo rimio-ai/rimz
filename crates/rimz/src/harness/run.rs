@@ -17,6 +17,10 @@ use crate::store::run_store::{self, RunStoreErr};
 use crate::store::{SidebarSnapshot, StatePaths, Store};
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
+/// Stable RimZ launch identity. The provider may replace the provisional
+/// session key after startup, so launch ancestry resolves this value through
+/// the durable `AgentState::launch_id` stamp.
+pub const ENV_AGENT_ID: &str = "RIMZ_AGENT_ID";
 /// The launched adapter kind (`claude`, `codex`, ...). Its presence marks the
 /// process as a RimZ-launched agent for peer-message attribution.
 pub const ENV_AGENT_KIND: &str = "RIMZ_AGENT_KIND";
@@ -76,6 +80,8 @@ pub struct SupervisedRunRequest {
     pub name: Option<String>,
     pub background: bool,
     pub force_new_tab: bool,
+    /// Launch as a top-level agent even when the caller is another agent.
+    pub top_level: bool,
     pub permission_mode: PermissionMode,
     pub agent: Option<crate::ids::AgentKind>,
     pub model: Option<String>,

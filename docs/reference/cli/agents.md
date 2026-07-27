@@ -85,6 +85,8 @@ rimz agents claude --worktree "Take another approach."
 
 The bare spec and `launch` verb are equivalent: use whichever reads better in a command chain.
 
+When a RimZ-launched agent runs this command, each new agent is recorded as its child and appears in the existing subagent list on the caller's top-level card. The machine `max-launch-depth` setting bounds recursive launches (one layer by default); an over-limit command refuses before it creates launch state. `--top-level` makes the new agent independent instead: no parent link and its own sidebar row. The child still owns a real pane and remains addressable with `rimz message`, `rimz answer`, and `rimz pane`.
+
 The spec is a named [team](../../guide/configuration.md#agent-profiles-commands-and-teams), one declared role of a team as `<team>.<role>`, or an inline grammar: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is `term`, an agent kind, a virtual `<kind>-<mode>` cell, a configured profile, or a configured command; an agent cell may use `<cell>:<role>` for an ad-hoc role handle. Use `rimz agents <team>.<role>` to re-add one role of a running or stopped team with the same role handle and stamped team lane. Inside that team's channel the bare role is enough — `rimz agents planner` in `#forge` means `rimz agents forge.planner`, and the role joins the lane it resolved from. RimZ reads the lane's team from the stamps its agents carry, so the shorthand works in a worktree lane and an in-place `<dir>/<team>` lane alike. A bare role that also names a profile or command resolving to a different agent is ambiguous and refuses; launch `<team>.<role>` or rename one of them. The built-in `peer` team is the roleless `claude,codex`. The full grammar and how cells compile to panes are in [harness.md → The layout IR](../../internals/harness/harness.md#the-layout-ir).
 
 `rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend.
@@ -160,6 +162,8 @@ Relaunching a named team into the same named worktree reconciles with existing s
 `--channel <NAME>` launches into a durable named channel, registering it when missing and naming the backend tab `#<NAME>`. Named channels run in the room root and are managed with [`rimz channel`](./channel.md).
 
 Placement follows intent under the default `auto` policy: a named-channel launch, a worktree launch, or a multi-cell spec opens its own tab, and a one-cell non-worktree launch, including a single team role, takes over the current pane and returns to the shell when it exits. `--new-pane` forces a split (rejected for a multi-cell spec), `--new-tab` forces a tab, and `--bg` downgrades an in-place launch to a split so focus stays put — that is `--bg`'s placement meaning at launch; combined with `-p` it instead detaches from a supervised run, covered under [Supervised runs](#supervised-runs--p). The per-machine [`[agents] placement`](../../guide/configuration.md#agent-profiles-commands-and-teams) default sets the policy when no flag is given. The split-versus-tab mechanics are in [harness.md → Placement](../../internals/harness/harness.md#placement).
+
+`--top-level` affects ancestry, not placement: when another agent invokes the launch, it suppresses the parent link so the result is a peer row. The global `--root <PATH>` remains the project-root override and is a separate option.
 
 ### Supervised runs (`-p`)
 
@@ -290,7 +294,7 @@ Identity, presence, tool calls, compactions, and clocks come from the store's au
 
 #### `top`
 
-`top` ranks live root agents by pane process-tree resources: CPU, memory, I/O per second, process count, context fill, tokens, and age. It streams by default; `--once` takes two samples 500 ms apart and exits for scripts, while `-w/--worktree` selects one lane. Resource columns read `-` on platforms or panes where process metrics are unavailable, while context and token columns still render.
+`top` ranks live pane-backed agents, including launched children nested in a parent card, by process-tree resources: CPU, memory, I/O per second, process count, context fill, tokens, and age. It streams by default; `--once` takes two samples 500 ms apart and exits for scripts, while `-w/--worktree` selects one lane. Resource columns read `-` on platforms or panes where process metrics are unavailable, while context and token columns still render.
 
 #### `focus`
 

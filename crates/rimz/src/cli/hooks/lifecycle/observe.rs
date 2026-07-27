@@ -184,10 +184,18 @@ fn correlate_subagent_observation(
             return;
         }
     };
-    if let Some(parent_id) = snapshot
+    let prior_state = snapshot
         .agents
         .iter()
-        .find(|state| state.kind.as_str() == agent.spec().kind && state.agent_id == *child_id)
+        .find(|state| state.kind.as_str() == agent.spec().kind && state.agent_id == *child_id);
+    // Pane-backed launched children keep ordinary multi-turn lifecycle and run
+    // completion semantics. Their durable parent stamp is carried by the
+    // rollup; only provider-native children normalize root turn signals into
+    // subagent signals here.
+    if prior_state.is_some_and(|state| state.launch_depth.is_some()) {
+        return;
+    }
+    if let Some(parent_id) = prior_state
         .and_then(|state| state.parent_agent_id.clone())
         .filter(|parent_id| parent_id != child_id)
     {
@@ -253,9 +261,14 @@ fn correlate_subagent_observation(
             .as_ref()
             .unwrap_or(&candidate.agent_id)
             .clone();
-        (root_parent != *child_id).then_some((root_parent, correlation))
+        let root_parent_kind = candidate
+            .parent_agent_kind
+            .as_ref()
+            .unwrap_or(&candidate.kind)
+            .clone();
+        (root_parent != *child_id).then_some((root_parent, root_parent_kind, correlation))
     });
-    let Some((parent_id, correlation)) = matched.next() else {
+    let Some((parent_id, parent_kind, correlation)) = matched.next() else {
         return;
     };
     if matched.next().is_some() {
@@ -267,6 +280,9 @@ fn correlate_subagent_observation(
         return;
     }
     observation.parent_agent_id = Some(parent_id);
+    if parent_kind.as_str() != agent.spec().kind {
+        observation.launch.parent_agent_kind = Some(parent_kind);
+    }
     observation.agent_name = correlation.agent_name;
     observation.launch.role = correlation.role;
     observation.task = correlation.task;

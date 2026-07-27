@@ -108,7 +108,7 @@ pub(crate) fn resume_park(
     capacity: Option<&ProviderCapacity>,
     now: Timestamp,
 ) -> Option<ResumeArm> {
-    if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
+    if agent.is_provider_subagent() || agent.agent_id.is_empty() {
         return None;
     }
     let error = display_turn_error(
@@ -186,7 +186,7 @@ pub(crate) fn resume_parked(
         resume_messages,
     };
     for agent in &snapshot.agents {
-        if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
+        if agent.is_provider_subagent() || agent.agent_id.is_empty() {
             continue;
         }
         let path = park_record_path(runtime, &agent.kind, &agent.agent_id);
@@ -247,7 +247,7 @@ pub(crate) fn exhausted_parks(
         return exhausted;
     }
     for agent in &snapshot.agents {
-        if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
+        if agent.is_provider_subagent() || agent.agent_id.is_empty() {
             continue;
         }
         let path = park_record_path(runtime, &agent.kind, &agent.agent_id);

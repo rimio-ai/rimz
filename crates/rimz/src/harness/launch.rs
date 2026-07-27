@@ -204,7 +204,7 @@ pub struct ExecIdentity {
     /// minted and soft names. Carried in the hidden request, not an env var.
     #[serde(default)]
     pub name_explicit: bool,
-    /// Provisional launch row id; valid only alongside `name`.
+    /// Stable RimZ launch id; valid only alongside `name`.
     pub launch_id: Option<String>,
     /// Canonical launch parameters. `kind_ordinal` remains display-only and is
     /// deliberately absent from wrapper argv and environment wiring.
@@ -796,6 +796,13 @@ pub fn exec_identity_env(request: &ExecRequest) -> BTreeMap<String, String> {
     env.insert(
         crate::harness::run::ENV_AGENT_KIND.to_owned(),
         request.kind.to_string(),
+    );
+    // Always overwrite the ambient value. Resume records predating launch ids
+    // deliberately export an empty value rather than inheriting their caller's
+    // identity into the new pane.
+    env.insert(
+        crate::harness::run::ENV_AGENT_ID.to_owned(),
+        request.identity.launch_id.clone().unwrap_or_default(),
     );
     if let Some(run_id) = request.run_id.as_ref() {
         env.insert(

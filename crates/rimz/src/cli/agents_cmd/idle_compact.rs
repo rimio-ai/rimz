@@ -80,7 +80,7 @@ pub fn run_idle_compact(args: IdleCompactArgs) -> Result<()> {
 
     let idle_after = config.harness.idle_compact_after();
     let idle_secs = Timestamp::now().as_second() - agent.last_activity.as_second();
-    if agent.parent_agent_id.is_some()
+    if agent.is_provider_subagent()
         || agent.agent_id.is_empty()
         || agent.compacting_since.is_some()
         || agent.budget_park.is_some()

@@ -2174,6 +2174,7 @@ fn seed_agent_launch(
         &kind,
         AgentLaunchPayload {
             agent_id: AgentSessionId::from(launch_id),
+            launch_id: None,
             agent_name: agent_name.to_owned(),
             agent_name_explicit: false,
             launch: LaunchParams {
@@ -2197,6 +2198,7 @@ fn seed_agent_launch(
                 channel: None,
 
                 kind_ordinal: None,
+                ..LaunchParams::default()
             },
             state,
             run_id: None,

@@ -47,6 +47,7 @@ fn raw_lifecycle_at(
 fn launch_payload(agent_id: &str, agent_name: &str) -> AgentLaunchPayload {
     AgentLaunchPayload {
         agent_id: agent_id.into(),
+        launch_id: None,
         agent_name: agent_name.to_owned(),
         agent_name_explicit: false,
         launch: LaunchParams::default(),
@@ -446,6 +447,50 @@ fn launch_description_reduces_and_survives_provisional_adoption() {
     assert_eq!(adopted.len(), 1);
     assert_eq!(adopted[0].agent_id.as_str(), "real-session");
     assert_eq!(adopted[0].description.as_deref(), Some("port auth"));
+}
+
+#[test]
+fn launched_child_identity_and_ancestry_survive_provider_adoption() {
+    let launch = launch_event(
+        "codex",
+        AgentLaunchPayload {
+            launch_id: Some(AgentSessionId::from("launch_child")),
+            launch: LaunchParams {
+                parent_agent_id: Some(AgentSessionId::from("root-session")),
+                parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+                launch_depth: Some(2),
+                role: Some("reviewer".to_owned()),
+                ..Default::default()
+            },
+            pane_id: Some(PaneId::parse("tmux:%2").expect("pane id")),
+            ..launch_payload("launch_child", "reviewer")
+        },
+    );
+    let lifecycle = raw_lifecycle_at(
+        "codex",
+        2,
+        json!({
+            "agent_id": "provider-session",
+            "agent_name": "reviewer",
+            "signal": { "signal": "registered" },
+            "pane_id": "tmux:%2",
+        }),
+    );
+
+    let agents = reduce_agent_states(&[launch, lifecycle]);
+
+    assert_eq!(agents.len(), 1);
+    let child = &agents[0];
+    assert_eq!(child.agent_id.as_str(), "provider-session");
+    assert_eq!(child.launch_id.as_deref(), Some("launch_child"));
+    assert_eq!(child.parent_agent_id.as_deref(), Some("root-session"));
+    assert_eq!(
+        child.parent_agent_kind.as_ref(),
+        Some(&AgentKind::new_unchecked("claude"))
+    );
+    assert_eq!(child.launch_depth, Some(2));
+    assert_eq!(child.role.as_deref(), Some("reviewer"));
+    assert!(child.is_launched_child());
 }
 
 #[test]

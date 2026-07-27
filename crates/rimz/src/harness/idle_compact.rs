@@ -114,7 +114,7 @@ fn should_compact(
     record: Option<&FireRecord>,
 ) -> bool {
     if mode == IdleCompactMode::Off
-        || agent.parent_agent_id.is_some()
+        || agent.is_provider_subagent()
         || agent.agent_id.is_empty()
         || compact_command.is_none()
         || agent.compacting_since.is_some()

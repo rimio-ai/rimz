@@ -424,6 +424,15 @@ placement = "auto"   # "auto" | "pane" | "tab"
 
 `placement` sets where a launch lands when neither `--new-pane` nor `--new-tab` is passed. `auto` (the default) runs a one-cell non-worktree launch in the current pane and opens a new tab for a worktree, named-channel, or multi-cell launch; `pane` splits a new pane for a one-cell non-worktree launch and otherwise opens a tab; `tab` always opens a tab. The CLI side of placement is in [agents.md → Channel, worktree, and placement](../reference/cli/agents.md#channel-worktree-and-placement).
 
+#### Launch depth
+
+```toml
+[agents]
+max-launch-depth = 1
+```
+
+An agent that runs `rimz agents` launches children beneath its own top-level card. `max-launch-depth` limits that recursion and defaults to one child layer; a launch past the limit fails before creating a pane, worktree, or provisional agent and tells the calling agent not to retry. Deeper configured limits still render as one flat child list under the original top-level ancestor. Pass `--top-level` when the new agent should instead be an independent peer with its own card.
+
 ### Worktrees
 
 ```toml

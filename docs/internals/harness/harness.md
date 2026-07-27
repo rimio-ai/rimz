@@ -140,8 +140,9 @@ The compile path is the seam the whole harness hangs off, and it runs in a fixed
 1. **Resolve.** `plan::resolve_launch` reads the effective config (machine profiles and teams, merged with trust-filtered project config) and produces a `LayoutSpec` whose agent cells carry their profile-declared launch params and typed system-prompt file path. A launch-wide provider override replaces each cell's adapter here without changing its profile or role identity.
 2. **Validate.** The profile prompt-file validator and replacement-support check run next, so a moved prompt file or an adapter with no replacement mechanism fails at the entry point rather than inside a half-built tab.
 3. **Finalize.** `plan::finalize_launch_layout` applies the launch-wide choices: permission posture, CLI model and effort, the typed prompt-file override, passthrough argv, budget, adapter-declared preset reconciliation and defaults, and supervised turn limits. An args-only model is adopted as identity; an adapter default is stamped only when no model was selected at all.
-4. **Identify.** Each cell becomes a launch request with a name, a channel, and its cohort stamps, and the store mints provisional rows before any pane opens.
-5. **Compile.** Each cell becomes a `LayoutPanes` entry. An agent cell compiles to the exec-wrapper argv, a command cell to its raw argv, and an empty argv reserves the pane for the user's shell.
+4. **Resolve ancestry.** The launcher reads its stable launch identity, resolves the live durable caller, checks the configured depth, and computes the flattened top-level parent stamp. A stale caller or excessive depth refuses here, before provider preflight, worktree creation, store append, or mux action. `--top-level` deliberately produces no parent stamp.
+5. **Identify.** Each cell becomes a launch request with a name, a channel, its cohort stamps, and any parent stamp, and the store mints provisional rows before any pane opens.
+6. **Compile.** Each cell becomes a `LayoutPanes` entry. An agent cell compiles to the exec-wrapper argv, a command cell to its raw argv, and an empty argv reserves the pane for the user's shell.
 
 Restart, fork, and resume stop after step 1 and replay only profile-declared settings, through the shared posture seam under [Resume](#resume-and-rebirth).
 

@@ -60,6 +60,7 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
         name: None,
         background: false,
         force_new_tab: false,
+        top_level: false,
         permission_mode: PermissionMode::Auto,
         agent: None,
         model: Some(" gpt-5 ".to_owned()),

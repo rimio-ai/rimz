@@ -60,7 +60,7 @@ impl SidebarSnapshot {
             let sessions: Vec<&AgentState> = self
                 .agents
                 .iter()
-                .filter(|agent| agent.parent_agent_id.is_none() && agent.kind == kind)
+                .filter(|agent| !agent.is_provider_subagent() && agent.kind == kind)
                 .collect();
             // Nothing to show without a session or a substantive logged-in
             // account. Recorded spend qualifies a probed account but never
@@ -110,7 +110,7 @@ impl SidebarSnapshot {
                 fresh_windows(
                     self.agents
                         .iter()
-                        .filter(|agent| agent.parent_agent_id.is_none() && agent.kind == *of_kind)
+                        .filter(|agent| !agent.is_provider_subagent() && agent.kind == *of_kind)
                         .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref()),
                     now,
                 )
@@ -239,7 +239,7 @@ fn provider_kinds(
 ) -> Vec<String> {
     let mut kinds: Vec<String> = Vec::new();
     for agent in agents {
-        if agent.parent_agent_id.is_none() && !kinds.iter().any(|known| agent.kind == **known) {
+        if !agent.is_provider_subagent() && !kinds.iter().any(|known| agent.kind == **known) {
             kinds.push(agent.kind.to_string());
         }
     }

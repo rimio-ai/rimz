@@ -606,6 +606,7 @@ impl<'a> TaskFire<'a> {
             name: None,
             background: false,
             force_new_tab: false,
+            top_level: false,
             permission_mode,
             agent: None,
             model: None,
