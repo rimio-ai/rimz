@@ -96,7 +96,6 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
             system_prompt_file: None,
-            append_system_prompt_file: None,
         },
     },
 };

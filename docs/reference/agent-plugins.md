@@ -82,6 +82,7 @@ bin = "mybot"
 args = []
 model-flag = "--model"
 effort-flag = "--effort"
+system-prompt-file-flag = "--system-prompt-file"
 resume = ["mybot", "--resume", "{session_id}"]
 compact-command = "/compact"
 
@@ -103,7 +104,7 @@ version = ["mybot", "--version"]
 
 `kind` matches `[a-z0-9-]+`, starts and ends with a letter or digit, matches its directory name, and does not collide with a built-in or another plugin. `session_start` is required because it establishes the session row. Optional tables tolerate unknown keys for forward compatibility; protocol version, identity, event names, tool subsets, probe commands, and resume placeholders validate strictly.
 
-Relative probe executables and relative transcript globs resolve from the bundle directory. A launch or resume executable containing a path separator also resolves from the bundle directory; bare executable names use `PATH`. Launch presets fail when a configured `model`, `effort`, or system-prompt field has no declared rendering, so launch intent is not silently discarded.
+Relative probe executables and relative transcript globs resolve from the bundle directory. A launch or resume executable containing a path separator also resolves from the bundle directory; bare executable names use `PATH`. `model-flag` and `effort-flag` receive their configured values. `system-prompt-file-flag` declares a replacement mechanism: RimZ passes either the resolved `system-prompt-file` or a content-addressed artifact containing that file plus `append-system-prompt-files` in order. It must be a file-path flag, not a text flag or an append-only flag. Launch presets fail when a configured `model`, `effort`, or system-prompt field has no declared rendering, so launch intent is not silently discarded.
 
 `emits` is the shim's conformance declaration. RimZ derives the coverage and lifecycle matrices from it plus declared probes and capabilities. The feed still processes a valid canonical event omitted from `emits` and warns, because the live event is authoritative; update `emits` so coverage remains truthful.
 

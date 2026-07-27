@@ -64,6 +64,8 @@ pub enum TrustErr {
     },
     #[error("removed project config table in {path}: {detail}")]
     RemovedProjectTable { path: PathBuf, detail: String },
+    #[error("removed project config key in {path}: {detail}")]
+    RemovedProjectKey { path: PathBuf, detail: String },
     #[error("serializing trust record: {0}")]
     RecordSerialize(#[from] toml::ser::Error),
     #[error("serializing birth prompt dismissal: {0}")]
@@ -502,6 +504,12 @@ fn check_project_config_removed_tables(path: &Path, text: &str) -> Result<()> {
                 .to_owned(),
         });
     }
+    if let Some(detail) = crate::config::retired_append_prompt_key(&doc) {
+        return Err(TrustErr::RemovedProjectKey {
+            path: path.to_path_buf(),
+            detail,
+        });
+    }
     Ok(())
 }
 
@@ -666,8 +674,8 @@ pub struct ProjectProfile {
     pub effort: Option<String>,
     #[serde(rename = "system-prompt-file")]
     pub system_prompt_file: Option<String>,
-    #[serde(rename = "append-system-prompt-file")]
-    pub append_system_prompt_file: Option<String>,
+    #[serde(rename = "append-system-prompt-files")]
+    pub append_system_prompt_files: Option<Vec<String>>,
     pub args: Option<String>,
 }
 
@@ -732,7 +740,8 @@ struct ExecutableProfile<'a> {
     model: Option<&'a str>,
     effort: Option<&'a str>,
     system_prompt_file: Option<&'a str>,
-    append_system_prompt_file: Option<&'a str>,
+    #[serde(rename = "append_system_prompt_file")]
+    append_system_prompt_files: Option<&'a [String]>,
     args: Option<&'a str>,
 }
 
@@ -751,7 +760,8 @@ struct ExecutableRole<'a> {
     model: Option<&'a str>,
     effort: Option<&'a str>,
     system_prompt_file: Option<String>,
-    append_system_prompt_file: Option<String>,
+    #[serde(rename = "append_system_prompt_file")]
+    append_system_prompt_files: Option<Vec<String>>,
     args: Option<&'a str>,
 }
 
@@ -812,7 +822,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     model: p.model.as_deref(),
                     effort: p.effort.as_deref(),
                     system_prompt_file: p.system_prompt_file.as_deref(),
-                    append_system_prompt_file: p.append_system_prompt_file.as_deref(),
+                    append_system_prompt_files: p.append_system_prompt_files.as_deref(),
                     args: p.args.as_deref(),
                 })
                 .collect(),
@@ -835,10 +845,15 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                                 .system_prompt_file
                                 .as_ref()
                                 .map(|path| path.to_string_lossy().into_owned()),
-                            append_system_prompt_file: role
-                                .append_system_prompt_file
+                            append_system_prompt_files: role
+                                .append_system_prompt_files
                                 .as_ref()
-                                .map(|path| path.to_string_lossy().into_owned()),
+                                .map(|paths| {
+                                    paths
+                                        .iter()
+                                        .map(|path| path.to_string_lossy().into_owned())
+                                        .collect()
+                                }),
                             args: role.args.as_deref(),
                         })
                         .collect(),
@@ -1371,7 +1386,7 @@ mod tests {
             "[profiles.x]\nagent = \"claude\"\nmodel = \"opus\"\n",
             "[profiles.x]\nagent = \"claude\"\neffort = \"low\"\n",
             "[profiles.x]\nagent = \"claude\"\nsystem-prompt-file = \"prompts/x.md\"\n",
-            "[profiles.x]\nagent = \"claude\"\nappend-system-prompt-file = \"prompts/x-extra.md\"\n",
+            "[profiles.x]\nagent = \"claude\"\nappend-system-prompt-files = [\"prompts/x-extra.md\"]\n",
             "[profiles.x]\nagent = \"claude\"\nargs = \"--profile x\"\n",
             "[profiles.y]\nagent = \"claude\"\n",
             "[agents.teams.review]\nlayout = \"planner,coder\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
@@ -1382,7 +1397,7 @@ mod tests {
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nmodel = \"opus\"\n",
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\neffort = \"low\"\n",
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
-            "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nappend-system-prompt-file = \"prompts/planner-extra.md\"\n",
+            "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nappend-system-prompt-files = [\"prompts/planner-extra.md\"]\n",
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nargs = \"--role planner\"\n",
             "[tasks.x]\nagent = \"codex\"\n",
             "[tasks.y]\nagent = \"codex\"\n",

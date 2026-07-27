@@ -67,6 +67,7 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
                 session_id: id.to_owned(),
                 extra_args: Vec::new(),
             },
+            system_prompt: Default::default(),
             provider_account: crate::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

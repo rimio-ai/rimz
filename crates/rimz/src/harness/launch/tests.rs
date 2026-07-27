@@ -49,6 +49,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
         kind: AgentKind::new_unchecked(kind),
         action,
+        system_prompt: Default::default(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -215,6 +216,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
             prompt: Some("fix it".to_owned()),
             extra_args,
         },
+        system_prompt: Default::default(),
         provider_account: ProviderAccountState::Unbound,
         run_id: Some(
             "run_0123456789abcdef0123456789abcdef"

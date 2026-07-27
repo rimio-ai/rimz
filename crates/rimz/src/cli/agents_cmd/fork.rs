@@ -87,6 +87,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
                 session_id: seed.source_session_id.to_string(),
                 extra_args: posture.args.clone(),
             },
+            system_prompt: posture.system_prompt.clone(),
             provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,
@@ -136,6 +137,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
                 session_id: seed.source_session_id.to_string(),
                 extra_args: posture.args,
             },
+            system_prompt: posture.system_prompt.clone(),
             provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,
@@ -206,6 +208,9 @@ fn fork_posture(seed: &ForkSeed, profiles: &rimz::config::ProfilesConfig) -> Res
     );
     if let Some(reason @ PostureDegrade::KindChanged { .. }) = &posture.degraded {
         bail!("{reason}; a fork stays on the source provider — fix the profile and retry");
+    }
+    if let Some(reason @ PostureDegrade::PromptUnsupported { .. }) = &posture.degraded {
+        bail!("{reason}");
     }
     Ok(posture)
 }
@@ -338,7 +343,7 @@ mod tests {
                 mode: Some(PermissionMode::Yolo),
                 model: Some("opus".to_owned()),
                 effort: Some("high".to_owned()),
-                append_system_prompt_file: Some(prompt.path().to_path_buf()),
+                append_system_prompt_files: Some(vec![prompt.path().to_path_buf()]),
                 args: Some("--plugin-dir '/tmp/plugin dir'".to_owned()),
                 ..profile("claude")
             },
@@ -354,12 +359,14 @@ mod tests {
                 "opus",
                 "--effort",
                 "high",
-                "--append-system-prompt-file",
-                prompt.path().to_str().expect("utf-8 prompt path"),
                 "--dangerously-skip-permissions",
                 "--plugin-dir",
                 "/tmp/plugin dir",
             ]
+        );
+        assert_eq!(
+            posture.system_prompt.append_system_prompt_files,
+            [prompt.path().to_path_buf()]
         );
         assert_eq!(posture.mode, Some(PermissionMode::Yolo));
         assert_eq!(posture.model.as_deref(), Some("opus"));

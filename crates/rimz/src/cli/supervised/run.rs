@@ -55,10 +55,11 @@ pub(super) fn prepare_supervised_launch_layout(
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
-    let mut resolved = rimz::harness::plan::resolve_launch(
+    let mut resolved = rimz::harness::plan::resolve_launch_with_kind_override(
         &effective,
         &machine_config.agents.commands,
         Some(spec),
+        request.agent.as_ref(),
     )?;
     rimz::harness::plan::reject_prompt_that_looks_like_spec(
         Some(spec),
@@ -72,7 +73,7 @@ pub(super) fn prepare_supervised_launch_layout(
         model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
         effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
         system_prompt_file: request.system_prompt_file.clone(),
-        append_system_prompt_file: request.append_system_prompt_file.clone(),
+        append_system_prompt_files: request.append_system_prompt_files.clone(),
     };
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
@@ -359,6 +360,7 @@ fn prepare_supervised(
             prompt: Some(request.prompt.clone()),
             extra_args: agent_cell.args.clone(),
         },
+        system_prompt: rimz::harness::prompt_compose::SystemPromptSources::from_cell(agent_cell),
         provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -474,6 +476,7 @@ fn execute_attempt(
         prompt,
         cleanup_worktree: (request.worktree.is_some() || request.from_pr.is_some()) && retries == 0,
         permission_args: &agent_cell.args,
+        system_prompt: &rimz::harness::prompt_compose::SystemPromptSources::from_cell(agent_cell),
         self_cleanup_on_completion: request.background && !request.keep,
         provider_account_binding: prepared.managed_launch.binding(),
     })?;

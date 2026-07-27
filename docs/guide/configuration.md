@@ -354,6 +354,10 @@ system-prompt-file = "~/.config/rimz/prompts/slim.md"
 [agents.profiles.planner]
 agent = "claude-slim"                                  # inherit the slim profile, change the voice
 system-prompt-file = "~/.config/rimz/prompts/planner.md"
+append-system-prompt-files = [
+  "~/.config/rimz/prompts/review-policy.md",
+  "~/.config/rimz/prompts/rust-style.md",
+]
 
 [agents.profiles.codex-yolo]
 agent = "codex"
@@ -384,9 +388,11 @@ mode = "plan"
 
 #### Profiles
 
-A profile is a named agent preset, addressable as `@<name>` once it is running. `agent` is its base, a built-in kind (`claude`, `codex`, …) or another profile that resolves to one, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `system-prompt-file`, `append-system-prompt-file`, and raw `args`. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. These same override fields recur wherever you preset an agent (profiles, team roles, and loop tasks), so the template and `rimz config get` carry the current per-field defaults. A provider flag repeated in raw `args` is reconciled at launch: the typed field or launch flag wins and RimZ warns when its value differs, while a model set only in `args` becomes the launch model and suppresses the adapter default.
+A profile is a named agent preset, addressable as `@<name>` once it is running. `agent` is its base, a built-in kind (`claude`, `codex`, …) or another profile that resolves to one, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `system-prompt-file`, `append-system-prompt-files`, and raw `args`. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. Team roles expose the same fields; loop tasks expose the launch fields relevant to scheduled work. The template and `rimz config get` carry the current per-field defaults. Model and effort flags repeated in raw `args` are reconciled at launch: the typed field or launch flag wins and RimZ warns when its value differs, while a model set only in `args` becomes the launch model and suppresses the adapter default.
 
-Inheritance flattens at launch to one concrete adapter kind, and **the nearest set value wins for every field, including `args`**: a child that sets `args` replaces the base `args` rather than appending. `system-prompt-file` gives the profile its own voice; `append-system-prompt-file` keeps the adapter's base prompt and adds rules where the adapter supports it. A `~` expands to home and a relative path roots at the declaring config file, so a role in a drop-in `team.toml` can name a prompt beside that fragment and keep pointing at it wherever the team launches; each file must exist at launch, and a missing one fails with the path to fix. A field the resolved adapter has no flag for fails the launch and names the field to remove. Command-line `--model`, `--effort`, `--budget`, `--system-prompt-file`, and `--append-system-prompt-file` render after the profile and override it for that launch.
+Inheritance flattens at launch to one concrete adapter kind, and **the nearest set value wins for every field, including lists and `args`**: a child that sets `args` replaces the base `args`, and a child or team role that sets `append-system-prompt-files` replaces the inherited list rather than extending it. `system-prompt-file` supplies the first piece of the profile's voice. RimZ then composes `append-system-prompt-files` in declared order, separated by blank lines, and uses the result as the agent's replacement system prompt. The resolved adapter must support system-prompt replacement; Claude, Codex, and Qwen do, while an unsupported adapter fails the launch and points to raw `args` as the provider-specific escape hatch. A `~` expands to home and a relative path roots at the declaring config file, so a role in a drop-in `team.toml` can name prompt pieces beside that fragment and keep pointing at them wherever the team launches; every file must exist at launch, and a missing one fails with the path to fix.
+
+The former singular config key `append-system-prompt-file` has been removed. Configuration using it fails with an actionable rename error; write `append-system-prompt-files = ["path/to/fragment.md"]` instead. The command-line spelling stays singular and becomes repeatable: each `--append-system-prompt-file PATH` adds one piece, in flag order, and a non-empty command-line list replaces the profile's list for that launch. Command-line `--model`, `--effort`, `--budget`, and `--system-prompt-file` likewise override the profile value.
 
 A profile may be named like a kind: `[agents.profiles.claude]` overrides the base for bare `claude`, for profiles that set `agent = "claude"`, and for virtual cells like `claude-auto`.
 

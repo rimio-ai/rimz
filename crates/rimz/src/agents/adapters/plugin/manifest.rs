@@ -76,6 +76,7 @@ pub(super) struct LaunchManifest {
     pub args: Vec<String>,
     pub model_flag: Option<String>,
     pub effort_flag: Option<String>,
+    pub system_prompt_file_flag: Option<String>,
     pub resume: Option<Vec<String>>,
     pub compact_command: Option<String>,
     #[serde(default)]

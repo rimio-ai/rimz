@@ -30,7 +30,7 @@ Four rules explain most of the design. When a piece of the code surprises you, o
 4. **Choose where it lands.** Two cells plus a worktree means a new tab. Placement is decided now, before anything durable exists, so a rejected placement leaves no debris ([Placement](#placement)).
 5. **Create the worktree.** A marked Git worktree is added and seeded, and its name `feat-a` becomes the channel every cell is stamped with ([worktrees.md](./worktrees.md)).
 6. **Mint identities.** The store writes a provisional row per cell with its name, channel, and cohort stamps, so both agents are addressable as `@claude#feat-a` and `@codex#feat-a` before either has run a turn ([The address](#the-address)).
-7. **Open the panes.** Each cell compiles to a hidden `rimz agents exec` wrapper invocation carrying an `ExecRequest`. The wrapper validates it, then runs the stock provider CLI in the pane with the trailing prompt in its launch argv ([The exec wrapper](#the-exec-wrapper)).
+7. **Open the panes.** Each cell compiles to a hidden `rimz agents exec` wrapper invocation carrying an `ExecRequest`. The wrapper validates it, materializes any system-prompt composition, then runs the stock provider CLI in the pane with the trailing prompt in its launch argv ([The exec wrapper](#the-exec-wrapper)).
 8. **The agents report themselves.** Their lifecycle hooks write durable events, which the rollup folds into the state every later command reads: messages waiting for a turn boundary ([messaging.md](./messaging.md)), supervised runs waiting to complete ([scripting.md](./scripting.md)), and budget ticks watching the spend ([budget.md](./budget.md)).
 9. **Reclaim what is left.** When a pane ends, the resident wrapper decides whether the exit was deliberate, and only then removes the worktree or closes the pane ([Reclaiming a pane](#reclaiming-a-pane)).
 
@@ -56,6 +56,7 @@ Inside `harness/` itself, start here when you are looking for where a behaviour 
 | --- | --- |
 | [`spec.rs`](../../../crates/rimz/src/harness/spec.rs) | The layout IR: the inline grammar, team and profile resolution, virtual `<kind>-<mode>` cells, prompt-file path rooting, the prompt leader, and the name-collision rules that keep profile names addressable. |
 | [`plan.rs`](../../../crates/rimz/src/harness/plan.rs) | Turning a spec into a launch: effective-config resolution, launch finalization, placement resolution, per-cell launch identities, and compilation to backend-neutral pane commands. |
+| [`prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | Ordered system-prompt composition, content-addressed runtime artifacts, and adapter replacement argv. |
 | [`launch.rs`](../../../crates/rimz/src/harness/launch.rs) | The provider process: adapter argv for launch, resume, and fork; the hidden `ExecRequest` wire; launch environment composition; the login-shell wrapper; and preflight. |
 | [`target.rs`](../../../crates/rimz/src/harness/target.rs) | The address: parsing `@handle#channel`, resolving it against a snapshot, binding a match to a live pane, and rendering the canonical handle back. |
 | [`petname.rs`](../../../crates/rimz/src/harness/petname.rs) | The adjective-noun instance names, their collision check, and the deterministic fallback for records written before petnames existed. |
@@ -137,9 +138,9 @@ Stacks are presentation only. Zellij renders a native stack with one expanded pa
 
 The compile path is the seam the whole harness hangs off, and it runs in a fixed order.
 
-1. **Resolve.** `plan::resolve_launch` reads the effective config (machine profiles and teams, merged with trust-filtered project config) and produces a `LayoutSpec` whose agent cells carry their profile-declared launch params.
-2. **Validate.** The profile prompt-file validator runs next, so a moved `--system-prompt-file` fails at the entry point rather than inside a half-built tab.
-3. **Finalize.** `plan::finalize_launch_layout` applies the launch-wide choices: permission posture, CLI presets and passthrough argv, budget, adapter-declared preset reconciliation and defaults, and supervised turn limits. An args-only model is adopted as identity; an adapter default is stamped only when no model was selected at all.
+1. **Resolve.** `plan::resolve_launch` reads the effective config (machine profiles and teams, merged with trust-filtered project config) and produces a `LayoutSpec` whose agent cells carry their profile-declared launch params and typed prompt source paths. A launch-wide provider override replaces each cell's adapter here without changing its profile or role identity.
+2. **Validate.** The profile prompt-file validator and replacement-support check run next, so a moved prompt fragment or an adapter with no replacement mechanism fails at the entry point rather than inside a half-built tab.
+3. **Finalize.** `plan::finalize_launch_layout` applies the launch-wide choices: permission posture, CLI model and effort, typed prompt-source overrides, passthrough argv, budget, adapter-declared preset reconciliation and defaults, and supervised turn limits. A non-empty CLI fragment list replaces the profile list. An args-only model is adopted as identity; an adapter default is stamped only when no model was selected at all.
 4. **Identify.** Each cell becomes a launch request with a name, a channel, and its cohort stamps, and the store mints provisional rows before any pane opens.
 5. **Compile.** Each cell becomes a `LayoutPanes` entry. An agent cell compiles to the exec-wrapper argv, a command cell to its raw argv, and an empty argv reserves the pane for the user's shell.
 
@@ -147,13 +148,15 @@ Restart, fork, and resume stop after step 1 and replay only profile-declared set
 
 A trailing launch prompt attaches to exactly one agent identity: a named team's configured `leader` role, its first declared role by default, or otherwise the first unambiguous agent cell. Team and multi-cell launches stamp each member's cohort and order (`launch_group` and `launch_ordinal`, exported as `RIMZ_LAUNCH_GROUP` and `RIMZ_LAUNCH_ORDINAL`), so the sidebar keeps cards in definition order and resume can match a cohort later.
 
-`launch::compile_agent_process` is the provider-process seam. It selects launch, resume, or fork argv from one typed request, composes trusted project, adapter, RimZ identity, and RTK environment in that order, applies the login-shell wrapper, and retains the raw provider argv for PATH preflight.
+`launch::compile_agent_process` is the provider-process seam. It selects launch, resume, or fork argv from one typed request after the exec wrapper has rendered prompt replacement, composes trusted project, adapter, RimZ identity, and RTK environment in that order, applies the login-shell wrapper, and retains the raw provider argv for PATH preflight.
 
 ### The exec wrapper
 
 Every agent pane runs the hidden `rimz agents exec <kind>` wrapper rather than the agent directly.
 
-The command line carries two visible arguments, the kind and an optional `--worktree-path`, which together form the process-classification envelope that pane discovery reads. Everything else travels in one hidden compact JSON `ExecRequest`: the typed action (`Launch`, `Resume`, or `Fork`), the identity, the prompt, the run id, pane-lifetime flags, provider account binding state, and provider argv. The wrapper decodes and validates that request, cross-checking the payload kind and worktree against the visible envelope, before it launches anything. Backends never resolve agent kinds or worktrees; the wrapper does.
+The command line carries two visible arguments, the kind and an optional `--worktree-path`, which together form the process-classification envelope that pane discovery reads. Everything else travels in one hidden compact JSON `ExecRequest`: the typed action (`Launch`, `Resume`, or `Fork`), the identity, the prompt, typed system-prompt source paths, the run id, pane-lifetime flags, provider account binding state, and provider argv. The wrapper decodes and validates that request, cross-checking the payload kind and worktree against the visible envelope, before it launches anything. Backends never resolve agent kinds or worktrees; the wrapper does.
+
+When prompt fragments exist, the wrapper reads the base prompt first and then the fragments in declaration order, normalizes one trailing newline per piece, and separates pieces with a blank line. File-path adapters receive a content-addressed `prompt/sys.<digest>.md` beneath the workspace's hardened private runtime root; Qwen receives the same composition as `--system-prompt` text. The artifact is cache-class state and is regenerated idempotently at every fresh launch, resume, restart, fork, and rebirth, so runtime cleanup and reboot do not make durable sessions unrecoverable. Planning already proved file existence and adapter support before mux effects; a source removed in the narrow plan-to-exec race fails the provisional launch and any supervised run instead of falling back to the provider prompt.
 
 The wrapper then runs the agent in the pane, inheriting the pane's TTY. It launches through the user's shell-startup path when that shell and `/usr/bin/env` are available and falls back to direct exec otherwise, and it exports `RIMZ_RTK` from `[harness] rtk` so `cargo xtask` can route recognized cargo subcommands through `rtk`.
 
@@ -280,7 +283,7 @@ Each observation spans `[created_at, last_activity]`. Transitive interval overla
 
 ### Posture
 
-A resumed pane runs `rimz agents exec <kind>` with a `Resume` action carrying the provider session id and the prior RimZ identity (name, profile, role, team, launch group, launch ordinal, channel). Its **posture** comes from `resume::resolve_posture`, the one seam every relaunch path shares: the argv the agent's profile renders, meaning model, effort, system-prompt files, permission mode, budget, and profile `args`. A session that launched as `@planner` comes back as a planner.
+A resumed pane runs `rimz agents exec <kind>` with a `Resume` action carrying the provider session id and the prior RimZ identity (name, profile, role, team, launch group, launch ordinal, channel). Its **posture** comes from `resume::resolve_posture`, the one pure seam every relaunch path shares: model and effort argv, typed system-prompt source paths, permission mode, budget, and profile `args`. The exec wrapper performs the fallible prompt materialization later. A session that launched as `@planner` comes back as a planner.
 
 Once the provider process stage is ready, the resident exec wrapper appends `agent.attached` before it starts or execs the provider. That placement record binds the exact resumed session to the wrapper's pane and live process owner, so a reborn agent is addressable before a lazily-registering provider emits its first hook.
 

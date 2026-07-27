@@ -186,12 +186,21 @@ pub(crate) struct AgentLaunchArgs {
     /// Model for the launched agents.
     #[arg(long, value_name = "MODEL", conflicts_with = "resume")]
     pub(crate) model: Option<String>,
+    /// Launch the spec's agent cells with this provider (fresh launches only).
+    #[arg(long, value_name = "KIND", conflicts_with = "resume")]
+    pub(crate) agent: Option<String>,
     /// Replace each agent's base system prompt with a file's contents.
     #[arg(long, value_name = "PATH", conflicts_with = "resume")]
     pub(crate) system_prompt_file: Option<PathBuf>,
-    /// Append a file's contents to each agent's base system prompt where supported.
-    #[arg(long, value_name = "PATH", conflicts_with = "resume")]
-    pub(crate) append_system_prompt_file: Option<PathBuf>,
+    /// Compose these files in order into a replacement system prompt. A
+    /// non-empty CLI list replaces the profile's list.
+    #[arg(
+        long = "append-system-prompt-file",
+        value_name = "PATH",
+        action = clap::ArgAction::Append,
+        conflicts_with = "resume"
+    )]
+    pub(crate) append_system_prompt_files: Vec<PathBuf>,
     /// Reasoning effort for the launched agents (provider-specific levels).
     #[arg(long, value_name = "LEVEL", conflicts_with = "resume")]
     pub(crate) effort: Option<String>,
@@ -656,10 +665,8 @@ fn into_supervised_request(
         args.launch.system_prompt_file.as_deref(),
         "--system-prompt-file",
     )?;
-    let append_system_prompt_file = resolve_launch_prompt_file(
-        args.launch.append_system_prompt_file.as_deref(),
-        "--append-system-prompt-file",
-    )?;
+    let append_system_prompt_files =
+        resolve_launch_prompt_files(&args.launch.append_system_prompt_files)?;
     let request = rimz::harness::run::SupervisedRunRequest {
         spec: args
             .launch
@@ -674,9 +681,10 @@ fn into_supervised_request(
         background: args.launch.cohort.bg,
         force_new_tab: args.launch.cohort.new_tab,
         permission_mode,
+        agent: resolve_agent_override(args.launch.agent.as_deref())?,
         model: args.launch.model,
         system_prompt_file,
-        append_system_prompt_file,
+        append_system_prompt_files,
         effort: args.launch.effort,
         budget: args.launch.cohort.budget,
         max_turns: args.launch.max_turns,

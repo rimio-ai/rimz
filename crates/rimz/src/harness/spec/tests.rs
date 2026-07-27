@@ -11,7 +11,7 @@ fn profile(agent: &str) -> Profile {
         effort: None,
         budget: None,
         system_prompt_file: None,
-        append_system_prompt_file: None,
+        append_system_prompt_files: None,
         args: None,
     }
 }
@@ -43,7 +43,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
         effort: None,
         budget: None,
         system_prompt_file: None,
-        append_system_prompt_file: None,
+        append_system_prompt_files: None,
         args: None,
     }
 }
@@ -415,7 +415,7 @@ fn profile_inheritance_and_builtin_overrides_resolve() {
 }
 
 #[test]
-fn profile_cells_render_fields_in_contract_order() {
+fn profile_cells_render_preset_args_and_carry_prompt_sources() {
     let profiles = profiles([
         (
             "codex-deep",
@@ -432,7 +432,7 @@ fn profile_cells_render_fields_in_contract_order() {
             "prompt-base",
             Profile {
                 agent: "claude".to_owned(),
-                append_system_prompt_file: Some("/prompts/base-extra.md".into()),
+                append_system_prompt_files: Some(vec!["/prompts/base-extra.md".into()]),
                 ..profile("claude")
             },
         ),
@@ -476,18 +476,10 @@ fn profile_cells_render_fields_in_contract_order() {
         Some(Path::new("/prompts/planner.md"))
     );
     assert_eq!(
-        prompt.append_system_prompt_file.as_deref(),
-        Some(Path::new("/prompts/base-extra.md"))
+        prompt.append_system_prompt_files.as_slice(),
+        [PathBuf::from("/prompts/base-extra.md")]
     );
-    assert_eq!(
-        prompt.args,
-        vec![
-            "--system-prompt-file".to_owned(),
-            "/prompts/planner.md".to_owned(),
-            "--append-system-prompt-file".to_owned(),
-            "/prompts/base-extra.md".to_owned(),
-        ]
-    );
+    assert!(prompt.args.is_empty());
 }
 
 #[test]
@@ -542,11 +534,12 @@ fn profile_resolution_rejects_invalid_chains_and_fields() {
             ..profile("pi")
         },
     )]);
-    assert!(matches!(
-        parse_layout_spec("pi-deep", &unsupported, &no_commands()),
-        Err(LayoutErr::InvalidProfile { profile, reason })
-            if profile == "pi-deep" && reason.contains("system-prompt-file")
-    ));
+    let unsupported =
+        parse_layout_spec("pi-deep", &unsupported, &no_commands()).expect("prompt stays typed");
+    assert_eq!(
+        agent_at(&unsupported, 0, 0).system_prompt_file.as_deref(),
+        Some(Path::new("/abs/prompt.md"))
+    );
 }
 
 #[test]
@@ -691,7 +684,7 @@ fn named_teams_compile_roles_and_apply_overrides() {
             "planner-base",
             Profile {
                 agent: "claude".to_owned(),
-                append_system_prompt_file: Some("/prompts/base-extra.md".into()),
+                append_system_prompt_files: Some(vec!["/prompts/base-extra.md".into()]),
                 ..profile("claude")
             },
         ),
@@ -707,7 +700,7 @@ fn named_teams_compile_roles_and_apply_overrides() {
                 effort: Some("high".to_owned()),
                 budget: None,
                 system_prompt_file: Some("/prompts/coder.md".into()),
-                append_system_prompt_file: None,
+                append_system_prompt_files: None,
                 args: Some("--role".to_owned()),
             },
             RoleBinding {
@@ -718,7 +711,7 @@ fn named_teams_compile_roles_and_apply_overrides() {
                 effort: None,
                 budget: None,
                 system_prompt_file: None,
-                append_system_prompt_file: Some("/prompts/role-extra.md".into()),
+                append_system_prompt_files: Some(vec!["/prompts/role-extra.md".into()]),
                 args: None,
             },
         ]),
@@ -747,16 +740,10 @@ fn named_teams_compile_roles_and_apply_overrides() {
     assert_eq!(planner.launch.profile.as_deref(), Some("planner-base"));
     assert_eq!(planner.launch.role.as_deref(), Some("planner"));
     assert_eq!(
-        planner.append_system_prompt_file.as_deref(),
-        Some(Path::new("/prompts/role-extra.md"))
+        planner.append_system_prompt_files.as_slice(),
+        [PathBuf::from("/prompts/role-extra.md")]
     );
-    assert_eq!(
-        planner.args,
-        vec![
-            "--append-system-prompt-file".to_owned(),
-            "/prompts/role-extra.md".to_owned(),
-        ]
-    );
+    assert!(planner.args.is_empty());
 }
 
 #[test]

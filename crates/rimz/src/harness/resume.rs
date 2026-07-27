@@ -259,6 +259,7 @@ pub struct ResumeSkip {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumePosture {
     pub args: Vec<String>,
+    pub system_prompt: crate::harness::prompt_compose::SystemPromptSources,
     pub mode: Option<PermissionMode>,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -283,6 +284,8 @@ pub enum PostureDegrade {
     },
     #[error("profile `{profile}` prompt file is missing ({reason})")]
     PromptFileMissing { profile: String, reason: String },
+    #[error("profile `{profile}` prompt replacement is unsupported ({reason})")]
+    PromptUnsupported { profile: String, reason: String },
 }
 
 impl ResumePosture {
@@ -291,6 +294,7 @@ impl ResumePosture {
     pub fn from_cell(cell: &crate::harness::spec::AgentCell) -> Self {
         Self {
             args: cell.args.clone(),
+            system_prompt: crate::harness::prompt_compose::SystemPromptSources::from_cell(cell),
             mode: cell.launch.mode,
             model: cell.launch.model.clone(),
             effort: cell.launch.effort.clone(),
@@ -377,6 +381,19 @@ pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -
             request.stamped_mode,
             request.kind,
             PostureDegrade::PromptFileMissing {
+                profile: name.to_owned(),
+                reason: err.to_string(),
+            },
+        );
+    }
+    if let Err(err) = crate::harness::plan::validate_system_prompt_support(
+        &cell,
+        find_definition(cell.kind.as_str()),
+    ) {
+        return ResumePosture::degrade(
+            request.stamped_mode,
+            request.kind,
+            PostureDegrade::PromptUnsupported {
                 profile: name.to_owned(),
                 reason: err.to_string(),
             },
@@ -1666,6 +1683,18 @@ fn plan_resume_candidates_detailed(
             },
             ctx.profiles,
         );
+        if matches!(
+            posture.degraded.as_ref(),
+            Some(PostureDegrade::PromptUnsupported { .. })
+        ) {
+            plan.warnings.extend(
+                posture
+                    .degraded
+                    .as_ref()
+                    .map(|reason| format!("{reason}; not resuming")),
+            );
+            continue;
+        }
         plan.warnings.extend(
             posture
                 .degraded
@@ -2294,6 +2323,7 @@ fn candidate_resume_command(
                 session_id: candidate.session_id.to_string(),
                 extra_args: posture.args.clone(),
             },
+            system_prompt: posture.system_prompt.clone(),
             provider_account: crate::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

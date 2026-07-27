@@ -73,11 +73,13 @@ impl LaunchSpec {
             PresetField::Model => self.presets.model,
             PresetField::Effort => self.presets.effort,
             PresetField::SystemPromptFile => self.presets.system_prompt_file,
-            PresetField::AppendSystemPromptFile => self.presets.append_system_prompt_file,
         }?;
         Some(match matcher {
             StaticPresetMatcher::Flag(flags) => {
                 PresetArgMatcher::Flag(flags.iter().map(|flag| (*flag).to_owned()).collect())
+            }
+            StaticPresetMatcher::TextFlag(flags) => {
+                PresetArgMatcher::TextFlag(flags.iter().map(|flag| (*flag).to_owned()).collect())
             }
             StaticPresetMatcher::ConfigKey { flags, key } => PresetArgMatcher::ConfigKey {
                 flags: flags.iter().map(|flag| (*flag).to_owned()).collect(),
@@ -91,7 +93,7 @@ impl LaunchSpec {
         agent_kind: &'static str,
         preset: &LaunchPreset,
     ) -> Result<Vec<String>, PresetErr> {
-        let values: [(PresetField, &'static str, Option<String>); 4] = [
+        let values: [(PresetField, &'static str, Option<String>); 2] = [
             (
                 PresetField::Model,
                 "model",
@@ -101,22 +103,6 @@ impl LaunchSpec {
                 PresetField::Effort,
                 "effort",
                 preset.effort.clone().filter(|value| !value.is_empty()),
-            ),
-            (
-                PresetField::SystemPromptFile,
-                "system-prompt-file",
-                preset
-                    .system_prompt_file
-                    .as_deref()
-                    .map(|path| path.to_string_lossy().into_owned()),
-            ),
-            (
-                PresetField::AppendSystemPromptFile,
-                "append-system-prompt-file",
-                preset
-                    .append_system_prompt_file
-                    .as_deref()
-                    .map(|path| path.to_string_lossy().into_owned()),
             ),
         ];
         let mut argv = Vec::new();
@@ -129,7 +115,7 @@ impl LaunchSpec {
                     field: field_name,
                 })?;
             match matcher {
-                PresetArgMatcher::Flag(flags) => {
+                PresetArgMatcher::Flag(flags) | PresetArgMatcher::TextFlag(flags) => {
                     let flag = flags.first().ok_or(PresetErr::UnsupportedField {
                         agent: agent_kind,
                         field: field_name,
@@ -230,7 +216,6 @@ pub struct PresetMatchers {
     pub model: Option<StaticPresetMatcher>,
     pub effort: Option<StaticPresetMatcher>,
     pub system_prompt_file: Option<StaticPresetMatcher>,
-    pub append_system_prompt_file: Option<StaticPresetMatcher>,
 }
 
 impl PresetMatchers {
@@ -238,13 +223,13 @@ impl PresetMatchers {
         model: None,
         effort: None,
         system_prompt_file: None,
-        append_system_prompt_file: None,
     };
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum StaticPresetMatcher {
     Flag(&'static [&'static str]),
+    TextFlag(&'static [&'static str]),
     ConfigKey {
         flags: &'static [&'static str],
         key: &'static str,
