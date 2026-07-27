@@ -3,10 +3,10 @@
 //! `.worktreelink` is the sharing twin of `.worktreeinclude`: one relative
 //! directory path per line, with blank lines and `#` comments ignored. RimZ
 //! links those directories from the main checkout into each new worktree, then
-//! registers an anchored exclude pattern in the worktree's effective
-//! `info/exclude` so the machine-local link never dirties the checkout.
+//! registers an anchored exclude pattern so the machine-local link never
+//! dirties the checkout.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 
 use super::git_stdout;
 
@@ -94,47 +94,8 @@ fn link_dir(repo_root: &Path, root: &Path, worktree: &Path, rel: &str) -> usize 
         tracing::warn!(src = %target.display(), dest = %dest.display(), error = %err, "creating .worktreelink symlink");
         return 0;
     }
-    ensure_excluded(worktree, rel);
+    super::exclude::ensure_excluded(worktree, &anchored_pattern(rel));
     1
-}
-
-fn ensure_excluded(worktree: &Path, rel: &str) {
-    let Some(exclude) = exclude_path(worktree) else {
-        return;
-    };
-    let pattern = anchored_pattern(rel);
-    let mut text = match std::fs::read_to_string(&exclude) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(err) => {
-            tracing::warn!(path = %exclude.display(), error = %err, "reading git info/exclude for .worktreelink");
-            return;
-        }
-    };
-    if text.lines().any(|line| line.trim() == pattern) {
-        return;
-    }
-    if !text.is_empty() && !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text.push_str(&pattern);
-    text.push('\n');
-    if let Err(err) = crate::store::atomic::write_bytes_atomically(&exclude, text.as_bytes()) {
-        tracing::warn!(path = %exclude.display(), error = %err, "writing git info/exclude for .worktreelink");
-    }
-}
-
-fn exclude_path(worktree: &Path) -> Option<PathBuf> {
-    let raw = git_stdout(worktree, ["rev-parse", "--git-path", "info/exclude"]).ok()?;
-    if raw.is_empty() {
-        return None;
-    }
-    let path = PathBuf::from(raw);
-    Some(if path.is_absolute() {
-        path
-    } else {
-        worktree.join(path)
-    })
 }
 
 fn anchored_pattern(rel: &str) -> String {
@@ -236,7 +197,7 @@ mod tests {
                 .expect("src canonical")
         );
 
-        let exclude = exclude_path(&worktree).expect("exclude path");
+        let exclude = super::super::exclude::exclude_path(&worktree).expect("exclude path");
         let text = std::fs::read_to_string(&exclude).expect("exclude text");
         assert_eq!(
             text.lines().filter(|line| *line == "/node_modules").count(),

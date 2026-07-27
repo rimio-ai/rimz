@@ -21,10 +21,12 @@ use crate::pane::PaneRef;
 use crate::store::runtime::AgentLiveness;
 use crate::workspace::{ResolvedWorkspace, RootClass};
 
+mod exclude;
 mod include;
 mod link;
 mod pr;
 
+pub use exclude::exclude_team_scratch;
 pub use pr::create_from_pr;
 
 const MARKER_FILE: &str = "rimz-worktree.json";

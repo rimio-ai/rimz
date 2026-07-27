@@ -959,6 +959,7 @@ fn single_role_team_launch_takes_over_caller_pane() {
             roles: vec![role_binding("planner")],
             leader: None,
             layout: None,
+            scratch_files: Vec::new(),
         },
     )]));
 

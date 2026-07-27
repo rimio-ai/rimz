@@ -1354,7 +1354,11 @@ pub fn materialize_team_restore_tab(
 ) -> anyhow::Result<ResumeTab> {
     use anyhow::Context;
 
-    let team_roles = teams.0.get(&planned.team).map(|team| team.roles.as_slice());
+    let team = teams.0.get(&planned.team);
+    if let Some(team) = team {
+        crate::worktree::exclude_team_scratch(&planned.cwd, &team.scratch_files);
+    }
+    let team_roles = team.map(|team| team.roles.as_slice());
     let launch_requests = launch_identity_requests(
         &planned.layout,
         None,

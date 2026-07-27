@@ -274,6 +274,12 @@ pub enum LayoutErr {
     RoleNotPlaced { team: String, role: String },
     #[error("team `{team}` layout places role `{role}` more than once")]
     DuplicateRoleInLayout { team: String, role: String },
+    #[error("invalid scratch-files pattern {pattern:?} in team `{team}`: {reason}")]
+    InvalidScratchPattern {
+        team: String,
+        pattern: String,
+        reason: &'static str,
+    },
     #[error("invalid profile `{profile}`: {reason}")]
     InvalidProfile { profile: String, reason: String },
     #[error("invalid command `{command}`: {reason}")]
@@ -1300,6 +1306,15 @@ fn prepare_team<'a>(
     team: &'a Team,
     profiles: &ProfilesConfig,
 ) -> Result<PreparedTeam<'a>> {
+    for pattern in &team.scratch_files {
+        if let Some(reason) = invalid_scratch_pattern(pattern) {
+            return Err(LayoutErr::InvalidScratchPattern {
+                team: name.to_owned(),
+                pattern: pattern.clone(),
+                reason,
+            });
+        }
+    }
     if team.roles.is_empty() && team.layout.is_none() {
         return Err(LayoutErr::EmptyTeam {
             team: name.to_owned(),
@@ -1364,6 +1379,22 @@ fn prepare_team<'a>(
         });
     }
     Ok(PreparedTeam { team, roles })
+}
+
+fn invalid_scratch_pattern(pattern: &str) -> Option<&'static str> {
+    if pattern.trim().is_empty() {
+        Some("patterns cannot be empty")
+    } else if pattern.starts_with('!') {
+        Some("negation patterns are not allowed")
+    } else if pattern.starts_with('#') {
+        Some("comment lines are not patterns")
+    } else if pattern.chars().any(|ch| ch.is_ascii_control()) {
+        Some("ASCII control characters are not allowed")
+    } else if pattern.split('/').any(|segment| segment == "..") {
+        Some("`..` path segments are not allowed")
+    } else {
+        None
+    }
 }
 
 fn invalid_role_name(name: &str) -> bool {
