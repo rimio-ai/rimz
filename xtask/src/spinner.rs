@@ -100,7 +100,7 @@ impl Spinner {
                         if let Ok(label) = worker_label.lock() {
                             let elapsed = format_elapsed(elapsed);
                             let mut stderr = std::io::stderr().lock();
-                            let _ = writeln!(stderr, "xtask: {} still running ({elapsed})", *label);
+                            let _ = writeln!(stderr, "{}", heartbeat_line(&label, &elapsed));
                             let _ = stderr.flush();
                         }
                     }
@@ -157,6 +157,14 @@ fn progress_mode(
 
 fn animation_allowed(agent_kind: Option<&str>, term: Option<&str>) -> bool {
     agent_kind.is_none_or(str::is_empty) && term != Some("dumb")
+}
+
+fn heartbeat_line(label: &str, elapsed: &str) -> String {
+    if let Some((task, phase)) = label.split_once(" — ") {
+        format!("xtask: {task} still running ({elapsed}) — {phase}")
+    } else {
+        format!("xtask: {label} still running ({elapsed})")
+    }
 }
 
 fn format_elapsed(elapsed: Duration) -> String {
@@ -237,6 +245,18 @@ mod tests {
         assert!(heartbeat.due(Duration::from_secs(80)));
         assert!(!heartbeat.due(Duration::from_secs(81)));
         assert!(heartbeat.due(Duration::from_secs(105)));
+    }
+
+    #[test]
+    fn heartbeat_keeps_the_latest_phase_after_the_elapsed_time() {
+        assert_eq!(
+            heartbeat_line("test — Checking rimz", "45s"),
+            "xtask: test still running (45s) — Checking rimz"
+        );
+        assert_eq!(
+            heartbeat_line("test", "15s"),
+            "xtask: test still running (15s)"
+        );
     }
 
     #[test]
