@@ -1,14 +1,14 @@
 //! Lifetime effort folded across every session-spend transcript for one
 //! logical agent slot.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentState, TranscriptStat, find_definition};
 
-use super::aggregate::{DedupPayload, SidechainDedup};
+use super::aggregate::{DedupPayload, SidechainDedup, subagent_child_id};
 use super::{CachedEntry, PriceBook, session_entries};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +48,12 @@ pub struct SlotEffort {
     pub cost_usd: Option<f64>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SlotEffortBreakdown {
+    pub total: SlotEffort,
+    pub subagents: BTreeMap<String, SlotEffort>,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct EffortSessionRef<'a> {
     pub kind: &'a str,
@@ -77,11 +83,14 @@ struct MemoEntry {
     entries: Vec<CachedEntry>,
 }
 
-struct SelectedEntry<'a>(&'a CachedEntry);
+struct SelectedEntry<'a> {
+    entry: &'a CachedEntry,
+    subagent: Option<String>,
+}
 
 impl DedupPayload for SelectedEntry<'_> {
     fn entry(&self) -> &CachedEntry {
-        self.0
+        self.entry
     }
 }
 
@@ -90,11 +99,26 @@ pub fn slot_effort(sessions: &[EffortSessionRef<'_>], prices: &PriceBook) -> Slo
     slot_effort_with_memo(sessions, prices, &mut EffortParseMemo::default())
 }
 
+pub fn slot_effort_breakdown(
+    sessions: &[EffortSessionRef<'_>],
+    prices: &PriceBook,
+) -> SlotEffortBreakdown {
+    slot_effort_breakdown_with_memo(sessions, prices, &mut EffortParseMemo::default())
+}
+
 pub fn slot_effort_with_memo(
     sessions: &[EffortSessionRef<'_>],
     prices: &PriceBook,
     memo: &mut EffortParseMemo,
 ) -> SlotEffort {
+    slot_effort_breakdown_with_memo(sessions, prices, memo).total
+}
+
+pub fn slot_effort_breakdown_with_memo(
+    sessions: &[EffortSessionRef<'_>],
+    prices: &PriceBook,
+    memo: &mut EffortParseMemo,
+) -> SlotEffortBreakdown {
     let resolved = sessions
         .iter()
         .filter_map(|session| {
@@ -130,12 +154,14 @@ pub fn slot_effort_with_memo(
         }
     }
 
-    fold_entries(resolved.iter().flat_map(|(session_id, _, paths)| {
+    fold_tagged_entries(resolved.iter().flat_map(|(session_id, _, paths)| {
         paths.iter().flat_map(|path| {
+            let child_id = subagent_child_id(path);
             memo.files
                 .get(path)
                 .into_iter()
                 .flat_map(|parsed| session_entries(&parsed.entries, session_id))
+                .map(move |entry| (entry, child_id.clone()))
         })
     }))
 }
@@ -147,23 +173,37 @@ impl EffortParseMemo {
     }
 }
 
+#[cfg(test)]
 fn fold_entries<'a>(entries: impl IntoIterator<Item = &'a CachedEntry>) -> SlotEffort {
+    fold_tagged_entries(entries.into_iter().map(|entry| (entry, None))).total
+}
+
+fn fold_tagged_entries<'a>(
+    entries: impl IntoIterator<Item = (&'a CachedEntry, Option<String>)>,
+) -> SlotEffortBreakdown {
     let mut deduped = SidechainDedup::default();
-    for entry in entries {
-        deduped.insert(SelectedEntry(entry));
+    for (entry, subagent) in entries {
+        deduped.insert(SelectedEntry { entry, subagent });
     }
-    deduped
-        .into_counted()
-        .into_iter()
-        .fold(SlotEffort::default(), |mut effort, entry| {
-            effort.tokens.absorb_entry(entry.0);
-            effort.cost_usd = sum_optional_cost(
-                effort.cost_usd,
-                (entry.0.cost_usd.is_finite() && entry.0.cost_usd > 0.0)
-                    .then_some(entry.0.cost_usd),
+    let mut breakdown = SlotEffortBreakdown::default();
+    for selected in deduped.into_counted() {
+        absorb_entry(&mut breakdown.total, selected.entry);
+        if let Some(child_id) = selected.subagent {
+            absorb_entry(
+                breakdown.subagents.entry(child_id).or_default(),
+                selected.entry,
             );
-            effort
-        })
+        }
+    }
+    breakdown
+}
+
+fn absorb_entry(effort: &mut SlotEffort, entry: &CachedEntry) {
+    effort.tokens.absorb_entry(entry);
+    effort.cost_usd = sum_optional_cost(
+        effort.cost_usd,
+        (entry.cost_usd.is_finite() && entry.cost_usd > 0.0).then_some(entry.cost_usd),
+    );
 }
 
 pub fn sum_optional_cost(total: Option<f64>, value: Option<f64>) -> Option<f64> {
@@ -254,7 +294,7 @@ mod tests {
         .unwrap();
         let main = main.to_string_lossy().into_owned();
 
-        let effort = slot_effort(
+        let breakdown = slot_effort_breakdown(
             &[EffortSessionRef {
                 kind: "claude",
                 session_id: "session",
@@ -262,6 +302,7 @@ mod tests {
             }],
             &PriceBook::default(),
         );
+        let effort = breakdown.total;
 
         assert_eq!(
             effort.tokens,
@@ -273,6 +314,16 @@ mod tests {
             }
         );
         assert_eq!(effort.cost_usd, Some(3.0));
+        assert_eq!(
+            breakdown.subagents["a"].tokens,
+            EffortTokens {
+                input: 20,
+                output: 2,
+                cache_write: 0,
+                cache_read: 0,
+            }
+        );
+        assert_eq!(breakdown.subagents["a"].cost_usd, Some(2.0));
     }
 
     #[test]
