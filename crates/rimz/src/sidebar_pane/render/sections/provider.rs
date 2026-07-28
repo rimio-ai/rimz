@@ -1233,6 +1233,10 @@ fn select_provider_bars(panel: &SidebarProviderPanel) -> Vec<ProviderBar<'_>> {
         .extra_credits
         .as_ref()
         .is_none_or(ExtraCredits::is_usable);
+    let extra_known_usable = panel
+        .extra_credits
+        .as_ref()
+        .is_some_and(ExtraCredits::is_usable);
 
     if let Some(longest_spent) = panel
         .windows
@@ -1244,10 +1248,16 @@ fn select_provider_bars(panel: &SidebarProviderPanel) -> Vec<ProviderBar<'_>> {
             if extra_disabled {
                 return provider_window_pair(first, longest_spent);
             }
+            if extra_known_usable {
+                return vec![ProviderBar::Extra, ProviderBar::Window(last)];
+            }
+            return vec![ProviderBar::Window(longest_spent), ProviderBar::Extra];
+        }
+        if extra_known_usable {
             return vec![ProviderBar::Extra, ProviderBar::Window(last)];
         }
         if extra_usable {
-            return vec![ProviderBar::Extra, ProviderBar::Window(last)];
+            return vec![ProviderBar::Window(first), ProviderBar::Extra];
         }
     }
     first_and_last()
