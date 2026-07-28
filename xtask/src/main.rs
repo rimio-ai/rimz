@@ -98,9 +98,14 @@ const TASKS: &[TaskInfo] = &[
         runs: "cargo clippy for all workspace targets and both host install feature shapes without testkit; every pass denies warnings",
     },
     TaskInfo {
+        name: "check",
+        summary: "Run a fast structural compile check across the workspace.",
+        runs: "cargo check --workspace --all-targets --all-features --locked",
+    },
+    TaskInfo {
         name: "test",
-        summary: "Run the workspace test suite through nextest; accepts nextest filters.",
-        runs: "cargo nextest run --workspace --all-features --locked [nextest filter]...",
+        summary: "Run nextest filters, batch exact --name selections, or discover tests with --list.",
+        runs: "cargo nextest run --workspace --all-features --locked [--name <test>]... [nextest filter]...; --list uses cargo nextest list",
     },
     TaskInfo {
         name: "test-archive",
@@ -318,6 +323,7 @@ fn dispatch(task: &str, args: &[String], root: &Path) -> Result<()> {
         "hooks" => hooks::install(root),
         "fmt" => gates::fmt(root),
         "lint" => gates::lint(root),
+        "check" => gates::check(root),
         "test" => gates::test(root, args),
         "test-archive" => gates::test_archive(root, args),
         "sandbox" => sandbox::run(root, args),
