@@ -1,4 +1,4 @@
-//! TTY-gated stderr spinner adapted from `crates/rimz/src/cli/spinner.rs`.
+//! Stderr progress indicator adapted from `crates/rimz/src/cli/spinner.rs`.
 //!
 //! The small implementation is duplicated deliberately so xtask stays free of
 //! a dependency on the runtime crate.
