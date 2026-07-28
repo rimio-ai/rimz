@@ -1,0 +1,37 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+assertion_line: 252
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 3                                            $0.00
+ ────────────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                      ⢿ 3   ○ 0
+
+▎⑂ team-expand · forge ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌⢄ planner                                           ▐
+▌  plan                                              ▐
+▌  ▢ ──────────────────────────────────────────    0%▐
+▌  ▤ 0                                               ▐
+▌  ⧉ subagents (1)                                   ▐
+▌    ⣾ research — map the renderer                   ▐
+▌                                               ◔ <1m▐
+▎⢄ coder                                             🮇
+▎  implement                                         🮇
+▎  ▢ ──────────────────────────────────────────    0%🮇
+▎  ▤ 0                                               🮇
+▎  ⧉ subagents (1)                                   🮇
+▎    ⣾ tests — pin the frame                         🮇
+▎                                               ◔ <1m🮇
+▎⢄ stray                                             🮇
+▎  observe                                           🮇
+▎  ▢ ──────────────────────────────────────────    0%🮇
+▎  ▤ 0                                               🮇
+
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+
+                                           ? for help

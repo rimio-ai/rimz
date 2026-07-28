@@ -128,6 +128,183 @@ fn render_active_team_header_tolerates_strays_and_yields_to_git_facts() {
 }
 
 #[test]
+fn selecting_named_team_member_expands_every_teammate_only() {
+    let mut planner = agent(
+        "planner",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/worktrees/team-expand"),
+        Some("team-expand"),
+        Some("plan"),
+    );
+    planner.team = Some("forge".to_owned());
+    planner.role = Some("planner".to_owned());
+    let mut coder = agent(
+        "coder",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/worktrees/team-expand"),
+        Some("team-expand"),
+        Some("implement"),
+    );
+    coder.team = Some("forge".to_owned());
+    coder.role = Some("coder".to_owned());
+    let mut stray = agent(
+        "stray",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/worktrees/team-expand"),
+        Some("team-expand"),
+        Some("observe"),
+    );
+    stray.role = Some("stray".to_owned());
+
+    let mut plan_child = agent(
+        "plan-child",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("research"),
+    );
+    plan_child.parent_agent_id = Some("planner".into());
+    plan_child.subagent_description = Some("map the renderer".to_owned());
+    let mut code_child = agent(
+        "code-child",
+        "codex",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("tests"),
+    );
+    code_child.parent_agent_id = Some("coder".into());
+    code_child.subagent_description = Some("pin the frame".to_owned());
+    let mut stray_child = agent(
+        "stray-child",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("audit"),
+    );
+    stray_child.parent_agent_id = Some("stray".into());
+    stray_child.subagent_description = Some("stay collapsed".to_owned());
+
+    let snapshot = snapshot_with(vec![
+        planner,
+        coder,
+        stray,
+        plan_child,
+        code_child,
+        stray_child,
+    ]);
+    let selected_index = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .position(|row| row.id == "planner")
+        .expect("planner row");
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index,
+            ..UiState::default()
+        },
+        54,
+        32,
+    );
+
+    assert!(
+        rendered.contains("map the renderer") && rendered.contains("pin the frame"),
+        "both named teammates expand:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("stay collapsed"),
+        "a non-team card keeps its resting shape:\n{rendered}"
+    );
+    assert!(
+        rendered
+            .lines()
+            .find(|line| line.contains("planner"))
+            .is_some_and(|line| line.starts_with('▌')),
+        "the selected teammate keeps the selected gutter:\n{rendered}"
+    );
+    assert!(
+        rendered
+            .lines()
+            .find(|line| line.contains("coder"))
+            .is_some_and(|line| line.starts_with('▎')),
+        "the expanded teammate keeps the lane gutter:\n{rendered}"
+    );
+    assert_snapshot("named_team_selection_expands_teammates", rendered);
+}
+
+#[test]
+fn selecting_inline_cohort_member_expands_only_that_card() {
+    let mut first = agent(
+        "first",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/worktrees/inline"),
+        Some("inline"),
+        Some("first"),
+    );
+    first.launch_group = Some("inline-1".to_owned());
+    let mut second = agent(
+        "second",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/worktrees/inline"),
+        Some("inline"),
+        Some("second"),
+    );
+    second.launch_group = Some("inline-1".to_owned());
+    let mut first_child = agent(
+        "first-child",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("first child"),
+    );
+    first_child.parent_agent_id = Some("first".into());
+    first_child.subagent_description = Some("selected child".to_owned());
+    let mut second_child = agent(
+        "second-child",
+        "codex",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("second child"),
+    );
+    second_child.parent_agent_id = Some("second".into());
+    second_child.subagent_description = Some("collapsed child".to_owned());
+
+    let snapshot = snapshot_with(vec![first, second, first_child, second_child]);
+    let selected_index = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .position(|row| row.id == "first")
+        .expect("first row");
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index,
+            ..UiState::default()
+        },
+        54,
+        24,
+    );
+
+    assert!(rendered.contains("selected child"), "{rendered}");
+    assert!(
+        !rendered.contains("collapsed child"),
+        "unnamed launch cohorts retain single-card expansion:\n{rendered}"
+    );
+}
+
+#[test]
 fn render_colliding_group_qualifiers_are_muted_and_ellipsize_with_the_label() {
     let mut snapshot = snapshot_with(vec![
         agent(
