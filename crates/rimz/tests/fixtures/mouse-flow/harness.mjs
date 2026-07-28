@@ -33,11 +33,16 @@ function createHarness({ search = "?room=room-a" } = {}) {
     }
 
     dispatchEvent(event) {
+      if (event.target === undefined) event.target = this;
       this.dispatched.push(event);
       for (const listener of this.listeners.get(event.type) ?? []) {
         listener.call(this, event);
       }
       return !event.defaultPrevented;
+    }
+
+    contains(target) {
+      return target === this;
     }
   }
 
@@ -51,6 +56,10 @@ function createHarness({ search = "?room=room-a" } = {}) {
       this.buttons = init.buttons ?? 0;
       this.clientX = init.clientX ?? 0;
       this.clientY = init.clientY ?? 0;
+      this.shiftKey = Boolean(init.shiftKey);
+      this.altKey = Boolean(init.altKey);
+      this.ctrlKey = Boolean(init.ctrlKey);
+      this.metaKey = Boolean(init.metaKey);
       this.defaultPrevented = false;
     }
 
@@ -64,6 +73,7 @@ function createHarness({ search = "?room=room-a" } = {}) {
   const dispatchElementEvent = element.dispatchEvent.bind(element);
   element.ownerDocument = ownerDocument;
   element.dispatchEvent = (event) => {
+    if (event.target === undefined) event.target = element;
     ownerDocument.dispatchEvent(event);
     return dispatchElementEvent(event);
   };
@@ -247,6 +257,87 @@ function protocolBurstCoalescesToOneRearm() {
   assert.equal(harness.mouseFlow.suppressPress, false);
   harness.sendWithMouseFlow((data) => sent.push(data), sgrMouse(0, 3, 4, "m"));
   assert.deepEqual(messages(sent), ["0\x1b[<0;3;4m"], "a later real boundary must not be swallowed");
+}
+
+function enableWithoutDisableDoesNotRearm() {
+  const harness = createHarness();
+  harness.installMouseDragRearm(harness.term);
+  harness.element.dispatchEvent(new window.MouseEvent("mousedown", {
+    bubbles: true,
+    button: 0,
+    buttons: 1,
+    clientX: 3,
+    clientY: 4,
+  }));
+
+  harness.emitProtocol(6);
+  harness.advance(0);
+
+  const downs = harness.element.dispatched.filter((event) => event.type === "mousedown");
+  assert.equal(downs.length, 1, "an initial reporting enable must not re-arm");
+}
+
+function burstEndingDisabledDoesNotRearm() {
+  const harness = createHarness();
+  harness.installMouseDragRearm(harness.term);
+  harness.element.dispatchEvent(new window.MouseEvent("mousedown", {
+    bubbles: true,
+    button: 0,
+    buttons: 1,
+    clientX: 3,
+    clientY: 4,
+  }));
+
+  harness.emitProtocol(0);
+  harness.emitProtocol(6);
+  harness.emitProtocol(0);
+  harness.advance(0);
+
+  const downs = harness.element.dispatched.filter((event) => event.type === "mousedown");
+  assert.equal(downs.length, 1, "a protocol burst ending disabled must not re-arm");
+}
+
+function rearmPreservesModifiersAndIgnoresOutsidePresses() {
+  const harness = createHarness();
+  harness.installMouseDragRearm(harness.term);
+  harness.element.dispatchEvent(new window.MouseEvent("mousedown", {
+    bubbles: true,
+    button: 0,
+    buttons: 1,
+    clientX: 3,
+    clientY: 4,
+    shiftKey: true,
+    altKey: true,
+    ctrlKey: true,
+    metaKey: true,
+  }));
+  harness.emitProtocol(0);
+  harness.emitProtocol(6);
+  harness.advance(0);
+
+  const synthetic = harness.element.dispatched.at(-1);
+  assert.equal(synthetic.shiftKey, true);
+  assert.equal(synthetic.altKey, true);
+  assert.equal(synthetic.ctrlKey, true);
+  assert.equal(synthetic.metaKey, true);
+
+  harness.ownerDocument.dispatchEvent(new window.MouseEvent("mouseup", {
+    buttons: 0,
+    clientX: 3,
+    clientY: 4,
+  }));
+  harness.ownerDocument.dispatchEvent(new window.MouseEvent("mousedown", {
+    button: 0,
+    buttons: 1,
+    clientX: 8,
+    clientY: 9,
+  }));
+  harness.emitProtocol(0);
+  harness.emitProtocol(6);
+  harness.advance(0);
+
+  const downs = harness.element.dispatched.filter((event) => event.type === "mousedown");
+  assert.equal(downs.length, 2, "a primary press outside the terminal must not arm the shim");
 }
 
 function swallowedRearmPressPreservesPacingCadence() {
@@ -448,6 +539,9 @@ const scenarios = [
   churnWhileHeldRearmsOnceAndSwallowsPress,
   churnWithoutHeldButtonDoesNotRearm,
   protocolBurstCoalescesToOneRearm,
+  enableWithoutDisableDoesNotRearm,
+  burstEndingDisabledDoesNotRearm,
+  rearmPreservesModifiersAndIgnoresOutsidePresses,
   swallowedRearmPressPreservesPacingCadence,
   idleMotionSendsImmediately,
   slowDragPassesThroughUnchanged,

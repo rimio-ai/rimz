@@ -295,9 +295,20 @@ endY:r.y+({end_raw_y}+.5)*r.cellHeight
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+    let selection_deadline = Instant::now() + Duration::from_secs(2);
+    while fixture.target_copy_cursor_y().abs_diff(start_raw_y) > 2 {
+        assert!(
+            Instant::now() < selection_deadline,
+            "physical mousedown missed the target copy-mode pane: geometry={}, state={}",
+            fixture.target_pane_geometry(),
+            fixture.target_copy_state(),
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     fixture.start_mouse_mode_churn();
     let received_before_drag = frames.received();
     let mut samples = Vec::new();
+    const COPY_CURSOR_TOLERANCE: u16 = 12;
     for step in 1..=180 {
         let phase = step % 120;
         let sweep = if phase <= 60 { phase } else { 120 - phase };
@@ -318,15 +329,26 @@ endY:r.y+({end_raw_y}+.5)*r.cellHeight
         );
         std::thread::sleep(Duration::from_millis(16));
         if step % 30 == 0 {
-            samples.push((
-                step,
-                start_raw_y + (105 * sweep / 60),
-                fixture.target_copy_cursor_y(),
-                fixture.target_copy_state(),
-            ));
+            let expected_y = start_raw_y + (105.0 * row_fraction).round() as u16;
+            let sample_deadline = Instant::now() + Duration::from_millis(500);
+            let cursor_y = loop {
+                let cursor_y = fixture.target_copy_cursor_y();
+                if cursor_y.abs_diff(expected_y) <= COPY_CURSOR_TOLERANCE {
+                    break cursor_y;
+                }
+                assert!(
+                    Instant::now() < sample_deadline,
+                    "tmux copy cursor stopped tracking the held drag: expected={expected_y}, cursor={cursor_y}, samples={samples:?}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            let state = fixture.target_copy_state();
+            samples.push((step, expected_y, cursor_y, state));
         }
     }
     let received_after_drag = frames.received();
+    fixture.stop_mouse_mode_churn();
+    std::thread::sleep(Duration::from_millis(100));
     dispatch_mouse(
         &tab,
         Input::DispatchMouseEventTypeOption::MouseReleased,

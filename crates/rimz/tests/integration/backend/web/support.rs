@@ -404,6 +404,8 @@ impl LiveWebFixture {
                 "split-window",
                 "-d",
                 "-h",
+                "-l",
+                "4",
                 "-P",
                 "-F",
                 "#{pane_id}",
@@ -428,6 +430,16 @@ impl LiveWebFixture {
             r#"while :; do printf '\033[?1003h'; sleep 0.02; printf '\033[?1003l'; sleep 0.02; done"#,
             "Enter",
         ]);
+    }
+
+    pub(super) fn stop_mouse_mode_churn(&self) {
+        let pane = self
+            .churn_pane
+            .lock()
+            .expect("lock churn pane")
+            .clone()
+            .expect("prepared churn pane");
+        self.server.output(&["send-keys", "-t", &pane, "C-c"]);
     }
 
     pub(super) fn target_pane_geometry(&self) -> String {

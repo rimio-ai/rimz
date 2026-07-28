@@ -136,17 +136,22 @@ const installMouseDragRearm=term=>{
     disabled:false,
     events:0,
     timer:0,
-    rearming:false,
+    shiftKey:false,
+    altKey:false,
+    ctrlKey:false,
+    metaKey:false,
   };
   const remember=event=>{
-    if(drag.rearming)return;
     drag.x=event.clientX;
     drag.y=event.clientY;
     if(event.type==="mousedown"){
-      if(event.button===0){
-        drag.held=true;
-        drag.disabled=false;
-      }
+      if(event.button!==0||!element.contains(event.target))return;
+      drag.held=true;
+      drag.disabled=false;
+      drag.shiftKey=event.shiftKey;
+      drag.altKey=event.altKey;
+      drag.ctrlKey=event.ctrlKey;
+      drag.metaKey=event.metaKey;
     }else drag.held=(event.buttons&1)!==0;
   };
   for(const type of ["mousedown","mousemove","mouseup"]){
@@ -165,7 +170,6 @@ const installMouseDragRearm=term=>{
       if(!drag.held||!drag.disabled
         ||(drag.events&XTERM_HELD_DRAG_EVENTS)!==XTERM_HELD_DRAG_EVENTS)return;
       drag.disabled=false;
-      drag.rearming=true;
       mouseFlow.suppressPress=true;
       noteMouseFlow("rearm");
       try{
@@ -177,10 +181,13 @@ const installMouseDragRearm=term=>{
           buttons:1,
           clientX:drag.x,
           clientY:drag.y,
+          shiftKey:drag.shiftKey,
+          altKey:drag.altKey,
+          ctrlKey:drag.ctrlKey,
+          metaKey:drag.metaKey,
         }));
       }finally{
         mouseFlow.suppressPress=false;
-        drag.rearming=false;
       }
     },0);
   });
