@@ -50,13 +50,15 @@ pub(super) fn launch_layout(
             }
         }
     }
-    let kind_override = resolve_agent_override(args.launch.agent.as_deref())?;
     let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
         &machine_config.agents.commands,
         args.launch.spec.as_deref(),
-        kind_override.as_ref(),
+        rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()).as_deref(),
     )?;
+    for warning in &resolved.warnings {
+        writeln!(std::io::stderr(), "{warning}")?;
+    }
     let preset = validate_resolved_launch_inputs(
         &args,
         &effective,
@@ -89,6 +91,7 @@ pub(super) fn launch_layout(
         teams,
         layout,
         team_name,
+        warnings: _,
     } = resolved;
     let ancestry = if rimz::harness::plan::launch_ancestry_required(args.launch.cohort.top_level) {
         let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
@@ -717,21 +720,6 @@ pub(super) fn resolve_launch_prompt_files(paths: &[PathBuf]) -> Result<Vec<PathB
                 .map(|path| path.expect("a supplied path resolves to one path"))
         })
         .collect()
-}
-
-pub(super) fn resolve_agent_override(value: Option<&str>) -> Result<Option<rimz::ids::AgentKind>> {
-    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    let Some(adapter) = rimz::agents::find_definition(value) else {
-        let mut kinds = rimz::agents::known_kinds().collect::<Vec<_>>();
-        kinds.sort_unstable();
-        bail!(
-            "unknown agent kind `{value}` for --agent; known kinds: {}",
-            kinds.join(", ")
-        );
-    };
-    Ok(Some(adapter.spec().kind_id()))
 }
 
 /// Apply CLI-owned launch validation in its user-visible precedence order.

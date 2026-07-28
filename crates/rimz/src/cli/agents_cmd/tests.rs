@@ -645,32 +645,53 @@ mod launch_options {
     use super::*;
 
     #[test]
-    fn supervised_request_carries_model_and_effort_overrides() {
+    fn supervised_request_carries_profile_base_model_and_effort_overrides() {
         let args = parse_agents(&[
-            "rimz", "codex", "fix-it", "--model", " gpt-5 ", "--effort", " low ", "-p",
+            "rimz",
+            "codex",
+            "fix-it",
+            "--agent",
+            " reviewer ",
+            "--model",
+            " gpt-5 ",
+            "--effort",
+            " low ",
+            "-p",
         ]);
 
         let (request, _) = into_supervised_request(args).expect("build supervised request");
 
+        assert_eq!(request.agent.as_deref(), Some("reviewer"));
         assert_eq!(request.model.as_deref(), Some(" gpt-5 "));
         assert_eq!(request.effort.as_deref(), Some(" low "));
     }
 
     #[test]
-    fn agent_override_parses_and_unknown_kind_lists_choices() {
+    fn agent_override_parses_and_unknown_value_lists_choices() {
         let args = parse_agents(&["rimz", "coder", "--agent", "claude"]);
         assert_eq!(args.launch.agent.as_deref(), Some("claude"));
         assert_eq!(
-            resolve_agent_override(args.launch.agent.as_deref())
-                .expect("known")
-                .as_ref()
-                .map(AgentKind::as_str),
+            rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()).as_deref(),
             Some("claude")
         );
 
-        let err = resolve_agent_override(Some("ghost")).expect_err("unknown");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let machine = MachineConfig::default();
+        let effective =
+            rimz::config::effective::load(&machine.agents, dir.path(), &dir.path().join("config"))
+                .expect("effective config");
+        let err = rimz::harness::plan::resolve_launch(
+            &effective,
+            &machine.agents.commands,
+            Some("codex"),
+            Some("ghost"),
+        )
+        .expect_err("unknown");
         let message = err.to_string();
-        assert!(message.contains("unknown agent kind `ghost`"), "{message}");
+        assert!(
+            message.contains("unknown agent profile or kind `ghost`"),
+            "{message}"
+        );
         assert!(message.contains("claude"), "{message}");
         assert!(message.contains("codex"), "{message}");
     }
@@ -682,12 +703,11 @@ mod launch_options {
     ) -> Result<(ResolvedLaunch, LaunchPreset)> {
         let effective =
             rimz::config::effective::load(&machine.agents, root, &root.join("config-home"))?;
-        let kind_override = resolve_agent_override(args.launch.agent.as_deref())?;
         let resolved = rimz::harness::plan::resolve_launch(
             &effective,
             &machine.agents.commands,
             args.launch.spec.as_deref(),
-            kind_override.as_ref(),
+            rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()).as_deref(),
         )?;
         let preset = validate_resolved_launch_inputs(
             args,

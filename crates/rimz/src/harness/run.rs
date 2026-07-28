@@ -83,7 +83,7 @@ pub struct SupervisedRunRequest {
     /// Launch as a top-level agent even when the caller is another agent.
     pub top_level: bool,
     pub permission_mode: PermissionMode,
-    pub agent: Option<crate::ids::AgentKind>,
+    pub agent: Option<String>,
     pub model: Option<String>,
     pub system_prompt_file: Option<PathBuf>,
     pub append_system_prompt_files: Vec<PathBuf>,

@@ -685,7 +685,7 @@ fn into_supervised_request(
         force_new_tab: args.launch.cohort.new_tab,
         top_level: args.launch.cohort.top_level,
         permission_mode,
-        agent: resolve_agent_override(args.launch.agent.as_deref())?,
+        agent: rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()),
         model: args.launch.model,
         system_prompt_file,
         append_system_prompt_files,

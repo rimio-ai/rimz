@@ -487,6 +487,227 @@ fn profile_cells_render_preset_args_and_carry_prompt_sources() {
 }
 
 #[test]
+fn cross_kind_rebase_drops_provider_fields_and_carries_portable_fields() {
+    let profiles = profiles([(
+        "planner",
+        Profile {
+            agent: "claude".to_owned(),
+            mode: Some(PermissionMode::Auto),
+            model: Some("claude-model".to_owned()),
+            effort: Some("high".to_owned()),
+            budget: Some("$4".to_owned()),
+            system_prompt_file: Some("/prompts/system.md".into()),
+            append_system_prompt_files: vec!["/prompts/fragment.md".into()],
+            args: Some("--strict-mcp-config".to_owned()),
+        },
+    )]);
+    let mut warnings = Vec::new();
+
+    let spec = resolve_spec_with_base_override(
+        Some("planner"),
+        &profiles,
+        &no_commands(),
+        &TeamsConfig::default(),
+        Some("codex"),
+        &mut warnings,
+    )
+    .expect("rebase");
+
+    let cell = agent_at(&spec, 0, 0);
+    assert_eq!(cell.kind, "codex");
+    assert_eq!(cell.launch.model, None);
+    assert_eq!(cell.launch.effort.as_deref(), Some("high"));
+    assert_eq!(cell.launch.budget.as_deref(), Some("$4.00"));
+    assert_eq!(cell.launch.mode, Some(PermissionMode::Auto));
+    assert_eq!(
+        cell.system_prompt_file.as_deref(),
+        Some(Path::new("/prompts/system.md"))
+    );
+    assert_eq!(
+        cell.append_system_prompt_files,
+        [PathBuf::from("/prompts/fragment.md")]
+    );
+    assert!(!cell.args.iter().any(|arg| arg == "--strict-mcp-config"));
+    assert_eq!(
+        warnings
+            .iter()
+            .map(|warning| match warning {
+                SpecWarning::RebaseDropped { field, .. } => *field,
+            })
+            .collect::<Vec<_>>(),
+        ["model", "args"]
+    );
+}
+
+#[test]
+fn profile_override_supplies_provider_base_and_orders_prompt_fragments() {
+    let profiles = profiles([
+        (
+            "planner",
+            Profile {
+                agent: "claude".to_owned(),
+                effort: Some("high".to_owned()),
+                append_system_prompt_files: vec!["/prompts/planner.md".into()],
+                ..profile("claude")
+            },
+        ),
+        (
+            "codex",
+            Profile {
+                agent: "codex".to_owned(),
+                model: Some("codex-model".to_owned()),
+                append_system_prompt_files: vec!["/prompts/codex.md".into()],
+                args: Some("--base-only".to_owned()),
+                ..profile("codex")
+            },
+        ),
+    ]);
+    let mut warnings = Vec::new();
+
+    let spec = resolve_spec_with_base_override(
+        Some("planner"),
+        &profiles,
+        &no_commands(),
+        &TeamsConfig::default(),
+        Some("codex"),
+        &mut warnings,
+    )
+    .expect("profile base");
+
+    let cell = agent_at(&spec, 0, 0);
+    assert_eq!(cell.kind, "codex");
+    assert_eq!(cell.launch.model.as_deref(), Some("codex-model"));
+    assert_eq!(cell.launch.effort.as_deref(), Some("high"));
+    assert_eq!(
+        cell.append_system_prompt_files,
+        [
+            PathBuf::from("/prompts/codex.md"),
+            PathBuf::from("/prompts/planner.md")
+        ]
+    );
+    assert!(cell.args.ends_with(&["--base-only".to_owned()]));
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn same_kind_and_chained_overrides_resolve_without_drops() {
+    let profiles = profiles([
+        (
+            "planner",
+            Profile {
+                agent: "claude".to_owned(),
+                model: Some("claude-model".to_owned()),
+                args: Some("--profile planner".to_owned()),
+                ..profile("claude")
+            },
+        ),
+        ("switch", profile("switch-base")),
+        ("switch-base", profile("codex")),
+    ]);
+    let mut warnings = Vec::new();
+    let same = resolve_spec_with_base_override(
+        Some("planner"),
+        &profiles,
+        &no_commands(),
+        &TeamsConfig::default(),
+        Some("claude"),
+        &mut warnings,
+    )
+    .expect("same kind");
+    let cell = agent_at(&same, 0, 0);
+    assert_eq!(cell.launch.model.as_deref(), Some("claude-model"));
+    assert!(
+        cell.args
+            .ends_with(&["--profile".to_owned(), "planner".to_owned()])
+    );
+    assert!(warnings.is_empty());
+
+    let chained = resolve_spec_with_base_override(
+        Some("claude"),
+        &profiles,
+        &no_commands(),
+        &TeamsConfig::default(),
+        Some("switch"),
+        &mut warnings,
+    )
+    .expect("chained base");
+    assert_eq!(agent_at(&chained, 0, 0).kind, "codex");
+
+    assert!(matches!(
+        resolve_spec_with_base_override(
+            Some("claude"),
+            &profiles,
+            &no_commands(),
+            &TeamsConfig::default(),
+            Some("ghost"),
+            &mut warnings,
+        ),
+        Err(LayoutErr::UnknownAgentOverride { value, valid })
+            if value == "ghost"
+                && valid.contains("planner")
+                && valid.contains("claude")
+                && valid.contains("codex")
+    ));
+}
+
+#[test]
+fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
+    let profiles = profiles([(
+        "planner",
+        Profile {
+            agent: "claude".to_owned(),
+            model: Some("profile-model".to_owned()),
+            ..profile("claude")
+        },
+    )]);
+    let mut planner = role("planner", "planner");
+    planner.args = Some("--role-arg".to_owned());
+    let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), team(vec![planner]))]));
+    let mut warnings = Vec::new();
+
+    let team_spec = resolve_spec_with_base_override(
+        Some("forge"),
+        &profiles,
+        &no_commands(),
+        &teams,
+        Some("codex"),
+        &mut warnings,
+    )
+    .expect("team rebase");
+    let cell = agent_at(&team_spec, 0, 0);
+    assert_eq!(cell.kind, "codex");
+    assert_eq!(cell.launch.role.as_deref(), Some("planner"));
+    assert!(!cell.args.iter().any(|arg| arg == "--role-arg"));
+    assert!(warnings.iter().all(|warning| {
+        warning
+            .to_string()
+            .contains("role `planner` profile `planner`")
+    }));
+
+    warnings.clear();
+    let virtual_spec = resolve_spec_with_base_override(
+        Some("claude-yolo"),
+        &no_profiles(),
+        &no_commands(),
+        &TeamsConfig::default(),
+        Some("codex"),
+        &mut warnings,
+    )
+    .expect("virtual rebase");
+    let virtual_cell = agent_at(&virtual_spec, 0, 0);
+    assert_eq!(virtual_cell.kind, "codex");
+    assert_eq!(virtual_cell.launch.mode, Some(PermissionMode::Yolo));
+    assert_eq!(
+        virtual_cell.args,
+        crate::agents::find_definition("codex")
+            .expect("codex")
+            .spec()
+            .launch
+            .permission_args(PermissionMode::Yolo)
+    );
+}
+
+#[test]
 fn profile_resolution_rejects_invalid_chains_and_fields() {
     assert_eq!(
         resolve_profile("planner", &profiles([("planner", profile("ghost"))])),
