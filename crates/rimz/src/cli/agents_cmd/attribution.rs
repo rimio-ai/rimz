@@ -358,6 +358,9 @@ fn subagents_label(member: &AttributionMember) -> Option<String> {
             if let Some(task) = stat.task.as_deref() {
                 segment.push(' ');
                 segment.push_str(&task.to_lowercase());
+            } else {
+                segment.push(' ');
+                segment.push_str("other");
             }
             if let Some(cost) = stat.cost_usd {
                 segment.push(' ');
@@ -576,7 +579,7 @@ mod tests {
               calls:     2 asks · 7 tool calls · 1 compaction
               messages:  2 user, 5 agent, 4 sent
               tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
-              subagents: 3 explorer $0.55 · 1
+              subagents: 3 explorer $0.55 · 1 other
 
         Other agents · 1 agent · 1h05m active · $1.25 · 7 messages (2 from you)
 
@@ -585,7 +588,7 @@ mod tests {
               calls:     2 asks · 7 tool calls · 1 compaction
               messages:  2 user, 5 agent, 4 sent
               tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
-              subagents: 3 explorer $0.55 · 1
+              subagents: 3 explorer $0.55 · 1 other
 
         Total · 2 agents · 2h10m active · $2.50 · 14 messages (4 from you)
         ");
@@ -606,7 +609,7 @@ mod tests {
               calls:     2 asks · 7 tool calls · 1 compaction
               messages:  2 user, 5 agent, 4 sent
               tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
-              subagents: 3 explorer $0.55 · 1
+              subagents: 3 explorer $0.55 · 1 other
 
         Total · 1 agent · 1h05m active · $1.25 · 7 messages (2 from you)
         ");
@@ -627,7 +630,7 @@ mod tests {
           - calls: 2 asks · 7 tool calls · 1 compaction
           - messages: 2 user, 5 agent, 4 sent
           - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
-          - subagents: 3 explorer $0.55 · 1
+          - subagents: 3 explorer $0.55 · 1 other
 
         **Other agents**
 
@@ -636,7 +639,7 @@ mod tests {
           - calls: 2 asks · 7 tool calls · 1 compaction
           - messages: 2 user, 5 agent, 4 sent
           - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
-          - subagents: 3 explorer $0.55 · 1
+          - subagents: 3 explorer $0.55 · 1 other
 
         </details>
         ");

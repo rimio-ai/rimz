@@ -311,11 +311,14 @@ fn transcript_counts_messages_asks_and_sent_credit_per_slot() {
     let mut cross_lane = entry("codex", "docs-coder", TranscriptKind::Message);
     cross_lane.channel = Some("docs".to_owned());
     cross_lane.from = Some("@planner#feature".to_owned());
+    let mut system_nudge = entry("claude", "planner-session", TranscriptKind::Prompt);
+    system_nudge.from = Some("rimz".to_owned());
     let transcript = vec![
         entry("claude", "planner-session", TranscriptKind::Prompt),
         entry("claude", "planner-session", TranscriptKind::Ask),
         received,
         cross_lane,
+        system_nudge,
     ];
 
     let report = build_with(&[planner, coder, docs_coder], &[], &transcript);
@@ -368,8 +371,11 @@ fn subagents_group_by_task_and_join_durable_child_cost() {
     let mut explore_two = agent("explore-two", "claude", 30);
     explore_two.parent_agent_id = Some(AgentSessionId::from("parent"));
     explore_two.task = Some("Explore".to_owned());
+    let mut described = agent("described", "claude", 40);
+    described.parent_agent_id = Some(AgentSessionId::from("parent"));
+    described.task = Some("Inspect every parser call site".to_owned());
 
-    let report = build_with(&[parent], &[explore_one, explore_two], &[]);
+    let report = build_with(&[parent], &[explore_one, explore_two, described], &[]);
     let stats = &report.groups[0].members[0].subagents;
 
     assert_eq!(
@@ -382,11 +388,22 @@ fn subagents_group_by_task_and_join_durable_child_cost() {
             },
             SubagentStat {
                 task: None,
-                count: 1,
+                count: 2,
                 cost_usd: Some(0.5),
             },
         ]
     );
+}
+
+#[test]
+fn subagent_type_rejects_descriptions_and_unbounded_labels() {
+    assert_eq!(subagent_type(Some("Explore")), Some("Explore".to_owned()));
+    assert_eq!(
+        subagent_type(Some("general-purpose")),
+        Some("general-purpose".to_owned())
+    );
+    assert_eq!(subagent_type(Some("Inspect auth retries")), None);
+    assert_eq!(subagent_type(Some(&"x".repeat(25))), None);
 }
 
 #[test]

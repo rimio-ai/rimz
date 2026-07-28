@@ -20,6 +20,7 @@ use super::{AgentState, pricing, spending};
 pub use super::spending::EffortTokens as TokenSplit;
 
 pub const ATTRIBUTION_SCHEMA: u8 = 2;
+const SUBAGENT_TYPE_MAX_CHARS: usize = 24;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Attribution {
@@ -152,6 +153,13 @@ struct SlotKey {
     slot: Slot,
 }
 
+struct FoldedMember {
+    channel: Option<String>,
+    team: Option<String>,
+    attribution: AttributionMember,
+    opened_turn: bool,
+}
+
 pub fn build(request: AttributionRequest<'_>) -> Attribution {
     let folded = fold(request.agents);
     let peer_representatives = representatives(request.peers);
@@ -181,19 +189,24 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
                 &prices,
                 &conversation_counts,
             );
-            (slot.channel, team, member, opened_turn)
+            FoldedMember {
+                channel: slot.channel,
+                team,
+                attribution: member,
+                opened_turn,
+            }
         })
         .collect::<Vec<_>>();
     credit_sent_messages(&mut members, request.transcript);
-    members.retain(|(_, _, member, opened_turn)| *opened_turn || member.has_contribution());
-    members.sort_by(|left, right| member_order(&left.2, &right.2));
+    members.retain(|member| member.opened_turn || member.attribution.has_contribution());
+    members.sort_by(|left, right| member_order(&left.attribution, &right.attribution));
 
     let mut by_team = BTreeMap::<String, Vec<AttributionMember>>::new();
     let mut other = Vec::new();
-    for (_, team, member, _) in members {
-        match team {
-            Some(team) => by_team.entry(team).or_default().push(member),
-            None => other.push(member),
+    for member in members {
+        match member.team {
+            Some(team) => by_team.entry(team).or_default().push(member.attribution),
+            None => other.push(member.attribution),
         }
     }
 
@@ -415,7 +428,9 @@ fn conversation_counts(
             .or_insert_with(ConversationCounts::default);
         match entry.entry {
             TranscriptKind::Prompt => {
-                counts.messages.user = counts.messages.user.saturating_add(1);
+                if entry.from.as_deref() != Some("rimz") {
+                    counts.messages.user = counts.messages.user.saturating_add(1);
+                }
             }
             TranscriptKind::Message => {
                 counts.messages.agent = counts.messages.agent.saturating_add(1);
@@ -429,10 +444,7 @@ fn conversation_counts(
     counts
 }
 
-fn credit_sent_messages(
-    members: &mut [(Option<String>, Option<String>, AttributionMember, bool)],
-    transcript: &[TranscriptEntry],
-) {
+fn credit_sent_messages(members: &mut [FoldedMember], transcript: &[TranscriptEntry]) {
     for entry in transcript
         .iter()
         .filter(|entry| entry.entry == TranscriptKind::Message)
@@ -444,15 +456,10 @@ fn credit_sent_messages(
             .split_once('#')
             .map_or((from, None), |(base, channel)| (base, Some(channel)));
         let sender_channel = explicit_channel.or(entry.channel.as_deref());
-        if let Some((_, _, member, _)) = members.iter_mut().find(|(channel, _, member, _)| {
-            member
-                .handle
-                .split_once('#')
-                .map_or(member.handle.as_str(), |(base, _)| base)
-                == base
-                && channel.as_deref() == sender_channel
+        if let Some(member) = members.iter_mut().find(|member| {
+            member.attribution.handle == base && member.channel.as_deref() == sender_channel
         }) {
-            member.messages.sent = member.messages.sent.saturating_add(1);
+            member.attribution.messages.sent = member.attribution.messages.sent.saturating_add(1);
         }
     }
 }
@@ -474,12 +481,7 @@ fn subagent_stats(
     }) {
         children.insert(
             child.agent_id.to_string(),
-            child
-                .task
-                .as_deref()
-                .map(str::trim)
-                .filter(|task| !task.is_empty())
-                .map(ToOwned::to_owned),
+            subagent_type(child.task.as_deref()),
         );
     }
     for child_id in spend.keys() {
@@ -512,6 +514,16 @@ fn subagent_stats(
             })
     });
     stats
+}
+
+fn subagent_type(task: Option<&str>) -> Option<String> {
+    let task = task?.trim();
+    (!task.is_empty()
+        && task.chars().count() <= SUBAGENT_TYPE_MAX_CHARS
+        && task
+            .chars()
+            .all(|character| !character.is_whitespace() && !character.is_control()))
+    .then(|| task.to_owned())
 }
 
 fn newest<'a>(records: &[&'a AgentState]) -> Option<&'a AgentState> {
