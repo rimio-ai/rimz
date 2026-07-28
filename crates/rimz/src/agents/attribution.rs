@@ -93,9 +93,9 @@ impl AttributionMember {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct MessageCounts {
-    pub user: u64,
-    pub agent: u64,
-    pub sent: u64,
+    pub from_user: u64,
+    pub from_teammates: u64,
+    pub to_teammates: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -344,8 +344,10 @@ fn member(
             if let Some(counts) =
                 conversation_counts.get(&(agent.kind.clone(), agent.agent_id.clone()))
             {
-                total.user = total.user.saturating_add(counts.messages.user);
-                total.agent = total.agent.saturating_add(counts.messages.agent);
+                total.from_user = total.from_user.saturating_add(counts.messages.from_user);
+                total.from_teammates = total
+                    .from_teammates
+                    .saturating_add(counts.messages.from_teammates);
             }
             total
         });
@@ -429,11 +431,11 @@ fn conversation_counts(
         match entry.entry {
             TranscriptKind::Prompt => {
                 if entry.from.as_deref() != Some("rimz") {
-                    counts.messages.user = counts.messages.user.saturating_add(1);
+                    counts.messages.from_user = counts.messages.from_user.saturating_add(1);
                 }
             }
             TranscriptKind::Message => {
-                counts.messages.agent = counts.messages.agent.saturating_add(1);
+                counts.messages.from_teammates = counts.messages.from_teammates.saturating_add(1);
             }
             TranscriptKind::Ask => {
                 counts.asks = counts.asks.saturating_add(1);
@@ -459,7 +461,8 @@ fn credit_sent_messages(members: &mut [FoldedMember], transcript: &[TranscriptEn
         if let Some(member) = members.iter_mut().find(|member| {
             member.attribution.handle == base && member.channel.as_deref() == sender_channel
         }) {
-            member.attribution.messages.sent = member.attribution.messages.sent.saturating_add(1);
+            member.attribution.messages.to_teammates =
+                member.attribution.messages.to_teammates.saturating_add(1);
         }
     }
 }
@@ -565,9 +568,18 @@ fn totals_from_refs(members: &[&AttributionMember]) -> EffortTotals {
         totals.asks = totals.asks.saturating_add(member.asks);
         totals.tool_calls = totals.tool_calls.saturating_add(member.tool_calls);
         totals.compactions = totals.compactions.saturating_add(member.compactions);
-        totals.messages.user = totals.messages.user.saturating_add(member.messages.user);
-        totals.messages.agent = totals.messages.agent.saturating_add(member.messages.agent);
-        totals.messages.sent = totals.messages.sent.saturating_add(member.messages.sent);
+        totals.messages.from_user = totals
+            .messages
+            .from_user
+            .saturating_add(member.messages.from_user);
+        totals.messages.from_teammates = totals
+            .messages
+            .from_teammates
+            .saturating_add(member.messages.from_teammates);
+        totals.messages.to_teammates = totals
+            .messages
+            .to_teammates
+            .saturating_add(member.messages.to_teammates);
         totals.tokens.add_assign(member.tokens);
     }
     let started = members

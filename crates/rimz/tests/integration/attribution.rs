@@ -189,9 +189,9 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
     assert_eq!(planner["presence"], "exited");
     assert_eq!(planner["sessions"], 2);
     assert_eq!(planner["asks"], 1);
-    assert_eq!(planner["messages"]["user"], 1);
-    assert_eq!(planner["messages"]["sent"], 1);
-    assert_eq!(report["totals"]["messages"]["agent"], 1);
+    assert_eq!(planner["messages"]["from_user"], 1);
+    assert_eq!(planner["messages"]["to_teammates"], 1);
+    assert_eq!(report["totals"]["messages"]["from_teammates"], 1);
     assert_eq!(report["totals"]["tokens"]["input"], 1_000);
     assert_eq!(report["totals"]["tokens"]["output"], 400);
     assert_eq!(report["totals"]["tokens"]["cache_read"], 1_000);
@@ -211,7 +211,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
     assert!(markdown.contains("<code>forge</code> team"));
     assert!(markdown.contains("- **planner** — Codex `gpt-5.5@high`"));
     assert!(markdown.contains("  - calls: 1 ask"));
-    assert!(markdown.contains("  - messages: 1 user, 1 sent"));
+    assert!(markdown.contains("  - messages: 1 from you · 1 to teammates"));
     assert!(markdown.contains("  - tokens: "));
 }
 
