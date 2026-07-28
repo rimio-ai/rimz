@@ -448,6 +448,8 @@ fn unheadered_system_batch_keeps_each_confirmed_message_causal() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].message_id.as_ref(), Some(&first.message_id));
     assert_eq!(entries[1].message_id.as_ref(), Some(&second.message_id));
+    assert_eq!(entries[0].from.as_deref(), Some("rimz"));
+    assert_eq!(entries[1].from.as_deref(), Some("rimz"));
     assert_eq!(
         rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "sess-1")
             .unwrap()

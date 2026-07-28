@@ -71,8 +71,7 @@ pub(crate) use cache::{compact_spending_cache, peek_cache_version};
 pub use discovery::{SpendingSource, SpendingSourceGroup, SpendingSourceTree};
 pub use effort::{
     EffortParseMemo, EffortSessionRef, EffortTokens, SlotEffort, SlotEffortBreakdown, slot_effort,
-    slot_effort_breakdown, slot_effort_breakdown_with_memo, slot_effort_with_memo,
-    sum_optional_cost,
+    slot_effort_breakdown, slot_effort_with_memo, sum_optional_cost,
 };
 #[doc(hidden)]
 pub use engine::refresh_global_spending_direct;

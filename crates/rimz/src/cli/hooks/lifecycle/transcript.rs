@@ -284,6 +284,9 @@ pub(super) fn record_conversation(
                     if let Some((offset, message)) = matched {
                         entry.message_id = Some(message.message_id.clone());
                         entry.reply_to = message.in_reply_to.clone();
+                        if matches!(&message.sender, rimz::message::MessageSender::System) {
+                            entry.from = Some("rimz".to_owned());
+                        }
                         matched_ids.push(message.message_id.clone());
                         delivered_cursor += offset + 1;
                     }

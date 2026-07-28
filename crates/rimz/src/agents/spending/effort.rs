@@ -114,7 +114,7 @@ pub fn slot_effort_with_memo(
     slot_effort_breakdown_with_memo(sessions, prices, memo).total
 }
 
-pub fn slot_effort_breakdown_with_memo(
+fn slot_effort_breakdown_with_memo(
     sessions: &[EffortSessionRef<'_>],
     prices: &PriceBook,
     memo: &mut EffortParseMemo,
@@ -171,11 +171,6 @@ impl EffortParseMemo {
         let touched = std::mem::take(&mut self.touched);
         self.files.retain(|path, _| touched.contains(path));
     }
-}
-
-#[cfg(test)]
-fn fold_entries<'a>(entries: impl IntoIterator<Item = &'a CachedEntry>) -> SlotEffort {
-    fold_tagged_entries(entries.into_iter().map(|entry| (entry, None))).total
 }
 
 fn fold_tagged_entries<'a>(
@@ -237,7 +232,8 @@ mod tests {
         let replay = first.clone();
         let unpriced = entry("unpriced", 20, 0.0);
 
-        let effort = fold_entries([&first, &replay, &unpriced]);
+        let effort =
+            fold_tagged_entries([(&first, None), (&replay, None), (&unpriced, None)]).total;
 
         assert_eq!(
             effort.tokens,
@@ -262,7 +258,7 @@ mod tests {
         };
         let replay = first.clone();
 
-        let effort = fold_entries([&first, &replay]);
+        let effort = fold_tagged_entries([(&first, None), (&replay, None)]).total;
 
         assert_eq!(effort.tokens.input, 12);
         assert_eq!(effort.cost_usd, Some(0.5));
