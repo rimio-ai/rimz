@@ -1,10 +1,11 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use headless_chrome::protocol::cdp::{Network, types::Event};
 use headless_chrome::{Browser, LaunchOptions, Tab};
 use rimz::mux::{ClientFocusOptions, MuxBackend, ZellijBackend};
@@ -89,10 +90,14 @@ pub(super) struct BrowserHandle {
 
 impl BrowserHandle {
     pub(super) fn launch(path: &Path) -> Self {
+        Self::launch_with_size(path, (1280, 800))
+    }
+
+    pub(super) fn launch_with_size(path: &Path, window_size: (u32, u32)) -> Self {
         let options = LaunchOptions::default_builder()
             .path(Some(path.to_path_buf()))
             .sandbox(false)
-            .window_size(Some((1280, 800)))
+            .window_size(Some(window_size))
             .args(vec![OsStr::new("--disable-gpu")])
             .idle_browser_timeout(Duration::from_secs(120))
             .build()
@@ -150,20 +155,26 @@ impl BrowserHandle {
 
 pub(super) struct WebSocketCapture {
     closes: Arc<AtomicUsize>,
+    mouse_mode_disable: Arc<AtomicBool>,
     received: Arc<AtomicUsize>,
     sent: Arc<AtomicUsize>,
+    sent_payloads: Arc<Mutex<Vec<Vec<u8>>>>,
     urls: Arc<Mutex<Vec<String>>>,
 }
 
 impl WebSocketCapture {
     fn new(tab: &Tab) -> Self {
         let closes = Arc::new(AtomicUsize::new(0));
+        let mouse_mode_disable = Arc::new(AtomicBool::new(false));
         let received = Arc::new(AtomicUsize::new(0));
         let sent = Arc::new(AtomicUsize::new(0));
+        let sent_payloads = Arc::new(Mutex::new(Vec::new()));
         let urls = Arc::new(Mutex::new(Vec::new()));
         let listener_closes = Arc::clone(&closes);
+        let listener_mouse_mode_disable = Arc::clone(&mouse_mode_disable);
         let listener_received = Arc::clone(&received);
         let listener_sent = Arc::clone(&sent);
+        let listener_sent_payloads = Arc::clone(&sent_payloads);
         let listener_urls = Arc::clone(&urls);
         tab.add_event_listener(Arc::new(move |event: &Event| match event {
             Event::NetworkWebSocketCreated(event) => {
@@ -172,11 +183,24 @@ impl WebSocketCapture {
                     .expect("lock WebSocket URLs")
                     .push(event.params.url.clone());
             }
-            Event::NetworkWebSocketFrameReceived(_) => {
+            Event::NetworkWebSocketFrameReceived(event) => {
                 listener_received.fetch_add(1, Ordering::Relaxed);
+                if let Ok(payload) = STANDARD.decode(&event.params.response.payload_data)
+                    && payload
+                        .windows(b"?1002l".len())
+                        .any(|window| window == b"?1002l")
+                {
+                    listener_mouse_mode_disable.store(true, Ordering::Relaxed);
+                }
             }
-            Event::NetworkWebSocketFrameSent(_) => {
+            Event::NetworkWebSocketFrameSent(event) => {
                 listener_sent.fetch_add(1, Ordering::Relaxed);
+                if let Ok(payload) = STANDARD.decode(&event.params.response.payload_data) {
+                    listener_sent_payloads
+                        .lock()
+                        .expect("lock sent WebSocket payloads")
+                        .push(payload);
+                }
             }
             Event::NetworkWebSocketClosed(_) => {
                 listener_closes.fetch_add(1, Ordering::Relaxed);
@@ -186,8 +210,10 @@ impl WebSocketCapture {
         .expect("listen for browser WebSocket frames");
         Self {
             closes,
+            mouse_mode_disable,
             received,
             sent,
+            sent_payloads,
             urls,
         }
     }
@@ -198,6 +224,10 @@ impl WebSocketCapture {
 
     pub(super) fn received(&self) -> usize {
         self.received.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn saw_mouse_mode_disable(&self) -> bool {
+        self.mouse_mode_disable.load(Ordering::Relaxed)
     }
 
     pub(super) fn wait_until_sent(&self, budget: Duration) {
@@ -225,6 +255,13 @@ impl WebSocketCapture {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
+
+    pub(super) fn sent_payloads(&self) -> Vec<Vec<u8>> {
+        self.sent_payloads
+            .lock()
+            .expect("lock sent WebSocket payloads")
+            .clone()
+    }
 }
 
 pub(super) struct OpenedWeb {
@@ -240,7 +277,9 @@ pub(super) struct LiveWebFixture {
     _guard: rimz::store::lock::WorkspaceLock,
     pub(super) env: Env,
     pub(super) workspace: rimz::ResolvedWorkspace,
+    churn_pane: Mutex<Option<String>>,
     server: TmuxServer,
+    target_pane: String,
     ttyd: PathBuf,
     web_port: u16,
 }
@@ -264,6 +303,16 @@ impl LiveWebFixture {
             &root,
             "sh",
         ]);
+        let target_pane = tmux_stdout(
+            &server,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                &workspace.session_name,
+                "#{pane_id}",
+            ],
+        );
         let web_port = free_loopback_port();
         let share_port = free_loopback_port();
         write_machine_config(
@@ -274,7 +323,9 @@ impl LiveWebFixture {
             _guard: guard,
             env,
             workspace,
+            churn_pane: Mutex::new(None),
             server,
+            target_pane,
             ttyd: stack.ttyd.clone(),
             web_port,
         }
@@ -342,6 +393,72 @@ impl LiveWebFixture {
         ]);
     }
 
+    pub(super) fn enable_mouse(&self) {
+        self.server.output(&["set-option", "-g", "mouse", "on"]);
+    }
+
+    pub(super) fn prepare_mouse_mode_churn(&self) {
+        let pane = tmux_stdout(
+            &self.server,
+            &[
+                "split-window",
+                "-d",
+                "-h",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "-t",
+                &self.target_pane,
+            ],
+        );
+        *self.churn_pane.lock().expect("lock churn pane") = Some(pane);
+    }
+
+    pub(super) fn start_mouse_mode_churn(&self) {
+        let pane = self
+            .churn_pane
+            .lock()
+            .expect("lock churn pane")
+            .clone()
+            .expect("prepared churn pane");
+        self.server.output(&[
+            "send-keys",
+            "-t",
+            &pane,
+            r#"while :; do printf '\033[?1003h'; sleep 0.02; printf '\033[?1003l'; sleep 0.02; done"#,
+            "Enter",
+        ]);
+    }
+
+    pub(super) fn target_pane_geometry(&self) -> String {
+        tmux_display(
+            &self.server,
+            &self.target_pane,
+            "#{pane_left},#{pane_top},#{pane_width},#{pane_height}",
+        )
+    }
+
+    pub(super) fn target_copy_cursor_y(&self) -> u16 {
+        tmux_display(&self.server, &self.target_pane, "#{copy_cursor_y}")
+            .parse()
+            .expect("numeric target copy cursor")
+    }
+
+    pub(super) fn target_copy_state(&self) -> String {
+        tmux_display(
+            &self.server,
+            &self.target_pane,
+            "#{pane_in_mode},#{selection_present},#{selection_start_y},#{selection_end_y},#{copy_cursor_y}",
+        )
+    }
+
+    pub(super) fn cancel_target_copy_mode(&self) {
+        if tmux_display(&self.server, &self.target_pane, "#{pane_in_mode}") == "1" {
+            self.server
+                .output(&["send-keys", "-X", "-t", &self.target_pane, "cancel"]);
+        }
+    }
+
     pub(super) fn pane_widths(&self) -> Vec<u16> {
         String::from_utf8_lossy(
             &self
@@ -358,6 +475,23 @@ impl LiveWebFixture {
         .lines()
         .map(|line| line.parse().expect("numeric tmux pane width"))
         .collect()
+    }
+
+    pub(super) fn begin_copy_selection(&self) {
+        self.server.output(&["copy-mode", "-t", &self.target_pane]);
+        self.server
+            .output(&["send-keys", "-X", "-t", &self.target_pane, "top-line"]);
+        for _ in 0..5 {
+            self.server
+                .output(&["send-keys", "-X", "-t", &self.target_pane, "cursor-down"]);
+        }
+        self.server.output(&[
+            "send-keys",
+            "-X",
+            "-t",
+            &self.target_pane,
+            "begin-selection",
+        ]);
     }
 
     pub(super) fn wait_capture_contains(&self, needle: &str, budget: Duration) -> String {
@@ -413,6 +547,16 @@ impl Drop for LiveWebFixture {
     fn drop(&mut self) {
         let _ = self.command().args(["web", "stop"]).bounded_output();
     }
+}
+
+fn tmux_stdout(server: &TmuxServer, args: &[&str]) -> String {
+    String::from_utf8_lossy(&server.output(args).stdout)
+        .trim()
+        .to_owned()
+}
+
+fn tmux_display(server: &TmuxServer, target: &str, format: &str) -> String {
+    tmux_stdout(server, &["display-message", "-p", "-t", target, format])
 }
 
 pub(super) struct LiveZellijWebFixture {

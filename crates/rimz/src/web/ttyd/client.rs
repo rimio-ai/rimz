@@ -314,6 +314,7 @@ const loadFont=fontFamily&&document.fonts
   :Promise.resolve();
 waitForTerminal().then(term=>{{
   installPixelLayer(term);
+  installMouseDragRearm(term);
   const sendInput=data=>{{
     if(typeof term.input==="function"){{term.input(data,true);return true;}}
     const core=term._core&&term._core.coreService;
@@ -966,6 +967,8 @@ mod tests {
         assert!(!rendered.contains("WebSocketStream"));
         assert!(rendered.contains("const sendWithMouseFlow="));
         assert!(rendered.contains("sendWithMouseFlow(payload=>"));
+        assert!(rendered.contains("const installMouseDragRearm=term=>"));
+        assert!(rendered.contains("installMouseDragRearm(term)"));
         assert!(!rendered.contains("installBacklogMeter"));
         assert!(rendered.contains("const RIMZ_PIXEL_PLACEHOLDER=1109742"));
         assert!(rendered.contains("const RIMZ_PIXEL_DIACRITICS=[\"̅\",\"̍\",\"̎\""));
