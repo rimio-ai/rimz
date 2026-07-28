@@ -102,13 +102,10 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
         header_target,
         header_hit.into_iter().chain(header_link),
     );
-    let rows = visible_group.rows(roster);
-    let selected_team = group_selected
-        .then(|| rows[ctx.selected_index - first_row].team())
-        .flatten();
-    for (this_row, row) in range.zip(rows.iter().copied()) {
+    for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
         let selected = this_row == ctx.selected_index;
-        let expanded = selected || selected_team.is_some_and(|team| row.team() == Some(team));
+        let expanded =
+            super::row_expanded_by_selection(roster, visible_group, this_row, ctx.selected_index);
         let gutter = if selected { Gutter::Selected } else { lane };
         let cost_usd = super::agent_card::agent_card_cost_usd(group, row);
         for line in row_lines(

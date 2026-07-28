@@ -149,7 +149,7 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
 }
 
 #[test]
-fn selection_awaiting_first_prompt_tracks_selected_bare_idle_card() {
+fn expanded_row_awaiting_first_prompt_tracks_selected_bare_idle_card() {
     let bare_idle = snapshot_with(vec![agent(
         "claude-1",
         "claude",
@@ -159,14 +159,14 @@ fn selection_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         None,
     )]);
 
-    assert!(selection_awaiting_first_prompt(
+    assert!(expanded_row_awaiting_first_prompt(
         &bare_idle,
         &UiState {
             selected_index: 0,
             ..Default::default()
         }
     ));
-    assert!(!selection_awaiting_first_prompt(
+    assert!(!expanded_row_awaiting_first_prompt(
         &bare_idle,
         &UiState {
             selected_index: 99,
@@ -182,7 +182,7 @@ fn selection_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         Some("main"),
         Some("warm up"),
     )]);
-    assert!(!selection_awaiting_first_prompt(
+    assert!(!expanded_row_awaiting_first_prompt(
         &described,
         &UiState {
             selected_index: 0,
@@ -203,7 +203,7 @@ fn selection_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         .expect("agent row")
         .usage
         .total_tokens = Some(1);
-    assert!(!selection_awaiting_first_prompt(
+    assert!(!expanded_row_awaiting_first_prompt(
         &used,
         &UiState {
             selected_index: 0,
@@ -219,7 +219,7 @@ fn selection_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         Some("main"),
         None,
     )]);
-    assert!(!selection_awaiting_first_prompt(
+    assert!(!expanded_row_awaiting_first_prompt(
         &running,
         &UiState {
             selected_index: 0,

@@ -329,10 +329,25 @@ fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a S
     .row(ui.selected_index)
 }
 
-/// The selected row is a bare, not-yet-prompted idle card whose selected form
-/// animates the compose affordance.
-pub(crate) fn selection_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
-    selected_row(snapshot, ui).is_some_and(sections::awaiting_first_prompt_affordance)
+/// Selection expands a bare, not-yet-prompted idle card whose compose
+/// affordance needs the breath animation grid. This can be the selected row
+/// itself or a visible named teammate expanded alongside it.
+pub(crate) fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
+    let roster = VisibleRoster::new(
+        snapshot,
+        ui.make_up_filter,
+        &ui.expanded_groups,
+        ui.held_visible(),
+    );
+    roster.groups().iter().any(|group| {
+        group
+            .range()
+            .zip(group.rows(&roster).iter().copied())
+            .any(|(row_index, row)| {
+                sections::row_expanded_by_selection(&roster, group, row_index, ui.selected_index)
+                    && sections::awaiting_first_prompt_affordance(row)
+            })
+    })
 }
 
 /// The provider kind the dashboard's tab focus derives from the selection: the
