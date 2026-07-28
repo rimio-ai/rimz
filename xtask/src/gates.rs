@@ -12,7 +12,9 @@ use serde::Deserialize;
 use crate::build::{build_plugin, verify_vendored_plugin};
 use crate::docs_links::docs_links;
 use crate::invariants::invariants;
-use crate::runner::{Captured, ensure_success, run, run_streamed, run_with_env_and_removed};
+use crate::runner::{
+    Captured, RtkPolicy, ensure_success, run, run_streamed, run_with_env_and_removed,
+};
 use crate::sandbox::HostSandbox;
 use crate::spinner::Spinner;
 
@@ -77,6 +79,7 @@ const CARGO_PROGRESS_VERBS: &[&str] = &[
     "Blocking",
     "Running",
 ];
+const NEXTEST_PROGRESS_PREFIXES: &[&str] = &["PASS [", "START [", "SLOW [", "TRY [", "LEAK ["];
 const TRIMMED_OUTPUT_MAX_CHARS: usize = 12_000;
 
 pub(crate) fn fmt(root: &Path) -> Result<()> {
@@ -339,7 +342,15 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let captured = run_streamed(root, "cargo", args, envs, removed_envs, progress)?;
+    let captured = run_streamed(
+        root,
+        "cargo",
+        args,
+        envs,
+        removed_envs,
+        RtkPolicy::Configured,
+        progress,
+    )?;
     if captured.status.success() {
         return Ok(GateResult::Pass {
             note: note.and_then(|extract| extract(&captured.output)),
@@ -356,6 +367,7 @@ fn capture_cargo_task<I, S>(
     args: I,
     envs: &[(&str, PathBuf)],
     removed_envs: &[&str],
+    rtk_policy: RtkPolicy,
 ) -> Result<Captured>
 where
     I: IntoIterator<Item = S>,
@@ -369,7 +381,15 @@ where
             spinner.set(format!("{label} — {line}"));
         }
     };
-    let captured = run_streamed(root, "cargo", args, envs, removed_envs, &mut progress);
+    let captured = run_streamed(
+        root,
+        "cargo",
+        args,
+        envs,
+        removed_envs,
+        rtk_policy,
+        &mut progress,
+    );
     drop(spinner);
     captured
 }
@@ -379,14 +399,14 @@ fn finish_cargo_task(
     captured: Captured,
     note: Option<fn(&str) -> Option<String>>,
     invocation: &str,
-) -> Result<Captured> {
+) -> Result<()> {
     if captured.status.success() {
         report_gate_pass(
             name,
             note.and_then(|extract| extract(&captured.output))
                 .as_deref(),
         );
-        return Ok(captured);
+        return Ok(());
     }
     report_task_failure(name, &failure_detail(&captured.output), invocation);
     bail!("{name} failed");
@@ -538,22 +558,20 @@ fn report_gate_pass(name: &str, note: Option<&str>) {
     }
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "xtask prints compact gate failures and the next action to stderr"
-)]
 fn report_gate_failure(name: &str, detail: &str, invocation: &str) {
-    eprintln!("gate: fail at {name}");
-    eprintln!("{detail}");
-    eprintln!("NEXT: fix the {name} errors above, then rerun `{invocation}`");
+    report_failure("gate", name, detail, invocation);
+}
+
+fn report_task_failure(name: &str, detail: &str, invocation: &str) {
+    report_failure("xtask", name, detail, invocation);
 }
 
 #[expect(
     clippy::print_stderr,
-    reason = "xtask prints compact task failures and the next action to stderr"
+    reason = "xtask prints compact failures and the next action to stderr"
 )]
-fn report_task_failure(name: &str, detail: &str, invocation: &str) {
-    eprintln!("xtask: fail at {name}");
+fn report_failure(prefix: &str, name: &str, detail: &str, invocation: &str) {
+    eprintln!("{prefix}: fail at {name}");
     eprintln!("{detail}");
     eprintln!("NEXT: fix the {name} errors above, then rerun `{invocation}`");
 }
@@ -578,7 +596,10 @@ fn failure_detail(output: &str) -> String {
 fn trim_cargo_noise(output: &str) -> String {
     let mut lines = Vec::new();
     let mut previous_blank = true;
-    for line in output.lines().filter(|line| !is_cargo_progress(line)) {
+    for line in output
+        .lines()
+        .filter(|line| !is_cargo_progress(line) && !is_nextest_progress(line))
+    {
         let line = line.trim_end();
         if line.trim().is_empty() {
             if !previous_blank {
@@ -603,19 +624,36 @@ fn is_cargo_progress(line: &str) -> bool {
         .any(|verb| line.starts_with(verb))
 }
 
+fn is_nextest_progress(line: &str) -> bool {
+    let line = line.trim_start();
+    NEXTEST_PROGRESS_PREFIXES
+        .iter()
+        .any(|prefix| line.starts_with(prefix))
+}
+
 fn bound_trimmed_output(output: String) -> String {
     if output.chars().count() <= TRIMMED_OUTPUT_MAX_CHARS {
         return output;
     }
-    let mut truncated: String = output.chars().take(TRIMMED_OUTPUT_MAX_CHARS).collect();
-    truncated.push_str("\n... output truncated ...");
-    truncated
+    let head_chars = TRIMMED_OUTPUT_MAX_CHARS / 3;
+    let tail_chars = TRIMMED_OUTPUT_MAX_CHARS - head_chars;
+    let head: String = output.chars().take(head_chars).collect();
+    let mut tail: Vec<char> = output.chars().rev().take(tail_chars).collect();
+    tail.reverse();
+    format!(
+        "{head}\n... output truncated; showing final diagnostics ...\n{}",
+        tail.into_iter().collect::<String>()
+    )
 }
 
 fn extract_test_summary(output: &str) -> Option<String> {
     output
         .lines()
-        .find(|line| line.contains("tests run:") || line.contains("test run:"))
+        .find(|line| {
+            line.contains("tests run:")
+                || line.contains("test run:")
+                || line.trim_start().starts_with("cargo nextest:")
+        })
         .map(|line| line.trim().to_owned())
 }
 
@@ -628,8 +666,15 @@ pub(crate) fn deps(root: &Path) -> Result<()> {
 }
 
 pub(crate) fn check(root: &Path) -> Result<()> {
-    let captured = capture_cargo_task(root, "check", CHECK_ARGS.iter().copied(), &[], &[])?;
-    finish_cargo_task("check", captured, None, "cargo xtask check").map(|_| ())
+    let captured = capture_cargo_task(
+        root,
+        "check",
+        CHECK_ARGS.iter().copied(),
+        &[],
+        &[],
+        RtkPolicy::Configured,
+    )?;
+    finish_cargo_task("check", captured, None, "cargo xtask check")
 }
 
 pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
@@ -641,7 +686,14 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
     if command.list {
         let mut cargo_args = nextest_args("list");
         cargo_args.extend(command.forwarded);
-        let captured = capture_cargo_task(root, "test list", cargo_args, &env, &["NO_COLOR"])?;
+        let captured = capture_cargo_task(
+            root,
+            "test list",
+            cargo_args,
+            &env,
+            &["NO_COLOR"],
+            RtkPolicy::Bypass,
+        )?;
         if !captured.status.success() {
             report_task_failure("test list", &failure_detail(&captured.output), &invocation);
             bail!("test list failed");
@@ -655,13 +707,19 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
     if command.names.is_empty() {
         let mut cargo_args = nextest_args("run");
         cargo_args.extend(command.forwarded);
-        let captured = capture_cargo_task(root, "test", cargo_args, &env, &["NO_COLOR"])?;
-        if nextest_matched_no_tests(&captured) {
+        let captured = capture_cargo_task(
+            root,
+            "test",
+            cargo_args,
+            &env,
+            &["NO_COLOR"],
+            RtkPolicy::Configured,
+        )?;
+        if nextest_matched_no_tests(captured.status.code(), &captured.output) {
             report_zero_test_match(args);
             bail!("no tests matched");
         }
-        return finish_cargo_task("test", captured, Some(extract_test_summary), &invocation)
-            .map(|_| ());
+        return finish_cargo_task("test", captured, Some(extract_test_summary), &invocation);
     }
 
     run_named_tests(root, command, &env, &invocation)
@@ -753,7 +811,14 @@ fn run_named_tests(
         "--message-format".to_owned(),
         "json".to_owned(),
     ]);
-    let listed = capture_cargo_task(root, "test discovery", list_args, env, &["NO_COLOR"])?;
+    let listed = capture_cargo_task(
+        root,
+        "test discovery",
+        list_args,
+        env,
+        &["NO_COLOR"],
+        RtkPolicy::Bypass,
+    )?;
     if !listed.status.success() {
         report_task_failure(
             "test discovery",
@@ -773,7 +838,14 @@ fn run_named_tests(
     let mut run_args = nextest_args("run");
     run_args.extend(["-E".to_owned(), filterset]);
     run_args.extend(command.forwarded);
-    let captured = capture_cargo_task(root, "test", run_args, env, &["NO_COLOR"])?;
+    let captured = capture_cargo_task(
+        root,
+        "test",
+        run_args,
+        env,
+        &["NO_COLOR"],
+        RtkPolicy::Configured,
+    )?;
     report_test_selection(&command.names, &matches);
     finish_cargo_task("test", captured, Some(extract_test_summary), invocation)?;
     if !matches.unmatched.is_empty() {
@@ -904,8 +976,8 @@ fn test_invocation(args: &[String]) -> String {
     }
 }
 
-fn nextest_matched_no_tests(captured: &Captured) -> bool {
-    captured.status.code() == Some(4) || captured.output.contains("error: no tests to run")
+fn nextest_matched_no_tests(status_code: Option<i32>, output: &str) -> bool {
+    status_code == Some(4) || output.contains("error: no tests to run")
 }
 
 #[expect(
@@ -1083,6 +1155,8 @@ mod tests {
    Compiling foo v1.2.3
     Finished `dev` profile
      Running `cargo clippy`
+        PASS [   0.002s] crate tests::already_passed
+       START [   0.003s] crate tests::still_running
 
 
 error[E0599]: no method named `run`
@@ -1103,6 +1177,44 @@ warning: unused variable
     }
 
     #[test]
+    fn bounded_failure_output_keeps_the_first_and_final_diagnostics() {
+        let output = format!(
+            "error: first compiler diagnostic\n{}\nSummary: final failing test",
+            "unhelpful middle output\n".repeat(1_000)
+        );
+        let bounded = bound_trimmed_output(output);
+
+        assert!(bounded.starts_with("error: first compiler diagnostic"));
+        assert!(bounded.contains("output truncated; showing final diagnostics"));
+        assert!(bounded.ends_with("Summary: final failing test"));
+    }
+
+    #[test]
+    fn compact_failure_drops_default_profile_passes_before_bounding() {
+        let mut output = (0..135)
+            .map(|index| {
+                format!(
+                    "        PASS [   0.002s] ({index}/135) rimz::integration tests::passing_{index}\n"
+                )
+            })
+            .collect::<String>();
+        output.push_str(
+            "        FAIL [   0.010s] rimz::integration tests::broken\n\
+             panic: expected durable record\n\
+             Summary [   1.0s] 135 tests run: 134 passed, 1 failed\n",
+        );
+
+        let detail = failure_detail(&output);
+        assert!(!detail.contains("PASS ["), "{detail}");
+        assert!(detail.contains("FAIL ["), "{detail}");
+        assert!(
+            detail.contains("panic: expected durable record"),
+            "{detail}"
+        );
+        assert!(detail.contains("1 failed"), "{detail}");
+    }
+
+    #[test]
     fn extract_test_summary_reads_nextest_summary_line() {
         let output = "\
 some setup line
@@ -1117,7 +1229,24 @@ Summary [   12.3s] 2611 tests run: 2611 passed, 42 skipped
             extract_test_summary("Summary [ 0.01s] 1 test run: 1 passed").as_deref(),
             Some("Summary [ 0.01s] 1 test run: 1 passed")
         );
+        assert_eq!(
+            extract_test_summary("cargo nextest: 1 passed, 42 skipped (0.01s)").as_deref(),
+            Some("cargo nextest: 1 passed, 42 skipped (0.01s)")
+        );
         assert_eq!(extract_test_summary("no summary here"), None);
+    }
+
+    #[test]
+    fn zero_match_detection_uses_nextest_exit_code_or_message() {
+        assert!(nextest_matched_no_tests(Some(4), ""));
+        assert!(nextest_matched_no_tests(
+            Some(1),
+            "error: no tests to run\n"
+        ));
+        assert!(!nextest_matched_no_tests(
+            Some(1),
+            "test failed for another reason"
+        ));
     }
 
     #[test]
