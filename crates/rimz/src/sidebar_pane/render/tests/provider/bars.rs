@@ -432,8 +432,28 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
     panel.extra_credits = None;
     assert_eq!(
         labels(&panel),
+        vec!["7d", "ex"],
+        "unknown extra credits keep the binding spent window first"
+    );
+    panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+        Some(7.0),
+        None,
+        Some(50.0),
+    ));
+    assert_eq!(
+        labels(&panel),
         vec!["ex", "7d"],
-        "extra credits lead while the spent long cap keeps its reset row"
+        "known-usable extra credits lead while the spent long cap keeps its reset row"
+    );
+    panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+        Some(50.0),
+        None,
+        Some(50.0),
+    ));
+    assert_eq!(
+        labels(&panel),
+        vec!["7d", "ex"],
+        "exhausted extra credits keep the binding spent window first"
     );
 
     panel.windows = vec![
@@ -456,16 +476,58 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
             ..Default::default()
         },
     ];
+    panel.extra_credits = None;
+    assert_eq!(
+        labels(&panel),
+        vec!["7d", "ex"],
+        "unknown extra credits keep a spent middle window first"
+    );
+    panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+        Some(7.0),
+        None,
+        Some(50.0),
+    ));
     assert_eq!(
         labels(&panel),
         vec!["ex", "30d"],
-        "extra credits lead while the longest included window remains visible"
+        "known-usable extra credits lead while the longest included window remains visible"
     );
     panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
     assert_eq!(
         labels(&panel),
         vec!["5h", "7d"],
         "disabled extra usage pairs the short window with the binding spent one"
+    );
+
+    panel.windows = vec![
+        RateLimitWindow {
+            used_percentage: Some(100),
+            resets_at: None,
+            duration_mins: Some(5 * 60),
+            ..Default::default()
+        },
+        RateLimitWindow {
+            used_percentage: Some(10),
+            resets_at: None,
+            duration_mins: Some(7 * 24 * 60),
+            ..Default::default()
+        },
+    ];
+    panel.extra_credits = None;
+    assert_eq!(
+        labels(&panel),
+        vec!["5h", "ex"],
+        "unknown extra credits keep the spent short window first"
+    );
+    panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+        Some(50.0),
+        None,
+        Some(50.0),
+    ));
+    assert_eq!(
+        labels(&panel),
+        vec!["5h", "7d"],
+        "exhausted extra credits do not replace an included window"
     );
 }
 
