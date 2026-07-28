@@ -15,6 +15,68 @@ function createHarness({ search = "?room=room-a" } = {}) {
   let nextTimer = 1;
   const timers = new Map();
   const wire = [];
+  const protocolListeners = [];
+
+  class FakeTarget {
+    constructor() {
+      this.listeners = new Map();
+      this.dispatched = [];
+    }
+
+    addEventListener(type, listener) {
+      if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+      this.listeners.get(type).add(listener);
+    }
+
+    removeEventListener(type, listener) {
+      this.listeners.get(type)?.delete(listener);
+    }
+
+    dispatchEvent(event) {
+      this.dispatched.push(event);
+      for (const listener of this.listeners.get(event.type) ?? []) {
+        listener.call(this, event);
+      }
+      return !event.defaultPrevented;
+    }
+  }
+
+  class FakeMouseEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      this.bubbles = Boolean(init.bubbles);
+      this.cancelable = Boolean(init.cancelable);
+      this.view = init.view;
+      this.button = init.button ?? 0;
+      this.buttons = init.buttons ?? 0;
+      this.clientX = init.clientX ?? 0;
+      this.clientY = init.clientY ?? 0;
+      this.defaultPrevented = false;
+    }
+
+    preventDefault() {
+      if (this.cancelable) this.defaultPrevented = true;
+    }
+  }
+
+  const ownerDocument = new FakeTarget();
+  const element = new FakeTarget();
+  const dispatchElementEvent = element.dispatchEvent.bind(element);
+  element.ownerDocument = ownerDocument;
+  element.dispatchEvent = (event) => {
+    ownerDocument.dispatchEvent(event);
+    return dispatchElementEvent(event);
+  };
+  const coreMouseService = {
+    onProtocolChange(listener) {
+      protocolListeners.push(listener);
+      return { dispose() {} };
+    },
+  };
+  const term = {
+    element,
+    _core: { coreMouseService },
+  };
 
   class FakeWebSocket extends EventTarget {
     static OPEN = 1;
@@ -34,6 +96,7 @@ function createHarness({ search = "?room=room-a" } = {}) {
   globalThis.window = {
     WebSocket: FakeWebSocket,
     location: new URL(search, "https://rimz.test/"),
+    MouseEvent: FakeMouseEvent,
     performance: {
       now: () => now,
     },
@@ -47,7 +110,7 @@ function createHarness({ search = "?room=room-a" } = {}) {
     },
   };
   const api = new Function(
-    `${mouseFlowSource}\n${wsUrlSource}\nreturn {MOTION_INTERVAL_MS,MOUSE_NONE,MOUSE_BOUNDARY,MOUSE_MOTION,mouseFlow,mouseReportKind,sendWithMouseFlow,resetMouseFlow,installRoomWebSocketUrl};`,
+    `${mouseFlowSource}\n${wsUrlSource}\nreturn {MOTION_INTERVAL_MS,MOUSE_NONE,MOUSE_BOUNDARY,MOUSE_MOTION,mouseFlow,mouseReportKind,sendWithMouseFlow,resetMouseFlow,installMouseDragRearm,installRoomWebSocketUrl};`,
   )();
   const advance = (duration) => {
     const target = now + duration;
@@ -67,7 +130,21 @@ function createHarness({ search = "?room=room-a" } = {}) {
     const due = Math.min(...[...timers.values()].map((timer) => timer.due));
     return Number.isFinite(due) ? due - now : null;
   };
-  return { ...api, advance, nextDelay, timers, wire };
+  const emitProtocol = (events) => {
+    for (const listener of protocolListeners) listener(events);
+  };
+  return {
+    ...api,
+    advance,
+    coreMouseService,
+    element,
+    emitProtocol,
+    nextDelay,
+    ownerDocument,
+    term,
+    timers,
+    wire,
+  };
 }
 
 const sgrMouse = (code, column, row, final = "M") => (
@@ -78,6 +155,128 @@ const x10Mouse = (code, column, row) => (
 );
 const input = (value) => encoder.encode(`0${value}`);
 const messages = (sent) => sent.map((payload) => decoder.decode(payload));
+
+function installXtermDragModel(harness, sent) {
+  const drag = (event) => {
+    harness.sendWithMouseFlow(
+      (data) => sent.push(data),
+      sgrMouse(32, Math.max(Math.round(event.clientX), 1), Math.max(Math.round(event.clientY), 1)),
+    );
+  };
+  const down = (event) => {
+    harness.sendWithMouseFlow(
+      (data) => sent.push(data),
+      sgrMouse(0, Math.max(Math.round(event.clientX), 1), Math.max(Math.round(event.clientY), 1)),
+    );
+    harness.ownerDocument.addEventListener("mousemove", drag);
+  };
+  harness.element.addEventListener("mousedown", down);
+  harness.coreMouseService.onProtocolChange((events) => {
+    if (!(events & 4)) harness.ownerDocument.removeEventListener("mousemove", drag);
+  });
+}
+
+function churnWhileHeldRearmsOnceAndSwallowsPress() {
+  const harness = createHarness();
+  const sent = [];
+  installXtermDragModel(harness, sent);
+  harness.installMouseDragRearm(harness.term);
+
+  harness.element.dispatchEvent(new window.MouseEvent("mousedown", {
+    bubbles: true,
+    button: 0,
+    buttons: 1,
+    clientX: 3,
+    clientY: 4,
+  }));
+  assert.deepEqual(messages(sent), ["0\x1b[<0;3;4M"]);
+
+  harness.emitProtocol(0);
+  harness.emitProtocol(2);
+  harness.emitProtocol(6);
+  harness.emitProtocol(6);
+  harness.advance(0);
+  harness.ownerDocument.dispatchEvent(new window.MouseEvent("mousemove", {
+    buttons: 1,
+    clientX: 8,
+    clientY: 9,
+  }));
+
+  const downs = harness.element.dispatched.filter((event) => event.type === "mousedown");
+  assert.equal(downs.length, 2, "one physical press plus one synthetic re-arm");
+  assert.deepEqual(
+    messages(sent),
+    ["0\x1b[<0;3;4M", "0\x1b[<32;8;9M"],
+    "the synthetic press must be swallowed and the restored drag sent once",
+  );
+}
+
+function churnWithoutHeldButtonDoesNotRearm() {
+  const harness = createHarness();
+  harness.installMouseDragRearm(harness.term);
+  harness.emitProtocol(0);
+  harness.emitProtocol(6);
+  harness.advance(0);
+
+  assert.equal(harness.element.dispatched.length, 0);
+  assert.equal(harness.timers.size, 0);
+}
+
+function protocolBurstCoalescesToOneRearm() {
+  const harness = createHarness();
+  const sent = [];
+  harness.installMouseDragRearm(harness.term);
+  harness.element.dispatchEvent(new window.MouseEvent("mousedown", {
+    bubbles: true,
+    button: 0,
+    buttons: 1,
+    clientX: 3,
+    clientY: 4,
+  }));
+
+  harness.emitProtocol(0);
+  harness.emitProtocol(2);
+  harness.emitProtocol(6);
+  harness.emitProtocol(0);
+  harness.emitProtocol(6);
+  assert.equal(harness.timers.size, 1);
+  harness.advance(0);
+
+  const downs = harness.element.dispatched.filter((event) => event.type === "mousedown");
+  assert.equal(downs.length, 2, "one protocol burst must schedule one synthetic press");
+  assert.equal(harness.mouseFlow.suppressPress, false);
+  harness.sendWithMouseFlow((data) => sent.push(data), sgrMouse(0, 3, 4, "m"));
+  assert.deepEqual(messages(sent), ["0\x1b[<0;3;4m"], "a later real boundary must not be swallowed");
+}
+
+function swallowedRearmPressPreservesPacingCadence() {
+  const harness = createHarness();
+  const sent = [];
+  harness.installMouseDragRearm(harness.term);
+  harness.element.dispatchEvent(new window.MouseEvent("mousedown", {
+    bubbles: true,
+    button: 0,
+    buttons: 1,
+    clientX: 3,
+    clientY: 4,
+  }));
+  harness.sendWithMouseFlow((data) => sent.push(data), sgrMouse(32, 3, 4));
+  harness.element.addEventListener("mousedown", () => {
+    harness.sendWithMouseFlow((data) => sent.push(data), sgrMouse(0, 3, 4));
+  });
+
+  harness.emitProtocol(0);
+  harness.emitProtocol(6);
+  harness.advance(0);
+  assert.deepEqual(messages(sent), ["0\x1b[<32;3;4M"]);
+  assert.equal(harness.mouseFlow.lastSentAt, 0);
+
+  harness.advance(30);
+  harness.sendWithMouseFlow((data) => sent.push(data), sgrMouse(32, 4, 4));
+  assert.equal(harness.nextDelay(), 20, "re-arm must not reset the motion interval");
+  harness.advance(20);
+  assert.deepEqual(messages(sent), ["0\x1b[<32;3;4M", "0\x1b[<32;4;4M"]);
+}
 
 function idleMotionSendsImmediately() {
   const harness = createHarness();
@@ -246,6 +445,10 @@ function releasePreservesTheFinalDragCoordinate() {
 }
 
 const scenarios = [
+  churnWhileHeldRearmsOnceAndSwallowsPress,
+  churnWithoutHeldButtonDoesNotRearm,
+  protocolBurstCoalescesToOneRearm,
+  swallowedRearmPressPreservesPacingCadence,
   idleMotionSendsImmediately,
   slowDragPassesThroughUnchanged,
   fastDragCoalescesAtABoundedRate,

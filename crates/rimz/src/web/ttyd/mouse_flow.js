@@ -3,6 +3,7 @@ const MOTION_INTERVAL_MS=50;
 const MOUSE_NONE=0;
 const MOUSE_BOUNDARY=1;
 const MOUSE_MOTION=2;
+const XTERM_HELD_DRAG_EVENTS=6;
 const DEBUG_MOUSE_FLOW=(()=>{
   try{
     return new URLSearchParams(window.location.search).get("rimzdebug")==="1";
@@ -20,6 +21,7 @@ const mouseFlow={
   pending:null,
   timer:0,
   lastSentAt:null,
+  suppressPress:false,
 };
 if(DEBUG_MOUSE_FLOW)window.__rimzWeb={flow:mouseFlow,decisions:mouseFlowDecisions};
 
@@ -80,6 +82,11 @@ const flushPendingMouseMotion=action=>{
 };
 const sendWithMouseFlow=(send,data)=>{
   const kind=mouseReportKind(data);
+  if(mouseFlow.suppressPress&&kind===MOUSE_BOUNDARY){
+    noteMouseFlow("swallow-press");
+    mouseFlow.suppressPress=false;
+    return;
+  }
   if(kind===MOUSE_MOTION){
     const now=window.performance.now();
     const ready=mouseFlow.lastSentAt===null
@@ -111,4 +118,70 @@ const resetMouseFlow=()=>{
   mouseFlow.pending=null;
   mouseFlow.timer=0;
   mouseFlow.lastSentAt=null;
+  mouseFlow.suppressPress=false;
+};
+
+const installMouseDragRearm=term=>{
+  const service=term._core&&term._core.coreMouseService;
+  const element=term.element;
+  const ownerDocument=element&&element.ownerDocument;
+  if(!service||typeof service.onProtocolChange!=="function"||!ownerDocument){
+    noteMouseFlow("rearm-unavailable");
+    return;
+  }
+  const drag={
+    held:false,
+    x:0,
+    y:0,
+    disabled:false,
+    events:0,
+    timer:0,
+    rearming:false,
+  };
+  const remember=event=>{
+    if(drag.rearming)return;
+    drag.x=event.clientX;
+    drag.y=event.clientY;
+    if(event.type==="mousedown"){
+      if(event.button===0){
+        drag.held=true;
+        drag.disabled=false;
+      }
+    }else drag.held=(event.buttons&1)!==0;
+  };
+  for(const type of ["mousedown","mousemove","mouseup"]){
+    ownerDocument.addEventListener(type,remember,{capture:true,passive:true});
+  }
+  service.onProtocolChange(events=>{
+    drag.events=events;
+    const reportsHeldDrag=(events&XTERM_HELD_DRAG_EVENTS)===XTERM_HELD_DRAG_EVENTS;
+    if(!reportsHeldDrag){
+      if(drag.held)drag.disabled=true;
+      return;
+    }
+    if(!drag.held||!drag.disabled||drag.timer)return;
+    drag.timer=window.setTimeout(()=>{
+      drag.timer=0;
+      if(!drag.held||!drag.disabled
+        ||(drag.events&XTERM_HELD_DRAG_EVENTS)!==XTERM_HELD_DRAG_EVENTS)return;
+      drag.disabled=false;
+      drag.rearming=true;
+      mouseFlow.suppressPress=true;
+      noteMouseFlow("rearm");
+      try{
+        element.dispatchEvent(new window.MouseEvent("mousedown",{
+          bubbles:true,
+          cancelable:true,
+          view:window,
+          button:0,
+          buttons:1,
+          clientX:drag.x,
+          clientY:drag.y,
+        }));
+      }finally{
+        mouseFlow.suppressPress=false;
+        drag.rearming=false;
+      }
+    },0);
+  });
 };
