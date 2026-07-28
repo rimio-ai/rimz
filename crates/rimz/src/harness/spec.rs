@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -135,6 +136,32 @@ pub struct ResolvedProfile {
     pub system_prompt_file: Option<PathBuf>,
     pub append_system_prompt_files: Vec<PathBuf>,
     pub args: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpecWarning {
+    RebaseDropped {
+        origin: String,
+        field: &'static str,
+        from: AgentKind,
+        to: AgentKind,
+    },
+}
+
+impl fmt::Display for SpecWarning {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RebaseDropped {
+                origin,
+                field,
+                from,
+                to,
+            } => write!(
+                formatter,
+                "warning: {origin} {from} `{field}` dropped for {to} launch; move it to a {to} base profile"
+            ),
+        }
+    }
 }
 
 impl ResolvedProfile {
@@ -280,6 +307,10 @@ pub enum LayoutErr {
     },
     #[error("invalid profile `{profile}`: {reason}")]
     InvalidProfile { profile: String, reason: String },
+    #[error(
+        "unknown agent profile or kind `{value}` for --agent; valid profiles and kinds: {valid}"
+    )]
+    UnknownAgentOverride { value: String, valid: String },
     #[error("invalid command `{command}`: {reason}")]
     InvalidCommand { command: String, reason: String },
     #[error("profile `{profile}` references unknown base `{base}`")]
@@ -388,13 +419,14 @@ pub fn validate_config(
         }
     }
     for name in teams.0.keys() {
+        let mut warnings = Vec::new();
         let team = teams
             .0
             .get(name)
             .expect("team config key exists during validation");
-        let prepared = prepare_team(name, team, profiles, None)?;
+        let prepared = prepare_team(name, team, profiles, None, &mut warnings)?;
         if team.layout.is_some() {
-            compile_team(name, prepared, profiles, commands, None)?;
+            compile_team(name, prepared, profiles, commands, None, &mut warnings)?;
         }
     }
     Ok(())
@@ -460,7 +492,7 @@ pub fn parse_layout_spec(
 ) -> Result<LayoutSpec> {
     validate_profile_names(profiles)?;
     validate_command_names(commands)?;
-    parse_layout_spec_validated(raw, profiles, commands, None)
+    parse_layout_spec_validated(raw, profiles, commands, None, &mut Vec::new())
 }
 
 pub fn resolve_spec(
@@ -469,19 +501,35 @@ pub fn resolve_spec(
     commands: &CommandsConfig,
     teams: &TeamsConfig,
 ) -> Result<LayoutSpec> {
-    resolve_spec_with_kind_override(arg, profiles, commands, teams, None)
+    resolve_spec_with_base_override(arg, profiles, commands, teams, None, &mut Vec::new())
 }
 
-pub fn resolve_spec_with_kind_override(
+pub fn resolve_spec_with_base_override(
     arg: Option<&str>,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
     teams: &TeamsConfig,
-    kind_override: Option<&AgentKind>,
+    agent_override: Option<&str>,
+    warnings: &mut Vec<SpecWarning>,
 ) -> Result<LayoutSpec> {
     validate_profile_names(profiles)?;
     validate_command_names(commands)?;
     validate_team_names(teams)?;
+    let agent_override = agent_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(value) = agent_override
+        && !profiles.0.contains_key(value)
+        && crate::agents::find_definition(value).is_none()
+    {
+        return Err(LayoutErr::UnknownAgentOverride {
+            value: value.to_owned(),
+            valid: valid_agent_overrides(profiles),
+        });
+    }
+    let base_override = agent_override
+        .map(|value| resolve_profile(value, profiles))
+        .transpose()?;
     let Some(raw) = arg.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(LayoutSpec::single(Cell::shell()));
     };
@@ -489,19 +537,46 @@ pub fn resolve_spec_with_kind_override(
         if is_cell_word(raw, profiles, commands) {
             return Err(LayoutErr::ReservedTeamName(raw.to_owned()));
         }
-        return resolve_team_with_kind_override(raw, teams, profiles, commands, kind_override);
+        return resolve_team_with_base_override(
+            raw,
+            teams,
+            profiles,
+            commands,
+            base_override.as_ref(),
+            warnings,
+        );
     }
     if let Some((team, role)) = raw
         .split_once('.')
         .filter(|(team, _)| teams.0.contains_key(*team))
     {
-        return resolve_team_role(team, role, teams, profiles, commands, kind_override);
+        return resolve_team_role(
+            team,
+            role,
+            teams,
+            profiles,
+            commands,
+            base_override.as_ref(),
+            warnings,
+        );
     }
     if is_inline_spec(raw, profiles, commands) {
-        return parse_layout_spec_validated(raw, profiles, commands, kind_override);
+        return parse_layout_spec_validated(
+            raw,
+            profiles,
+            commands,
+            base_override.as_ref(),
+            warnings,
+        );
     }
     if raw == "peer" {
-        return parse_layout_spec_validated(BUILTIN_PEER, profiles, commands, kind_override);
+        return parse_layout_spec_validated(
+            BUILTIN_PEER,
+            profiles,
+            commands,
+            base_override.as_ref(),
+            warnings,
+        );
     }
     if let Some(cell) = path_command_cell(raw) {
         return Ok(LayoutSpec::single(cell));
@@ -526,15 +601,16 @@ pub fn resolve_team(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
 ) -> Result<LayoutSpec> {
-    resolve_team_with_kind_override(name, teams, profiles, commands, None)
+    resolve_team_with_base_override(name, teams, profiles, commands, None, &mut Vec::new())
 }
 
-fn resolve_team_with_kind_override(
+fn resolve_team_with_base_override(
     name: &str,
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    kind_override: Option<&AgentKind>,
+    base_override: Option<&ResolvedProfile>,
+    warnings: &mut Vec<SpecWarning>,
 ) -> Result<LayoutSpec> {
     let team = teams
         .0
@@ -542,10 +618,11 @@ fn resolve_team_with_kind_override(
         .expect("team resolution called with a known team name");
     Ok(compile_team(
         name,
-        prepare_team(name, team, profiles, kind_override)?,
+        prepare_team(name, team, profiles, base_override, warnings)?,
         profiles,
         commands,
-        kind_override,
+        base_override,
+        warnings,
     )?
     .layout)
 }
@@ -609,7 +686,8 @@ fn resolve_team_role(
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    kind_override: Option<&AgentKind>,
+    base_override: Option<&ResolvedProfile>,
+    warnings: &mut Vec<SpecWarning>,
 ) -> Result<LayoutSpec> {
     let team = teams
         .0
@@ -617,10 +695,11 @@ fn resolve_team_role(
         .expect("team role resolution called with a known team name");
     let compiled = compile_team(
         team_name,
-        prepare_team(team_name, team, profiles, kind_override)?,
+        prepare_team(team_name, team, profiles, base_override, warnings)?,
         profiles,
         commands,
-        kind_override,
+        base_override,
+        warnings,
     )?;
     let Some(cell) = compiled.roles.get(role_name) else {
         return Err(LayoutErr::UnknownRoleInTeam {
@@ -654,7 +733,8 @@ fn compile_team(
     prepared: PreparedTeam<'_>,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    kind_override: Option<&AgentKind>,
+    base_override: Option<&ResolvedProfile>,
+    warnings: &mut Vec<SpecWarning>,
 ) -> Result<CompiledTeam> {
     let mut role_cells = BTreeMap::new();
     for mut role in prepared.roles {
@@ -675,7 +755,8 @@ fn compile_team(
             &role_cells,
             profiles,
             commands,
-            kind_override,
+            base_override,
+            warnings,
         )?
     } else {
         LayoutSpec {
@@ -730,7 +811,8 @@ fn compile_team_layout(
     role_cells: &BTreeMap<String, AgentCell>,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    kind_override: Option<&AgentKind>,
+    base_override: Option<&ResolvedProfile>,
+    warnings: &mut Vec<SpecWarning>,
 ) -> Result<LayoutSpec> {
     let structure = parse_layout_structure(raw)?;
     let mut placements: BTreeMap<String, usize> = role_cells
@@ -748,7 +830,7 @@ fn compile_team_layout(
                 rows.push(Cell::Agent(cell.clone()));
                 continue;
             }
-            match parse_cell(cell_name, profiles, commands, kind_override) {
+            match parse_cell(cell_name, profiles, commands, base_override, warnings) {
                 Ok(cell) => rows.push(cell),
                 Err(LayoutErr::UnknownCell { .. }) => {
                     return Err(LayoutErr::UnknownRoleInLayout {
@@ -921,16 +1003,19 @@ pub fn is_known_spec_token(
             || raw == "peer"
             || is_cell_word(raw, profiles, commands)
             || (raw.contains(':')
-                && parse_layout_spec_validated(raw, profiles, commands, None).is_ok())
+                && parse_layout_spec_validated(raw, profiles, commands, None, &mut Vec::new())
+                    .is_ok())
             || (raw.contains([',', '+', '/'])
-                && parse_layout_spec_validated(raw, profiles, commands, None).is_ok()))
+                && parse_layout_spec_validated(raw, profiles, commands, None, &mut Vec::new())
+                    .is_ok()))
 }
 
 fn parse_layout_spec_validated(
     raw: &str,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    kind_override: Option<&AgentKind>,
+    base_override: Option<&ResolvedProfile>,
+    warnings: &mut Vec<SpecWarning>,
 ) -> Result<LayoutSpec> {
     let structure = parse_layout_structure(raw)?;
     let mut seen_roles = BTreeSet::new();
@@ -947,7 +1032,7 @@ fn parse_layout_spec_validated(
                     });
                 }
             }
-            let mut cell = parse_cell(cell_name, profiles, commands, kind_override)?;
+            let mut cell = parse_cell(cell_name, profiles, commands, base_override, warnings)?;
             if let Some(role) = role {
                 let Cell::Agent(agent) = &mut cell else {
                     return Err(LayoutErr::RoleOnCommandCell {
@@ -1052,29 +1137,40 @@ fn parse_cell(
     raw: &str,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    kind_override: Option<&AgentKind>,
+    base_override: Option<&ResolvedProfile>,
+    warnings: &mut Vec<SpecWarning>,
 ) -> Result<Cell> {
     if let Some(command) = commands.0.get(raw) {
         return command_cell(raw, command);
     }
     if profiles.0.contains_key(raw) {
-        return Ok(Cell::Agent(profile_cell_with_kind_override(
+        return Ok(Cell::Agent(profile_cell_with_base_override(
             raw,
             profiles,
-            kind_override,
+            base_override,
+            warnings,
         )?));
     }
     if raw == "term" {
         return Ok(Cell::shell());
     }
     if crate::agents::find_definition(raw).is_some() {
-        return Ok(Cell::agent(
-            kind_override
-                .cloned()
-                .unwrap_or_else(|| AgentKind::new_unchecked(raw)),
-        ));
+        let original = ResolvedProfile::bare(raw);
+        let resolved = rebase_onto(
+            original,
+            base_override,
+            &format!("agent kind `{raw}`"),
+            warnings,
+        );
+        return Ok(Cell::Agent(agent_cell_from(
+            &resolved,
+            render_profile_args(raw, &resolved)?,
+            None,
+            None,
+            resolved.launch.mode,
+        )));
     }
-    if let Some(cell) = virtual_agent_cell(raw, profiles, kind_override)? {
+    if let Some(cell) = virtual_agent_cell(raw, profiles, base_override, warnings)? {
         return Ok(cell);
     }
     if let Some(cell) = path_command_cell(raw) {
@@ -1100,16 +1196,22 @@ fn path_command_cell(raw: &str) -> Option<Cell> {
 /// through this, and relaunch replays a stored profile name through it to
 /// recover the same posture.
 pub fn profile_cell(name: &str, profiles: &ProfilesConfig) -> Result<AgentCell> {
-    profile_cell_with_kind_override(name, profiles, None)
+    profile_cell_with_base_override(name, profiles, None, &mut Vec::new())
 }
 
-fn profile_cell_with_kind_override(
+fn profile_cell_with_base_override(
     name: &str,
     profiles: &ProfilesConfig,
-    kind_override: Option<&AgentKind>,
+    base_override: Option<&ResolvedProfile>,
+    warnings: &mut Vec<SpecWarning>,
 ) -> Result<AgentCell> {
     let resolved = resolve_profile(name, profiles)?;
-    let resolved = with_kind_override(resolved, kind_override);
+    let resolved = rebase_onto(
+        resolved,
+        base_override,
+        &format!("profile `{name}`"),
+        warnings,
+    );
     cell_from_profile(name, &resolved)
 }
 
@@ -1196,12 +1298,13 @@ fn command_cell(name: &str, raw: &str) -> Result<Cell> {
 fn virtual_agent_cell(
     raw: &str,
     profiles: &ProfilesConfig,
-    kind_override: Option<&AgentKind>,
+    base_override: Option<&ResolvedProfile>,
+    warnings: &mut Vec<SpecWarning>,
 ) -> Result<Option<Cell>> {
     let Some((kind_name, mode)) = virtual_agent_parts(raw) else {
         return Ok(None);
     };
-    let (resolved, profile_name) = virtual_base(kind_name, profiles, kind_override)?;
+    let (resolved, profile_name) = virtual_base(kind_name, profiles, base_override, warnings)?;
     let Some(resolved) = resolved else {
         return Ok(None);
     };
@@ -1246,7 +1349,8 @@ fn virtual_cell_from(
 fn virtual_base(
     kind_name: &str,
     profiles: &ProfilesConfig,
-    kind_override: Option<&AgentKind>,
+    base_override: Option<&ResolvedProfile>,
+    warnings: &mut Vec<SpecWarning>,
 ) -> Result<(Option<ResolvedProfile>, Option<String>)> {
     if crate::agents::find_definition(kind_name).is_none() {
         return Ok((None, None));
@@ -1254,14 +1358,21 @@ fn virtual_base(
     if profiles.0.contains_key(kind_name) {
         let resolved = resolve_profile(kind_name, profiles)?;
         return Ok((
-            Some(with_kind_override(resolved, kind_override)),
+            Some(rebase_onto(
+                resolved,
+                base_override,
+                &format!("profile `{kind_name}`"),
+                warnings,
+            )),
             Some(kind_name.to_owned()),
         ));
     }
     Ok((
-        Some(with_kind_override(
+        Some(rebase_onto(
             ResolvedProfile::bare(kind_name),
-            kind_override,
+            base_override,
+            &format!("agent kind `{kind_name}`"),
+            warnings,
         )),
         None,
     ))
@@ -1372,7 +1483,8 @@ fn prepare_team<'a>(
     name: &str,
     team: &'a Team,
     profiles: &ProfilesConfig,
-    kind_override: Option<&AgentKind>,
+    base_override: Option<&ResolvedProfile>,
+    warnings: &mut Vec<SpecWarning>,
 ) -> Result<PreparedTeam<'a>> {
     for pattern in &team.scratch_files {
         if let Some(reason) = invalid_scratch_pattern(pattern) {
@@ -1428,7 +1540,12 @@ fn prepare_team<'a>(
         }
         let mut resolved = resolve_profile(&binding.profile, profiles)?;
         resolved.apply_role(binding);
-        let resolved = with_kind_override(resolved, kind_override);
+        let resolved = rebase_onto(
+            resolved,
+            base_override,
+            &format!("role `{}` profile `{}`", binding.role, binding.profile),
+            warnings,
+        );
         let args = render_profile_args(&binding.profile, &resolved)?;
         roles.push(PreparedRole {
             role: binding.role.clone(),
@@ -1450,14 +1567,75 @@ fn prepare_team<'a>(
     Ok(PreparedTeam { team, roles })
 }
 
-fn with_kind_override(
-    mut resolved: ResolvedProfile,
-    kind_override: Option<&AgentKind>,
+fn rebase_onto(
+    mut original: ResolvedProfile,
+    base: Option<&ResolvedProfile>,
+    origin: &str,
+    warnings: &mut Vec<SpecWarning>,
 ) -> ResolvedProfile {
-    if let Some(kind) = kind_override {
-        resolved.kind = kind.clone();
+    let Some(base) = base else {
+        return original;
+    };
+    let from = original.kind.clone();
+    let same_kind = from == base.kind;
+
+    original.kind.clone_from(&base.kind);
+    original.launch.mode = original.launch.mode.or(base.launch.mode);
+    if original.launch.effort.is_none() {
+        original.launch.effort.clone_from(&base.launch.effort);
     }
-    resolved
+    if original.launch.budget.is_none() {
+        original.launch.budget.clone_from(&base.launch.budget);
+    }
+    if original.system_prompt_file.is_none() {
+        original
+            .system_prompt_file
+            .clone_from(&base.system_prompt_file);
+    }
+    if !base.append_system_prompt_files.is_empty() {
+        let mut fragments = base.append_system_prompt_files.clone();
+        fragments.append(&mut original.append_system_prompt_files);
+        original.append_system_prompt_files = fragments;
+    }
+
+    if same_kind {
+        if original.launch.model.is_none() {
+            original.launch.model.clone_from(&base.launch.model);
+        }
+        if original.args.is_none() {
+            original.args.clone_from(&base.args);
+        }
+    } else {
+        if original
+            .launch
+            .model
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            warnings.push(SpecWarning::RebaseDropped {
+                origin: origin.to_owned(),
+                field: "model",
+                from: from.clone(),
+                to: base.kind.clone(),
+            });
+        }
+        if original
+            .args
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            warnings.push(SpecWarning::RebaseDropped {
+                origin: origin.to_owned(),
+                field: "args",
+                from,
+                to: base.kind.clone(),
+            });
+        }
+        original.launch.model.clone_from(&base.launch.model);
+        original.args.clone_from(&base.args);
+    }
+
+    original
 }
 
 fn invalid_scratch_pattern(pattern: &str) -> Option<&'static str> {
@@ -1498,6 +1676,14 @@ fn valid_cells(profiles: &ProfilesConfig, commands: &CommandsConfig) -> String {
         }
     }
     values.extend(commands.0.keys().cloned());
+    values.extend(profiles.0.keys().cloned());
+    values.into_iter().collect::<Vec<_>>().join(", ")
+}
+
+fn valid_agent_overrides(profiles: &ProfilesConfig) -> String {
+    let mut values = crate::agents::known_kinds()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
     values.extend(profiles.0.keys().cloned());
     values.into_iter().collect::<Vec<_>>().join(", ")
 }

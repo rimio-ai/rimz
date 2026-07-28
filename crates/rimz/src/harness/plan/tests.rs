@@ -447,7 +447,7 @@ fn prompt_validation_reports_capability_before_base_and_files_before_pi_size() {
 }
 
 #[test]
-fn provider_override_carries_profile_fields_and_renders_with_new_adapter() {
+fn provider_override_drops_provider_fields_and_carries_portable_fields() {
     let dir = tempfile::tempdir().expect("temp dir");
     let mut machine = MachineConfig::default();
     machine.agents.profiles.0.insert(
@@ -462,39 +462,29 @@ fn provider_override_carries_profile_fields_and_renders_with_new_adapter() {
         ),
     );
     let launch = effective_launch(&machine, dir.path());
-    let claude = AgentKind::new_unchecked("claude");
     let resolved = resolve_launch(
         &launch,
         &machine.agents.commands,
         Some("coder"),
-        Some(&claude),
+        Some("claude"),
     )
     .expect("override");
     let cell = resolved.layout.agent_cells().next().expect("cell");
-    assert_eq!(cell.kind, claude);
+    assert_eq!(cell.kind, "claude");
     assert_eq!(cell.launch.profile.as_deref(), Some("coder"));
-    assert_eq!(cell.launch.model.as_deref(), Some("profile-model"));
+    assert_eq!(cell.launch.model, None);
     assert_eq!(cell.launch.effort.as_deref(), Some("high"));
     assert_eq!(
         cell.args,
-        [
-            "--model",
-            "profile-model",
-            "--effort",
-            "high",
-            "--permission-mode",
-            "auto",
-            "--raw",
-            "profile",
-        ]
+        ["--effort", "high", "--permission-mode", "auto",]
     );
+    assert_eq!(resolved.warnings.len(), 2);
 
-    let kimi = AgentKind::new_unchecked("kimi");
     let err = resolve_launch(
         &launch,
         &machine.agents.commands,
         Some("coder"),
-        Some(&kimi),
+        Some("kimi"),
     )
     .expect_err("kimi cannot express effort");
     assert!(
