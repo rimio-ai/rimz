@@ -176,12 +176,9 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
             let member = member(
                 &records,
                 &peer_representatives,
-                request.me,
-                request.active_grace_secs,
-                request.now,
+                &request,
                 &active_records,
                 &prices,
-                request.subagents,
                 &conversation_counts,
             );
             (slot.channel, team, member, opened_turn)
@@ -314,12 +311,9 @@ fn representatives<'a>(peers: &[&'a AgentState]) -> Vec<&'a AgentState> {
 fn member(
     records: &[&AgentState],
     peers: &[&AgentState],
-    me: Option<&AgentSessionId>,
-    active_grace_secs: u32,
-    now: Timestamp,
+    request: &AttributionRequest<'_>,
     active_records: &BTreeMap<(AgentKind, AgentSessionId), active_time::ActiveTimeRecord>,
     prices: &pricing::PriceBook,
-    subagents: &[&AgentState],
     conversation_counts: &HashMap<(AgentKind, AgentSessionId), ConversationCounts>,
 ) -> AttributionMember {
     // Every slot is created by `fold` only after its first record is inserted.
@@ -349,13 +343,13 @@ fn member(
                 .map_or(0, |counts| counts.asks),
         )
     });
-    let subagents = subagent_stats(records, subagents, &effort.subagents);
+    let subagents = subagent_stats(records, request.subagents, &effort.subagents);
     let active_secs = records
         .iter()
         .filter_map(|agent| {
             active_records
                 .get(&(agent.kind.clone(), agent.agent_id.clone()))
-                .map(|record| record.display_secs(now, active_grace_secs))
+                .map(|record| record.display_secs(request.now, request.active_grace_secs))
         })
         .reduce(u64::saturating_add);
     AttributionMember {
@@ -373,7 +367,9 @@ fn member(
         } else {
             Presence::Exited
         },
-        me: me.is_some_and(|me| records.iter().any(|agent| &agent.agent_id == me)),
+        me: request
+            .me
+            .is_some_and(|me| records.iter().any(|agent| &agent.agent_id == me)),
         launch_ordinal: latest.launch_ordinal,
         sessions: u32::try_from(records.len()).unwrap_or(u32::MAX),
         registered_at: records.iter().filter_map(|agent| agent.registered_at).min(),
