@@ -98,6 +98,23 @@ fn ttyd_input_guard_stops_macos_option_keypress_before_xterm() {
     );
 }
 
+#[test]
+fn ttyd_mouse_flow_paces_drag_reports() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new("node")
+        .arg(crate_root.join("tests/fixtures/mouse-flow/harness.mjs"))
+        .arg(crate_root.join("src/web/ttyd/mouse_flow.js"))
+        .arg(crate_root.join("src/web/ttyd/ws_url.js"))
+        .output()
+        .expect("run ttyd mouse-flow Node harness");
+    assert!(
+        output.status.success(),
+        "ttyd mouse-flow Node harness failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn materialized_room_panes_json() -> &'static str {
     r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#
 }
