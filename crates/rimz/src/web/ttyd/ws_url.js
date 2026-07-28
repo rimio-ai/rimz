@@ -21,6 +21,12 @@ const installRoomWebSocketUrl=()=>{
       const target=rewriteWsUrl(url);
       if(protocols===undefined)super(target);
       else super(target,protocols);
+      resetMouseFlow();
+      this.addEventListener("close",resetMouseFlow,{once:true});
+    }
+
+    send(data){
+      sendWithMouseFlow(payload=>NativeWebSocket.prototype.send.call(this,payload),data);
     }
   };
 };

@@ -104,6 +104,97 @@ fn continuous_output_keeps_websocket_attached() {
 }
 
 #[test]
+fn paced_tmux_border_drag_tracks_before_release_and_lands_at_endpoint() {
+    let stack = require_web_stack!("tmux");
+    let fixture = LiveWebFixture::new(&stack);
+    fixture.split_horizontally();
+    let opened = fixture.open();
+    let browser = BrowserHandle::launch(&stack.browser);
+    let url = format!("{}&rimzdebug=1", opened.url);
+    let tab = browser.authed_tab(&url, &opened.secret);
+    wait_until_attached(&tab, &fixture.workspace.session_name, ATTACH_TIMEOUT);
+    std::thread::sleep(Duration::from_secs(3));
+
+    let widths = fixture.pane_widths();
+    let initial_width = widths[0];
+    let divider = widths[0] + 1;
+    let expression = format!(
+        r#"(()=>{{
+const term=window.term;
+const send=(code,x,final="M")=>term.input(`\x1b[<${{code}};${{x}};10${{final}}`,true);
+send(0,{divider});
+let step=0;
+window.__rimzDragMotionDone=false;
+window.__rimzDragTimer=setInterval(()=>{{
+  step++;
+  const x={divider}+(step%21)-10;
+  send(32,x);
+  if(step===300){{
+    clearInterval(window.__rimzDragTimer);
+    send(32,{divider}+10);
+    window.__rimzDragMotionDone=true;
+  }}
+}},16);
+return "started";
+}})()"#
+    );
+    support::eval_string(&tab, &expression).expect("start browser drag");
+    let motion_deadline = Instant::now() + Duration::from_secs(7);
+    loop {
+        let done = support::eval_string(&tab, "String(Boolean(window.__rimzDragMotionDone))")
+            .expect("read browser drag progress");
+        if done == "true" {
+            break;
+        }
+        assert!(
+            Instant::now() < motion_deadline,
+            "browser did not finish the paced motion sequence"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let tracking_endpoint = initial_width + 10;
+    let tracking_deadline = Instant::now() + Duration::from_secs(2);
+    while fixture.pane_widths()[0] != tracking_endpoint {
+        assert!(
+            Instant::now() < tracking_deadline,
+            "tmux stopped tracking before release; expected width {tracking_endpoint}, got {:?}",
+            fixture.pane_widths()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let decisions = support::eval_string(
+        &tab,
+        "JSON.stringify(window.__rimzWeb?.decisions?.map(item=>item.action)??[])",
+    )
+    .expect("read mouse-flow decisions");
+    assert!(
+        decisions.contains("\"coalesce\"") && decisions.contains("\"timer-send\""),
+        "live drag did not exercise proactive pacing: {decisions}"
+    );
+
+    let release_endpoint = initial_width - 8;
+    let release = format!(
+        r#"(()=>{{
+const send=(code,x,final="M")=>window.term.input(`\x1b[<${{code}};${{x}};10${{final}}`,true);
+send(32,{divider}-8);
+send(0,{divider}-8,"m");
+return "released";
+}})()"#
+    );
+    support::eval_string(&tab, &release).expect("release browser drag");
+    let release_deadline = Instant::now() + Duration::from_secs(2);
+    while fixture.pane_widths()[0] != release_endpoint {
+        assert!(
+            Instant::now() < release_deadline,
+            "tmux did not land at the released endpoint; expected width {release_endpoint}, got {:?}",
+            fixture.pane_widths()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
 fn wrong_credential_is_refused() {
     let stack = require_web_stack!("tmux");
     let fixture = LiveWebFixture::new(&stack);

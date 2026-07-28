@@ -331,6 +331,35 @@ impl LiveWebFixture {
             .output(&["send-keys", "-t", &self.workspace.session_name, "C-c"]);
     }
 
+    pub(super) fn split_horizontally(&self) {
+        self.server.output(&["set-option", "-g", "mouse", "on"]);
+        self.server.output(&[
+            "split-window",
+            "-h",
+            "-t",
+            &self.workspace.session_name,
+            "sh",
+        ]);
+    }
+
+    pub(super) fn pane_widths(&self) -> Vec<u16> {
+        String::from_utf8_lossy(
+            &self
+                .server
+                .output(&[
+                    "list-panes",
+                    "-t",
+                    &self.workspace.session_name,
+                    "-F",
+                    "#{pane_width}",
+                ])
+                .stdout,
+        )
+        .lines()
+        .map(|line| line.parse().expect("numeric tmux pane width"))
+        .collect()
+    }
+
     pub(super) fn wait_capture_contains(&self, needle: &str, budget: Duration) -> String {
         let deadline = Instant::now() + budget;
         loop {

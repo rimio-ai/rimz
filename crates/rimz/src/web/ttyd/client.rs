@@ -282,6 +282,7 @@ fn client_bootstrap(family: Option<&str>) -> String {
         .collect::<Vec<_>>();
     let diacritics = serde_json::to_string(&diacritics)
         .expect("serializing the static pixel diacritic table cannot fail");
+    let mouse_flow = include_str!("mouse_flow.js");
     let ws_url = include_str!("ws_url.js");
     let pixel_layer = include_str!("pixel_layer.js");
     let input_guard = include_str!("input_guard.js");
@@ -295,6 +296,7 @@ const fontFamily={family};
 const RIMZ_PIXEL_PROTOCOL={pixel_protocol};
 const RIMZ_PIXEL_PLACEHOLDER={placeholder};
 const RIMZ_PIXEL_DIACRITICS={diacritics};
+{mouse_flow}
 {ws_url}
 installRoomWebSocketUrl();
 {pixel_layer}
@@ -934,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_profile_does_not_require_client_styling() {
+    fn compatibility_profile_includes_browser_guards_without_client_styling() {
         let rendered = inject_client_profile("<html><head></head><body></body></html>", None, &[])
             .expect("document markers");
         assert!(rendered.contains("rimz-web-client"));
@@ -962,8 +964,9 @@ mod tests {
         assert!(rendered.contains("installRoomWebSocketUrl()"));
         assert!(rendered.contains("window.WebSocket=class extends NativeWebSocket"));
         assert!(!rendered.contains("WebSocketStream"));
+        assert!(rendered.contains("const sendWithMouseFlow="));
+        assert!(rendered.contains("sendWithMouseFlow(payload=>"));
         assert!(!rendered.contains("installBacklogMeter"));
-        assert!(!rendered.contains("sendWithMouseFlow"));
         assert!(rendered.contains("const RIMZ_PIXEL_PLACEHOLDER=1109742"));
         assert!(rendered.contains("const RIMZ_PIXEL_DIACRITICS=[\"̅\",\"̍\",\"̎\""));
         assert!(rendered.contains("const suppressPlaceholderGlyphs=chunk=>"));
