@@ -782,19 +782,19 @@ fn lifecycle_projection(
             *total = total.saturating_add(1);
         }
     }
-    // A context reset that rests the agent retires the prior turn's subagents: a
-    // manual `/compact` (`CompactionEnded` resting to idle) summarizes away the
-    // turn the children belonged to, and a `/clear` (`Registered`) drops it
-    // outright. Advancing the subagent boundary here makes a user-typed reset
-    // behave like automatic compaction from a rested state, which already opens a
-    // turn. The rest gate is load-bearing: automatic compaction *mid-turn* resumes
-    // the same turn (stays `running`), so its in-flight children stay listed.
+    // A context reset that lands the agent at rest retires the prior turn's
+    // subagents: a manual `/compact` summarizes away the turn the children
+    // belonged to, and a `/clear` (`Registered`) drops it outright. Advancing
+    // the subagent boundary here makes a user-typed reset behave like automatic
+    // compaction from a rested state, which already opens a turn. The rest gate
+    // is load-bearing: automatic compaction *mid-turn* resumes the same turn
+    // (stays `running`), so its in-flight children stay listed.
     // Matching the signal — not `compaction_closed` — still fires when the
     // `PreCompact` bracket open was missed. A first-event `Registered` leaves
     // `turn_started_at` unset because the session has never opened a turn; pane
     // recovery reads that absence as first-turn-start eligibility.
     let resets_context = prior.is_some()
-        && next.status == AgentStatus::Idle
+        && !matches!(next.status, AgentStatus::Running | AgentStatus::Waiting)
         && matches!(
             &signal,
             lifecycle::LifecycleSignal::CompactionEnded { .. }

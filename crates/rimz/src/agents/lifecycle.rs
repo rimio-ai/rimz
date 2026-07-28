@@ -492,12 +492,13 @@ fn map_status(
         LifecycleSignal::CompactionEnded { auto: Some(true) } => {
             reconcile_activity(prior_status, "auto-compaction resumed a turn", kind)
         }
-        LifecycleSignal::CompactionEnded { auto: Some(false) }
-            if prior_status == Some(AgentStatus::Waiting) =>
-        {
-            AgentStatus::Running
-        }
-        LifecycleSignal::CompactionEnded { auto: Some(false) } => AgentStatus::Idle,
+        LifecycleSignal::CompactionEnded { auto: Some(false) } => match prior_status {
+            Some(AgentStatus::Waiting) => AgentStatus::Running,
+            // A stale running row rests: the manual close proves the user typed
+            // at the prompt, and no Stop will end the turn the row remembers.
+            Some(AgentStatus::Running) | None => AgentStatus::Idle,
+            Some(resting) => resting,
+        },
         LifecycleSignal::CompactionEnded { auto: None } => {
             if prior_status == Some(AgentStatus::Waiting) {
                 AgentStatus::Running
@@ -564,10 +565,7 @@ fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStat
             parked_on_background: true,
         } => TurnPhase::Parked,
         LifecycleSignal::Compacting => prior_phase,
-        LifecycleSignal::CompactionEnded {
-            auto: Some(true) | None,
-        } => prior_phase,
-        LifecycleSignal::CompactionEnded { auto: Some(false) } => TurnPhase::Idle,
+        LifecycleSignal::CompactionEnded { .. } => prior_phase,
         LifecycleSignal::Registered
         | LifecycleSignal::TurnEnded { .. }
         | LifecycleSignal::TurnInterrupted
