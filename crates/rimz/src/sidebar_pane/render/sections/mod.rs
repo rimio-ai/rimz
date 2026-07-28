@@ -18,6 +18,8 @@ use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
 use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
+use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
+use crate::{SidebarRow, SidebarWorktreeKind};
 
 use super::CostRolls;
 pub(super) use super::layout::{pin_right, spans_width, trim_spans_to_width};
@@ -43,6 +45,31 @@ pub(in crate::sidebar_pane::render) use provider::reset_expiry_heat_amount;
 pub(super) use provider::{DashboardContext, dashboard_block};
 pub(super) use provider::{fleet_store_lines, fleet_total_lines};
 pub(super) use worktree::{WorktreeRenderContext, worktree_group_lines_projected};
+
+/// Whether selection opens this row's full card shape. The selected row always
+/// opens; a sibling opens only when both rows belong to the same projected
+/// non-external group and share a named team.
+pub(super) fn row_expanded_by_selection(
+    roster: &VisibleRoster<'_>,
+    group: &VisibleGroup<'_>,
+    row_index: usize,
+    selected_index: usize,
+) -> bool {
+    let range = group.range();
+    if !range.contains(&row_index) {
+        return false;
+    }
+    if row_index == selected_index {
+        return true;
+    }
+    if group.source().kind == SidebarWorktreeKind::External || !range.contains(&selected_index) {
+        return false;
+    }
+    let Some(selected_team) = roster.row(selected_index).and_then(SidebarRow::team) else {
+        return false;
+    };
+    roster.row(row_index).and_then(SidebarRow::team) == Some(selected_team)
+}
 
 pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) theme: &'a Theme,

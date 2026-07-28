@@ -173,6 +173,36 @@ fn selected_blank_idle_agent_keeps_breath_grid_awake() {
 }
 
 #[test]
+fn expanded_blank_team_member_keeps_breath_grid_awake() {
+    let ws = workspace();
+    let mut snapshot = agent_snapshot(&ws);
+    let group = &mut snapshot.worktree_groups[0];
+    group.rows[0].as_agent_mut().unwrap().team = Some("forge".to_owned());
+
+    let mut teammate = group.rows[0].clone();
+    teammate.id = "agent-2".to_owned();
+    teammate.pane = Some(pane("terminal_10", "tab_0", false));
+    let teammate_card = teammate.as_agent_mut().unwrap();
+    teammate_card.team = Some("forge".to_owned());
+    teammate_card.task = None;
+    teammate_card.description = None;
+    teammate_card.prompt = None;
+    group.rows.push(teammate);
+
+    let mut ui = UiState {
+        selected_index: 0,
+        ..Default::default()
+    };
+    ui.theme(&snapshot.theme);
+
+    assert!(is_animating(&snapshot, &ui, 0, false));
+    assert_eq!(
+        frame_interval(&snapshot, &ui, false),
+        crate::sidebar::timing::BREATH_ANIMATION_FRAME
+    );
+}
+
+#[test]
 fn help_popup_dismisses_and_consumes_any_user_input() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(

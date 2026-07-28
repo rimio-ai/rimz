@@ -10,7 +10,7 @@ pub(super) fn is_animating(
         return true;
     };
     render::animation_cadence(snapshot, &theme.animations) != render::AnimationCadence::None
-        || render::selection_awaiting_first_prompt(snapshot, ui)
+        || render::expanded_row_awaiting_first_prompt(snapshot, ui)
         || ui.help_visible
         || pet_frame_interval(snapshot, ui, alert_active).is_some()
         || ui.tally.any_rolling(phase)
@@ -69,7 +69,7 @@ pub(super) fn frame_interval(
     }
     let cadence = render::animation_cadence(snapshot, &theme.animations);
     let cadence = if cadence == render::AnimationCadence::None
-        && render::selection_awaiting_first_prompt(snapshot, ui)
+        && render::expanded_row_awaiting_first_prompt(snapshot, ui)
     {
         render::AnimationCadence::Breath
     } else {
