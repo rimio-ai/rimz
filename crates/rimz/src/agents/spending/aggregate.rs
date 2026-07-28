@@ -1043,6 +1043,13 @@ fn file_grouping_session_path<'a>(adapter: &AgentDefinition, path: &'a Path) -> 
     dir.unwrap_or(path)
 }
 
+pub(super) fn subagent_child_id(path: &Path) -> Option<String> {
+    let parent = path.parent()?;
+    (parent.file_name().and_then(|name| name.to_str()) == Some("subagents")).then_some(())?;
+    let stem = path.file_stem()?.to_str()?;
+    Some(stem.strip_prefix("agent-").unwrap_or(stem).to_owned())
+}
+
 pub(crate) fn spending_files_signature(files: &[(&'static AgentDefinition, PathBuf)]) -> u64 {
     let mut hasher = DefaultHasher::new();
     for (adapter, file) in files {
