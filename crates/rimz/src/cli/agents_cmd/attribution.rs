@@ -422,9 +422,11 @@ fn totals_label(totals: &EffortTotals) -> String {
     }
     let messages = totals.messages.user.saturating_add(totals.messages.agent);
     if messages > 0 {
-        let from_you = (totals.messages.user > 0)
-            .then(|| format!(" ({} from you)", totals.messages.user))
-            .unwrap_or_default();
+        let from_you = if totals.messages.user > 0 {
+            format!(" ({} from you)", totals.messages.user)
+        } else {
+            String::new()
+        };
         parts.push(format!("{messages} messages{from_you}"));
     }
     parts.join(" · ")
