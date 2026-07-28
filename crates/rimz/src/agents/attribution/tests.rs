@@ -331,14 +331,14 @@ fn transcript_counts_messages_asks_and_sent_credit_per_slot() {
     assert_eq!(
         planner.messages,
         MessageCounts {
-            user: 1,
-            agent: 0,
-            sent: 2,
+            from_user: 1,
+            from_teammates: 0,
+            to_teammates: 2,
         }
     );
     assert_eq!(report.totals.asks, 1);
-    assert_eq!(report.totals.messages.user, 1);
-    assert_eq!(report.totals.messages.agent, 2);
+    assert_eq!(report.totals.messages.from_user, 1);
+    assert_eq!(report.totals.messages.from_teammates, 2);
 }
 
 #[test]
@@ -422,5 +422,5 @@ fn sent_messages_alone_are_a_contribution() {
     let report = build_with(&[idle], &[], &[sent]);
 
     assert_eq!(report.totals.agents, 1);
-    assert_eq!(report.groups[0].members[0].messages.sent, 1);
+    assert_eq!(report.groups[0].members[0].messages.to_teammates, 1);
 }

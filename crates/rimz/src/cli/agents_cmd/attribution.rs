@@ -318,15 +318,15 @@ fn calls_label(member: &AttributionMember) -> Option<String> {
 
 fn messages_label(member: &AttributionMember) -> Option<String> {
     [
-        (member.messages.user, "user"),
-        (member.messages.agent, "agent"),
-        (member.messages.sent, "sent"),
+        (member.messages.from_user, "from you"),
+        (member.messages.from_teammates, "from teammates"),
+        (member.messages.to_teammates, "to teammates"),
     ]
     .into_iter()
     .filter(|(count, _)| *count > 0)
     .map(|(count, name)| format!("{count} {name}"))
     .reduce(|mut label, component| {
-        label.push_str(", ");
+        label.push_str(" · ");
         label.push_str(&component);
         label
     })
@@ -423,10 +423,13 @@ fn totals_label(totals: &EffortTotals) -> String {
     if let Some(cost) = totals.cost_usd.map(rimz::theme::fmt::dollars2) {
         parts.push(cost);
     }
-    let messages = totals.messages.user.saturating_add(totals.messages.agent);
+    let messages = totals
+        .messages
+        .from_user
+        .saturating_add(totals.messages.from_teammates);
     if messages > 0 {
-        let from_you = if totals.messages.user > 0 {
-            format!(" ({} from you)", totals.messages.user)
+        let from_you = if totals.messages.from_user > 0 {
+            format!(" ({} from you)", totals.messages.from_user)
         } else {
             String::new()
         };
@@ -492,9 +495,9 @@ mod tests {
             tool_calls: 7,
             compactions: 1,
             messages: MessageCounts {
-                user: 2,
-                agent: 5,
-                sent: 4,
+                from_user: 2,
+                from_teammates: 5,
+                to_teammates: 4,
             },
             tokens: TokenSplit {
                 input: 1_200,
@@ -530,9 +533,9 @@ mod tests {
             tool_calls: 7 * members.len() as u64,
             compactions: members.len() as u32,
             messages: MessageCounts {
-                user: 2 * members.len() as u64,
-                agent: 5 * members.len() as u64,
-                sent: 4 * members.len() as u64,
+                from_user: 2 * members.len() as u64,
+                from_teammates: 5 * members.len() as u64,
+                to_teammates: 4 * members.len() as u64,
             },
             tokens: TokenSplit {
                 input: 1_200 * members.len() as u64,
@@ -577,7 +580,7 @@ mod tests {
           @planner (plan|ner) · Claude · fable`2@high
               effort:    1h05m active · $1.25
               calls:     2 asks · 7 tool calls · 1 compaction
-              messages:  2 user, 5 agent, 4 sent
+              messages:  2 from you · 5 from teammates · 4 to teammates
               tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
               subagents: 3 explorer $0.55 · 1 other
 
@@ -586,7 +589,7 @@ mod tests {
           @codex · Codex · gpt-5.5@high
               effort:    1h05m active · $1.25
               calls:     2 asks · 7 tool calls · 1 compaction
-              messages:  2 user, 5 agent, 4 sent
+              messages:  2 from you · 5 from teammates · 4 to teammates
               tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
               subagents: 3 explorer $0.55 · 1 other
 
@@ -607,7 +610,7 @@ mod tests {
           @codex · Codex · gpt-5.5@high
               effort:    1h05m active · $1.25
               calls:     2 asks · 7 tool calls · 1 compaction
-              messages:  2 user, 5 agent, 4 sent
+              messages:  2 from you · 5 from teammates · 4 to teammates
               tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
               subagents: 3 explorer $0.55 · 1 other
 
@@ -628,7 +631,7 @@ mod tests {
         - **plan|ner** — Claude fable&#96;2@high
           - effort: 1h05m active · $1.25
           - calls: 2 asks · 7 tool calls · 1 compaction
-          - messages: 2 user, 5 agent, 4 sent
+          - messages: 2 from you · 5 from teammates · 4 to teammates
           - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
           - subagents: 3 explorer $0.55 · 1 other
 
@@ -637,7 +640,7 @@ mod tests {
         - **@codex** — Codex `gpt-5.5@high`
           - effort: 1h05m active · $1.25
           - calls: 2 asks · 7 tool calls · 1 compaction
-          - messages: 2 user, 5 agent, 4 sent
+          - messages: 2 from you · 5 from teammates · 4 to teammates
           - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
           - subagents: 3 explorer $0.55 · 1 other
 
