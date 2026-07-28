@@ -237,6 +237,41 @@ fn compaction_end_stays_orthogonal_to_display_status() {
     .remove(0)
     .worktree("/repo/main")
     .active_ago(default_stall_secs() + 10);
+    let successful_manual = reduce_agent_states(&[
+        lifecycle_at(
+            &ws,
+            "codex",
+            "UserPromptSubmit",
+            "successful-manual",
+            LifecycleSignal::TurnStarted,
+        ),
+        lifecycle_at(
+            &ws,
+            "codex",
+            "Stop",
+            "successful-manual",
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            },
+        ),
+        lifecycle_at(
+            &ws,
+            "codex",
+            "PreCompact",
+            "successful-manual",
+            LifecycleSignal::Compacting,
+        ),
+        lifecycle_at(
+            &ws,
+            "codex",
+            "PostCompact",
+            "successful-manual",
+            LifecycleSignal::CompactionEnded { auto: Some(false) },
+        ),
+    ])
+    .remove(0)
+    .worktree("/repo/main");
 
     let snapshot = room_with_agent_panes(vec![auto]);
     assert_eq!(
@@ -249,5 +284,11 @@ fn compaction_end_stays_orthogonal_to_display_status() {
         row(&snapshot, "manual").status(),
         Some(AgentStatus::Idle),
         "manual compaction rests the row, so it is stall-exempt"
+    );
+    let snapshot = room_with_agent_panes(vec![successful_manual]);
+    assert_eq!(
+        row(&snapshot, "successful-manual").status(),
+        Some(AgentStatus::Success),
+        "manual compaction resumes the successful status from before the bracket"
     );
 }

@@ -142,7 +142,7 @@ The edges, precisely:
 | `subagent_stopped` | `running` → `success` / `failed` | the child's terminal verdict, kept through the parent's turn |
 | `tool_used` (mutating) | resting or *(none)* → `running`, reconciled; `waiting` → `running` | completed work proves a turn; attention rows hold; a keyed ask clears only for a tool with the same native key, while either key being absent preserves the any-completion fallback; the first file-editing tool moves the phase to `acting` |
 | `compacting` | status and phase held, except `waiting` → `running`, reconciled | stamps the [compaction head](#the-compaction-bracket); compaction proves the native prompt released the pane, so it clears a waiting row and the ask behind it |
-| `compaction_ended` | auto → `running` (phase carried) · manual → `idle` · trigger unknown → held · any close on `waiting` → `running` | closes and counts an open [bracket](#the-compaction-bracket) |
+| `compaction_ended` | auto → `running` (phase carried) · manual → prior resting status resumed, or stale `running` → `idle` · trigger unknown → held · any close on `waiting` → `running` | closes and counts an open [bracket](#the-compaction-bracket) |
 | `ended` | held, row stamped ended | the reducer records `ended_at`; reaching `step` preserves the prior lifecycle state as an ignored no-op |
 | `lost` | held | legacy `rimz.agent-lost` marker retained for log replay compatibility, reaching `step` as an ignored no-op |
 
@@ -187,7 +187,7 @@ Compaction is a transient head over the status. The opening signal (`Compacting`
 | Trigger | Lands | Because |
 | --- | --- | --- |
 | known automatic | `running`, interrupted phase carried | automatic compaction happens mid-turn |
-| known manual | `idle` | `/compact` runs between turns |
+| known manual | prior resting status resumed; a stale `running` row rests to `idle` | `/compact` runs between turns |
 | absent | prior status and phase held | the provider reported no trigger bit |
 
 A close that rests the agent advances `turn_started_at`, retiring the prior turn's subagents the same as a fresh prompt or `/clear`; an automatic mid-turn close resumes the turn and holds the boundary. Redundant close signals are idempotent, since an absent bracket closes nothing, and the projection expires the head past a short display window, so a crash mid-compact can never pulse it forever.

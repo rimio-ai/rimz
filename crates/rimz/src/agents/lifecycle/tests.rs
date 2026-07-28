@@ -367,6 +367,24 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
             state(AgentStatus::Idle, TurnPhase::Idle, false),
         ),
         (
+            "manual after success",
+            state(AgentStatus::Success, TurnPhase::Idle, true),
+            Some(false),
+            state(AgentStatus::Success, TurnPhase::Idle, false),
+        ),
+        (
+            "manual after failure",
+            state(AgentStatus::Failed, TurnPhase::Idle, true),
+            Some(false),
+            state(AgentStatus::Failed, TurnPhase::Idle, false),
+        ),
+        (
+            "manual while idle",
+            state(AgentStatus::Idle, TurnPhase::Idle, true),
+            Some(false),
+            state(AgentStatus::Idle, TurnPhase::Idle, false),
+        ),
+        (
             "unknown",
             state(AgentStatus::Running, TurnPhase::Reasoning, true),
             None,

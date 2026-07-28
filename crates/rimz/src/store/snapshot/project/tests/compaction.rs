@@ -215,6 +215,32 @@ fn compaction_end_clears_marker_and_counts_completed_brackets() {
 }
 
 #[test]
+fn manual_compaction_resumes_success_and_advances_the_turn_boundary() {
+    let prompt = lifecycle_at("claude", 1, "UserPromptSubmit", signal("turn_started"));
+    let stop = lifecycle_at(
+        "claude",
+        2,
+        "Stop",
+        serde_json::json!({
+            "signal": "turn_ended",
+            "errored": false,
+            "parked_on_background": false
+        }),
+    );
+    let compact = lifecycle_at("claude", 3, "PreCompact", signal("compacting"));
+    let post = lifecycle_at("claude", 4, "PostCompact", compaction_ended(Some(false)));
+    let expected_boundary = post.timestamp;
+
+    let agents = reduce_agent_states(&[prompt, stop, compact, post]);
+
+    assert_eq!(agents[0].status, AgentStatus::Success);
+    assert_eq!(agents[0].phase, TurnPhase::Idle);
+    assert!(agents[0].compacting_since.is_none());
+    assert_eq!(agents[0].compaction_count, 1);
+    assert_eq!(agents[0].turn_started_at, Some(expected_boundary));
+}
+
+#[test]
 fn compaction_end_resumes_interrupted_turn_for_auto_or_unknown_edges() {
     for (source, prompt_event, edit_event, compact_event, post_event, end_signal) in [
         (
