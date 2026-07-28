@@ -94,6 +94,10 @@ impl SidebarRow {
         agent.team.as_deref().or(agent.launch_group.as_deref())
     }
 
+    pub fn team(&self) -> Option<&str> {
+        self.as_agent()?.team.as_deref()
+    }
+
     pub fn launch_ordinal(&self) -> Option<u32> {
         self.as_agent().and_then(|agent| agent.launch_ordinal)
     }

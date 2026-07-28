@@ -70,9 +70,9 @@ pub(super) fn template(
     stage: CardStage,
     status: AgentStatus,
     density: CardDensityMode,
-    selected: bool,
+    expanded: bool,
 ) -> &'static [CardSlot] {
-    if density == CardDensityMode::Compact && !selected {
+    if density == CardDensityMode::Compact && !expanded {
         return match status {
             AgentStatus::Idle => IDENTITY,
             AgentStatus::Running | AgentStatus::Waiting => IDENTITY_DESCRIPTION_GAUGE,
@@ -83,11 +83,11 @@ pub(super) fn template(
     }
 
     match stage {
-        CardStage::Fresh { labeled: false } if !selected => IDENTITY,
-        CardStage::Fresh { labeled: true } if !selected => IDENTITY_DESCRIPTION,
+        CardStage::Fresh { labeled: false } if !expanded => IDENTITY,
+        CardStage::Fresh { labeled: true } if !expanded => IDENTITY_DESCRIPTION,
         CardStage::Fresh { labeled: false } => IDENTITY_AWAITING_GAUGE,
         CardStage::Fresh { labeled: true } => IDENTITY_DESCRIPTION_GAUGE,
-        CardStage::Engaged if selected || density == CardDensityMode::Expanded => {
+        CardStage::Engaged if expanded || density == CardDensityMode::Expanded => {
             ENGAGED_WITH_SUBAGENTS
         }
         CardStage::Engaged => ENGAGED,
@@ -121,9 +121,9 @@ mod tests {
         stage: CardStage,
         status: AgentStatus,
         density: CardDensityMode,
-        selected: bool,
+        expanded: bool,
     ) -> &'static [CardSlot] {
-        if density == CardDensityMode::Compact && !selected {
+        if density == CardDensityMode::Compact && !expanded {
             return match status {
                 AgentStatus::Idle => IDENTITY,
                 AgentStatus::Running | AgentStatus::Waiting => IDENTITY_DESCRIPTION_GAUGE,
@@ -132,7 +132,7 @@ mod tests {
                 }
             };
         }
-        match (stage, selected, density) {
+        match (stage, expanded, density) {
             (CardStage::Fresh { labeled: false }, false, _) => IDENTITY,
             (CardStage::Fresh { labeled: true }, false, _) => IDENTITY_DESCRIPTION,
             (CardStage::Fresh { labeled: false }, true, _) => IDENTITY_AWAITING_GAUGE,
@@ -145,15 +145,15 @@ mod tests {
     }
 
     #[test]
-    fn table_pins_every_state_status_density_and_selection_combination() {
+    fn table_pins_every_state_status_density_and_expansion_combination() {
         for stage in STAGES {
             for status in STATUSES {
                 for density in DENSITIES {
-                    for selected in [false, true] {
+                    for expanded in [false, true] {
                         assert_eq!(
-                            template(stage, status, density, selected),
-                            expected_template(stage, status, density, selected),
-                            "{stage:?} {status:?} {density:?} selected={selected}"
+                            template(stage, status, density, expanded),
+                            expected_template(stage, status, density, expanded),
+                            "{stage:?} {status:?} {density:?} expanded={expanded}"
                         );
                     }
                 }
@@ -169,9 +169,9 @@ mod tests {
         ] {
             for status in STATUSES {
                 for density in DENSITIES {
-                    for selected in [false, true] {
+                    for expanded in [false, true] {
                         assert!(
-                            !template(stage, status, density, selected).contains(&CardSlot::Tokens)
+                            !template(stage, status, density, expanded).contains(&CardSlot::Tokens)
                         );
                     }
                 }

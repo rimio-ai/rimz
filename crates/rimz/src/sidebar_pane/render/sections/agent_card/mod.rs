@@ -79,6 +79,7 @@ pub(super) fn row_lines(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
     selected: bool,
+    expanded: bool,
     gutter: Gutter,
     cost_usd: Option<f64>,
     mut meter_pixels: Option<&mut MeterPixels>,
@@ -118,7 +119,7 @@ pub(super) fn row_lines(
         }
     } else if let Some(agent) = agent(row) {
         let stage = CardStage::of(row);
-        for slot in template(stage, status, ctx.card_density, selected) {
+        for slot in template(stage, status, ctx.card_density, expanded) {
             match slot {
                 CardSlot::Identity => {
                     inner.push(identity_line(ctx, row, attention, cost_usd));
