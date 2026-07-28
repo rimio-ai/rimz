@@ -78,7 +78,7 @@ rimz loop logs <task>                # full forensics for recent runs
 
 ## Testing
 
-- Run `cargo xtask gate` before a PR or hand-off, `cargo xtask test <filter>` for focused iteration, and `cargo xtask sandbox -- <command>` to drive a real multiplexer from disposable roots. The gate stack, the nextest-only runner, the sandbox roots, the test tiers and what each one owns, and the one-home rule for a module's unit tests all live in [rust-conventions.md](./docs/contributing/rust-conventions.md).
+- Run `cargo xtask gate` before a PR or hand-off, batch focused tests with `cargo xtask test --name <test> [--name <test>...]` (or pass a nextest filter), and use `cargo xtask sandbox -- <command>` to drive a real multiplexer from disposable roots. The gate stack, the nextest-only runner, the sandbox roots, the test tiers and what each one owns, and the one-home rule for a module's unit tests all live in [rust-conventions.md](./docs/contributing/rust-conventions.md).
 - Judge the reach of your own change and escalate past `gate` to journey, live-backend, performance, dependency gates, or full CI (`cargo xtask ci`) when it touches those surfaces, their fixtures, or shared infrastructure. CI's `tests` job is the branch-protection floor rather than the ceiling.
 - Capture planned behaviour in the owning doc and add the executable test when the implementation can make it pass; an ignored test standing in for a future product target does not land.
 - **Invariant.** `cargo xtask invariants` greps tracked text — Rust and Markdown alike — to guard the architectural boundaries. Because it matches text rather than parsed code, an `AGENTS.md` inside a guarded subtree is scanned along with it: describe a boundary in prose and leave the path the rule bans unwritten.
