@@ -652,17 +652,34 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
 
 #[test]
 fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
-    let profiles = profiles([(
-        "planner",
-        Profile {
-            agent: "claude".to_owned(),
-            model: Some("profile-model".to_owned()),
-            ..profile("claude")
-        },
-    )]);
+    let profiles = profiles([
+        (
+            "planner",
+            Profile {
+                agent: "claude".to_owned(),
+                model: Some("profile-model".to_owned()),
+                ..profile("claude")
+            },
+        ),
+        (
+            "codex",
+            Profile {
+                agent: "codex".to_owned(),
+                model: Some("codex-model".to_owned()),
+                effort: Some("high".to_owned()),
+                args: Some("--base-only".to_owned()),
+                ..profile("codex")
+            },
+        ),
+    ]);
     let mut planner = role("planner", "planner");
     planner.args = Some("--role-arg".to_owned());
-    let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), team(vec![planner]))]));
+    let mut reviewer = role("reviewer", "planner");
+    reviewer.args = Some("--reviewer-arg".to_owned());
+    let teams = TeamsConfig(BTreeMap::from([(
+        "forge".to_owned(),
+        team(vec![planner, reviewer]),
+    )]));
     let mut warnings = Vec::new();
 
     let team_spec = resolve_spec_with_base_override(
@@ -678,6 +695,28 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
     assert_eq!(cell.kind, "codex");
     assert_eq!(cell.launch.role.as_deref(), Some("planner"));
     assert!(!cell.args.iter().any(|arg| arg == "--role-arg"));
+    assert_eq!(warnings.len(), 4);
+    assert!(warnings.iter().all(|warning| {
+        let warning = warning.to_string();
+        warning.contains("role `planner` profile `planner`")
+            || warning.contains("role `reviewer` profile `planner`")
+    }));
+
+    warnings.clear();
+    let role_spec = resolve_spec_with_base_override(
+        Some("forge.planner"),
+        &profiles,
+        &no_commands(),
+        &teams,
+        Some("codex"),
+        &mut warnings,
+    )
+    .expect("single role rebase");
+    assert_eq!(
+        agent_at(&role_spec, 0, 0).launch.role.as_deref(),
+        Some("planner")
+    );
+    assert_eq!(warnings.len(), 2);
     assert!(warnings.iter().all(|warning| {
         warning
             .to_string()
@@ -687,7 +726,7 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
     warnings.clear();
     let virtual_spec = resolve_spec_with_base_override(
         Some("claude-yolo"),
-        &no_profiles(),
+        &profiles,
         &no_commands(),
         &TeamsConfig::default(),
         Some("codex"),
@@ -697,14 +736,26 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
     let virtual_cell = agent_at(&virtual_spec, 0, 0);
     assert_eq!(virtual_cell.kind, "codex");
     assert_eq!(virtual_cell.launch.mode, Some(PermissionMode::Yolo));
-    assert_eq!(
-        virtual_cell.args,
-        crate::agents::find_definition("codex")
-            .expect("codex")
-            .spec()
-            .launch
-            .permission_args(PermissionMode::Yolo)
+    assert_eq!(virtual_cell.launch.model.as_deref(), Some("codex-model"));
+    assert!(
+        virtual_cell
+            .args
+            .windows(2)
+            .any(|args| { args == ["--model".to_owned(), "codex-model".to_owned()] })
     );
+    assert!(
+        virtual_cell
+            .args
+            .windows(2)
+            .any(|args| { args == ["-c".to_owned(), "model_reasoning_effort=high".to_owned(),] })
+    );
+    assert!(virtual_cell.args.iter().any(|arg| arg == "--base-only"));
+    let posture = crate::agents::find_definition("codex")
+        .expect("codex")
+        .spec()
+        .launch
+        .permission_args(PermissionMode::Yolo);
+    assert!(virtual_cell.args.ends_with(&posture));
 }
 
 #[test]

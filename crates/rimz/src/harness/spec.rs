@@ -693,13 +693,14 @@ fn resolve_team_role(
         .0
         .get(team_name)
         .expect("team role resolution called with a known team name");
+    let mut team_warnings = Vec::new();
     let compiled = compile_team(
         team_name,
-        prepare_team(team_name, team, profiles, base_override, warnings)?,
+        prepare_team(team_name, team, profiles, base_override, &mut team_warnings)?,
         profiles,
         commands,
         base_override,
-        warnings,
+        &mut team_warnings,
     )?;
     let Some(cell) = compiled.roles.get(role_name) else {
         return Err(LayoutErr::UnknownRoleInTeam {
@@ -708,6 +709,18 @@ fn resolve_team_role(
             valid_roles: valid_team_roles(team),
         });
     };
+    let binding = team
+        .roles
+        .iter()
+        .find(|binding| binding.role == role_name)
+        .expect("compiled team role has a source binding");
+    let selected_origin = format!("role `{}` profile `{}`", binding.role, binding.profile);
+    warnings.extend(team_warnings.into_iter().filter(|warning| {
+        matches!(
+            warning,
+            SpecWarning::RebaseDropped { origin, .. } if origin == &selected_origin
+        )
+    }));
     Ok(LayoutSpec::single(Cell::Agent(cell.clone())))
 }
 
@@ -1328,14 +1341,12 @@ fn virtual_cell_from(
     extra_args: Vec<String>,
     mode: Option<PermissionMode>,
 ) -> Result<Cell> {
-    let mut args = match profile_name.as_deref() {
-        Some(profile) => {
-            let mut base = resolved.clone();
-            base.launch.mode = None;
-            render_profile_args(profile, &base)?
-        }
-        None => Vec::new(),
-    };
+    let mut base = resolved.clone();
+    base.launch.mode = None;
+    let error_origin = profile_name
+        .as_deref()
+        .unwrap_or_else(|| resolved.kind.as_str());
+    let mut args = render_profile_args(error_origin, &base)?;
     args.extend(extra_args);
     Ok(Cell::Agent(agent_cell_from(
         &resolved,
@@ -1580,6 +1591,7 @@ fn rebase_onto(
     let same_kind = from == base.kind;
 
     original.kind.clone_from(&base.kind);
+    // Keep the portable-field merge aligned with ResolvedProfile::fill_missing.
     original.launch.mode = original.launch.mode.or(base.launch.mode);
     if original.launch.effort.is_none() {
         original.launch.effort.clone_from(&base.launch.effort);

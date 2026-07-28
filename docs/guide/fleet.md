@@ -304,7 +304,7 @@ To try a profile on a different provider without changing it, add `--agent`:
 rimz agents claude-planner --agent codex --model gpt-5.3-codex
 ```
 
-The launched handle is still `@claude-planner`. Its configured model, effort, and raw `args` carry to Codex before command-line overrides apply, so incompatible typed settings fail before a pane opens rather than disappearing. This override is fresh-launch only and is not written back to the profile; a later interactive restart refuses the provider mismatch and points to an explicit fresh `--agent` launch.
+The launched handle is still `@claude-planner`. Mode, effort, budget, and prompt files carry from the original profile. Because model names and raw `args` belong to a provider, a provider change drops their old values with a warning and takes replacements from the selected base; a profile such as `[agents.profiles.codex]` can hold those Codex defaults. `--agent` accepts any profile name as that base as well as a registered kind, and command-line overrides still win. This override is fresh-launch only and is not written back to the profile; a later interactive restart refuses the provider mismatch and points to an explicit fresh `--agent` launch.
 
 On budgets specifically: `--budget 5` parks the agent when its session cost reaches $5, `--budget 20/day` caps each local calendar day instead, and `rimz agents budget @coder` inspects or changes the cap while the agent runs. The same dollar-cap model scales up to loop tasks, the room, and a provider login: the [budgets guide](./budget.md) owns it.
 
