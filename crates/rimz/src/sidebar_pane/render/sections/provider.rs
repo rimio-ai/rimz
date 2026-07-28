@@ -1244,10 +1244,10 @@ fn select_provider_bars(panel: &SidebarProviderPanel) -> Vec<ProviderBar<'_>> {
             if extra_disabled {
                 return provider_window_pair(first, longest_spent);
             }
-            return vec![ProviderBar::Window(longest_spent), ProviderBar::Extra];
+            return vec![ProviderBar::Extra, ProviderBar::Window(last)];
         }
         if extra_usable {
-            return vec![ProviderBar::Window(first), ProviderBar::Extra];
+            return vec![ProviderBar::Extra, ProviderBar::Window(last)];
         }
     }
     first_and_last()
@@ -1522,13 +1522,11 @@ fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<
 }
 
 fn money_value_spans(theme: &Theme, value: &str) -> Vec<Span<'static>> {
-    let value_width = PROVIDER_VALUE_WIDTH.saturating_sub(1);
-    let clipped = clip(value, value_width);
-    let pad = value_width.saturating_sub(text_width(&clipped));
+    let clipped = clip(value, PROVIDER_VALUE_WIDTH);
+    let pad = PROVIDER_VALUE_WIDTH.saturating_sub(text_width(&clipped));
     vec![
         Span::raw(" ".repeat(pad)),
         Span::styled(clipped, theme.money_style(Modifier::BOLD)),
-        Span::raw(" "),
     ]
 }
 

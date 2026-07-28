@@ -1,5 +1,6 @@
 use super::*;
 use crate::sidebar_pane::render::labels::mana_style;
+use crate::sidebar_pane::render::layout::text_width;
 
 /// Every provider bar — `5h`, `7d` across blocks, and the API spend row —
 /// shares one front (bar-start) column and one end (bar-end) column, so the
@@ -61,6 +62,52 @@ fn provider_bars_share_one_front_and_end_column() {
         "provider bars share an end column: {ends:?}"
     );
 }
+
+#[test]
+fn provider_money_values_share_the_header_end_column() {
+    let theme = Theme::fixed(true);
+    let mut extra = provider_panel("claude", "Claude", 173, true, false, Some((100, 40)));
+    extra.extra_credits = Some(crate::agents::ExtraCredits::known(
+        Some(7.0),
+        None,
+        Some(50.0),
+    ));
+    let mut api = provider_panel("pi", "Pi", 28, false, false, None);
+    api.extra_credits = Some(crate::agents::ExtraCredits::known(
+        Some(10.0),
+        Some(40.0),
+        Some(50.0),
+    ));
+
+    for (panel, bar_value) in [(extra, "$50"), (api, "$40")] {
+        let lines = Dashboard::stacked(&theme, &[panel])
+            .width(30)
+            .lines()
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        let header = lines
+            .iter()
+            .find(|line| line.contains("$3.50"))
+            .expect("provider spend header");
+        let bar = lines
+            .iter()
+            .find(|line| line.contains(bar_value))
+            .expect("provider money bar");
+
+        assert_eq!(
+            text_width(header.trim_end()),
+            text_width(bar.trim_end()),
+            "{bar_value} should end under the header spend: {header:?} / {bar:?}"
+        );
+    }
+}
+
 #[test]
 fn provider_bar_tones_labels_and_reset_countdowns() {
     let theme = Theme::fixed(false);
@@ -364,8 +411,8 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
         None,
         Some(50.0),
     ));
-    assert_eq!(labels(&panel), vec!["5h", "ex"]);
-    let row_text = metered_bar_rows(&theme, &panel)[1]
+    assert_eq!(labels(&panel), vec!["ex", "7d"]);
+    let row_text = metered_bar_rows(&theme, &panel)[0]
         .spans
         .iter()
         .map(|span| span.content.as_ref())
@@ -385,8 +432,8 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
     panel.extra_credits = None;
     assert_eq!(
         labels(&panel),
-        vec!["7d", "ex"],
-        "a spent long cap makes the extra track relevant even when unknown"
+        vec!["ex", "7d"],
+        "extra credits lead while the spent long cap keeps its reset row"
     );
 
     panel.windows = vec![
@@ -411,8 +458,8 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
     ];
     assert_eq!(
         labels(&panel),
-        vec!["7d", "ex"],
-        "a spent middle window stays visible even when a longer window exists"
+        vec!["ex", "30d"],
+        "extra credits lead while the longest included window remains visible"
     );
     panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
     assert_eq!(
@@ -433,7 +480,7 @@ fn extra_usage_value_is_the_rounded_whole_dollar_budget() {
             None,
             Some(limit),
         ));
-        let values = metered_bar_rows(&theme, &panel)[1]
+        let values = metered_bar_rows(&theme, &panel)[0]
             .spans
             .iter()
             .map(|span| span.content.as_ref())
