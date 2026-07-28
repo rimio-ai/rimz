@@ -386,7 +386,7 @@ Provider blocks stacked (`theme.display.provider_tabs = "never"`). Claude and Co
 ```
   Claude v2.1.169 · Claude Max                   ⇅ rc
   ▐▛███▜▌  ◎ 58  ◇ 17M ↘ 15M ↗ 2M ◌ 198M      $188.88
- ▝▜█████▛▘ ex  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱      $50
+ ▝▜█████▛▘ ex  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱     $50
    ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱ ↻ 5d22h
 
   Codex v0.137.0 · ChatGPT Pro                   ⇅ rc
