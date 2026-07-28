@@ -175,7 +175,9 @@ Both helpers live next to the durability contract they enforce. No module hand-r
 
 ## Tests
 
-`cargo xtask test` wraps `cargo nextest run --workspace --all-features --locked`; trailing args forward as nextest filters and profiles (`cargo xtask test auth`, `cargo xtask test -P live`). Each invocation gives the suite a disposable HOME, every XDG root, and private tmux and Zellij server namespaces, while `common::Env` narrows CLI subprocesses to per-test roots for every persistent surface. nextest is the only suite runner; install it with `cargo install cargo-nextest --locked`. Drive it through `cargo xtask test` rather than reassembling the invocation — the flags carry as much weight as the runner, because unit tests reach `crate::testkit` and both bare `cargo test` and bare `cargo nextest run` fail to compile without `--all-features`. Three profiles in `.config/nextest.toml` partition the suite: `gate` (deterministic non-live tests, what `cargo xtask gate` runs), `live` (mux backend tests, the real-browser web suite, and deep mux smokes), and `journey` (non-deep rendered journeys).
+`cargo xtask test` wraps `cargo nextest run --workspace --all-features --locked`; trailing args forward as nextest filters and profiles (`cargo xtask test auth`, `cargo xtask test -P live`). Repeat `--name <test>` to batch copied leaf names or full `module::path` names through one exact, segment-anchored nextest run rather than launching parallel Cargo processes. Xtask lists the selection first, runs every matched test, and fails after the run if any requested name was unmatched; `cargo xtask test --list <term>` discovers the available full names. A raw nextest filter that matches nothing fails with the same discovery command as its next action.
+
+Each invocation gives the suite a disposable HOME, every XDG root, and private tmux and Zellij server namespaces, while `common::Env` narrows CLI subprocesses to per-test roots for every persistent surface. nextest is the only suite runner; install it with `cargo install cargo-nextest --locked`. Drive it through `cargo xtask test` rather than reassembling the invocation — the flags carry as much weight as the runner, because unit tests reach `crate::testkit` and both bare `cargo test` and bare `cargo nextest run` fail to compile without `--all-features`. Three profiles in `.config/nextest.toml` partition the suite: `gate` (deterministic non-live tests, what `cargo xtask gate` runs), `live` (mux backend tests, the real-browser web suite, and deep mux smokes), and `journey` (non-deep rendered journeys).
 
 Run interactive smoke checks of a built binary through `cargo xtask sandbox -- target/debug/rimz <args>`. The sandbox replaces HOME, every persistent XDG root, `TMUX_TMPDIR`, the Zellij runtime and config roots, and `TMPDIR`, then tears down both private mux servers when the command exits. A bare `target/debug/rimz start` is a real product invocation and therefore addresses the user's normal multiplexer server.
 
@@ -229,7 +231,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 ## Contributor command surface
 
-`cargo xtask <task>` is the entry point for contributor automation; new automation lands in `xtask/`, and the only tracked hook script is `.githooks/pre-commit`, which routes back to it. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `stage-install`, `dist`, `brew-formula`, `profile-build`, `hooks`, `fmt`, `lint`, `test`, `test-archive`, `deps`, `deny`, `vet`, `semver`, `externals`, `coverage`, `perf`, `complexity`, `invariants`, `docs-links`, `gate`, `checks`, `ci`, `pricing-refresh`, `theme-refresh`, `screenshot`.
+`cargo xtask <task>` is the entry point for contributor automation; new automation lands in `xtask/`, and the only tracked hook script is `.githooks/pre-commit`, which routes back to it. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `stage-install`, `dist`, `brew-formula`, `profile-build`, `hooks`, `fmt`, `lint`, `check`, `test`, `test-archive`, `deps`, `deny`, `vet`, `semver`, `externals`, `coverage`, `perf`, `complexity`, `invariants`, `docs-links`, `gate`, `checks`, `ci`, `pricing-refresh`, `theme-refresh`, `screenshot`.
 
 Three deserve a note:
 
@@ -246,6 +248,10 @@ Every PR gate runs in CI with warnings treated as errors; each has a local `carg
 - `cargo xtask externals` — the gates that talk to the crates.io registry: `deny` and `vet`. Both run so a single pass reports every signal.
 - `cargo xtask ci` — `checks` plus plain `cargo nextest run --workspace --all-features --locked`; the local full stack when a change calls for full validation.
 
+`cargo xtask check` (singular) is the fast `cargo check --workspace --all-targets --all-features --locked` structural compile pass. It is intentionally distinct from `cargo xtask checks` (plural), the non-test gate composite above; use singular `check` for early broad iteration.
+
+Run one Cargo-family command at a time in a worktree. Concurrent builds only wait on the same target-directory lock: batch focused names in one `cargo xtask test` invocation, let that run finish before starting `gate`, and use `check` for an early broad compile signal. Reserve `test-archive` plus partitioned execution for genuinely large CI suites.
+
 Escalate past `gate` when the change touches the matching surface: `cargo xtask test -P live` for live-backend and deep-mux-smoke coverage, `cargo xtask test -P journey` for rendered journeys, `cargo xtask externals` when dependencies change, and `cargo xtask ci` for both checks and the full suite.
 
 Two wall clocks bound a run, so a wedged compile, test process, or multiplexer costs a bounded wait instead of the caller's patience:
@@ -255,10 +261,11 @@ Two wall clocks bound a run, so a wedged compile, test process, or multiplexer c
 
 The individual gates:
 
-- Long-running human-facing phases show a TTY-gated stderr status line with the live phase and elapsed time; `xtask/src/spinner.rs` is a deliberate lightweight copy of the RimZ CLI spinner that keeps xtask independent of the runtime crate.
+- Long-running phases show an animated TTY status line or, for agents and redirected output, a newline heartbeat after 15 seconds and every 30 seconds thereafter. `RIMZ_NO_PROGRESS=1` silences both. `xtask/src/spinner.rs` is a deliberate lightweight copy of the RimZ CLI spinner that keeps xtask independent of the runtime crate.
 - `cargo fmt --all -- --check` — formatting (the `fmt` task).
 - `cargo xtask lint` — runs `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`, then lints the `rimz` host without `testkit` in both install feature shapes: default for `cargo xtask install`, and `sentry` for `cargo xtask install-dev`; the host passes expose dead code that test-only references can mask.
-- `cargo nextest run --workspace --all-features --locked` — the `test` task; accepts nextest filters and profiles as trailing args.
+- `cargo xtask check` — the fast all-target, all-feature workspace compile pass.
+- `cargo nextest run --workspace --all-features --locked` — the `test` task; accepts nextest filters and profiles as trailing args, captures output into a compact pass or failure report, batches repeated exact `--name` selections, and exposes discovery through `--list`.
 - `cargo nextest archive --workspace --all-features --locked --archive-file <path>` — the `test-archive` task; compiles and packages the workspace test binaries for portable execution.
 - `cargo xtask sandbox -- <command> [args]` — runs an interactive target-binary smoke command with disposable host state and private tmux/Zellij servers.
 - `cargo xtask docs-links` — every relative markdown link target and `#anchor` resolves in the working tree (offline and deterministic; external URLs are out of scope).
