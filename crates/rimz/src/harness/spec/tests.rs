@@ -352,6 +352,29 @@ fn resolve_spec_dispatches_default_inline_peer_and_team() {
 }
 
 #[test]
+fn unknown_team_error_groups_and_wraps_valid_choices() {
+    let error = resolve_spec(
+        Some("missing"),
+        &no_profiles(),
+        &no_commands(),
+        &TeamsConfig::default(),
+    )
+    .expect_err("missing team");
+    let rendered = error.to_string();
+
+    assert!(rendered.starts_with(
+        "unknown team `missing`\n\
+         define it under [agents.teams] or pass an inline profile/command spec\n\
+         valid teams:\n  peer\n\
+         valid cells:\n  "
+    ));
+    assert!(
+        rendered.lines().all(|line| line.len() <= 88),
+        "error contains an overlong line:\n{rendered}"
+    );
+}
+
+#[test]
 fn profile_inheritance_and_builtin_overrides_resolve() {
     let profiles = profiles([
         (
@@ -487,7 +510,7 @@ fn profile_cells_render_preset_args_and_carry_prompt_sources() {
 }
 
 #[test]
-fn cross_kind_rebase_drops_provider_fields_and_carries_portable_fields() {
+fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
     let profiles = profiles([(
         "planner",
         Profile {
@@ -501,15 +524,12 @@ fn cross_kind_rebase_drops_provider_fields_and_carries_portable_fields() {
             args: Some("--strict-mcp-config".to_owned()),
         },
     )]);
-    let mut warnings = Vec::new();
-
-    let spec = resolve_spec_with_base_override(
+    let spec = resolve_spec_with_agent_override(
         Some("planner"),
         &profiles,
         &no_commands(),
         &TeamsConfig::default(),
         Some("codex"),
-        &mut warnings,
     )
     .expect("rebase");
 
@@ -528,15 +548,6 @@ fn cross_kind_rebase_drops_provider_fields_and_carries_portable_fields() {
         [PathBuf::from("/prompts/fragment.md")]
     );
     assert!(!cell.args.iter().any(|arg| arg == "--strict-mcp-config"));
-    assert_eq!(
-        warnings
-            .iter()
-            .map(|warning| match warning {
-                SpecWarning::RebaseDropped { field, .. } => *field,
-            })
-            .collect::<Vec<_>>(),
-        ["model", "args"]
-    );
 }
 
 #[test]
@@ -562,15 +573,12 @@ fn profile_override_supplies_provider_base_and_orders_prompt_fragments() {
             },
         ),
     ]);
-    let mut warnings = Vec::new();
-
-    let spec = resolve_spec_with_base_override(
+    let spec = resolve_spec_with_agent_override(
         Some("planner"),
         &profiles,
         &no_commands(),
         &TeamsConfig::default(),
         Some("codex"),
-        &mut warnings,
     )
     .expect("profile base");
 
@@ -586,7 +594,6 @@ fn profile_override_supplies_provider_base_and_orders_prompt_fragments() {
         ]
     );
     assert!(cell.args.ends_with(&["--base-only".to_owned()]));
-    assert!(warnings.is_empty());
 }
 
 #[test]
@@ -604,14 +611,12 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
         ("switch", profile("switch-base")),
         ("switch-base", profile("codex")),
     ]);
-    let mut warnings = Vec::new();
-    let same = resolve_spec_with_base_override(
+    let same = resolve_spec_with_agent_override(
         Some("planner"),
         &profiles,
         &no_commands(),
         &TeamsConfig::default(),
         Some("claude"),
-        &mut warnings,
     )
     .expect("same kind");
     let cell = agent_at(&same, 0, 0);
@@ -620,27 +625,24 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
         cell.args
             .ends_with(&["--profile".to_owned(), "planner".to_owned()])
     );
-    assert!(warnings.is_empty());
 
-    let chained = resolve_spec_with_base_override(
+    let chained = resolve_spec_with_agent_override(
         Some("claude"),
         &profiles,
         &no_commands(),
         &TeamsConfig::default(),
         Some("switch"),
-        &mut warnings,
     )
     .expect("chained base");
     assert_eq!(agent_at(&chained, 0, 0).kind, "codex");
 
     assert!(matches!(
-        resolve_spec_with_base_override(
+        resolve_spec_with_agent_override(
             Some("claude"),
             &profiles,
             &no_commands(),
             &TeamsConfig::default(),
             Some("ghost"),
-            &mut warnings,
         ),
         Err(LayoutErr::UnknownAgentOverride { value, valid })
             if value == "ghost"
@@ -680,57 +682,38 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
         "forge".to_owned(),
         team(vec![planner, reviewer]),
     )]));
-    let mut warnings = Vec::new();
-
-    let team_spec = resolve_spec_with_base_override(
+    let team_spec = resolve_spec_with_agent_override(
         Some("forge"),
         &profiles,
         &no_commands(),
         &teams,
         Some("codex"),
-        &mut warnings,
     )
     .expect("team rebase");
     let cell = agent_at(&team_spec, 0, 0);
     assert_eq!(cell.kind, "codex");
     assert_eq!(cell.launch.role.as_deref(), Some("planner"));
     assert!(!cell.args.iter().any(|arg| arg == "--role-arg"));
-    assert_eq!(warnings.len(), 4);
-    assert!(warnings.iter().all(|warning| {
-        let warning = warning.to_string();
-        warning.contains("role `planner` profile `planner`")
-            || warning.contains("role `reviewer` profile `planner`")
-    }));
 
-    warnings.clear();
-    let role_spec = resolve_spec_with_base_override(
+    let role_spec = resolve_spec_with_agent_override(
         Some("forge.planner"),
         &profiles,
         &no_commands(),
         &teams,
         Some("codex"),
-        &mut warnings,
     )
     .expect("single role rebase");
     assert_eq!(
         agent_at(&role_spec, 0, 0).launch.role.as_deref(),
         Some("planner")
     );
-    assert_eq!(warnings.len(), 2);
-    assert!(warnings.iter().all(|warning| {
-        warning
-            .to_string()
-            .contains("role `planner` profile `planner`")
-    }));
 
-    warnings.clear();
-    let virtual_spec = resolve_spec_with_base_override(
+    let virtual_spec = resolve_spec_with_agent_override(
         Some("claude-yolo"),
         &profiles,
         &no_commands(),
         &TeamsConfig::default(),
         Some("codex"),
-        &mut warnings,
     )
     .expect("virtual rebase");
     let virtual_cell = agent_at(&virtual_spec, 0, 0);

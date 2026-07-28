@@ -29,7 +29,6 @@ pub struct ResolvedLaunch {
     pub teams: crate::config::TeamsConfig,
     pub layout: LayoutSpec,
     pub team_name: Option<String>,
-    pub warnings: Vec<crate::harness::spec::SpecWarning>,
 }
 
 /// Flattened parent stamp for one pane-backed agent launched by another agent.
@@ -181,14 +180,12 @@ pub fn resolve_launch(
     spec: Option<&str>,
     agent_override: Option<&str>,
 ) -> std::result::Result<ResolvedLaunch, ResolveLaunchError> {
-    let mut warnings = Vec::new();
-    let layout = match crate::harness::spec::resolve_spec_with_base_override(
+    let layout = match crate::harness::spec::resolve_spec_with_agent_override(
         spec,
         &launch.profiles,
         commands,
         &launch.teams,
         agent_override,
-        &mut warnings,
     ) {
         Ok(layout) => layout,
         Err(err @ crate::harness::spec::LayoutErr::UnknownTeam { .. })
@@ -205,7 +202,6 @@ pub fn resolve_launch(
         teams: launch.teams.clone(),
         layout,
         team_name,
-        warnings,
     })
 }
 

@@ -61,9 +61,6 @@ pub(super) fn prepare_supervised_launch_layout(
         Some(spec),
         request.agent.as_deref(),
     )?;
-    for warning in &resolved.warnings {
-        writeln!(std::io::stderr(), "{warning}")?;
-    }
     rimz::harness::plan::reject_prompt_that_looks_like_spec(
         Some(spec),
         Some(&request.prompt),

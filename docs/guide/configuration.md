@@ -394,7 +394,7 @@ Command-line `--model`, `--effort`, `--budget`, and `--system-prompt-file` overr
 
 A profile may be named like a kind: `[agents.profiles.claude]` overrides the base for bare `claude`, for profiles that set `agent = "claude"`, and for virtual cells like `claude-auto`.
 
-At launch, `--agent <PROFILE|KIND>` replaces the base chain while keeping the selected cell's identity and portable settings: mode, effort, budget, and prompt files. On a provider change, the original model and raw `args` are dropped with a warning because their vocabulary belongs to the old provider; the replacement profile supplies those fields instead. A same-provider re-base keeps them. This makes a profile named for a kind, such as `[agents.profiles.codex]`, the natural place for the Codex model and raw flags used by `--agent codex`.
+At launch, `--agent <PROFILE|KIND>` replaces the base chain while keeping the selected cell's identity and portable settings: mode, effort, budget, and prompt files. On a provider change, the replacement is intentional: the original model and raw `args` are dropped silently because their vocabulary belongs to the old provider, and the replacement profile supplies those fields instead. A same-provider re-base keeps them. This makes a profile named for a kind, such as `[agents.profiles.codex]`, the natural place for the Codex model and raw flags used by `--agent codex`.
 
 #### Commands
 

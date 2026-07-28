@@ -447,7 +447,7 @@ fn prompt_validation_reports_capability_before_base_and_files_before_pi_size() {
 }
 
 #[test]
-fn provider_override_drops_provider_fields_and_carries_portable_fields() {
+fn provider_override_replaces_provider_fields_and_carries_portable_fields() {
     let dir = tempfile::tempdir().expect("temp dir");
     let mut machine = MachineConfig::default();
     machine.agents.profiles.0.insert(
@@ -478,7 +478,6 @@ fn provider_override_drops_provider_fields_and_carries_portable_fields() {
         cell.args,
         ["--effort", "high", "--permission-mode", "auto",]
     );
-    assert_eq!(resolved.warnings.len(), 2);
 
     let err = resolve_launch(
         &launch,

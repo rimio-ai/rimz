@@ -56,9 +56,6 @@ pub(super) fn launch_layout(
         args.launch.spec.as_deref(),
         rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()).as_deref(),
     )?;
-    for warning in &resolved.warnings {
-        writeln!(std::io::stderr(), "{warning}")?;
-    }
     let preset = validate_resolved_launch_inputs(
         &args,
         &effective,
@@ -91,7 +88,6 @@ pub(super) fn launch_layout(
         teams,
         layout,
         team_name,
-        warnings: _,
     } = resolved;
     let ancestry = if rimz::harness::plan::launch_ancestry_required(args.launch.cohort.top_level) {
         let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
