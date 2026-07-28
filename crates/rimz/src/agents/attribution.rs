@@ -13,12 +13,13 @@ use serde::Serialize;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::store::active_time;
 use crate::store::paths::RuntimePaths;
+use crate::transcript::{TranscriptEntry, TranscriptKind};
 
 use super::{AgentState, pricing, spending};
 
 pub use super::spending::EffortTokens as TokenSplit;
 
-pub const ATTRIBUTION_SCHEMA: u8 = 1;
+pub const ATTRIBUTION_SCHEMA: u8 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Attribution {
@@ -67,20 +68,40 @@ pub struct AttributionMember {
     pub registered_at: Option<Timestamp>,
     pub last_activity: Timestamp,
     pub active_secs: Option<u64>,
+    pub asks: u64,
     pub tool_calls: u64,
     pub compactions: u32,
+    pub messages: MessageCounts,
     pub tokens: TokenSplit,
     pub cost_usd: Option<f64>,
+    pub subagents: Vec<SubagentStat>,
 }
 
 impl AttributionMember {
     fn has_contribution(&self) -> bool {
         self.active_secs.unwrap_or(0) > 0
+            || self.asks > 0
             || self.tool_calls > 0
             || self.compactions > 0
+            || self.messages != MessageCounts::default()
             || self.tokens != TokenSplit::default()
             || self.cost_usd.is_some()
+            || !self.subagents.is_empty()
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct MessageCounts {
+    pub user: u64,
+    pub agent: u64,
+    pub sent: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SubagentStat {
+    pub task: Option<String>,
+    pub count: u32,
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -89,8 +110,10 @@ pub struct EffortTotals {
     pub active_secs: Option<u64>,
     pub wall_clock_secs: u64,
     pub cost_usd: Option<f64>,
+    pub asks: u64,
     pub tool_calls: u64,
     pub compactions: u32,
+    pub messages: MessageCounts,
     pub tokens: TokenSplit,
 }
 
@@ -104,6 +127,8 @@ pub enum Presence {
 pub struct AttributionRequest<'a> {
     pub agents: &'a [&'a AgentState],
     pub peers: &'a [&'a AgentState],
+    pub subagents: &'a [&'a AgentState],
+    pub transcript: &'a [TranscriptEntry],
     pub me: Option<&'a AgentSessionId>,
     pub runtime: &'a RuntimePaths,
     pub active_grace_secs: u32,
@@ -130,6 +155,7 @@ struct SlotKey {
 pub fn build(request: AttributionRequest<'_>) -> Attribution {
     let folded = fold(request.agents);
     let peer_representatives = representatives(request.peers);
+    let conversation_counts = conversation_counts(request.transcript);
     let active_records = active_time::read_for_keys(
         request.runtime,
         request
@@ -144,7 +170,7 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
 
     let mut members = folded
         .into_iter()
-        .filter_map(|(_, records)| {
+        .map(|(slot, records)| {
             let team = newest(&records).and_then(|agent| agent.team.clone());
             let opened_turn = records.iter().any(|agent| agent.turn_started_at.is_some());
             let member = member(
@@ -155,15 +181,19 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
                 request.now,
                 &active_records,
                 &prices,
+                request.subagents,
+                &conversation_counts,
             );
-            (opened_turn || member.has_contribution()).then_some((team, member))
+            (slot.channel, team, member, opened_turn)
         })
         .collect::<Vec<_>>();
-    members.sort_by(|left, right| member_order(&left.1, &right.1));
+    credit_sent_messages(&mut members, request.transcript);
+    members.retain(|(_, _, member, opened_turn)| *opened_turn || member.has_contribution());
+    members.sort_by(|left, right| member_order(&left.2, &right.2));
 
     let mut by_team = BTreeMap::<String, Vec<AttributionMember>>::new();
     let mut other = Vec::new();
-    for (team, member) in members {
+    for (_, team, member, _) in members {
         match team {
             Some(team) => by_team.entry(team).or_default().push(member),
             None => other.push(member),
@@ -289,16 +319,37 @@ fn member(
     now: Timestamp,
     active_records: &BTreeMap<(AgentKind, AgentSessionId), active_time::ActiveTimeRecord>,
     prices: &pricing::PriceBook,
+    subagents: &[&AgentState],
+    conversation_counts: &HashMap<(AgentKind, AgentSessionId), ConversationCounts>,
 ) -> AttributionMember {
     // Every slot is created by `fold` only after its first record is inserted.
     let latest = newest(records).expect("folded attribution slot has records");
-    let effort = spending::slot_effort(
+    let effort = spending::slot_effort_breakdown(
         &records
             .iter()
             .map(|agent| spending::EffortSessionRef::from_state(agent))
             .collect::<Vec<_>>(),
         prices,
     );
+    let messages = records
+        .iter()
+        .fold(MessageCounts::default(), |mut total, agent| {
+            if let Some(counts) =
+                conversation_counts.get(&(agent.kind.clone(), agent.agent_id.clone()))
+            {
+                total.user = total.user.saturating_add(counts.messages.user);
+                total.agent = total.agent.saturating_add(counts.messages.agent);
+            }
+            total
+        });
+    let asks = records.iter().fold(0u64, |total, agent| {
+        total.saturating_add(
+            conversation_counts
+                .get(&(agent.kind.clone(), agent.agent_id.clone()))
+                .map_or(0, |counts| counts.asks),
+        )
+    });
+    let subagents = subagent_stats(records, subagents, &effort.subagents);
     let active_secs = records
         .iter()
         .filter_map(|agent| {
@@ -332,6 +383,7 @@ fn member(
             .max()
             .unwrap_or(latest.last_activity),
         active_secs,
+        asks,
         tool_calls: records.iter().fold(0u64, |total, agent| {
             total.saturating_add(
                 agent
@@ -344,9 +396,126 @@ fn member(
         compactions: records.iter().fold(0u32, |total, agent| {
             total.saturating_add(agent.compaction_count)
         }),
-        tokens: effort.tokens,
-        cost_usd: effort.cost_usd,
+        messages,
+        tokens: effort.total.tokens,
+        cost_usd: effort.total.cost_usd,
+        subagents,
     }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ConversationCounts {
+    asks: u64,
+    messages: MessageCounts,
+}
+
+fn conversation_counts(
+    transcript: &[TranscriptEntry],
+) -> HashMap<(AgentKind, AgentSessionId), ConversationCounts> {
+    let mut counts = HashMap::new();
+    for entry in transcript {
+        let counts = counts
+            .entry((entry.kind.clone(), entry.agent_id.clone()))
+            .or_insert_with(ConversationCounts::default);
+        match entry.entry {
+            TranscriptKind::Prompt => {
+                counts.messages.user = counts.messages.user.saturating_add(1);
+            }
+            TranscriptKind::Message => {
+                counts.messages.agent = counts.messages.agent.saturating_add(1);
+            }
+            TranscriptKind::Ask => {
+                counts.asks = counts.asks.saturating_add(1);
+            }
+            TranscriptKind::Assistant | TranscriptKind::Answer | TranscriptKind::Error => {}
+        }
+    }
+    counts
+}
+
+fn credit_sent_messages(
+    members: &mut [(Option<String>, Option<String>, AttributionMember, bool)],
+    transcript: &[TranscriptEntry],
+) {
+    for entry in transcript
+        .iter()
+        .filter(|entry| entry.entry == TranscriptKind::Message)
+    {
+        let Some(from) = entry.from.as_deref() else {
+            continue;
+        };
+        let (base, explicit_channel) = from
+            .split_once('#')
+            .map_or((from, None), |(base, channel)| (base, Some(channel)));
+        let sender_channel = explicit_channel.or(entry.channel.as_deref());
+        if let Some((_, _, member, _)) = members.iter_mut().find(|(channel, _, member, _)| {
+            member
+                .handle
+                .split_once('#')
+                .map_or(member.handle.as_str(), |(base, _)| base)
+                == base
+                && channel.as_deref() == sender_channel
+        }) {
+            member.messages.sent = member.messages.sent.saturating_add(1);
+        }
+    }
+}
+
+fn subagent_stats(
+    records: &[&AgentState],
+    subagents: &[&AgentState],
+    spend: &BTreeMap<String, spending::SlotEffort>,
+) -> Vec<SubagentStat> {
+    let mut children = BTreeMap::<String, Option<String>>::new();
+    for child in subagents.iter().copied().filter(|child| {
+        records.iter().any(|parent| {
+            child.parent_agent_id.as_ref() == Some(&parent.agent_id)
+                && child
+                    .parent_agent_kind
+                    .as_ref()
+                    .is_none_or(|kind| kind == &parent.kind)
+        })
+    }) {
+        children.insert(
+            child.agent_id.to_string(),
+            child
+                .task
+                .as_deref()
+                .map(str::trim)
+                .filter(|task| !task.is_empty())
+                .map(ToOwned::to_owned),
+        );
+    }
+    for child_id in spend.keys() {
+        children.entry(child_id.clone()).or_default();
+    }
+
+    let mut grouped = BTreeMap::<Option<String>, SubagentStat>::new();
+    for (child_id, task) in children {
+        let stat = grouped.entry(task.clone()).or_insert_with(|| SubagentStat {
+            task,
+            count: 0,
+            cost_usd: None,
+        });
+        stat.count = stat.count.saturating_add(1);
+        stat.cost_usd = spending::sum_optional_cost(
+            stat.cost_usd,
+            spend.get(&child_id).and_then(|effort| effort.cost_usd),
+        );
+    }
+    let mut stats = grouped.into_values().collect::<Vec<_>>();
+    stats.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| match (&left.task, &right.task) {
+                (Some(left), Some(right)) => left.cmp(right),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            })
+    });
+    stats
 }
 
 fn newest<'a>(records: &[&'a AgentState]) -> Option<&'a AgentState> {
@@ -385,8 +554,12 @@ fn totals_from_refs(members: &[&AttributionMember]) -> EffortTotals {
             (None, None) => None,
         };
         totals.cost_usd = spending::sum_optional_cost(totals.cost_usd, member.cost_usd);
+        totals.asks = totals.asks.saturating_add(member.asks);
         totals.tool_calls = totals.tool_calls.saturating_add(member.tool_calls);
         totals.compactions = totals.compactions.saturating_add(member.compactions);
+        totals.messages.user = totals.messages.user.saturating_add(member.messages.user);
+        totals.messages.agent = totals.messages.agent.saturating_add(member.messages.agent);
+        totals.messages.sent = totals.messages.sent.saturating_add(member.messages.sent);
         totals.tokens.add_assign(member.tokens);
     }
     let started = members
