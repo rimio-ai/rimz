@@ -24,6 +24,12 @@ pub(crate) struct Captured {
     pub(crate) output: String,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum RtkPolicy {
+    Configured,
+    Bypass,
+}
+
 pub(crate) fn run<I, S>(root: &Path, program: &str, args: I) -> Result<()>
 where
     I: IntoIterator<Item = S>,
@@ -57,9 +63,16 @@ where
     S: AsRef<OsStr>,
 {
     let args: Vec<_> = args.into_iter().collect();
-    let mut child = build_command(root, program, &args, envs, removed_envs)
-        .spawn()
-        .with_context(|| format!("running `{program}`"))?;
+    let mut child = build_command(
+        root,
+        program,
+        &args,
+        envs,
+        removed_envs,
+        RtkPolicy::Configured,
+    )
+    .spawn()
+    .with_context(|| format!("running `{program}`"))?;
     let status = wait_bounded(&mut child, program, &args, &mut || {})?;
     ensure_success(program, &args, status)
 }
@@ -70,6 +83,7 @@ pub(crate) fn run_streamed<I, S>(
     args: I,
     envs: &[(&str, PathBuf)],
     removed_envs: &[&str],
+    rtk_policy: RtkPolicy,
     on_line: &mut dyn FnMut(&str),
 ) -> Result<Captured>
 where
@@ -77,7 +91,7 @@ where
     S: AsRef<OsStr>,
 {
     let args: Vec<_> = args.into_iter().collect();
-    let mut child = build_command(root, program, &args, envs, removed_envs)
+    let mut child = build_command(root, program, &args, envs, removed_envs, rtk_policy)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -193,14 +207,16 @@ fn build_command<S: AsRef<OsStr>>(
     args: &[S],
     envs: &[(&str, PathBuf)],
     removed_envs: &[&str],
+    rtk_policy: RtkPolicy,
 ) -> Command {
-    let mut command = if crate::rtk::wrap_cargo(program, args) {
-        let mut command = Command::new("rtk");
-        command.arg(program);
-        command
-    } else {
-        Command::new(program)
-    };
+    let mut command =
+        if matches!(rtk_policy, RtkPolicy::Configured) && crate::rtk::wrap_cargo(program, args) {
+            let mut command = Command::new("rtk");
+            command.arg(program);
+            command
+        } else {
+            Command::new(program)
+        };
     command
         .args(args.iter().map(AsRef::as_ref))
         .current_dir(root)
@@ -290,5 +306,19 @@ mod tests {
 
         assert_eq!(lines, ["first� line", "second line"]);
         assert_eq!(output, "first� line\r\nsecond line");
+    }
+
+    #[test]
+    fn rtk_bypass_builds_the_requested_cargo_command_directly() {
+        let command = build_command(
+            Path::new("."),
+            "cargo",
+            &["nextest", "list"],
+            &[],
+            &[],
+            RtkPolicy::Bypass,
+        );
+
+        assert_eq!(command.get_program(), "cargo");
     }
 }
