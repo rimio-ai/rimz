@@ -30,10 +30,12 @@ pub(super) fn attribution(
     let channel = super::list::list_channel_filter(all, scope.as_deref(), &ctx.workspace);
     let default_worktree =
         (!all && channel.is_none()).then_some(ctx.workspace.worktree_root.as_path());
-    let agents = snapshot
+    let (subagents, roots) = snapshot
         .agents
         .iter()
-        .filter(|agent| !agent.is_provider_subagent())
+        .partition::<Vec<_>, _>(|agent| agent.is_provider_subagent());
+    let agents = roots
+        .into_iter()
         .filter(|agent| {
             if let Some(filter) = channel.as_deref() {
                 rimz::harness::target::agent_in_worktree(agent, filter)
@@ -47,10 +49,14 @@ pub(super) fn attribution(
             }
         })
         .collect::<Vec<_>>();
+    let transcript =
+        rimz::transcript::read_all(ctx.store.paths()).context("reading conversation transcript")?;
     let me = super::report::SelfIdentity::from_env().resolve(&snapshot);
     let report = rimz::agents::attribution::build(AttributionRequest {
         agents: &agents,
         peers: &peers,
+        subagents: &subagents,
+        transcript: &transcript,
         me: me.as_ref(),
         runtime: ctx.runtime(),
         active_grace_secs: crate::cli::machine_config()
@@ -145,11 +151,21 @@ pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io:
                 render::paint(render::palette::muted(), &model_label(member))
             )?;
             let mut details = render::KeyVals::new().indent(6);
-            details.push("effort", render::cell(effort_label(member)));
+            if let Some(effort) = effort_label(member) {
+                details.push("effort", render::cell(effort));
+            }
             if let Some(calls) = calls_label(member) {
                 details.push("calls", render::cell(calls));
             }
-            details.push("tokens", render::cell(token_label(member)));
+            if let Some(messages) = messages_label(member) {
+                details.push("messages", render::cell(messages));
+            }
+            if let Some(tokens) = token_label(member) {
+                details.push("tokens", render::cell(tokens));
+            }
+            if let Some(subagents) = subagents_label(member) {
+                details.push("subagents", render::cell(subagents));
+            }
             details.render(w)?;
         }
     }
@@ -186,11 +202,21 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
                 markdown_escape(&member.provider),
                 markdown_model_label(member),
             )?;
-            writeln!(w, "  - effort: {}", markdown_escape(&effort_label(member)))?;
+            if let Some(effort) = effort_label(member) {
+                writeln!(w, "  - effort: {}", markdown_escape(&effort))?;
+            }
             if let Some(calls) = calls_label(member) {
                 writeln!(w, "  - calls: {}", markdown_escape(&calls))?;
             }
-            writeln!(w, "  - tokens: {}", markdown_escape(&token_label(member)))?;
+            if let Some(messages) = messages_label(member) {
+                writeln!(w, "  - messages: {}", markdown_escape(&messages))?;
+            }
+            if let Some(tokens) = token_label(member) {
+                writeln!(w, "  - tokens: {}", markdown_escape(&tokens))?;
+            }
+            if let Some(subagents) = subagents_label(member) {
+                writeln!(w, "  - subagents: {}", markdown_escape(&subagents))?;
+            }
         }
     }
     writeln!(w)?;
@@ -256,20 +282,27 @@ fn markdown_model_label(member: &AttributionMember) -> String {
     }
 }
 
-fn effort_label(member: &AttributionMember) -> String {
-    let active = member
+fn effort_label(member: &AttributionMember) -> Option<String> {
+    let mut parts = Vec::with_capacity(2);
+    if let Some(active) = member
         .active_secs
         .map(|seconds| format!("{} active", duration_label(seconds)))
-        .unwrap_or_else(|| "active unknown".to_owned());
-    let cost = member
-        .cost_usd
-        .map(rimz::theme::fmt::dollars2)
-        .unwrap_or_else(|| "cost unknown".to_owned());
-    format!("{active} · {cost}")
+    {
+        parts.push(active);
+    }
+    if let Some(cost) = member.cost_usd.map(rimz::theme::fmt::dollars2) {
+        parts.push(cost);
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 fn calls_label(member: &AttributionMember) -> Option<String> {
-    let mut parts = Vec::with_capacity(2);
+    let mut parts = Vec::with_capacity(3);
+    match member.asks {
+        0 => {}
+        1 => parts.push("1 ask".to_owned()),
+        count => parts.push(format!("{count} asks")),
+    }
     match member.tool_calls {
         0 => {}
         1 => parts.push("1 tool call".to_owned()),
@@ -283,7 +316,23 @@ fn calls_label(member: &AttributionMember) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
-fn token_label(member: &AttributionMember) -> String {
+fn messages_label(member: &AttributionMember) -> Option<String> {
+    [
+        (member.messages.user, "user"),
+        (member.messages.agent, "agent"),
+        (member.messages.sent, "sent"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, name)| format!("{count} {name}"))
+    .reduce(|mut label, component| {
+        label.push_str(", ");
+        label.push_str(&component);
+        label
+    })
+}
+
+fn token_label(member: &AttributionMember) -> Option<String> {
     [
         (member.tokens.input, "input"),
         (member.tokens.output, "output"),
@@ -298,7 +347,29 @@ fn token_label(member: &AttributionMember) -> String {
         label.push_str(&component);
         label
     })
-    .unwrap_or_else(|| "none recorded".to_owned())
+}
+
+fn subagents_label(member: &AttributionMember) -> Option<String> {
+    member
+        .subagents
+        .iter()
+        .map(|stat| {
+            let mut segment = stat.count.to_string();
+            if let Some(task) = stat.task.as_deref() {
+                segment.push(' ');
+                segment.push_str(&task.to_lowercase());
+            }
+            if let Some(cost) = stat.cost_usd {
+                segment.push(' ');
+                segment.push_str(&rimz::theme::fmt::dollars2(cost));
+            }
+            segment
+        })
+        .reduce(|mut label, segment| {
+            label.push_str(" · ");
+            label.push_str(&segment);
+            label
+        })
 }
 
 fn token_count(value: u64) -> String {
@@ -340,18 +411,22 @@ fn totals_label(totals: &EffortTotals) -> String {
             "agents"
         }
     )];
-    parts.push(
-        totals
-            .active_secs
-            .map(|seconds| format!("{} active", duration_label(seconds)))
-            .unwrap_or_else(|| "active unknown".to_owned()),
-    );
-    parts.push(
-        totals
-            .cost_usd
-            .map(rimz::theme::fmt::dollars2)
-            .unwrap_or_else(|| "cost unknown".to_owned()),
-    );
+    if let Some(active) = totals
+        .active_secs
+        .map(|seconds| format!("{} active", duration_label(seconds)))
+    {
+        parts.push(active);
+    }
+    if let Some(cost) = totals.cost_usd.map(rimz::theme::fmt::dollars2) {
+        parts.push(cost);
+    }
+    let messages = totals.messages.user.saturating_add(totals.messages.agent);
+    if messages > 0 {
+        let from_you = (totals.messages.user > 0)
+            .then(|| format!(" ({} from you)", totals.messages.user))
+            .unwrap_or_default();
+        parts.push(format!("{messages} messages{from_you}"));
+    }
     parts.join(" · ")
 }
 
@@ -389,7 +464,7 @@ fn html_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rimz::agents::attribution::{Presence, TeamRef, TokenSplit};
+    use rimz::agents::attribution::{MessageCounts, Presence, SubagentStat, TeamRef, TokenSplit};
     use rimz::ids::AgentKind;
 
     fn member(handle: &str, role: Option<&str>, provider: &str, model: &str) -> AttributionMember {
@@ -408,8 +483,14 @@ mod tests {
             registered_at: Some(jiff::Timestamp::UNIX_EPOCH),
             last_activity: jiff::Timestamp::UNIX_EPOCH,
             active_secs: Some(3_900),
+            asks: 2,
             tool_calls: 7,
             compactions: 1,
+            messages: MessageCounts {
+                user: 2,
+                agent: 5,
+                sent: 4,
+            },
             tokens: TokenSplit {
                 input: 1_200,
                 output: 800,
@@ -417,6 +498,18 @@ mod tests {
                 cache_read: 3_000,
             },
             cost_usd: Some(1.25),
+            subagents: vec![
+                SubagentStat {
+                    task: Some("Explorer".to_owned()),
+                    count: 3,
+                    cost_usd: Some(0.55),
+                },
+                SubagentStat {
+                    task: None,
+                    count: 1,
+                    cost_usd: None,
+                },
+            ],
         }
     }
 
@@ -428,8 +521,14 @@ mod tests {
             active_secs: Some(3_900 * members.len() as u64),
             wall_clock_secs: 4_000,
             cost_usd: Some(1.25 * members.len() as f64),
+            asks: 2 * members.len() as u64,
             tool_calls: 7 * members.len() as u64,
             compactions: members.len() as u32,
+            messages: MessageCounts {
+                user: 2 * members.len() as u64,
+                agent: 5 * members.len() as u64,
+                sent: 4 * members.len() as u64,
+            },
             tokens: TokenSplit {
                 input: 1_200 * members.len() as u64,
                 output: 800 * members.len() as u64,
@@ -440,7 +539,7 @@ mod tests {
         let team_members = vec![team_member];
         let other_members = vec![stray];
         Attribution {
-            schema: 1,
+            schema: 2,
             generated_at: jiff::Timestamp::UNIX_EPOCH,
             rimz_version: "test".to_owned(),
             scope: AttributionScope::default(),
@@ -468,21 +567,25 @@ mod tests {
         let mut output = anstream::StripStream::new(Vec::new());
         render_panel(&mut output, &report()).expect("render panel");
         insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @r"
-        forge team · 1 agent · 1h05m active · $1.25
+        forge team · 1 agent · 1h05m active · $1.25 · 7 messages (2 from you)
 
           @planner (plan|ner) · Claude · fable`2@high
-              effort: 1h05m active · $1.25
-              calls:  7 tool calls · 1 compaction
-              tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
+              effort:    1h05m active · $1.25
+              calls:     2 asks · 7 tool calls · 1 compaction
+              messages:  2 user, 5 agent, 4 sent
+              tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
+              subagents: 3 explorer $0.55 · 1
 
-        Other agents · 1 agent · 1h05m active · $1.25
+        Other agents · 1 agent · 1h05m active · $1.25 · 7 messages (2 from you)
 
           @codex · Codex · gpt-5.5@high
-              effort: 1h05m active · $1.25
-              calls:  7 tool calls · 1 compaction
-              tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
+              effort:    1h05m active · $1.25
+              calls:     2 asks · 7 tool calls · 1 compaction
+              messages:  2 user, 5 agent, 4 sent
+              tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
+              subagents: 3 explorer $0.55 · 1
 
-        Total · 2 agents · 2h10m active · $2.50
+        Total · 2 agents · 2h10m active · $2.50 · 14 messages (4 from you)
         ");
     }
 
@@ -497,11 +600,13 @@ mod tests {
         render_panel(&mut output, &report).expect("render panel");
         insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @r"
           @codex · Codex · gpt-5.5@high
-              effort: 1h05m active · $1.25
-              calls:  7 tool calls · 1 compaction
-              tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
+              effort:    1h05m active · $1.25
+              calls:     2 asks · 7 tool calls · 1 compaction
+              messages:  2 user, 5 agent, 4 sent
+              tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
+              subagents: 3 explorer $0.55 · 1
 
-        Total · 1 agent · 1h05m active · $1.25
+        Total · 1 agent · 1h05m active · $1.25 · 7 messages (2 from you)
         ");
     }
 
@@ -511,21 +616,25 @@ mod tests {
         render_markdown(&mut output, &report()).expect("render markdown");
         insta::assert_snapshot!(String::from_utf8(output).expect("utf8"), @r"
         <details>
-        <summary>Implemented by RimZ agents — 2 agents · 2h10m active · $2.50</summary>
+        <summary>Implemented by RimZ agents — 2 agents · 2h10m active · $2.50 · 14 messages (4 from you)</summary>
 
         **forge team**
 
         - **plan|ner** — Claude fable&#96;2@high
           - effort: 1h05m active · $1.25
-          - calls: 7 tool calls · 1 compaction
+          - calls: 2 asks · 7 tool calls · 1 compaction
+          - messages: 2 user, 5 agent, 4 sent
           - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
+          - subagents: 3 explorer $0.55 · 1
 
         **Other agents**
 
         - **@codex** — Codex `gpt-5.5@high`
           - effort: 1h05m active · $1.25
-          - calls: 7 tool calls · 1 compaction
+          - calls: 2 asks · 7 tool calls · 1 compaction
+          - messages: 2 user, 5 agent, 4 sent
           - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
+          - subagents: 3 explorer $0.55 · 1
 
         </details>
         ");
@@ -584,10 +693,15 @@ mod tests {
     #[test]
     fn call_labels_name_only_recorded_components() {
         let mut sample = member("@coder", Some("coder"), "Codex", "gpt-5.5");
+        sample.asks = 0;
         sample.tool_calls = 0;
         sample.compactions = 0;
         assert_eq!(calls_label(&sample), None);
 
+        sample.asks = 1;
+        assert_eq!(calls_label(&sample).as_deref(), Some("1 ask"));
+
+        sample.asks = 0;
         sample.tool_calls = 1;
         assert_eq!(calls_label(&sample).as_deref(), Some("1 tool call"));
 
@@ -597,9 +711,10 @@ mod tests {
 
         sample.tool_calls = 2;
         sample.compactions = 3;
+        sample.asks = 4;
         assert_eq!(
             calls_label(&sample).as_deref(),
-            Some("2 tool calls · 3 compactions")
+            Some("4 asks · 2 tool calls · 3 compactions")
         );
     }
 
@@ -608,6 +723,7 @@ mod tests {
         let mut report = report();
         for group in &mut report.groups {
             for member in &mut group.members {
+                member.asks = 0;
                 member.tool_calls = 0;
                 member.compactions = 0;
             }
@@ -635,12 +751,47 @@ mod tests {
         let mut sample = member("@coder", Some("coder"), "Codex", "gpt-5.5");
         sample.tokens.cache_write = 0;
         assert_eq!(
-            token_label(&sample),
-            "1.2k input, 800 output, 3k cache read"
+            token_label(&sample).as_deref(),
+            Some("1.2k input, 800 output, 3k cache read")
         );
 
         sample.tokens = TokenSplit::default();
-        assert_eq!(token_label(&sample), "none recorded");
+        assert_eq!(token_label(&sample), None);
+    }
+
+    #[test]
+    fn absent_details_are_omitted_without_placeholders() {
+        let mut report = report();
+        report.groups.truncate(1);
+        report.groups[0].members[0].active_secs = None;
+        report.groups[0].members[0].cost_usd = None;
+        report.groups[0].members[0].asks = 0;
+        report.groups[0].members[0].tool_calls = 0;
+        report.groups[0].members[0].compactions = 0;
+        report.groups[0].members[0].messages = MessageCounts::default();
+        report.groups[0].members[0].tokens = TokenSplit::default();
+        report.groups[0].members[0].subagents.clear();
+        report.groups[0].totals.active_secs = None;
+        report.groups[0].totals.cost_usd = None;
+        report.groups[0].totals.messages = MessageCounts::default();
+        report.totals = report.groups[0].totals.clone();
+
+        let mut panel = anstream::StripStream::new(Vec::new());
+        render_panel(&mut panel, &report).expect("render panel");
+        let panel = String::from_utf8(panel.into_inner()).expect("utf8");
+        assert!(!panel.contains("unknown"));
+        assert!(!panel.contains("none recorded"));
+        assert!(!panel.contains("effort:"));
+        assert!(!panel.contains("calls:"));
+        assert!(!panel.contains("messages:"));
+        assert!(!panel.contains("tokens:"));
+        assert!(!panel.contains("subagents:"));
+
+        let mut markdown = Vec::new();
+        render_markdown(&mut markdown, &report).expect("render markdown");
+        let markdown = String::from_utf8(markdown).expect("utf8");
+        assert!(!markdown.contains("unknown"));
+        assert!(!markdown.contains("none recorded"));
     }
 
     #[test]

@@ -28,13 +28,24 @@ fn agent(id: &str, kind: &str, registered: i64) -> AgentState {
 }
 
 fn build_for(agents: &[AgentState]) -> Attribution {
+    build_with(agents, &[], &[])
+}
+
+fn build_with(
+    agents: &[AgentState],
+    subagents: &[AgentState],
+    transcript: &[TranscriptEntry],
+) -> Attribution {
     let dir = tempfile::tempdir().expect("tempdir");
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
         .expect("runtime paths");
     let refs = agents.iter().collect::<Vec<_>>();
+    let subagent_refs = subagents.iter().collect::<Vec<_>>();
     build(AttributionRequest {
         agents: &refs,
         peers: &refs,
+        subagents: &subagent_refs,
+        transcript,
         me: None,
         runtime: &runtime,
         active_grace_secs: 180,
@@ -268,4 +279,131 @@ fn agents_without_a_recorded_contribution_are_omitted() {
     assert_eq!(durable.compactions, 0);
     assert_eq!(durable.tokens, TokenSplit::default());
     assert_eq!(durable.cost_usd, None);
+}
+
+#[test]
+fn transcript_counts_messages_asks_and_sent_credit_per_slot() {
+    let mut planner = agent("planner-session", "claude", 10);
+    planner.team = Some("forge".to_owned());
+    planner.role = Some("planner".to_owned());
+    planner.channel = Some("feature".to_owned());
+    let mut coder = agent("coder-session", "codex", 20);
+    coder.team = Some("forge".to_owned());
+    coder.role = Some("coder".to_owned());
+    coder.channel = Some("feature".to_owned());
+    let mut docs_coder = agent("docs-coder", "codex", 30);
+    docs_coder.team = Some("forge".to_owned());
+    docs_coder.role = Some("coder".to_owned());
+    docs_coder.channel = Some("docs".to_owned());
+
+    let entry = |kind: &str, id: &str, entry| {
+        TranscriptEntry::new(
+            at(50),
+            AgentKind::new_unchecked(kind),
+            AgentSessionId::from(id),
+            entry,
+            String::new(),
+        )
+    };
+    let mut received = entry("codex", "coder-session", TranscriptKind::Message);
+    received.channel = Some("feature".to_owned());
+    received.from = Some("@planner".to_owned());
+    let mut cross_lane = entry("codex", "docs-coder", TranscriptKind::Message);
+    cross_lane.channel = Some("docs".to_owned());
+    cross_lane.from = Some("@planner#feature".to_owned());
+    let transcript = vec![
+        entry("claude", "planner-session", TranscriptKind::Prompt),
+        entry("claude", "planner-session", TranscriptKind::Ask),
+        received,
+        cross_lane,
+    ];
+
+    let report = build_with(&[planner, coder, docs_coder], &[], &transcript);
+    let members = report.groups[0].members.iter().collect::<Vec<_>>();
+    let planner = members
+        .iter()
+        .find(|member| member.handle == "@planner")
+        .expect("planner");
+    assert_eq!(planner.asks, 1);
+    assert_eq!(
+        planner.messages,
+        MessageCounts {
+            user: 1,
+            agent: 0,
+            sent: 2,
+        }
+    );
+    assert_eq!(report.totals.asks, 1);
+    assert_eq!(report.totals.messages.user, 1);
+    assert_eq!(report.totals.messages.agent, 2);
+}
+
+#[test]
+fn subagents_group_by_task_and_join_durable_child_cost() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let transcript = dir.path().join("parent.jsonl");
+    let subagent_dir = dir.path().join("parent/subagents");
+    std::fs::create_dir_all(&subagent_dir).unwrap();
+    std::fs::write(&transcript, "").unwrap();
+    for (child, cost) in [
+        ("explore-one", 1.25),
+        ("explore-two", 2.0),
+        ("untyped", 0.5),
+    ] {
+        std::fs::write(
+            subagent_dir.join(format!("agent-{child}.jsonl")),
+            format!(
+                "{{\"timestamp\":\"2026-01-01T10:00:01.000Z\",\"costUSD\":{cost},\"requestId\":\"{child}\",\"isSidechain\":true,\"message\":{{\"id\":\"{child}\",\"model\":\"child-model\",\"usage\":{{\"input_tokens\":20,\"output_tokens\":2}}}}}}\n"
+            ),
+        )
+        .unwrap();
+    }
+    let mut parent = agent("parent", "claude", 10);
+    parent.team = Some("forge".to_owned());
+    parent.role = Some("planner".to_owned());
+    parent.transcript_path = Some(transcript.to_string_lossy().into_owned());
+    let mut explore_one = agent("explore-one", "claude", 20);
+    explore_one.parent_agent_id = Some(AgentSessionId::from("parent"));
+    explore_one.task = Some("Explore".to_owned());
+    let mut explore_two = agent("explore-two", "claude", 30);
+    explore_two.parent_agent_id = Some(AgentSessionId::from("parent"));
+    explore_two.task = Some("Explore".to_owned());
+
+    let report = build_with(&[parent], &[explore_one, explore_two], &[]);
+    let stats = &report.groups[0].members[0].subagents;
+
+    assert_eq!(
+        stats,
+        &[
+            SubagentStat {
+                task: Some("Explore".to_owned()),
+                count: 2,
+                cost_usd: Some(3.25),
+            },
+            SubagentStat {
+                task: None,
+                count: 1,
+                cost_usd: Some(0.5),
+            },
+        ]
+    );
+}
+
+#[test]
+fn sent_messages_alone_are_a_contribution() {
+    let idle = agent("idle", "claude", 10);
+    let mut sent = TranscriptEntry::new(
+        at(50),
+        AgentKind::new_unchecked("codex"),
+        AgentSessionId::from("receiver"),
+        TranscriptKind::Message,
+        "hello".to_owned(),
+    );
+    sent.channel = Some("lane".to_owned());
+    sent.from = Some("@claude".to_owned());
+
+    let report = build_with(&[idle], &[], &[sent]);
+
+    assert_eq!(report.totals.agents, 1);
+    assert_eq!(report.groups[0].members[0].messages.sent, 1);
 }

@@ -130,6 +130,35 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
             ),
         ]
     );
+    let paths = env.state_path_for(&env.project_root);
+    for (session, entry, from) in [
+        (
+            "sess-attribution-planner",
+            rimz::transcript::TranscriptKind::Prompt,
+            None,
+        ),
+        (
+            "sess-attribution-planner",
+            rimz::transcript::TranscriptKind::Ask,
+            None,
+        ),
+        (
+            "sess-attribution-coder",
+            rimz::transcript::TranscriptKind::Message,
+            Some("@planner"),
+        ),
+    ] {
+        let mut entry = rimz::transcript::TranscriptEntry::new(
+            jiff::Timestamp::now(),
+            rimz::ids::AgentKind::new_unchecked("codex"),
+            session.into(),
+            entry,
+            String::new(),
+        );
+        entry.channel = Some("feature".to_owned());
+        entry.from = from.map(ToOwned::to_owned);
+        rimz::transcript::append(&paths, &entry).expect("append attribution transcript");
+    }
 
     let output = env
         .rimz()
@@ -144,7 +173,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
-    assert_eq!(report["schema"], 1);
+    assert_eq!(report["schema"], 2);
     assert_eq!(
         report["groups"].as_array().map(Vec::len),
         Some(1),
@@ -159,6 +188,10 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         .expect("planner");
     assert_eq!(planner["presence"], "exited");
     assert_eq!(planner["sessions"], 2);
+    assert_eq!(planner["asks"], 1);
+    assert_eq!(planner["messages"]["user"], 1);
+    assert_eq!(planner["messages"]["sent"], 1);
+    assert_eq!(report["totals"]["messages"]["agent"], 1);
     assert_eq!(report["totals"]["tokens"]["input"], 1_000);
     assert_eq!(report["totals"]["tokens"]["output"], 400);
     assert_eq!(report["totals"]["tokens"]["cache_read"], 1_000);
@@ -177,7 +210,8 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
     assert!(markdown.starts_with("<details>\n"));
     assert!(markdown.contains("<code>forge</code> team"));
     assert!(markdown.contains("- **planner** — Codex `gpt-5.5@high`"));
-    assert!(!markdown.contains("  - calls: "));
+    assert!(markdown.contains("  - calls: 1 ask"));
+    assert!(markdown.contains("  - messages: 1 user, 1 sent"));
     assert!(markdown.contains("  - tokens: "));
 }
 
@@ -222,6 +256,20 @@ fn attribution_cli_credits_claude_subagent_companions() {
             &observation,
         ))
         .expect("register Claude agent");
+    let mut child =
+        AgentLifecycleObservation::new(Some("child".into()), LifecycleSignal::Registered);
+    child.parent_agent_id = Some(session.into());
+    child.task = Some("Explore".to_owned());
+    child.worktree_path = Some(env.project_root.display().to_string());
+    env.store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SubagentStart",
+            &child,
+        ))
+        .expect("register Claude subagent");
 
     let output = env
         .rimz()
@@ -240,6 +288,18 @@ fn attribution_cli_credits_claude_subagent_companions() {
     assert_eq!(report["totals"]["tokens"]["input"], 30);
     assert_eq!(report["totals"]["tokens"]["output"], 3);
     assert_eq!(report["totals"]["cost_usd"], 3.0);
+    assert_eq!(
+        report["groups"][0]["members"][0]["subagents"][0]["task"],
+        "Explore"
+    );
+    assert_eq!(
+        report["groups"][0]["members"][0]["subagents"][0]["count"],
+        1
+    );
+    assert_eq!(
+        report["groups"][0]["members"][0]["subagents"][0]["cost_usd"],
+        2.0
+    );
 }
 
 #[test]
