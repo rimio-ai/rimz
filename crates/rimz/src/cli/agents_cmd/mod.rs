@@ -190,8 +190,8 @@ pub(crate) struct AgentLaunchArgs {
     /// Model for the launched agents.
     #[arg(long, value_name = "MODEL", conflicts_with = "resume")]
     pub(crate) model: Option<String>,
-    /// Launch the spec's agent cells with this provider (fresh launches only).
-    #[arg(long, value_name = "KIND", conflicts_with = "resume")]
+    /// Re-base the spec's agent cells onto this profile or provider kind.
+    #[arg(long, value_name = "PROFILE|KIND", conflicts_with = "resume")]
     pub(crate) agent: Option<String>,
     /// Replace each agent's base system prompt with a file's contents.
     #[arg(long, value_name = "PATH", conflicts_with = "resume")]
