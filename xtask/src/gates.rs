@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -6,11 +7,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 
 use crate::build::{build_plugin, verify_vendored_plugin};
 use crate::docs_links::docs_links;
 use crate::invariants::invariants;
-use crate::runner::{ensure_success, run, run_streamed, run_with_env_and_removed};
+use crate::runner::{Captured, ensure_success, run, run_streamed, run_with_env_and_removed};
 use crate::sandbox::HostSandbox;
 use crate::spinner::Spinner;
 
@@ -53,6 +55,13 @@ const GATE_TEST_ARGS: &[&str] = &[
     "--profile",
     "gate",
     "--workspace",
+    "--all-features",
+    "--locked",
+];
+const CHECK_ARGS: &[&str] = &[
+    "check",
+    "--workspace",
+    "--all-targets",
     "--all-features",
     "--locked",
 ];
@@ -341,6 +350,48 @@ where
     })
 }
 
+fn capture_cargo_task<I, S>(
+    root: &Path,
+    label: &str,
+    args: I,
+    envs: &[(&str, PathBuf)],
+    removed_envs: &[&str],
+) -> Result<Captured>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let spinner = Spinner::new(label);
+    let mut progress = |line: &str| {
+        let line = line.trim();
+        if !line.is_empty() {
+            let line = line.chars().take(100).collect::<String>();
+            spinner.set(format!("{label} — {line}"));
+        }
+    };
+    let captured = run_streamed(root, "cargo", args, envs, removed_envs, &mut progress);
+    drop(spinner);
+    captured
+}
+
+fn finish_cargo_task(
+    name: &str,
+    captured: Captured,
+    note: Option<fn(&str) -> Option<String>>,
+    invocation: &str,
+) -> Result<Captured> {
+    if captured.status.success() {
+        report_gate_pass(
+            name,
+            note.and_then(|extract| extract(&captured.output))
+                .as_deref(),
+        );
+        return Ok(captured);
+    }
+    report_task_failure(name, &failure_detail(&captured.output), invocation);
+    bail!("{name} failed");
+}
+
 fn in_process_gate(gate: impl FnOnce() -> Result<()>) -> GateResult {
     match gate() {
         Ok(()) => GateResult::Pass { note: None },
@@ -499,6 +550,16 @@ fn report_gate_failure(name: &str, detail: &str, invocation: &str) {
 
 #[expect(
     clippy::print_stderr,
+    reason = "xtask prints compact task failures and the next action to stderr"
+)]
+fn report_task_failure(name: &str, detail: &str, invocation: &str) {
+    eprintln!("xtask: fail at {name}");
+    eprintln!("{detail}");
+    eprintln!("NEXT: fix the {name} errors above, then rerun `{invocation}`");
+}
+
+#[expect(
+    clippy::print_stderr,
     reason = "xtask prints compact gate completion to the operator's stderr"
 )]
 fn report_gate_complete() {
@@ -554,7 +615,7 @@ fn bound_trimmed_output(output: String) -> String {
 fn extract_test_summary(output: &str) -> Option<String> {
     output
         .lines()
-        .find(|line| line.contains("tests run:"))
+        .find(|line| line.contains("tests run:") || line.contains("test run:"))
         .map(|line| line.trim().to_owned())
 }
 
@@ -566,18 +627,320 @@ pub(crate) fn deps(root: &Path) -> Result<()> {
     run_with_env_and_removed(root, "cargo", ["machete"], &[], &["CARGO_PKG_NAME"])
 }
 
+pub(crate) fn check(root: &Path) -> Result<()> {
+    let captured = capture_cargo_task(root, "check", CHECK_ARGS.iter().copied(), &[], &[])?;
+    finish_cargo_task("check", captured, None, "cargo xtask check").map(|_| ())
+}
+
 pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
+    let command = parse_test_command(args)?;
     let sandbox = HostSandbox::for_tests(root)?;
     let env = sandbox.command_env();
-    let mut cargo_args = vec![
-        "nextest".to_owned(),
-        "run".to_owned(),
-        "--workspace".to_owned(),
-        "--all-features".to_owned(),
-        "--locked".to_owned(),
-    ];
-    cargo_args.extend(args.iter().cloned());
-    run_with_env_and_removed(root, "cargo", cargo_args, &env, &["NO_COLOR"])
+    let invocation = test_invocation(args);
+
+    if command.list {
+        let mut cargo_args = nextest_args("list");
+        cargo_args.extend(command.forwarded);
+        let captured = capture_cargo_task(root, "test list", cargo_args, &env, &["NO_COLOR"])?;
+        if !captured.status.success() {
+            report_task_failure("test list", &failure_detail(&captured.output), &invocation);
+            bail!("test list failed");
+        }
+        std::io::stdout()
+            .write_all(captured.stdout.as_bytes())
+            .context("writing nextest list output")?;
+        return Ok(());
+    }
+
+    if command.names.is_empty() {
+        let mut cargo_args = nextest_args("run");
+        cargo_args.extend(command.forwarded);
+        let captured = capture_cargo_task(root, "test", cargo_args, &env, &["NO_COLOR"])?;
+        if nextest_matched_no_tests(&captured) {
+            report_zero_test_match(args);
+            bail!("no tests matched");
+        }
+        return finish_cargo_task("test", captured, Some(extract_test_summary), &invocation)
+            .map(|_| ());
+    }
+
+    run_named_tests(root, command, &env, &invocation)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct TestCommand {
+    names: Vec<String>,
+    forwarded: Vec<String>,
+    list: bool,
+}
+
+fn parse_test_command(args: &[String]) -> Result<TestCommand> {
+    let mut names = Vec::new();
+    let mut forwarded = Vec::new();
+    let mut list = false;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--" {
+            forwarded.extend(args[index..].iter().cloned());
+            break;
+        }
+        if arg == "--list" {
+            if list {
+                bail!("cargo xtask test accepts `--list` once");
+            }
+            list = true;
+            index += 1;
+            continue;
+        }
+        if arg == "--name" {
+            let Some(name) = args.get(index + 1).filter(|name| name.as_str() != "--") else {
+                bail!("cargo xtask test `--name` requires a test name");
+            };
+            if name.is_empty() {
+                bail!("cargo xtask test `--name` cannot be empty");
+            }
+            names.push(name.clone());
+            index += 2;
+            continue;
+        }
+        if let Some(name) = arg.strip_prefix("--name=") {
+            if name.is_empty() {
+                bail!("cargo xtask test `--name` cannot be empty");
+            }
+            names.push(name.to_owned());
+            index += 1;
+            continue;
+        }
+        forwarded.push(arg.clone());
+        index += 1;
+    }
+    if list && !names.is_empty() {
+        bail!("cargo xtask test does not combine `--list` with `--name`");
+    }
+    Ok(TestCommand {
+        names,
+        forwarded,
+        list,
+    })
+}
+
+fn nextest_args(subcommand: &str) -> Vec<String> {
+    [
+        "nextest",
+        subcommand,
+        "--workspace",
+        "--all-features",
+        "--locked",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+fn run_named_tests(
+    root: &Path,
+    command: TestCommand,
+    env: &[(&str, PathBuf)],
+    invocation: &str,
+) -> Result<()> {
+    let filterset = exact_name_filterset(&command.names);
+    let mut list_args = nextest_args("list");
+    list_args.extend(nextest_profile_args(&command.forwarded));
+    list_args.extend([
+        "-E".to_owned(),
+        filterset.clone(),
+        "--message-format".to_owned(),
+        "json".to_owned(),
+    ]);
+    let listed = capture_cargo_task(root, "test discovery", list_args, env, &["NO_COLOR"])?;
+    if !listed.status.success() {
+        report_task_failure(
+            "test discovery",
+            &failure_detail(&listed.output),
+            invocation,
+        );
+        bail!("test discovery failed");
+    }
+
+    let listed_names = parse_nextest_list(&listed.stdout)?;
+    let matches = match_requested_names(&command.names, &listed_names);
+    if matches.matched_tests == 0 {
+        report_test_selection(&command.names, &matches);
+        bail!("none of the requested test names matched");
+    }
+
+    let mut run_args = nextest_args("run");
+    run_args.extend(["-E".to_owned(), filterset]);
+    run_args.extend(command.forwarded);
+    let captured = capture_cargo_task(root, "test", run_args, env, &["NO_COLOR"])?;
+    report_test_selection(&command.names, &matches);
+    finish_cargo_task("test", captured, Some(extract_test_summary), invocation)?;
+    if !matches.unmatched.is_empty() {
+        bail!("some requested test names matched no tests");
+    }
+    Ok(())
+}
+
+fn exact_name_filterset(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|name| format!("test(/(^|::){}$/)", escape_test_name(name)))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn escape_test_name(name: &str) -> String {
+    let mut escaped = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':') || !ch.is_ascii() {
+            escaped.push(ch);
+        } else {
+            escaped.push('\\');
+            escaped.push(ch);
+        }
+    }
+    escaped
+}
+
+fn nextest_profile_args(args: &[String]) -> Vec<String> {
+    let mut profiles = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--" {
+            break;
+        }
+        if matches!(arg.as_str(), "-P" | "--profile") {
+            profiles.push(arg.clone());
+            if let Some(value) = args.get(index + 1) {
+                profiles.push(value.clone());
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if arg.starts_with("--profile=") || (arg.starts_with("-P") && arg.len() > 2) {
+            profiles.push(arg.clone());
+        }
+        index += 1;
+    }
+    profiles
+}
+
+#[derive(Deserialize)]
+struct NextestList {
+    #[serde(rename = "rust-suites")]
+    rust_suites: BTreeMap<String, ListedSuite>,
+}
+
+#[derive(Deserialize)]
+struct ListedSuite {
+    testcases: BTreeMap<String, ListedTest>,
+}
+
+#[derive(Deserialize)]
+struct ListedTest {
+    #[serde(rename = "filter-match")]
+    filter_match: ListedFilterMatch,
+}
+
+#[derive(Deserialize)]
+struct ListedFilterMatch {
+    status: String,
+}
+
+fn parse_nextest_list(output: &str) -> Result<Vec<String>> {
+    let listing: NextestList =
+        serde_json::from_str(output).context("parsing `cargo nextest list` JSON")?;
+    Ok(listing
+        .rust_suites
+        .into_values()
+        .flat_map(|suite| suite.testcases)
+        .filter_map(|(name, test)| (test.filter_match.status == "matches").then_some(name))
+        .collect())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RequestedMatches {
+    matched_requests: usize,
+    matched_tests: usize,
+    unmatched: Vec<String>,
+}
+
+fn match_requested_names(requested: &[String], listed: &[String]) -> RequestedMatches {
+    let mut unmatched = Vec::new();
+    let mut matched_requests = 0;
+    for requested_name in requested {
+        if listed
+            .iter()
+            .any(|listed_name| test_name_matches_request(listed_name, requested_name))
+        {
+            matched_requests += 1;
+        } else {
+            unmatched.push(requested_name.clone());
+        }
+    }
+    RequestedMatches {
+        matched_requests,
+        matched_tests: listed.len(),
+        unmatched,
+    }
+}
+
+fn test_name_matches_request(listed: &str, requested: &str) -> bool {
+    listed == requested
+        || listed
+            .strip_suffix(requested)
+            .is_some_and(|prefix| prefix.ends_with("::"))
+}
+
+fn test_invocation(args: &[String]) -> String {
+    if args.is_empty() {
+        "cargo xtask test".to_owned()
+    } else {
+        format!("cargo xtask test {}", args.join(" "))
+    }
+}
+
+fn nextest_matched_no_tests(captured: &Captured) -> bool {
+    captured.status.code() == Some(4) || captured.output.contains("error: no tests to run")
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "xtask reports exact-name selection results to the operator"
+)]
+fn report_test_selection(requested: &[String], matches: &RequestedMatches) {
+    eprintln!(
+        "test selection: {} requested, {} matched name(s), {} matched test(s)",
+        requested.len(),
+        matches.matched_requests,
+        matches.matched_tests
+    );
+    if !matches.unmatched.is_empty() {
+        eprintln!("unmatched: {}", matches.unmatched.join(", "));
+        eprintln!(
+            "NEXT: inspect available names with `cargo xtask test --list {}`",
+            matches.unmatched.join(" ")
+        );
+    }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "xtask explains empty nextest selections and gives a discovery command"
+)]
+fn report_zero_test_match(args: &[String]) {
+    let rendered = if args.is_empty() {
+        "<none>".to_owned()
+    } else {
+        args.join(" ")
+    };
+    eprintln!("xtask: no tests matched nextest arguments: {rendered}");
+    eprintln!("The filter or active profile excluded every workspace test.");
+    eprintln!("NEXT: inspect available names with `cargo xtask test --list {rendered}`");
 }
 
 pub(crate) fn test_archive(root: &Path, args: &[String]) -> Result<()> {
@@ -750,7 +1113,152 @@ Summary [   12.3s] 2611 tests run: 2611 passed, 42 skipped
             extract_test_summary(output).as_deref(),
             Some("Summary [   12.3s] 2611 tests run: 2611 passed, 42 skipped")
         );
+        assert_eq!(
+            extract_test_summary("Summary [ 0.01s] 1 test run: 1 passed").as_deref(),
+            Some("Summary [ 0.01s] 1 test run: 1 passed")
+        );
         assert_eq!(extract_test_summary("no summary here"), None);
+    }
+
+    #[test]
+    fn test_command_extracts_names_and_list_without_rewriting_nextest_args() {
+        let command = parse_test_command(&[
+            "--name".to_owned(),
+            "leaf".to_owned(),
+            "--name=tests::full".to_owned(),
+            "-P".to_owned(),
+            "gate".to_owned(),
+            "auth".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            command,
+            TestCommand {
+                names: vec!["leaf".to_owned(), "tests::full".to_owned()],
+                forwarded: vec!["-P".to_owned(), "gate".to_owned(), "auth".to_owned()],
+                list: false,
+            }
+        );
+
+        let command = parse_test_command(&["--list".to_owned(), "auth".to_owned()]).unwrap();
+        assert_eq!(
+            command,
+            TestCommand {
+                names: Vec::new(),
+                forwarded: vec!["auth".to_owned()],
+                list: true,
+            }
+        );
+    }
+
+    #[test]
+    fn test_command_leaves_libtest_args_after_separator_untouched() {
+        let command = parse_test_command(&[
+            "auth".to_owned(),
+            "--".to_owned(),
+            "--name".to_owned(),
+            "literal".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            command.forwarded,
+            ["auth", "--", "--name", "literal"].map(str::to_owned)
+        );
+        assert!(command.names.is_empty());
+    }
+
+    #[test]
+    fn test_command_rejects_missing_names_and_mixed_discovery_modes() {
+        assert!(
+            parse_test_command(&["--name".to_owned()])
+                .unwrap_err()
+                .to_string()
+                .contains("requires a test name")
+        );
+        assert!(
+            parse_test_command(&["--name=".to_owned()])
+                .unwrap_err()
+                .to_string()
+                .contains("cannot be empty")
+        );
+        assert!(
+            parse_test_command(&["--list".to_owned(), "--name=leaf".to_owned()])
+                .unwrap_err()
+                .to_string()
+                .contains("does not combine")
+        );
+    }
+
+    #[test]
+    fn exact_name_filterset_anchors_leaf_and_full_names() {
+        assert_eq!(
+            exact_name_filterset(&["leaf".to_owned(), "tests::full.name".to_owned()]),
+            r"test(/(^|::)leaf$/) | test(/(^|::)tests::full\.name$/)"
+        );
+        assert_eq!(
+            exact_name_filterset(&["unicode::café".to_owned()]),
+            "test(/(^|::)unicode::café$/)"
+        );
+    }
+
+    #[test]
+    fn list_step_forwards_only_nextest_profiles() {
+        assert_eq!(
+            nextest_profile_args(&[
+                "auth".to_owned(),
+                "-P".to_owned(),
+                "live".to_owned(),
+                "--profile=journey".to_owned(),
+                "--no-capture".to_owned(),
+                "--".to_owned(),
+                "-P".to_owned(),
+                "ignored".to_owned(),
+            ]),
+            ["-P", "live", "--profile=journey"].map(str::to_owned)
+        );
+    }
+
+    #[test]
+    fn nextest_json_keeps_only_filterset_matches() {
+        let output = r#"{
+            "rust-suites": {
+                "xtask::bin/xtask": {
+                    "testcases": {
+                        "tests::matched": {
+                            "filter-match": {"status": "matches"}
+                        },
+                        "tests::other": {
+                            "filter-match": {"status": "mismatch", "reason": "expression"}
+                        }
+                    }
+                }
+            }
+        }"#;
+        assert_eq!(
+            parse_nextest_list(output).unwrap(),
+            vec!["tests::matched".to_owned()]
+        );
+    }
+
+    #[test]
+    fn requested_names_match_whole_path_suffixes_only() {
+        let matches = match_requested_names(
+            &[
+                "leaf".to_owned(),
+                "nested::leaf".to_owned(),
+                "missing".to_owned(),
+            ],
+            &["tests::leaf".to_owned(), "tests::nested::leaf".to_owned()],
+        );
+        assert_eq!(
+            matches,
+            RequestedMatches {
+                matched_requests: 2,
+                matched_tests: 2,
+                unmatched: vec!["missing".to_owned()],
+            }
+        );
+        assert!(!test_name_matches_request("tests::leaf_extra", "leaf"));
     }
 
     #[test]

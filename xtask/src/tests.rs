@@ -59,6 +59,22 @@ fn test_forwards_filter_args() {
 }
 
 #[test]
+fn test_forwards_exact_names_and_list_requests() {
+    for argv in [
+        args(&["test", "--name", "leaf", "--name=tests::full"]),
+        args(&["test", "--list", "auth"]),
+    ] {
+        assert_eq!(
+            parse_args(&argv).unwrap(),
+            Action::Run {
+                task: "test",
+                args: &argv[1..],
+            },
+        );
+    }
+}
+
+#[test]
 fn test_archive_forwards_archive_args() {
     let argv = args(&[
         "test-archive",
@@ -150,5 +166,23 @@ fn profile_build_is_a_first_class_no_arg_task() {
             task: "profile-build",
             args: &[],
         },
+    );
+}
+
+#[test]
+fn check_is_a_first_class_no_arg_task() {
+    assert!(task_info("check").is_some());
+    assert_eq!(
+        parse_args(&args(&["check"])).unwrap(),
+        Action::Run {
+            task: "check",
+            args: &[],
+        },
+    );
+    assert!(
+        parse_args(&args(&["check", "--package", "rimz"]))
+            .unwrap_err()
+            .to_string()
+            .contains("takes no arguments")
     );
 }

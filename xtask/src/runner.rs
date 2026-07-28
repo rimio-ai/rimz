@@ -20,6 +20,7 @@ const TERMINATE_GRACE: Duration = Duration::from_secs(5);
 
 pub(crate) struct Captured {
     pub(crate) status: ExitStatus,
+    pub(crate) stdout: String,
     pub(crate) output: String,
 }
 
@@ -111,10 +112,12 @@ where
         .map_err(|_| anyhow::anyhow!("command stderr reader panicked"))?
         .context("reading command stderr")?;
 
-    let mut combined = String::from_utf8_lossy(&stdout).into_owned();
+    let stdout = String::from_utf8_lossy(&stdout).into_owned();
+    let mut combined = stdout.clone();
     combined.push_str(&stderr_output);
     Ok(Captured {
         status,
+        stdout,
         output: combined,
     })
 }
