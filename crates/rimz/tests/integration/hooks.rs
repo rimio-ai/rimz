@@ -3003,19 +3003,18 @@ fn codex_stop_over_error_rollout_writes_turn_error_sidecar() {
 fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
     let env = Env::new();
     let claim_id = env.seed_usage_claim("codex");
+    let request = rimz::sidebar::refresh::usage::AccountUsageRefreshRequest {
+        workspace_id: env.workspace_id.clone(),
+        kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        claim_id: claim_id.parse().expect("valid usage claim id"),
+    };
     let out = env
         .rimz()
         .env("RIMZ_CODEX_BIN", codex_appserver_stub())
-        .args([
-            "agents",
+        .args(rimz::child_process::agent_helper_argv(
             "refresh-usage",
-            "--kind",
-            "codex",
-            "--workspace-id",
-            env.workspace_id.as_str(),
-            "--claim-id",
-            &claim_id,
-        ])
+            &request,
+        ))
         .output()
         .expect("spawn agents refresh-usage codex");
     assert!(

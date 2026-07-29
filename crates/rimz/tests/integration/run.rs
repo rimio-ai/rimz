@@ -33,17 +33,17 @@ fn hidden_timeout_helper_settles_only_an_overdue_run() {
     rimz::store::run_store::write(&store.paths().runs_dir, &future).expect("write future run");
 
     for run in [&overdue, &future] {
+        let request = rimz::harness::run_timeout::RunTimeoutRequest {
+            workspace_id: env.workspace_id.clone(),
+            run_id: run.run_id.clone(),
+        };
         let output = env
             .rimz()
             .current_dir(&env.project_root)
-            .args([
-                "agents",
+            .args(rimz::child_process::agent_helper_argv(
                 "run-timeout",
-                "--workspace-id",
-                env.workspace_id.as_str(),
-                "--run-id",
-                run.run_id.as_str(),
-            ])
+                &request,
+            ))
             .output()
             .expect("run timeout helper");
         assert!(
