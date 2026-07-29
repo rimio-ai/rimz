@@ -250,7 +250,9 @@ fn tmux_sidebar_keeps_width_when_work_pane_closes() {
 
     let state = rimz::StatePaths::under(env.workspace_id.clone(), &env.state_root())
         .expect("test state paths");
-    let diag_path = state.root.join("diag.log.jsonl");
+    let diag_path = rimz::diag::DiagSink::under(state.root, env.workspace_id.clone(), "room", None)
+        .log_path()
+        .expect("diagnostic path");
     let baseline = read_until(
         &diag_path,
         |text| text.contains("\"sidebar_width_settle\"") && text.contains("\"settled_cols\":40"),
