@@ -350,12 +350,14 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
         bail!("this agent has no live subagents to stop");
     }
     let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let mut tracker = agents_cmd::StopTracker::default();
     let mut failed = false;
     let mut out = render::out();
     for child in children {
         let label = rimz::harness::target::agent_handle(child, &peers, true);
-        match agents_cmd::stop_resolved(&ctx, globals, child) {
-            Ok(()) => writeln!(out, "stopped {label}")?,
+        match agents_cmd::stop_resolved(&ctx, globals, child, &mut tracker) {
+            Ok(true) => writeln!(out, "stopped {label}")?,
+            Ok(false) => {}
             Err(err) => {
                 failed = true;
                 writeln!(out, "error {label}: {err:#}")?;

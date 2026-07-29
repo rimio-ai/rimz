@@ -1,7 +1,14 @@
 use super::*;
 
+use std::collections::HashSet;
+
 use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent};
 use crate::cli::render;
+
+#[derive(Default)]
+pub(in crate::cli) struct StopTracker {
+    stopped: HashSet<(AgentKind, AgentSessionId)>,
+}
 
 pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
@@ -12,12 +19,22 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
         let agents =
             rimz::harness::target::resolve_many(&snapshot, &reference, None, current_channel)?;
         let peers = rimz::harness::target::addressable_agents(&snapshot);
+        let mut tracker = StopTracker::default();
         let mut failed = false;
         let mut out = render::out();
         for agent in agents {
             let label = rimz::harness::target::agent_handle(agent, &peers, true);
-            match stop_live_agent(workspace, store, globals, agent) {
-                Ok(()) => writeln!(out, "stopped {label}")?,
+            match stop_live_agent_tree(
+                workspace,
+                store,
+                globals,
+                &snapshot,
+                &peers,
+                agent,
+                &mut tracker,
+            ) {
+                Ok(true) => writeln!(out, "stopped {label}")?,
+                Ok(false) => {}
                 Err(err) => {
                     failed = true;
                     writeln!(out, "error {label}: {err:#}")?;
@@ -32,6 +49,19 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
     let live_agent_result =
         crate::cli::resolve_agent_one(&snapshot, &reference, None, current_channel);
     let live_agent = live_agent_result.as_ref().ok().copied();
+    if let Some(live_agent) = live_agent {
+        let peers = rimz::harness::target::addressable_agents(&snapshot);
+        stop_live_agent_tree(
+            workspace,
+            store,
+            globals,
+            &snapshot,
+            &peers,
+            live_agent,
+            &mut StopTracker::default(),
+        )?;
+        return Ok(());
+    }
     if let Some(run) = newest_run_by_ref(store, &reference, live_agent)? {
         supervised::stop_supervised_run(workspace, store, globals, &run)?;
         return Ok(());
@@ -70,8 +100,70 @@ pub(in crate::cli) fn stop_resolved(
     ctx: &Ctx,
     globals: &GlobalFlags,
     agent: &AgentState,
-) -> Result<()> {
-    stop_live_agent(&ctx.workspace, &ctx.store, globals, agent)
+    tracker: &mut StopTracker,
+) -> Result<bool> {
+    let snapshot = ctx.alive_snapshot()?;
+    let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let current = snapshot
+        .agents
+        .iter()
+        .find(|candidate| candidate.kind == agent.kind && candidate.agent_id == agent.agent_id)
+        .unwrap_or(agent);
+    stop_live_agent_tree(
+        &ctx.workspace,
+        &ctx.store,
+        globals,
+        &snapshot,
+        &peers,
+        current,
+        tracker,
+    )
+}
+
+fn stop_live_agent_tree(
+    workspace: &rimz::ResolvedWorkspace,
+    store: &rimz::Store,
+    globals: &GlobalFlags,
+    snapshot: &rimz::SidebarSnapshot,
+    peers: &[&AgentState],
+    agent: &AgentState,
+    tracker: &mut StopTracker,
+) -> Result<bool> {
+    let key = (agent.kind.clone(), agent.agent_id.clone());
+    if tracker.stopped.contains(&key) {
+        return Ok(false);
+    }
+
+    let parent_label = rimz::harness::target::agent_handle(agent, peers, true);
+    let mut failures = Vec::new();
+    for child in rimz::harness::target::launched_children(&snapshot.agents, agent)
+        .into_iter()
+        .filter(|child| child.ended_at.is_none())
+    {
+        let child_label = rimz::harness::target::agent_handle(child, peers, true);
+        match stop_live_agent_tree(workspace, store, globals, snapshot, peers, child, tracker) {
+            Ok(true) => writeln!(
+                render::out(),
+                "stopped {child_label} (subagent of {parent_label})"
+            )?,
+            Ok(false) => {}
+            Err(err) => failures.push(format!("{child_label}: {err:#}")),
+        }
+    }
+
+    match stop_live_agent(workspace, store, globals, agent) {
+        Ok(()) => {
+            tracker.stopped.insert(key);
+        }
+        Err(err) => failures.push(format!("{parent_label}: {err:#}")),
+    }
+    if !failures.is_empty() {
+        bail!(
+            "one or more agents could not be stopped: {}",
+            failures.join("; ")
+        );
+    }
+    Ok(true)
 }
 
 fn close_agent_pane(workspace: &rimz::ResolvedWorkspace, agent: &AgentState) -> Result<()> {
