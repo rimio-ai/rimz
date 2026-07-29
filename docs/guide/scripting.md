@@ -141,14 +141,16 @@ A reference is the printed name, a run id, or any [agent address](./messaging.md
 
 ## Agents scripting agents
 
-`rimz agents -p` is a plain shell command, and agents have shell tools — so the caller does not have to be you. An agent that runs the command gets a subagent: Claude hands its diff to a Codex run for a second opinion, Codex hands a stubborn bug to Claude, a planner fans an audit out across three runs and joins on the exit codes. The calling agent sees only a command and an answer, so subagents mix providers freely; pairing model strengths this way is the same economics that makes [teams](./teams.md) work.
+`rimz agents -p` is a plain shell command, and agents have shell tools — so the caller does not have to be you. `rimz subagents` packages that path for a RimZ-launched agent: it supplies supervised print mode and background execution, inherits the caller's checkout, and prints a petname for the later join. Claude can hand its diff to Codex for a second opinion, Codex can hand a stubborn bug to Claude, and a planner can fan an audit across three runs. The calling agent sees only commands and durable answers, so subagents mix providers freely; pairing model strengths this way is the same economics that makes [teams](./teams.md) work.
 
 ```sh
 # inside a Claude turn, via its shell tool: a cross-provider review
-git diff | rimz agents codex -p --stdin 'review this diff; reply SHIP or HOLD, with reasons'
+reviewer=$(rimz subagents codex 'review the current diff; reply SHIP or HOLD, with reasons')
+# ... do other work or launch more children ...
+rimz subagents wait "$reviewer"
 ```
 
-Compare that with an agent's built-in subagents, which run headless inside the parent's harness. A `-p` child is a first-class member of your room: its own card and pane, a transcript that outlives the turn, and a question that routes to you instead of failing silently — the parent blocks on the exit code either way. Packaging the pattern for your agents is a few lines of skill or slash-command prompt around the one command; when the task belongs to a teammate that is already running, hand it over with [`rimz message`](./messaging.md) instead of spawning a fresh turn.
+Compare that with an agent's built-in subagents, which run headless inside the parent's harness. A RimZ-launched child is a first-class member of your room: its own pane, a nested sidebar row, a transcript that outlives the turn, and a question that routes to you instead of failing silently. Use `rimz agents -p` directly when the child needs controls the tailored doorway omits, such as `--stdin` or a separate worktree. When the task belongs to a teammate that is already running, hand it over with [`rimz message`](./messaging.md) instead of spawning a fresh turn.
 
 ## In a pipeline
 
