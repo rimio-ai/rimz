@@ -263,9 +263,9 @@ pub fn cleanup(spec: &SandboxSpec) {
 
     let socket = crate::mux::tmux::managed_server_socket_path_under(&spec.runtime_root);
     if socket.exists() {
-        let mut command = Command::new("tmux");
+        let mut command = crate::mux::tmux::tmux_cmd(&socket).to_command();
         scrub_session_env(&mut command);
-        command.args(["-S"]).arg(socket).arg("kill-server");
+        command.arg("kill-server");
         reap_bounded(command);
     }
 
