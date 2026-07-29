@@ -110,6 +110,7 @@ Every control command runs through [`CommandSpec`](../../crates/rimz/src/mux/com
 | --- | --- | --- |
 | `COMMAND_TIMEOUT` | 30s | A wedged `zellij action` busy-loops at 100% CPU when its server dies, and would otherwise hang the caller forever. |
 | `LIST_SESSIONS_TIMEOUT` | 3s | A read-only local query on hot paths. |
+| `TAB_RENAME_TIMEOUT` | 2s | Tab status is disposable chrome; a stuck backend drops the enrichment instead of holding a worker on the structural-command bound. |
 | Start-path session probe | 1s | A timeout here is treated as definitive rather than retried against a wedged server, and prints a console note. |
 
 A healthy command answers in milliseconds, and callers treat mux commands as best-effort, so the bound degrades rather than blocks. When the selected backend is unresponsive at start, RimZ refuses the start with recovery steps; rival-backend and notice probes skip their enrichment and continue.
