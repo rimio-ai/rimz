@@ -29,7 +29,7 @@ pub struct SubagentsArgs {
 enum SubagentsSubcmd {
     /// Launch one supervised child agent.
     Launch(SubagentLaunchArgs),
-    /// Launch children from a JSON task list and join them.
+    /// Launch children from a JSON task list.
     Fanout(FanoutArgs),
     /// List this agent's children.
     #[command(alias = "ls")]
@@ -77,9 +77,9 @@ struct FanoutArgs {
     /// Tasks JSON; stdin when omitted.
     #[arg(value_name = "FILE")]
     file: Option<PathBuf>,
-    /// Launch the children without joining them.
+    /// Wait for every launched child and print its result.
     #[arg(long)]
-    bg: bool,
+    fg: bool,
     /// Stop each child after this duration.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<Duration>,
@@ -106,7 +106,7 @@ struct FanoutTask {
 
 #[derive(Debug, Default, PartialEq, Args)]
 #[command(
-    after_help = "Use `--bg` to launch several children in parallel, then join them with `rimz subagents wait`. The printed petname is also an address: use `rimz message @petname \"…\"` for a follow-up."
+    after_help = "Launch several children in parallel, then join them with `rimz subagents wait`. The printed petname is also an address: use `rimz message @petname \"…\"` for a follow-up."
 )]
 struct SubagentLaunchArgs {
     /// Agent kind or configured profile.
@@ -133,9 +133,9 @@ struct SubagentLaunchArgs {
     /// Stop the child after this duration.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<Duration>,
-    /// Run the child in the background and print its petname.
+    /// Wait for the child and print its result.
     #[arg(long)]
-    bg: bool,
+    fg: bool,
     /// Leave the child pane open after completion.
     #[arg(long)]
     keep: bool,
@@ -231,7 +231,7 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
             }
         }
     }
-    if args.bg {
+    if !args.fg {
         if args.json {
             #[derive(Serialize)]
             struct BackgroundReport<'a> {
@@ -329,7 +329,7 @@ impl FanoutTask {
             agent: self.agent,
             effort: self.effort,
             timeout,
-            bg: true,
+            fg: false,
             keep: fanout.keep,
             description: self.description,
             max_turns: self.max_turns,
@@ -360,7 +360,7 @@ impl SubagentLaunchArgs {
             prompt: Some(prompt),
             cohort: agents_cmd::CohortLaunchArgs {
                 description: self.description,
-                bg: self.bg,
+                bg: !self.fg,
                 ..Default::default()
             },
             name: self.name,
@@ -385,7 +385,7 @@ fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
         || args.agent.is_some()
         || args.effort.is_some()
         || args.timeout.is_some()
-        || args.bg
+        || args.fg
         || args.keep
         || args.description.is_some()
         || args.max_turns.is_some()
@@ -688,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn launch_implies_supervised_blocking_defaults() {
+    fn launch_implies_supervised_background_defaults() {
         let args = parse(&["rimz", "claude", "review this", "--effort", "high"]);
         let launch = args
             .launch
@@ -702,6 +702,7 @@ mod tests {
             "--effort",
             "high",
             "-p",
+            "--bg",
             "--timeout",
             "30m",
         ])
@@ -714,8 +715,8 @@ mod tests {
     }
 
     #[test]
-    fn background_launch_uses_the_supervised_non_blocking_path() {
-        let args = parse(&["rimz", "claude", "review this", "--bg"]);
+    fn foreground_launch_uses_the_supervised_blocking_path() {
+        let args = parse(&["rimz", "claude", "review this", "--fg"]);
         let launch = args
             .launch
             .into_agent_launch(&rimz::config::SubagentsConfig::default())
@@ -725,7 +726,6 @@ mod tests {
             "claude",
             "review this",
             "-p",
-            "--bg",
             "--timeout",
             "30m",
         ])
@@ -746,14 +746,14 @@ mod tests {
             "--timeout",
             "10m",
             "--keep",
-            "--bg",
+            "--fg",
             "--json",
         ]);
         let Some(SubagentsSubcmd::Fanout(fanout)) = fanout.command else {
             panic!("fanout command");
         };
         assert_eq!(fanout.file, Some(PathBuf::from("tasks.json")));
-        assert!(fanout.bg);
+        assert!(fanout.fg);
         assert!(fanout.json);
         let launches = parse_fanout_launches(
             r#"[{
@@ -1032,9 +1032,9 @@ mod tests {
     #[test]
     fn lifecycle_verbs_parse() {
         assert!(matches!(
-            parse(&["rimz", "fanout", "tasks.json", "--bg"]).command,
+            parse(&["rimz", "fanout", "tasks.json", "--fg"]).command,
             Some(SubagentsSubcmd::Fanout(FanoutArgs {
-                bg: true,
+                fg: true,
                 file: Some(_),
                 ..
             }))

@@ -29,7 +29,7 @@ The two also differ in reach: a pane-backed child is a peer for `rimz message` a
 
 `rimz subagents` refuses outside a RimZ-launched agent ([`cli/subagents/mod.rs`](../../../crates/rimz/src/cli/subagents/mod.rs)). The test is one environment variable: `RIMZ_AGENT_KIND`, exported into every agent pane by the [exec wrapper](./fleet.md#the-exec-wrapper). A user shell has no such variable and gets pointed at `rimz agents` or `rimz teams` instead.
 
-This is a usability boundary, not a security one — the same launch is expressible as `rimz agents … -p`, and `subagents` exists so a delegating agent does not have to choose the supervision flags correctly. What the doorway buys is that every child launched through it is *uniformly* supervised, deadlined, and self-cleaning.
+This is a usability boundary, not a security one — the same launch is expressible as `rimz agents … -p --bg`, and `subagents` exists so a delegating agent does not have to choose the supervision flags correctly. What the doorway buys is that every child launched through it is *uniformly* supervised, background, deadlined, and self-cleaning.
 
 ## What a launch desugars to
 
@@ -38,13 +38,13 @@ This is a usability boundary, not a security one — the same launch is expressi
 | Field | Value | Why |
 | --- | --- | --- |
 | `print` | always `true` | a child is one bounded turn, never a session |
-| `bg` | `--bg`, default false | foreground launches return the child's result directly; background launches let the parent join later |
+| `bg` | `!--fg` | the parent keeps its own turn moving and joins later |
 | wrapper self-cleanup | on unless `--keep` | the child is reclaimed from its durable outcome even if the blocking parent disappears |
 | `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | an unattended child must not run forever |
 | `keep` | `--keep`, default false | the pane closes itself on completion |
 | everything else | default | see the omissions below |
 
-The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --timeout 30m`, while additionally arming the in-pane wrapper's self-cleanup because this doorway omits retries and verification. `--bg` adds the same flag to that underlying run. Everything after that point — the run record, the completion fold, the wake socket, pane reclamation — is [scripting.md](./scripting.md) unchanged, which is the reason this page does not restate any of it.
+The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --bg --timeout 30m`, while additionally arming the in-pane wrapper's self-cleanup because this doorway omits retries and verification. `--fg` removes the background flag from that underlying run. Everything after that point — the run record, the completion fold, the wake socket, pane reclamation — is [scripting.md](./scripting.md) unchanged, which is the reason this page does not restate any of it.
 
 The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--top-level`, `--resume`, placement flags, output and input formats, retries, and verification. Each of those needs a decision the delegating agent is not well placed to make, and each is still reachable by calling `rimz agents` directly. `types` lists kinds, profiles, and configured commands but never teams, because one launch produces one agent rather than a cohort.
 
@@ -56,7 +56,7 @@ Parsing, required fields, timeout syntax, and duplicate explicit names are valid
 
 The supervised runner's background outcome carries the minted petname and run ID back to `agents_cmd`; the ordinary single-launch presentation prints the petname there, while fanout collects the identities directly. This avoids rediscovering children from a before/after store snapshot, which could confuse another launch racing in the same family.
 
-Without `--bg`, fanout passes the collected petnames to `agents_cmd::wait_agent_batch` as one explicit set. The normal multi-target wait renderer and aggregate exit code therefore own fanout results too. With `--bg`, the command returns after the launch loop and can render the collected run IDs as JSON.
+By default, fanout returns after the launch loop and can render the collected run IDs as JSON. With `--fg`, it passes the collected petnames to `agents_cmd::wait_agent_batch` as one explicit set. The normal multi-target wait renderer and aggregate exit code therefore own foreground fanout results too.
 
 A runtime failure during that loop aborts the remaining launches and reports every child already started. Those children are not rolled back: their durable run records, deadlines, self-cleanup, and caller-scoped `wait`/`stop` behavior remain the ordinary supervised lifecycle. Validation failures are different — because desugaring completed before the loop, they launch nothing.
 
@@ -104,7 +104,7 @@ Which projection each verb reads is the other half:
 
 Normal completion does not depend on the parent issuing a stop. That is worth stating plainly, because the shape of the API invites the opposite assumption.
 
-1. The parent launches; the ancestry stamp and depth check pass; a run record and pane are created. With `--bg`, the petname prints immediately; otherwise the parent waits for the result.
+1. The parent launches; the ancestry stamp and depth check pass; a run record and pane are created. By default the petname prints immediately; with `--fg`, the parent waits for the result.
 2. The child runs its one turn. Its hooks fold a terminal status into the run record.
 3. The child's own in-pane wrapper notices the terminal record, terminates the provider, and closes the pane independently of the parent. A surviving blocking parent also attempts the same idempotent reclamation after its wait returns; `wait` itself remains only a reader ([scripting.md § Reclaiming the run pane](./scripting.md#reclaiming-the-run-pane)).
 4. The run record survives, so `list` and `wait` still report the outcome after the pane is gone.
