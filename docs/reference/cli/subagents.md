@@ -10,12 +10,12 @@ Run it only from a RimZ-launched agent. A user-shell invocation fails before ope
 rimz subagents fanout tasks.json
 printf '%s\n' '[{"spec":"codex","prompt":"find the smallest safe fix"}]' \
   | rimz subagents fanout
-rimz subagents fanout tasks.json --bg
+rimz subagents fanout tasks.json --fg
 ```
 
-`fanout` reads a JSON task array from `FILE`, or from stdin when `FILE` is omitted. It validates the whole list, opens each child pane in sequence, and then joins exactly those children. The children run in parallel after their panes open. Each minted petname prints as it launches; the final lines report each child's durable outcome. The command exits nonzero if any child does.
+`fanout` reads a JSON task array from `FILE`, or from stdin when `FILE` is omitted. It validates the whole list and opens each child pane in sequence. The children run in parallel after their panes open, and each minted petname prints as it launches.
 
-Use `--bg` to return after launching instead of joining. In text mode it prints one petname per line. With `--bg --json`, it emits a map from petname to `run_id`; without `--bg`, `--json` emits the same result map as `rimz subagents wait --json`.
+By default, `fanout` returns after launching. Use `--fg` to join exactly the children from that fanout; the final lines report each durable outcome, and the command exits nonzero if any child does. With background `--json`, it emits a map from petname to `run_id`; with `--fg --json`, it emits the same result map as `rimz subagents wait --json`.
 
 Each array entry has the single-launch fields that make sense for data-driven delegation:
 
@@ -31,7 +31,7 @@ Each array entry has the single-launch fields that make sense for data-driven de
 | `max_turns` | no | Maximum agentic turns |
 | `description` | no | Initial child-card description |
 
-Explicit names must be unique within the list. A task timeout overrides the fanout-level `--timeout`, which overrides `[agents.subagents] timeout` (30 minutes by default). `--keep` applies to every child. Per-task raw argv, foreground mode, and pane retention are deliberately omitted; use profiles for provider arguments or separate single launches when children need different lifecycle controls.
+Explicit names must be unique within the list. A task timeout overrides the fanout-level `--timeout`, which overrides `[agents.subagents] timeout` (30 minutes by default). `--keep` applies to every child. Per-task raw argv, execution mode, and pane retention are deliberately omitted; use profiles for provider arguments or separate single launches when children need different lifecycle controls.
 
 All tasks are validated before the first launch. If a runtime failure occurs after some children have started, the error names them; they keep their normal deadline and cleanup behavior and remain available to `subagents wait` and `subagents stop`.
 
@@ -41,11 +41,11 @@ All tasks are validated before the first launch. If a runtime failure occurs aft
 rimz subagents claude "trace the authentication call path"
 ```
 
-Each launch is equivalent to a one-cell `rimz agents <spec> <prompt> -p` run with a timeout. It blocks until the child finishes and prints its result. Pass `--bg` to print the minted petname immediately, so a parent can start several children without waiting between launches.
+Each launch is equivalent to a one-cell `rimz agents <spec> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately, so a parent can start several children without waiting between launches. Pass `--fg` to block until the child finishes and print its result instead.
 
 ```sh
-first=$(rimz subagents codex "find the smallest safe fix" --bg)
-second=$(rimz subagents launch reviewer "review the proposed API" --bg)
+first=$(rimz subagents codex "find the smallest safe fix")
+second=$(rimz subagents launch reviewer "review the proposed API")
 rimz subagents wait "$first" "$second"
 ```
 
@@ -53,7 +53,7 @@ The bare form and `launch` verb are equivalent. A prompt is mandatory: the paren
 
 | Behavior | Default | Override |
 | --- | --- | --- |
-| Execution | supervised print mode, blocking | `--bg` returns immediately with the child's petname |
+| Execution | supervised print mode, background | `--fg` waits and prints the result |
 | Checkout | caller's current checkout | fixed |
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
 | Pane after completion | close | `--keep` |
