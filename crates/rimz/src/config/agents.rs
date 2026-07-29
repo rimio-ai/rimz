@@ -23,6 +23,8 @@ pub struct AgentsConfig {
     pub worktree: WorktreeConfig,
     pub attention: AttentionConfig,
     #[serde(default)]
+    pub subagents: SubagentsConfig,
+    #[serde(default)]
     pub profiles: ProfilesConfig,
     #[serde(default)]
     pub commands: CommandsConfig,
@@ -37,6 +39,7 @@ impl Default for AgentsConfig {
             max_launch_depth: default_max_launch_depth(),
             worktree: WorktreeConfig::default(),
             attention: AttentionConfig::default(),
+            subagents: SubagentsConfig::default(),
             profiles: ProfilesConfig::default(),
             commands: CommandsConfig::default(),
             teams: default_machine_teams(),
@@ -46,6 +49,26 @@ impl Default for AgentsConfig {
 
 const fn default_max_launch_depth() -> u8 {
     1
+}
+
+/// Defaults applied by the agent-only `rimz subagents` launch doorway.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct SubagentsConfig {
+    /// Supervised-run deadline in the CLI duration syntax (`30m`, `2h`).
+    pub timeout: String,
+    /// Optional per-child spend cap (`5` or `20/day`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<String>,
+}
+
+impl Default for SubagentsConfig {
+    fn default() -> Self {
+        Self {
+            timeout: "30m".to_owned(),
+            budget: None,
+        }
+    }
 }
 
 fn default_machine_teams() -> TeamsConfig {

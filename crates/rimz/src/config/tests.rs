@@ -733,6 +733,28 @@ fn agent_launch_depth_defaults_and_parses_machine_override() {
 }
 
 #[test]
+fn subagent_launch_defaults_parse_and_round_trip() {
+    let defaulted: AgentsConfig = toml::from_str("").expect("parse defaults");
+    assert_eq!(defaulted.subagents.timeout, "30m");
+    assert_eq!(defaulted.subagents.budget, None);
+
+    let parsed: AgentsConfig = toml::from_str(
+        "[subagents]\n\
+         timeout = \"45m\"\n\
+         budget = \"5/day\"\n",
+    )
+    .expect("parse subagent defaults");
+    assert_eq!(parsed.subagents.timeout, "45m");
+    assert_eq!(parsed.subagents.budget.as_deref(), Some("5/day"));
+
+    let encoded = toml::to_string(&parsed).expect("serialize agents");
+    assert_eq!(
+        toml::from_str::<AgentsConfig>(&encoded).expect("round-trip agents"),
+        parsed
+    );
+}
+
+#[test]
 fn forward_compat_keys_and_retired_sections_are_ignored() {
     let dir = tempdir().expect("tempdir");
     let config = load_no_fragments(&write(
