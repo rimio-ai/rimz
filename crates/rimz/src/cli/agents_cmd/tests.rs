@@ -667,6 +667,34 @@ mod launch_options {
     }
 
     #[test]
+    fn supervised_request_preserves_background_and_caller_owned_cleanup() {
+        for (background, caller_owned, expected) in [
+            (false, false, false),
+            (true, false, true),
+            (false, true, true),
+        ] {
+            let args = AgentsArgs::from_launch(AgentLaunchArgs {
+                spec: Some("codex".to_owned()),
+                prompt: Some("fix-it".to_owned()),
+                cohort: CohortLaunchArgs {
+                    bg: background,
+                    ..Default::default()
+                },
+                print: true,
+                self_cleanup_on_completion: caller_owned,
+                ..Default::default()
+            });
+
+            let (request, _) = into_supervised_request(args).expect("build supervised request");
+
+            assert_eq!(
+                request.self_cleanup_on_completion, expected,
+                "background={background}, caller_owned={caller_owned}"
+            );
+        }
+    }
+
+    #[test]
     fn agent_override_parses_and_unknown_value_lists_choices() {
         let args = parse_agents(&["rimz", "coder", "--agent", "claude"]);
         assert_eq!(args.launch.agent.as_deref(), Some("claude"));

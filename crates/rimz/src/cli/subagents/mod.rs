@@ -69,7 +69,7 @@ enum SubagentsSubcmd {
 
 #[derive(Debug, Default, PartialEq, Args)]
 #[command(
-    after_help = "Launch several children in parallel, then join them with `rimz subagents wait`. The printed petname is also an address: use `rimz message @petname \"…\"` for a follow-up."
+    after_help = "Use `--bg` to launch several children in parallel, then join them with `rimz subagents wait`. The printed petname is also an address: use `rimz message @petname \"…\"` for a follow-up."
 )]
 struct SubagentLaunchArgs {
     /// Agent kind or configured profile.
@@ -96,9 +96,9 @@ struct SubagentLaunchArgs {
     /// Stop the child after this duration.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<Duration>,
-    /// Block until the child finishes and print its result.
+    /// Run the child in the background and print its petname.
     #[arg(long)]
-    fg: bool,
+    bg: bool,
     /// Leave the child pane open after completion.
     #[arg(long)]
     keep: bool,
@@ -176,7 +176,7 @@ impl SubagentLaunchArgs {
             prompt: Some(prompt),
             cohort: agents_cmd::CohortLaunchArgs {
                 description: self.description,
-                bg: !self.fg,
+                bg: self.bg,
                 ..Default::default()
             },
             name: self.name,
@@ -184,6 +184,7 @@ impl SubagentLaunchArgs {
             agent: self.agent,
             effort: self.effort,
             print: true,
+            self_cleanup_on_completion: true,
             timeout: Some(timeout),
             keep: self.keep,
             max_turns: self.max_turns,
@@ -200,7 +201,7 @@ fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
         || args.agent.is_some()
         || args.effort.is_some()
         || args.timeout.is_some()
-        || args.fg
+        || args.bg
         || args.keep
         || args.description.is_some()
         || args.max_turns.is_some()
@@ -503,12 +504,13 @@ mod tests {
     }
 
     #[test]
-    fn launch_implies_supervised_background_defaults() {
+    fn launch_implies_supervised_blocking_defaults() {
         let args = parse(&["rimz", "claude", "review this", "--effort", "high"]);
         let launch = args
             .launch
             .into_agent_launch(&rimz::config::SubagentsConfig::default())
             .expect("launch payload");
+        assert!(launch.self_cleanup_on_completion);
         let agents = AgentsHarness::try_parse_from([
             "rimz",
             "claude",
@@ -516,19 +518,20 @@ mod tests {
             "--effort",
             "high",
             "-p",
-            "--bg",
             "--timeout",
             "30m",
         ])
         .expect("parse equivalent agents launch")
         .args;
+        let mut agents = agents;
+        agents.launch.self_cleanup_on_completion = true;
 
         assert_eq!(launch, agents.launch);
     }
 
     #[test]
-    fn foreground_launch_uses_the_supervised_blocking_path() {
-        let args = parse(&["rimz", "claude", "review this", "--fg"]);
+    fn background_launch_uses_the_supervised_non_blocking_path() {
+        let args = parse(&["rimz", "claude", "review this", "--bg"]);
         let launch = args
             .launch
             .into_agent_launch(&rimz::config::SubagentsConfig::default())
@@ -538,11 +541,14 @@ mod tests {
             "claude",
             "review this",
             "-p",
+            "--bg",
             "--timeout",
             "30m",
         ])
         .expect("parse equivalent agents launch")
         .args;
+        let mut agents = agents;
+        agents.launch.self_cleanup_on_completion = true;
 
         assert_eq!(launch, agents.launch);
     }

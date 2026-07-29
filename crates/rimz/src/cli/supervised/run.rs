@@ -496,7 +496,7 @@ fn execute_attempt(
         permission_args: &agent_cell.args,
         system_prompt_file: agent_cell.system_prompt_file.as_deref(),
         append_system_prompt_files: &agent_cell.append_system_prompt_files,
-        self_cleanup_on_completion: request.background && !request.keep,
+        self_cleanup_on_completion: request.self_cleanup_on_completion && !request.keep,
         provider_account_binding: prepared.managed_launch.binding(),
     })?;
     let waiter = if request.background {
