@@ -444,6 +444,11 @@ fn execute_attempt(
         prepared.launch.cwd.clone(),
     );
     record.budget.clone_from(&agent_cell.launch.budget);
+    record.deadline_at = request
+        .timeout
+        .map(|timeout| record.started_at.checked_add(timeout))
+        .transpose()
+        .context("computing supervised run deadline")?;
     record.retry_of = retry_of.cloned();
     record.loop_task.clone_from(&request.loop_task);
     let run_id = record.run_id.clone();

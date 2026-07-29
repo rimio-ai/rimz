@@ -292,6 +292,9 @@ pub struct RunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
     pub started_at: Timestamp,
+    /// Producer-enforced wall-clock deadline for this supervised attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_at: Option<Timestamp>,
     pub updated_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<Timestamp>,
@@ -328,6 +331,7 @@ impl RunRecord {
             worktree_path,
             last_message: None,
             started_at: now,
+            deadline_at: None,
             updated_at: now,
             completed_at: None,
         }
@@ -429,6 +433,28 @@ pub fn record_failure_tail(paths: &StatePaths, run_id: &RunId, tail: &str) -> Re
 
 pub fn timeout(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
     mark_terminal(paths, run_id, RunStatus::TimedOut).map(|(record, _wrote)| record)
+}
+
+/// Mark a run timed out only when its durable producer deadline is due.
+///
+/// The hidden timeout helper rechecks this under the workspace lock so a
+/// detached enforcement decision cannot overwrite a run that completed while
+/// the helper was starting.
+pub fn timeout_if_due(
+    paths: &StatePaths,
+    run_id: &RunId,
+    now: Timestamp,
+) -> Result<(RunRecord, bool)> {
+    update_record(paths, run_id, |record, _| {
+        if record.status.is_terminal()
+            || !record.deadline_at.is_some_and(|deadline| deadline <= now)
+        {
+            return Ok(RecordMutation::Keep(false));
+        }
+        record.status = RunStatus::TimedOut;
+        record.completed_at = Some(now);
+        Ok(RecordMutation::Write(true))
+    })
 }
 
 pub fn budget_exceeded(

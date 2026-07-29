@@ -22,6 +22,7 @@ mod register;
 mod report;
 mod restart;
 mod resume;
+mod run_timeout;
 mod runs_lookup;
 mod show;
 mod stop;
@@ -81,6 +82,7 @@ use register::{RegisterArgs, run_register};
 use restart::restart_agent;
 pub(in crate::cli) use restart::restart_resolved;
 use resume::resume_lane;
+use run_timeout::{RunTimeoutArgs, run_timeout};
 pub(in crate::cli) use show::focus_resolved;
 use show::{focus_agent, show_agent};
 pub(in crate::cli) use stop::StopTracker;
@@ -483,6 +485,9 @@ enum AgentsSubcmd {
     /// Hidden helper that interrupts an agent after its dollar cap is crossed.
     #[command(hide = true)]
     BudgetPark(BudgetParkArgs),
+    /// Hidden helper that settles a supervised run after its durable deadline.
+    #[command(hide = true)]
+    RunTimeout(RunTimeoutArgs),
     /// Hidden helper the producer spawns to refresh one provider's account usage
     /// (rate-limit windows + paid credits) into the shared cache.
     #[command(hide = true)]
@@ -533,6 +538,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::IdleCompact(args)) => return run_idle_compact(args),
         Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args),
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args),
+        Some(AgentsSubcmd::RunTimeout(args)) => return run_timeout(args, globals),
         Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args, globals),
         Some(AgentsSubcmd::RefreshContext(args)) => return refresh_context::run(args),
         Some(AgentsSubcmd::Budget(args)) => return run_budget(args, globals),
