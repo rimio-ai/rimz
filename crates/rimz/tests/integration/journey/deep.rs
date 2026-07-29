@@ -755,7 +755,6 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
             "inspect the implementation",
             "--name",
             "journey-child",
-            "--bg",
             "--keep",
             "--timeout",
             "2m",
