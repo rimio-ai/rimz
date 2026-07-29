@@ -99,11 +99,11 @@ fn stop_live_agent(
 pub(in crate::cli) fn stop_resolved(
     ctx: &Ctx,
     globals: &GlobalFlags,
+    snapshot: &rimz::SidebarSnapshot,
     agent: &AgentState,
     tracker: &mut StopTracker,
 ) -> Result<bool> {
-    let snapshot = ctx.alive_snapshot()?;
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let peers = rimz::harness::target::addressable_agents(snapshot);
     let current = snapshot
         .agents
         .iter()
@@ -113,7 +113,7 @@ pub(in crate::cli) fn stop_resolved(
         &ctx.workspace,
         &ctx.store,
         globals,
-        &snapshot,
+        snapshot,
         &peers,
         current,
         tracker,
