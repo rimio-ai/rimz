@@ -32,7 +32,7 @@ The [`pane` commands](./pane.md) additionally accept the literal `sidebar` for t
 
 - `@claude` — an agent kind; every Claude in the channel.
 - `@planner` — a [profile](../../guide/configuration.md#agent-profiles-commands-and-teams) you defined; every agent launched under it.
-- `@all` — everyone in the channel.
+- `@all` — everyone in the channel at resolution time; `message` excludes its RimZ-launched caller before dispatch.
 
 **Channels** scope the lookup to a named lane, worktree, or in-place team lane stamped at launch:
 
@@ -46,7 +46,7 @@ The [`pane` commands](./pane.md) additionally accept the literal `sidebar` for t
 **One agent or many:**
 
 - The management verbs (`show`, `logs`, `history`, `focus`, `fork`, `stop`, and `restart`) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from. `wait` accepts one or more independently resolved references. `stop --all` fans out to every match for the reference. `refresh` without a reference covers every live root agent in the current channel, and `refresh --all` widens to the workspace; with a reference it acts on exactly one agent.
-- `message` fan-outs are explicit: a multi-match is ambiguous until you opt in with `--all` or address `@all`. A fan-out delivers to every match with no confirmation and prefixes each delivery with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message.
+- `message` fan-outs are explicit: a multi-match is ambiguous until you opt in with `--all` or address `@all`. A human-authored `@all` delivers to every match; an agent-authored `@all` excludes that caller and errors when no peers remain. Explicit selector fan-outs such as `--all @claude` keep every match. Each delivery is prefixed with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message.
 
 The `@` sigil is required for `message`, where it also keeps a target from being read as a launch spec. `show`, `logs`, `history`, `fork`, `wait`, `stop`, `restart`, and `refresh` also accept a bare selector (`swift-otter`), and `transcript`, `wait`, and `stop` also accept a run id. The deeper resolution rules are in [fleet.md → The address](../../internals/harness/fleet.md#the-address).
 
