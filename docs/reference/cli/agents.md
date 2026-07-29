@@ -85,7 +85,7 @@ rimz agents claude --worktree "Take another approach."
 
 The bare spec and `launch` verb are equivalent: use whichever reads better in a command chain.
 
-When a RimZ-launched agent runs this command, each new agent is recorded as its child and appears in the existing subagent list on the caller's top-level card. The machine `max-launch-depth` setting bounds recursive launches (one layer by default); an over-limit command refuses before it creates launch state. `--top-level` makes the new agent independent instead: no parent link and its own sidebar row. The child still owns a real pane and remains addressable with `rimz message`, `rimz answer`, and `rimz pane`.
+When a RimZ-launched agent runs this command, each new agent is recorded as its child and appears in the existing subagent list on the caller's top-level card. The machine `max-launch-depth` setting bounds recursive launches (one layer by default); an over-limit command refuses before it creates launch state. `--top-level` makes the new agent independent instead: no parent link and its own sidebar row. The child still owns a real pane and remains addressable with `rimz message`, `rimz answer`, and `rimz pane`. Agents that want a one-prompt child with the safe flags implied use the agent-only [`rimz subagents`](./subagents.md) doorway instead.
 
 The spec is a named [team](../../guide/configuration.md#agent-profiles-commands-and-teams), one declared role of a team as `<team>.<role>`, or an inline grammar: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is `term`, an agent kind, a virtual `<kind>-<mode>` cell, a configured profile, or a configured command; an agent cell may use `<cell>:<role>` for an ad-hoc role handle. Use `rimz agents <team>.<role>` to re-add one role of a running or stopped team with the same role handle and stamped team lane. Inside that team's channel the bare role is enough — `rimz agents planner` in `#forge` means `rimz agents forge.planner`, and the role joins the lane it resolved from. RimZ reads the lane's team from the stamps its agents carry, so the shorthand works in a worktree lane and an in-place `<dir>/<team>` lane alike. A bare role that also names a profile or command resolving to a different agent is ambiguous and refuses; launch `<team>.<role>` or rename one of them. The built-in `peer` team is the roleless `claude,codex`. The full grammar and how cells compile to panes are in [harness.md → The layout IR](../../internals/harness/harness.md#the-layout-ir).
 
@@ -321,13 +321,15 @@ Several references form a join. Text mode prints `<name> <status>` in completion
 
 `--any` returns on the first terminal target regardless of success or failure, prints the winner's bare name to stdout, and exits with that target's status code; JSON mode prints the labeled map with only the winner. The other targets keep running. `--timeout` caps the whole wait and exits `124` without changing pending targets; JSON mode stamps unfinished targets `timed_out` in the result map before exiting.
 
+`rimz subagents wait` delegates to this join after restricting references to the calling agent's own children. With no names it supplies every live child automatically.
+
 #### `refresh`
 
 `refresh` forces the transcript tail re-read past the stat gate, re-runs Codex turn-death confirmation against the live pane when one is bound, spawns the kind's detached rich-context helper when one exists, and wakes sidebars after an inline merge. With a reference it resolves exactly one agent in scope; without a reference it refreshes every live root agent in the current channel; with `--all` it takes no reference and covers every live root agent in the workspace.
 
 #### `stop`
 
-`stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. It ends the CLI process the way Ctrl+C would; the provider's session files stay on disk, so a stopped agent is one `--resume` away. Without `--all`, `stop` resolves to exactly one agent; with `--all`, it resolves every match, prints one result line per agent, and exits non-zero if any stop failed.
+`stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. It ends the CLI process the way Ctrl+C would; the provider's session files stay on disk, so a stopped agent is one `--resume` away. A parent stop first stops its live RimZ-launched subagents; this also applies when `rimz teams stop` reaches that parent. Without `--all`, `stop` resolves to exactly one agent; with `--all`, it resolves every match, prints one result line per agent, and exits non-zero if any stop failed.
 
 #### `restart`
 

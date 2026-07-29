@@ -21,6 +21,7 @@ A `RunRecord` is written under `~/.local/state/rimz/workspaces/<id>/runs/<run_id
 | File | Owns |
 | --- | --- |
 | [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs) | The vocabulary and the durable transitions: `SupervisedRunRequest`, `RunRecord`, `RunStatus` and its exit codes, `RunVerify`, the locked update seam, the lifecycle fold, cancellation, and the retry and verify prompt builders. |
+| [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs) | Producer-side deadline detection and detached timeout-helper spawning. |
 | [`harness/run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs) | The blocking wait: the per-run datagram socket, frame validation, the poll loop, and timeout and cancellation transitions. |
 | [`cli/supervised/run.rs`](../../../crates/rimz/src/cli/supervised/run.rs) | The driver both `agents -p` and loop fires call: preparation, placement, the attempt loop, the verify loop, and the retry loop. |
 | [`cli/supervised/output.rs`](../../../crates/rimz/src/cli/supervised/output.rs) | The output projections: text, JSON, the NDJSON `RunStreamEvent` sink, and the stderr forensics block. |
@@ -40,7 +41,7 @@ A `RunRecord` is written under `~/.local/state/rimz/workspaces/<id>/runs/<run_id
 | Provenance | `prompt`, `worktree_path`, `permission_mode`, `budget`, `retry_of`, `loop_task` |
 | Outcome | `status`, `last_message`, `verify`, `failure_tail`, `transcript_path` |
 | Accounting | `cost_usd`, `input_tokens`, `output_tokens` |
-| Timing | `started_at`, `updated_at`, `completed_at` |
+| Timing | `started_at`, `deadline_at`, `updated_at`, `completed_at` |
 
 Two fields are worth calling out. `transcript_path` points at the *provider's own* session file, not the RimZ transcript log that `rimz transcript` renders; streaming reads that file directly. `agent_id` starts empty and is filled by the first matching lifecycle observation, which is how the record binds to a session it did not know the id of when it was written.
 
@@ -57,7 +58,7 @@ Records are cold-path durable state, written with temp-file-plus-rename through 
 | `Completed` | `0` | a root `TurnEnded` that did not error |
 | `Failed` | `1` | a root `TurnEnded` that errored, a session `Ended` before any turn result, or the wrapper's process-death backstop |
 | `VerifyFailed` | `123` | the verify command stayed red through `--max-attempts` total turns |
-| `TimedOut` | `124` | the waiter's `--timeout` elapsed |
+| `TimedOut` | `124` | the blocking waiter elapsed, or the producer found a durable deadline overdue |
 | `BudgetExceeded` | `125` | a scope cap or an exact managed-launch provider quota refused the run |
 | `Canceled` | `130` | `rimz agents stop`, Ctrl+C on a blocking caller, or a `TurnInterrupted` signal |
 
@@ -70,7 +71,7 @@ The driver is `cli::supervised::run_supervised`. One call can contain several at
 1. **Prepare.** Resolve the workspace and machine config, resolve and finalize the one-cell layout ([harness.md § From spec to panes](./harness.md#from-spec-to-panes)), and reject a comma-bearing prompt that was probably a mistyped spec.
 2. **Gate on dollars.** The provider-account quota gate and [`budget::scope_gate`](./budget.md#the-fail-fast-gate) run before the room is touched, and again at the top of every attempt. A refusal returns `SupervisedRunOutcome::BudgetExceeded` and never writes a record or opens a pane, which is why exit `125` is distinguishable from a run that started and then hit a cap.
 3. **Birth the room.** A caller outside a room gets one; an attended caller may reset a stuck room, while a non-interactive caller requires an explicit reset instead of silently resetting under a script.
-4. **Build the identity.** A `RunRecord` is constructed in memory, the store opens a launch batch that mints the provisional agent row and name, and that name is stamped onto the record. On a retry attempt an explicit `--name` is downgraded to a soft name, so the fresh attempt can remint while the prior ended row keeps its handle.
+4. **Build the identity.** A `RunRecord` is constructed in memory, including a `deadline_at` when the request carries `--timeout`; the store opens a launch batch that mints the provisional agent row and name, and that name is stamped onto the record. On a retry attempt an explicit `--name` is downgraded to a soft name, so the fresh attempt can remint while the prior ended row keeps its handle.
 5. **Bind the waiter.** A blocking run binds its wake socket *before* the record exists and before the pane opens, so no completion can land in a gap. A `--bg` run binds nothing.
 6. **Write the record, then open the pane.** `run::create` persists the record, then the pane opens: a split of the current tab by default, a new tab when forced or when there is no ambient pane, and the locked `rimzd` loop zone for scheduled fires. The pane runs the exec wrapper with `RIMZ_RUN_ID` exported.
 7. **Wait.** The waiter blocks until the record is terminal. `--bg` prints the agent name and returns here.
@@ -107,7 +108,9 @@ What survives that filter maps through `terminal_status_for_signal`:
 
 The waiter binds `sock/run.<short_id>.sock` before the pane opens and stays bound across verification re-prompts. When a terminal transition is newly written, the writer sends a `run_completed` datagram to that path. The waiter validates every frame by `(workspace_id, run_id)`, logs and drops a mismatch, and keeps receiving.
 
-The record on disk stays truth. The waiter polls it every 250 ms regardless, so a lost, delayed, or mismatched datagram costs at most one tick. The waiter also owns the two transitions no hook can produce: the `--timeout` expiry and the caller's cancellation flag, which the CLI's signal handler sets. `run::cancel_and_wake` couples a newly written cancellation to its wake, and leaves an already-terminal `--keep` record untouched when a stop is only reclaiming a pane.
+The record on disk stays truth. The waiter polls it every 250 ms regardless, so a lost, delayed, or mismatched datagram costs at most one tick. A blocking waiter can write the `--timeout` transition itself; a background run has no waiter, so the elected sidebar producer scans durable run records on its normal heavy-lane cadence. When `deadline_at` is due it spawns the hidden `agents run-timeout` helper. That helper rechecks the deadline under the workspace lock, writes `TimedOut`, wakes any waiter, and reclaims the pane. Detection remains read-only in the sidebar process; the short-lived helper owns every mutation.
+
+The waiter also owns the caller's cancellation transition, which the CLI's signal handler sets. `run::cancel_and_wake` couples a newly written cancellation to its wake, and leaves an already-terminal `--keep` record untouched when a stop is only reclaiming a pane.
 
 Streamed and non-streamed callers use the same `wait_terminal` call and differ only by an optional observer closure.
 
@@ -171,7 +174,7 @@ Cleanup is best-effort and split by who is still alive to do it.
 
 **A blocking run** closes the recorded launch pane after the driver finishes, falling back to finding the agent row by `(kind, agent_id)` in the snapshot when no pane id was recorded. Before that close, a non-completed record with no failure tail yet gets one captured from the pane. First writer wins: a wrapper that already captured a tail as it died cannot be overwritten by later cleanup.
 
-**A background run** hands reclamation to the in-pane wrapper. Unless `--keep`, the wrapper watches the run record, terminates the agent once it is terminal, runs marked-worktree cleanup, and closes its own pane.
+**A background run** hands normal completion reclamation to the in-pane wrapper. Unless `--keep`, the wrapper watches the run record, terminates the agent once it is terminal, runs marked-worktree cleanup, and closes its own pane. A producer-enforced timeout additionally runs the stop backstop from its hidden helper, so a wedged wrapper cannot leave the overdue pane behind.
 
 **A stop or a Ctrl+C-canceled blocking caller** uses the same terminal record and wake path, then closes the recorded pane if it lingers past a short grace. That reclaims a kept run's pane whether the reference given was the run id or the agent name.
 

@@ -19,13 +19,13 @@ rimz teams resume forge                   # reopen the newest closed forge team
 
 Every agent works inside one context window, and everything it does fills it: files read, tool output, discussion, dead ends. A filling window costs more per turn and reasons less sharply, so the window is the real budget a long task runs against. And inside the window, attention is the scarcer resource still: a model weighs everything it holds against everything else, and when everything claims importance, nothing receives it.
 
-Subagents are the first tool against that, and a good one. The parent dispatches an explore subagent to locate the relevant code and folds back a summary instead of the whole search; plan subagents draft competing directions in parallel. But a subagent runs one way: the parent spawns it, collects its report, and still carries the whole task in its own window.
+Subagents are the first tool against that, and a good one. The parent dispatches an explore subagent to locate the relevant code and folds back a summary instead of the whole search; plan subagents draft competing directions in parallel. Provider-native children and pane-backed children launched through [`rimz subagents`](../reference/cli/subagents.md) share that product role: one parent delegates bounded work and collects the result. The pane-backed form adds a durable petname, result joins, and lifecycle control, but it is still a supervised one-prompt assignment rather than a peer conversation.
 
 A team splits the task itself across independent windows:
 
 - Each member keeps its own context and its own attention, the way specialists on a human team do. Each member still uses its own subagents, so a team stacks on that architecture rather than replacing it.
 - Each member can run a different provider. Model capability is jagged (brilliant at one kind of work, mediocre at the next), the peaks and valleys sit in different places per model, and each model has a comfort zone shaped by its size and training. Matching phases of the work to models lets one model's peak cover another's valley: better results for fewer tokens.
-- Members talk both ways, over as many rounds as the work needs: a downstream role can ask, push back, and escalate, which a subagent can never do to its parent.
+- Members talk both ways, over as many rounds as the work needs: a downstream role can ask, push back, and escalate. A supervised subagent remains parent-directed; messages can park against its address, but v1 does not wake a finished child into another round.
 
 That is what a team manages: which window holds which part of the problem, and what each window's attention is spent on. The split itself is yours to design: two roles or five, one provider or several, whatever shape the work divides into. The rest of this page walks one split that has proven itself.
 
