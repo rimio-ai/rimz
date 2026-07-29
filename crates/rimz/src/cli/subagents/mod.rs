@@ -314,7 +314,7 @@ fn wait_children(
         .context("reading agent history")?;
     let (_, children) = caller_and_children(&audit.agents)?;
     let runs = rimz::harness::run::list(ctx.store.paths())?;
-    let references = wait_references(&children, &runs, &names)?;
+    let references = wait_references(&children, &runs, &names, any)?;
     if references.is_empty() {
         bail!("this agent has no supervised subagents to wait for");
     }
@@ -325,13 +325,16 @@ fn wait_references(
     children: &[&AgentState],
     runs: &[rimz::harness::run::RunRecord],
     names: &[String],
+    any: bool,
 ) -> Result<Vec<String>> {
     if names.is_empty() {
         return Ok(children
             .iter()
             .copied()
-            .filter(|child| newest_run_for_child(runs, child).is_some())
-            .map(child_reference)
+            .filter_map(|child| {
+                let run = newest_run_for_child(runs, child)?;
+                (!any || !run.status.is_terminal()).then(|| child_reference(child))
+            })
             .collect());
     }
     Ok(resolve_child_names(children, names)?
@@ -344,14 +347,13 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.alive_snapshot()?;
     let (_, all_children) = caller_and_children(&snapshot.agents)?;
-    let live_children = all_children
-        .into_iter()
-        .filter(|child| child.ended_at.is_none())
-        .collect::<Vec<_>>();
     let children = if all {
-        live_children
+        all_children
+            .into_iter()
+            .filter(|child| child.ended_at.is_none())
+            .collect()
     } else {
-        resolve_child_names(&live_children, &names)?
+        resolve_child_names(&all_children, &names)?
     };
     if children.is_empty() {
         bail!("this agent has no live subagents to stop");
@@ -470,27 +472,44 @@ mod tests {
             rimz::agents::AgentState::stub("codex", "finished", rimz::agents::AgentStatus::Success);
         finished.name = Some("swift-otter".to_owned());
         finished.ended_at = Some(Timestamp::now());
+        let mut running =
+            rimz::agents::AgentState::stub("codex", "running", rimz::agents::AgentStatus::Running);
+        running.name = Some("bright-owl".to_owned());
         let untracked = rimz::agents::AgentState::stub(
             "claude",
             "interactive",
             rimz::agents::AgentStatus::Idle,
         );
-        let children = vec![&finished, &untracked];
+        let children = vec![&finished, &running, &untracked];
 
-        let mut run = rimz::harness::run::RunRecord::new(
+        let mut finished_run = rimz::harness::run::RunRecord::new(
             rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-wait")),
             rimz::ids::AgentKind::new_unchecked("codex"),
             rimz::harness::run::PermissionMode::Auto,
             "review".to_owned(),
             PathBuf::from("/tmp/subagent-wait"),
         );
-        run.agent_id = Some(finished.agent_id.clone());
-        run.agent_name = finished.name.clone();
-        run.status = rimz::harness::run::RunStatus::Completed;
+        finished_run.agent_id = Some(finished.agent_id.clone());
+        finished_run.agent_name = finished.name.clone();
+        finished_run.status = rimz::harness::run::RunStatus::Completed;
+        let mut running_run = rimz::harness::run::RunRecord::new(
+            rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-wait")),
+            rimz::ids::AgentKind::new_unchecked("codex"),
+            rimz::harness::run::PermissionMode::Auto,
+            "implement".to_owned(),
+            PathBuf::from("/tmp/subagent-wait"),
+        );
+        running_run.agent_id = Some(running.agent_id.clone());
+        running_run.agent_name = running.name.clone();
+        let runs = [finished_run, running_run];
 
         assert_eq!(
-            wait_references(&children, &[run], &[]).expect("default join"),
-            vec!["swift-otter"]
+            wait_references(&children, &runs, &[], false).expect("default join"),
+            vec!["swift-otter", "bright-owl"]
+        );
+        assert_eq!(
+            wait_references(&children, &runs, &[], true).expect("default any"),
+            vec!["bright-owl"]
         );
     }
 
