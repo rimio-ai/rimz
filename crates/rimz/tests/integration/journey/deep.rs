@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tempfile::TempDir;
 
-use super::{rimz_bin, session_start_at};
+use super::{RoomHarness, SETTLE, rimz_bin, session_start_at};
 use crate::common::{
     CommandTimeoutExt, Env, ScrubSessionEnvExt, ZellijNamespace, path_with_front,
     write_hook_firing_agent,
@@ -557,6 +557,162 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
 }
 
 #[test]
+fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
+    if which::which("tmux").is_err() {
+        eprintln!("tmux not on PATH; skipping subagent tmux smoke");
+        return;
+    }
+    let Some(_rimz) = rimz_bin() else {
+        eprintln!("rimz not built; skipping subagent tmux smoke");
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    let stub_dir = write_hook_firing_agent(&env, "codex");
+    let agent_path = path_with_front(&stub_dir);
+    trust_codex_agent_path(&env, &agent_path);
+    let socket = managed_socket(&env.runtime_root);
+    let _server = TmuxServerGuard::new(socket.clone());
+    let session = workspace_session(&env);
+
+    let parent = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("RIMZ_TEST_AGENT_SESSION", "sess-journey-parent")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "30000")
+        .args([
+            "--mux",
+            "tmux",
+            "agents",
+            "codex",
+            "coordinate the review",
+            "--name",
+            "journey-parent",
+            "-p",
+            "--bg",
+            "--keep",
+            "--timeout",
+            "2m",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch parent");
+    assert!(
+        parent.status.success(),
+        "parent launch failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&parent.stdout),
+        String::from_utf8_lossy(&parent.stderr)
+    );
+
+    let parent_agent = wait_for_named_agent(&env, "journey-parent", true, CAPTURE_BUDGET);
+    let parent_launch_id = parent_agent
+        .launch_id
+        .clone()
+        .expect("RimZ-launched parent has launch id");
+
+    let child = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env(rimz::harness::run::ENV_AGENT_KIND, "codex")
+        .env(rimz::harness::run::ENV_AGENT_ID, parent_launch_id.as_str())
+        .env("RIMZ_TEST_AGENT_SESSION", "sess-journey-child")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "30000")
+        .args([
+            "--mux",
+            "tmux",
+            "subagents",
+            "codex",
+            "inspect the implementation",
+            "--name",
+            "journey-child",
+            "--keep",
+            "--timeout",
+            "2m",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch subagent");
+    assert!(
+        child.status.success(),
+        "subagent launch failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&child.stdout).trim(),
+        "journey-child"
+    );
+
+    let child_agent = wait_for_named_agent(&env, "journey-child", false, CAPTURE_BUDGET);
+    assert_eq!(
+        child_agent.parent_agent_id.as_ref(),
+        Some(&parent_agent.agent_id)
+    );
+    assert_eq!(child_agent.launch_depth, Some(1));
+    let parent_pane = wait_for_named_run(&env, "journey-parent", CAPTURE_BUDGET)
+        .pane_id
+        .expect("parent run pane")
+        .to_string();
+    let child_pane = wait_for_named_run(&env, "journey-child", CAPTURE_BUDGET)
+        .pane_id
+        .expect("child run pane")
+        .to_string();
+
+    let room = RoomHarness::launch(&env, rimz::ids::MuxName::Tmux);
+    let screen = room.wait_for(
+        |screen| screen.contains("subagents (1)") && screen.contains("journey-child"),
+        SETTLE,
+    );
+    assert!(
+        screen.contains("subagents (1)") && screen.contains("journey-child"),
+        "child should render only in the parent's subagent section:\n{screen}"
+    );
+    assert_eq!(
+        screen.matches("journey-child").count(),
+        1,
+        "child should not also render as a top-level card:\n{screen}"
+    );
+
+    let stopped = env
+        .rimz()
+        .env("TMUX", tmux_env(&socket))
+        .args(["--mux", "tmux", "agents", "stop", "@journey-parent"])
+        .bounded_output_within(Duration::from_secs(20))
+        .expect("stop parent");
+    assert!(
+        stopped.status.success(),
+        "parent stop failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&stopped.stdout),
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&stopped.stdout).contains("subagent of @journey-parent"),
+        "cascade should report the stopped child:\n{}",
+        String::from_utf8_lossy(&stopped.stdout)
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline
+        && (tmux_pane_alive(&socket, &session, &parent_pane)
+            || tmux_pane_alive(&socket, &session, &child_pane))
+    {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !tmux_pane_alive(&socket, &session, &parent_pane),
+        "parent pane should be closed"
+    );
+    assert!(
+        !tmux_pane_alive(&socket, &session, &child_pane),
+        "child pane should be closed before its parent"
+    );
+}
+
+#[test]
 fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
     if which::which("tmux").is_err() {
         eprintln!("tmux not on PATH; skipping supervised tmux smoke");
@@ -622,6 +778,59 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
         Some("failing-runner"),
         "failed run record should be the launched supervised agent, not a launch precondition error"
     );
+}
+
+fn wait_for_named_agent(
+    env: &Env,
+    name: &str,
+    require_bound: bool,
+    budget: Duration,
+) -> rimz::agents::AgentState {
+    let deadline = Instant::now() + budget;
+    loop {
+        let snapshot = env.store().snapshot().expect("read agent snapshot");
+        if let Some(agent) = snapshot.agents.iter().find(|agent| {
+            agent.name.as_deref() == Some(name)
+                && (!require_bound || !agent.agent_id.is_provisional())
+        }) {
+            return agent.clone();
+        }
+        if Instant::now() >= deadline {
+            let agents = snapshot
+                .agents
+                .iter()
+                .map(|agent| {
+                    (
+                        agent.name.as_deref(),
+                        agent.agent_id.as_str(),
+                        agent.launch_id.as_deref(),
+                        agent.parent_agent_id.as_deref(),
+                        agent.status,
+                    )
+                })
+                .collect::<Vec<_>>();
+            panic!("timed out waiting for agent {name}; agents: {agents:?}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_named_run(env: &Env, name: &str, budget: Duration) -> rimz::harness::run::RunRecord {
+    let deadline = Instant::now() + budget;
+    loop {
+        let runs = rimz::harness::run::list(env.store().paths()).expect("read runs");
+        if let Some(run) = runs
+            .into_iter()
+            .find(|run| run.agent_name.as_deref() == Some(name) && run.pane_id.is_some())
+        {
+            return run;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for run {name}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// Attach a `portable-pty` client to `session` and poll the composited screen
