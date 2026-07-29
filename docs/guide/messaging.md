@@ -2,14 +2,14 @@
 
 `rimz message` (`rimz msg` for short) types text into a running agent's own pane, the same way you would. It reads like Slack — every agent answers to a handle — and it guarantees the text lands: parked by default (held until the agent's current turn finishes), right now with `--steer`, or at a wall-clock time with `--schedule`.
 
-The same command serves you, your scripts, and the agents themselves — agents talk to each other through it too. One prompt reaches one teammate; `@all` reaches everyone in your channel.
+The same command serves you, your scripts, and the agents themselves — agents talk to each other through it too. One prompt reaches one teammate; `@all` reaches everyone in your channel when you send it and every peer when an agent sends it.
 
 ```sh
 rimz message @claude "add coverage for the expiry edge cases"      # parks: lands when @claude's turn ends
 rimz message --steer @claude "stop: the parser test comes first"   # interrupts the live turn now
 rimz message --schedule 60m @codex#feat-b "run the smoke test"     # lands in an hour
 rimz message @codex --when '@codex idle 58m' "ping"               # lands after 58 minutes continuously idle
-rimz message @all "summarize what changed at the next boundary"    # everyone in the current channel
+rimz message @all "summarize what changed at the next boundary"    # every peer for an agent; otherwise everyone
 ```
 
 ## Address an agent
@@ -21,7 +21,7 @@ A handle resolves through the shortest unique name for a running agent:
 - **`@codex`** — a kind. Reaches the one Codex in your channel; ambiguous only when several share it.
 - **`@planner`** — a profile or team role you defined in `agents.toml`, so `@planner` reaches the right member wherever its pane sits.
 - **`@swift-otter`** — a pet name or `@codex-2` ordinal, naming one specific instance when a kind isn't unique enough.
-- **`@all`** — every agent in the channel.
+- **`@all`** — every agent in the channel, except the caller when an agent sends the message.
 
 Handles are assigned when an agent launches — how kinds, profiles, and team roles become handles is [the agents guide](./fleet.md). The `@` sigil is required, so a stray word never broadcasts; a bare selector fails with a `did you mean @…?` hint. A raw pane id is the one exception that needs no sigil.
 
@@ -103,12 +103,12 @@ The condition latches once met, so a busy receiver still gets the message at its
 A handle that matches more than one agent is an error until you opt into the fan-out — so an ambiguous `@claude` lists the candidates instead of surprising all of them.
 
 ```sh
-rimz message @all "freeze new work; I'm cutting a release"          # everyone in the channel
+rimz message @all "freeze new work; I'm cutting a release"          # every peer for an agent; otherwise everyone
 rimz message --all @claude "rebase on main"                         # every Claude the address matches
 rimz message @codex#feat-a --create "start on the auth refactor"    # launch one if none exists, this text as its first prompt
 ```
 
-`@all` or `--all` fans out to every match, pacing deliveries so each agent reads a clean group message and skipping any that's momentarily blocked. `--create` launches the agent when the address matches none: a kind or profile opens fresh in the target channel with your text as its first prompt.
+`@all` fans out to every match when a human sends it. When a RimZ-launched agent sends it, RimZ excludes that caller and sends to its peers; `--no-from` changes attribution but not this exclusion. With no peers it errors instead of sending back to the caller, while an exact handle still permits an intentional self-message. Explicit selector fan-out such as `--all @claude` keeps every match. Fan-out paces deliveries so each agent reads a clean group message and skips any that's momentarily blocked. `--create` launches the agent when the address matches none: a kind or profile opens fresh in the target channel with your text as its first prompt.
 
 ## Land against a fresh window
 
@@ -134,7 +134,7 @@ rimz message --steer @claude --wait "answer from this turn"         # the live t
 
 A one-agent text wait keeps the compact output: the final assistant message alone on stdout. A fan-out text wait streams labeled blocks in completion order; failed legs write forensics to stderr while the remaining legs keep gathering. `--json` buffers one uniform map for either arity: `{"@coder":{"status":"completed","reply":"landed","message_id":"msg_…"}}`; non-reply failures also carry `error`.
 
-Agent-to-agent waits detect mutual and multi-agent reply cycles before they can hang: RimZ refuses or aborts the youngest wait, names the blocking handle and message, and leaves parked text queued to deliver at the next turn boundary. A bare agent-authored `--wait` has a one-hour default deadline as a backstop; use `--wait=<duration>` to choose another bound, while a human's bare wait remains indefinite.
+Agent-to-agent waits detect mutual and multi-agent reply cycles before they can hang: RimZ refuses or aborts the youngest wait, names the blocking handle and message, and leaves parked text queued to deliver at the next turn boundary. An agent-authored `@all --wait` gathers only peer replies, never a reply from itself. A bare agent-authored `--wait` has a one-hour default deadline as a backstop; use `--wait=<duration>` to choose another bound, while a human's bare wait remains indefinite.
 
 The gathered join exits 0 only when every leg completes and otherwise uses the first non-completed leg's status in target order; a deadline exits 124 after classifying unfinished legs as `timed_out`. `--any` returns on the first terminal leg regardless of success or failure, emits only that winner, and leaves every other delivered message in flight. `Waiting` and `Paused` remain inside a reply turn, so use `--wait=<duration>` when a script needs a bound.
 

@@ -31,7 +31,7 @@ rimz message clear @claude-2#cli-docs
 
 The message is one bare quoted argument, so no `--` separates ordinary prose from flags. A message that starts with `-` still uses clap's universal terminator (`--`) before the text. A wait duration uses the attached form `--wait=<duration>`; bare `--wait` has no value and can precede the message.
 
-Address the target with the [agent-address grammar](./agents.md#addressing-agents). A fan-out tags each delivery with the addressed handle, and an unmatched address prints the live-agent list.
+Address the target with the [agent-address grammar](./agents.md#addressing-agents). A fan-out tags each delivery with the addressed handle, and an unmatched address prints the live-agent list. Human-authored `@all` reaches every in-channel agent. Agent-authored `@all` reaches every peer but excludes the caller even with `--no-from`; it reports `no other agents in the current channel` when none remain. Use the caller's exact handle for an intentional self-message. Explicit selector fan-outs such as `--all @codex` are unchanged.
 
 ## Send modes
 
