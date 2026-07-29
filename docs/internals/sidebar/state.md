@@ -301,6 +301,24 @@ Reload also travels as a bare control word rather than a typed envelope, so it s
 
 Normalized pane observations carry event eligibility, so the shared projector preserves each backend's established stream. tmux suppresses pane open, close, and command overlays for sidebar and launch chrome, suppresses direct focus for launch chrome, and keeps direct sidebar focus. Zellij suppresses only sidebar opens, emits launch-chrome opens without a command, closes every removed terminal, permits live-sidebar command changes, and emits direct focus for every live terminal. View switches keep their own contract on both backends: launch chrome emits `FocusChanged`, while a sidebar with a working sibling emits `FocusStranded`.
 
+### What triggers a mux-derived event
+
+The taxonomy names each event's emitter; this table names the room change behind it. Only mux-derived events appear — the rest are emitted directly by the writer their `Emitter` column names. Neither backend constructs a `SidebarEvent`: both normalize into presence transitions and the shared projector decides.
+
+| Room change | Event | How each backend sees it |
+| --- | --- | --- |
+| A pane joins the room | `PaneOpened` | Zellij diffs a new terminal id out of the announced manifest. tmux takes the first non-seeding subscription line naming an unknown pane. |
+| A pane's command changes | `CommandChanged` | Zellij compares the pane command across two live manifests. tmux reads the changed command field of a subscription line. |
+| A pane leaves the room | `PaneClosed` | Zellij finds the terminal id absent from the new manifest. tmux takes a window-close line, or a pane missing from the layout roster. |
+| Focus moves between panes | `FocusChanged` | Zellij projects session focus from client observations. tmux takes the newly active pane or a pane-changed line. |
+| A view switch lands away from the sidebar | `FocusChanged` | Zellij settles the switch generation. tmux takes the window-changed line. |
+| A view switch lands on a sidebar that has a working sibling | `FocusStranded` | Same inputs as the switch above, classified by the landed pane's role. |
+| The layout cannot be read whole | `PanesChanged` | tmux only: a window holding a floating pane, or a layout line that fails to parse. |
+| Topology moved but identity is unknown | `PanesChanged` | The projector's fallback for a batch that produced no typed event — a bare nudge from either backend. |
+| A divider drag resizes panes, roster unchanged | `PanesChanged` on Zellij, nothing on tmux | The Zellij plugin hashes pane position and column count, so a drag republishes an announced manifest; the host finds no roster, command, or focus diff and falls back to a nudge. The tmux subscription format carries no geometry, and an unchanged layout roster yields no transition at all. |
+
+The last row is the one to hold onto: a geometry-only change is indistinguishable from topology motion on Zellij and invisible on tmux, so any consumer that reads `PanesChanged` as structural evidence reads a Zellij resize drag as structure moving.
+
 ### Push channels
 
 Each push channel exists so a change a writer already knows about reaches every renderer within one wakeup instead of a poll window. The producer's pull stays the structural backstop behind all of them.
