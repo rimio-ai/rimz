@@ -39,6 +39,39 @@ pub struct LaunchAncestry {
     pub launch_depth: u8,
 }
 
+/// Stable identity exported to a RimZ-launched agent process.
+///
+/// A launch id is authoritative when present. Agents launched before that id
+/// was exported retain the legacy unambiguous-pane fallback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaunchCallerEnv {
+    pub kind: AgentKind,
+    pub launch_id: Option<AgentSessionId>,
+    pub pane_id: Option<crate::ids::PaneId>,
+}
+
+impl LaunchCallerEnv {
+    pub fn from_env() -> Option<Self> {
+        let kind = std::env::var(crate::harness::run::ENV_AGENT_KIND)
+            .ok()
+            .filter(|value| !value.is_empty())
+            .map(AgentKind::new_unchecked)?;
+        let launch_id = std::env::var(crate::harness::run::ENV_AGENT_ID)
+            .ok()
+            .filter(|value| !value.is_empty())
+            .map(AgentSessionId::from);
+        let pane_id = launch_id
+            .is_none()
+            .then(crate::mux::ambient_pane_id)
+            .flatten();
+        Some(Self {
+            kind,
+            launch_id,
+            pane_id,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LaunchAncestryError {
     #[error(
@@ -117,38 +150,29 @@ pub fn resolve_launch_ancestry_from_env(
 pub fn resolve_launch_caller_from_env(
     agents: &[crate::agents::AgentState],
 ) -> std::result::Result<&crate::agents::AgentState, LaunchAncestryError> {
-    let kind = std::env::var(crate::harness::run::ENV_AGENT_KIND)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .ok_or(LaunchAncestryError::UnresolvedCaller)?;
-    let launch_id = std::env::var(crate::harness::run::ENV_AGENT_ID)
-        .ok()
-        .filter(|value| !value.is_empty());
-    let pane_id = launch_id
-        .is_none()
-        .then(crate::mux::ambient_pane_id)
-        .flatten();
-    resolve_launch_caller(agents, &kind, launch_id.as_deref(), pane_id.as_ref())
+    let caller = LaunchCallerEnv::from_env().ok_or(LaunchAncestryError::UnresolvedCaller)?;
+    resolve_launch_caller(agents, &caller)
 }
 
-fn resolve_launch_caller<'a>(
+pub fn resolve_launch_caller<'a>(
     agents: &'a [crate::agents::AgentState],
-    kind: &str,
-    launch_id: Option<&str>,
-    pane_id: Option<&crate::ids::PaneId>,
+    caller: &LaunchCallerEnv,
 ) -> std::result::Result<&'a crate::agents::AgentState, LaunchAncestryError> {
-    let caller = if let Some(launch_id) = launch_id {
+    let resolved = if let Some(launch_id) = caller.launch_id.as_ref() {
         agents.iter().find(|agent| {
-            agent.kind == kind
+            agent.kind == caller.kind
                 && agent
                     .launch_id
                     .as_ref()
                     .is_some_and(|candidate| candidate == launch_id)
         })
     } else {
-        let pane_id = pane_id.ok_or(LaunchAncestryError::UnresolvedCaller)?;
+        let pane_id = caller
+            .pane_id
+            .as_ref()
+            .ok_or(LaunchAncestryError::UnresolvedCaller)?;
         let mut matches = agents.iter().filter(|agent| {
-            agent.kind == kind
+            agent.kind == caller.kind
                 && !agent.is_provider_subagent()
                 && agent.ended_at.is_none()
                 && agent
@@ -163,7 +187,7 @@ fn resolve_launch_caller<'a>(
         caller
     }
     .ok_or(LaunchAncestryError::UnresolvedCaller)?;
-    Ok(caller)
+    Ok(resolved)
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -1100,6 +1100,46 @@ fn message_wait_gathers_fanout_replies_in_completion_order() {
 }
 
 #[test]
+fn agent_broadcast_waits_for_peers_without_waiting_on_itself() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let [caller, peer] = ReplyAgentFixture::pair(&env, "agent-gather");
+    caller.stamp_launch_identity(&env, "launch-agent-gather", "planner");
+
+    let child = traced_rimz(&env, "zellij-agent-wait-gather-trace.log")
+        .env(rimz::harness::run::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::run::ENV_AGENT_ID, "launch-agent-gather")
+        .env(rimz::harness::run::ENV_AGENT_NAME, "planner")
+        .args(["message", "@all", "--wait=5s", "status?"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agent fanout wait");
+    wait_for_message_event_count(&env, "message.sent", 1, Duration::from_secs(2));
+    peer.start_reported(
+        &env,
+        "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\n@all, status?",
+    );
+    peer.finish(&env, "peer finished", false);
+
+    let out = child.wait_with_output().expect("wait for peer reply");
+    assert!(
+        out.status.success(),
+        "agent fanout wait failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "peer finished\n");
+    assert!(out.stderr.is_empty());
+    assert!(
+        env.read_events()
+            .iter()
+            .filter(|event| event.method == "message.sent")
+            .all(|event| event.params_value()["agent_id"] == peer.session_id),
+        "the caller never receives a message leg"
+    );
+}
+
+#[test]
 fn message_wait_json_emits_one_fanout_map() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -1508,6 +1548,81 @@ fn steer_formats_human_and_agent_senders_and_no_from_stays_verbatim() {
         .find(|event| event.method == "message.sent")
         .expect("no-from sent event");
     assert_eq!(sent.params_value()["sender"]["origin"], "system");
+}
+
+#[test]
+fn agent_broadcast_steer_with_no_from_writes_only_to_the_peer() {
+    let env = Env::new();
+    let [caller, _peer] = ReplyAgentFixture::pair(&env, "agent-steer");
+    caller.stamp_launch_identity(&env, "launch-agent-steer", "planner");
+    let trace_log = env.project_root.join("zellij-agent-steer-trace.log");
+
+    let out = run_success(
+        traced_rimz(&env, "zellij-agent-steer-trace.log")
+            .env(rimz::harness::run::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::run::ENV_AGENT_ID, "launch-agent-steer")
+            .env(rimz::harness::run::ENV_AGENT_NAME, "planner")
+            .args(["message", "--steer", "@all", "--no-from", "--", "peer only"]),
+        "agent broadcast steer",
+    );
+
+    assert!(String::from_utf8_lossy(&out.stdout).contains("sent to"));
+    let lines = trace_lines(&trace_log);
+    assert!(
+        lines.iter().any(
+            |line| line.contains("\taction\twrite\t--pane-id\tterminal_4\t")
+                && is_paste_to_any_pane(line, "@all, peer only")
+        ),
+        "the peer receives the broadcast prefix: {lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("\t--pane-id\tterminal_3\t")),
+        "the caller pane is untouched: {lines:?}"
+    );
+}
+
+#[test]
+fn solo_agent_broadcast_errors_but_an_exact_self_handle_still_delivers() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let caller = ReplyAgentFixture::single(&env, "agent-solo");
+    caller.stamp_launch_identity(&env, "launch-agent-solo", "planner");
+
+    let broadcast = traced_rimz(&env, "zellij-agent-solo-broadcast-trace.log")
+        .env(rimz::harness::run::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::run::ENV_AGENT_ID, "launch-agent-solo")
+        .env(rimz::harness::run::ENV_AGENT_NAME, "planner")
+        .args(["message", "@all", "anyone?"])
+        .output()
+        .expect("solo broadcast");
+    assert_eq!(broadcast.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&broadcast.stderr)
+            .contains("no other agents in the current channel"),
+        "solo error: {}",
+        String::from_utf8_lossy(&broadcast.stderr)
+    );
+
+    run_success(
+        env.rimz()
+            .env(rimz::harness::run::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::run::ENV_AGENT_ID, "launch-agent-solo")
+            .env(rimz::harness::run::ENV_AGENT_NAME, "planner")
+            .args(["message", "@planner", "deliberate self-send"]),
+        "exact self send",
+    );
+    let message = env
+        .store()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .rev()
+        .next()
+        .expect("exact self message");
+    assert_eq!(message.agent_id, caller.session_id);
+    assert_eq!(message.text, "deliberate self-send");
 }
 
 #[test]
@@ -3059,17 +3174,48 @@ impl ReplyAgentFixture {
     }
 
     fn start(&self, env: &Env, prompt: &str) {
+        self.start_reported(env, &user_message(prompt));
+    }
+
+    fn start_reported(&self, env: &Env, prompt: &str) {
         run_hook(
             env,
             json!({
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": self.session_id,
-                "prompt": user_message(prompt),
+                "prompt": prompt,
                 "worktree_branch": self.branch,
                 "transcript_path": self.transcript_path,
             }),
             &[("ZELLIJ_PANE_ID", self.pane_id)],
         );
+    }
+
+    fn stamp_launch_identity(&self, env: &Env, launch_id: &str, name: &str) {
+        let workspace =
+            rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+        env.store()
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id,
+                workspace.session_name,
+                &AgentKind::new_unchecked("claude"),
+                AgentLaunchPayload {
+                    agent_id: AgentSessionId::from(self.session_id.as_str()),
+                    launch_id: Some(AgentSessionId::from(launch_id)),
+                    agent_name: name.to_owned(),
+                    agent_name_explicit: true,
+                    launch: LaunchParams::default(),
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: Some(PaneId::from_parts(MuxName::Zellij, self.pane_id)),
+                    runtime_owner: None,
+                    worktree_path: Some(env.home_root.join(&self.branch).display().to_string()),
+                    worktree_branch: Some(self.branch.clone()),
+                    prompt: Some("work".to_owned()),
+                    description: None,
+                },
+            ))
+            .expect("stamp launch identity");
     }
 
     fn finish(&self, env: &Env, reply: &str, failed: bool) {

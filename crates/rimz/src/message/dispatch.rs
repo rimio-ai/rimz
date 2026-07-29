@@ -3,7 +3,8 @@
 //! This module owns live-plus-durable target resolution, rollup-only selection,
 //! context folding, condition binding, hook preflight, reply causality, record
 //! construction, and the park-vs-live decision. Live attempts delegate receiver
-//! recovery to [`super::deliver`].
+//! recovery to [`super::deliver`]. Agent-originated broadcasts exclude the
+//! caller after address resolution, before any fan-out work begins.
 
 use std::collections::BTreeSet;
 
@@ -100,6 +101,7 @@ pub struct DispatchRequest {
     pub text: String,
     pub target_scope: Option<String>,
     pub current_channel: Option<String>,
+    pub caller: Option<crate::harness::plan::LaunchCallerEnv>,
     pub sender: MessageSender,
     pub automated: bool,
     pub allow_fanout: bool,
@@ -179,6 +181,14 @@ pub type Result<T> = std::result::Result<T, DispatchErr>;
 pub enum DispatchErr {
     #[error(transparent)]
     Recipient(#[from] TargetErr),
+    #[error(
+        "no other agents in the current channel{suffix}",
+        suffix = channel
+            .as_ref()
+            .map(|channel| format!(" (`#{channel}`)"))
+            .unwrap_or_default()
+    )]
+    NoPeers { channel: Option<String> },
     #[error("target `{target}` matched multiple agents")]
     Fanout {
         target: String,
@@ -263,13 +273,23 @@ pub fn dispatch(
     }
 
     let durable_agents = durable_target_agents(store)?;
-    let targets = resolve_targets(
+    let mut targets = resolve_targets(
         &snapshot,
         Some(&durable_agents),
         &request.target,
         request.target_scope.as_deref(),
         request.current_channel.as_deref(),
         rollup_only,
+    )?;
+    exclude_broadcast_caller(
+        &request.target,
+        &mut targets,
+        &durable_agents,
+        request.caller.as_ref(),
+        request
+            .target_scope
+            .as_deref()
+            .or(request.current_channel.as_deref()),
     )?;
     if targets.len() > 1
         && !request.allow_fanout
@@ -373,6 +393,44 @@ impl ResolvedTarget {
             .and_then(|pane| crate::harness::target::pane_binding(snapshot, pane, None))
             .and_then(|binding| binding.exact_agent)
     }
+}
+
+fn exclude_broadcast_caller(
+    raw: &str,
+    targets: &mut Vec<ResolvedTarget>,
+    durable_agents: &[AgentState],
+    caller_env: Option<&crate::harness::plan::LaunchCallerEnv>,
+    channel: Option<&str>,
+) -> Result<()> {
+    if !crate::harness::target::is_broadcast(raw) {
+        return Ok(());
+    }
+    let Some(caller) = caller_env.and_then(|caller| {
+        crate::harness::plan::resolve_launch_caller(durable_agents, caller).ok()
+    }) else {
+        return Ok(());
+    };
+    let caller_pane = caller.pane.as_ref().map(|pane| &pane.pane_id);
+    targets.retain(|target| {
+        if target
+            .agent
+            .as_ref()
+            .is_some_and(|agent| caller.card_ref().matches(agent.card_ref()))
+        {
+            return false;
+        }
+        target.agent.is_some()
+            || !target
+                .pane
+                .as_ref()
+                .is_some_and(|pane| Some(&pane.pane_id) == caller_pane)
+    });
+    if targets.is_empty() {
+        return Err(DispatchErr::NoPeers {
+            channel: channel.map(ToOwned::to_owned),
+        });
+    }
+    Ok(())
 }
 
 fn resolve_targets(
@@ -1115,6 +1173,179 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn agent_broadcast_excludes_only_the_caller_after_channel_resolution() {
+        let mut caller = named_agent("caller", "planner", "project");
+        caller.launch_id = Some(AgentSessionId::from("launch-planner"));
+        let first_peer = named_agent("first-peer", "coder", "project");
+        let second_peer = named_agent("second-peer", "reviewer", "project");
+        let other_channel = named_agent("other-channel", "docs", "docs");
+        let durable = vec![
+            caller.clone(),
+            first_peer.clone(),
+            second_peer.clone(),
+            other_channel,
+        ];
+        let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
+        let mut targets =
+            resolve_targets(&snapshot, Some(&durable), "@all#project", None, None, false).unwrap();
+
+        exclude_broadcast_caller(
+            "@all#project",
+            &mut targets,
+            &durable,
+            Some(&launch_caller("launch-planner")),
+            None,
+        )
+        .unwrap();
+
+        let ids = targets
+            .iter()
+            .filter_map(|target| target.agent.as_ref())
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["first-peer", "second-peer"]);
+    }
+
+    #[test]
+    fn exact_self_handle_is_not_broadcast_filtered() {
+        let mut caller = named_agent("caller", "planner", "project");
+        caller.launch_id = Some(AgentSessionId::from("launch-planner"));
+        let durable = vec![caller];
+        let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
+        let mut targets = resolve_targets(
+            &snapshot,
+            Some(&durable),
+            "@planner",
+            None,
+            Some("project"),
+            false,
+        )
+        .unwrap();
+
+        exclude_broadcast_caller(
+            "@planner",
+            &mut targets,
+            &durable,
+            Some(&launch_caller("launch-planner")),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0]
+                .agent
+                .as_ref()
+                .map(|agent| agent.agent_id.as_str()),
+            Some("caller")
+        );
+    }
+
+    #[test]
+    fn explicit_selector_fanout_keeps_the_caller() {
+        let mut caller = named_agent("caller", "planner", "project");
+        caller.launch_id = Some(AgentSessionId::from("launch-planner"));
+        let peer = named_agent("peer", "coder", "project");
+        let durable = vec![caller, peer];
+        let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
+        let mut targets = resolve_targets(
+            &snapshot,
+            Some(&durable),
+            "@claude",
+            None,
+            Some("project"),
+            false,
+        )
+        .unwrap();
+
+        exclude_broadcast_caller(
+            "@claude",
+            &mut targets,
+            &durable,
+            Some(&launch_caller("launch-planner")),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(targets.len(), 2);
+    }
+
+    #[test]
+    fn broadcast_excludes_a_legacy_pane_only_caller() {
+        let caller_pane = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let mut caller = named_agent("caller", "planner", "project");
+        caller.pane = Some(PaneRef::from_id(caller_pane.clone()));
+        let durable = vec![caller];
+        let snapshot = snapshot_with_panes(
+            Vec::new(),
+            vec![
+                pane_only("terminal_1", "planner"),
+                pane_only("terminal_2", "coder"),
+            ],
+        );
+        let legacy = crate::harness::plan::LaunchCallerEnv {
+            kind: AgentKind::new_unchecked("claude"),
+            launch_id: None,
+            pane_id: Some(caller_pane),
+        };
+        let mut targets = resolve_targets(
+            &snapshot,
+            Some(&durable),
+            "@all",
+            None,
+            Some("project"),
+            false,
+        )
+        .unwrap();
+
+        exclude_broadcast_caller("@all", &mut targets, &durable, Some(&legacy), None).unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].pane.as_ref().map(|pane| pane.pane_id.as_str()),
+            Some("zellij:terminal_2")
+        );
+    }
+
+    #[test]
+    fn solo_agent_broadcast_reports_no_peers() {
+        let mut caller = named_agent("caller", "planner", "project");
+        caller.launch_id = Some(AgentSessionId::from("launch-planner"));
+        let durable = vec![caller];
+        let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
+        let mut targets = resolve_targets(
+            &snapshot,
+            Some(&durable),
+            "@all",
+            None,
+            Some("project"),
+            false,
+        )
+        .unwrap();
+        let channel = "project".to_owned();
+
+        let err = exclude_broadcast_caller(
+            "@all",
+            &mut targets,
+            &durable,
+            Some(&launch_caller("launch-planner")),
+            Some(channel.as_str()),
+        )
+        .expect_err("the caller is not its own peer");
+
+        assert!(matches!(
+            &err,
+            DispatchErr::NoPeers {
+                channel: Some(channel)
+            } if channel == "project"
+        ));
+        assert!(
+            err.to_string()
+                .starts_with("no other agents in the current channel")
+        );
+    }
+
     fn workspace_id() -> WorkspaceId {
         WorkspaceId::parse("ws_000000000000000000000000").unwrap()
     }
@@ -1130,6 +1361,22 @@ mod tests {
         agent.worktree_path = Some("/repo/project".to_owned());
         agent.worktree_branch = Some("project".to_owned());
         agent
+    }
+
+    fn named_agent(id: &str, name: &str, channel: &str) -> AgentState {
+        let mut agent = agent(id, AgentStatus::Running);
+        agent.name = Some(name.to_owned());
+        agent.channel = Some(channel.to_owned());
+        agent.worktree_branch = Some(channel.to_owned());
+        agent
+    }
+
+    fn launch_caller(launch_id: &str) -> crate::harness::plan::LaunchCallerEnv {
+        crate::harness::plan::LaunchCallerEnv {
+            kind: AgentKind::new_unchecked("claude"),
+            launch_id: Some(AgentSessionId::from(launch_id)),
+            pane_id: None,
+        }
     }
 
     fn resident(id: &str, pane: &str) -> AgentState {
@@ -1153,6 +1400,17 @@ mod tests {
             pane_pid: None,
             worktree_path: Some("/repo/project".to_owned()),
             worktree_branch: Some("project".to_owned()),
+        }
+    }
+
+    fn pane_only(pane: &str, role: &str) -> PaneAgent {
+        PaneAgent {
+            pane_id: PaneId::from_parts(MuxName::Zellij, pane),
+            agent_id: None,
+            role: Some(role.to_owned()),
+            worktree_path: Some("/repo/project".to_owned()),
+            worktree_branch: Some("project".to_owned()),
+            ..owner_pane("", None)
         }
     }
 

@@ -305,6 +305,7 @@ fn execute_prepared_delivery(
             text: prepared.prompt,
             target_scope: None,
             current_channel: channel,
+            caller: None,
             sender,
             automated: true,
             allow_fanout: false,
