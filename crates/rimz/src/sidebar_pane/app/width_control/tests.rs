@@ -421,6 +421,33 @@ fn idle_off_spec_controller_retries_after_the_backstop_deadline() {
 }
 
 #[test]
+fn pending_mouse_classification_suppresses_a_due_idle_retry() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = crate::diag::DiagSink::disabled();
+
+    controller.backstop(Some(50), Some(1), None, &diag);
+    controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+    let resize_at_ms = controller
+        .classification_resize_at_ms
+        .expect("resize starts classification");
+    controller.classification_deadline = Some(Instant::now());
+    controller.idle_retry_deadline = Some(Instant::now() - Duration::from_millis(1));
+
+    controller.backstop(
+        Some(83),
+        Some(1),
+        Some(resize_at_ms.saturating_add(1)),
+        &diag,
+    );
+
+    assert!(controller.classification_deadline.is_some());
+    assert_eq!(controller.idle_retry_deadline, None);
+    assert!(!controller.convergence.in_flight());
+    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+}
+
+#[test]
 fn settled_view_resize_reresolves_an_unpinned_target() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology_for_view(&runtime, 240);
@@ -434,6 +461,25 @@ fn settled_view_resize_reresolves_an_unpinned_target() {
     controller.backstop(Some(80), Some(1), Some(u64::MAX), &diag);
 
     assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(controller.convergence.target(), Some(target(60)));
+}
+
+#[test]
+fn structural_marker_does_not_swallow_a_concurrent_view_change() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology_for_view(&runtime, 240);
+    controller.last_classified_view_cols = Some(200);
+    controller.last_siblings = Some(1);
+    let diag = crate::diag::DiagSink::disabled();
+    controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+
+    controller.observe(80, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+    controller.structural_at_ms = Some(u64::MAX);
+    controller.classification_deadline = Some(Instant::now());
+    controller.backstop(Some(80), Some(1), Some(u64::MAX), &diag);
+
+    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(controller.last_classified_view_cols, Some(240));
     assert_eq!(controller.convergence.target(), Some(target(60)));
 }
 
