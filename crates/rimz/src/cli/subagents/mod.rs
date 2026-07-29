@@ -264,7 +264,8 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
     if reports.is_empty() {
         return Ok(());
     }
-    let mut table = render::Table::new(["SUBAGENT", "KIND", "STATUS", "RUN"]);
+    let mut table = render::Table::new(["SUBAGENT", "KIND", "STATUS", "RUN"])
+        .max_width(render::terminal_columns(120));
     for child in reports {
         let detail = child
             .description
@@ -311,6 +312,7 @@ impl AgentTypeReport {
 
 fn available_types(config: &rimz::config::MachineConfig) -> Vec<AgentTypeReport> {
     let mut types = rimz::agents::known_kinds()
+        .filter(|kind| !config.agents.profiles.0.contains_key(*kind))
         .map(|kind| AgentTypeReport {
             name: kind.to_owned(),
             source: "kind",
@@ -575,6 +577,19 @@ mod tests {
                 args: None,
             },
         );
+        config.agents.profiles.0.insert(
+            "claude".to_owned(),
+            rimz::config::Profile {
+                agent: "claude".to_owned(),
+                mode: None,
+                model: None,
+                effort: None,
+                budget: None,
+                system_prompt_file: None,
+                append_system_prompt_files: Vec::new(),
+                args: None,
+            },
+        );
         config
             .agents
             .commands
@@ -598,6 +613,15 @@ mod tests {
             types
                 .iter()
                 .any(|entry| entry.name == "mytool" && entry.source == "command")
+        );
+        assert_eq!(
+            types.iter().filter(|entry| entry.name == "claude").count(),
+            1
+        );
+        assert!(
+            types
+                .iter()
+                .any(|entry| entry.name == "claude" && entry.source == "profile")
         );
         assert!(!types.iter().any(|entry| entry.name == "review"));
     }

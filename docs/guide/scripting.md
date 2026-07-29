@@ -141,7 +141,7 @@ A reference is the printed name, a run id, or any [agent address](./messaging.md
 
 ## Agents scripting agents
 
-`rimz agents -p` is a plain shell command, and agents have shell tools — so the caller does not have to be you. `rimz subagents` packages that path for a RimZ-launched agent: it supplies supervised print mode and background execution, inherits the caller's checkout, and prints a petname for the later join. Claude can hand its diff to Codex for a second opinion, Codex can hand a stubborn bug to Claude, and a planner can fan an audit across three runs. The calling agent sees only commands and durable answers, so subagents mix providers freely; pairing model strengths this way is the same economics that makes [teams](./teams.md) work.
+`rimz agents -p` is a plain shell command, and agents have shell tools — so the caller does not have to be you. `rimz subagents` packages that path for a RimZ-launched agent: it supplies supervised print mode, runs in the background by default or waits with `--fg`, inherits the caller's checkout, and prints a petname for a later join after a background launch. Claude can hand its diff to Codex for a second opinion, Codex can hand a stubborn bug to Claude, and a planner can fan an audit across three runs. The calling agent sees only commands and durable answers, so subagents mix providers freely; pairing model strengths this way is the same economics that makes [teams](./teams.md) work.
 
 ```sh
 # inside a Claude turn, via its shell tool: a cross-provider review
