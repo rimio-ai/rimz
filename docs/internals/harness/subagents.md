@@ -31,6 +31,22 @@ The two also differ in reach: a pane-backed child is a peer for `rimz message` a
 
 This is a usability boundary, not a security one — the same launch is expressible as `rimz agents … -p --bg`, and `subagents` exists so a delegating agent does not have to choose the supervision flags correctly. What the doorway buys is that every child launched through it is *uniformly* supervised, background, deadlined, and self-cleaning.
 
+## Children cannot delegate again
+
+Every prompt launched through `rimz subagents`, including every fanout entry, ends with a `<system_reminder>` telling the child to complete the work directly and not launch more agents. Where the provider exposes a verified native restriction, the exec compiler independently disables its delegation tool after profile arguments and configured environment have been applied:
+
+| Provider | Process restriction |
+| --- | --- |
+| Claude | merges the profile's disallowed-tool values into one final `--disallowedTools` occurrence and denies `Agent` |
+| Codex | replaces every `features.multi_agent` config override with one final false override |
+| OpenCode | merges `"task":"deny"` into `OPENCODE_PERMISSION`, preserving the profile's other permission rules |
+| Pi | prompt-only: Pi has no built-in subagents, and disabling all third-party extensions would remove unrelated child tools |
+| Other adapters | prompt-only until a provider-native restriction is verified |
+
+The restriction marker is internal to this doorway. An agent launched with `rimz agents` or as a team member keeps its normal provider tools even when it has launch ancestry.
+
+This complements, rather than replaces, `max-launch-depth`. The depth check blocks a child from launching another process through RimZ, while the process restriction blocks the provider's native delegation tool. The prompt reminder covers every adapter and states both rules in the child's task context.
+
 ## What a launch desugars to
 
 `rimz subagents <spec> <prompt>` builds an ordinary `AgentLaunchArgs` and hands it to the same `agents_cmd::run` a human launch uses. The sugar is entirely in the defaults:

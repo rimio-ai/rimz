@@ -42,6 +42,7 @@ fn worktree_exec_request(worktree: &Path) -> ExecRequest {
         worktree_path: Some(worktree.to_path_buf()),
         close_pane_on_exit: false,
         exit_on_run_completion: false,
+        subagent: false,
         identity: ExecIdentity::default(),
     }
 }

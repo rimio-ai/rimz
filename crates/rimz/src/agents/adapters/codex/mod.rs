@@ -670,6 +670,15 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
     fn configured_identity(&self) -> (Option<String>, Option<String>) {
         (configured_model(), configured_reasoning_effort())
     }
+
+    fn lockdown_subagent_args(&self, extra_args: &mut Vec<String>) {
+        crate::agents::PresetArgMatcher::ConfigKey {
+            flags: vec!["-c".to_owned(), "--config".to_owned()],
+            key: "features.multi_agent".to_owned(),
+        }
+        .remove_occurrences(extra_args);
+        extra_args.extend(["-c".to_owned(), "features.multi_agent=false".to_owned()]);
+    }
 }
 
 impl crate::agents::capabilities::SessionCapability for CodexAdapter {

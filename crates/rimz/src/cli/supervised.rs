@@ -131,6 +131,7 @@ pub(super) struct RunPaneCmdArgs<'a> {
     pub(super) system_prompt_file: Option<&'a Path>,
     pub(super) append_system_prompt_files: &'a [PathBuf],
     pub(super) self_cleanup_on_completion: bool,
+    pub(super) subagent: bool,
     pub(super) provider_account_binding: Option<&'a rimz::agents::ProviderAccountBinding>,
 }
 
@@ -156,6 +157,7 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
             worktree_path: args.cleanup_worktree.then(|| args.cwd.to_path_buf()),
             close_pane_on_exit: args.self_cleanup_on_completion,
             exit_on_run_completion: args.self_cleanup_on_completion,
+            subagent: args.subagent,
             identity: rimz::harness::launch::ExecIdentity {
                 name: args.agent_name.map(ToOwned::to_owned),
                 name_explicit: args.agent_name_explicit,

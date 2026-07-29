@@ -122,6 +122,37 @@ fn codex_commands_and_permission_args_match_run_posture() {
 }
 
 #[test]
+fn subagent_lockdown_replaces_codex_multi_agent_overrides() {
+    let mut args = [
+        "-c",
+        "features.multi_agent=true",
+        "--config",
+        "model_reasoning_effort=high",
+        "--config",
+        "features.multi_agent=true",
+        "--model",
+        "gpt-5",
+    ]
+    .map(ToOwned::to_owned)
+    .to_vec();
+
+    CodexAdapter.lockdown_subagent_args(&mut args);
+
+    assert_eq!(
+        args,
+        [
+            "--config",
+            "model_reasoning_effort=high",
+            "--model",
+            "gpt-5",
+            "-c",
+            "features.multi_agent=false",
+        ]
+        .map(ToOwned::to_owned)
+    );
+}
+
+#[test]
 fn codex_descriptor_declares_lazy_registration() {
     // Codex's instances can be present before a session binds (lazy
     // `SessionStart`, daemon-routed unstamped hooks), so it opts into cwd

@@ -74,6 +74,7 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
             worktree_path: None,
             close_pane_on_exit: true,
             exit_on_run_completion: false,
+            subagent: false,
             identity: crate::harness::launch::ExecIdentity {
                 launch_id: Some(id.to_owned()),
                 ..Default::default()

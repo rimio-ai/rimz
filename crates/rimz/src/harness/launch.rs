@@ -388,6 +388,10 @@ pub struct ExecRequest {
     pub close_pane_on_exit: bool,
     #[serde(default)]
     pub exit_on_run_completion: bool,
+    /// Whether this process is a supervised child launched through
+    /// `rimz subagents`.
+    #[serde(default)]
+    pub subagent: bool,
     #[serde(default)]
     pub identity: ExecIdentity,
 }
@@ -483,7 +487,11 @@ fn compile_agent_process_with_extra_env(
             kind: kind.to_owned(),
         }
     })?;
-    let provider_argv = compile_provider_argv(adapter, kind, &request.action, cwd)?;
+    let mut action = request.action.clone();
+    if request.subagent {
+        adapter.lockdown_subagent_args(action.extra_args_mut());
+    }
+    let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
     let provider_program =
         provider_argv
             .first()
@@ -638,6 +646,9 @@ fn compose_agent_env(
         crate::harness::run::ENV_RTK.to_owned(),
         rtk.as_str().to_owned(),
     );
+    if request.subagent {
+        adapter.lockdown_subagent_env(&mut env);
+    }
     if let Some(key) = invalid_env_key(&env) {
         return Err(AgentProcessCompileErr::InvalidEnvKey {
             kind: request.kind.to_string(),
@@ -699,6 +710,7 @@ pub fn preflight_agent_kind(
             worktree_path: None,
             close_pane_on_exit: false,
             exit_on_run_completion: false,
+            subagent: false,
             identity: ExecIdentity::default(),
         },
         cwd,

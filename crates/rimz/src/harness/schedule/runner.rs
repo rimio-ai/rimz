@@ -606,6 +606,7 @@ impl<'a> TaskFire<'a> {
             name: None,
             background: false,
             self_cleanup_on_completion: false,
+            subagent: false,
             force_new_tab: false,
             top_level: false,
             permission_mode,
@@ -1046,6 +1047,7 @@ fn resolve_managed_spawn_state(
         worktree_path: None,
         close_pane_on_exit: false,
         exit_on_run_completion: false,
+        subagent: false,
         identity: crate::harness::launch::ExecIdentity {
             params: launch,
             ..Default::default()

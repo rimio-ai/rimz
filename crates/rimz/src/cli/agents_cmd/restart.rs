@@ -126,6 +126,7 @@ pub(in crate::cli) fn restart_resolved(
         worktree_path: None,
         close_pane_on_exit: true,
         exit_on_run_completion: false,
+        subagent: false,
         identity: rimz::harness::launch::ExecIdentity {
             name: identity_name.map(ToOwned::to_owned),
             name_explicit: fresh_identity

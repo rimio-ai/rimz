@@ -34,6 +34,7 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
         worktree_path: None,
         close_pane_on_exit: false,
         exit_on_run_completion: false,
+        subagent: false,
         identity: ExecIdentity::default(),
     }
 }
@@ -136,6 +137,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
         worktree_path: None,
         close_pane_on_exit: false,
         exit_on_run_completion: false,
+        subagent: false,
         identity: ExecIdentity::default(),
     };
     env.rimz()
@@ -193,6 +195,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             worktree_path: None,
             close_pane_on_exit: false,
             exit_on_run_completion: false,
+            subagent: false,
             identity: ExecIdentity::default(),
         };
         env.rimz()

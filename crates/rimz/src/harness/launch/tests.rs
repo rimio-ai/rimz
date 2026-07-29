@@ -56,6 +56,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         worktree_path: None,
         close_pane_on_exit: false,
         exit_on_run_completion: false,
+        subagent: false,
         identity: ExecIdentity::default(),
     }
 }
@@ -128,6 +129,94 @@ fn process_compiler_composes_adapter_identity_and_rtk_environment() {
             .get(crate::harness::run::ENV_RTK)
             .map(String::as_str),
         Some("on")
+    );
+}
+
+#[test]
+fn process_compiler_locks_down_only_subagent_launches() {
+    let project = tempfile::tempdir().expect("project");
+    for (kind, profile_args, expected_suffix) in [
+        (
+            "claude",
+            vec![
+                "--disallowedTools".to_owned(),
+                "Read".to_owned(),
+                "Agent(fork)".to_owned(),
+            ],
+            vec![
+                "--disallowedTools".to_owned(),
+                "Read".to_owned(),
+                "Agent".to_owned(),
+                "--".to_owned(),
+                "inspect".to_owned(),
+            ],
+        ),
+        (
+            "codex",
+            vec!["-c".to_owned(), "features.multi_agent=true".to_owned()],
+            vec![
+                "-c".to_owned(),
+                "features.multi_agent=false".to_owned(),
+                "--".to_owned(),
+                "inspect".to_owned(),
+            ],
+        ),
+    ] {
+        let mut invocation = request(
+            kind,
+            ExecAction::Launch {
+                prompt: Some("inspect".to_owned()),
+                extra_args: profile_args.clone(),
+            },
+        );
+        let ordinary = compile_agent_process(
+            project.path(),
+            crate::config::RtkMode::Auto,
+            &invocation,
+            project.path(),
+        )
+        .expect("ordinary process");
+        assert_eq!(
+            ordinary.provider_argv[1..1 + profile_args.len()],
+            profile_args
+        );
+
+        invocation.subagent = true;
+        let child = compile_agent_process(
+            project.path(),
+            crate::config::RtkMode::Auto,
+            &invocation,
+            project.path(),
+        )
+        .expect("subagent process");
+        assert!(child.provider_argv.ends_with(&expected_suffix));
+    }
+}
+
+#[test]
+fn process_compiler_locks_down_opencode_subagent_environment() {
+    let project = tempfile::tempdir().expect("project");
+    let mut invocation = request(
+        "opencode",
+        ExecAction::Launch {
+            prompt: Some("inspect".to_owned()),
+            extra_args: Vec::new(),
+        },
+    );
+    invocation.subagent = true;
+
+    let process = compile_agent_process(
+        project.path(),
+        crate::config::RtkMode::Auto,
+        &invocation,
+        project.path(),
+    )
+    .expect("subagent process");
+
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&process.env["OPENCODE_PERMISSION"])
+            .expect("permission JSON"),
+        serde_json::json!({ "task": "deny" })
     );
 }
 
@@ -236,6 +325,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         worktree_path: Some(PathBuf::from("/repo/worktree")),
         close_pane_on_exit: true,
         exit_on_run_completion: true,
+        subagent: true,
         identity: ExecIdentity {
             name: Some("swift-otter".to_owned()),
             name_explicit: true,
@@ -462,6 +552,14 @@ fn exec_wire_rejects_malformed_and_mismatched_envelopes() {
     ));
 
     let mut value = serde_json::to_value(&input).expect("request value");
+    value
+        .as_object_mut()
+        .expect("request serializes as an object")
+        .remove("subagent");
+    let decoded =
+        decode_exec_request("codex", None, &value.to_string()).expect("legacy request payload");
+    assert!(!decoded.subagent);
+
     value["provider_account"] = serde_json::json!({ "state": "finalized" });
     let err = decode_exec_request("codex", None, &value.to_string())
         .expect_err("finalized binding required");

@@ -266,6 +266,16 @@ pub trait LaunchCapability: CoreCapability {
         Vec::new()
     }
 
+    /// Restrict provider-native delegation for a `rimz subagents` child.
+    /// The default leaves argv unchanged for providers without a verified
+    /// native restriction.
+    fn lockdown_subagent_args(&self, _extra_args: &mut Vec<String>) {}
+
+    /// Restrict provider-native delegation through launch environment for a
+    /// `rimz subagents` child. Applied after every configured launch variable;
+    /// the default leaves the environment unchanged.
+    fn lockdown_subagent_env(&self, _env: &mut BTreeMap<String, String>) {}
+
     /// Environment a newly-born room exports for direct agent launches. The
     /// mux layer carries this opaque map; provider policy stays in adapters.
     fn room_env(&self, _runtime: &crate::store::RuntimePaths) -> BTreeMap<String, String> {

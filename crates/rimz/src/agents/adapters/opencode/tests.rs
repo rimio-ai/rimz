@@ -88,6 +88,39 @@ fn opencode_activity_filter_and_launch_commands_build() {
 }
 
 #[test]
+fn subagent_lockdown_merges_opencode_permissions() {
+    let mut absent = std::collections::BTreeMap::new();
+    OpencodeAdapter.lockdown_subagent_env(&mut absent);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&absent["OPENCODE_PERMISSION"])
+            .expect("permission JSON"),
+        json!({ "task": "deny" })
+    );
+
+    let mut existing = std::collections::BTreeMap::from([(
+        "OPENCODE_PERMISSION".to_owned(),
+        r#"{"bash":"ask","edit":"allow","task":"allow"}"#.to_owned(),
+    )]);
+    OpencodeAdapter.lockdown_subagent_env(&mut existing);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&existing["OPENCODE_PERMISSION"])
+            .expect("permission JSON"),
+        json!({ "bash": "ask", "edit": "allow", "task": "deny" })
+    );
+
+    let mut invalid = std::collections::BTreeMap::from([(
+        "OPENCODE_PERMISSION".to_owned(),
+        "not JSON".to_owned(),
+    )]);
+    OpencodeAdapter.lockdown_subagent_env(&mut invalid);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&invalid["OPENCODE_PERMISSION"])
+            .expect("permission JSON"),
+        json!({ "task": "deny" })
+    );
+}
+
+#[test]
 fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     let registered = hook_lifecycle(
         &OpencodeAdapter,

@@ -388,6 +388,7 @@ fn prepare_supervised(
         worktree_path: None,
         close_pane_on_exit: false,
         exit_on_run_completion: false,
+        subagent: request.subagent,
         identity: rimz::harness::launch::ExecIdentity {
             params: preflight_launch,
             ..rimz::harness::launch::ExecIdentity::default()
@@ -508,6 +509,7 @@ fn execute_attempt(
         system_prompt_file: agent_cell.system_prompt_file.as_deref(),
         append_system_prompt_files: &agent_cell.append_system_prompt_files,
         self_cleanup_on_completion: request.self_cleanup_on_completion && !request.keep,
+        subagent: request.subagent,
         provider_account_binding: prepared.managed_launch.binding(),
     })?;
     let waiter = if request.background {

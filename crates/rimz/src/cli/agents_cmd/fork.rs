@@ -94,6 +94,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             worktree_path: None,
             close_pane_on_exit: false,
             exit_on_run_completion: false,
+            subagent: false,
             identity: rimz::harness::launch::ExecIdentity::default(),
         },
         &seed.cwd,
@@ -145,6 +146,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             worktree_path: None,
             close_pane_on_exit: placement != Placement::SamePane,
             exit_on_run_completion: false,
+            subagent: false,
             identity: rimz::harness::launch::ExecIdentity {
                 name: Some(launch.name.clone()),
                 name_explicit: launch.name_explicit,

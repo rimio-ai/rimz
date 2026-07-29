@@ -60,6 +60,7 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
         name: None,
         background: false,
         self_cleanup_on_completion: false,
+        subagent: false,
         force_new_tab: false,
         top_level: false,
         permission_mode: PermissionMode::Auto,
