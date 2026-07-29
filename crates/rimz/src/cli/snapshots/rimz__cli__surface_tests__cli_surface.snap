@@ -997,6 +997,8 @@ rimz help subagents list
 
 rimz help subagents stop
 
+rimz help subagents types
+
 rimz help subagents wait
 
 rimz help teams
@@ -2082,11 +2084,10 @@ rimz subagents
     <prompt>  [action=set takes=1..=1]
     <spec>  [action=set takes=1..=1]
     --agent <PROFILE|KIND>  [action=set takes=1..=1]
-    --ask  [action=set-true takes=0..=0]
-    --budget <AMOUNT[/day]>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --description <TEXT>  [action=set takes=1..=1]
     --effort <LEVEL>  [action=set takes=1..=1]
+    --fg  [action=set-true takes=0..=0]
     -h, --help  [action=help takes=0..=0]
     --json  [action=set-true takes=0..=0]
     --keep  [action=set-true takes=0..=0]
@@ -2097,7 +2098,6 @@ rimz subagents
     --root <ROOT>  [action=set takes=1..=1 global]
     --timeout <TIMEOUT>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
-    --yolo  [action=set-true takes=0..=0]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz subagents help
@@ -2110,6 +2110,8 @@ rimz subagents help list
 
 rimz subagents help stop
 
+rimz subagents help types
+
 rimz subagents help wait
 
 rimz subagents launch
@@ -2117,11 +2119,10 @@ rimz subagents launch
     <prompt>  [action=set takes=1..=1]
     <spec>  [action=set takes=1..=1]
     --agent <PROFILE|KIND>  [action=set takes=1..=1]
-    --ask  [action=set-true takes=0..=0]
-    --budget <AMOUNT[/day]>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --description <TEXT>  [action=set takes=1..=1]
     --effort <LEVEL>  [action=set takes=1..=1]
+    --fg  [action=set-true takes=0..=0]
     -h, --help  [action=help takes=0..=0]
     --keep  [action=set-true takes=0..=0]
     --max-turns <N>  [action=set takes=1..=1]
@@ -2131,7 +2132,6 @@ rimz subagents launch
     --root <ROOT>  [action=set takes=1..=1 global]
     --timeout <TIMEOUT>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
-    --yolo  [action=set-true takes=0..=0]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz subagents list (aliases: ls)
@@ -2148,6 +2148,15 @@ rimz subagents stop
     --all  [action=set-true takes=0..=0]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz subagents types
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]

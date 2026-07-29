@@ -57,16 +57,12 @@ const fn default_max_launch_depth() -> u8 {
 pub struct SubagentsConfig {
     /// Supervised-run deadline in the CLI duration syntax (`30m`, `2h`).
     pub timeout: String,
-    /// Optional per-child spend cap (`5` or `20/day`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget: Option<String>,
 }
 
 impl Default for SubagentsConfig {
     fn default() -> Self {
         Self {
             timeout: "30m".to_owned(),
-            budget: None,
         }
     }
 }

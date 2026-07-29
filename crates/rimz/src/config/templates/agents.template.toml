@@ -29,7 +29,6 @@
 
 [agents.subagents]
 # timeout = "30m"                      # wall-clock deadline for supervised child runs
-# Add `budget = "5"` for an optional child cap; `"20/day"` makes it a daily cap.
 
 [agents.profiles]
 # Profiles are named main agents addressed as `@<profile>`. `agent` names a

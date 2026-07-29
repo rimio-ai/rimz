@@ -12,22 +12,30 @@ rimz subagents codex "find the smallest safe fix"
 rimz subagents launch reviewer "review the proposed API"
 ```
 
-Each launch is equivalent to a one-cell `rimz agents <spec> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately, so a parent can start several children without waiting between launches.
+Each launch is equivalent to a one-cell `rimz agents <spec> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately, so a parent can start several children without waiting between launches. Pass `--fg` to block until the child finishes and print its result instead.
 
 The bare form and `launch` verb are equivalent. A prompt is mandatory: the parent must supply the whole assignment as the second positional argument. The child inherits the parent's current checkout and lane.
 
 | Behavior | Default | Override |
 | --- | --- | --- |
-| Execution | supervised print mode, background | fixed |
+| Execution | supervised print mode, background | `--fg` blocks and prints the result |
 | Checkout | caller's current checkout | fixed |
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
-| Spend cap | none | `--budget`, then `[agents.subagents] budget` |
 | Pane after completion | close | `--keep` |
 | Address | minted petname | `--name/-n` |
 
 The launch surface deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--top-level`, `--resume`, placement flags, output/input formats, retries, and verification. Use `rimz agents` when the launch needs those controls; use `rimz teams` when the workers are peers rather than children.
 
-Model, provider/profile rebasing, effort, permission posture, description, turn cap, and raw provider arguments remain available. Run `rimz subagents launch --help` for their exact spellings.
+Model, provider/profile rebasing, effort, description, turn cap, and raw provider arguments remain available. Run `rimz subagents launch --help` for their exact spellings.
+
+## Discover agent types
+
+```sh
+rimz subagents types
+rimz subagents types --json
+```
+
+`types` lists every agent kind, configured profile, and configured launch command available for one child. Team names are excluded because a subagent launch creates one agent, not a cohort.
 
 ## Join results
 
@@ -52,7 +60,7 @@ rimz subagents stop calm-fox
 rimz subagents stop --all
 ```
 
-Bare `rimz subagents` lists the caller's children, including retained completed children, with live status and the newest supervised-run outcome. `stop` accepts only live children of the caller.
+Bare `rimz subagents` lists the caller's children, including retained completed children, with live status, the newest supervised-run outcome, and each child's current one-line description. `stop` accepts only live children of the caller.
 
 `restart` and `resume` are deliberately absent in v1: the durable run record does not yet retain every launch argument needed to reproduce the supervised deadline, wait, and self-close contracts. Relaunch the same spec and prompt to start a fresh child, matching the Agent-tool model.
 
@@ -73,7 +81,6 @@ Provider-native children and RimZ-launched pane-backed children share the produc
 ```toml
 [agents.subagents]
 timeout = "30m"
-# budget = "5"
 ```
 
-`timeout` uses the CLI duration syntax (`s`, `m`, `h`, `d`). The deadline is stored on each run and enforced by the room producer even if the parent never calls `wait`. `budget` accepts a session cap such as `"5"` or a daily cap such as `"20/day"`; leaving it unset means no child-specific cap. Launch flags win over this table.
+`timeout` uses the CLI duration syntax (`s`, `m`, `h`, `d`). The deadline is stored on each run and enforced by the room producer even if the parent never calls `wait`. A stale `budget` key in this table is rejected at config load; spend limits belong to the parent.

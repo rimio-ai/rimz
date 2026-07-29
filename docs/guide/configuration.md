@@ -442,10 +442,9 @@ An agent that runs `rimz agents` or [`rimz subagents`](../reference/cli/subagent
 ```toml
 [agents.subagents]
 timeout = "30m"
-# budget = "5"       # optional per-child cap; "20/day" also works
 ```
 
-These defaults apply only to the agent-only `rimz subagents` doorway. `timeout` is the wall-clock limit for each supervised child and defaults to 30 minutes; the producer enforces it even when no process is waiting on the result. No budget cap is set by default. Per-launch `--timeout` and `--budget` flags override this table.
+These defaults apply only to the agent-only `rimz subagents` doorway. `timeout` is the wall-clock limit for each supervised child and defaults to 30 minutes; the producer enforces it even when no process is waiting on the result. Per-launch `--timeout` overrides this table.
 
 ### Worktrees
 
