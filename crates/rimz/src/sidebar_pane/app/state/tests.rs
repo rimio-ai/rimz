@@ -3,7 +3,9 @@ use crate::agents::AgentStatus;
 use crate::diag::record::{DiagEvent, GateRule};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar_pane::app::ServeConfig;
-use crate::sidebar_pane::app::fetch::{FetchPhase, FetchRole, FetchUpdate, PaneFrame};
+use crate::sidebar_pane::app::fetch::{
+    FetchPhase, FetchRole, FetchUpdate, PaneFrame, SnapshotSource,
+};
 use crate::sidebar_pane::app::fixtures::{serve_config, snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::app::loop_state::LoopState;
@@ -324,6 +326,7 @@ impl ApplyHarness {
             role: FetchRole::Producer,
             phase: FetchPhase::Final,
             pane_frame: PaneFrame::Fresh,
+            source: SnapshotSource::Produced,
         })
     }
 
@@ -617,6 +620,7 @@ fn interim_success_does_not_recover_health_and_final_failure_advances_once() {
         role: FetchRole::Producer,
         phase: FetchPhase::Interim,
         pane_frame: PaneFrame::Held,
+        source: SnapshotSource::Published,
     });
     assert_eq!(h.health.failure_streak, ALERT_AFTER_FAILURES);
     assert!(h.health.alert.as_ref().is_some_and(Alert::is_active));
@@ -649,6 +653,7 @@ fn focused_read_clear_survives_failure_without_duplicate_trace() {
             role: FetchRole::Producer,
             phase: FetchPhase::Final,
             pane_frame: PaneFrame::Fresh,
+            source: SnapshotSource::Produced,
         },
         &diag,
     );
@@ -1026,6 +1031,7 @@ fn frameless_fold_does_not_blip_switch_in() {
         role: FetchRole::Producer,
         phase: FetchPhase::Interim,
         pane_frame: PaneFrame::Held,
+        source: SnapshotSource::Published,
     });
     assert_eq!(a.ui.viewing_own_tab, Some(true));
 
@@ -1084,7 +1090,7 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
 }
 
 #[test]
-fn non_final_fast_success_keeps_refresh_alert_active() {
+fn published_fast_success_keeps_refresh_alert_active() {
     let ws = workspace();
     let (_dir, mut h) = ApplyHarness::new(&ws);
     h.health = degraded_health("snapshot failed: produce");
@@ -1092,8 +1098,9 @@ fn non_final_fast_success_keeps_refresh_alert_active() {
     let applied = h.apply_outcome(FetchUpdate::Snapshot {
         snapshot: Box::new(snapshot(&ws)),
         role: FetchRole::Producer,
-        phase: FetchPhase::Interim,
+        phase: FetchPhase::Final,
         pane_frame: PaneFrame::Held,
+        source: SnapshotSource::Published,
     });
 
     assert!(!applied.should_exit);

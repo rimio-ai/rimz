@@ -13,6 +13,7 @@ fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
         role: FetchRole::Producer,
         phase: FetchPhase::Final,
         pane_frame: PaneFrame::Held,
+        source: SnapshotSource::Published,
     }));
 
     assert_eq!(rig.state.current.worktree_groups.len(), 1);
@@ -78,6 +79,42 @@ fn maintenance_requests_force_fold_when_gate_deadline_is_due() {
             .expect("gate deadline fold request")
             .forces_fold(),
         "due gate reevaluation must bypass the unchanged-input skip"
+    );
+}
+
+#[test]
+fn rejected_final_defers_one_gate_deadline_reevaluation() {
+    let mut rig = Rig::new();
+    rig.state.current = agent_snapshot(&rig.ws);
+
+    rig.fold(snapshot(&rig.ws), false);
+
+    assert_eq!(
+        rig.state.gate.rule,
+        Some(crate::diag::record::GateRule::FramelessOverFrame)
+    );
+    assert!(
+        rig.next_request().is_none(),
+        "a rejected final must not immediately feed another fetch"
+    );
+    let deadline = rig
+        .fetch
+        .next_deadline()
+        .expect("one deferred reevaluation");
+    assert!(
+        deadline > Instant::now(),
+        "the reevaluation waits for the gate escape hatch"
+    );
+
+    rig.fold(snapshot(&rig.ws), false);
+    assert!(
+        rig.next_request().is_none(),
+        "repeated rejected finals remain one deferred fetch"
+    );
+    assert_eq!(
+        rig.fetch.next_deadline(),
+        Some(deadline),
+        "the first gate deadline remains authoritative"
     );
 }
 

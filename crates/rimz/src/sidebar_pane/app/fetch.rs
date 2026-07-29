@@ -98,6 +98,7 @@ pub(super) enum FetchUpdate {
         role: FetchRole,
         phase: FetchPhase,
         pane_frame: PaneFrame,
+        source: SnapshotSource,
     },
     Failed {
         error: String,
@@ -107,7 +108,7 @@ pub(super) enum FetchUpdate {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SnapshotSource {
+pub(super) enum SnapshotSource {
     Published,
     Produced,
 }
@@ -608,6 +609,7 @@ impl FetchWorker {
             role,
             phase,
             pane_frame,
+            source,
         });
         deliver_notifications(
             &self.config,

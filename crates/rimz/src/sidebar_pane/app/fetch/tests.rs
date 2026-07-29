@@ -87,6 +87,7 @@ fn refresh_override_stamps_folded_snapshot() {
         role: FetchRole::Consumer,
         phase: FetchPhase::Final,
         pane_frame: PaneFrame::Held,
+        source: SnapshotSource::Published,
     });
 
     let update = rx.recv().expect("published snapshot");
