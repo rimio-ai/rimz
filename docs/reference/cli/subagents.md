@@ -2,7 +2,7 @@
 
 `rimz subagents` is the agent-only doorway for delegating one bounded prompt to a supervised child. It is syntax sugar over `rimz agents`: the child gets a real pane, durable run record, petname, parent link, and sidebar entry without making the parent choose the supervision flags.
 
-Run it only from a RimZ-launched agent. A user-shell invocation fails before opening the room and points to `rimz agents` or `rimz teams`.
+Run it only from a RimZ-launched agent. A user-shell invocation fails before opening the room and points to `rimz agents` or `rimz teams`. The mechanics behind the sugar — the ancestry stamp and its depth cap, the caller-scoped verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
 
 ## Fan out work
 
@@ -23,6 +23,8 @@ The bare form and `launch` verb are equivalent. A prompt is mandatory: the paren
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
 | Pane after completion | close | `--keep` |
 | Address | minted petname | `--name/-n` |
+
+A finished child closes its own pane: the close follows the run reaching a terminal status, not the parent joining it, so it happens whether or not `wait` is ever called. `--keep` opts out and leaves the pane for `stop` or `rimz gc`.
 
 The launch surface deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--top-level`, `--resume`, placement flags, output/input formats, retries, and verification. Use `rimz agents` when the launch needs those controls; use `rimz teams` when the workers are peers rather than children.
 

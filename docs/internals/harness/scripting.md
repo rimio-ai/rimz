@@ -168,13 +168,15 @@ An adapter with no verified turn-completion signal refuses `-p` before opening a
 
 Because the record is the run, a `wait` in a different shell, a later CI step, or another machine sharing the state directory sees exactly what the launching process would have seen.
 
+**`wait` only reads.** It polls records and maps a settled status to an exit code; it never signals a process, cancels a run, or closes a pane. Three consequences follow, and each one surprises somebody. Not waiting at all changes nothing about a run's lifecycle, because [pane reclamation](#reclaiming-the-run-pane) belongs to the in-pane wrapper rather than to the joining caller. `--any` returns the first finisher and leaves every loser running to its own completion, which is why the [race recipe](../../guide/scripting.md#in-a-pipeline) stops the loser explicitly. And `wait --timeout` bounds *the caller's patience*, not the run: it exits `124` with the run still live, which is the same code a genuinely `TimedOut` run exits with. `--json` does not disambiguate them either, because the join stamps every unfinished target `timed_out` in its result map on the way out. Only the durable record still knows — a run the caller merely stopped waiting on is still `Running` — so a script that needs the difference re-reads the record with `agents show` rather than trusting the join's exit code.
+
 ## Reclaiming the run pane
 
 Cleanup is best-effort and split by who is still alive to do it.
 
 **A blocking run** closes the recorded launch pane after the driver finishes, falling back to finding the agent row by `(kind, agent_id)` in the snapshot when no pane id was recorded. Before that close, a non-completed record with no failure tail yet gets one captured from the pane. First writer wins: a wrapper that already captured a tail as it died cannot be overwritten by later cleanup.
 
-**A background run** hands normal completion reclamation to the in-pane wrapper. Unless `--keep`, the wrapper watches the run record, terminates the agent once it is terminal, runs marked-worktree cleanup, and closes its own pane. A producer-enforced timeout additionally runs the stop backstop from its hidden helper, so a wedged wrapper cannot leave the overdue pane behind.
+**A background run** hands normal completion reclamation to the in-pane wrapper. Unless `--keep`, the wrapper watches the run record, terminates the agent once it is terminal, runs marked-worktree cleanup, and closes its own pane. Concretely, `supervise_child` re-reads the record every 250 ms, sends `SIGTERM` on the first terminal status, escalates to `SIGKILL` 300 ms later, and then settles: the close is self-initiated by the pane's own wrapper, on the record alone, with no involvement from whoever launched it or joins it. A producer-enforced timeout additionally runs the stop backstop from its hidden helper, so a wedged wrapper cannot leave the overdue pane behind.
 
 **A stop or a Ctrl+C-canceled blocking caller** uses the same terminal record and wake path, then closes the recorded pane if it lingers past a short grace. That reclaims a kept run's pane whether the reference given was the run id or the agent name.
 

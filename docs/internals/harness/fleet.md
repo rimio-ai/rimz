@@ -1,6 +1,6 @@
 # The agent harness
 
-> The entry point for contributors working on the harness. This page orients you across the whole area, then owns the launch core: spawning a fleet, addressing it, resuming it, capping what it spends, and reclaiming what it leaves behind. The other five pages in this folder go deep on one job each.
+> The entry point for contributors working on the harness. This page orients you across the whole area, then owns the launch core: spawning a fleet, addressing it, resuming it, capping what it spends, and reclaiming what it leaves behind. The other seven pages in this folder go deep on one job each.
 
 ## What the harness does
 
@@ -38,12 +38,13 @@ Steps 1 through 7 are the same for every entry point. A `-p` run, a scheduled lo
 
 ## Where the code lives
 
-The harness is a product area, not a single Rust module. It spans four source trees, and the seven pages in this folder are grouped by the job they document rather than by the crate path they point at.
+The harness is a product area, not a single Rust module. It spans four source trees, and the eight pages in this folder are grouped by the job they document rather than by the crate path they point at.
 
 | Page | Owns | Source |
 | --- | --- | --- |
 | fleet.md (this page) | Spawn, address, resume, reclaim | [`harness/`](../../../crates/rimz/src/harness) |
 | [scripting.md](./scripting.md) | Supervised `-p` runs | [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), [`run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) |
+| [subagents.md](./subagents.md) | Agents launching supervised children | [`cli/subagents/`](../../../crates/rimz/src/cli/subagents), [`harness/plan.rs`](../../../crates/rimz/src/harness/plan.rs) |
 | [loops.md](./loops.md) | Scheduled tasks and unattended recovery | [`harness/schedule/`](../../../crates/rimz/src/harness/schedule), [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs) |
 | [budget.md](./budget.md) | Dollar caps and the park they produce | [`harness/budget.rs`](../../../crates/rimz/src/harness/budget.rs), [`cli/budget.rs`](../../../crates/rimz/src/cli/budget.rs) |
 | [messaging.md](./messaging.md) | Getting text into a running agent | [`message/`](../../../crates/rimz/src/message) |
