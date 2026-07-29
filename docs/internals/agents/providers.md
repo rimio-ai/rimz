@@ -156,7 +156,7 @@ Identity is what keeps the credits cache honest. [`AccountUsageProbe`](../../../
 
 ### Refresh cadences
 
-The producer keeps every metered account whose spec declares `direct_account_usage` current between turns through one hidden helper, `rimz agents refresh-usage --kind <kind>`, spawned only after `credits.json` grants a durable per-kind direct-query claim. The account fold admits helpers from the panels it just built, before PR, policy, and git enrichment, so a newly discovered idle login starts its first usage read in the same heavy pass.
+The producer keeps every metered account whose spec declares `direct_account_usage` current between turns through one hidden `rimz agents refresh-usage` helper for that provider, spawned only after `credits.json` grants a durable per-kind direct-query claim. The account fold admits helpers from the panels it just built, before PR, policy, and git enrichment, so a newly discovered idle login starts its first usage read in the same heavy pass.
 
 The claim is what makes this safe across rooms. Under the shared credits lock, scheduling derives the claim identity only from the published account-cache scope and credential stamp plus the prior same-scope credits owner, and records a UUID nonce, claim time, requested scope, optional credential-file stamp, and optional cached owner fallback. The helper receives the nonce through a hidden `--claim-id`, and only the matching worker may resolve credentials, contact the provider, and publish. The claim and `oauth_read_at_ms` live under the same lock, so workspaces admit one fetch, a failed spawn cancels its claim, and an expired worker claim becomes retryable without a marker file.
 
