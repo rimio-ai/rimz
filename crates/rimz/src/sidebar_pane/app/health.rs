@@ -67,9 +67,10 @@ pub(super) fn next_health(previous: &Health, failure: Option<String>) -> Health 
 
 /// Whether the refresh loop has been *continuously* degraded past
 /// [`GIVE_UP_AFTER_DEGRADED`]. Keys off the sticky health alert: `since` is
-/// pinned to the start of the current failure episode and any successful fetch
-/// clears the active state (the alert lingers only as a dim recovered notice),
-/// so this fires only on an unbroken run of failures, never after a recovery.
+/// pinned to the start of the current failure episode and an authoritative
+/// success clears the active state (the alert lingers only as a dim recovered
+/// notice), so this fires only on an unbroken run of failures, never after a
+/// producer verdict or consumer-read recovery.
 pub(super) fn degraded_too_long(health: &Health, now: Timestamp) -> bool {
     health
         .alert

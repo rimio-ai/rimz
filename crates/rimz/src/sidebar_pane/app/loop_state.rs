@@ -1479,7 +1479,7 @@ impl LoopState {
         let fetch_failure = application.snapshot.as_ref().err().cloned();
         let producer_verdict = application.source == Some(SnapshotSource::Produced);
         let mut computed = compute_next_state(application.snapshot, &self.current, &self.health);
-        if fetch_was_ok && !producer_verdict {
+        if fetch_was_ok && application.role.is_producer() && !producer_verdict {
             // Published fast folds are paintable data, not a producer-health
             // verdict. Only a completed produce can recover the refresh episode,
             // so frameless/status-only folds cannot mask repeated pane-read failure.

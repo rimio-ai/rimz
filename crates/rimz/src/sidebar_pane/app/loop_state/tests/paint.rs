@@ -111,7 +111,7 @@ fn resize_hold_releases_only_on_a_post_engage_pane_stamp() {
         rig.state.paint_hold.engage(Instant::now(), 100);
 
         let snapshot = agent_snapshot_observed(&rig.ws, observed_at_ms);
-        rig.fold(snapshot, false);
+        rig.fold(snapshot, PaneFrame::Held, SnapshotSource::Published);
 
         assert_eq!(
             !rig.state.paint_hold.is_engaged(),
@@ -130,7 +130,7 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
     rig.state.paint_hold.engage(Instant::now(), 100);
 
     let snapshot = process_snapshot(&rig.ws, 150);
-    rig.fold(snapshot, false);
+    rig.fold(snapshot, PaneFrame::Held, SnapshotSource::Published);
     assert!(
         rig.state.paint_hold.is_engaged(),
         "the rejected fold stays held"
@@ -146,7 +146,7 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
     );
 
     let snapshot = process_snapshot(&rig.ws, 151);
-    rig.fold(snapshot, false);
+    rig.fold(snapshot, PaneFrame::Held, SnapshotSource::Published);
     assert!(
         rig.state.paint_hold.is_engaged(),
         "the second rejected fold still stays held"
@@ -157,7 +157,7 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
         Some(jiff::Timestamp::from_millisecond(now_ms - 1_000).unwrap());
 
     let snapshot = process_snapshot(&rig.ws, 152);
-    rig.fold(snapshot, false);
+    rig.fold(snapshot, PaneFrame::Held, SnapshotSource::Published);
     assert!(
         !rig.state.paint_hold.is_engaged(),
         "the escape-hatch accepted fold releases by pane stamp"
@@ -248,7 +248,7 @@ fn empty_close_suppresses_widened_paint_until_exit() {
 
     let mut empty = agent_snapshot_observed(&rig.ws, 200);
     empty.own_view = Some(empty_own_view());
-    rig.fold(empty, true);
+    rig.fold(empty, PaneFrame::Fresh, SnapshotSource::Produced);
 
     assert!(
         rig.state.should_exit,
