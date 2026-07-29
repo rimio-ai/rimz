@@ -268,6 +268,24 @@ pub fn resolve_agents<'a>(
     resolve_mentions(raw, worktree_flag, current_channel, candidates)
 }
 
+/// Resolve a target to exactly one agent from a caller-supplied durable
+/// candidate set.
+pub fn resolve_agent<'a>(
+    raw: &str,
+    worktree_flag: Option<&str>,
+    current_channel: Option<&str>,
+    candidates: &[&'a AgentState],
+) -> Result<&'a AgentState, TargetErr> {
+    let matches = resolve_agents(raw, worktree_flag, current_channel, candidates)?;
+    match matches.as_slice() {
+        [one] => Ok(one),
+        many => Err(TargetErr::Ambiguous {
+            target: raw.to_owned(),
+            candidates: render_candidates(many),
+        }),
+    }
+}
+
 /// Resolve a live message target to every matching live agent pane: bound sessions
 /// and lazy (sessionless) panes alike, each addressed by the pane the producer
 /// bound this fold — so a daemon-routed session reaches its pane and a just
@@ -842,10 +860,12 @@ pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
         .collect()
 }
 
-/// Pane-backed children stamped with `parent` as their display parent.
+/// Pane-backed descendants stamped with `parent` as their display parent.
 ///
 /// Ended children remain in this projection so callers can list and wait on
-/// completed supervised work. Lifecycle commands filter to live rows.
+/// completed supervised work. Lifecycle commands filter to live rows. Launch
+/// ancestry flattens configured depths above one, so this is direct-child
+/// membership only at the default maximum depth of one.
 pub fn launched_children<'a>(agents: &'a [AgentState], parent: &AgentState) -> Vec<&'a AgentState> {
     let mut children = agents
         .iter()

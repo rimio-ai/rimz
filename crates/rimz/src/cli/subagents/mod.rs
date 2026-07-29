@@ -60,11 +60,6 @@ enum SubagentsSubcmd {
         #[arg(long, conflicts_with = "names")]
         all: bool,
     },
-    /// Restart one live child in place, resuming its session.
-    Restart {
-        #[arg(value_name = "NAME")]
-        name: String,
-    },
 }
 
 #[derive(Debug, Default, PartialEq, Args)]
@@ -132,7 +127,6 @@ pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
             json,
         }) => wait_children(names, any, timeout, stream, json, globals),
         Some(SubagentsSubcmd::Stop { names, all }) => stop_children(names, all, globals),
-        Some(SubagentsSubcmd::Restart { name }) => restart_child(&name, globals),
         None if args.launch.spec.is_some() => {
             if args.json {
                 bail!("--json is only supported with `rimz subagents` and `rimz subagents list`");
@@ -319,32 +313,45 @@ fn wait_children(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading agent history")?;
     let (_, children) = caller_and_children(&audit.agents)?;
-    let references = if names.is_empty() {
-        children
-            .into_iter()
-            .filter(|child| child.ended_at.is_none())
-            .map(child_reference)
-            .collect::<Vec<_>>()
-    } else {
-        resolve_child_names(&children, &names)?
-            .into_iter()
-            .map(child_reference)
-            .collect()
-    };
+    let runs = rimz::harness::run::list(ctx.store.paths())?;
+    let references = wait_references(&children, &runs, &names)?;
     if references.is_empty() {
-        bail!("this agent has no live subagents to wait for");
+        bail!("this agent has no supervised subagents to wait for");
     }
     agents_cmd::wait_agent(references, any, timeout, stream, false, json, globals)
+}
+
+fn wait_references(
+    children: &[&AgentState],
+    runs: &[rimz::harness::run::RunRecord],
+    names: &[String],
+) -> Result<Vec<String>> {
+    if names.is_empty() {
+        return Ok(children
+            .iter()
+            .copied()
+            .filter(|child| newest_run_for_child(runs, child).is_some())
+            .map(child_reference)
+            .collect());
+    }
+    Ok(resolve_child_names(children, names)?
+        .into_iter()
+        .map(child_reference)
+        .collect())
 }
 
 fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.alive_snapshot()?;
     let (_, all_children) = caller_and_children(&snapshot.agents)?;
+    let live_children = all_children
+        .into_iter()
+        .filter(|child| child.ended_at.is_none())
+        .collect::<Vec<_>>();
     let children = if all {
-        all_children
+        live_children
     } else {
-        resolve_child_names(&all_children, &names)?
+        resolve_child_names(&live_children, &names)?
     };
     if children.is_empty() {
         bail!("this agent has no live subagents to stop");
@@ -355,7 +362,7 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
     let mut out = render::out();
     for child in children {
         let label = rimz::harness::target::agent_handle(child, &peers, true);
-        match agents_cmd::stop_resolved(&ctx, globals, child, &mut tracker) {
+        match agents_cmd::stop_resolved(&ctx, globals, &snapshot, child, &mut tracker) {
             Ok(true) => writeln!(out, "stopped {label}")?,
             Ok(false) => {}
             Err(err) => {
@@ -370,20 +377,6 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
     Ok(())
 }
 
-fn restart_child(name: &str, globals: &GlobalFlags) -> Result<()> {
-    let ctx = Ctx::open(globals)?;
-    let snapshot = ctx.alive_snapshot()?;
-    let (_, children) = caller_and_children(&snapshot.agents)?;
-    let child = resolve_child_names(&children, &[name.to_owned()])?
-        .into_iter()
-        .next()
-        .context("restart requires one child")?;
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
-    let message = agents_cmd::restart_resolved(&ctx, child, &peers)?;
-    writeln!(render::out(), "{message}")?;
-    Ok(())
-}
-
 fn resolve_child_names<'a>(
     children: &[&'a AgentState],
     names: &[String],
@@ -391,24 +384,8 @@ fn resolve_child_names<'a>(
     names
         .iter()
         .map(|name| {
-            let reference = name
-                .strip_prefix('@')
-                .unwrap_or(name)
-                .split('#')
-                .next()
-                .unwrap_or(name);
-            let mut matches = children.iter().copied().filter(|child| {
-                child.name.as_deref() == Some(reference)
-                    || child.agent_id.as_str() == reference
-                    || child.launch_id.as_deref() == Some(reference)
-            });
-            let child = matches
-                .next()
-                .with_context(|| format!("`{name}` is not one of this agent's live subagents"))?;
-            if matches.next().is_some() {
-                bail!("subagent name `{name}` is ambiguous");
-            }
-            Ok(child)
+            rimz::harness::target::resolve_agent(name, None, None, children)
+                .with_context(|| format!("`{name}` is not one of this agent's subagents"))
         })
         .collect()
 }
@@ -422,7 +399,10 @@ fn child_reference(child: &AgentState) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use clap::Parser;
+    use jiff::Timestamp;
 
     use super::*;
 
@@ -485,6 +465,54 @@ mod tests {
     }
 
     #[test]
+    fn default_wait_keeps_finished_supervised_children() {
+        let mut finished =
+            rimz::agents::AgentState::stub("codex", "finished", rimz::agents::AgentStatus::Success);
+        finished.name = Some("swift-otter".to_owned());
+        finished.ended_at = Some(Timestamp::now());
+        let untracked = rimz::agents::AgentState::stub(
+            "claude",
+            "interactive",
+            rimz::agents::AgentStatus::Idle,
+        );
+        let children = vec![&finished, &untracked];
+
+        let mut run = rimz::harness::run::RunRecord::new(
+            rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-wait")),
+            rimz::ids::AgentKind::new_unchecked("codex"),
+            rimz::harness::run::PermissionMode::Auto,
+            "review".to_owned(),
+            PathBuf::from("/tmp/subagent-wait"),
+        );
+        run.agent_id = Some(finished.agent_id.clone());
+        run.agent_name = finished.name.clone();
+        run.status = rimz::harness::run::RunStatus::Completed;
+
+        assert_eq!(
+            wait_references(&children, &[run], &[]).expect("default join"),
+            vec!["swift-otter"]
+        );
+    }
+
+    #[test]
+    fn explicit_child_resolution_uses_the_shared_address_grammar() {
+        let mut child =
+            rimz::agents::AgentState::stub("codex", "child", rimz::agents::AgentStatus::Running);
+        child.name = Some("swift-otter".to_owned());
+        child.channel = Some("review".to_owned());
+
+        assert_eq!(
+            resolve_child_names(&[&child], &["@swift-otter#review".to_owned()])
+                .expect("qualified child"),
+            vec![&child]
+        );
+        assert!(
+            resolve_child_names(&[&child], &["@swift-otter#other".to_owned()]).is_err(),
+            "wrong-channel child must not resolve"
+        );
+    }
+
+    #[test]
     fn lifecycle_verbs_parse() {
         assert!(matches!(
             parse(&["rimz", "wait", "swift-otter", "--any"]).command,
@@ -493,10 +521,6 @@ mod tests {
         assert!(matches!(
             parse(&["rimz", "stop", "--all"]).command,
             Some(SubagentsSubcmd::Stop { all: true, .. })
-        ));
-        assert!(matches!(
-            parse(&["rimz", "restart", "swift-otter"]).command,
-            Some(SubagentsSubcmd::Restart { .. })
         ));
     }
 }
