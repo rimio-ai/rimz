@@ -445,8 +445,7 @@ fn fresh_pane_allows_bind(
     fresh_binding_at: jiff::Timestamp,
 ) -> Result<(), LocalSessionBindRejectReason> {
     let launch_owner = binding_index.latest_launch_agent(pane, &observation.kind);
-    let stamped_owner = launch_owner.or_else(|| binding_index.stamped_agent(pane));
-    if stamped_owner.is_some_and(|owner| {
+    if launch_owner.is_some_and(|owner| {
         owner.kind == observation.kind
             && owner.agent_id != observation.session_id
             && !owner.agent_id.is_provisional()

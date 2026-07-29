@@ -149,11 +149,13 @@ fn cached_alive_snapshot_binds_safe_local_session_intersection() {
     let removed_worktree = dir.path().join("removed");
     std::fs::create_dir_all(&live_worktree).unwrap();
     std::fs::create_dir_all(&removed_worktree).unwrap();
-    let live_pane = pane(
+    let now = Timestamp::now();
+    let mut live_pane = pane(
         "terminal_kiro",
         "kiro-cli",
         &live_worktree.to_string_lossy(),
     );
+    live_pane.pane_process_start = Some(now - std::time::Duration::from_secs(1));
     let removed_pane = pane(
         "terminal_removed",
         "kiro-cli",
@@ -165,7 +167,6 @@ fn cached_alive_snapshot_binds_safe_local_session_intersection() {
         live_pane.clone(),
         removed_pane,
     ]);
-    let now = Timestamp::now();
     let live_observation = local_observation("kiro-live", &live_worktree, now);
     let removed_observation = local_observation("kiro-removed", &removed_worktree, now);
     atomic::write_temp_then_rename_cache(
@@ -570,7 +571,10 @@ fn read_published_snapshot_binds_safe_local_session_intersection() {
     std::fs::create_dir_all(&removed_worktree).unwrap();
     let wt = worktree.to_string_lossy().into_owned();
     let removed_wt = removed_worktree.to_string_lossy().into_owned();
-    let panes = vec![pane("terminal_kiro", "kiro-cli", &wt)];
+    let now = Timestamp::now();
+    let mut live_pane = pane("terminal_kiro", "kiro-cli", &wt);
+    live_pane.pane_process_start = Some(now - std::time::Duration::from_secs(1));
+    let panes = vec![live_pane];
     let frame = assemble_frame(panes.clone(), unix_now_ms(), "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
 
@@ -585,7 +589,6 @@ fn read_published_snapshot_binds_safe_local_session_intersection() {
         pane("terminal_removed", "kiro-cli", &removed_wt),
     ];
     let inputs = crate::sidebar::agent_projection::LocalSessionInputs::from_panes(&published_panes);
-    let now = Timestamp::now();
     let session_id = crate::ids::AgentSessionId::from("kiro-session");
     let observation = crate::agents::LocalSessionObservation {
         kind: crate::ids::AgentKind::new_unchecked("kiro"),
