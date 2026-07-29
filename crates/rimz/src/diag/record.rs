@@ -153,6 +153,7 @@ impl SidebarWidthIntentVerdict {
 pub enum SidebarWidthControlTrigger {
     Retarget,
     ResizeFeedback,
+    Structural,
     Backstop,
     Classification,
 }
@@ -162,6 +163,7 @@ impl SidebarWidthControlTrigger {
         match self {
             Self::Retarget => "retarget",
             Self::ResizeFeedback => "resize-feedback",
+            Self::Structural => "structural",
             Self::Backstop => "backstop",
             Self::Classification => "classification",
         }

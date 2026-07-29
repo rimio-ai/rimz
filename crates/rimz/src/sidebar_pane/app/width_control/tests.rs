@@ -205,7 +205,8 @@ fn first_backend_geometry_resolves_the_initial_target() {
     controller.backstop(Some(80), Some(1), None, &diag);
 
     assert_eq!(controller.convergence.target(), Some(target(50)));
-    assert_eq!(controller.last_classified, Some((200, 1)));
+    assert_eq!(controller.last_classified_view_cols, Some(200));
+    assert_eq!(controller.last_siblings, Some(1));
 }
 
 #[test]
@@ -237,7 +238,7 @@ fn missing_backend_geometry_retries_the_baseline_at_most_once_per_second() {
         Some(retry),
         "an immediate render iteration does not probe again",
     );
-    assert_eq!(controller.last_classified, None);
+    assert_eq!(controller.last_classified_view_cols, None);
 }
 
 #[test]
@@ -255,7 +256,8 @@ fn legitimate_paint_width_tracks_the_target_or_falls_back_to_the_cap() {
 fn settled_drag_pins_once_after_the_debounce() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
-    controller.last_classified = Some((200, 1));
+    controller.last_classified_view_cols = Some(200);
+    controller.last_siblings = Some(1);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
 
@@ -322,7 +324,8 @@ fn drag_inside_the_native_band_never_arms_classification() {
 fn settled_structural_resize_converges_without_adopting() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
-    controller.last_classified = Some((200, 1));
+    controller.last_classified_view_cols = Some(200);
+    controller.last_siblings = Some(1);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
 
@@ -335,10 +338,94 @@ fn settled_structural_resize_converges_without_adopting() {
 }
 
 #[test]
+fn sibling_change_backstop_converges_without_resize_feedback() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = crate::diag::DiagSink::disabled();
+
+    controller.backstop(Some(50), Some(3), None, &diag);
+    controller.backstop(Some(80), Some(2), Some(u64::MAX), &diag);
+
+    assert_eq!(controller.structural_at_ms, Some(u64::MAX));
+    assert_eq!(controller.convergence.target(), Some(target(50)));
+    assert!(controller.convergence.in_flight());
+    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+}
+
+#[test]
+fn structural_event_converges_without_resize_feedback() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = crate::diag::DiagSink::disabled();
+
+    controller.backstop(Some(50), Some(3), None, &diag);
+    controller.note_structural(u64::MAX, Some(80), &diag);
+
+    assert_eq!(controller.structural_at_ms, Some(u64::MAX));
+    assert_eq!(controller.convergence.target(), Some(target(50)));
+    assert!(controller.convergence.in_flight());
+    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+}
+
+#[test]
+fn stalled_structural_resize_is_not_adopted_on_later_feedback() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = crate::diag::DiagSink::disabled();
+
+    controller.backstop(Some(50), Some(3), None, &diag);
+    controller.backstop(Some(83), Some(2), Some(u64::MAX), &diag);
+    controller
+        .convergence
+        .in_flight
+        .as_mut()
+        .expect("structural correction in flight")
+        .at = Instant::now() - FEEDBACK_TIMEOUT;
+    controller.observe(83, SidebarWidthControlTrigger::Backstop, &diag);
+    controller
+        .convergence
+        .in_flight
+        .as_mut()
+        .expect("no-progress retry in flight")
+        .at = Instant::now() - FEEDBACK_TIMEOUT;
+    controller.observe(83, SidebarWidthControlTrigger::Backstop, &diag);
+    assert!(controller.convergence.is_idle());
+
+    controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+    controller.classification_deadline = Some(Instant::now());
+    controller.backstop(Some(83), Some(2), Some(u64::MAX), &diag);
+
+    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(controller.convergence.target(), Some(target(50)));
+    assert!(controller.convergence.in_flight());
+}
+
+#[test]
+fn idle_off_spec_controller_retries_after_the_backstop_deadline() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = crate::diag::DiagSink::disabled();
+
+    controller.backstop(Some(50), Some(1), None, &diag);
+    controller.convergence.idle_at = Some(83);
+    controller.idle_retry_deadline = Some(Instant::now() - Duration::from_millis(1));
+
+    controller.backstop(Some(83), Some(1), Some(u64::MAX), &diag);
+
+    assert!(controller.convergence.in_flight());
+    assert!(
+        controller
+            .idle_retry_deadline
+            .is_some_and(|deadline| deadline > Instant::now())
+    );
+}
+
+#[test]
 fn settled_view_resize_reresolves_an_unpinned_target() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology_for_view(&runtime, 240);
-    controller.last_classified = Some((200, 1));
+    controller.last_classified_view_cols = Some(200);
+    controller.last_siblings = Some(1);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
 
@@ -354,7 +441,8 @@ fn settled_view_resize_reresolves_an_unpinned_target() {
 fn settled_view_resize_scales_a_pinned_target() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology_for_view(&runtime, 240);
-    controller.last_classified = Some((200, 1));
+    controller.last_classified_view_cols = Some(200);
+    controller.last_siblings = Some(1);
     let share =
         crate::sidebar::width_target::pin(&runtime, target(80), 200).expect("pin width target");
     let diag = crate::diag::DiagSink::disabled();
@@ -371,7 +459,8 @@ fn settled_view_resize_scales_a_pinned_target() {
 #[test]
 fn settled_resize_without_geometry_never_adopts() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
-    controller.last_classified = Some((200, 1));
+    controller.last_classified_view_cols = Some(200);
+    controller.last_siblings = Some(1);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
 
@@ -384,10 +473,11 @@ fn settled_resize_without_geometry_never_adopts() {
 }
 
 #[test]
-fn stale_pane_observation_converges_and_rearms_without_adopting() {
+fn stale_pane_observation_waits_without_adopting_or_nudging() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
-    controller.last_classified = Some((200, 1));
+    controller.last_classified_view_cols = Some(200);
+    controller.last_siblings = Some(1);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
 
@@ -401,6 +491,37 @@ fn stale_pane_observation_converges_and_rearms_without_adopting() {
     assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
     assert!(controller.classification_deadline.is_some());
     assert_eq!(controller.classification_resize_at_ms, Some(resize_at_ms));
+    assert!(!controller.convergence.in_flight());
+}
+
+#[test]
+fn merely_newer_sibling_observation_waits_without_adopting_or_nudging() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    controller.last_classified_view_cols = Some(200);
+    controller.last_siblings = Some(1);
+    let diag = crate::diag::DiagSink::disabled();
+    controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+
+    controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+    let resize_at_ms = controller
+        .classification_resize_at_ms
+        .expect("resize starts classification");
+    controller.classification_deadline = Some(Instant::now());
+    controller.backstop(
+        Some(83),
+        Some(1),
+        Some(resize_at_ms.saturating_add(1)),
+        &diag,
+    );
+
+    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert!(controller.classification_deadline.is_some());
+    assert_eq!(controller.classification_resize_at_ms, Some(resize_at_ms));
+    assert!(
+        !controller.convergence.in_flight(),
+        "pending adoption evidence must not fight a genuine mouse drag",
+    );
 }
 
 #[test]
