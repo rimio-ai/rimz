@@ -47,7 +47,7 @@ name = "rimz"
 path = "src/lib.rs"
 
 [features]
-testkit = []
+testkit = ["dep:tempfile"]
 # Off-box error reporting (src/observability/). Non-default and stripped from
 # shipped binaries, like `testkit`; dev opts in, CI builds it via --all-features.
 sentry = ["dep:sentry", "dep:sentry-tracing"]
@@ -55,6 +55,14 @@ sentry = ["dep:sentry", "dep:sentry-tracing"]
 [[bin]]
 name = "rimz"
 path = "src/main.rs"
+
+# Test-only owner-death reaper for integration fixture roots and processes.
+[[bin]]
+name = "rimz-test-reaper"
+path = "src/bin/rimz-test-reaper.rs"
+required-features = ["testkit"]
+test = false
+bench = false
 
 # Test-only fixture: a `zellij`-shaped shim that records argv and exits 0.
 # Used by `tests/integration/backend/zellij.rs` to verify the wakeup walk
@@ -164,6 +172,7 @@ prost.workspace = true
 shlex.workspace = true
 similar.workspace = true
 terminal_size.workspace = true
+tempfile = { workspace = true, optional = true }
 toml.workspace = true
 toml_edit.workspace = true
 thiserror.workspace = true
@@ -210,6 +219,5 @@ insta.workspace = true
 portable-pty.workspace = true
 predicates.workspace = true
 proptest.workspace = true
-tempfile.workspace = true
 tracing.workspace = true
 vt100.workspace = true

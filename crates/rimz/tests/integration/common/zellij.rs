@@ -4,35 +4,33 @@ use std::path::Path;
 use std::process::Command;
 
 use portable_pty::CommandBuilder;
-use tempfile::TempDir;
+use rimz::testkit::sandbox::TestSandbox;
 
 use super::{CommandTimeoutExt, ScrubSessionEnvExt};
 
 /// Owns the private HOME, XDG, and temporary-file surface shared by one
 /// Zellij test server and all of its clients.
 pub struct ZellijNamespace {
-    root: TempDir,
+    sandbox: TestSandbox,
 }
 
 impl ZellijNamespace {
     pub fn new() -> Self {
-        let root = tempfile::Builder::new()
-            .prefix("rz")
-            .rand_bytes(6)
-            .tempdir()
-            .expect("zellij namespace tempdir");
-        let config_dir = root.path().join(".config/zellij");
+        let sandbox = TestSandbox::zellij()
+            .and_then(|sandbox| sandbox.arm(Path::new(env!("CARGO_BIN_EXE_rimz-test-reaper"))))
+            .expect("arm Zellij namespace reaper");
+        let config_dir = sandbox.home_root().join(".config/zellij");
         std::fs::create_dir_all(&config_dir).expect("zellij config dir");
         std::fs::write(
             config_dir.join("config.kdl"),
             "// Hermetic test config: stock behavior, no first-run wizard or tips UI.\nshow_startup_tips false\nshow_release_notes false\n",
         )
         .expect("zellij config.kdl");
-        Self { root }
+        Self { sandbox }
     }
 
     pub fn path(&self) -> &Path {
-        self.root.path()
+        self.sandbox.home_root()
     }
 
     /// Build a short-lived control command scoped to this namespace.

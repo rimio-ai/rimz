@@ -20,6 +20,7 @@ macro_rules! require_zellij {
     };
 }
 
+mod containment;
 mod daemon;
 mod launch;
 mod pane_io;
