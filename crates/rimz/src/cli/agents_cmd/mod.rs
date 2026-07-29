@@ -83,6 +83,7 @@ pub(in crate::cli) use restart::restart_resolved;
 use resume::resume_lane;
 pub(in crate::cli) use show::focus_resolved;
 use show::{focus_agent, show_agent};
+pub(in crate::cli) use stop::StopTracker;
 use stop::stop_agent;
 pub(in crate::cli) use stop::stop_resolved;
 use supervised::OutputFormat;
