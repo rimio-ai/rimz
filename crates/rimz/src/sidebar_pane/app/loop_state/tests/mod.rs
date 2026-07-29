@@ -107,6 +107,11 @@ impl Rig {
             } else {
                 PaneFrame::Held
             },
+            source: if fresh_pane_frame {
+                SnapshotSource::Produced
+            } else {
+                SnapshotSource::Published
+            },
         });
     }
 

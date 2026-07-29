@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use jiff::Timestamp;
 
-use super::fetch::{FetchPhase, FetchRole, FetchUpdate, PaneFrame};
+use super::fetch::{FetchPhase, FetchRole, FetchUpdate, PaneFrame, SnapshotSource};
 use super::gate::{apply_gate, gate_remaining};
 use super::health::degraded_too_long;
 use super::lifecycle::{grow_beyond_legit, self_close_decision};
@@ -60,7 +60,7 @@ struct BackgroundRowKey {
 struct FetchApplication {
     snapshot: std::result::Result<SidebarSnapshot, String>,
     role: FetchRole,
-    phase: FetchPhase,
+    source: Option<SnapshotSource>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -377,11 +377,13 @@ impl LoopState {
         if saw_final {
             fetch.complete(!self.should_exit);
         }
-        // A held transient regression asks for one more read so the
-        // last-known-good cache heals to the next good frame. Single-flight
-        // bounds this to one extra run.
+        // A held transient regression schedules one reevaluation at the gate
+        // deadline. Eager finals can otherwise feed themselves through the
+        // fast fold and pin the renderer to its 1 ms gate wakeup.
         if !self.should_exit && saw_final && rejected {
-            fetch.request(FetchRequest::default(), false);
+            let defer_for = gate_remaining(&self.gate, jiff::Timestamp::now())
+                .unwrap_or(crate::sidebar::timing::ACCEPT_REGRESSION_AFTER);
+            fetch.defer_until(FetchRequest::default(), Instant::now() + defer_for);
         }
     }
 
@@ -472,6 +474,7 @@ impl LoopState {
                 role,
                 phase,
                 pane_frame,
+                source,
             } => {
                 let now_ms = crate::sidebar::timing::unix_now_ms();
                 self.event_store.prune(now_ms);
@@ -487,6 +490,7 @@ impl LoopState {
                     role,
                     phase,
                     pane_frame,
+                    source,
                 }
             }
             failed @ FetchUpdate::Failed { .. } => failed,
@@ -551,6 +555,7 @@ impl LoopState {
                 snapshot: Box::new(fused),
                 phase: FetchPhase::Interim,
                 pane_frame: PaneFrame::Held,
+                source: SnapshotSource::Published,
                 role: if self.last_known_elder {
                     FetchRole::Producer
                 } else {
@@ -1379,17 +1384,17 @@ impl LoopState {
             FetchUpdate::Snapshot {
                 snapshot,
                 role,
-                phase,
+                source,
                 ..
             } => FetchApplication {
                 snapshot: Ok(*snapshot),
                 role,
-                phase,
+                source: Some(source),
             },
             FetchUpdate::Failed { error, role, .. } => FetchApplication {
                 snapshot: Err(error),
                 role,
-                phase: FetchPhase::Final,
+                source: None,
             },
             FetchUpdate::Unchanged { .. } => {
                 return ApplyOutcome {
@@ -1472,13 +1477,12 @@ impl LoopState {
         // committed; `current` still holds it until we overwrite it below.
         let fetch_was_ok = application.snapshot.is_ok();
         let fetch_failure = application.snapshot.as_ref().err().cloned();
-        let final_for_request = application.phase == FetchPhase::Final;
+        let producer_verdict = application.source == Some(SnapshotSource::Produced);
         let mut computed = compute_next_state(application.snapshot, &self.current, &self.health);
-        if fetch_was_ok && !final_for_request {
-            // A fast-lane frame inside an open fetch cycle is paintable data, not a
-            // health verdict. Let the final produce outcome recover or extend the
-            // refresh episode so a repeated produce failure is not masked by the
-            // frameless/status-only fast fold that precedes it.
+        if fetch_was_ok && !producer_verdict {
+            // Published fast folds are paintable data, not a producer-health
+            // verdict. Only a completed produce can recover the refresh episode,
+            // so frameless/status-only folds cannot mask repeated pane-read failure.
             computed.health = self.health.clone();
         }
         let incoming_panes_produced_at_ms = computed.snapshot.panes_produced_at_ms;

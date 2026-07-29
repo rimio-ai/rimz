@@ -55,8 +55,9 @@ enum CommitDecision {
 /// unchanged* and a pane that `prev` rendered as an agent (or remote-control)
 /// host now renders as a bare process without a positive foreground-command
 /// change — exactly the phantom-`process` flicker — or while a frameless
-/// fallback tries to replace a frame-backed render. A foreground-command change
-/// is a genuine in-place exit and commits immediately.
+/// fallback tries to replace a frame-backed render. Every hold expires through
+/// the same wall-clock escape hatch. A foreground-command change is a genuine
+/// in-place exit and commits immediately.
 /// Persistence, not the rollup's `agents` list, distinguishes a transient drop
 /// (recovers next read) from a genuine exit (persists until the hatch opens),
 /// because the root-cause race is the agent momentarily *leaving* that list.
@@ -67,6 +68,9 @@ fn gate_commit(
     now: Timestamp,
 ) -> CommitDecision {
     if prev.panes_produced_at_ms.is_some() && incoming.panes_produced_at_ms.is_none() {
+        if escape_hatch_open(gate, now) {
+            return CommitDecision::AcceptViaEscapeHatch;
+        }
         return CommitDecision::KeepPrior(GateRule::FramelessOverFrame);
     }
     if prev.panes_produced_at_ms.is_some()

@@ -260,6 +260,28 @@ fn gate_releases_held_regression_only_at_wall_clock_deadline() {
         gate_remaining(&gate, Timestamp::from_millisecond(base_ms + 1_000).unwrap()),
         Some(Duration::ZERO)
     );
+
+    let frameless = snapshot(&ws);
+    assert_eq!(
+        gate_commit(
+            &agent_snapshot(&ws),
+            &frameless,
+            &gate,
+            Timestamp::from_millisecond(base_ms + 999).unwrap()
+        ),
+        CommitDecision::KeepPrior(GateRule::FramelessOverFrame),
+        "frameless fallback holds through the same settling window"
+    );
+    assert_eq!(
+        gate_commit(
+            &agent_snapshot(&ws),
+            &frameless,
+            &gate,
+            Timestamp::from_millisecond(base_ms + 1_000).unwrap()
+        ),
+        CommitDecision::AcceptViaEscapeHatch,
+        "frameless fallback cannot hold a frame forever"
+    );
 }
 
 #[test]
