@@ -27,6 +27,10 @@
 # inactive_after_secs = 3600           # a card idle this many seconds sinks below live work (the prompt-cache window)
 # archive_after_secs = 86400           # a card idle this many seconds parks below hot and warm work
 
+[agents.subagents]
+# timeout = "30m"                      # wall-clock deadline for supervised child runs
+# Add `budget = "5"` for an optional child cap; `"20/day"` makes it a daily cap.
+
 [agents.profiles]
 # Profiles are named main agents addressed as `@<profile>`. `agent` names a
 # built-in kind or another profile; the nearest profile wins for every field
