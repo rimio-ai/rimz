@@ -248,7 +248,6 @@ pub(crate) fn strip_status_glyph_suffix<'a>(name: &'a str, theme: &ThemeConfig) 
         .flatten()
         .collect::<Vec<_>>();
     glyphs.sort_unstable_by_key(|glyph| std::cmp::Reverse(glyph.len()));
-    glyphs.dedup();
     glyphs
         .into_iter()
         .find_map(|glyph| name.strip_suffix(glyph)?.strip_suffix(' '))

@@ -7,6 +7,8 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use jiff::SignedDuration;
+
 /// The realtime event store's receiver-clock TTL. Events are a latency hint:
 /// a missed or expired event falls back to the next producer pull, so the TTL
 /// must outlive the longest supersession window — [`EVENT_PANE_TTL`] from the
@@ -63,7 +65,7 @@ pub const TAB_READ_DWELL: Duration = Duration::from_millis(2500);
 /// How long a completed agent keeps the transient done glyph in its mux tab
 /// name. Attention and working states clear through lifecycle changes; success
 /// alone decays so an old completion never reads as current indefinitely.
-pub const TAB_SUCCESS_STATUS_TTL: Duration = Duration::from_secs(5 * 60);
+pub const TAB_SUCCESS_STATUS_TTL: SignedDuration = SignedDuration::from_mins(5);
 
 /// Coalescing window for the shared snapshot cache — the **poll-mode** pane
 /// TTL, in effect whenever the presence push channel is dead or absent. Just

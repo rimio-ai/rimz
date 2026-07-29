@@ -18,6 +18,7 @@ pub(crate) struct TabRename {
     pub(crate) desired_name: String,
 }
 
+/// Declaration order is the product precedence ladder consumed by `max`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum TabStatus {
     Success,
@@ -56,9 +57,8 @@ pub(crate) fn desired_tab_renames(snapshot: &SidebarSnapshot, frame: &PaneFrame)
         .filter_map(|row| {
             let pane = row.pane.as_ref()?;
             let status = row.status()?;
-            let success_age = snapshot.now.duration_since(row.last_activity).as_secs();
-            let fresh_success =
-                success_age <= i64::try_from(TAB_SUCCESS_STATUS_TTL.as_secs()).unwrap_or(i64::MAX);
+            let success_age = snapshot.now.duration_since(row.last_activity);
+            let fresh_success = success_age <= TAB_SUCCESS_STATUS_TTL;
             TabStatus::from_row(status, fresh_success).map(|status| (pane.pane_id.clone(), status))
         })
         .fold(

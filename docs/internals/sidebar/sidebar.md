@@ -8,7 +8,7 @@ The sidebar is the narrow column pinned beside your panes, and it answers one qu
 
 That rule splits the module in two, and the split is worth holding in mind while reading the rest of this page. **The producer** folds the store and the live pane roster into one `SidebarSnapshot`: presence, grouping, ranking, and every card field. **The renderer** turns that snapshot into lines for one terminal. `SidebarSnapshot` is the whole contract between them. When you are unsure where a behaviour belongs, ask whether it depends on the terminal in front of one viewer, or on what that viewer is currently looking at: width, color depth, selection, scroll position, and the cockpit lens are the renderer's, and the room's own facts are the producer's.
 
-The sidebar is also a UI client over the store, never a writer of it. It writes only runtime display files (its heartbeat, read receipts, `unread.json`, `focus-anchor.json`, and the producer caches) and imports no store-writer module. `cargo xtask invariants` enforces that boundary.
+The sidebar is also a UI client over the store, never a writer of it. Its filesystem writes are only runtime display files (its heartbeat, read receipts, `unread.json`, `focus-anchor.json`, and the producer caches); the elected producer also maintains the best-effort status suffix on mux tab names. Neither is durable truth, and the sidebar imports no store-writer module. `cargo xtask invariants` enforces that boundary.
 
 ## From store to screen
 
