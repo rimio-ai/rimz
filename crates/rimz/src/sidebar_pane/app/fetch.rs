@@ -6,6 +6,7 @@
 //! render/input loop never blocks on pane production; heavy git/spend/account
 //! refreshes run on the cache refresher.
 
+use std::collections::HashMap;
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
@@ -295,6 +296,8 @@ struct FetchWorker {
     last_election: Option<ProducerElection>,
     meter: TickMeter,
     projection_publisher: crate::sidebar::workspace_projection::WorkspaceProjectionPublisher,
+    tab_name_topology_generation: Option<(Option<u64>, u64)>,
+    attempted_tab_names: HashMap<PaneId, String>,
 }
 
 struct FastFold {
@@ -335,6 +338,8 @@ impl FetchWorker {
             last_election: None,
             meter,
             projection_publisher: Default::default(),
+            tab_name_topology_generation: None,
+            attempted_tab_names: HashMap::new(),
         }
     }
 
@@ -548,6 +553,9 @@ impl FetchWorker {
                     Some(&produced.frame),
                     self.config.own_pane.as_ref(),
                 );
+                if role.is_producer() {
+                    self.update_tab_names(&snapshot, &produced.frame);
+                }
                 self.publish_snapshot(
                     state,
                     SnapshotPublication {
@@ -565,6 +573,49 @@ impl FetchWorker {
                 role,
                 pane_frame,
             }),
+        }
+    }
+
+    fn update_tab_names(
+        &mut self,
+        snapshot: &SidebarSnapshot,
+        frame: &crate::sidebar::frame::PaneFrame,
+    ) {
+        let generation = (frame.topology_stamp_ms, frame.observed_at_ms);
+        if self.tab_name_topology_generation != Some(generation) {
+            self.tab_name_topology_generation = Some(generation);
+            self.attempted_tab_names.clear();
+        }
+        let renames = crate::sidebar::produce::tab_status::desired_tab_renames(snapshot, frame);
+        if renames.is_empty() {
+            return;
+        }
+        let backend = crate::mux::backend_for(self.config.mux);
+        for rename in renames {
+            if self
+                .attempted_tab_names
+                .get(&rename.anchor)
+                .is_some_and(|attempted| attempted == &rename.desired_name)
+            {
+                continue;
+            }
+            self.attempted_tab_names
+                .insert(rename.anchor.clone(), rename.desired_name.clone());
+            if let Err(err) = backend.rename_tab(
+                &self.config.session_name,
+                &rename.anchor,
+                &rename.desired_name,
+            ) {
+                tracing::warn!(
+                    session = %self.config.session_name,
+                    pane = %rename.anchor,
+                    observed_name = %rename.observed_name,
+                    desired_name = %rename.desired_name,
+                    tags.operation = "sidebar.tab_status.rename",
+                    error = &err as &dyn std::error::Error,
+                    "could not update mux tab status",
+                );
+            }
         }
     }
 

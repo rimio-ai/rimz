@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 
+use crate::agents::AgentStatus;
 use crate::config::{GlyphRole, ThemeConfig, ThemeStyle};
 
 use super::ramp_tone;
@@ -217,6 +218,51 @@ pub fn theme_glyphs(theme: &ThemeConfig) -> impl Fn(GlyphRole) -> String {
     move |role| glyphs.glyph(role).to_owned()
 }
 
+/// The still glyph role carrying an agent lifecycle state across every
+/// human-facing surface.
+pub fn agent_status_glyph_role(status: AgentStatus) -> GlyphRole {
+    match status {
+        AgentStatus::Waiting => GlyphRole::StatusWaiting,
+        AgentStatus::Failed => GlyphRole::StatusAttention,
+        AgentStatus::Running => GlyphRole::StatusWorking,
+        AgentStatus::Idle => GlyphRole::StatusIdle,
+        AgentStatus::Success => GlyphRole::StatusDone,
+        AgentStatus::Paused => GlyphRole::StatusPaused,
+    }
+}
+
+/// Strip one status glyph suffix emitted by any built-in or configured glyph
+/// set. The returned base always borrows the observed name, preserving manual
+/// renames byte-for-byte.
+pub(crate) fn strip_status_glyph_suffix<'a>(name: &'a str, theme: &ThemeConfig) -> &'a str {
+    let mut glyphs = STATUS_SUFFIX_ROLES
+        .iter()
+        .flat_map(|&role| {
+            [
+                Some(unicode_glyph(role)),
+                nerd_font_glyph(role),
+                theme.glyphs.glyph("unicode", role),
+                theme.glyphs.glyph("nerd_font", role),
+            ]
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    glyphs.sort_unstable_by_key(|glyph| std::cmp::Reverse(glyph.len()));
+    glyphs.dedup();
+    glyphs
+        .into_iter()
+        .find_map(|glyph| name.strip_suffix(glyph)?.strip_suffix(' '))
+        .unwrap_or(name)
+}
+
+const STATUS_SUFFIX_ROLES: [GlyphRole; 5] = [
+    GlyphRole::StatusWaiting,
+    GlyphRole::StatusAttention,
+    GlyphRole::StatusPaused,
+    GlyphRole::StatusWorking,
+    GlyphRole::StatusDone,
+];
+
 pub fn nerd_font_probe_glyphs() -> [&'static str; 8] {
     [
         nerd_font_glyph(GlyphRole::CockpitWorkspace).expect("workspace icon"),
@@ -395,6 +441,31 @@ mod tests {
             glyphs.glyph(GlyphRole::MeterBarFilled),
             unicode_glyph(GlyphRole::MeterBarFilled)
         );
+    }
+
+    #[test]
+    fn status_suffix_strip_covers_both_presets_and_overrides() {
+        let config: ThemeGlyphsConfig = toml::from_str(
+            "[unicode.status]\n\
+             waiting = \"W\"\n\
+             [nerd_font.status]\n\
+             attention = \"A\"\n",
+        )
+        .expect("glyph config");
+        let theme = ThemeConfig {
+            glyphs: config,
+            ..ThemeConfig::default()
+        };
+
+        for (name, expected) in [
+            ("manual ?", "manual"),
+            ("manual \u{f12a}", "manual"),
+            ("manual W", "manual"),
+            ("manual A", "manual"),
+            ("manual name", "manual name"),
+        ] {
+            assert_eq!(strip_status_glyph_suffix(name, &theme), expected);
+        }
     }
 
     #[test]

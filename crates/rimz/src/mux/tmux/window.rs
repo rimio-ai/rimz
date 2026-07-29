@@ -453,10 +453,13 @@ impl TmuxBackend {
     /// already carries it is skipped.
     pub(super) fn session_has_window(&self, session: &str, name: &str) -> Result<bool> {
         let sanitized = sanitize_window_name(name);
+        let config = crate::config::MachineConfig::load_lenient();
+        let theme = &config.theme;
         Ok(self
             .window_names(session)?
             .iter()
-            .any(|window| window == name || window == &sanitized))
+            .map(|window| crate::theme::strip_status_glyph_suffix(window, theme))
+            .any(|window| window == name || window == sanitized))
     }
 
     /// Every window name in `session` — one `list-windows` probe that callers
@@ -563,7 +566,12 @@ impl TmuxBackend {
                 return;
             }
         };
-        let mut seeded = existing.into_iter().collect::<HashSet<_>>();
+        let config = crate::config::MachineConfig::load_lenient();
+        let theme = &config.theme;
+        let mut seeded = existing
+            .iter()
+            .map(|name| crate::theme::strip_status_glyph_suffix(name, theme).to_owned())
+            .collect::<HashSet<_>>();
         let mut focus_window: Option<String> = None;
         for tab in &opts.resume_tabs {
             let label = sanitize_window_name(&tab.label);
