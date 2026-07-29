@@ -3,7 +3,7 @@ use super::*;
 use super::runs_lookup::{agent_name, newest_run_by_ref};
 use crate::cli::render;
 
-pub(super) fn wait_agent(
+pub(in crate::cli) fn wait_agent(
     references: Vec<String>,
     any: bool,
     timeout: Option<Duration>,

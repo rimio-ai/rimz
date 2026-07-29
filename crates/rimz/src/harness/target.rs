@@ -842,6 +842,21 @@ pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
         .collect()
 }
 
+/// Pane-backed children stamped with `parent` as their display parent.
+///
+/// Ended children remain in this projection so callers can list and wait on
+/// completed supervised work. Lifecycle commands filter to live rows.
+pub fn launched_children<'a>(agents: &'a [AgentState], parent: &AgentState) -> Vec<&'a AgentState> {
+    let mut children = agents
+        .iter()
+        .filter(|agent| {
+            agent.is_launched_child() && agent.parent_agent_id.as_ref() == Some(&parent.agent_id)
+        })
+        .collect::<Vec<_>>();
+    children.sort_by_key(|agent| (agent.registered_at, agent.agent_id.clone()));
+    children
+}
+
 /// The team whose members occupy this lane, from the durable rollup.
 ///
 /// A team launch stamps its lane three ways — an explicit channel name, a
