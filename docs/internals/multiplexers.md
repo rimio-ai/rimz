@@ -93,7 +93,7 @@ Selection is stable across worktrees: every worktree of one repository resolves 
 | Session lifecycle | `ensure_session`, `attach_command`, `detach`, `kill_session`, `list_sessions`, `session_liveness`, `version` | `attach_command` hands a `CommandSpec` to the CLI attach runner rather than running it. |
 | Pane inventory | `list_panes`, `cached_pane_roster`, `client_view` | See [reading the room](#reading-the-room). |
 | Pane I/O | `capture_pane`, `send_keys`, `send_key`, `paste_text` | `paste_text` wraps one bracketed paste and converts logical newlines to CR; the submit Enter follows separately as a keystroke. |
-| Structure | `split_pane`, `open_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. |
+| Structure | `split_pane`, `open_tab`, `rename_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. `rename_tab` addresses the view through one pane anchor. |
 | Focus and geometry | `focus_pane`, `sidebar_width_step`, `nudge_sidebar_width`, `record_sidebar_width_default`, `register_focus_key` | |
 | Health | `probe_session_health`, `ensure_clean_session`, `reconcile_sidebars`, `purge_resurrection_cache`, `resurrection_cache_paths`, `session_accepts_agent_close` | Several default to a no-op because they answer a Zellij-only question. |
 | Presence | `ensure_presence_plugin` | Zellij-only; tmux inherits the no-op default because its control-mode watch already pushes. |
@@ -123,6 +123,8 @@ Raw IDs stay inside the backend adapter, where the native command expects them (
 `ViewId` names the view holding a pane (a Zellij tab, a tmux window) by the identity RimZ observes on every fast path: Zellij tab position (`tab_1`), tmux window id (`@3`). `PaneRef.view_id` is the flat read-side seam, and the producer lifts it into `TabFrame.view_id` so sidebar-per-view bookkeeping runs over typed topology.
 
 **A view id is never the view's on-screen label.** Zellij's default tab names are themselves number-shaped (`Tab #16`), so matching a positional `tab_15` against a tab named "Tab #15" joins two unrelated id spaces and lands on the wrong tab in any session that has closed one. The label is sticky, minted at tab creation; `PaneRef.view_name` carries it for display only. Resolve "which view holds this pane?" through the pane id.
+
+Tab renames follow that rule too. `rename_tab` takes a normalized pane anchor, never a display name or positional `ViewId`: tmux accepts the pane directly as a `rename-window` target, while Zellij resolves the pane through an authoritative listing and passes the resulting stable id to `rename-tab-by-id`. The sidebar producer uses this best-effort primitive to maintain one status-glyph suffix. The suffix is chrome only, rebuilt from projected agent state; it never becomes identity or durable truth. Name-based birth and resume checks strip known built-in and configured status suffixes before comparing their idempotency keys.
 
 ### The identity pin
 

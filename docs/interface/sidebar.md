@@ -69,6 +69,8 @@ The tables show the default Unicode set. `[theme.glyphs]` can select Nerd Font o
 | `✓`   | done       | finished cleanly | a look, not the lead |
 | `○`/`⢿` | process  | a pane with no agent (shell, editor): hollow `○` when idle, `⢿` while it does real work — the same shapes the idle and working agent rows wear, one soft step quieter, never a cockpit tally | no |
 
+Mux tab names reuse the fixed representatives from this table as one suffix (`!`, `?`, `⏸`, `⢿`, or `✓`), choosing the tab's most urgent live agent. They do not animate: each glyph is a state label, while the sidebar row can animate within that same role.
+
 Three short-lived **heads** ride over the base status on the leading cell, so they never earn a cockpit bucket of their own — every running agent, whichever head it wears, counts as **working** (`⢿`) in the make-up:
 
 | head | meaning |
