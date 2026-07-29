@@ -19,19 +19,9 @@ pub(in crate::sidebar_pane::render) const PAUSED_GLYPH: &str = "⏸\u{FE0E}";
 /// row is configured in one place; the per-row animated working/thinking cells
 /// live in the role-specific helpers below and ride `[theme.animations]`.
 pub(in crate::sidebar_pane::render) fn status_glyph(theme: &Theme, status: AgentStatus) -> String {
-    theme.glyph(status_glyph_role(status)).to_owned()
-}
-
-/// The `status` glyph role carrying each agent status's still representative.
-fn status_glyph_role(status: AgentStatus) -> GlyphRole {
-    match status {
-        AgentStatus::Waiting => GlyphRole::StatusWaiting,
-        AgentStatus::Failed => GlyphRole::StatusAttention,
-        AgentStatus::Running => GlyphRole::StatusWorking,
-        AgentStatus::Idle => GlyphRole::StatusIdle,
-        AgentStatus::Success => GlyphRole::StatusDone,
-        AgentStatus::Paused => GlyphRole::StatusPaused,
-    }
+    theme
+        .glyph(crate::theme::agent_status_glyph_role(status))
+        .to_owned()
 }
 
 /// The age clock's Nerd Font faces: the `circle_slice` series fills one eighth

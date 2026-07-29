@@ -1022,10 +1022,12 @@ impl ZellijBackend {
     /// view is idempotent on its name, so a relaunch into a session carrying it
     /// is skipped.
     pub(super) fn session_has_named_tab(&self, session: &str, tab_name: &str) -> Result<bool> {
+        let config = crate::config::MachineConfig::load_lenient();
+        let theme = &config.theme;
         Ok(self
             .list_tabs(session)?
             .iter()
-            .any(|tab| tab.name == tab_name))
+            .any(|tab| crate::theme::strip_status_glyph_suffix(&tab.name, theme) == tab_name))
     }
 }
 

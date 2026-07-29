@@ -21,6 +21,7 @@
 pub(crate) mod git;
 mod metrics;
 mod panes;
+pub(crate) mod tab_status;
 
 use std::{
     collections::{BTreeSet, HashSet},

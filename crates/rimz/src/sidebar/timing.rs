@@ -60,6 +60,11 @@ pub const FOCUS_ANCHOR_FRESH: Duration = Duration::from_millis(2500);
 /// wash off the neighbours as a click side effect.
 pub const TAB_READ_DWELL: Duration = Duration::from_millis(2500);
 
+/// How long a completed agent keeps the transient done glyph in its mux tab
+/// name. Attention and working states clear through lifecycle changes; success
+/// alone decays so an old completion never reads as current indefinitely.
+pub const TAB_SUCCESS_STATUS_TTL: Duration = Duration::from_secs(5 * 60);
+
 /// Coalescing window for the shared snapshot cache — the **poll-mode** pane
 /// TTL, in effect whenever the presence push channel is dead or absent. Just
 /// under the default 1s data tick: when one store-delta wakeup wakes every
