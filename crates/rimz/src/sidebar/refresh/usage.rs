@@ -8,9 +8,11 @@
 
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::agents::{AccountUsageIdentity, AccountUsageSnapshot, ProviderAccountScope};
+use crate::ids::{AgentKind, WorkspaceId};
 use crate::{RuntimePaths, SidebarSnapshot};
 
 use super::accounts::cached_account_usage_hint;
@@ -22,6 +24,13 @@ use super::credits::{
 use super::trace;
 use super::trace::{TraceEvent, duration_ms};
 use super::{drop_kind_rate_limits, merge_account_rate_limits};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountUsageRefreshRequest {
+    pub workspace_id: WorkspaceId,
+    pub kind: AgentKind,
+    pub claim_id: Uuid,
+}
 
 /// Claim and spawn each metered provider's direct account-usage refresh.
 pub(crate) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
@@ -356,16 +365,15 @@ fn publish_account_usage_windows(
 fn spawn_usage_refresh(runtime: &RuntimePaths, kind: &str, claim_id: Uuid) -> bool {
     let exe = crate::proc::rimz_exe();
     let mut cmd = crate::child_process::detached_rimz_command(exe, runtime);
-    cmd.args([
-        "agents",
+    let request = AccountUsageRefreshRequest {
+        workspace_id: runtime.workspace_id.clone(),
+        kind: AgentKind::new_unchecked(kind),
+        claim_id,
+    };
+    cmd.args(crate::child_process::agent_helper_argv(
         "refresh-usage",
-        "--kind",
-        kind,
-        "--workspace-id",
-        runtime.workspace_id.as_str(),
-        "--claim-id",
-        &claim_id.to_string(),
-    ]);
+        &request,
+    ));
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         workspace = %runtime.workspace_id,

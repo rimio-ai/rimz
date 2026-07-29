@@ -1,32 +1,20 @@
 //! Hidden helper that interrupts an over-budget agent and settles its run.
 
 use anyhow::{Context, Result};
-use clap::Args;
 
-use rimz::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+use rimz::harness::budget::BudgetParkRequest;
 use rimz::mux::{NamedKey, press_pane_key};
 
 use super::Ctx;
 
-#[derive(Debug, Args)]
-pub struct BudgetParkArgs {
-    #[arg(long)]
-    workspace_id: String,
-    #[arg(long)]
-    kind: String,
-    #[arg(long)]
-    agent_id: String,
-    #[arg(long)]
-    pane: String,
-    #[arg(long)]
-    at_cost: Option<f64>,
-}
-
-pub fn run_budget_park(args: BudgetParkArgs) -> Result<()> {
-    let workspace_id: WorkspaceId = args.workspace_id.parse().context("parsing workspace id")?;
-    let kind = AgentKind::new_unchecked(args.kind);
-    let agent_id = AgentSessionId::from(args.agent_id.as_str());
-    let pane_id = PaneId::parse(&args.pane).context("parsing pane id")?;
+pub fn run_budget_park(request: BudgetParkRequest) -> Result<()> {
+    let BudgetParkRequest {
+        workspace_id,
+        kind,
+        agent_id,
+        pane_id,
+        at_cost,
+    } = request;
     let ctx = Ctx::for_workspace(workspace_id, Some(pane_id.mux()))?;
     let store = &ctx.store;
     let snapshot = ctx
@@ -42,7 +30,7 @@ pub fn run_budget_park(args: BudgetParkArgs) -> Result<()> {
         })
         .context("budget target pane is no longer bound to the agent")?;
 
-    let at_cost = args.at_cost.or_else(|| {
+    let at_cost = at_cost.or_else(|| {
         rimz::harness::budget::read_ledger(store.runtime_paths(), &kind, &agent_id)
             .and_then(|ledger| ledger.parked.map(|park| park.at_cost))
     });

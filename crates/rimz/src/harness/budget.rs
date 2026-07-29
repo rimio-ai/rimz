@@ -9,7 +9,6 @@
 //! graph.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -22,7 +21,7 @@ use sha2::{Digest, Sha256};
 use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus};
 use crate::config::MachineConfig;
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
 use crate::store::SidebarSnapshot;
 use crate::store::atomic::write_temp_then_rename_cache;
@@ -53,6 +52,15 @@ impl BudgetWindow {
 pub struct BudgetSpec {
     pub cap_usd: f64,
     pub window: BudgetWindow,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BudgetParkRequest {
+    pub workspace_id: WorkspaceId,
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    pub pane_id: PaneId,
+    pub at_cost: Option<f64>,
 }
 
 impl FromStr for BudgetSpec {
@@ -1476,21 +1484,14 @@ fn spawn_budget_park(
     pane_id: &PaneId,
     at_cost: Option<f64>,
 ) -> bool {
-    let mut args: Vec<OsString> = vec![
-        "agents".into(),
-        "budget-park".into(),
-        "--workspace-id".into(),
-        runtime.workspace_id.as_str().into(),
-        "--kind".into(),
-        agent.kind.as_str().into(),
-        "--agent-id".into(),
-        agent.agent_id.as_str().into(),
-        "--pane".into(),
-        pane_id.to_string().into(),
-    ];
-    if let Some(at_cost) = at_cost {
-        args.extend([OsString::from("--at-cost"), at_cost.to_string().into()]);
-    }
+    let request = BudgetParkRequest {
+        workspace_id: runtime.workspace_id.clone(),
+        kind: agent.kind.clone(),
+        agent_id: agent.agent_id.clone(),
+        pane_id: pane_id.clone(),
+        at_cost,
+    };
+    let args = crate::child_process::agent_helper_argv("budget-park", &request);
     if let Err(err) = crate::child_process::spawn_detached_rimz(runtime, args, "agent-budget-park")
     {
         tracing::debug!(

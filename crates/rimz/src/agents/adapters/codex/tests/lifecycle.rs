@@ -614,30 +614,24 @@ fn expiry_predicates_match_observed_root_signals() {
 
 #[test]
 fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
+    let workspace_id =
+        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/workspace"));
     let ctx = crate::agents::LifecycleRefreshCtx {
         agent_id: "sess-1",
-        workspace_id: "ws-1",
+        workspace_id: &workspace_id,
         model_hint: Some("gpt-5"),
         server_url: None,
     };
     let spawn = CodexAdapter
         .context_refresh_spawn(crate::agents::RefreshTrigger::Hook("Stop"), &ctx)
         .expect("Stop refreshes");
-    assert_eq!(
-        spawn.args,
-        [
-            "agents",
-            "refresh-context",
-            "--kind",
-            "codex",
-            "--session-id",
-            "sess-1",
-            "--workspace-id",
-            "ws-1",
-            "--model",
-            "gpt-5",
-        ]
-    );
+    let request: crate::agents::LifecycleRefreshRequest =
+        serde_json::from_str(&spawn.args[3]).expect("decode refresh request");
+    assert_eq!(request.kind.as_str(), "codex");
+    assert_eq!(request.session_id, "sess-1");
+    assert_eq!(request.workspace_id, workspace_id);
+    assert_eq!(request.model.as_deref(), Some("gpt-5"));
+    assert_eq!(request.server_url, None);
     let tick_spawn = CodexAdapter
         .context_refresh_spawn(crate::agents::RefreshTrigger::Tick, &ctx)
         .expect("producer tick refreshes");
@@ -650,9 +644,8 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
         !CodexAdapter
             .context_refresh_spawn(crate::agents::RefreshTrigger::Hook("SessionStart"), &bare)
             .unwrap()
-            .args
-            .iter()
-            .any(|arg| arg == "--model")
+            .args[3]
+            .contains("gpt-5")
     );
     for event in ["PreToolUse", "PostToolUse", "SubagentStop", "Notification"] {
         assert!(

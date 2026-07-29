@@ -9,51 +9,28 @@
 //! so a vanished pane leaves a message error instead of a false resume audit.
 
 use anyhow::{Context, Result};
-use clap::Args;
 use jiff::Timestamp;
 use std::time::Duration;
 
+use rimz::harness::AutoContinueRequest;
 use rimz::harness::assist_log::{Assist, AssistRecord};
-use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use rimz::message::{DeliveryGate, deliver};
 
 use super::Ctx;
 
-#[derive(Debug, Args)]
-pub struct AutoContinueArgs {
-    #[arg(long)]
-    workspace_id: String,
-    #[arg(long)]
-    kind: String,
-    #[arg(long)]
-    agent_id: String,
-    /// Normalized pane id (`tmux:%3`, `zellij:terminal_3`).
-    #[arg(long)]
-    pane: String,
-    #[arg(long)]
-    text: String,
-    #[arg(long)]
-    reason: String,
-    #[arg(long)]
-    message_id: Option<String>,
-    #[arg(long)]
-    parked_since: Option<Timestamp>,
-    #[arg(long)]
-    label: Option<String>,
-}
-
-pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
-    let workspace_id: WorkspaceId = args.workspace_id.parse().context("parsing workspace id")?;
-    let pane_id = PaneId::parse(&args.pane).context("parsing pane id")?;
-    let kind = AgentKind::new_unchecked(args.kind);
-    let agent_id = AgentSessionId::from(args.agent_id.as_str());
-    let retry_message_id = args
-        .message_id
-        .as_deref()
-        .map(MessageId::parse)
-        .transpose()
-        .context("parsing message id")?;
-    let text = args.text.trim();
+pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
+    let AutoContinueRequest {
+        workspace_id,
+        kind,
+        agent_id,
+        pane_id,
+        message_id: retry_message_id,
+        parked_since,
+        text,
+        reason,
+        label,
+    } = request;
+    let text = text.trim();
     if text.is_empty() {
         return Ok(());
     }
@@ -82,7 +59,7 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
     let message_id = if let Some(message_id) = retry_message_id {
         message_id
     } else {
-        let gate = if args.reason == "budget_day_reset" {
+        let gate = if reason == "budget_day_reset" {
             DeliveryGate::Done
         } else {
             DeliveryGate::Resume
@@ -107,13 +84,13 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
     )
     .context("delivering auto-continue resume message")?;
     let delivery_failure = if !delivered {
-        let reason = format!("resume delivery gate closed ({})", args.reason);
+        let failure_reason = format!("resume delivery gate closed ({reason})");
         store
             .record_message_delivery_failures(
                 std::slice::from_ref(&message_id),
                 None,
                 rimz::store::DeliveryFailureDisposition::Retry,
-                &reason,
+                &failure_reason,
                 &workspace.session_name,
             )
             .context("recording auto-continue delivery miss")
@@ -126,9 +103,9 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         assist: Assist::AutoContinue {
             kind,
             agent_id,
-            label: args.label,
-            park: args.reason,
-            parked_since: args.parked_since,
+            label,
+            park: reason,
+            parked_since: Some(parked_since),
             delivered,
             message_id: message_id.to_string(),
         },

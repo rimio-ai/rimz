@@ -425,7 +425,7 @@ fn session_context_refresh_spawn(
     let adapter = crate::agents::find_definition(kind)?;
     let refresh_ctx = LifecycleRefreshCtx {
         agent_id: session_id,
-        workspace_id: runtime.workspace_id.as_str(),
+        workspace_id: &runtime.workspace_id,
         model_hint,
         server_url: None,
     };

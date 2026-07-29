@@ -4,50 +4,37 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use clap::Args;
 use jiff::Timestamp;
 
 use rimz::agents::AgentStatus;
 use rimz::config::{IdleCompactMode, MachineConfig};
 use rimz::harness::assist_log::{Assist, AssistRecord};
-use rimz::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+use rimz::harness::idle_compact::IdleCompactRequest;
+#[cfg(test)]
+use rimz::ids::WorkspaceId;
 use rimz::message::{
     DeliveryGate, MessageBody, MessageRecord, MessageSender, deliver, send::already_compacted_at,
 };
 
 use super::Ctx;
 
-#[derive(Debug, Args)]
-pub struct IdleCompactArgs {
-    #[arg(long)]
-    workspace_id: String,
-    #[arg(long)]
-    kind: String,
-    #[arg(long)]
-    agent_id: String,
-    /// Normalized pane id (`tmux:%3`, `zellij:terminal_3`).
-    #[arg(long)]
-    pane: String,
-    #[arg(long)]
-    command: String,
-    #[arg(long)]
-    occupied_tokens: u64,
-    #[arg(long)]
-    label: Option<String>,
-}
-
-pub fn run_idle_compact(args: IdleCompactArgs) -> Result<()> {
-    let workspace_id: WorkspaceId = args.workspace_id.parse().context("parsing workspace id")?;
-    let pane_id = PaneId::parse(&args.pane).context("parsing pane id")?;
-    let kind = AgentKind::new_unchecked(args.kind.clone());
-    let agent_id = AgentSessionId::from(args.agent_id.as_str());
+pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
+    let IdleCompactRequest {
+        workspace_id,
+        kind,
+        agent_id,
+        pane_id,
+        command,
+        occupied_tokens: producer_occupied,
+        label,
+    } = request;
     let expected_command = rimz::agents::spec_by_kind(kind.as_str())
         .and_then(|spec| spec.launch.compact_command())
         .context("idle-compaction target adapter has no compact command")?;
-    if args.command != expected_command {
+    if command != expected_command {
         bail!(
             "idle-compaction command `{}` does not match {} adapter command `{expected_command}`",
-            args.command,
+            command,
             kind
         );
     }
@@ -99,9 +86,9 @@ pub fn run_idle_compact(args: IdleCompactArgs) -> Result<()> {
     else {
         return Ok(());
     };
-    if args.occupied_tokens != occupied_tokens {
+    if producer_occupied != occupied_tokens {
         tracing::debug!(
-            producer_occupied = args.occupied_tokens,
+            producer_occupied,
             current_occupied = occupied_tokens,
             "idle-compaction context reading changed before helper validation",
         );
@@ -134,7 +121,7 @@ pub fn run_idle_compact(args: IdleCompactArgs) -> Result<()> {
     let message_id = message.message_id.clone();
     if let Err(err) = store.queue_message(&message, &workspace.session_name) {
         append_assist(
-            &args,
+            &label,
             kind,
             agent_id,
             idle_secs,
@@ -157,7 +144,7 @@ pub fn run_idle_compact(args: IdleCompactArgs) -> Result<()> {
         Ok(delivered) => delivered,
         Err(err) => {
             append_assist(
-                &args,
+                &label,
                 kind,
                 agent_id,
                 idle_secs,
@@ -185,7 +172,7 @@ pub fn run_idle_compact(args: IdleCompactArgs) -> Result<()> {
         }
     };
     append_assist(
-        &args,
+        &label,
         kind,
         agent_id,
         idle_secs,
@@ -221,9 +208,9 @@ fn latest_delivered_was_compaction(
 
 #[allow(clippy::too_many_arguments)]
 fn append_assist(
-    args: &IdleCompactArgs,
-    kind: AgentKind,
-    agent_id: AgentSessionId,
+    label: &str,
+    kind: rimz::ids::AgentKind,
+    agent_id: rimz::ids::AgentSessionId,
     idle_secs: i64,
     occupied_tokens: u64,
     message_id: &rimz::ids::MessageId,
@@ -235,7 +222,7 @@ fn append_assist(
         assist: Assist::IdleCompact {
             kind,
             agent_id,
-            label: args.label.clone(),
+            label: Some(label.to_owned()),
             idle_secs: idle_secs.max(0) as u64,
             occupied_tokens,
             message_id: message_id.to_string(),

@@ -17,3 +17,5 @@ pub mod run_wake;
 pub mod schedule;
 pub mod spec;
 pub mod target;
+
+pub use auto_continue::AutoContinueRequest;

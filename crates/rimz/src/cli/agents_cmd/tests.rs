@@ -11,7 +11,7 @@ use rimz::forge::Forge;
 use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::run_wake::{ExpectedRunFrame, RunWakeOutcome};
-use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
+use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId, RunId, WorkspaceId};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -62,6 +62,151 @@ fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
         &args.request,
     )
     .expect("decode exec request")
+}
+
+fn parse_helper_argv(argv: Vec<String>) -> AgentsArgs {
+    let argv = std::iter::once("rimz".to_owned()).chain(argv);
+    let parsed = crate::cli::Cli::try_parse_from(argv).expect("parse helper argv");
+    let Some(crate::cli::Subcmd::Agents(args)) = parsed.subcommand else {
+        panic!("expected agents subcommand");
+    };
+    *args
+}
+
+#[test]
+fn hidden_helper_requests_round_trip_through_cli() {
+    use rimz::agents::LifecycleRefreshRequest;
+    use rimz::harness::AutoContinueRequest;
+    use rimz::harness::auto_redeem::{AutoRedeemRequest, RedeemReason};
+    use rimz::harness::budget::BudgetParkRequest;
+    use rimz::harness::idle_compact::IdleCompactRequest;
+    use rimz::harness::run_timeout::RunTimeoutRequest;
+    use rimz::sidebar::refresh::usage::AccountUsageRefreshRequest;
+
+    let workspace_id = WorkspaceId::from_project_root(Path::new("/workspace with spaces"));
+    let kind = AgentKind::new_unchecked("codex");
+    let agent_id = AgentSessionId::from("session -- 1");
+    let pane_id = PaneId::parse("tmux:%3").unwrap();
+
+    let auto_continue = AutoContinueRequest {
+        workspace_id: workspace_id.clone(),
+        kind: kind.clone(),
+        agent_id: agent_id.clone(),
+        pane_id: pane_id.clone(),
+        message_id: Some(MessageId::parse("msg_0123456789abcdef").unwrap()),
+        parked_since: "2026-01-02T03:04:05Z".parse().unwrap(),
+        text: "--resume with spaces".to_owned(),
+        reason: "overloaded_backoff_retry".to_owned(),
+        label: Some("@coder # lane".to_owned()),
+    };
+    let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
+        "auto-continue",
+        &auto_continue,
+    ));
+    let Some(AgentsSubcmd::AutoContinue(args)) = parsed.command else {
+        panic!("expected auto-continue");
+    };
+    assert_eq!(args.request, auto_continue);
+
+    let idle_compact = IdleCompactRequest {
+        workspace_id: workspace_id.clone(),
+        kind: kind.clone(),
+        agent_id: agent_id.clone(),
+        pane_id: pane_id.clone(),
+        command: "/compact --keep cache".to_owned(),
+        occupied_tokens: 81_234,
+        label: "@coder".to_owned(),
+    };
+    let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
+        "idle-compact",
+        &idle_compact,
+    ));
+    let Some(AgentsSubcmd::IdleCompact(args)) = parsed.command else {
+        panic!("expected idle-compact");
+    };
+    assert_eq!(args.request, idle_compact);
+
+    let auto_redeem = AutoRedeemRequest {
+        workspace_id: workspace_id.clone(),
+        kind: kind.clone(),
+        reason: RedeemReason::ScheduledRedeem,
+        request_id: "018f7f2e-7b3a-7cc0-8ec1-000000000001".parse().unwrap(),
+    };
+    let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
+        "auto-redeem",
+        &auto_redeem,
+    ));
+    let Some(AgentsSubcmd::AutoRedeem(args)) = parsed.command else {
+        panic!("expected auto-redeem");
+    };
+    assert_eq!(args.request, auto_redeem);
+
+    let budget_park = BudgetParkRequest {
+        workspace_id: workspace_id.clone(),
+        kind: kind.clone(),
+        agent_id: agent_id.clone(),
+        pane_id: pane_id.clone(),
+        at_cost: Some(12.75),
+    };
+    let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
+        "budget-park",
+        &budget_park,
+    ));
+    let Some(AgentsSubcmd::BudgetPark(args)) = parsed.command else {
+        panic!("expected budget-park");
+    };
+    assert_eq!(args.request, budget_park);
+
+    let run_timeout = RunTimeoutRequest {
+        workspace_id: workspace_id.clone(),
+        run_id: RunId::parse("run_0123456789abcdef0123456789abcdef").unwrap(),
+    };
+    let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
+        "run-timeout",
+        &run_timeout,
+    ));
+    let Some(AgentsSubcmd::RunTimeout(args)) = parsed.command else {
+        panic!("expected run-timeout");
+    };
+    assert_eq!(args.request, run_timeout);
+
+    let refresh_usage = AccountUsageRefreshRequest {
+        workspace_id: workspace_id.clone(),
+        kind: kind.clone(),
+        claim_id: "018f7f2e-7b3a-7cc0-8ec1-000000000002".parse().unwrap(),
+    };
+    let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
+        "refresh-usage",
+        &refresh_usage,
+    ));
+    let Some(AgentsSubcmd::RefreshUsage(args)) = parsed.command else {
+        panic!("expected refresh-usage");
+    };
+    assert_eq!(args.request, refresh_usage);
+
+    let refresh_context = LifecycleRefreshRequest {
+        kind,
+        session_id: "session -- 1".to_owned(),
+        workspace_id,
+        model: Some("gpt 5 -- fast".to_owned()),
+        server_url: Some("http://127.0.0.1:4096/path with spaces".to_owned()),
+    };
+    let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
+        "refresh-context",
+        &refresh_context,
+    ));
+    assert_eq!(
+        parsed.scope(),
+        (
+            "agents refresh-context",
+            Some(refresh_context.session_id.as_str()),
+            Some(refresh_context.kind.as_str()),
+        )
+    );
+    let Some(AgentsSubcmd::RefreshContext(args)) = parsed.command else {
+        panic!("expected refresh-context");
+    };
+    assert_eq!(args.request, refresh_context);
 }
 
 fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {

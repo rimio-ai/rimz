@@ -4,12 +4,18 @@
 //! The helper owns the locked mutation, wakeup, and pane reclamation so the
 //! sidebar producer remains read-only on the store.
 
-use std::ffi::OsString;
-
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 
 use crate::harness::run::{RunRecord, RunStatus};
+use crate::ids::{RunId, WorkspaceId};
 use crate::{RuntimePaths, StatePaths};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunTimeoutRequest {
+    pub workspace_id: WorkspaceId,
+    pub run_id: RunId,
+}
 
 /// Detect overdue non-terminal runs and ask short-lived helpers to settle them.
 pub fn enforce(paths: &StatePaths, runtime: &RuntimePaths, now: Timestamp) {
@@ -35,14 +41,11 @@ fn is_overdue(record: &RunRecord, now: Timestamp) -> bool {
 }
 
 fn spawn_timeout_helper(runtime: &RuntimePaths, record: &RunRecord) {
-    let args: Vec<OsString> = vec![
-        "agents".into(),
-        "run-timeout".into(),
-        "--workspace-id".into(),
-        runtime.workspace_id.as_str().into(),
-        "--run-id".into(),
-        record.run_id.as_str().into(),
-    ];
+    let request = RunTimeoutRequest {
+        workspace_id: runtime.workspace_id.clone(),
+        run_id: record.run_id.clone(),
+    };
+    let args = crate::child_process::agent_helper_argv("run-timeout", &request);
     if let Err(err) =
         crate::child_process::spawn_detached_rimz(runtime, args, "supervised-run-timeout")
     {
