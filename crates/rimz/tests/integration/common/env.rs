@@ -9,9 +9,10 @@ use std::process::{Child, Command, Output, Stdio};
 
 use super::command::ScrubSessionEnvExt;
 use rimz::pane::PaneRef;
-use rimz::testkit::sandbox::TestSandbox;
+use rimz::testkit::sandbox::{SandboxSpec, TestSandbox};
 use rimz::{EventEnvelope, RuntimePaths, StatePaths, Store, WorkspaceId, WorkspaceResolver};
 use serde_json::Value;
+use tempfile::TempDir;
 
 /// Canonicalize, falling back to the original path when it does not yet exist
 /// (a project root the test is about to create). Workspace IDs hash the
@@ -51,6 +52,8 @@ pub fn tmux_pane(raw: &str, command: &str, cwd: &Path) -> PaneRef {
 /// configured `rimz` command builder pinned to private tmux and Zellij roots.
 pub struct Env {
     sandbox: TestSandbox,
+    _home: TempDir,
+    _runtime: TempDir,
     /// The harness `$HOME`: per-user agent config (`.claude/`, `.codex/`) and
     /// the XDG roots live here.
     pub home_root: PathBuf,
@@ -77,19 +80,36 @@ impl Drop for Env {
 
 impl Env {
     pub fn new() -> Self {
-        let sandbox = TestSandbox::new()
-            .and_then(|sandbox| sandbox.arm(Path::new(env!("CARGO_BIN_EXE_rimz-test-reaper"))))
-            .expect("arm test sandbox reaper");
-        let home_root = canonical(sandbox.home_root());
+        let home = tempfile::Builder::new()
+            .prefix("rimz-test-home-")
+            .rand_bytes(6)
+            .tempdir()
+            .expect("test HOME");
+        let runtime = tempfile::Builder::new()
+            .prefix("rr")
+            .rand_bytes(6)
+            .tempdir_in("/tmp")
+            .expect("short runtime tempdir");
+        let home_root = canonical(home.path());
+        let runtime_root = runtime.path().to_path_buf();
+        let sandbox = TestSandbox::arm(
+            SandboxSpec {
+                home_root: home_root.clone(),
+                runtime_root: runtime_root.clone(),
+            },
+            Path::new(env!("CARGO_BIN_EXE_rimz-test-reaper")),
+        )
+        .expect("arm test sandbox reaper");
         let project_root = home_root.join("project");
         std::fs::create_dir_all(&project_root).expect("mkdir project root");
         let workspace_id = WorkspaceId::from_project_root(&project_root);
-        let runtime_root = sandbox.runtime_root().to_path_buf();
         for dir in ["state", "config"] {
             std::fs::create_dir_all(home_root.join(dir)).expect("mkdir env root");
         }
         let env = Env {
             sandbox,
+            _home: home,
+            _runtime: runtime,
             home_root,
             project_root,
             workspace_id,

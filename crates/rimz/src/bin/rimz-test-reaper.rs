@@ -28,14 +28,17 @@ fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let first = args.next().ok_or("missing sandbox spec")?;
     if first == "--fake-owner" {
-        return run_fake_owner();
+        let encoded = args.next().ok_or("--fake-owner requires a sandbox spec")?;
+        if args.next().is_some() {
+            return Err("--fake-owner expects exactly one sandbox spec".to_owned());
+        }
+        let spec = parse_spec(&encoded)?;
+        return run_fake_owner(spec);
     }
     if args.next().is_some() {
         return Err("expected exactly one sandbox spec".to_owned());
     }
-    let spec: SandboxSpec =
-        serde_json::from_str(&first).map_err(|err| format!("invalid sandbox spec JSON: {err}"))?;
-    rimz::testkit::sandbox::validate(&spec).map_err(|err| err.to_string())?;
+    let spec = parse_spec(&first)?;
 
     let mut buffer = [0_u8; 64];
     while std::io::stdin()
@@ -47,12 +50,17 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn run_fake_owner() -> Result<(), String> {
+fn parse_spec(encoded: &str) -> Result<SandboxSpec, String> {
+    let spec =
+        serde_json::from_str(encoded).map_err(|err| format!("invalid sandbox spec JSON: {err}"))?;
+    rimz::testkit::sandbox::validate(&spec).map_err(|err| err.to_string())?;
+    Ok(spec)
+}
+
+fn run_fake_owner(spec: SandboxSpec) -> Result<(), String> {
     let executable =
         std::env::current_exe().map_err(|err| format!("resolving reaper executable: {err}"))?;
-    let sandbox = TestSandbox::new()
-        .and_then(|sandbox| sandbox.arm(Path::new(&executable)))
-        .map_err(|err| err.to_string())?;
+    let sandbox = TestSandbox::arm(spec, Path::new(&executable)).map_err(|err| err.to_string())?;
     let mut command = Command::new("sleep");
     command
         .arg("600")

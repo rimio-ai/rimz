@@ -47,7 +47,7 @@ name = "rimz"
 path = "src/lib.rs"
 
 [features]
-testkit = ["dep:tempfile"]
+testkit = []
 # Off-box error reporting (src/observability/). Non-default and stripped from
 # shipped binaries, like `testkit`; dev opts in, CI builds it via --all-features.
 sentry = ["dep:sentry", "dep:sentry-tracing"]
@@ -172,7 +172,6 @@ prost.workspace = true
 shlex.workspace = true
 similar.workspace = true
 terminal_size.workspace = true
-tempfile = { workspace = true, optional = true }
 toml.workspace = true
 toml_edit.workspace = true
 thiserror.workspace = true
@@ -219,5 +218,6 @@ insta.workspace = true
 portable-pty.workspace = true
 predicates.workspace = true
 proptest.workspace = true
+tempfile.workspace = true
 tracing.workspace = true
 vt100.workspace = true

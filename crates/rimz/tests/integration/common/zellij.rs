@@ -4,7 +4,8 @@ use std::path::Path;
 use std::process::Command;
 
 use portable_pty::CommandBuilder;
-use rimz::testkit::sandbox::TestSandbox;
+use rimz::testkit::sandbox::{SandboxSpec, TestSandbox};
+use tempfile::TempDir;
 
 use super::{CommandTimeoutExt, ScrubSessionEnvExt};
 
@@ -12,21 +13,39 @@ use super::{CommandTimeoutExt, ScrubSessionEnvExt};
 /// Zellij test server and all of its clients.
 pub struct ZellijNamespace {
     sandbox: TestSandbox,
+    _root: TempDir,
 }
 
 impl ZellijNamespace {
     pub fn new() -> Self {
-        let sandbox = TestSandbox::zellij()
-            .and_then(|sandbox| sandbox.arm(Path::new(env!("CARGO_BIN_EXE_rimz-test-reaper"))))
-            .expect("arm Zellij namespace reaper");
-        let config_dir = sandbox.home_root().join(".config/zellij");
+        let root = tempfile::Builder::new()
+            .prefix("rz")
+            .rand_bytes(6)
+            .tempdir()
+            .expect("zellij namespace tempdir");
+        let root_path = root
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| root.path().to_path_buf());
+        let sandbox = TestSandbox::arm(
+            SandboxSpec {
+                home_root: root_path.clone(),
+                runtime_root: root_path.clone(),
+            },
+            Path::new(env!("CARGO_BIN_EXE_rimz-test-reaper")),
+        )
+        .expect("arm Zellij namespace reaper");
+        let config_dir = root_path.join(".config/zellij");
         std::fs::create_dir_all(&config_dir).expect("zellij config dir");
         std::fs::write(
             config_dir.join("config.kdl"),
             "// Hermetic test config: stock behavior, no first-run wizard or tips UI.\nshow_startup_tips false\nshow_release_notes false\n",
         )
         .expect("zellij config.kdl");
-        Self { sandbox }
+        Self {
+            sandbox,
+            _root: root,
+        }
     }
 
     pub fn path(&self) -> &Path {
