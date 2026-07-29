@@ -1618,8 +1618,7 @@ fn solo_agent_broadcast_errors_but_an_exact_self_handle_still_delivers() {
         .list_messages()
         .expect("messages")
         .into_iter()
-        .rev()
-        .next()
+        .next_back()
         .expect("exact self message");
     assert_eq!(message.agent_id, caller.session_id);
     assert_eq!(message.text, "deliberate self-send");
