@@ -43,7 +43,11 @@ use clap::{Args, Subcommand, ValueEnum};
 use super::GlobalFlags;
 pub(super) use crate::cli::Ctx;
 use crate::cli::supervised;
-use rimz::agents::AgentState;
+use rimz::agents::{AgentState, LifecycleRefreshRequest};
+use rimz::harness::AutoContinueRequest;
+use rimz::harness::auto_redeem::AutoRedeemRequest;
+use rimz::harness::budget::BudgetParkRequest;
+use rimz::harness::idle_compact::IdleCompactRequest;
 use rimz::harness::plan::{
     LaunchFinalizeOptions, LayoutPaneParams, Placement, ResolvedLaunch, apply_in_place_downgrade,
     cohort_cells, compile_layout_panes, launch_identity_requests, mint_launch_id,
@@ -51,38 +55,39 @@ use rimz::harness::plan::{
 };
 use rimz::harness::resume::{PostureDegrade, ResumePosture};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus, SupervisedRunOutcome};
+use rimz::harness::run_timeout::RunTimeoutRequest;
 use rimz::harness::spec::{AgentCell, Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::{DeliveryGate, gate_open};
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, own_pane_id};
 use rimz::room::{RoomContext, RoomSizing};
+use rimz::sidebar::refresh::usage::AccountUsageRefreshRequest;
 use rimz::store::{
     AgentLaunchBatch, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest, AgentLaunchScope,
 };
 use rimz::workspace::WorkspaceResolver;
 
 use attribution::attribution;
-use auto_continue::{AutoContinueArgs, run_auto_continue};
-use auto_redeem::{AutoRedeemArgs, run_auto_redeem};
+use auto_continue::run_auto_continue;
+use auto_redeem::run_auto_redeem;
 use budget::{BudgetArgs, run_budget};
-use budget_park::{BudgetParkArgs, run_budget_park};
+use budget_park::run_budget_park;
 use check::{CheckArgs, run_check};
 use exec::run_exec;
 use fork::{ForkArgs, run_fork};
 use history::history_agent;
-use idle_compact::{IdleCompactArgs, run_idle_compact};
+use idle_compact::run_idle_compact;
 use launch::*;
 use list::list_agents;
 pub(crate) use list::render_agents_table;
 use logs::logs_agent;
 use refresh::{RefreshArgs, run_refresh};
-use refresh_context::RefreshContextArgs;
-use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
+use refresh_usage::run_refresh_usage;
 use register::{RegisterArgs, run_register};
 use restart::restart_agent;
 pub(in crate::cli) use restart::restart_resolved;
 use resume::resume_lane;
-use run_timeout::{RunTimeoutArgs, run_timeout};
+use run_timeout::run_timeout;
 pub(in crate::cli) use show::focus_resolved;
 use show::{focus_agent, show_agent};
 pub(in crate::cli) use stop::StopTracker;
@@ -284,8 +289,8 @@ impl AgentsArgs {
         match &self.command {
             Some(AgentsSubcmd::RefreshContext(args)) => (
                 "agents refresh-context",
-                Some(args.session_id()),
-                Some(args.kind()),
+                Some(args.request.session_id.as_str()),
+                Some(args.request.kind.as_str()),
             ),
             _ => ("agents", None, None),
         }
@@ -477,29 +482,47 @@ enum AgentsSubcmd {
     /// Hidden helper the producer spawns to nudge a parked agent when its resume
     /// condition is due (`sidebar::enrich` auto-continue).
     #[command(hide = true)]
-    AutoContinue(AutoContinueArgs),
+    AutoContinue(HelperRequestArgs<AutoContinueRequest>),
     /// Hidden helper the producer spawns to compact an eligible idle agent
     /// before its provider prompt cache expires.
     #[command(hide = true)]
-    IdleCompact(IdleCompactArgs),
+    IdleCompact(HelperRequestArgs<IdleCompactRequest>),
     /// Hidden helper the producer spawns to redeem an account-wide Codex reset
     /// credit after rechecking current provider state.
     #[command(hide = true)]
-    AutoRedeem(AutoRedeemArgs),
+    AutoRedeem(HelperRequestArgs<AutoRedeemRequest>),
     /// Hidden helper that interrupts an agent after its dollar cap is crossed.
     #[command(hide = true)]
-    BudgetPark(BudgetParkArgs),
+    BudgetPark(HelperRequestArgs<BudgetParkRequest>),
     /// Hidden helper that settles a supervised run after its durable deadline.
     #[command(hide = true)]
-    RunTimeout(RunTimeoutArgs),
+    RunTimeout(HelperRequestArgs<RunTimeoutRequest>),
     /// Hidden helper the producer spawns to refresh one provider's account usage
     /// (rate-limit windows + paid credits) into the shared cache.
     #[command(hide = true)]
-    RefreshUsage(RefreshUsageArgs),
+    RefreshUsage(HelperRequestArgs<AccountUsageRefreshRequest>),
     /// Hidden helper an installed hook spawns to refresh one session's context
     /// sidecar from its provider's out-of-band source.
     #[command(hide = true)]
-    RefreshContext(RefreshContextArgs),
+    RefreshContext(HelperRequestArgs<LifecycleRefreshRequest>),
+}
+
+fn parse_helper_request<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, String> {
+    serde_json::from_str(value).map_err(|err| err.to_string())
+}
+
+#[derive(Debug, Args)]
+struct HelperRequestArgs<T>
+where
+    T: Clone + Send + Sync + serde::de::DeserializeOwned + 'static,
+{
+    #[arg(
+        long,
+        hide = true,
+        value_name = "JSON",
+        value_parser = parse_helper_request::<T>
+    )]
+    request: T,
 }
 
 #[derive(Debug, Args)]
@@ -538,13 +561,13 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Check(args)) => return run_check(args),
         Some(AgentsSubcmd::Register(args)) => return run_register(args),
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
-        Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args),
-        Some(AgentsSubcmd::IdleCompact(args)) => return run_idle_compact(args),
-        Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args),
-        Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args),
-        Some(AgentsSubcmd::RunTimeout(args)) => return run_timeout(args, globals),
-        Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args, globals),
-        Some(AgentsSubcmd::RefreshContext(args)) => return refresh_context::run(args),
+        Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args.request),
+        Some(AgentsSubcmd::IdleCompact(args)) => return run_idle_compact(args.request),
+        Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args.request),
+        Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args.request),
+        Some(AgentsSubcmd::RunTimeout(args)) => return run_timeout(args.request, globals),
+        Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args.request),
+        Some(AgentsSubcmd::RefreshContext(args)) => return refresh_context::run(args.request),
         Some(AgentsSubcmd::Budget(args)) => return run_budget(args, globals),
         Some(AgentsSubcmd::List {
             scope,

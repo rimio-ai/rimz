@@ -1,24 +1,17 @@
 //! Hidden helper that settles an overdue supervised run and reclaims its pane.
 
 use anyhow::{Context, Result};
-use clap::Args;
 use jiff::Timestamp;
 
-use rimz::ids::{RunId, WorkspaceId};
+use rimz::harness::run_timeout::RunTimeoutRequest;
 
 use super::Ctx;
 
-#[derive(Debug, Args)]
-pub struct RunTimeoutArgs {
-    #[arg(long)]
-    workspace_id: String,
-    #[arg(long)]
-    run_id: String,
-}
-
-pub fn run_timeout(args: RunTimeoutArgs, globals: &super::GlobalFlags) -> Result<()> {
-    let workspace_id: WorkspaceId = args.workspace_id.parse().context("parsing workspace id")?;
-    let run_id = RunId::parse(&args.run_id).context("parsing run id")?;
+pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> Result<()> {
+    let RunTimeoutRequest {
+        workspace_id,
+        run_id,
+    } = request;
     let paths =
         rimz::StatePaths::for_workspace(workspace_id.clone()).context("preparing store paths")?;
     let initial = rimz::harness::run::load(&paths, &run_id).context("loading timed run")?;

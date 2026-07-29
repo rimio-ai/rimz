@@ -8,9 +8,7 @@
 //! burn-rate cache; atomic replacement plus observation stamps make duplicate
 //! folds idempotent.
 
-use std::ffi::OsString;
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
@@ -22,6 +20,7 @@ use crate::agents::account::{
 use crate::agents::{AccountUsageSnapshot, RateLimitWindow, ResetCredits};
 use crate::config::ResumeConfig;
 use crate::harness::assist_log::AssistWindowReset;
+use crate::ids::{AgentKind, WorkspaceId};
 use crate::store::atomic::write_temp_then_rename_cache;
 use crate::{RuntimePaths, SidebarProviderPanel};
 
@@ -44,6 +43,14 @@ pub enum RedeemReason {
     ScheduledRedeem,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoRedeemRequest {
+    pub workspace_id: WorkspaceId,
+    pub kind: AgentKind,
+    pub reason: RedeemReason,
+    pub request_id: uuid::Uuid,
+}
+
 impl RedeemReason {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -51,20 +58,6 @@ impl RedeemReason {
             Self::BlockedGain => "blocked_gain",
             Self::DoomedCredit => "doomed_credit",
             Self::ScheduledRedeem => "scheduled_redeem",
-        }
-    }
-}
-
-impl FromStr for RedeemReason {
-    type Err = AutoRedeemErr;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "expiry_rescue" => Ok(Self::ExpiryRescue),
-            "blocked_gain" => Ok(Self::BlockedGain),
-            "doomed_credit" => Ok(Self::DoomedCredit),
-            "scheduled_redeem" => Ok(Self::ScheduledRedeem),
-            _ => Err(AutoRedeemErr::InvalidReason(value.to_owned())),
         }
     }
 }
@@ -90,8 +83,6 @@ struct RedeemStamp {
 pub enum AutoRedeemErr {
     #[error("auto-redeem supports only the `codex` provider, not `{0}`")]
     UnsupportedKind(String),
-    #[error("invalid auto-redeem reason `{0}`")]
-    InvalidReason(String),
     #[error("locking the shared auto-redeem attempt: {0}")]
     Lock(#[from] crate::store::lock::LockErr),
     #[error("writing the shared auto-redeem stamp: {0}")]
@@ -414,15 +405,15 @@ pub(crate) fn redeem_credits(
         return;
     };
 
-    let request_id = uuid::Uuid::now_v7().to_string();
+    let request_id = uuid::Uuid::now_v7();
     // A pending reservation deliberately uses the 10-minute attempt cooldown
     // as its dead-helper lease. Redemption is rare and account-scoped, so the
     // conservative backstop is preferable to a second freshness clock.
-    if !reserve_attempt(runtime, reason, now, &request_id) {
+    if !reserve_attempt(runtime, reason, now, &request_id.to_string()) {
         return;
     }
-    if !spawn_auto_redeem(runtime, reason, &request_id) {
-        cancel_attempt_reservation(runtime, &request_id);
+    if !spawn_auto_redeem(runtime, reason, request_id) {
+        cancel_attempt_reservation(runtime, &request_id.to_string());
     }
 }
 
@@ -431,18 +422,18 @@ pub(crate) fn redeem_credits(
 /// retained in a report, including on an attempted error.
 pub fn execute_auto_redeem(
     runtime: &RuntimePaths,
-    kind: &str,
-    requested_reason: &str,
-    request_id: &str,
+    kind: &AgentKind,
+    requested_reason: RedeemReason,
+    request_id: uuid::Uuid,
     config: &ResumeConfig,
 ) -> Result<Option<RedeemReport>, AutoRedeemErr> {
-    if kind != CODEX_KIND {
-        return Err(AutoRedeemErr::UnsupportedKind(kind.to_owned()));
+    if kind.as_str() != CODEX_KIND {
+        return Err(AutoRedeemErr::UnsupportedKind(kind.to_string()));
     }
-    let requested_reason = requested_reason.parse::<RedeemReason>()?;
     if crate::agents::credits::oauth_usage_offline() {
         return Ok(None);
     }
+    let request_id = request_id.to_string();
 
     let _guard =
         crate::store::lock::WorkspaceLock::acquire(&runtime.shared_auto_redeem_lock(CODEX_KIND))?;
@@ -498,7 +489,7 @@ pub fn execute_auto_redeem(
     };
     let action =
         consume_reserved_reset_credit(&stamp_path, &stamp, &report, requested_reason, || {
-            action.consume(request_id)
+            action.consume(&request_id)
         })?;
     report.outcome = Some(action.outcome);
     report.windows_reset = action.windows_reset > 0;
@@ -587,19 +578,14 @@ fn publish_usage(
     }
 }
 
-fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason, request_id: &str) -> bool {
-    let args: Vec<OsString> = vec![
-        "agents".into(),
-        "auto-redeem".into(),
-        "--workspace-id".into(),
-        runtime.workspace_id.as_str().into(),
-        "--kind".into(),
-        CODEX_KIND.into(),
-        "--reason".into(),
-        reason.as_str().into(),
-        "--request-id".into(),
-        request_id.into(),
-    ];
+fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason, request_id: uuid::Uuid) -> bool {
+    let request = AutoRedeemRequest {
+        workspace_id: runtime.workspace_id.clone(),
+        kind: AgentKind::new_unchecked(CODEX_KIND),
+        reason,
+        request_id,
+    };
+    let args = crate::child_process::agent_helper_argv("auto-redeem", &request);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         workspace = %runtime.workspace_id,

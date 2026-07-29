@@ -572,25 +572,33 @@ pub enum RefreshTrigger<'a> {
 /// `server_url: None`.
 pub struct LifecycleRefreshCtx<'a> {
     pub agent_id: &'a str,
-    pub workspace_id: &'a str,
+    pub workspace_id: &'a crate::ids::WorkspaceId,
     pub model_hint: Option<&'a str>,
     pub server_url: Option<&'a str>,
 }
 
-/// The leading argv of the detached `rimz agents refresh-context` helper: the
-/// one command that runs [`AgentDefinition::refresh_session_context`] for any
-/// provider. An adapter appends its own flags.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LifecycleRefreshRequest {
+    pub kind: crate::ids::AgentKind,
+    pub session_id: String,
+    pub workspace_id: crate::ids::WorkspaceId,
+    pub model: Option<String>,
+    pub server_url: Option<String>,
+}
+
+/// The detached `rimz agents refresh-context` helper request: the one command
+/// that runs [`AgentDefinition::refresh_session_context`] for any provider.
 pub fn refresh_context_argv(kind: &str, ctx: &LifecycleRefreshCtx<'_>) -> Vec<String> {
-    vec![
-        "agents".to_owned(),
-        "refresh-context".to_owned(),
-        "--kind".to_owned(),
-        kind.to_owned(),
-        "--session-id".to_owned(),
-        ctx.agent_id.to_owned(),
-        "--workspace-id".to_owned(),
-        ctx.workspace_id.to_owned(),
-    ]
+    crate::child_process::agent_helper_argv(
+        "refresh-context",
+        &LifecycleRefreshRequest {
+            kind: crate::ids::AgentKind::new_unchecked(kind),
+            session_id: ctx.agent_id.to_owned(),
+            workspace_id: ctx.workspace_id.clone(),
+            model: ctx.model_hint.map(str::to_owned),
+            server_url: ctx.server_url.map(str::to_owned),
+        },
+    )
 }
 
 /// File identity for a bounded transcript, rollout, or telemetry tail read. Producers persist it

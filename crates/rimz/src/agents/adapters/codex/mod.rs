@@ -740,10 +740,7 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
         {
             return None;
         }
-        let mut args = crate::agents::refresh_context_argv(self.spec().kind, ctx);
-        if let Some(model) = ctx.model_hint {
-            args.extend(["--model".to_owned(), model.to_owned()]);
-        }
+        let args = crate::agents::refresh_context_argv(self.spec().kind, ctx);
         Some(RefreshSpawn { args })
     }
 

@@ -393,9 +393,11 @@ fn opencode_records_native_permission_and_question_answers() {
 
 #[test]
 fn opencode_context_refreshes_are_bounded_to_turn_events_with_server_url() {
+    let workspace_id =
+        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/workspace"));
     let ctx = crate::agents::LifecycleRefreshCtx {
         agent_id: "sess-1",
-        workspace_id: "ws-1",
+        workspace_id: &workspace_id,
         model_hint: Some("gpt-5"),
         server_url: Some("http://127.0.0.1:4096/"),
     };
@@ -408,29 +410,22 @@ fn opencode_context_refreshes_are_bounded_to_turn_events_with_server_url() {
         let spawn = OpencodeAdapter
             .context_refresh_spawn(crate::agents::RefreshTrigger::Hook(event), &ctx)
             .unwrap_or_else(|| panic!("{event} refreshes"));
+        let request: crate::agents::LifecycleRefreshRequest =
+            serde_json::from_str(&spawn.args[3]).expect("decode refresh request");
+        assert_eq!(request.kind.as_str(), "opencode", "{event}");
+        assert_eq!(request.session_id, "sess-1", "{event}");
+        assert_eq!(request.workspace_id, workspace_id, "{event}");
+        assert_eq!(request.model.as_deref(), Some("gpt-5"), "{event}");
         assert_eq!(
-            spawn.args,
-            [
-                "agents",
-                "refresh-context",
-                "--kind",
-                "opencode",
-                "--session-id",
-                "sess-1",
-                "--workspace-id",
-                "ws-1",
-                "--server-url",
-                "http://127.0.0.1:4096/",
-                "--model",
-                "gpt-5",
-            ],
+            request.server_url.as_deref(),
+            Some("http://127.0.0.1:4096/"),
             "{event}"
         );
     }
 
     let bare = crate::agents::LifecycleRefreshCtx {
         agent_id: "sess-1",
-        workspace_id: "ws-1",
+        workspace_id: &workspace_id,
         model_hint: None,
         server_url: Some("http://127.0.0.1:4096/"),
     };
@@ -438,13 +433,12 @@ fn opencode_context_refreshes_are_bounded_to_turn_events_with_server_url() {
         !OpencodeAdapter
             .context_refresh_spawn(crate::agents::RefreshTrigger::Hook("session_idle"), &bare)
             .unwrap()
-            .args
-            .iter()
-            .any(|arg| arg == "--model")
+            .args[3]
+            .contains("gpt-5")
     );
     let missing_url = crate::agents::LifecycleRefreshCtx {
         agent_id: "sess-1",
-        workspace_id: "ws-1",
+        workspace_id: &workspace_id,
         model_hint: None,
         server_url: None,
     };

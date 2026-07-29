@@ -12,55 +12,27 @@
 //! the hook returns before this child does any work.
 
 use anyhow::{Context, Result};
-use clap::Args;
 use jiff::Timestamp;
 
-use rimz::agents;
+use rimz::agents::{self, LifecycleRefreshRequest};
 use rimz::ids::{PaneId, WorkspaceId};
 use rimz::store::workspace_record;
 use rimz::{ResolvedWorkspace, RuntimePaths, StatePaths, Store};
 
-#[derive(Debug, Args)]
-pub(super) struct RefreshContextArgs {
-    /// Agent kind whose adapter owns the refresh.
-    #[arg(long)]
-    kind: String,
-    /// Session id the sidecar is filed under (the provider's own session id).
-    #[arg(long)]
-    session_id: String,
-    /// Workspace the session belongs to; the runtime dir derives from it.
-    #[arg(long)]
-    workspace_id: String,
-    /// The session's current model id, used to resolve a display name.
-    #[arg(long)]
-    model: Option<String>,
-    /// Embedded provider server base URL, for adapters whose plugin reports one.
-    #[arg(long)]
-    server_url: Option<String>,
-}
-
-impl RefreshContextArgs {
-    pub(super) fn kind(&self) -> &str {
-        &self.kind
-    }
-
-    pub(super) fn session_id(&self) -> &str {
-        &self.session_id
-    }
-}
-
-pub(super) fn run(args: RefreshContextArgs) -> Result<()> {
-    let Some(definition) = agents::find_definition(&args.kind) else {
+pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
+    let Some(definition) = agents::find_definition(request.kind.as_str()) else {
         return Ok(());
     };
-    let workspace_id: WorkspaceId = args.workspace_id.parse().context("parsing workspace id")?;
+    let workspace_id = request.workspace_id;
     let runtime = crate::cli::runtime_paths_for(workspace_id.clone())?;
 
-    let prior = rimz::store::agent_context::read_one(&runtime, &args.kind, &args.session_id);
+    let kind = request.kind.as_str();
+    let session_id = request.session_id.as_str();
+    let prior = rimz::store::agent_context::read_one(&runtime, kind, session_id);
     let Some(refresh) = definition.refresh_session_context(&agents::SessionContextInput {
-        session_id: &args.session_id,
-        model: args.model.as_deref(),
-        server_url: args.server_url.as_deref(),
+        session_id,
+        model: request.model.as_deref(),
+        server_url: request.server_url.as_deref(),
         prior: prior.as_ref(),
         pricing_cache_path: &runtime.shared_pricing_cache_path(),
         broker_socket: Some(&runtime.codex_app_server_socket_path()),
@@ -70,17 +42,11 @@ pub(super) fn run(args: RefreshContextArgs) -> Result<()> {
 
     let mut wrote = false;
     if let Some(mut local) = refresh.local {
-        confirm_turn_death_from_pane(
-            &runtime,
-            &workspace_id,
-            &args.kind,
-            &args.session_id,
-            &mut local,
-        );
+        confirm_turn_death_from_pane(&runtime, &workspace_id, kind, session_id, &mut local);
         rimz::store::agent_context::merge_local_context(
             &runtime,
             definition.spec(),
-            &args.session_id,
+            session_id,
             local,
             Timestamp::now(),
         )
@@ -92,7 +58,7 @@ pub(super) fn run(args: RefreshContextArgs) -> Result<()> {
         let oauth_enabled = !agents::credits::oauth_usage_offline();
         wrote |= rimz::sidebar::refresh::complete_realtime_account_usage(
             &runtime,
-            &args.kind,
+            kind,
             oauth_enabled,
             Some(realtime),
         );
@@ -102,8 +68,8 @@ pub(super) fn run(args: RefreshContextArgs) -> Result<()> {
         let observed_at = observed.observed_at;
         rimz::store::agent_context::update_record(
             &runtime,
-            &args.kind,
-            &args.session_id,
+            kind,
+            session_id,
             observed_at,
             |record, _| definition.merge_session_context(record, &observed),
         )

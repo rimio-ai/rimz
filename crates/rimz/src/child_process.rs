@@ -10,6 +10,8 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
+
 use crate::RuntimePaths;
 
 #[cfg(unix)]
@@ -237,6 +239,20 @@ where
     cmd
 }
 
+/// Render one typed hidden-agent-helper request as a single JSON argv value.
+pub fn agent_helper_argv<T: Serialize>(verb: &str, request: &T) -> Vec<String> {
+    // These internal request types contain only scalar values and cannot fail
+    // JSON serialization.
+    let request = serde_json::to_string(request)
+        .expect("scalar hidden-agent-helper request serializes as JSON");
+    vec![
+        "agents".to_owned(),
+        verb.to_owned(),
+        "--request".to_owned(),
+        request,
+    ]
+}
+
 /// Spawn one detached RimZ helper. Unit tests compile the exact command but
 /// suppress the subprocess centrally so policy tests cannot leak helpers.
 pub(crate) fn spawn_detached_rimz<I, S>(
@@ -432,6 +448,30 @@ mod tests {
 
         spawn_detached_rimz(&runtime, ["agents", "auto-continue"], "test-helper")
             .expect("unit-test spawn suppression");
+    }
+
+    #[test]
+    fn agent_helper_request_stays_one_typed_argv_value() {
+        let request = crate::harness::AutoContinueRequest {
+            workspace_id: crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
+                "/workspace with spaces",
+            )),
+            kind: crate::ids::AgentKind::new_unchecked("codex"),
+            agent_id: crate::ids::AgentSessionId::from("session -- 1"),
+            pane_id: crate::ids::PaneId::parse("tmux:%3").unwrap(),
+            message_id: Some(crate::ids::MessageId::parse("msg_0123456789abcdef").unwrap()),
+            parked_since: "2026-01-02T03:04:05Z".parse().unwrap(),
+            text: "--resume with spaces".to_owned(),
+            reason: "overloaded_backoff_retry".to_owned(),
+            label: None,
+        };
+
+        let argv = agent_helper_argv("auto-continue", &request);
+        assert_eq!(&argv[..3], ["agents", "auto-continue", "--request"]);
+        assert_eq!(
+            serde_json::from_str::<crate::harness::AutoContinueRequest>(&argv[3]).unwrap(),
+            request
+        );
     }
 
     #[test]

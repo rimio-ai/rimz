@@ -8,6 +8,15 @@ use serde_json::Value;
 
 use crate::common::{CommandTimeoutExt, Env, path_with_front};
 
+fn refresh_usage_argv(env: &Env, kind: &str, claim_id: &str) -> Vec<String> {
+    let request = rimz::sidebar::refresh::usage::AccountUsageRefreshRequest {
+        workspace_id: env.workspace_id.clone(),
+        kind: rimz::ids::AgentKind::new_unchecked(kind),
+        claim_id: claim_id.parse().expect("valid usage claim id"),
+    };
+    rimz::child_process::agent_helper_argv("refresh-usage", &request)
+}
+
 #[test]
 fn one_cold_snapshot_discovers_claude_and_publishes_first_usage_windows() {
     let env = Env::new();
@@ -157,16 +166,7 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
 
     let output = env
         .rimz()
-        .args([
-            "agents",
-            "refresh-usage",
-            "--kind",
-            "claude",
-            "--workspace-id",
-            env.workspace_id.as_str(),
-            "--claim-id",
-            &claim_id,
-        ])
+        .args(refresh_usage_argv(&env, "claude", &claim_id))
         .env(
             "RIMZ_CLAUDE_OAUTH_USAGE_URL",
             format!("{origin}/api/oauth/usage"),
@@ -242,16 +242,7 @@ fn claude_refresh_usage_refuses_an_untrusted_override_without_publishing_usage()
 
     let output = env
         .rimz()
-        .args([
-            "agents",
-            "refresh-usage",
-            "--kind",
-            "claude",
-            "--workspace-id",
-            env.workspace_id.as_str(),
-            "--claim-id",
-            &claim_id,
-        ])
+        .args(refresh_usage_argv(&env, "claude", &claim_id))
         .env(
             "RIMZ_CLAUDE_OAUTH_USAGE_URL",
             "https://rimz-advisory.invalid/api/oauth/usage",
@@ -304,16 +295,7 @@ fn claude_refresh_usage_retries_transient_http_failures() {
 
     let output = env
         .rimz()
-        .args([
-            "agents",
-            "refresh-usage",
-            "--kind",
-            "claude",
-            "--workspace-id",
-            env.workspace_id.as_str(),
-            "--claim-id",
-            &claim_id,
-        ])
+        .args(refresh_usage_argv(&env, "claude", &claim_id))
         .env(
             "RIMZ_CLAUDE_OAUTH_USAGE_URL",
             format!("{origin}/api/oauth/usage"),
@@ -385,16 +367,7 @@ fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unrea
 
     let output = env
         .rimz()
-        .args([
-            "agents",
-            "refresh-usage",
-            "--kind",
-            "codex",
-            "--workspace-id",
-            env.workspace_id.as_str(),
-            "--claim-id",
-            &claim_id,
-        ])
+        .args(refresh_usage_argv(&env, "codex", &claim_id))
         .env("RIMZ_CODEX_BIN", env.home_root.join("missing-codex"))
         .env("RIMZ_CODEX_APP_SERVER_SOCK", "")
         .bounded_output()

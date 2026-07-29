@@ -2,41 +2,27 @@
 //! credit after the elected producer finds a useful redemption.
 
 use anyhow::{Context, Result};
-use clap::Args;
 
 use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{Assist, AssistRecord};
-use rimz::ids::WorkspaceId;
+use rimz::harness::auto_redeem::AutoRedeemRequest;
 
 use crate::cli::runtime_paths_for;
 
-#[derive(Debug, Args)]
-pub(super) struct AutoRedeemArgs {
-    #[arg(long)]
-    workspace_id: String,
-    #[arg(long)]
-    kind: String,
-    #[arg(long)]
-    reason: String,
-    #[arg(long)]
-    request_id: uuid::Uuid,
-}
-
-pub(super) fn run_auto_redeem(args: AutoRedeemArgs) -> Result<()> {
-    let workspace_id: WorkspaceId = args.workspace_id.parse().context("parsing workspace id")?;
-    let runtime = runtime_paths_for(workspace_id)?;
+pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
+    let runtime = runtime_paths_for(request.workspace_id)?;
     let config = MachineConfig::load().context("loading auto-redeem config")?;
 
     let result = rimz::harness::auto_redeem::execute_auto_redeem(
         &runtime,
-        &args.kind,
-        &args.reason,
-        &args.request_id.to_string(),
+        &request.kind,
+        request.reason,
+        request.request_id,
         &config.resume,
     );
     match result {
         Ok(Some(report)) => {
-            append_report(&args.kind, args.request_id, &report, None);
+            append_report(request.kind.as_str(), request.request_id, &report, None);
             if report.reset {
                 let _ = rimz::store::wakeup::wake_sidebars(&runtime);
             }
@@ -44,7 +30,12 @@ pub(super) fn run_auto_redeem(args: AutoRedeemArgs) -> Result<()> {
         Ok(None) => {}
         Err(err) => {
             if let Some(report) = err.attempted_report() {
-                append_report(&args.kind, args.request_id, report, Some(err.to_string()));
+                append_report(
+                    request.kind.as_str(),
+                    request.request_id,
+                    report,
+                    Some(err.to_string()),
+                );
             }
             return Err(err).context("redeeming Codex reset credit");
         }

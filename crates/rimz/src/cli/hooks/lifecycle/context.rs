@@ -75,7 +75,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     // agent's turn.
     let refresh_ctx = rimz::agents::LifecycleRefreshCtx {
         agent_id,
-        workspace_id: workspace.workspace_id.as_str(),
+        workspace_id: &workspace.workspace_id,
         model_hint,
         server_url: decoded.routing().server_url(),
     };

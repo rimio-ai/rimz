@@ -510,7 +510,7 @@ fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
 fn scheduled_reason_round_trips() {
     assert_eq!(RedeemReason::ScheduledRedeem.as_str(), "scheduled_redeem");
     assert_eq!(
-        "scheduled_redeem".parse::<RedeemReason>().unwrap(),
+        serde_json::from_str::<RedeemReason>("\"scheduled_redeem\"").unwrap(),
         RedeemReason::ScheduledRedeem
     );
 }

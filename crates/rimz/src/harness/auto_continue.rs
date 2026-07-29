@@ -26,7 +26,6 @@
 //! arm decision is the pure, unit-tested [`resume_park`].
 
 use std::collections::BTreeSet;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -40,7 +39,7 @@ use crate::agents::{
     effective_turn_error_class,
 };
 use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
-use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
 use crate::store::atomic::write_temp_then_rename_cache;
 #[cfg(test)]
@@ -52,6 +51,19 @@ use crate::store::snapshot::ResumeOutcome;
 /// before the agent's first hook lands; if a nudge fails to wake a still-parked
 /// agent, RimZ retries on this cadence rather than typing every frame.
 const AUTO_CONTINUE_RETRY_INTERVAL: Duration = Duration::from_secs(120);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoContinueRequest {
+    pub workspace_id: WorkspaceId,
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    pub pane_id: PaneId,
+    pub message_id: Option<MessageId>,
+    pub parked_since: Timestamp,
+    pub text: String,
+    pub reason: String,
+    pub label: Option<String>,
+}
 
 /// A durable record of one park: written while the park is fresh, read after its
 /// class-specific resume condition is due. It outlives the per-session context
@@ -638,30 +650,18 @@ fn spawn_auto_continue(
     text: &str,
     facts: AutoContinueFacts<'_>,
 ) -> bool {
-    let mut args: Vec<OsString> = vec![
-        "agents".into(),
-        "auto-continue".into(),
-        "--workspace-id".into(),
-        runtime.workspace_id.as_str().into(),
-        "--kind".into(),
-        kind.as_str().into(),
-        "--agent-id".into(),
-        agent_id.as_str().into(),
-        "--pane".into(),
-        pane_id.to_string().into(),
-        "--text".into(),
-        text.into(),
-        "--reason".into(),
-        facts.reason.into(),
-        "--parked-since".into(),
-        facts.parked_since.to_string().into(),
-    ];
-    if let Some(message_id) = message_id {
-        args.extend([OsString::from("--message-id"), message_id.as_str().into()]);
-    }
-    if let Some(label) = facts.label {
-        args.extend([OsString::from("--label"), label.into()]);
-    }
+    let request = AutoContinueRequest {
+        workspace_id: runtime.workspace_id.clone(),
+        kind: kind.clone(),
+        agent_id: agent_id.clone(),
+        pane_id: pane_id.clone(),
+        message_id: message_id.cloned(),
+        parked_since: facts.parked_since,
+        text: text.to_owned(),
+        reason: facts.reason.to_owned(),
+        label: facts.label.map(str::to_owned),
+    };
+    let args = crate::child_process::agent_helper_argv("auto-continue", &request);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         workspace = %runtime.workspace_id,

@@ -5,7 +5,6 @@
 //! detached `rimz agents idle-compact` helper. The helper owns the durable
 //! message write; this module writes only a disposable pacing record.
 
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -14,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentState, AgentStatus};
 use crate::config::{HarnessConfig, IdleCompactMode};
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::atomic::write_temp_then_rename_cache;
 use crate::{RuntimePaths, SidebarSnapshot, WorktreePrState};
 
@@ -23,6 +22,17 @@ pub const IDLE_COMPACT_MIN_TOKENS: u64 = 50_000;
 
 /// Bounds duplicate helper spawns while a frame or context reading catches up.
 const IDLE_COMPACT_RESPAWN_THROTTLE: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdleCompactRequest {
+    pub workspace_id: WorkspaceId,
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    pub pane_id: PaneId,
+    pub command: String,
+    pub occupied_tokens: u64,
+    pub label: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct FireRecord {
@@ -210,24 +220,16 @@ fn spawn_idle_compact(
     occupied: u64,
     label: &str,
 ) -> bool {
-    let args: Vec<OsString> = vec![
-        "agents".into(),
-        "idle-compact".into(),
-        "--workspace-id".into(),
-        runtime.workspace_id.as_str().into(),
-        "--kind".into(),
-        kind.as_str().into(),
-        "--agent-id".into(),
-        agent_id.as_str().into(),
-        "--pane".into(),
-        pane_id.to_string().into(),
-        "--command".into(),
-        command.into(),
-        "--occupied-tokens".into(),
-        occupied.to_string().into(),
-        "--label".into(),
-        label.into(),
-    ];
+    let request = IdleCompactRequest {
+        workspace_id: runtime.workspace_id.clone(),
+        kind: kind.clone(),
+        agent_id: agent_id.clone(),
+        pane_id: pane_id.clone(),
+        command: command.to_owned(),
+        occupied_tokens: occupied,
+        label: label.to_owned(),
+    };
+    let args = crate::child_process::agent_helper_argv("idle-compact", &request);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         workspace = %runtime.workspace_id,
