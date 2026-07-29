@@ -15,6 +15,8 @@ use crate::{RuntimePaths, diag::DiagSink};
 use tracing::{debug, warn};
 
 const FEEDBACK_TIMEOUT: Duration = Duration::from_secs(1);
+const IDLE_RETRY: Duration = Duration::from_secs(5);
+const STRUCTURAL_GUARD_MS: u64 = 2_000;
 const MAX_STEPS: u8 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,8 +90,20 @@ impl WidthControl {
         self.target
     }
 
+    fn is_idle(&self) -> bool {
+        self.idle_at.is_some()
+    }
+
     fn in_flight(&self) -> bool {
         self.in_flight.is_some()
+    }
+
+    fn rearm(&mut self) {
+        self.steps_issued = 0;
+        self.in_flight = None;
+        self.retried_no_progress = false;
+        self.reverse_issued = false;
+        self.idle_at = None;
     }
 
     fn stop_step(&self) -> u16 {
@@ -217,7 +231,10 @@ pub(super) struct WidthController {
     mux: MuxName,
     width: crate::mux::SidebarWidth,
     convergence: WidthControl,
-    last_classified: Option<(u16, usize)>,
+    last_classified_view_cols: Option<u16>,
+    last_siblings: Option<usize>,
+    structural_at_ms: Option<u64>,
+    idle_retry_deadline: Option<Instant>,
     baseline_probe_deadline: Option<Instant>,
     classification_deadline: Option<Instant>,
     classification_resize_at_ms: Option<u64>,
@@ -239,7 +256,10 @@ impl WidthController {
             mux,
             width,
             convergence: WidthControl::new(None),
-            last_classified: None,
+            last_classified_view_cols: None,
+            last_siblings: None,
+            structural_at_ms: None,
+            idle_retry_deadline: None,
             baseline_probe_deadline,
             classification_deadline: None,
             classification_resize_at_ms: None,
@@ -249,11 +269,12 @@ impl WidthController {
     pub(super) fn feedback_deadline(&self) -> Option<Instant> {
         [
             self.convergence.feedback_deadline(),
-            self.last_classified
+            self.last_classified_view_cols
                 .is_none()
                 .then_some(self.baseline_probe_deadline)
                 .flatten(),
             self.classification_deadline,
+            self.idle_retry_deadline,
         ]
         .into_iter()
         .flatten()
@@ -273,7 +294,7 @@ impl WidthController {
         diag: &DiagSink,
     ) {
         self.width = crate::mux::SidebarWidth::from_config(theme);
-        let target = self.last_classified.map(|(view_cols, _)| {
+        let target = self.last_classified_view_cols.map(|view_cols| {
             crate::sidebar::width_target::resolve(&self.runtime, self.width, Some(view_cols))
                 .cols(Some(view_cols))
         });
@@ -427,6 +448,24 @@ impl WidthController {
         }
     }
 
+    pub(super) fn note_structural(
+        &mut self,
+        at_ms: u64,
+        measured_cols: Option<u16>,
+        diag: &DiagSink,
+    ) {
+        self.structural_at_ms = Some(
+            self.structural_at_ms
+                .map_or(at_ms, |previous| previous.max(at_ms)),
+        );
+        if let Some(cols) = measured_cols
+            && self.convergence.needs_adjustment(cols)
+        {
+            self.convergence.rearm();
+            self.observe(cols, SidebarWidthControlTrigger::Structural, diag);
+        }
+    }
+
     pub(super) fn backstop(
         &mut self,
         measured_cols: Option<u16>,
@@ -434,14 +473,25 @@ impl WidthController {
         panes_observed_at_ms: Option<u64>,
         diag: &DiagSink,
     ) {
-        if self.last_classified.is_none()
+        let now = Instant::now();
+        if let Some(siblings) = sibling_count {
+            let previous = self.last_siblings.replace(siblings);
+            if previous.is_some_and(|previous| previous != siblings) {
+                self.note_structural(
+                    panes_observed_at_ms.unwrap_or_else(crate::sidebar::timing::unix_now_ms),
+                    measured_cols,
+                    diag,
+                );
+            }
+        }
+        if self.last_classified_view_cols.is_none()
             && self
                 .baseline_probe_deadline
-                .is_some_and(|deadline| Instant::now() >= deadline)
+                .is_some_and(|deadline| now >= deadline)
         {
-            self.baseline_probe_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
-            if let (Some(cols), Some(siblings)) = (measured_cols, sibling_count)
-                && self.capture_classification_baseline(cols, siblings, diag)
+            self.baseline_probe_deadline = Some(now + FEEDBACK_TIMEOUT);
+            if let Some(cols) = measured_cols
+                && self.capture_classification_baseline(cols, diag)
             {
                 self.baseline_probe_deadline = None;
             }
@@ -449,18 +499,18 @@ impl WidthController {
         if self
             .convergence
             .feedback_deadline()
-            .is_some_and(|deadline| Instant::now() >= deadline)
+            .is_some_and(|deadline| now >= deadline)
             && let Some(cols) = measured_cols
         {
             self.observe(cols, SidebarWidthControlTrigger::Backstop, diag);
         }
         if self
             .classification_deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
+            .is_some_and(|deadline| now >= deadline)
         {
             match (measured_cols, sibling_count) {
-                (Some(cols), Some(siblings)) => {
-                    self.classify_settled_resize(cols, siblings, panes_observed_at_ms, diag);
+                (Some(cols), Some(_)) => {
+                    self.classify_settled_resize(cols, panes_observed_at_ms, diag);
                 }
                 (Some(_), None) => {
                     self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
@@ -471,14 +521,21 @@ impl WidthController {
                 }
             }
         }
+        if let Some(cols) = measured_cols {
+            if self.convergence.is_idle() && self.convergence.needs_adjustment(cols) {
+                let deadline = self.idle_retry_deadline.get_or_insert(now + IDLE_RETRY);
+                if now >= *deadline {
+                    self.convergence.rearm();
+                    self.observe(cols, SidebarWidthControlTrigger::Backstop, diag);
+                    self.idle_retry_deadline = Some(now + IDLE_RETRY);
+                }
+            } else {
+                self.idle_retry_deadline = None;
+            }
+        }
     }
 
-    fn capture_classification_baseline(
-        &mut self,
-        measured_cols: u16,
-        sibling_count: usize,
-        diag: &DiagSink,
-    ) -> bool {
+    fn capture_classification_baseline(&mut self, measured_cols: u16, diag: &DiagSink) -> bool {
         let Some(pane) = self.own_pane.as_ref() else {
             return false;
         };
@@ -489,7 +546,7 @@ impl WidthController {
         ) && step.view_cols > 0
         {
             self.convergence.seed_native_step(step.band_cols);
-            self.last_classified = Some((step.view_cols, sibling_count));
+            self.last_classified_view_cols = Some(step.view_cols);
             let target = crate::sidebar::width_target::resolve(
                 &self.runtime,
                 self.width,
@@ -506,7 +563,6 @@ impl WidthController {
     fn classify_settled_resize(
         &mut self,
         measured_cols: u16,
-        sibling_count: usize,
         panes_observed_at_ms: Option<u64>,
         diag: &DiagSink,
     ) {
@@ -547,29 +603,29 @@ impl WidthController {
             self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
             return;
         };
-        if !self
-            .classification_resize_at_ms
-            .zip(panes_observed_at_ms)
-            .is_some_and(|(resize_at_ms, observed_at_ms)| observed_at_ms > resize_at_ms)
-        {
+        let Some(resize_at_ms) = self.classification_resize_at_ms else {
+            self.classification_deadline = None;
+            return;
+        };
+        let previous = self.last_classified_view_cols.replace(view_cols.get());
+        let view_changed = previous.is_none_or(|previous_cols| previous_cols != view_cols.get());
+        let structurally_changed = self.structural_at_ms.is_some_and(|structural_at_ms| {
+            structural_at_ms >= resize_at_ms.saturating_sub(STRUCTURAL_GUARD_MS)
+        });
+        if structurally_changed {
+            self.classification_deadline = None;
+            self.classification_resize_at_ms = None;
+            self.convergence.rearm();
             self.observe(
                 measured_cols,
                 SidebarWidthControlTrigger::Classification,
                 diag,
             );
-            self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
             return;
         }
-        self.classification_deadline = None;
-        self.classification_resize_at_ms = None;
-
-        let previous = self
-            .last_classified
-            .replace((view_cols.get(), sibling_count));
-        let view_changed =
-            previous.is_none_or(|(previous_cols, _)| previous_cols != view_cols.get());
-        let siblings_changed = previous.is_some_and(|(_, siblings)| siblings != sibling_count);
         if view_changed {
+            self.classification_deadline = None;
+            self.classification_resize_at_ms = None;
             let target = crate::sidebar::width_target::resolve(
                 &self.runtime,
                 self.width,
@@ -585,14 +641,14 @@ impl WidthController {
             );
             return;
         }
-        if siblings_changed {
-            self.observe(
-                measured_cols,
-                SidebarWidthControlTrigger::Classification,
-                diag,
-            );
+        if !panes_observed_at_ms.is_some_and(|observed_at_ms| {
+            observed_at_ms >= resize_at_ms.saturating_add(STRUCTURAL_GUARD_MS)
+        }) {
+            self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
             return;
         }
+        self.classification_deadline = None;
+        self.classification_resize_at_ms = None;
 
         let Some(measured) = NonZeroU16::new(measured_cols) else {
             return;

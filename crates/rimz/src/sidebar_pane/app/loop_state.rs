@@ -583,6 +583,16 @@ impl LoopState {
         }
         let requests_verification = envelope.event.requests_producer_verification();
         let sent_at_ms = envelope.sent_at_ms;
+        if matches!(
+            &envelope.event,
+            SidebarEvent::PaneClosed { .. }
+                | SidebarEvent::PaneOpened { .. }
+                | SidebarEvent::PanesChanged
+        ) {
+            let measured = terminal.size().ok().map(|size| size.width);
+            self.width_control
+                .note_structural(sent_at_ms, measured, diag);
+        }
         match envelope.event {
             SidebarEvent::Reload => {
                 return self.handle_reload(config, fetch);
