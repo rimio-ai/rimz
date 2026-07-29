@@ -182,6 +182,15 @@ impl ZellijBackend {
     }
 
     pub(super) fn tab_id_for_pane(&self, session_name: &str, pane: &PaneId) -> Result<u64> {
+        self.tab_id_for_pane_within(session_name, pane, super::super::COMMAND_TIMEOUT)
+    }
+
+    fn tab_id_for_pane_within(
+        &self,
+        session_name: &str,
+        pane: &PaneId,
+        timeout: Duration,
+    ) -> Result<u64> {
         let pane_id = ZellijPaneId::try_from(pane)
             .ok()
             .and_then(ZellijPaneId::terminal_id)
@@ -189,7 +198,7 @@ impl ZellijBackend {
                 program: "zellij".to_owned(),
                 reason: format!("target pane `{pane}` has no numeric Zellij id"),
             })?;
-        let listed = self.raw_listed_panes(session_name, super::super::COMMAND_TIMEOUT)?;
+        let listed = self.raw_listed_panes(session_name, timeout)?;
         listed
             .into_iter()
             .find(|candidate| !candidate.is_plugin && candidate.id == pane_id)
@@ -1163,14 +1172,15 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn rename_tab(&self, session: &str, anchor: &PaneId, name: &str) -> Result<()> {
-        let tab_id = self.tab_id_for_pane(session, anchor)?;
+        let tab_id =
+            self.tab_id_for_pane_within(session, anchor, super::super::TAB_RENAME_TIMEOUT)?;
         self.zellij_action(session)
             .args([
                 "rename-tab-by-id".to_owned(),
                 tab_id.to_string(),
                 name.to_owned(),
             ])
-            .run()
+            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
             .map(|_| ())
     }
 

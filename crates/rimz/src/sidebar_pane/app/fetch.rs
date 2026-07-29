@@ -590,7 +590,7 @@ impl FetchWorker {
         if renames.is_empty() {
             return;
         }
-        let backend = crate::mux::backend_for(self.config.mux);
+        let mut pending = Vec::new();
         for rename in renames {
             if self
                 .attempted_tab_names
@@ -601,22 +601,30 @@ impl FetchWorker {
             }
             self.attempted_tab_names
                 .insert(rename.anchor.clone(), rename.desired_name.clone());
-            if let Err(err) = backend.rename_tab(
-                &self.config.session_name,
-                &rename.anchor,
-                &rename.desired_name,
-            ) {
-                tracing::warn!(
-                    session = %self.config.session_name,
-                    pane = %rename.anchor,
-                    observed_name = %rename.observed_name,
-                    desired_name = %rename.desired_name,
-                    tags.operation = "sidebar.tab_status.rename",
-                    error = &err as &dyn std::error::Error,
-                    "could not update mux tab status",
-                );
-            }
+            pending.push(rename);
         }
+        if pending.is_empty() {
+            return;
+        }
+        let mux = self.config.mux;
+        let session = self.config.session_name.clone();
+        std::thread::spawn(move || {
+            let backend = crate::mux::backend_for(mux);
+            for rename in pending {
+                if let Err(err) = backend.rename_tab(&session, &rename.anchor, &rename.desired_name)
+                {
+                    tracing::warn!(
+                        session = %session,
+                        pane = %rename.anchor,
+                        observed_name = %rename.observed_name,
+                        desired_name = %rename.desired_name,
+                        tags.operation = "sidebar.tab_status.rename",
+                        error = &err as &dyn std::error::Error,
+                        "could not update mux tab status",
+                    );
+                }
+            }
+        });
     }
 
     fn publish_snapshot(

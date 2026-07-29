@@ -820,7 +820,9 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn rename_tab(&self, _session: &str, anchor: &PaneId, name: &str) -> Result<()> {
-        self.rename_window_command(anchor, name)?.run().map(|_| ())
+        self.rename_window_command(anchor, name)?
+            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
+            .map(|_| ())
     }
 
     fn close_pane(&self, _session: &str, pane: &PaneId) -> Result<()> {

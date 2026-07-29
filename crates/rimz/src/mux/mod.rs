@@ -49,6 +49,11 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 
+/// Best-effort tab chrome must never inherit the full structural-command wait.
+/// Healthy local renames complete in milliseconds; a stuck backend may drop a
+/// glyph update rather than retain a worker for the general 30s bound.
+pub(crate) const TAB_RENAME_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[derive(Debug, thiserror::Error)]
 pub enum MuxErr {
     #[error("multiplexer command `{program}` not found on PATH")]
