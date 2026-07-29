@@ -361,6 +361,16 @@ fn detects_mutual_queued_cycle() {
 }
 
 #[test]
+fn detects_an_immediate_self_wait_cycle_without_edges() {
+    let agents = [agent("a", AgentStatus::Running)];
+
+    let cycle = wait_cycle(&[], &[], &agents, &agents[0].kind, "a", &agents[0])
+        .expect("waiting on the caller itself is an immediate cycle");
+
+    assert!(cycle.is_empty());
+}
+
+#[test]
 fn detects_three_agent_chain_and_renders_it() {
     let agents = [
         agent("a", AgentStatus::Running),
