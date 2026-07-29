@@ -39,7 +39,7 @@ This is a usability boundary, not a security one — the same launch is expressi
 | --- | --- | --- |
 | `print` | always `true` | a child is one bounded turn, never a session |
 | `bg` | `!--fg` | the parent keeps its own turn moving and joins later |
-| wrapper self-cleanup | on unless `--keep` | the child is reclaimed from its durable outcome even if the blocking parent disappears |
+| wrapper self-cleanup | on unless `--keep` | the child reclaims itself from its durable outcome after the parent returns |
 | `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | an unattended child must not run forever |
 | `keep` | `--keep`, default false | the pane closes itself on completion |
 | everything else | default | see the omissions below |
