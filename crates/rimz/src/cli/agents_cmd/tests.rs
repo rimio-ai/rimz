@@ -220,6 +220,7 @@ fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
         worktree_path: None,
         close_pane_on_exit: false,
         exit_on_run_completion: false,
+        subagent: false,
         identity: ExecIdentity::default(),
     }
 }
@@ -566,6 +567,7 @@ mod parse {
             worktree_path: Some(PathBuf::from("/repo/worktree")),
             close_pane_on_exit: true,
             exit_on_run_completion: true,
+            subagent: true,
             identity: ExecIdentity {
                 name: Some("swift-otter".to_owned()),
                 name_explicit: true,
@@ -812,11 +814,11 @@ mod launch_options {
     }
 
     #[test]
-    fn supervised_request_preserves_background_and_caller_owned_cleanup() {
-        for (background, caller_owned, expected) in [
-            (false, false, false),
-            (true, false, true),
-            (false, true, true),
+    fn supervised_request_preserves_internal_launch_posture() {
+        for (background, caller_owned, subagent, expected_cleanup) in [
+            (false, false, false, false),
+            (true, false, false, true),
+            (false, true, true, true),
         ] {
             let args = AgentsArgs::from_launch(AgentLaunchArgs {
                 spec: Some("codex".to_owned()),
@@ -827,15 +829,17 @@ mod launch_options {
                 },
                 print: true,
                 self_cleanup_on_completion: caller_owned,
+                subagent,
                 ..Default::default()
             });
 
             let (request, _) = into_supervised_request(args).expect("build supervised request");
 
             assert_eq!(
-                request.self_cleanup_on_completion, expected,
+                request.self_cleanup_on_completion, expected_cleanup,
                 "background={background}, caller_owned={caller_owned}"
             );
+            assert_eq!(request.subagent, subagent);
         }
     }
 
@@ -1556,6 +1560,7 @@ fn bare_exec_args() -> ExecRequest {
         worktree_path: None,
         close_pane_on_exit: false,
         exit_on_run_completion: false,
+        subagent: false,
         identity: ExecIdentity {
             name: Some("lucid-atlas".to_owned()),
             launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),

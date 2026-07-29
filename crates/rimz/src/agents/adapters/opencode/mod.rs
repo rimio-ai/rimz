@@ -338,7 +338,23 @@ impl crate::agents::capabilities::CoreCapability for OpencodeAdapter {
     }
 }
 
-impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {}
+impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
+    fn lockdown_subagent_env(&self, env: &mut std::collections::BTreeMap<String, String>) {
+        const PERMISSION_ENV: &str = "OPENCODE_PERMISSION";
+
+        let mut permissions = env
+            .get(PERMISSION_ENV)
+            .and_then(|value| {
+                serde_json::from_str::<std::collections::BTreeMap<String, Value>>(value).ok()
+            })
+            .unwrap_or_default();
+        permissions.insert("task".to_owned(), Value::String("deny".to_owned()));
+        env.insert(
+            PERMISSION_ENV.to_owned(),
+            Value::Object(permissions.into_iter().collect()).to_string(),
+        );
+    }
+}
 
 impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {

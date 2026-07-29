@@ -1055,6 +1055,7 @@ mod tests {
             worktree_path: None,
             close_pane_on_exit: false,
             exit_on_run_completion: false,
+            subagent: false,
             identity: ExecIdentity::default(),
         }
     }

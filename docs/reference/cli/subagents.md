@@ -4,6 +4,8 @@
 
 Run it only from a RimZ-launched agent. A user-shell invocation fails before opening the room and points to `rimz agents` or `rimz teams`. The mechanics behind the sugar — the ancestry stamp and its depth cap, the caller-scoped verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
 
+A child launched through this doorway must complete its assignment directly and cannot spawn further agents. RimZ appends that instruction to the prompt, disables the provider's native delegation tool where a verified restriction exists, and retains the launch-depth check as a backstop for RimZ commands.
+
 ## Launch and fan out work
 
 ```sh

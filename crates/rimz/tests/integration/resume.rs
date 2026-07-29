@@ -93,6 +93,7 @@ fn resume_argv(kind: &str, id: &str, name: &str) -> Vec<String> {
             worktree_path: None,
             close_pane_on_exit: true,
             exit_on_run_completion: false,
+            subagent: false,
             identity: ExecIdentity {
                 name: Some(name.to_owned()),
                 launch_id: Some(id.to_owned()),

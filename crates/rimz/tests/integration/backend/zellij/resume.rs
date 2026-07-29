@@ -170,6 +170,7 @@ fn zellij_agent_exec_command(
         worktree_path: None,
         close_pane_on_exit: true,
         exit_on_run_completion: false,
+        subagent: false,
         identity: rimz::harness::launch::ExecIdentity::default(),
     };
     let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &request).expect("exec argv");

@@ -2387,6 +2387,7 @@ fn candidate_resume_command(
             worktree_path: None,
             close_pane_on_exit: true,
             exit_on_run_completion: false,
+            subagent: false,
             identity: crate::harness::launch::ExecIdentity {
                 name: candidate.name.clone(),
                 name_explicit: candidate.name_explicit,

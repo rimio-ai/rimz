@@ -222,6 +222,9 @@ pub(crate) struct AgentLaunchArgs {
     /// self-cleaning even when the supervised run blocks.
     #[arg(skip)]
     pub(crate) self_cleanup_on_completion: bool,
+    /// Internal launch posture for the `rimz subagents` doorway.
+    #[arg(skip)]
+    pub(crate) subagent: bool,
     /// Read stdin to EOF as prompt content. With a positional prompt, the
     /// instruction goes first and stdin follows inside `<stdin>` tags.
     #[arg(long, requires = "print")]
@@ -749,6 +752,7 @@ fn into_supervised_request(
         name: args.launch.name,
         background: args.launch.cohort.bg,
         self_cleanup_on_completion: args.launch.cohort.bg || args.launch.self_cleanup_on_completion,
+        subagent: args.launch.subagent,
         force_new_tab: args.launch.cohort.new_tab,
         top_level: args.launch.cohort.top_level,
         permission_mode,

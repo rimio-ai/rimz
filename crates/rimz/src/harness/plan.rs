@@ -989,6 +989,7 @@ fn fresh_agent_pane(
                 worktree_path: params.cleanup_worktree.then(|| params.cwd.to_path_buf()),
                 close_pane_on_exit: !params.cleanup_worktree && !params.in_place,
                 exit_on_run_completion: false,
+                subagent: false,
                 identity: crate::harness::launch::ExecIdentity {
                     name: Some(launch.name.clone()),
                     name_explicit: launch.name_explicit,

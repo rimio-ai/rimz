@@ -100,3 +100,50 @@ fn claude_commands_and_permission_args_match_run_posture() {
         Some(vec!["--max-turns".to_owned(), "3".to_owned()])
     );
 }
+
+#[test]
+fn subagent_lockdown_merges_claude_disallowed_tools_once() {
+    let mut args = [
+        "--disallowedTools",
+        "Agent(fork)",
+        "Bash",
+        "--tools",
+        "Agent,Bash",
+        "--disallowed-tools=Agent(statusline-setup)",
+        "--disallowed-tools",
+        "Write",
+        "Bash",
+        "--model",
+        "opus",
+    ]
+    .map(ToOwned::to_owned)
+    .to_vec();
+
+    ClaudeAdapter.lockdown_subagent_args(&mut args);
+
+    assert_eq!(
+        args,
+        [
+            "--tools",
+            "Agent,Bash",
+            "--model",
+            "opus",
+            "--disallowedTools",
+            "Bash",
+            "Write",
+            "Agent",
+        ]
+        .map(ToOwned::to_owned)
+    );
+}
+
+#[test]
+fn subagent_lockdown_handles_claude_equals_and_empty_forms() {
+    let mut equals = vec!["--disallowedTools=Read".to_owned()];
+    ClaudeAdapter.lockdown_subagent_args(&mut equals);
+    assert_eq!(equals, vec!["--disallowedTools", "Read", "Agent"]);
+
+    let mut empty = vec!["--model".to_owned(), "opus".to_owned()];
+    ClaudeAdapter.lockdown_subagent_args(&mut empty);
+    assert_eq!(empty, vec!["--model", "opus", "--disallowedTools", "Agent"]);
+}
