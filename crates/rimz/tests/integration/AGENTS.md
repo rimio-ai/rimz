@@ -6,6 +6,7 @@ Local contract for `crates/rimz/tests/integration/` — the crate's single integ
 
 - One binary: every suite is a module of [`main.rs`](./main.rs), and [`common/`](./common/mod.rs) is declared once — no per-file harness duplication.
 - Pick the tier by what the test drives: `common::Env` runs the `rimz` binary out of process with HOME, XDG, `TMUX_TMPDIR`, and `ZELLIJ_CONFIG_DIR` scoped to tempdirs; `common::Harness` opens a real in-process `rimz::Store` for direct API tests; `common::payloads` holds the golden agent hook payloads and `common::shim` the environment probes and fake executables, both shared across tiers.
+- Every `Env` and `ZellijNamespace` arms an independent stdin-keepalive reaper before spawning children. The fixture HOME/runtime values are the process-ownership marker: on orderly drop or abrupt owner death the reaper stops both private mux endpoints, terminates every marker-carrying descendant, and removes the roots. A command that calls `env_clear()` must re-pin `HOME` or `XDG_RUNTIME_DIR` before it can become long-lived.
 - Real tempdir, real store files — no in-memory stubs.
 - Every builder that runs `rimz` or creates a mux server scrubs the ambient session env at construction (`common::ScrubSessionEnvExt` — the `RIMZ_*` identity pin and the `ZELLIJ*`/`TMUX*` detection vars), so a suite run from inside a live RimZ room behaves like a clean shell; a test that needs one of these sets it explicitly afterwards.
 

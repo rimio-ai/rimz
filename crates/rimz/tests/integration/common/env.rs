@@ -9,9 +9,9 @@ use std::process::{Child, Command, Output, Stdio};
 
 use super::command::ScrubSessionEnvExt;
 use rimz::pane::PaneRef;
+use rimz::testkit::sandbox::TestSandbox;
 use rimz::{EventEnvelope, RuntimePaths, StatePaths, Store, WorkspaceId, WorkspaceResolver};
 use serde_json::Value;
-use tempfile::TempDir;
 
 /// Canonicalize, falling back to the original path when it does not yet exist
 /// (a project root the test is about to create). Workspace IDs hash the
@@ -50,8 +50,7 @@ pub fn tmux_pane(raw: &str, command: &str, cwd: &Path) -> PaneRef {
 /// per-user agent config and the workspace never share a directory — and a
 /// configured `rimz` command builder pinned to private tmux and Zellij roots.
 pub struct Env {
-    _home: TempDir,
-    _runtime: TempDir,
+    sandbox: TestSandbox,
     /// The harness `$HOME`: per-user agent config (`.claude/`, `.codex/`) and
     /// the XDG roots live here.
     pub home_root: PathBuf,
@@ -78,22 +77,19 @@ impl Drop for Env {
 
 impl Env {
     pub fn new() -> Self {
-        let home = TempDir::new().expect("tempdir");
-        let runtime = tempfile::Builder::new()
-            .prefix("rr")
-            .tempdir_in("/tmp")
-            .expect("short runtime tempdir");
-        let home_root = canonical(home.path());
+        let sandbox = TestSandbox::new()
+            .and_then(|sandbox| sandbox.arm(Path::new(env!("CARGO_BIN_EXE_rimz-test-reaper"))))
+            .expect("arm test sandbox reaper");
+        let home_root = canonical(sandbox.home_root());
         let project_root = home_root.join("project");
         std::fs::create_dir_all(&project_root).expect("mkdir project root");
         let workspace_id = WorkspaceId::from_project_root(&project_root);
-        let runtime_root = runtime.path().to_path_buf();
+        let runtime_root = sandbox.runtime_root().to_path_buf();
         for dir in ["state", "config"] {
             std::fs::create_dir_all(home_root.join(dir)).expect("mkdir env root");
         }
         let env = Env {
-            _home: home,
-            _runtime: runtime,
+            sandbox,
             home_root,
             project_root,
             workspace_id,
@@ -270,14 +266,15 @@ impl Env {
     pub fn agent_owner_pid(&self) -> u32 {
         self.agent_owner
             .get_or_init(|| {
-                Command::new("sleep")
+                let mut command = Command::new("sleep");
+                command
                     .arg("600")
                     .scrub_session_env()
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .expect("spawn journey agent owner")
+                    .stderr(Stdio::null());
+                self.sandbox.pin_identity(&mut command);
+                command.spawn().expect("spawn journey agent owner")
             })
             .id()
     }

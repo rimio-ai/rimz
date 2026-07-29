@@ -4,6 +4,8 @@
 //! out of the shipped binary while integration tests and benches can share the
 //! same event and pane shapes.
 
+pub mod sandbox;
+
 pub use crate::proc::testkit::spawn_count;
 pub use crate::store::atomic::testkit::fsync_count;
 pub use crate::store::event_log::testkit::{bytes_read, bytes_written};
