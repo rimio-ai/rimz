@@ -8,14 +8,7 @@ use rimz::mux::{NamedKey, press_pane_key};
 use super::Ctx;
 
 pub fn run_budget_park(request: BudgetParkRequest) -> Result<()> {
-    let BudgetParkRequest {
-        workspace_id,
-        kind,
-        agent_id,
-        pane_id,
-        at_cost,
-    } = request;
-    let ctx = Ctx::for_workspace(workspace_id, Some(pane_id.mux()))?;
+    let ctx = Ctx::for_workspace(request.workspace_id, Some(request.pane_id.mux()))?;
     let store = &ctx.store;
     let snapshot = ctx
         .resolution_snapshot()
@@ -24,21 +17,21 @@ pub fn run_budget_park(request: BudgetParkRequest) -> Result<()> {
         .agent_panes
         .iter()
         .find(|pane| {
-            pane.kind == kind
-                && pane.agent_id.as_ref() == Some(&agent_id)
-                && pane.pane_id == pane_id
+            pane.kind == request.kind
+                && pane.agent_id.as_ref() == Some(&request.agent_id)
+                && pane.pane_id == request.pane_id
         })
         .context("budget target pane is no longer bound to the agent")?;
 
-    let at_cost = at_cost.or_else(|| {
-        rimz::harness::budget::read_ledger(store.runtime_paths(), &kind, &agent_id)
+    let at_cost = request.at_cost.or_else(|| {
+        rimz::harness::budget::read_ledger(store.runtime_paths(), &request.kind, &request.agent_id)
             .and_then(|ledger| ledger.parked.map(|park| park.at_cost))
     });
-    let interrupted = press_pane_key(&pane_id, NamedKey::Escape);
+    let interrupted = press_pane_key(&request.pane_id, NamedKey::Escape);
 
     for record in rimz::harness::run::list(store.paths())? {
-        if record.kind != kind
-            || record.agent_id.as_ref() != Some(&agent_id)
+        if record.kind != request.kind
+            || record.agent_id.as_ref() != Some(&request.agent_id)
             || record.status.is_terminal()
         {
             continue;
