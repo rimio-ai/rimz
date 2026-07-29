@@ -435,7 +435,17 @@ placement = "auto"   # "auto" | "pane" | "tab"
 max-launch-depth = 1
 ```
 
-An agent that runs `rimz agents` launches children beneath its own top-level card. `max-launch-depth` limits that recursion and defaults to one child layer; a launch past the limit fails before creating a pane, worktree, or provisional agent and tells the calling agent not to retry. Deeper configured limits still render as one flat child list under the original top-level ancestor. Pass `--top-level` when the new agent should instead be an independent peer with its own card.
+An agent that runs `rimz agents` or [`rimz subagents`](../reference/cli/subagents.md) launches children beneath its own top-level card. `max-launch-depth` limits that recursion and defaults to one child layer; a launch past the limit fails before creating a pane, worktree, or provisional agent and tells the calling agent not to retry. Deeper configured limits still render as one flat child list under the original top-level ancestor. Pass `--top-level` to `rimz agents` when the new agent should instead be an independent peer with its own card.
+
+#### Subagent launches
+
+```toml
+[agents.subagents]
+timeout = "30m"
+# budget = "5"       # optional per-child cap; "20/day" also works
+```
+
+These defaults apply only to the agent-only `rimz subagents` doorway. `timeout` is the wall-clock limit for each supervised child and defaults to 30 minutes; the producer enforces it even when no process is waiting on the result. No budget cap is set by default. Per-launch `--timeout` and `--budget` flags override this table.
 
 ### Worktrees
 
