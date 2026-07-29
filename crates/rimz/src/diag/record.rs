@@ -155,6 +155,7 @@ pub enum SidebarWidthControlTrigger {
     ResizeFeedback,
     Structural,
     Backstop,
+    IdleRetry,
     Classification,
 }
 
@@ -165,6 +166,7 @@ impl SidebarWidthControlTrigger {
             Self::ResizeFeedback => "resize-feedback",
             Self::Structural => "structural",
             Self::Backstop => "backstop",
+            Self::IdleRetry => "idle-retry",
             Self::Classification => "classification",
         }
     }

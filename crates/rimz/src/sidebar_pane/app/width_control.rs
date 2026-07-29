@@ -513,6 +513,8 @@ impl WidthController {
                     self.classify_settled_resize(cols, panes_observed_at_ms, diag);
                 }
                 (Some(_), None) => {
+                    // A sibling count proves this observation located our own
+                    // view; do not adopt from a session frame that did not.
                     self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
                 }
                 (None, _) => {
@@ -522,11 +524,13 @@ impl WidthController {
             }
         }
         if let Some(cols) = measured_cols {
-            if self.convergence.is_idle() && self.convergence.needs_adjustment(cols) {
+            if self.classification_deadline.is_some() {
+                self.idle_retry_deadline = None;
+            } else if self.convergence.is_idle() && self.convergence.needs_adjustment(cols) {
                 let deadline = self.idle_retry_deadline.get_or_insert(now + IDLE_RETRY);
                 if now >= *deadline {
                     self.convergence.rearm();
-                    self.observe(cols, SidebarWidthControlTrigger::Backstop, diag);
+                    self.observe(cols, SidebarWidthControlTrigger::IdleRetry, diag);
                     self.idle_retry_deadline = Some(now + IDLE_RETRY);
                 }
             } else {
@@ -612,17 +616,6 @@ impl WidthController {
         let structurally_changed = self.structural_at_ms.is_some_and(|structural_at_ms| {
             structural_at_ms >= resize_at_ms.saturating_sub(STRUCTURAL_GUARD_MS)
         });
-        if structurally_changed {
-            self.classification_deadline = None;
-            self.classification_resize_at_ms = None;
-            self.convergence.rearm();
-            self.observe(
-                measured_cols,
-                SidebarWidthControlTrigger::Classification,
-                diag,
-            );
-            return;
-        }
         if view_changed {
             self.classification_deadline = None;
             self.classification_resize_at_ms = None;
@@ -634,6 +627,17 @@ impl WidthController {
             let target_cols = target.cols(Some(view_cols.get()));
             spawn_width_default_record(self.mux, &self.session_name, target_cols.get());
             self.convergence.retarget(Some(target_cols));
+            self.observe(
+                measured_cols,
+                SidebarWidthControlTrigger::Classification,
+                diag,
+            );
+            return;
+        }
+        if structurally_changed {
+            self.classification_deadline = None;
+            self.classification_resize_at_ms = None;
+            self.convergence.rearm();
             self.observe(
                 measured_cols,
                 SidebarWidthControlTrigger::Classification,
