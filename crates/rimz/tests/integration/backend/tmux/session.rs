@@ -23,10 +23,13 @@ fn rename_tab_targets_the_anchor_panes_window() {
 
     server
         .backend
-        .rename_tab(session, &anchor, "work ✓")
+        // The command-builder unit test covers Unicode preservation. Keep the
+        // live seam assertion locale-neutral: tmux replaces non-ASCII with `_`
+        // when the server starts under CI's `LC_ALL=C`.
+        .rename_tab(session, &anchor, "work ?")
         .expect("rename pane's window");
 
-    assert_eq!(server.display(session, "#{window_name}"), "work ✓");
+    assert_eq!(server.display(session, "#{window_name}"), "work ?");
 }
 
 #[test]
