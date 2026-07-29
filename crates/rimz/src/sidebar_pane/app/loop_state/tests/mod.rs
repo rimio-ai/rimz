@@ -97,21 +97,13 @@ impl Rig {
         );
     }
 
-    fn fold(&mut self, snapshot: SidebarSnapshot, fresh_pane_frame: bool) {
+    fn fold(&mut self, snapshot: SidebarSnapshot, pane_frame: PaneFrame, source: SnapshotSource) {
         self.deliver(FetchUpdate::Snapshot {
             snapshot: Box::new(snapshot),
             role: FetchRole::Producer,
             phase: FetchPhase::Final,
-            pane_frame: if fresh_pane_frame {
-                PaneFrame::Fresh
-            } else {
-                PaneFrame::Held
-            },
-            source: if fresh_pane_frame {
-                SnapshotSource::Produced
-            } else {
-                SnapshotSource::Published
-            },
+            pane_frame,
+            source,
         });
     }
 
@@ -338,24 +330,24 @@ fn spend_ratchet_holds_within_epoch_and_resets_across_epochs() {
     let mut high = agent_snapshot(&rig.ws);
     high.today_spend_live_usd = Some(5.0);
     high.today_spend_epoch_secs = Some(10);
-    rig.fold(high, true);
+    rig.fold(high, PaneFrame::Fresh, SnapshotSource::Produced);
     assert_eq!(rig.state.ui.spend_ratchet.display(Some(10), 5.0), 5.0);
 
     let mut lower = agent_snapshot(&rig.ws);
     lower.today_spend_live_usd = Some(3.0);
     lower.today_spend_epoch_secs = Some(10);
-    rig.fold(lower, true);
+    rig.fold(lower, PaneFrame::Fresh, SnapshotSource::Produced);
     assert_eq!(rig.state.ui.spend_ratchet.display(Some(10), 3.0), 5.0);
 
     let mut older = agent_snapshot(&rig.ws);
     older.today_spend_live_usd = Some(1.0);
-    rig.fold(older, true);
+    rig.fold(older, PaneFrame::Fresh, SnapshotSource::Produced);
     assert_eq!(rig.state.ui.spend_ratchet.display(None, 1.0), 1.0);
 
     let mut next = agent_snapshot(&rig.ws);
     next.today_spend_live_usd = Some(2.0);
     next.today_spend_epoch_secs = Some(11);
-    rig.fold(next, true);
+    rig.fold(next, PaneFrame::Fresh, SnapshotSource::Produced);
     assert_eq!(rig.state.ui.spend_ratchet.display(Some(11), 2.0), 2.0);
 }
 
@@ -376,9 +368,9 @@ fn tripped_budget_ratchet_observes_the_day_spend_epoch_it_displays() {
     };
 
     let high = capped(&rig.ws, 5.0);
-    rig.fold(high, true);
+    rig.fold(high, PaneFrame::Fresh, SnapshotSource::Produced);
     let lower = capped(&rig.ws, 3.0);
-    rig.fold(lower, true);
+    rig.fold(lower, PaneFrame::Fresh, SnapshotSource::Produced);
 
     let (usd, epoch) = render::cockpit_spend_target(&rig.state.current).expect("tripped spend");
     assert_eq!((usd, epoch), (3.0, Some(20)));

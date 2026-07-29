@@ -56,7 +56,7 @@ fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
     });
 
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
-    rig.fold(snapshot, true);
+    rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.selected_pane, Some(target));
     assert_eq!(rig.state.ui.scroll_offset, 7);
@@ -96,7 +96,7 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     crate::sidebar::focus_anchor::store(&rig.runtime, &anchor).expect("store anchor");
 
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
-    rig.fold(snapshot, true);
+    rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
     assert_eq!(rig.state.ui.scroll_offset, 7);
@@ -124,7 +124,7 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     anchor.applied_at_ms = Some(crate::sidebar::timing::unix_now_ms());
     crate::sidebar::focus_anchor::store(&rig.runtime, &anchor).expect("apply anchor");
     let snapshot = snapshot_with_focused_pane(&rig.ws, target);
-    rig.fold(snapshot, true);
+    rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.scroll_offset, 4);
     assert!(rig.state.ui.manual_scroll.is_some());
@@ -143,7 +143,7 @@ fn focus_anchor_stamp_applies_once() {
     .expect("store anchor");
 
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
-    rig.fold(snapshot, true);
+    rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
     assert_eq!(rig.state.ui.scroll_offset, 7);
 
     rig.state.ui.scroll_offset = 4;
@@ -151,7 +151,7 @@ fn focus_anchor_stamp_applies_once() {
         selection_at_start: Some(target.clone()),
     });
     let snapshot = snapshot_with_focused_pane(&rig.ws, target);
-    rig.fold(snapshot, true);
+    rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.scroll_offset, 4);
     assert!(rig.state.ui.manual_scroll.is_some());
@@ -171,7 +171,7 @@ fn stale_focus_anchor_fences_unchanged_observation_to_unknown() {
     rig.state.ui.scroll_offset = 3;
 
     let snapshot = snapshot_with_focused_pane(&rig.ws, target);
-    rig.fold(snapshot, true);
+    rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.selected_pane, None);
     assert_eq!(rig.state.ui.scroll_offset, 3);
@@ -197,7 +197,7 @@ fn superseding_client_observation_leaves_scroll_untouched() {
         client_id: crate::mux::MuxClientId::Zellij(7),
         pane_id: selected.clone(),
     }];
-    rig.fold(snapshot, true);
+    rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.selected_pane, Some(selected));
     assert_eq!(rig.state.ui.scroll_offset, 3);
@@ -210,7 +210,7 @@ fn external_focus_change_arms_group_reveal_once() {
     let target = zellij("terminal_2");
 
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
-    rig.fold(snapshot, true);
+    rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
     assert!(
@@ -220,7 +220,7 @@ fn external_focus_change_arms_group_reveal_once() {
 
     rig.state.ui.focus_group_reveal = false;
     let snapshot = snapshot_with_focused_pane(&rig.ws, target);
-    rig.fold(snapshot, true);
+    rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
 
     assert!(
         !rig.state.ui.focus_group_reveal,
@@ -291,7 +291,7 @@ fn answering_focused_agent_holds_the_pre_answer_order() {
         "the live rank moves the answered row down"
     );
 
-    rig.fold(after, true);
+    rig.fold(after, PaneFrame::Fresh, SnapshotSource::Produced);
 
     assert!(rig.state.ui.order_hold.is_some());
     assert_eq!(

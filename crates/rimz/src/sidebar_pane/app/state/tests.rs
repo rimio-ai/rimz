@@ -1099,7 +1099,7 @@ fn published_fast_success_keeps_refresh_alert_active() {
         snapshot: Box::new(snapshot(&ws)),
         role: FetchRole::Producer,
         phase: FetchPhase::Final,
-        pane_frame: PaneFrame::Held,
+        pane_frame: PaneFrame::Fresh,
         source: SnapshotSource::Published,
     });
 
@@ -1112,8 +1112,28 @@ fn published_fast_success_keeps_refresh_alert_active() {
             .alert
             .as_ref()
             .is_some_and(|alert| alert.is_active()),
-        "only a final success may mark the refresh loop recovered"
+        "only a produced success may mark producer health recovered"
     );
+}
+
+#[test]
+fn consumer_published_success_recovers_refresh_health() {
+    let ws = workspace();
+    let (_dir, mut h) = ApplyHarness::new(&ws);
+    h.health = degraded_health("snapshot failed: consumer read");
+
+    h.apply_outcome(FetchUpdate::Snapshot {
+        snapshot: Box::new(snapshot(&ws)),
+        role: FetchRole::Consumer,
+        phase: FetchPhase::Final,
+        pane_frame: PaneFrame::Held,
+        source: SnapshotSource::Published,
+    });
+
+    assert_eq!(h.health.failure_streak, 0);
+    let alert = h.health.alert.as_ref().expect("recovered alert lingers");
+    assert!(!alert.is_active());
+    assert!(alert.recovered_at.is_some());
 }
 
 #[test]

@@ -310,7 +310,7 @@ fn successful_fetch_converges_a_missed_body_filter_event() {
     crate::sidebar::body_filter::write(&rig.runtime, filter).expect("write shared filter");
 
     let snapshot = agent_snapshot(&rig.ws);
-    rig.fold(snapshot, true);
+    rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.make_up_filter, Some(filter));
 }
@@ -332,7 +332,7 @@ fn failed_or_rowless_birth_fold_does_not_publish_a_filter_clear() {
     );
 
     let rowless = snapshot(&rig.ws);
-    rig.fold(rowless, true);
+    rig.fold(rowless, PaneFrame::Fresh, SnapshotSource::Produced);
     assert_eq!(rig.state.ui.make_up_filter, None);
     assert_eq!(
         crate::sidebar::body_filter::load(&rig.runtime),
@@ -350,7 +350,7 @@ fn empty_body_filter_auto_clear_updates_the_shared_file() {
     );
 
     let snapshot = agent_snapshot(&rig.ws);
-    rig.fold(snapshot, true);
+    rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.make_up_filter, None);
     assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), None);

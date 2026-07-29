@@ -87,7 +87,11 @@ fn rejected_final_defers_one_gate_deadline_reevaluation() {
     let mut rig = Rig::new();
     rig.state.current = agent_snapshot(&rig.ws);
 
-    rig.fold(snapshot(&rig.ws), false);
+    rig.fold(
+        snapshot(&rig.ws),
+        PaneFrame::Held,
+        SnapshotSource::Published,
+    );
 
     assert_eq!(
         rig.state.gate.rule,
@@ -106,7 +110,11 @@ fn rejected_final_defers_one_gate_deadline_reevaluation() {
         "the reevaluation waits for the gate escape hatch"
     );
 
-    rig.fold(snapshot(&rig.ws), false);
+    rig.fold(
+        snapshot(&rig.ws),
+        PaneFrame::Held,
+        SnapshotSource::Published,
+    );
     assert!(
         rig.next_request().is_none(),
         "repeated rejected finals remain one deferred fetch"
@@ -125,7 +133,7 @@ fn self_close_watchdog_bypasses_unchanged_skip_while_empty_confirming() {
     empty.own_view = Some(empty_own_view());
     // Birth/resurrection path: no sibling observed yet, so zero enters the
     // confirm window and the watchdog forces a fresh producer fold.
-    rig.fold(empty, true);
+    rig.fold(empty, PaneFrame::Fresh, SnapshotSource::Produced);
     assert!(rig.state.self_close.confirming_empty());
 
     rig.state.last_self_close_check = Instant::now() - SELF_CLOSE_WATCHDOG;
