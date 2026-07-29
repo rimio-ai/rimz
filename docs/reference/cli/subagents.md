@@ -39,7 +39,7 @@ rimz subagents wait calm-fox --stream
 rimz subagents wait --json
 ```
 
-With no names, `wait` joins every live child of the caller. Explicit names must belong to that caller; one agent cannot use this doorway to collect another parent's children. Joins, `--any`, streaming, JSON, timeout behavior, output, and exit codes are the same durable machinery as [`rimz agents wait`](./agents.md#wait).
+With no names, `wait` joins every supervised child recorded beneath the caller, including children that finished before the command started. Explicit names must resolve inside that same set. Joins, `--any`, streaming, JSON, timeout behavior, output, and exit codes are the same durable machinery as [`rimz agents wait`](./agents.md#wait).
 
 The result remains available after the child pane closes because the run record, not the pane, is truth.
 
@@ -50,10 +50,11 @@ rimz subagents
 rimz subagents list --json
 rimz subagents stop calm-fox
 rimz subagents stop --all
-rimz subagents restart bright-owl
 ```
 
-Bare `rimz subagents` lists the caller's children, including retained completed children, with live status and the newest supervised-run outcome. `stop` and `restart` accept only live children of the caller. Restart preserves the existing parent and depth stamps.
+Bare `rimz subagents` lists the caller's children, including retained completed children, with live status and the newest supervised-run outcome. `stop` accepts only live children of the caller.
+
+`restart` and `resume` are deliberately absent in v1: the durable run record does not yet retain every launch argument needed to reproduce the supervised deadline, wait, and self-close contracts. Relaunch the same spec and prompt to start a fresh child, matching the Agent-tool model.
 
 Stopping a parent through `rimz agents stop` stops its live pane-backed children first. The same cascade applies when `rimz teams stop` stops that parent.
 
@@ -62,6 +63,8 @@ Every child is addressable as `@<petname>`. A supervised print-mode provider is 
 ## Depth and sidebar placement
 
 A `rimz subagents` launch counts as one normal agent-launch depth. `[agents] max-launch-depth` defaults to one, so a top-level agent may launch children and those children may not launch grandchildren. An over-limit call refuses before creating a run, pane, or provisional child.
+
+When `max-launch-depth` is raised above one, RimZ retains true depth but flattens display ancestry under the original top-level agent. The caller-scoped verbs follow that durable display ancestry: the top-level agent sees all descendants, while an intermediate child does not get a separate direct-child set.
 
 Provider-native children and RimZ-launched pane-backed children share the product term *subagent*: both appear in the subagent section nested under the top-level parent's card. No pane-backed child is duplicated as a top-level card.
 
