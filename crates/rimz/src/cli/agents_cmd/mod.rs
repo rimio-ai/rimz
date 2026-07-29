@@ -88,7 +88,7 @@ pub(in crate::cli) use stop::stop_resolved;
 use supervised::OutputFormat;
 use supervised::run::run_print;
 use top::{TopArgs, run_top};
-use wait::wait_agent;
+pub(in crate::cli) use wait::wait_agent;
 
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
 const CHILD_WAIT_POLL: Duration = Duration::from_millis(25);

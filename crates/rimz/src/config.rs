@@ -55,8 +55,8 @@ mod worktree;
 pub use accounts::{AccountBudgetConfigError, AccountsConfig, UsageLimitUsd};
 pub(crate) use agents::retired_append_prompt_key;
 pub use agents::{
-    AgentsConfig, CommandsConfig, LaunchPlacement, Profile, ProfilesConfig, RoleBinding, Team,
-    TeamsConfig,
+    AgentsConfig, CommandsConfig, LaunchPlacement, Profile, ProfilesConfig, RoleBinding,
+    SubagentsConfig, Team, TeamsConfig,
 };
 pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationRole, AnimationSpec, AnimationSpeed,

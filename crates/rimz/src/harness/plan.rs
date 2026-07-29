@@ -102,12 +102,25 @@ pub fn resolve_launch_ancestry_from_env(
     if top_level {
         return Ok(None);
     }
-    let Some(kind) = std::env::var(crate::harness::run::ENV_AGENT_KIND)
+    if !launch_ancestry_required(false) {
+        return Ok(None);
+    }
+    let caller = resolve_launch_caller_from_env(agents)?;
+    resolve_launch_ancestry(Some(caller), false, max_depth)
+}
+
+/// Resolve the pane-backed agent that owns the current process environment.
+///
+/// Command doorways that operate on the caller's descendants use the same
+/// stable launch-id rules as ancestry stamping, so a stale pane environment
+/// cannot select another agent's children.
+pub fn resolve_launch_caller_from_env(
+    agents: &[crate::agents::AgentState],
+) -> std::result::Result<&crate::agents::AgentState, LaunchAncestryError> {
+    let kind = std::env::var(crate::harness::run::ENV_AGENT_KIND)
         .ok()
         .filter(|value| !value.is_empty())
-    else {
-        return Ok(None);
-    };
+        .ok_or(LaunchAncestryError::UnresolvedCaller)?;
     let launch_id = std::env::var(crate::harness::run::ENV_AGENT_ID)
         .ok()
         .filter(|value| !value.is_empty());
@@ -115,8 +128,7 @@ pub fn resolve_launch_ancestry_from_env(
         .is_none()
         .then(crate::mux::ambient_pane_id)
         .flatten();
-    let caller = resolve_launch_caller(agents, &kind, launch_id.as_deref(), pane_id.as_ref())?;
-    resolve_launch_ancestry(Some(caller), false, max_depth)
+    resolve_launch_caller(agents, &kind, launch_id.as_deref(), pane_id.as_ref())
 }
 
 fn resolve_launch_caller<'a>(
