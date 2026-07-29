@@ -7,7 +7,7 @@ use crate::agents::{
     AgentState, AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
     ProviderCapacity, TurnPhase,
 };
-use crate::diag::record::DiagEvent;
+use crate::diag::record::{DiagEvent, LocalSessionBindRejectReason};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
 use crate::store::active_time::ActiveTimeRecord;
@@ -32,10 +32,22 @@ impl SidebarSnapshot {
     /// rows: the durable rollup and event log remain untouched.
     #[doc(hidden)]
     pub fn with_local_sessions(
+        self,
+        panes: &[PaneRef],
+        observations: Vec<LocalSessionObservation>,
+    ) -> Self {
+        self.with_local_sessions_and_diagnostics(panes, observations)
+            .0
+    }
+
+    /// Diagnostic-carrying form used by the shared enrichment spine: the
+    /// elected producer emits the events, while a disabled consumer sink and
+    /// direct snapshot callers discard them.
+    pub(crate) fn with_local_sessions_and_diagnostics(
         mut self,
         panes: &[PaneRef],
         mut observations: Vec<LocalSessionObservation>,
-    ) -> Self {
+    ) -> (Self, Vec<DiagEvent>) {
         observations.sort_by(|left, right| {
             left.created_at
                 .cmp(&right.created_at)
@@ -44,6 +56,7 @@ impl SidebarSnapshot {
         let mut used_panes = HashSet::new();
         let mut used_sessions = BTreeSet::new();
         let mut bindings = Vec::new();
+        let mut diagnostics = Vec::new();
         let binding_index = PaneBindingIndex::new(&self.agents);
 
         for (observation_index, observation) in observations.iter().enumerate() {
@@ -61,6 +74,22 @@ impl SidebarSnapshot {
                 })
             });
             if let Some(pane) = stamped {
+                if binding_index
+                    .latest_launch_agent(pane, &observation.kind)
+                    .is_some_and(|launch| {
+                        launch.agent_id != observation.session_id
+                            && launch.registered_at.is_some_and(|launched_at| {
+                                observation.created_at < launched_at
+                                    || observation.last_activity < launched_at
+                            })
+                    })
+                {
+                    diagnostics.push(DiagEvent::GhostSessionBind {
+                        agent_kind: observation.kind.clone(),
+                        agent_session_id: observation.session_id.clone(),
+                        pane_id: pane.pane_id.clone(),
+                    });
+                }
                 // Exact durable identity consumes both sides before lifecycle
                 // freshness is considered, so a stale provider fold cannot
                 // later bind this pane to another same-cwd session.
@@ -124,17 +153,39 @@ impl SidebarSnapshot {
             },
         );
         for (observation_index, observation, fresh_binding_at) in fresh {
-            let viable = panes
+            let mut viable = Vec::new();
+            let mut rejected = Vec::new();
+            let mut legacy_viable = Vec::new();
+            for pane in panes
                 .iter()
                 .filter(|pane| !used_panes.contains(&pane.pane_id))
                 .filter(|pane| pane.resumed_session_id.is_none())
                 .filter(|pane| local_pane_matches(pane, observation))
-                .filter(|pane| match pane.pane_process_start {
-                    Some(start) => start <= fresh_binding_at && observation.last_activity >= start,
-                    None => observation.first_event_at.is_some(),
-                })
-                .collect::<Vec<_>>();
+            {
+                if legacy_fresh_pane_allows_bind(pane, observation, fresh_binding_at) {
+                    legacy_viable.push(pane);
+                }
+                match fresh_pane_allows_bind(&binding_index, pane, observation, fresh_binding_at) {
+                    Ok(()) => viable.push(pane),
+                    Err(reason) => rejected.push((pane, reason)),
+                }
+            }
             let Some(pane) = unique_closest_pane(&viable) else {
+                // Record only a bind the old fail-open fallback would actually
+                // have selected, not every historical rollout rejected while
+                // scanning a busy same-cwd room.
+                if let Some(legacy_pane) = unique_closest_pane(&legacy_viable)
+                    && let Some((_, reason)) = rejected
+                        .iter()
+                        .find(|(pane, _)| pane.pane_id == legacy_pane.pane_id)
+                {
+                    diagnostics.push(DiagEvent::LocalSessionBindRejected {
+                        agent_kind: observation.kind.clone(),
+                        agent_session_id: observation.session_id.clone(),
+                        pane_id: legacy_pane.pane_id.clone(),
+                        reason: *reason,
+                    });
+                }
                 continue;
             };
             used_panes.insert(pane.pane_id.clone());
@@ -145,7 +196,7 @@ impl SidebarSnapshot {
         for (observation_index, pane) in bindings {
             merge_bound_local_session(&mut self.agents, &observations[observation_index], &pane);
         }
-        self
+        (self, diagnostics)
     }
 
     /// Fold live multiplexer panes into the sidebar view-model. This reducer is
@@ -374,6 +425,48 @@ impl SidebarSnapshot {
         }
         self
     }
+}
+
+fn legacy_fresh_pane_allows_bind(
+    pane: &PaneRef,
+    observation: &LocalSessionObservation,
+    fresh_binding_at: jiff::Timestamp,
+) -> bool {
+    match pane.pane_process_start {
+        Some(start) => start <= fresh_binding_at && observation.last_activity >= start,
+        None => observation.first_event_at.is_some(),
+    }
+}
+
+fn fresh_pane_allows_bind(
+    binding_index: &PaneBindingIndex<'_>,
+    pane: &PaneRef,
+    observation: &LocalSessionObservation,
+    fresh_binding_at: jiff::Timestamp,
+) -> Result<(), LocalSessionBindRejectReason> {
+    let launch_owner = binding_index.latest_launch_agent(pane, &observation.kind);
+    let stamped_owner = launch_owner.or_else(|| binding_index.stamped_agent(pane));
+    if stamped_owner.is_some_and(|owner| {
+        owner.kind == observation.kind
+            && owner.agent_id != observation.session_id
+            && !owner.agent_id.is_provisional()
+    }) {
+        return Err(LocalSessionBindRejectReason::PaneReserved);
+    }
+
+    // The strongest known lower bound wins. A durable launch can postdate a
+    // shell-root process start, while a provider-process start can postdate an
+    // older retained launch stamp.
+    let clock = pane
+        .pane_process_start
+        .into_iter()
+        .chain(launch_owner.and_then(|owner| owner.registered_at))
+        .max()
+        .ok_or(LocalSessionBindRejectReason::NoEvidence)?;
+    if clock > fresh_binding_at || observation.last_activity < clock {
+        return Err(LocalSessionBindRejectReason::StaleLaunchClock);
+    }
+    Ok(())
 }
 
 fn local_pane_matches(pane: &PaneRef, observation: &LocalSessionObservation) -> bool {

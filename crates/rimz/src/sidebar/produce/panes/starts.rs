@@ -31,14 +31,12 @@ fn pane_process_agent_kind(process: &crate::sidebar::frame::PaneProcess) -> Opti
 /// Stamp the in-pane agent CLI's `/proc` start onto agent panes the backend
 /// left without one — every pane today: tmux has no per-pane process-start
 /// format variable, and Zellij 0.44 emits no process fields (`PaneTopologyPane`
-/// keeps reading builds that do). A startless pane leaves the cwd-fallback guard
-/// (`pane_start_allows_bind`) blind, so a stale daemon-mode Codex session would
-/// latch onto a freshly-started pane in the same cwd and project its old stats.
-/// Runs at frame production, in both produce arms, so the published pane frame
-/// carries the stamp and every reader — the in-process produce *and* the
-/// consumer in-process fold (`read_published_snapshot`) — sees the guard fire;
-/// stamping after the fold's frame read would leave the consumer lane blind
-/// again.
+/// keeps reading builds that do). This best-effort stamp lets cwd fallback bind
+/// before a hook when no durable RimZ launch clock exists; a pane with neither
+/// clock now fails closed. Runs at frame production, in both produce arms, so
+/// the published pane frame carries the stamp and every reader — the in-process
+/// produce *and* the consumer in-process fold (`read_published_snapshot`) —
+/// makes the same evidence decision.
 ///
 /// Only panes in `unstamped` — left startless by the fresh read itself
 /// ([`natively_unstamped`]) — are touched; a native start is authoritative.

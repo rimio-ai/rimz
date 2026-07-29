@@ -571,7 +571,12 @@ fn enrich_core(
     // the strict live-pane binding and discards paneless observations.
     if let Some(frame) = frame {
         let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None);
-        snapshot = snapshot.with_local_sessions(&panes, opts.agent_projection.local_sessions);
+        let (next_snapshot, diagnostics) = snapshot
+            .with_local_sessions_and_diagnostics(&panes, opts.agent_projection.local_sessions);
+        snapshot = next_snapshot;
+        for event in diagnostics {
+            diag.emit(event);
+        }
     }
 
     // Fold each session's rich statusline context onto its agent state

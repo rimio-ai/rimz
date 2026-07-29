@@ -98,6 +98,37 @@ impl<'a> PaneBindingIndex<'a> {
             .min_by(|left, right| compare_same_pane_owners(left, right))
     }
 
+    /// The newest RimZ-launched root stamped on this live pane. Unlike
+    /// [`Self::stamped_agent`], this deliberately ignores the adapter's
+    /// same-pane primary policy: a later launch is the pane-incarnation clock
+    /// even while an older session remains retained in the rollup.
+    pub(super) fn latest_launch_agent(
+        &self,
+        pane: &PaneRef,
+        kind: &AgentKind,
+    ) -> Option<&'a AgentState> {
+        self.stamped_by_pane
+            .get(&pane.pane_id)?
+            .iter()
+            .filter_map(|index| self.agents.get(*index))
+            .filter(|agent| {
+                agent.parent_agent_id.is_none()
+                    && agent.kind == *kind
+                    && (agent.launch_id.is_some() || agent.agent_id.is_provisional())
+            })
+            .filter(|agent| {
+                agent
+                    .pane
+                    .as_ref()
+                    .is_some_and(|stamped| stamped_agent_matches_live_pane(agent, stamped, pane))
+            })
+            .max_by(|left, right| {
+                left.registered_at
+                    .cmp(&right.registered_at)
+                    .then_with(|| left.agent_id.cmp(&right.agent_id))
+            })
+    }
+
     pub(super) fn stamped_launched_child(&self, pane: &PaneRef) -> Option<&'a AgentState> {
         self.stamped_by_pane
             .get(&pane.pane_id)?
@@ -466,9 +497,10 @@ fn stamp_owned_by_live_pane_root(agent: &AgentState, stamped: &PaneRef, pane: &P
         && owner.pid == live_pid
 }
 
-/// Defensive guard for read-time binds: when the pane's process start is known,
-/// a session whose `last_activity` predates that start belongs to an older
-/// instance, not the process now in the pane — so it must not bind.
+/// Defensive guard for exact-identity read-time binds: when the pane's process
+/// start is known, a session whose `last_activity` predates that start belongs
+/// to an older instance, not the process now in the pane. The cwd fallback has
+/// a stricter evidence gate and does not rely on this fail-open predicate.
 pub fn pane_start_allows_bind(last_activity: Timestamp, pane: &PaneRef) -> bool {
     pane.pane_process_start
         .is_none_or(|start| last_activity >= start)

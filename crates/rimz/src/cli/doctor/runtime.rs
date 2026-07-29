@@ -1200,6 +1200,7 @@ fn classify_diagnostic(
         | DiagEvent::GateHold { .. }
         | DiagEvent::TopologyWriteRejected { .. }
         | DiagEvent::NewbornQuarantined { .. }
+        | DiagEvent::LocalSessionBindRejected { .. }
         | DiagEvent::ClientReaped { settled: true, .. } => model::DoctorState::Contained,
         DiagEvent::FrameShrinkVerified { .. }
         | DiagEvent::PaneCarryRefuted { .. }
@@ -1261,6 +1262,7 @@ fn classify_diagnostic(
         | DiagEvent::RowConflict { .. }
         | DiagEvent::DuplicatePaneId { .. }
         | DiagEvent::ForeignSessionPane { .. }
+        | DiagEvent::GhostSessionBind { .. }
         | DiagEvent::MixedBuildWriters { .. }
         | DiagEvent::RendererPanic { .. }
         | DiagEvent::RendererSignalDeath { .. }

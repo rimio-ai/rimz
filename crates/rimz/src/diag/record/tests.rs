@@ -49,6 +49,23 @@ fn hosted_carry(reason: HostedCarryDropReason) -> DiagEvent {
     }
 }
 
+fn local_bind_rejected(reason: LocalSessionBindRejectReason) -> DiagEvent {
+    DiagEvent::LocalSessionBindRejected {
+        agent_kind: AgentKind::new_unchecked("codex"),
+        agent_session_id: AgentSessionId::from("sess-old"),
+        pane_id: pane("terminal_5"),
+        reason,
+    }
+}
+
+fn ghost_bind() -> DiagEvent {
+    DiagEvent::GhostSessionBind {
+        agent_kind: AgentKind::new_unchecked("codex"),
+        agent_session_id: AgentSessionId::from("sess-old"),
+        pane_id: pane("terminal_5"),
+    }
+}
+
 fn frame_stamp(produced_at_ms: u64) -> FrameStamp {
     FrameStamp {
         produced_at_ms: Some(produced_at_ms),
@@ -219,6 +236,7 @@ fn severity_table_pins_conditional_and_regression_categories() {
         tick_budget_breach(TickLoop::CacheRefresh, 20, Some(8_000)),
         hosted_carry(HostedCarryDropReason::ProbeReportsAbsent),
         hosted_carry(HostedCarryDropReason::CarryExpired),
+        local_bind_rejected(LocalSessionBindRejectReason::NoEvidence),
         DiagEvent::RendererExit {
             cause: RendererExitCause::SelfCloseEmptyTab,
         },
@@ -263,6 +281,7 @@ fn severity_table_pins_conditional_and_regression_categories() {
         },
     ];
     let error = [
+        ghost_bind(),
         DiagEvent::RendererPanic {
             message: "boom".to_owned(),
             backtrace: None,
@@ -396,6 +415,20 @@ fn identity_keys_partition_episodes_and_subjects() {
         key(hosted_carry(HostedCarryDropReason::ProbeReportsAbsent)),
         key(hosted_carry(HostedCarryDropReason::ForegroundKindMismatch))
     );
+    assert_ne!(
+        key(local_bind_rejected(
+            LocalSessionBindRejectReason::NoEvidence
+        )),
+        key(local_bind_rejected(
+            LocalSessionBindRejectReason::StaleLaunchClock
+        ))
+    );
+    assert_ne!(
+        key(local_bind_rejected(
+            LocalSessionBindRejectReason::PaneReserved
+        )),
+        key(ghost_bind())
+    );
     let renderer_death = |signal, exit_code, stderr: &str| {
         key(DiagEvent::RendererSignalDeath {
             signal,
@@ -432,6 +465,14 @@ fn representative_events_keep_json_wire_shape() {
         (
             r#"{"kind":"hosted_carry_dropped","pane_id":"zellij:terminal_5","agent_kind":"codex","reason":"foreground_kind_mismatch"}"#,
             hosted_carry(HostedCarryDropReason::ForegroundKindMismatch),
+        ),
+        (
+            r#"{"kind":"local_session_bind_rejected","agent_kind":"codex","agent_session_id":"sess-old","pane_id":"zellij:terminal_5","reason":"stale_launch_clock"}"#,
+            local_bind_rejected(LocalSessionBindRejectReason::StaleLaunchClock),
+        ),
+        (
+            r#"{"kind":"ghost_session_bind","agent_kind":"codex","agent_session_id":"sess-old","pane_id":"zellij:terminal_5"}"#,
+            ghost_bind(),
         ),
         (
             r#"{"kind":"renderer_exit","cause":"self_close_empty_tab"}"#,

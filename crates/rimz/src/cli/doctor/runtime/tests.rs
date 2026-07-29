@@ -1,8 +1,8 @@
 use super::*;
 use rimz::diag::record::{
     AnomalyKind, DiagEnvelope, DiagEvent, EventsSig, FetchFoldCause, FetchFoldCauseStats,
-    FrameStamp, HostedCarryDropReason, ObserveRole, PaneDropEvidence, PaneDropViewEvidence,
-    TickLoop,
+    FrameStamp, HostedCarryDropReason, LocalSessionBindRejectReason, ObserveRole, PaneDropEvidence,
+    PaneDropViewEvidence, TickLoop,
 };
 use rimz::remote::link::LinkTier;
 
@@ -665,6 +665,25 @@ fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
             hosted(HostedCarryDropReason::ForegroundKindMismatch),
             model::DoctorState::Investigate,
             model::DoctorImpact::Warn,
+        ),
+        (
+            DiagEvent::LocalSessionBindRejected {
+                agent_kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                agent_session_id: "sess-old".into(),
+                pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_5"),
+                reason: LocalSessionBindRejectReason::StaleLaunchClock,
+            },
+            model::DoctorState::Contained,
+            model::DoctorImpact::Info,
+        ),
+        (
+            DiagEvent::GhostSessionBind {
+                agent_kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                agent_session_id: "sess-old".into(),
+                pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_5"),
+            },
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Alarm,
         ),
         (
             DiagEvent::LinkAlert {

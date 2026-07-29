@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::agents::{LocalSessionObservation, LocalSessionProjection, LocalSessionState};
+use crate::diag::record::{DiagEvent, LocalSessionBindRejectReason};
 use crate::ids::{AgentKind, AgentSessionId};
 
 fn observation(
@@ -72,7 +73,8 @@ fn identity_observation(kind: &str, id: &str, last_secs_ago: i64) -> LocalSessio
 
 #[test]
 fn stock_kiro_session_bootstraps_only_when_a_live_pane_binds() {
-    let pane = pane("%1", "kiro-cli chat --v3", "/repo/main");
+    let mut pane = pane("%1", "kiro-cli chat --v3", "/repo/main");
+    pane.pane_process_start = Some(ago(21));
     let snapshot = room(Vec::new())
         .with_local_sessions(
             std::slice::from_ref(&pane),
@@ -93,7 +95,8 @@ fn stock_kiro_session_bootstraps_only_when_a_live_pane_binds() {
 
 #[test]
 fn local_session_binding_normalizes_the_pane_workspace() {
-    let pane = pane("%1", "kiro-cli chat --v3", "/repo/tmp/../main");
+    let mut pane = pane("%1", "kiro-cli chat --v3", "/repo/tmp/../main");
+    pane.pane_process_start = Some(ago(21));
     let snapshot = room(Vec::new()).with_local_sessions(
         std::slice::from_ref(&pane),
         vec![event_observation("sess-live", 20, 10)],
@@ -107,7 +110,8 @@ fn local_session_binding_normalizes_the_pane_workspace() {
 fn exact_resume_wins_before_fresh_one_to_one_pairing() {
     let mut resumed = pane("%1", "kiro-cli chat --v3", "/repo/main");
     resumed.resumed_session_id = Some(AgentSessionId::from("sess-b"));
-    let other = pane("%2", "kiro-cli chat --v3", "/repo/main");
+    let mut other = pane("%2", "kiro-cli chat --v3", "/repo/main");
+    other.pane_process_start = Some(ago(21));
     let observations = vec![
         event_observation("sess-a", 20, 10),
         event_observation("sess-b", 20, 10),
@@ -133,13 +137,16 @@ fn ambiguous_fresh_candidates_stay_identityless_idle_agent_rows() {
     let second = pane("%2", "kiro-cli chat --v3", "/repo/main");
     let mut snapshot = room(Vec::new());
     snapshot.wired_kinds = vec!["kiro".to_owned()];
-    let snapshot = snapshot
-        .with_local_sessions(
-            &[first.clone(), second.clone()],
-            vec![event_observation("sess-a", 20, 10)],
-        )
-        .with_live_panes(vec![first, second], None);
+    let (snapshot, diagnostics) = snapshot.with_local_sessions_and_diagnostics(
+        &[first.clone(), second.clone()],
+        vec![event_observation("sess-a", 20, 10)],
+    );
+    let snapshot = snapshot.with_live_panes(vec![first, second], None);
     assert!(snapshot.agents.is_empty());
+    assert!(
+        diagnostics.is_empty(),
+        "an ambiguous legacy fallback never selected a bind to reject"
+    );
     assert!(rows(&snapshot).iter().all(|row| row.is_agent()));
     assert!(
         rows(&snapshot)
@@ -232,6 +239,26 @@ fn recordless_session_without_process_start_stays_a_process_row() {
 
     assert!(snapshot.agents.is_empty());
     assert!(rows(&snapshot).iter().all(|row| row.is_process()));
+}
+
+#[test]
+fn evidence_free_local_session_bind_fails_closed_with_diagnostic() {
+    let pane = pane("%1", "kiro-cli-chat", "/repo/main");
+    let (snapshot, diagnostics) = room(Vec::new()).with_local_sessions_and_diagnostics(
+        std::slice::from_ref(&pane),
+        vec![event_observation("sess-unproven", 20, 10)],
+    );
+
+    assert!(snapshot.agents.is_empty());
+    assert_eq!(
+        diagnostics,
+        [DiagEvent::LocalSessionBindRejected {
+            agent_kind: AgentKind::new_unchecked("kiro"),
+            agent_session_id: AgentSessionId::from("sess-unproven"),
+            pane_id: pane.pane_id,
+            reason: LocalSessionBindRejectReason::NoEvidence,
+        }]
+    );
 }
 
 #[test]
@@ -650,6 +677,120 @@ fn identity_only_session_adopts_launch_identity_as_idle() {
 }
 
 #[test]
+fn stale_rollout_cannot_adopt_a_fresh_launch_or_add_session_history() {
+    let mut provisional = agent("codex", "launch_abc", AgentStatus::Idle, 1).in_pane("%1");
+    provisional.launch_id = Some(provisional.agent_id.clone());
+    provisional.registered_at = Some(ago(5));
+    let pane = pane("%1", "codex", "/repo/main");
+
+    let (snapshot, diagnostics) = room(vec![provisional]).with_local_sessions_and_diagnostics(
+        std::slice::from_ref(&pane),
+        vec![identity_observation("codex", "session-old", 10)],
+    );
+    let snapshot = snapshot.with_live_panes(vec![pane.clone()], None);
+
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .all(|agent| agent.agent_id != "session-old")
+    );
+    let launch = rollup_agent(&snapshot, "launch_abc");
+    assert!(launch.transcript_path.is_none());
+    assert!(
+        !row(&snapshot, "launch_abc")
+            .as_agent()
+            .expect("launch agent row")
+            .has_session_history()
+    );
+    assert_eq!(
+        diagnostics,
+        [DiagEvent::LocalSessionBindRejected {
+            agent_kind: AgentKind::new_unchecked("codex"),
+            agent_session_id: AgentSessionId::from("session-old"),
+            pane_id: pane.pane_id,
+            reason: LocalSessionBindRejectReason::StaleLaunchClock,
+        }]
+    );
+}
+
+#[test]
+fn launch_clock_admits_a_session_created_after_the_launch() {
+    let mut provisional = agent("codex", "launch_abc", AgentStatus::Idle, 1).in_pane("%1");
+    provisional.launch_id = Some(provisional.agent_id.clone());
+    provisional.registered_at = Some(ago(30));
+    let pane = pane("%1", "codex", "/repo/main");
+
+    let (snapshot, diagnostics) = room(vec![provisional]).with_local_sessions_and_diagnostics(
+        std::slice::from_ref(&pane),
+        vec![identity_observation("codex", "session-current", 1)],
+    );
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(
+        rollup_agent(&snapshot, "session-current")
+            .pane
+            .as_ref()
+            .map(|pane| &pane.pane_id),
+        Some(&pane.pane_id)
+    );
+}
+
+#[test]
+fn registered_session_reserves_its_launch_pane_from_other_rollouts() {
+    let mut current = agent("codex", "session-current", AgentStatus::Idle, 1).in_pane("%1");
+    current.launch_id = Some(AgentSessionId::from("launch_abc"));
+    current.registered_at = Some(ago(30));
+    let pane = pane("%1", "codex", "/repo/main");
+
+    let (snapshot, diagnostics) = room(vec![current]).with_local_sessions_and_diagnostics(
+        std::slice::from_ref(&pane),
+        vec![identity_observation("codex", "session-other", 1)],
+    );
+
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .all(|agent| agent.agent_id != "session-other")
+    );
+    assert_eq!(
+        diagnostics,
+        [DiagEvent::LocalSessionBindRejected {
+            agent_kind: AgentKind::new_unchecked("codex"),
+            agent_session_id: AgentSessionId::from("session-other"),
+            pane_id: pane.pane_id,
+            reason: LocalSessionBindRejectReason::PaneReserved,
+        }]
+    );
+}
+
+#[test]
+fn exact_old_stamp_beside_a_newer_launch_reports_a_ghost_bind() {
+    let mut old = agent("codex", "session-old", AgentStatus::Idle, 0).in_pane("%1");
+    old.launch_id = Some(AgentSessionId::from("launch_old"));
+    old.registered_at = Some(ago(60));
+    let mut fresh = agent("codex", "launch_new", AgentStatus::Idle, 1).in_pane("%1");
+    fresh.launch_id = Some(fresh.agent_id.clone());
+    fresh.registered_at = Some(ago(5));
+    let pane = pane("%1", "codex", "/repo/main");
+
+    let (_, diagnostics) = room(vec![old, fresh]).with_local_sessions_and_diagnostics(
+        std::slice::from_ref(&pane),
+        vec![identity_observation("codex", "session-old", 10)],
+    );
+
+    assert_eq!(
+        diagnostics,
+        [DiagEvent::GhostSessionBind {
+            agent_kind: AgentKind::new_unchecked("codex"),
+            agent_session_id: AgentSessionId::from("session-old"),
+            pane_id: pane.pane_id,
+        }]
+    );
+}
+
+#[test]
 fn ended_session_cannot_adopt_a_provisional_launch_identity() {
     let mut provisional = agent("codex", "launch_abc", AgentStatus::Running, 1).in_pane("%1");
     provisional.name = Some("writer".to_owned());
@@ -711,9 +852,10 @@ fn ownerless_session_stamped_to_an_absent_pane_cannot_fresh_bind_elsewhere() {
 }
 
 #[test]
-fn reborn_unstamped_session_can_fresh_bind() {
+fn reborn_unstamped_session_can_fresh_bind_with_process_clock() {
     let durable = agent("codex", "session-a", AgentStatus::Running, 0).worktree("/repo/main");
-    let pane = pane("%1", "codex", "/repo/main");
+    let mut pane = pane("%1", "codex", "/repo/main");
+    pane.pane_process_start = Some(ago(21));
 
     let snapshot = room(vec![durable]).with_local_sessions(
         std::slice::from_ref(&pane),
