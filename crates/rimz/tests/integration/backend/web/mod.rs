@@ -106,6 +106,8 @@ fn continuous_output_keeps_websocket_attached() {
 
 #[test]
 fn paced_tmux_border_drag_tracks_before_release_and_lands_at_endpoint() {
+    const MOTION_DURATION: Duration = Duration::from_millis(4_800);
+
     let stack = require_web_stack!("tmux");
     let fixture = LiveWebFixture::new(&stack);
     fixture.split_horizontally();
@@ -119,18 +121,22 @@ fn paced_tmux_border_drag_tracks_before_release_and_lands_at_endpoint() {
     let widths = fixture.pane_widths();
     let initial_width = widths[0];
     let divider = widths[0] + 1;
+    let motion_duration_ms = MOTION_DURATION.as_millis();
     let expression = format!(
         r#"(()=>{{
 const term=window.term;
 const send=(code,x,final="M")=>term.input(`\x1b[<${{code}};${{x}};10${{final}}`,true);
 send(0,{divider});
 let step=0;
+const startedAt=performance.now();
 window.__rimzDragMotionDone=false;
+window.__rimzDragMotionSteps=step;
 window.__rimzDragTimer=setInterval(()=>{{
   step++;
+  window.__rimzDragMotionSteps=step;
   const x={divider}+(step%21)-10;
   send(32,x);
-  if(step===300){{
+  if(performance.now()-startedAt>={motion_duration_ms}){{
     clearInterval(window.__rimzDragTimer);
     send(32,{divider}+10);
     window.__rimzDragMotionDone=true;
@@ -140,17 +146,18 @@ return "started";
 }})()"#
     );
     support::eval_string(&tab, &expression).expect("start browser drag");
-    let motion_deadline = Instant::now() + Duration::from_secs(7);
+    let motion_deadline = Instant::now() + MOTION_DURATION + Duration::from_secs(5);
     loop {
         let done = support::eval_string(&tab, "String(Boolean(window.__rimzDragMotionDone))")
             .expect("read browser drag progress");
         if done == "true" {
             break;
         }
-        assert!(
-            Instant::now() < motion_deadline,
-            "browser did not finish the paced motion sequence"
-        );
+        if Instant::now() >= motion_deadline {
+            let steps = support::eval_string(&tab, "String(window.__rimzDragMotionSteps)")
+                .unwrap_or_else(|err| format!("unavailable ({err})"));
+            panic!("browser did not finish the paced motion sequence; callbacks={steps}");
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
 
