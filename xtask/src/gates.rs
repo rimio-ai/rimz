@@ -706,7 +706,11 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
 
     if command.names.is_empty() {
         let mut cargo_args = nextest_args("run");
+        let streams_output = requests_no_capture(&command.forwarded);
         cargo_args.extend(command.forwarded);
+        if streams_output {
+            return run_streaming_tests(root, cargo_args, &env, &invocation, args);
+        }
         let captured = capture_cargo_task(
             root,
             "test",
@@ -837,7 +841,16 @@ fn run_named_tests(
 
     let mut run_args = nextest_args("run");
     run_args.extend(["-E".to_owned(), filterset]);
+    let streams_output = requests_no_capture(&command.forwarded);
     run_args.extend(command.forwarded);
+    if streams_output {
+        report_test_selection(&command.names, &matches);
+        run_streaming_tests(root, run_args, env, invocation, &command.names)?;
+        if !matches.unmatched.is_empty() {
+            bail!("some requested test names matched no tests");
+        }
+        return Ok(());
+    }
     let captured = capture_cargo_task(
         root,
         "test",
@@ -850,6 +863,42 @@ fn run_named_tests(
     finish_cargo_task("test", captured, Some(extract_test_summary), invocation)?;
     if !matches.unmatched.is_empty() {
         bail!("some requested test names matched no tests");
+    }
+    Ok(())
+}
+
+/// `--no-capture` only means anything when the test's own output reaches the
+/// operator, so a run that asks for it bypasses the spinner and inherits the
+/// terminal. Both spellings appear in the wild, and libtest's sits after `--`.
+fn requests_no_capture(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.as_str(), "--no-capture" | "--nocapture"))
+}
+
+/// Run the tests on the operator's stdio. Nextest prints its own summary here,
+/// so the gate line is the exit classification alone.
+fn run_streaming_tests(
+    root: &Path,
+    cargo_args: Vec<String>,
+    env: &[(&str, PathBuf)],
+    invocation: &str,
+    requested: &[String],
+) -> Result<()> {
+    let status = crate::runner::run_inherited(
+        root,
+        "cargo",
+        cargo_args,
+        env,
+        &["NO_COLOR"],
+        RtkPolicy::Configured,
+    )?;
+    if nextest_matched_no_tests(status.code(), "") {
+        report_zero_test_match(requested);
+        bail!("no tests matched");
+    }
+    if !status.success() {
+        report_task_failure("test", "test output streamed above", invocation);
+        bail!("test failed");
     }
     Ok(())
 }
@@ -1345,6 +1394,20 @@ Summary [   12.3s] 2611 tests run: 2611 passed, 42 skipped
             ]),
             ["-P", "live", "--profile=journey"].map(str::to_owned)
         );
+    }
+
+    #[test]
+    fn no_capture_is_recognized_in_both_spellings_and_after_the_separator() {
+        assert!(requests_no_capture(&["--no-capture".to_owned()]));
+        assert!(requests_no_capture(&[
+            "--".to_owned(),
+            "--nocapture".to_owned()
+        ]));
+        assert!(!requests_no_capture(&[
+            "auth".to_owned(),
+            "-P".to_owned(),
+            "live".to_owned()
+        ]));
     }
 
     #[test]

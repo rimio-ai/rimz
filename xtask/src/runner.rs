@@ -77,6 +77,28 @@ where
     ensure_success(program, &args, status)
 }
 
+/// Run `program` on the operator's own stdio: nothing is captured, so the child
+/// writes straight to the terminal. Returns the exit status rather than failing
+/// on it, leaving the caller to classify what a non-zero code means.
+pub(crate) fn run_inherited<I, S>(
+    root: &Path,
+    program: &str,
+    args: I,
+    envs: &[(&str, PathBuf)],
+    removed_envs: &[&str],
+    rtk_policy: RtkPolicy,
+) -> Result<ExitStatus>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let args: Vec<_> = args.into_iter().collect();
+    let mut child = build_command(root, program, &args, envs, removed_envs, rtk_policy)
+        .spawn()
+        .with_context(|| format!("running `{program}`"))?;
+    wait_bounded(&mut child, program, &args, &mut || {})
+}
+
 pub(crate) fn run_streamed<I, S>(
     root: &Path,
     program: &str,

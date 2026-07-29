@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use rimz::diag::record::DiagEvent;
 use tempfile::TempDir;
 
 use super::{RoomHarness, SETTLE, rimz_bin, session_start_at};
@@ -23,6 +24,9 @@ use crate::common::{
 };
 
 const CAPTURE_BUDGET: Duration = Duration::from_secs(30);
+
+/// Trailing diagnostic records carried into a width assertion's message.
+const DIAG_EVIDENCE_RECORDS: usize = 40;
 
 /// Shell line that runs the renderer over `env`'s store but with its own short
 /// `XDG_RUNTIME_DIR` (the wakeup socket must stay under the AF_UNIX limit).
@@ -248,19 +252,18 @@ fn tmux_sidebar_keeps_width_when_work_pane_closes() {
     );
     tmux(&socket, &["select-layout", "-t", "room", "even-horizontal"]);
 
-    let state = rimz::StatePaths::under(env.workspace_id.clone(), &env.state_root())
-        .expect("test state paths");
-    let diag_path = rimz::diag::DiagSink::under(state.root, env.workspace_id.clone(), "room", None)
-        .log_path()
-        .expect("diagnostic path");
-    let baseline = read_until(
-        &diag_path,
-        |text| text.contains("\"sidebar_width_settle\"") && text.contains("\"settled_cols\":40"),
+    env.wait_for_diag(
+        "room",
+        |record| {
+            matches!(
+                record.event,
+                DiagEvent::SidebarWidthSettle {
+                    settled_cols: 40,
+                    ..
+                }
+            )
+        },
         CAPTURE_BUDGET,
-    );
-    assert!(
-        baseline.contains("\"settled_cols\":40"),
-        "the renderer never established its 40-column baseline:\n{baseline}"
     );
     assert_eq!(tmux_pane_width(&socket, &sidebar), Some(40));
 
@@ -285,7 +288,7 @@ fn tmux_sidebar_keeps_width_when_work_pane_closes() {
         &socket,
         &["show-option", "-qv", "-t", "room", "@rimz_sidebar_cols"],
     );
-    let diag = std::fs::read_to_string(&diag_path).unwrap_or_default();
+    let diag = env.diag_tail("room", DIAG_EVIDENCE_RECORDS);
     assert_eq!(
         settled,
         Some(40),
@@ -1255,17 +1258,6 @@ fn capture_all_until(
             return last;
         }
         std::thread::sleep(Duration::from_millis(150));
-    }
-}
-
-fn read_until(path: &Path, pred: impl Fn(&str) -> bool, budget: Duration) -> String {
-    let deadline = Instant::now() + budget;
-    loop {
-        let text = std::fs::read_to_string(path).unwrap_or_default();
-        if pred(&text) || Instant::now() >= deadline {
-            return text;
-        }
-        std::thread::sleep(Duration::from_millis(50));
     }
 }
 

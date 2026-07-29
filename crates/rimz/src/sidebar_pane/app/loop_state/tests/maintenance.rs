@@ -119,10 +119,21 @@ fn rejected_final_defers_one_gate_deadline_reevaluation() {
         rig.next_request().is_none(),
         "repeated rejected finals remain one deferred fetch"
     );
-    assert_eq!(
-        rig.fetch.next_deadline(),
-        Some(deadline),
-        "the first gate deadline remains authoritative"
+    // Each rejection derives the same absolute deadline from two clocks: a
+    // nanosecond `Instant` plus a gate remainder the wall clock quantizes to
+    // whole milliseconds. Re-arming therefore lands within one quantum of the
+    // first deadline rather than exactly on it; a second reevaluation of its
+    // own would sit seconds out.
+    let rearmed = rig
+        .fetch
+        .next_deadline()
+        .expect("the deferred reevaluation survives");
+    let drift = rearmed
+        .saturating_duration_since(deadline)
+        .max(deadline.saturating_duration_since(rearmed));
+    assert!(
+        drift <= Duration::from_millis(1),
+        "the first gate deadline remains authoritative; moved by {drift:?}"
     );
 }
 

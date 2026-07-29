@@ -18,6 +18,8 @@ Match the size of the change to the size of the ask, and leave the refactor you 
 
 The house style is explicit Rust — typed IDs across module boundaries, structured parsers over ad-hoc string work, state machines where a bool would drift, typed `Result` errors at library boundaries — and [rust-conventions.md](./docs/contributing/rust-conventions.md) is its authority. `unwrap`/`expect`/panic belong in tests, build scripts, and provably-impossible states — leave a comment naming why the state is impossible.
 
+For an event or timing bug, write the red end-to-end test first and prove the proposed signal reaches the consumer's decision point: producer emission and timestamp freshness are not evidence of consumer freshness.
+
 Two invariants sit underneath that style:
 
 - **Store durability.** Every durable write follows the [store durability contract](./docs/internals/store.md).
@@ -82,7 +84,7 @@ rimz loop logs <task>                # full forensics for recent runs
 
 ## Testing
 
-- Take `cargo xtask check` (singular — `checks` is the non-test gate composite) as the early broad compile signal while iterating, run `cargo xtask gate` before a PR or hand-off, batch focused tests with `cargo xtask test --name <test> [--name <test>...]` (or pass a nextest filter), and use `cargo xtask sandbox -- <command>` to drive a real multiplexer from disposable roots. Run one Cargo-family command at a time in a worktree; concurrent builds only queue on the same target-directory lock. The gate stack, the nextest-only runner, the sandbox roots, the test tiers and what each one owns, and the one-home rule for a module's unit tests all live in [rust-conventions.md](./docs/contributing/rust-conventions.md).
+- Take `cargo xtask check` (singular — `checks` is the non-test gate composite) as the early broad compile signal while iterating, run `cargo xtask gate` before a PR or hand-off, batch focused tests with `cargo xtask test --name <test> [--name <test>...]` (exact names only — run a whole module through a bare nextest filter, `cargo xtask test 'sidebar_pane::app::width_control'`), and use `cargo xtask sandbox -- <command>` to drive a real multiplexer from disposable roots. Run one Cargo-family command at a time in a worktree; concurrent builds only queue on the same target-directory lock. The gate stack, the nextest-only runner, the sandbox roots, the test tiers and what each one owns, and the one-home rule for a module's unit tests all live in [rust-conventions.md](./docs/contributing/rust-conventions.md).
 - Judge the reach of your own change and escalate past `gate` to journey, live-backend, performance, dependency gates, or full CI (`cargo xtask ci`) when it touches those surfaces, their fixtures, or shared infrastructure. CI's `tests` job is the branch-protection floor rather than the ceiling.
 - Capture planned behaviour in the owning doc and add the executable test when the implementation can make it pass; an ignored test standing in for a future product target does not land.
 - **Invariant.** `cargo xtask invariants` greps tracked text — Rust and Markdown alike — to guard the architectural boundaries. Because it matches text rather than parsed code, an `AGENTS.md` inside a guarded subtree is scanned along with it: describe a boundary in prose and leave the path the rule bans unwritten.

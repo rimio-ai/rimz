@@ -6,13 +6,19 @@ use std::io::{self, Write};
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use super::command::ScrubSessionEnvExt;
+use rimz::diag::DiagSink;
+use rimz::diag::record::DiagEnvelope;
 use rimz::pane::PaneRef;
 use rimz::testkit::sandbox::{SandboxSpec, TestSandbox};
 use rimz::{EventEnvelope, RuntimePaths, StatePaths, Store, WorkspaceId, WorkspaceResolver};
 use serde_json::Value;
 use tempfile::TempDir;
+
+/// How many trailing diagnostic records an assertion message carries.
+const DIAG_TAIL_RECORDS: usize = 20;
 
 /// Canonicalize, falling back to the original path when it does not yet exist
 /// (a project root the test is about to create). Workspace IDs hash the
@@ -634,6 +640,70 @@ impl Env {
     /// so test code never hand-rolls the length framing.
     pub fn read_events(&self) -> Vec<EventEnvelope> {
         self.store().read_events().expect("read events")
+    }
+
+    // --- diagnostics ---
+
+    /// Every diagnostic record `session` has written, decoded into the typed
+    /// envelope. The path comes from [`rimz::diag::DiagSink`], so a test never
+    /// spells the log's file name itself.
+    pub fn diag_records(&self, session: &str) -> Vec<DiagEnvelope> {
+        let Some(path) = self.diag_sink(session).log_path() else {
+            return Vec::new();
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        text.lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| serde_json::from_str::<DiagEnvelope>(line).ok())
+            .filter(|record| record.session_name == session)
+            .collect()
+    }
+
+    /// Poll `session`'s diagnostic log until a record satisfies `predicate`,
+    /// returning it. Matching on the decoded [`DiagEnvelope`] instead of the
+    /// serialized text keeps a test from silently waiting out its budget on a
+    /// field spelling serde never emits. Panics with the log tail on timeout.
+    pub fn wait_for_diag(
+        &self,
+        session: &str,
+        predicate: impl Fn(&DiagEnvelope) -> bool,
+        budget: Duration,
+    ) -> DiagEnvelope {
+        let deadline = Instant::now() + budget;
+        loop {
+            if let Some(found) = self
+                .diag_records(session)
+                .into_iter()
+                .find(|record| predicate(record))
+            {
+                return found;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no diagnostic record matched within {budget:?}; log tail:\n{}",
+                self.diag_tail(session, DIAG_TAIL_RECORDS)
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// The last `limit` diagnostic records of `session`, one debug line each —
+    /// evidence for an assertion message.
+    pub fn diag_tail(&self, session: &str, limit: usize) -> String {
+        let records = self.diag_records(session);
+        records
+            .iter()
+            .skip(records.len().saturating_sub(limit))
+            .map(|record| format!("{record:?}\n"))
+            .collect()
+    }
+
+    fn diag_sink(&self, session: &str) -> DiagSink {
+        let state =
+            StatePaths::under(self.workspace_id.clone(), &self.state_root()).expect("state paths");
+        DiagSink::under(state.root, self.workspace_id.clone(), session, None)
     }
 
     /// `true` when the sandbox forbids binding AF_UNIX datagram sockets; tests

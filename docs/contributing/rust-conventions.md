@@ -175,7 +175,7 @@ Both helpers live next to the durability contract they enforce. No module hand-r
 
 ## Tests
 
-`cargo xtask test` wraps `cargo nextest run --workspace --all-features --locked`; trailing args forward as nextest filters and profiles (`cargo xtask test auth`, `cargo xtask test -P live`). Repeat `--name <test>` to batch copied leaf names or full `module::path` names through one exact, segment-anchored nextest run rather than launching parallel Cargo processes. Xtask lists the selection first, runs every matched test, and fails after the run if any requested name was unmatched; `cargo xtask test --list <term>` discovers the available full names. A raw nextest filter that matches nothing fails with the same discovery command as its next action.
+`cargo xtask test` wraps `cargo nextest run --workspace --all-features --locked`; trailing args forward as nextest filters and profiles (`cargo xtask test auth`, `cargo xtask test -P live`). Repeat `--name <test>` to batch copied leaf names or full `module::path` names through one exact, segment-anchored nextest run rather than launching parallel Cargo processes. Xtask lists the selection first, runs every matched test, and fails after the run if any requested name was unmatched; `cargo xtask test --list <term>` discovers the available full names. A raw nextest filter that matches nothing fails with the same discovery command as its next action. `--name` takes exact test names, so a whole module goes through a bare filter instead (`cargo xtask test 'sidebar_pane::app::width_control'`). `--no-capture` forwards to nextest and switches the run onto the terminal's own stdio, so a passing test's prints and `tracing` lines reach the operator instead of the compact gate line.
 
 Each xtask invocation gives the suite a disposable HOME, every XDG root, and private tmux and Zellij server namespaces. Inside it, every `common::Env` and live `ZellijNamespace` owns narrower per-test roots plus an independent stdin-keepalive reaper: orderly drop and abrupt test-owner death both stop private mux endpoints, terminate marker-carrying descendants, and remove the roots. That fixture layer also works under bare nextest; the xtask layer remains the invocation-wide backstop. nextest is the only suite runner; install it with `cargo install cargo-nextest --locked`. Drive it through `cargo xtask test` rather than reassembling the invocation — the flags carry as much weight as the runner, because unit tests reach `crate::testkit` and both bare `cargo test` and bare `cargo nextest run` fail to compile without `--all-features`. Three profiles in `.config/nextest.toml` partition the suite: `gate` (deterministic non-live tests, what `cargo xtask gate` runs), `live` (mux backend tests, the real-browser web suite, and deep mux smokes), and `journey` (non-deep rendered journeys).
 
@@ -191,6 +191,8 @@ Core test shapes keep their own discipline:
 - **Property tests** — `proptest` for parsers (TOML override values, agent payloads, framing), serializers (round-trip schema types), and state-machine transitions (no path leaves a final state).
 
 Snapshot churn caused by transient IDs is a test-helper bug, not a product failure — fix the normalization.
+
+When a change adds a verdict, marker, or timer to an existing state machine, enumerate how the new input interacts with each existing one and test the plausible simultaneous cases — at minimum a structural and a geometry change arriving together, and a pending classification against every backstop and retry path. Single-input tests pass on a machine whose bugs all live in the combined states.
 
 ## Dependency budget
 
@@ -265,7 +267,7 @@ The individual gates:
 - `cargo fmt --all -- --check` — formatting (the `fmt` task).
 - `cargo xtask lint` — runs `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`, then lints the `rimz` host without `testkit` in both install feature shapes: default for `cargo xtask install`, and `sentry` for `cargo xtask install-dev`; the host passes expose dead code that test-only references can mask.
 - `cargo xtask check` — the fast all-target, all-feature workspace compile pass.
-- `cargo nextest run --workspace --all-features --locked` — the `test` task; accepts nextest filters and profiles as trailing args, captures output into a compact pass or failure report, batches repeated exact `--name` selections, and exposes discovery through `--list`.
+- `cargo nextest run --workspace --all-features --locked` — the `test` task; accepts nextest filters and profiles as trailing args, captures output into a compact pass or failure report unless `--no-capture` puts the run on the terminal's stdio, batches repeated exact `--name` selections, and exposes discovery through `--list`.
 - `cargo nextest archive --workspace --all-features --locked --archive-file <path>` — the `test-archive` task; compiles and packages the workspace test binaries for portable execution.
 - `cargo xtask sandbox -- <command> [args]` — runs an interactive target-binary smoke command with disposable host state and private tmux/Zellij servers.
 - `cargo xtask docs-links` — every relative markdown link target and `#anchor` resolves in the working tree (offline and deterministic; external URLs are out of scope).
