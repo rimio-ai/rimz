@@ -48,11 +48,10 @@ fn supervised_run_placement_matrix() {
     }
 }
 
-#[test]
-fn supervised_launch_normalizes_model_and_effort_overrides() {
-    let request = SupervisedRunRequest {
+fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
+    SupervisedRunRequest {
         spec: "codex".to_owned(),
-        prompt: "fix-it".to_owned(),
+        prompt: prompt.to_owned(),
         description: None,
         worktree: None,
         from_pr: None,
@@ -60,15 +59,15 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
         name: None,
         background: false,
         self_cleanup_on_completion: false,
-        subagent: false,
+        subagent,
         force_new_tab: false,
         top_level: false,
         permission_mode: PermissionMode::Auto,
         agent: None,
-        model: Some(" gpt-5 ".to_owned()),
+        model: None,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
-        effort: Some(" low ".to_owned()),
+        effort: None,
         budget: None,
         max_turns: None,
         timeout: None,
@@ -80,7 +79,14 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
         loop_task: None,
         passthrough: Vec::new(),
         managed_launch: rimz::agents::ManagedLaunchState::PendingResolution,
-    };
+    }
+}
+
+#[test]
+fn supervised_launch_normalizes_model_and_effort_overrides() {
+    let mut request = supervised_request("fix-it", false);
+    request.model = Some(" gpt-5 ".to_owned());
+    request.effort = Some(" low ".to_owned());
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
@@ -104,6 +110,35 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
     };
     assert_eq!(model.as_deref(), Some("gpt-5"));
     assert_eq!(effort.as_deref(), Some("low"));
+}
+
+#[test]
+fn subagent_prompt_is_composed_after_spec_validation() {
+    let request = supervised_request("codex", true);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workspace =
+        rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
+
+    let err = super::run::prepare_supervised_launch_layout(
+        &request,
+        "claude",
+        &workspace,
+        &rimz::config::MachineConfig::default(),
+    )
+    .expect_err("spec-like prompt");
+    assert!(
+        err.to_string()
+            .contains("prompt `codex` looks like another spec cell"),
+        "{err:#}"
+    );
+
+    let prompt = super::run::supervised_prompt(&request);
+    assert!(prompt.starts_with("codex\n\n<system_reminder>"));
+    assert!(prompt.contains("must not spawn agents or subagents"));
+    assert!(prompt.ends_with("</system_reminder>"));
+
+    let ordinary = supervised_request("codex", false);
+    assert_eq!(super::run::supervised_prompt(&ordinary), "codex");
 }
 
 #[test]

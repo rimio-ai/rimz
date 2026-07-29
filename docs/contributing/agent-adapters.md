@@ -66,7 +66,7 @@ Install is the visible security step ([adapter.md → Hook install](../internals
 
 ## Step 6 — Wire launch, resume, and presets
 
-From the worksheet's launch row: `permission_args` for the four [`PermissionMode`](../../crates/rimz/src/harness/run.rs)s, `render_preset` (reject any `agents.toml` preset field the agent cannot render, so launch intent is never silently dropped), `resume_command` and `fork_command`, `compact_command` (declare the native manual command or a documented registry exception when the agent only compacts automatically), and `launch_command`/`launch_env`/`default_launch_model` where the stock invocation needs shaping.
+From the worksheet's launch row: `permission_args` for the four [`PermissionMode`](../../crates/rimz/src/harness/run.rs)s, `render_preset` (reject any `agents.toml` preset field the agent cannot render, so launch intent is never silently dropped), `resume_command` and `fork_command`, `compact_command` (declare the native manual command or a documented registry exception when the agent only compacts automatically), and `launch_command`/`launch_env`/`default_launch_model` where the stock invocation needs shaping. When the provider has a verified native delegation control, implement `lockdown_subagent_args` or `lockdown_subagent_env` so it overrides conflicting profile values without erasing unrelated settings; otherwise keep the prompt-only default.
 
 ## Step 7 — Wire context enrichment
 

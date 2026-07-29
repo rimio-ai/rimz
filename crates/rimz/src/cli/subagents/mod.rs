@@ -349,7 +349,6 @@ impl SubagentLaunchArgs {
             .prompt
             .filter(|prompt| !prompt.trim().is_empty())
             .context("a subagent needs its prompt from the parent")?;
-        let prompt = format!("{prompt}\n\n{SUBAGENT_REMINDER}");
         let timeout = self
             .timeout
             .map(Ok)
@@ -379,14 +378,6 @@ impl SubagentLaunchArgs {
         })
     }
 }
-
-const SUBAGENT_REMINDER: &str = concat!(
-    "<system_reminder>You are a subagent: a supervised child launched by another agent to ",
-    "complete the task above. You must not spawn agents or subagents of any kind — do not use ",
-    "agent, task, or spawn tools, and do not launch `rimz subagents`, `rimz agents`, or ",
-    "`rimz teams`. Do the work yourself with your direct tools and report the result; your final ",
-    "message is returned to your caller when you exit.</system_reminder>"
-);
 
 fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
     if args.prompt.is_some()
@@ -721,10 +712,8 @@ mod tests {
         let mut agents = agents;
         agents.launch.self_cleanup_on_completion = true;
         assert!(launch.subagent);
-        let expected_prompt = format!("review this\n\n{SUBAGENT_REMINDER}");
-        assert_eq!(launch.prompt.as_deref(), Some(expected_prompt.as_str()));
+        assert_eq!(launch.prompt.as_deref(), Some("review this"));
         agents.launch.subagent = true;
-        agents.launch.prompt = launch.prompt.clone();
 
         assert_eq!(launch, agents.launch);
     }
@@ -749,8 +738,8 @@ mod tests {
         let mut agents = agents;
         agents.launch.self_cleanup_on_completion = true;
         assert!(launch.subagent);
+        assert_eq!(launch.prompt.as_deref(), Some("review this"));
         agents.launch.subagent = true;
-        agents.launch.prompt = launch.prompt.clone();
 
         assert_eq!(launch, agents.launch);
     }
@@ -816,8 +805,8 @@ mod tests {
         let mut agents = agents;
         agents.launch.self_cleanup_on_completion = true;
         assert!(launches[0].subagent);
+        assert_eq!(launches[0].prompt.as_deref(), Some("review this"));
         agents.launch.subagent = true;
-        agents.launch.prompt = launches[0].prompt.clone();
 
         assert_eq!(launches, vec![agents.launch]);
     }

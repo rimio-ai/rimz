@@ -43,6 +43,22 @@ pub(super) fn run_placement(
     }
 }
 
+const SUBAGENT_REMINDER: &str = concat!(
+    "<system_reminder>You are a subagent: a supervised child launched by another agent to ",
+    "complete the task above. You must not spawn agents or subagents of any kind — do not use ",
+    "agent, task, or spawn tools, and do not launch `rimz subagents`, `rimz agents`, or ",
+    "`rimz teams`. Do the work yourself with your direct tools and report the result; your final ",
+    "message is returned to your caller when you exit.</system_reminder>"
+);
+
+pub(super) fn supervised_prompt(request: &SupervisedRunRequest) -> Cow<'_, str> {
+    if request.subagent {
+        Cow::Owned(format!("{}\n\n{SUBAGENT_REMINDER}", request.prompt))
+    } else {
+        Cow::Borrowed(&request.prompt)
+    }
+}
+
 /// Resolve and finalize the one-cell layout for a command-neutral supervised request.
 pub(super) fn prepare_supervised_launch_layout(
     request: &SupervisedRunRequest,
@@ -339,6 +355,7 @@ fn prepare_supervised(
         }
     }
     let resolved = prepare_supervised_launch_layout(request, &spec, &workspace, &machine_config)?;
+    let prompt = supervised_prompt(request);
     let team_name = resolved.team_name;
     let layout = resolved.layout;
     let agent_cells = layout.agent_cells().collect::<Vec<_>>();
@@ -378,7 +395,7 @@ fn prepare_supervised(
     let launch_invocation = rimz::harness::launch::ExecRequest {
         kind: agent_cell.kind.clone(),
         action: rimz::harness::launch::ExecAction::Launch {
-            prompt: Some(request.prompt.clone()),
+            prompt: Some(prompt.to_string()),
             extra_args: agent_cell.args.clone(),
         },
         system_prompt_file: agent_cell.system_prompt_file.clone(),
@@ -425,7 +442,7 @@ fn prepare_supervised(
         store,
         kind,
         room_channel,
-        prompt: request.prompt.clone(),
+        prompt: prompt.into_owned(),
         output_format: presentation.output_format,
         stream_text: presentation.stream_text,
         managed_launch,
