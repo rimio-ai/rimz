@@ -103,7 +103,10 @@ pub(in crate::cli) fn run_print(
     let output_format = presentation.output_format;
     let record = match run_supervised(request, presentation, globals)? {
         SupervisedRunOutcome::Record(record) => Some(*record),
-        SupervisedRunOutcome::Background => None,
+        SupervisedRunOutcome::Background { agent_name, .. } => {
+            writeln!(render::out(), "{agent_name}")?;
+            None
+        }
         SupervisedRunOutcome::BudgetExceeded { reason } => {
             render::report(&anyhow::anyhow!(reason));
             std::process::exit(RunStatus::BudgetExceeded.exit_code());
@@ -145,6 +148,14 @@ struct PreparedRun {
 struct PresentationWaiter {
     waiter: run_wake::RunWaiter,
     stream_cursor: Option<TranscriptCursor>,
+}
+
+enum AttemptOutcome {
+    Background {
+        agent_name: String,
+        run_id: rimz::RunId,
+    },
+    Blocking(Box<BlockingAttempt>),
 }
 
 impl PresentationWaiter {
@@ -429,7 +440,7 @@ fn execute_attempt(
     retry_of: Option<&rimz::RunId>,
     attempt: u32,
     retries: u32,
-) -> Result<Option<BlockingAttempt>> {
+) -> Result<AttemptOutcome> {
     let agent_cell = prepared
         .layout
         .agent_cells()
@@ -518,11 +529,10 @@ fn execute_attempt(
     rimz::harness::run::create(prepared.store.paths(), &record).context("recording run")?;
     open_attempt_pane(prepared, room, request, &run_id, &launch_batch, &pane)?;
     if request.background {
-        #[expect(clippy::print_stdout, reason = "command result is the agent name")]
-        {
-            println!("{}", launch_identity.name);
-        }
-        return Ok(None);
+        return Ok(AttemptOutcome::Background {
+            agent_name: launch_identity.name.clone(),
+            run_id,
+        });
     }
     let Some(waiter) = waiter else {
         bail!("blocking run did not bind its completion waiter");
@@ -533,7 +543,10 @@ fn execute_attempt(
             .then(|| TranscriptCursor::new(true)),
     };
     let record = waiter.await_terminal(prepared, room, request)?;
-    Ok(Some(BlockingAttempt { record, waiter }))
+    Ok(AttemptOutcome::Blocking(Box::new(BlockingAttempt {
+        record,
+        waiter,
+    })))
 }
 
 fn verify_phase(
@@ -716,7 +729,7 @@ pub(in crate::cli) fn run_supervised(
         ) {
             return Ok(SupervisedRunOutcome::BudgetExceeded { reason });
         }
-        let Some(blocking) = execute_attempt(
+        let attempt_outcome = execute_attempt(
             &prepared,
             &room,
             &request,
@@ -724,9 +737,12 @@ pub(in crate::cli) fn run_supervised(
             retry_of.as_ref(),
             attempt,
             retries,
-        )?
-        else {
-            return Ok(SupervisedRunOutcome::Background);
+        )?;
+        let blocking = match attempt_outcome {
+            AttemptOutcome::Background { agent_name, run_id } => {
+                return Ok(SupervisedRunOutcome::Background { agent_name, run_id });
+            }
+            AttemptOutcome::Blocking(blocking) => *blocking,
         };
         let (record, verify_error, waiter) = verify_phase(&prepared, &room, &request, blocking)?;
         if !request.keep {

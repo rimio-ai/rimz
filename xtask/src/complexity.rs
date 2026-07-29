@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use crate::runner;
 use crate::source_files;
+use crate::source_files::{inline_test_marker_line, is_test_file, split_file_loc};
 use crate::spinner::Spinner;
 
 const COMPLEXITY_OUTPUT_DIR: &str = "target/complexity";
@@ -520,13 +521,6 @@ fn walk_json_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn is_test_file(path: &Path) -> bool {
-    path.file_name() == Some(OsStr::new("tests.rs"))
-        || path
-            .components()
-            .any(|component| component.as_os_str() == OsStr::new("tests"))
-}
-
 fn collect_functions(space: &Space, functions: &mut Vec<FunctionMetrics>) {
     if matches!(space.kind.as_str(), "function" | "closure") {
         functions.push(FunctionMetrics {
@@ -541,34 +535,6 @@ fn collect_functions(space: &Space, functions: &mut Vec<FunctionMetrics>) {
     for child in &space.spaces {
         collect_functions(child, functions);
     }
-}
-
-fn inline_test_marker_line(source: &str) -> Option<u64> {
-    let mut marker = None;
-    for (index, line) in source.lines().enumerate() {
-        let trimmed = line.trim();
-        if let Some(marker_line) = marker {
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed.starts_with("mod tests") {
-                return Some(marker_line);
-            }
-            marker = None;
-        }
-        if trimmed == "#[cfg(test)]" {
-            marker = Some(index as u64 + 1);
-        }
-    }
-    None
-}
-
-fn split_file_loc(sloc: f64, inline_test_marker: Option<u64>) -> (f64, f64) {
-    let Some(marker) = inline_test_marker else {
-        return (sloc, 0.0);
-    };
-    let code_sloc = marker.saturating_sub(1) as f64;
-    (code_sloc, (sloc - code_sloc).max(0.0))
 }
 
 fn classify(metrics: &FunctionMetrics) -> Option<Severity> {

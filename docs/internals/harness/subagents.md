@@ -48,6 +48,18 @@ The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --t
 
 The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--top-level`, `--resume`, placement flags, output and input formats, retries, and verification. Each of those needs a decision the delegating agent is not well placed to make, and each is still reachable by calling `rimz agents` directly. `types` lists kinds, profiles, and configured commands but never teams, because one launch produces one agent rather than a cohort.
 
+## Fanout is repeated single-launch plus an exact join
+
+`rimz subagents fanout` accepts a JSON array and desugars every entry through the same `SubagentLaunchArgs::into_agent_launch` path above. Task `timeout` wins over the fanout flag, which wins over the configured default. Fanout-level `keep` applies uniformly; per-task foreground, retention, and passthrough argv are not part of the data format.
+
+Parsing, required fields, timeout syntax, and duplicate explicit names are validated across the entire array before the first side effect. Pane opens then happen sequentially in the caller process. This avoids racing two backend split operations against the same ambient pane, while the child processes themselves run in parallel as soon as each pane opens.
+
+The supervised runner's background outcome carries the minted petname and run ID back to `agents_cmd`; the ordinary single-launch presentation prints the petname there, while fanout collects the identities directly. This avoids rediscovering children from a before/after store snapshot, which could confuse another launch racing in the same family.
+
+Without `--bg`, fanout passes the collected petnames to `agents_cmd::wait_agent_batch` as one explicit set. The normal multi-target wait renderer and aggregate exit code therefore own fanout results too. With `--bg`, the command returns after the launch loop and can render the collected run IDs as JSON.
+
+A runtime failure during that loop aborts the remaining launches and reports every child already started. Those children are not rolled back: their durable run records, deadlines, self-cleanup, and caller-scoped `wait`/`stop` behavior remain the ordinary supervised lifecycle. Validation failures are different — because desugaring completed before the loop, they launch nothing.
+
 ## Ancestry, depth, and flattening
 
 Ancestry resolves in [`plan.rs`](../../../crates/rimz/src/harness/plan.rs) as step 4 of [the compile path](./fleet.md#from-spec-to-panes) — **before** provider preflight, worktree creation, store append, or any mux action, so a refusal leaves nothing behind.
@@ -66,6 +78,8 @@ launch_depth    = current_depth + 1                           ← true
 That third line is the whole flattening rule. A child inherits *its caller's* parent when the caller has one, and only otherwise points at the caller. So a grandchild is stamped with the same top-level parent as its parent, while `launch_depth` keeps counting honestly. True depth stays available for the cap; display ancestry collapses to one level of nesting under the original top-level agent.
 
 `[agents] max-launch-depth` ([`config/agents.rs`](../../../crates/rimz/src/config/agents.rs)) defaults to `1`. With an unstamped top-level agent reading as depth 0, that permits children and refuses grandchildren.
+
+Fanout does not change that accounting: each array entry is one ordinary launch from the same caller. At the default cap, a top-level agent may fan out, but any child attempting its own fanout is refused before the first task launches.
 
 `--top-level` is the escape hatch, and it short-circuits ahead of everything above: no caller resolution, no store projection read, no depth check, no parent stamp. It is a `rimz agents` flag only. `rimz subagents` never sets it, so a child launched through this doorway cannot escape ancestry — which is what makes the depth cap meaningful against an agent that is itself writing the command line.
 

@@ -81,34 +81,43 @@ fn launch_caller_uses_durable_identity_and_only_legacy_missing_ids_use_the_pane(
     caller.launch_id = Some(AgentSessionId::from("launch-stable"));
     caller.pane = Some(crate::pane::PaneRef::from_id(pane_id.clone()));
     let agents = vec![caller];
+    let durable = LaunchCallerEnv {
+        kind: AgentKind::new_unchecked("claude"),
+        launch_id: Some(AgentSessionId::from("launch-stable")),
+        pane_id: None,
+    };
+    let legacy = LaunchCallerEnv {
+        kind: AgentKind::new_unchecked("claude"),
+        launch_id: None,
+        pane_id: Some(pane_id.clone()),
+    };
 
     assert_eq!(
-        resolve_launch_caller(&agents, "claude", Some("launch-stable"), None)
+        resolve_launch_caller(&agents, &durable)
             .expect("durable launch identity")
             .agent_id,
         "provider-session"
     );
     assert_eq!(
-        resolve_launch_caller(&agents, "claude", None, Some(&pane_id))
+        resolve_launch_caller(&agents, &legacy)
             .expect("legacy pane identity")
             .agent_id,
         "provider-session"
     );
+    let stale = LaunchCallerEnv {
+        launch_id: Some(AgentSessionId::from("stale-launch")),
+        pane_id: Some(pane_id.clone()),
+        ..legacy.clone()
+    };
     assert!(
-        resolve_launch_caller(&agents, "claude", Some("stale-launch"), Some(&pane_id)).is_err(),
+        resolve_launch_caller(&agents, &stale).is_err(),
         "a non-empty stale identity never falls back to the pane"
     );
 
     let mut duplicate = agents[0].clone();
     duplicate.agent_id = AgentSessionId::from("duplicate");
     assert!(
-        resolve_launch_caller(
-            &[agents[0].clone(), duplicate],
-            "claude",
-            None,
-            Some(&pane_id)
-        )
-        .is_err(),
+        resolve_launch_caller(&[agents[0].clone(), duplicate], &legacy).is_err(),
         "legacy pane identity must be unambiguous"
     );
 }

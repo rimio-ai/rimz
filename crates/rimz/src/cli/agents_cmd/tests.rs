@@ -1381,6 +1381,22 @@ fn provider_binding_debug_redacts_account_key() {
     assert!(!format!("{expected:?}").contains("owner"));
 }
 
+#[test]
+fn batch_wait_keeps_labeled_output_for_one_target() {
+    assert!(matches!(
+        wait::WaitStyle::new(1, false, true),
+        wait::WaitStyle::Single { json: true }
+    ));
+    assert_eq!(
+        wait::WaitStyle::batch(true),
+        wait::WaitStyle::All { json: true }
+    );
+    assert_eq!(
+        wait::WaitStyle::batch(false),
+        wait::WaitStyle::All { json: false }
+    );
+}
+
 fn bare_exec_args() -> ExecRequest {
     ExecRequest {
         kind: AgentKind::new_unchecked("codex"),

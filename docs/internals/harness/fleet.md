@@ -225,7 +225,7 @@ A handle falls into three classes, narrowing from group to instance.
 | Type | `@codex` (kind), `@planner` (profile) | every agent of that kind or profile in the channel | yes |
 | Instance | `@writer` (explicit `--name`), `@swift-otter` (petname), `@claude-2` (kind ordinal), a session-id prefix, `tmux:%1` (pane address) | exactly one running agent | no |
 
-`@all` is the broadcast handle for the whole channel. Role names reserve built-in kind handles so kind addresses keep round-tripping, and a profile name that would read as `@all`, a kind ordinal, or a pane address is rejected at config load.
+`@all` is the broadcast handle that resolves the whole channel. Message dispatch subsequently removes the RimZ-launched caller from this intrinsic broadcast; resolution itself stays caller-agnostic. Role names reserve built-in kind handles so kind addresses keep round-tripping, and a profile name that would read as `@all`, a kind ordinal, or a pane address is rejected at config load.
 
 Only a type handle creates, because only a kind or profile carries what a launch needs. An instance handle names something that must already exist, and refuses with the fix.
 
@@ -236,7 +236,7 @@ An address resolves against a fresh snapshot to zero, one, or many agents.
 | Matches | Outcome |
 | --- | --- |
 | one | delivered |
-| many | an ambiguity error listing the handles to pick one, unless `--all` or `@all` opts into fan-out. Fan-out delivers to every match, prefixes each delivery with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message, and skips a blocked agent while the rest send. |
+| many | an ambiguity error listing the handles to pick one, unless `--all` or `@all` opts into fan-out. Fan-out delivers to every match except that message dispatch removes an agent caller from intrinsic `@all`; it prefixes each delivery with the addressed handle (`@all,`, `@claude,`) and skips a blocked agent while the rest send. |
 | zero | a miss that names where the agent runs in another channel and lists live agents, or, with `--create`, launches it |
 
 `--create` launches a missing agent straight from its address. `rimz message --steer @planner#design --create "draft the API"` opens a `planner` in `#design`, registering the named channel, with the text as its first prompt. With `--worktree feat/x` it creates or reuses that worktree instead.

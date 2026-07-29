@@ -110,7 +110,7 @@ pub struct SupervisedRunRequest {
 #[derive(Debug)]
 pub enum SupervisedRunOutcome {
     Record(Box<RunRecord>),
-    Background,
+    Background { agent_name: String, run_id: RunId },
     BudgetExceeded { reason: String },
 }
 
