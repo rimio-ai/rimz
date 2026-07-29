@@ -9,7 +9,6 @@ use serde::Serialize;
 
 use super::{Ctx, GlobalFlags, agents_cmd, render};
 use rimz::agents::AgentState;
-use rimz::harness::budget::BudgetSpec;
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
@@ -30,6 +29,12 @@ enum SubagentsSubcmd {
     /// List this agent's children.
     #[command(alias = "ls")]
     List {
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List agent types available to launch.
+    Types {
         /// Emit JSON.
         #[arg(long)]
         json: bool,
@@ -88,18 +93,12 @@ struct SubagentLaunchArgs {
     /// Reasoning effort for the child.
     #[arg(long, value_name = "LEVEL")]
     effort: Option<String>,
-    /// Let the child ask before tool use where supported.
-    #[arg(long, conflicts_with = "yolo")]
-    ask: bool,
-    /// Skip provider permission prompts where supported.
-    #[arg(long)]
-    yolo: bool,
-    /// Cap this child's spend.
-    #[arg(long, value_name = "AMOUNT[/day]")]
-    budget: Option<BudgetSpec>,
     /// Stop the child after this duration.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<Duration>,
+    /// Block until the child finishes and print its result.
+    #[arg(long)]
+    fg: bool,
     /// Leave the child pane open after completion.
     #[arg(long)]
     keep: bool,
@@ -119,6 +118,7 @@ pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         Some(SubagentsSubcmd::Launch(launch)) => launch_child(launch, globals),
         Some(SubagentsSubcmd::List { json }) => list_children(json, globals),
+        Some(SubagentsSubcmd::Types { json }) => list_types(json),
         Some(SubagentsSubcmd::Wait {
             names,
             any,
@@ -171,27 +171,15 @@ impl SubagentLaunchArgs {
             .unwrap_or_else(|| crate::cli::supervised::parse_timeout(&defaults.timeout))
             .map_err(anyhow::Error::msg)
             .context("parsing agents.subagents.timeout")?;
-        let budget = match self.budget {
-            Some(budget) => Some(budget),
-            None => defaults
-                .budget
-                .as_deref()
-                .map(str::parse)
-                .transpose()
-                .context("parsing agents.subagents.budget")?,
-        };
         Ok(agents_cmd::AgentLaunchArgs {
             spec: Some(spec),
             prompt: Some(prompt),
             cohort: agents_cmd::CohortLaunchArgs {
                 description: self.description,
-                budget,
-                bg: true,
+                bg: !self.fg,
                 ..Default::default()
             },
             name: self.name,
-            ask: self.ask,
-            yolo: self.yolo,
             model: self.model,
             agent: self.agent,
             effort: self.effort,
@@ -211,10 +199,8 @@ fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
         || args.model.is_some()
         || args.agent.is_some()
         || args.effort.is_some()
-        || args.ask
-        || args.yolo
-        || args.budget.is_some()
         || args.timeout.is_some()
+        || args.fg
         || args.keep
         || args.description.is_some()
         || args.max_turns.is_some()
@@ -237,6 +223,8 @@ struct ChildReport {
     handle: String,
     kind: String,
     status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -264,6 +252,7 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
                 name,
                 kind: child.kind.to_string(),
                 status: child.status.as_str().to_owned(),
+                description: child.activity_line(),
                 run_id: run.map(|run| run.run_id.to_string()),
                 run_status: run.map(|run| run.status.as_str().to_owned()),
             }
@@ -277,11 +266,96 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
     }
     let mut table = render::Table::new(["SUBAGENT", "KIND", "STATUS", "RUN"]);
     for child in reports {
+        let detail = child
+            .description
+            .map(|line| render::cell(line).fg(render::palette::muted()));
+        table.card(
+            [
+                render::cell(child.handle),
+                render::cell(child.kind),
+                render::cell(child.status),
+                render::cell(child.run_status.unwrap_or_else(|| "-".to_owned())).dash(),
+            ],
+            detail,
+        );
+    }
+    table.render(&mut render::out()).map_err(Into::into)
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct AgentTypeReport {
+    name: String,
+    source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<String>,
+}
+
+impl AgentTypeReport {
+    fn detail(&self) -> String {
+        let Some(agent) = &self.agent else {
+            return "-".to_owned();
+        };
+        let posture = match (self.model.as_deref(), self.effort.as_deref()) {
+            (Some(model), Some(effort)) => Some(format!("{model}@{effort}")),
+            (Some(model), None) => Some(model.to_owned()),
+            (None, Some(effort)) => Some(format!("@{effort}")),
+            (None, None) => None,
+        };
+        posture.map_or_else(|| agent.clone(), |posture| format!("{agent} · {posture}"))
+    }
+}
+
+fn available_types(config: &rimz::config::MachineConfig) -> Vec<AgentTypeReport> {
+    let mut types = rimz::agents::known_kinds()
+        .map(|kind| AgentTypeReport {
+            name: kind.to_owned(),
+            source: "kind",
+            agent: None,
+            model: None,
+            effort: None,
+        })
+        .collect::<Vec<_>>();
+    types.extend(
+        config
+            .agents
+            .profiles
+            .0
+            .iter()
+            .map(|(name, profile)| AgentTypeReport {
+                name: name.clone(),
+                source: "profile",
+                agent: Some(profile.agent.clone()),
+                model: profile.model.clone(),
+                effort: profile.effort.clone(),
+            }),
+    );
+    types.extend(config.agents.commands.0.keys().map(|name| AgentTypeReport {
+        name: name.clone(),
+        source: "command",
+        agent: None,
+        model: None,
+        effort: None,
+    }));
+    types
+}
+
+fn list_types(json: bool) -> Result<()> {
+    let config = rimz::config::MachineConfig::load().context("loading machine config")?;
+    let types = available_types(&config);
+    if json {
+        return render::json_pretty(&types);
+    }
+    let mut table = render::Table::new(["TYPE", "SOURCE", "DETAIL"]);
+    for agent_type in types {
+        let detail = agent_type.detail();
         table.row([
-            render::cell(child.handle),
-            render::cell(child.kind),
-            render::cell(child.status),
-            render::cell(child.run_status.unwrap_or_else(|| "-".to_owned())).dash(),
+            render::cell(agent_type.name),
+            render::cell(agent_type.source),
+            render::cell(detail).dash(),
         ]);
     }
     table.render(&mut render::out()).map_err(Into::into)
@@ -448,6 +522,84 @@ mod tests {
         .args;
 
         assert_eq!(launch, agents.launch);
+    }
+
+    #[test]
+    fn foreground_launch_uses_the_supervised_blocking_path() {
+        let args = parse(&["rimz", "claude", "review this", "--fg"]);
+        let launch = args
+            .launch
+            .into_agent_launch(&rimz::config::SubagentsConfig::default())
+            .expect("launch payload");
+        let agents = AgentsHarness::try_parse_from([
+            "rimz",
+            "claude",
+            "review this",
+            "-p",
+            "--timeout",
+            "30m",
+        ])
+        .expect("parse equivalent agents launch")
+        .args;
+
+        assert_eq!(launch, agents.launch);
+    }
+
+    #[test]
+    fn unattended_launch_flags_are_rejected() {
+        for args in [
+            &["rimz", "claude", "review this", "--ask"][..],
+            &["rimz", "claude", "review this", "--yolo"],
+            &["rimz", "claude", "review this", "--budget", "5"],
+        ] {
+            assert!(
+                Harness::try_parse_from(args).is_err(),
+                "{args:?} must not be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn available_types_include_kinds_profiles_and_commands_but_not_teams() {
+        let mut config = rimz::config::MachineConfig::default();
+        config.agents.profiles.0.insert(
+            "planner".to_owned(),
+            rimz::config::Profile {
+                agent: "claude".to_owned(),
+                mode: None,
+                model: Some("fable".to_owned()),
+                effort: Some("high".to_owned()),
+                budget: None,
+                system_prompt_file: None,
+                append_system_prompt_files: Vec::new(),
+                args: None,
+            },
+        );
+        config
+            .agents
+            .commands
+            .0
+            .insert("mytool".to_owned(), "mytool --chat".to_owned());
+        config
+            .agents
+            .teams
+            .0
+            .insert("review".to_owned(), rimz::config::Team::default());
+
+        let types = available_types(&config);
+
+        assert!(types.iter().any(|entry| entry.source == "kind"));
+        assert!(types.iter().any(|entry| {
+            entry.name == "planner"
+                && entry.source == "profile"
+                && entry.detail() == "claude · fable@high"
+        }));
+        assert!(
+            types
+                .iter()
+                .any(|entry| entry.name == "mytool" && entry.source == "command")
+        );
+        assert!(!types.iter().any(|entry| entry.name == "review"));
     }
 
     #[test]
