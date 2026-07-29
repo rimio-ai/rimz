@@ -176,6 +176,126 @@ fn tmux_room_shows_agent_after_hook() {
     );
 }
 
+/// tmux: closing a work column returns its width to the remaining work panes,
+/// not the fixed-width sidebar.
+#[test]
+fn tmux_sidebar_keeps_width_when_work_pane_closes() {
+    if which::which("tmux").is_err() {
+        eprintln!("tmux not on PATH; skipping deep tmux resize smoke");
+        return;
+    }
+    let Some(rimz) = rimz_bin() else {
+        eprintln!("rimz not built; skipping deep tmux resize smoke");
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+
+    let runtime = tempfile::Builder::new()
+        .prefix("rz")
+        .rand_bytes(6)
+        .tempdir()
+        .expect("short runtime dir");
+    let socket = managed_socket(runtime.path());
+    let _server = TmuxServerGuard::new(socket.clone());
+
+    tmux(
+        &socket,
+        &[
+            "new-session",
+            "-d",
+            "-s",
+            "room",
+            "-x",
+            "160",
+            "-y",
+            "40",
+            "sleep 300",
+        ],
+    );
+    tmux(
+        &socket,
+        &["set-option", "-t", "room", "@rimz_sidebar_cols", "40"],
+    );
+    let first_work = tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
+    let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "tmux", "room", &[]);
+    let sidebar = tmux_capture(
+        &socket,
+        &[
+            "split-window",
+            "-h",
+            "-b",
+            "-d",
+            "-l",
+            "40",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            &first_work,
+            &serve,
+        ],
+    );
+    tmux(
+        &socket,
+        &["split-window", "-h", "-d", "-t", &first_work, "sleep 300"],
+    );
+    tmux(
+        &socket,
+        &["split-window", "-h", "-d", "-t", &first_work, "sleep 300"],
+    );
+    tmux(&socket, &["select-layout", "-t", "room", "even-horizontal"]);
+
+    let state = rimz::StatePaths::under(env.workspace_id.clone(), &env.state_root())
+        .expect("test state paths");
+    let diag_path = state.root.join("diag.log.jsonl");
+    let baseline = read_until(
+        &diag_path,
+        |text| text.contains("\"sidebar_width_settle\"") && text.contains("\"settled_cols\":40"),
+        CAPTURE_BUDGET,
+    );
+    assert!(
+        baseline.contains("\"settled_cols\":40"),
+        "the renderer never established its 40-column baseline:\n{baseline}"
+    );
+    assert_eq!(tmux_pane_width(&socket, &sidebar), Some(40));
+
+    let adjacent_work = tmux_capture(
+        &socket,
+        &["list-panes", "-t", "room", "-F", "#{pane_index} #{pane_id}"],
+    )
+    .lines()
+    .find_map(|line| {
+        let (index, pane) = line.split_once(' ')?;
+        (index == "1").then(|| pane.to_owned())
+    })
+    .expect("work pane adjacent to sidebar");
+    tmux(&socket, &["kill-pane", "-t", &adjacent_work]);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && tmux_pane_width(&socket, &sidebar) != Some(40) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let settled = tmux_pane_width(&socket, &sidebar);
+    let configured = tmux_capture(
+        &socket,
+        &["show-option", "-qv", "-t", "room", "@rimz_sidebar_cols"],
+    );
+    let diag = std::fs::read_to_string(&diag_path).unwrap_or_default();
+    assert_eq!(
+        settled,
+        Some(40),
+        "sidebar did not return to its fixed width after the adjacent work pane closed; \
+         @rimz_sidebar_cols={configured}\n{diag}"
+    );
+    assert_eq!(
+        configured, "40",
+        "structural redistribution must not become the session-wide sidebar default\n{diag}"
+    );
+}
+
 /// tmux: prove the sidebar self-closes when its last sibling dies *without*
 /// flashing to the freed full width on the way out.
 ///
@@ -1135,6 +1255,17 @@ fn capture_all_until(
     }
 }
 
+fn read_until(path: &Path, pred: impl Fn(&str) -> bool, budget: Duration) -> String {
+    let deadline = Instant::now() + budget;
+    loop {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if pred(&text) || Instant::now() >= deadline {
+            return text;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// The active pane's id and width for `session` — after a `split-window`, that
 /// is the freshly created sidebar split.
 fn tmux_current_pane(socket: &Path, session: &str) -> (String, usize) {
@@ -1160,6 +1291,20 @@ fn tmux_current_pane(socket: &Path, session: &str) -> (String, usize) {
         }
     }
     panic!("no active pane in {session}:\n{raw}");
+}
+
+fn tmux_pane_width(socket: &Path, pane: &str) -> Option<usize> {
+    let out = Command::new("tmux")
+        .scrub_session_env()
+        .arg("-S")
+        .arg(socket)
+        .args(["display-message", "-p", "-t", pane, "#{pane_width}"])
+        .bounded_output()
+        .expect("spawn tmux display-message");
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().parse().ok())
+        .flatten()
 }
 
 /// Whether `pane` still exists in `session`. A self-closed sidebar pane (and its
