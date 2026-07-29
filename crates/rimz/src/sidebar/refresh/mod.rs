@@ -262,6 +262,7 @@ pub fn refresh_heavy_lanes(
     let mut budget_snapshot = base.clone();
     apply_live_day_spend(&mut budget_snapshot, &spending.workspace);
     crate::harness::budget::enforce(&budget_snapshot, runtime, state_messages_dir, config);
+    crate::harness::run_timeout::enforce(state_paths, runtime, base.now);
     refresh_diff_stats_for(
         base,
         runtime,

@@ -28,6 +28,40 @@ fn setup_for(kind: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
 }
 
 #[test]
+fn durable_deadline_defaults_for_old_records_and_times_out_once_due() {
+    let (_dir, paths, record) = setup();
+    let mut old_json = serde_json::to_value(&record).expect("serialize run");
+    old_json
+        .as_object_mut()
+        .expect("run object")
+        .remove("deadline_at");
+    let old: RunRecord = serde_json::from_value(old_json).expect("deserialize old run");
+    assert_eq!(old.deadline_at, None);
+
+    let deadline = record.started_at + std::time::Duration::from_secs(30);
+    let mut timed = record.clone();
+    timed.deadline_at = Some(deadline);
+    crate::store::run_store::write(&paths.runs_dir, &timed).expect("write deadline");
+
+    let (_, wrote) = timeout_if_due(
+        &paths,
+        &record.run_id,
+        deadline - std::time::Duration::from_secs(1),
+    )
+    .expect("check early deadline");
+    assert!(!wrote);
+
+    let (settled, wrote) =
+        timeout_if_due(&paths, &record.run_id, deadline).expect("settle due deadline");
+    assert!(wrote);
+    assert_eq!(settled.status, RunStatus::TimedOut);
+    assert_eq!(settled.completed_at, Some(deadline));
+
+    let (_, wrote) = timeout_if_due(&paths, &record.run_id, deadline).expect("repeat due deadline");
+    assert!(!wrote);
+}
+
+#[test]
 fn lifecycle_completion_writes_terminal_record_once() {
     let (_dir, paths, record) = setup();
     let observation = AgentLifecycleObservation::new(

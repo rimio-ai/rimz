@@ -18,6 +18,56 @@ use std::process::Command;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+#[test]
+fn hidden_timeout_helper_settles_only_an_overdue_run() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let now = Timestamp::now();
+
+    let mut overdue = create_running_named_run(&env, &store, "overdue");
+    overdue.deadline_at = Some(now - Duration::from_secs(1));
+    rimz::store::run_store::write(&store.paths().runs_dir, &overdue).expect("write overdue run");
+    let mut future = create_running_named_run(&env, &store, "future");
+    future.deadline_at = Some(now + Duration::from_secs(60));
+    rimz::store::run_store::write(&store.paths().runs_dir, &future).expect("write future run");
+
+    for run in [&overdue, &future] {
+        let output = env
+            .rimz()
+            .current_dir(&env.project_root)
+            .args([
+                "agents",
+                "run-timeout",
+                "--workspace-id",
+                env.workspace_id.as_str(),
+                "--run-id",
+                run.run_id.as_str(),
+            ])
+            .output()
+            .expect("run timeout helper");
+        assert!(
+            output.status.success(),
+            "timeout helper failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &overdue.run_id)
+            .expect("load overdue run")
+            .status,
+        RunStatus::TimedOut
+    );
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &future.run_id)
+            .expect("load future run")
+            .status,
+        RunStatus::Running
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn qwen_supervised_run_exits_125_before_recording_when_exact_quota_is_spent() {
