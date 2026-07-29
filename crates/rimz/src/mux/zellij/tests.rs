@@ -123,6 +123,25 @@ fn readonly_attach_relies_on_the_broadcast_ttyd_input_boundary() {
 }
 
 #[cfg(unix)]
+#[test]
+fn rename_tab_resolves_the_anchor_to_a_stable_id() {
+    let (temp, shim) =
+        support::pane_roster_shim(r#"[{"id":7,"is_plugin":false,"tab_id":42,"tab_position":3}]"#);
+    let backend = ZellijBackend::with_program_for_test(&shim);
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+
+    backend
+        .rename_tab("rimz-test", &pane, "#feat ✓")
+        .expect("rename by stable tab id");
+
+    let log = shim_log(&temp);
+    assert!(
+        log.contains("--session rimz-test action rename-tab-by-id 42 #feat ✓"),
+        "{log}"
+    );
+}
+
+#[cfg(unix)]
 fn terminal_pane(
     id: u64,
     tab_position: u64,

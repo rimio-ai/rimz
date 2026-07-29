@@ -41,6 +41,20 @@ fn existing_session_attach_targets_the_managed_server() {
 }
 
 #[test]
+fn rename_tab_targets_the_anchor_pane_and_sanitizes_the_name() {
+    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
+    let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
+    let spec = backend
+        .rename_window_command(&pane, "#feat:one.2 ✓")
+        .expect("tmux pane");
+
+    assert_eq!(
+        verb_args(&spec),
+        ["rename-window", "-t", "%7", "#feat-one-2 ✓"]
+    );
+}
+
+#[test]
 fn readonly_attach_blocks_input_and_ignores_viewer_size() {
     let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
     backend

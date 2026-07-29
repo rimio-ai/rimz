@@ -1153,6 +1153,18 @@ impl MuxBackend for ZellijBackend {
         Ok(())
     }
 
+    fn rename_tab(&self, session: &str, anchor: &PaneId, name: &str) -> Result<()> {
+        let tab_id = self.tab_id_for_pane(session, anchor)?;
+        self.zellij_action(session)
+            .args([
+                "rename-tab-by-id".to_owned(),
+                tab_id.to_string(),
+                name.to_owned(),
+            ])
+            .run()
+            .map(|_| ())
+    }
+
     fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()> {
         ZellijBackend::close_pane(self, session, pane)
     }

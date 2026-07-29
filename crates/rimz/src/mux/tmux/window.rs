@@ -42,6 +42,16 @@ pub(super) fn sanitize_window_name(raw: &str) -> String {
 }
 
 impl TmuxBackend {
+    pub(super) fn rename_window_command(&self, anchor: &PaneId, name: &str) -> Result<CommandSpec> {
+        ensure_pane_backend(anchor, MuxName::Tmux)?;
+        Ok(self.cmd().args([
+            "rename-window".to_owned(),
+            "-t".to_owned(),
+            anchor.raw().to_owned(),
+            sanitize_window_name(name),
+        ]))
+    }
+
     /// Open one detached named window and validate the ids printed by the same
     /// tmux client invocation.
     pub(super) fn open_named_window(
