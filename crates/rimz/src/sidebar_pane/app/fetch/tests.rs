@@ -418,6 +418,49 @@ fn produce_gate_newly_promoted_consumer_starts_without_cadence_debt() {
     assert!(cadence.start_attempt_if_due(true, FetchMode::Normal, Some(10_000), tick, now,));
 }
 
+#[test]
+fn tab_name_memo_deduplicates_within_one_pane_observation() {
+    let mut frame = crate::sidebar::frame::assemble_frame(
+        vec![pane("terminal_7", "tab_1", false)],
+        12,
+        "rimz-test",
+    );
+    frame.topology_stamp_ms = Some(11);
+    let anchor = PaneId::from_parts(MuxName::Zellij, "terminal_7");
+    let rename = crate::sidebar::produce::tab_status::TabRename {
+        anchor: anchor.clone(),
+        observed_name: "#feat".to_owned(),
+        desired_name: "#feat ?".to_owned(),
+    };
+    let mut memo = TabNameMemo::default();
+
+    assert_eq!(
+        memo.pending(&frame, vec![rename.clone()]),
+        vec![rename.clone()]
+    );
+    assert!(
+        memo.pending(&frame, vec![rename.clone()]).is_empty(),
+        "the same desired name is attempted once per pane observation",
+    );
+
+    let changed = crate::sidebar::produce::tab_status::TabRename {
+        desired_name: "#feat !".to_owned(),
+        ..rename.clone()
+    };
+    assert_eq!(
+        memo.pending(&frame, vec![changed.clone()]),
+        vec![changed.clone()],
+        "a status change within the same observation still dispatches",
+    );
+
+    frame.observed_at_ms += 1;
+    assert_eq!(
+        memo.pending(&frame, vec![changed.clone()]),
+        vec![changed],
+        "a fresh pane observation permits a retry",
+    );
+}
+
 fn notification_agent(id: &str, pane_id: Option<PaneId>) -> NotificationAgent {
     NotificationAgent {
         kind: AgentKind::new_unchecked("claude"),

@@ -281,6 +281,41 @@ impl ProducerElection {
     }
 }
 
+#[derive(Default)]
+struct TabNameMemo {
+    frame_generation: Option<(Option<u64>, u64)>,
+    attempted: HashMap<PaneId, String>,
+}
+
+impl TabNameMemo {
+    fn pending(
+        &mut self,
+        frame: &crate::sidebar::frame::PaneFrame,
+        renames: Vec<crate::sidebar::produce::tab_status::TabRename>,
+    ) -> Vec<crate::sidebar::produce::tab_status::TabRename> {
+        let generation = (frame.topology_stamp_ms, frame.observed_at_ms);
+        if self.frame_generation != Some(generation) {
+            self.frame_generation = Some(generation);
+            self.attempted.clear();
+        }
+        renames
+            .into_iter()
+            .filter(|rename| {
+                if self
+                    .attempted
+                    .get(&rename.anchor)
+                    .is_some_and(|attempted| attempted == &rename.desired_name)
+                {
+                    return false;
+                }
+                self.attempted
+                    .insert(rename.anchor.clone(), rename.desired_name.clone());
+                true
+            })
+            .collect()
+    }
+}
+
 /// Owns all state that persists between fetch requests.
 struct FetchWorker {
     config: ServeConfig,
@@ -296,8 +331,7 @@ struct FetchWorker {
     last_election: Option<ProducerElection>,
     meter: TickMeter,
     projection_publisher: crate::sidebar::workspace_projection::WorkspaceProjectionPublisher,
-    tab_name_topology_generation: Option<(Option<u64>, u64)>,
-    attempted_tab_names: HashMap<PaneId, String>,
+    tab_name_memo: TabNameMemo,
 }
 
 struct FastFold {
@@ -338,8 +372,7 @@ impl FetchWorker {
             last_election: None,
             meter,
             projection_publisher: Default::default(),
-            tab_name_topology_generation: None,
-            attempted_tab_names: HashMap::new(),
+            tab_name_memo: TabNameMemo::default(),
         }
     }
 
@@ -581,28 +614,8 @@ impl FetchWorker {
         snapshot: &SidebarSnapshot,
         frame: &crate::sidebar::frame::PaneFrame,
     ) {
-        let generation = (frame.topology_stamp_ms, frame.observed_at_ms);
-        if self.tab_name_topology_generation != Some(generation) {
-            self.tab_name_topology_generation = Some(generation);
-            self.attempted_tab_names.clear();
-        }
         let renames = crate::sidebar::produce::tab_status::desired_tab_renames(snapshot, frame);
-        if renames.is_empty() {
-            return;
-        }
-        let mut pending = Vec::new();
-        for rename in renames {
-            if self
-                .attempted_tab_names
-                .get(&rename.anchor)
-                .is_some_and(|attempted| attempted == &rename.desired_name)
-            {
-                continue;
-            }
-            self.attempted_tab_names
-                .insert(rename.anchor.clone(), rename.desired_name.clone());
-            pending.push(rename);
-        }
+        let pending = self.tab_name_memo.pending(frame, renames);
         if pending.is_empty() {
             return;
         }
@@ -613,7 +626,7 @@ impl FetchWorker {
             for rename in pending {
                 if let Err(err) = backend.rename_tab(&session, &rename.anchor, &rename.desired_name)
                 {
-                    tracing::warn!(
+                    tracing::debug!(
                         session = %session,
                         pane = %rename.anchor,
                         observed_name = %rename.observed_name,
