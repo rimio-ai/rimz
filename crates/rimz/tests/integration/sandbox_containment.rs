@@ -81,7 +81,7 @@ fn owner_sigkill_still_reaps_descendants_and_roots() {
         .arg("--fake-owner")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::null())
         .spawn()
         .expect("spawn fake sandbox owner");
     let report: FakeOwnerReport = {
