@@ -2,7 +2,7 @@
 
 Thirteen coding agents report to RimZ, and no code outside `crates/rimz/src/agents/` knows which one it is looking at. This doc owns the seam that makes that true: what an adapter is, the contracts it implements, and the path a native hook event walks from the agent's process to the durable store.
 
-Read [model.md](./model.md) first if you have not: it defines the [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) an adapter produces and the rollup that consumes it. This doc picks up on the producing side. Which native event means what for one agent is that agent's own page ([claude.md](./claude.md), [codex.md](./codex.md), and eleven siblings); the account and spend half lives in [providers.md](./providers.md); the third-party process-plugin wire is [plugin.md](./plugin.md).
+Read [model.md](./model.md) first if you have not: it defines the [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) an adapter produces and the rollup that consumes it. This doc picks up on the producing side. Which native event means what for one agent is that agent's own page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and eleven siblings); the account and spend half lives in [providers.md](./providers.md); the third-party process-plugin wire is [plugin.md](./plugin.md).
 
 ## The one rule
 
@@ -176,7 +176,7 @@ Inside whatever shape the agent's config takes, the installed form stays minimal
 
 - One command for every event: `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source <agent>`. The helper reads the event name from the payload's `hook_event_name`, or the installed command passes `--event <event>` when the agent omits that field.
 - Install reclaims every RimZ-owned entry by the stable command substring `rimz hooks feed --source <agent>`, then rewrites the canonical set, so duplicate or stale blocks never accumulate and user-authored hooks stay untouched.
-- Claude, Codex, Droid, Qwen, and Grok have no wildcard event key, so install writes one block per wired event. Copilot, Amp, Pi, and OpenCode instead own one whole integration file that RimZ authors, so the payload schema is RimZ's by design ([copilot.md](./copilot.md), [amp.md](./amp.md), [pi.md](./pi.md), [opencode.md](./opencode.md)).
+- Claude, Codex, Droid, Qwen, and Grok have no wildcard event key, so install writes one block per wired event. Copilot, Amp, Pi, and OpenCode instead own one whole integration file that RimZ authors, so the payload schema is RimZ's by design ([adapter_copilot.md](./adapter_copilot.md), [adapter_amp.md](./adapter_amp.md), [adapter_pi.md](./adapter_pi.md), [adapter_opencode.md](./adapter_opencode.md)).
 
 Every hook command enters the executable-surface hash, so a tampered hook config demotes project trust to stale ([trust.md](../harness/trust.md)). Per-tool payload *content* is gated by `[privacy] payload_mode` ([configuration.md](../../guide/configuration.md#sidecars-and-privacy)); the gate strips content, never whether a transition is observed.
 
@@ -295,5 +295,5 @@ Adding a [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs) varia
 - [providers.md](./providers.md) — the account, balance, spend, and pricing half of an integration.
 - [plugin.md](./plugin.md) — the third-party process-plugin manifest, wire, and probes.
 - [agent-adapters.md](../../contributing/agent-adapters.md) — the step-by-step integration playbook and deliverables checklist.
-- [claude.md](./claude.md) and its twelve siblings — per-kind native mappings.
+- [adapter_claude.md](./adapter_claude.md) and its twelve siblings — per-kind native mappings.
 - [claude-reference.md](../../externals/agent-adapter/claude-reference.md) and its siblings — the raw upstream protocols adapters read, pinned to source URLs.

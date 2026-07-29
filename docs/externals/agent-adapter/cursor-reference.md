@@ -1,6 +1,6 @@
 # Cursor CLI protocol reference
 
-> This document records the upstream surface behind RimZ's Cursor adapter; the implemented mapping and explicit deferrals are in [cursor.md](../../internals/agents/cursor.md), the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
+> This document records the upstream surface behind RimZ's Cursor adapter; the implemented mapping and explicit deferrals are in [adapter_cursor.md](../../internals/agents/adapter_cursor.md), the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the **Cursor CLI upstream protocol surface** relevant to RimZ — local hooks and their decision channel, conversation identity, context and subagent payloads, interactive and headless launch modes, stream JSON, ACP, authentication, configuration, permissions, and the documented local-state boundary. It is an implementation research record, not a claim that RimZ currently supports Cursor.
 

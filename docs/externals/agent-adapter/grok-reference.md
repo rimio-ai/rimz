@@ -1,6 +1,6 @@
 # Grok Build protocol reference
 
-> The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), the landed mapping is [grok.md](../../internals/agents/grok.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md). This document remains the upstream protocol reference.
+> The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), the landed mapping is [adapter_grok.md](../../internals/agents/adapter_grok.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md). This document remains the upstream protocol reference.
 
 This is the single home for the **Grok Build upstream protocol surface** RimZ can bind to: native lifecycle hooks, their JSON envelope and decision schema, durable session sidecars, structured headless output, Agent Client Protocol (ACP), authentication, and billing extensions. It mirrors the open-source Grok Build tree and its bundled user guide at the pinned revision below so a contributor can refresh it when upstream moves.
 

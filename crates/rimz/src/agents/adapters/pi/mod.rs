@@ -11,7 +11,7 @@
 //! stamped on every envelope from the in-process extension — payload-first, so
 //! the sidebar's bar and dollar line stay current with the turn-end spend walk
 //! reconciling the final total.
-//! Lifecycle maps per docs/internals/agents/pi.md: `session_start`
+//! Lifecycle maps per docs/internals/agents/adapter_pi.md: `session_start`
 //! registers, `before_agent_start` starts the turn with the prompt,
 //! `agent_end` captures its in-band verdict, `agent_settled` ends it once no
 //! automatic continuation remains,

@@ -99,7 +99,7 @@ active-time/                          per-root-session active-time accumulators
 agent-telemetry/copilot-otel.jsonl    room-scoped metadata-only Copilot export
 ```
 
-The Copilot export is an adapter concern; what RimZ does with it is [copilot.md](./agents/copilot.md). The sidebar also publishes its own caches into this directory, and that catalog belongs to the module that writes them: [state.md → Published lanes](./sidebar/state.md#published-lanes).
+The Copilot export is an adapter concern; what RimZ does with it is [adapter_copilot.md](./agents/adapter_copilot.md). The sidebar also publishes its own caches into this directory, and that catalog belongs to the module that writes them: [state.md → Published lanes](./sidebar/state.md#published-lanes).
 
 Liveness hints live apart from the store for one concrete reason: `AF_UNIX` socket paths are short, 108 bytes on Linux and 104 on macOS including the terminator, and a path under the deep state tree would overrun the budget. The sockets set the location, and the heartbeats and receipts follow them.
 
@@ -246,7 +246,7 @@ When a room comes back after its mux session died, the rebirth path records `ses
 
 Beside it, `last-death.json` records the incident for cheap `rimz list --all` display, and the reborn room writes back how many lost agents it seeded. A lost session that recovery leaves behind gets a durable `Ended` trace instead: `rimz.recovery-declined` when the user chose a fresh start, `rimz.not-resumed` for a leftover recovery could not seed. Either trace drops the session out of the next recovery set while keeping it resumable by hand. A crash birth also archives mux forensics under `crashes/<utc-ts>/`, best-effort and never blocking launch, retaining the newest five. `rimz doctor` surfaces the last incident with its cause, time, lost and recovered counts, and archive path.
 
-The recovery flow itself, from roster to repopulated panes, is [sidebar.md → Resume-on-rebirth](./sidebar/sidebar.md#resume-on-rebirth) and [harness.md](./harness/harness.md).
+The recovery flow itself, from roster to repopulated panes, is [sidebar.md → Resume-on-rebirth](./sidebar/sidebar.md#resume-on-rebirth) and [fleet.md](./harness/fleet.md).
 
 ## Maintenance
 

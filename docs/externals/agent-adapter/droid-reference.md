@@ -1,6 +1,6 @@
 # Factory Droid CLI protocol reference
 
-> RimZ's shipped mapping is [droid.md](../../internals/agents/droid.md). This document records the upstream protocol facts that mapping is built on; the agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), and the account, balance, spend, and pricing contract is [providers.md](../../internals/agents/providers.md).
+> RimZ's shipped mapping is [adapter_droid.md](../../internals/agents/adapter_droid.md). This document records the upstream protocol facts that mapping is built on; the agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), and the account, balance, spend, and pricing contract is [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the **Factory Droid CLI upstream protocol surface** relevant to RimZ: lifecycle hooks, session identity and transcripts, permissions and questions, compaction, subagents and missions, model and autonomy settings, resume and fork behavior, non-interactive execution, the stream JSON-RPC transport, authentication, and usage.
 

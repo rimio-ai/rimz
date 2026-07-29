@@ -58,7 +58,7 @@ rimz agents 'vim,codex+term'                 # your editor beside an agent stack
 rimz agents claude,codex "Draft the API shape."   # the prompt lands on the first cell, Claude
 ```
 
-Quote a spec whenever it contains a `+`, a space, or anything your shell would otherwise expand. Profiles and kinds compose the same way, so `rimz agents planner,coder+reviewer` lays out three of your presets. The full grammar and how cells compile to panes is [harness.md → The layout IR](../internals/harness/harness.md#the-layout-ir).
+Quote a spec whenever it contains a `+`, a space, or anything your shell would otherwise expand. Profiles and kinds compose the same way, so `rimz agents planner,coder+reviewer` lays out three of your presets. The full grammar and how cells compile to panes is [fleet.md → The layout IR](../internals/harness/fleet.md#the-layout-ir).
 
 Add `-w` and the whole layout lands in an isolated Git worktree, the pattern for running several agents in parallel without stepping on each other: see [Worktrees](./worktrees.md).
 

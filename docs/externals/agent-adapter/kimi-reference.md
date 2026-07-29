@@ -1,6 +1,6 @@
 # Kimi Code protocol reference
 
-> RimZ's adapter mapping lives in [kimi.md](../../internals/agents/kimi.md). The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), and the account, balance, spend, and pricing contract is [providers.md](../../internals/agents/providers.md).
+> RimZ's adapter mapping lives in [adapter_kimi.md](../../internals/agents/adapter_kimi.md). The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), and the account, balance, spend, and pricing contract is [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the upstream protocol surface of [`MoonshotAI/kimi-code`](https://github.com/MoonshotAI/kimi-code) relevant to RimZ: lifecycle hooks, durable agent records, session identity and storage, approvals and questions, context and token usage, authentication and quota, subagents, resume and fork behavior, permission modes, and non-interactive execution.
 

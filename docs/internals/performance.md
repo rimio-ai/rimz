@@ -265,7 +265,7 @@ Short-lived helpers reuse a cached build id keyed by executable path, mtime, and
 
 ### Warm context, no cold spawns
 
-Codex enrichment skips the cold-spawn handshake: a per-session broker holds one warm, already-handshaked `codex app-server` and serves it over a unix socket ([codex.md](./agents/codex.md#context-and-transcript)). It runs as a pane in the `rimzd` daemon tab, respawns a dead child once, and always leaves a cold-spawn fallback, so enrichment never depends on it. The elder's transcript watcher closes Codex's mid-turn freshness gap, debounced to one flush per 300ms per session. Both are latency hints over the unconditional producer tick: a watcher that never starts costs nothing.
+Codex enrichment skips the cold-spawn handshake: a per-session broker holds one warm, already-handshaked `codex app-server` and serves it over a unix socket ([adapter_codex.md](./agents/adapter_codex.md#context-and-transcript)). It runs as a pane in the `rimzd` daemon tab, respawns a dead child once, and always leaves a cold-spawn fallback, so enrichment never depends on it. The elder's transcript watcher closes Codex's mid-turn freshness gap, debounced to one flush per 300ms per session. Both are latency hints over the unconditional producer tick: a watcher that never starts costs nothing.
 
 ### Lessons from removed anti-patterns
 

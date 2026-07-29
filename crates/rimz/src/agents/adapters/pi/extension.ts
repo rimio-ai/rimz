@@ -9,7 +9,7 @@
 // handler awaits the child and reads the decision from stdout — `{"block":
 // true, "reason": …}` blocks the tool, anything else (including an absent or
 // broken rimz) lets it run. RimZ authors this wire; the event mapping it
-// feeds is docs/internals/agents/pi.md and the upstream surface is
+// feeds is docs/internals/agents/adapter_pi.md and the upstream surface is
 // docs/externals/agent-adapter/pi-reference.md.
 import { spawn } from "node:child_process";
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";

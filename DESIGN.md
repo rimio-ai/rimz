@@ -33,7 +33,7 @@ A channel is a named lane where a human and a few agent colleagues work one line
 - `message` reaches a member in either tense: `--steer` types into the live pane now, the default parks text for the next open turn, `--schedule` sets a delivery floor, and `--on done|any` picks the boundary gate. Every mode routes through the one pane-send primitive and records an audit event that omits the message text.
 - Automation is a teammate. `rimz agents … -p` drives one member headless — cron, CI, or a script launches the turn, reads the answer or a stream, and branches on the exit code — through the same hooks, store, and pane path an interactive member uses.
 
-The launcher and address grammar live in [harness.md](./docs/internals/harness/harness.md), the delivery gates in [messaging.md](./docs/internals/harness/messaging.md), and the supervised-run machinery in [scripting.md](./docs/internals/harness/scripting.md).
+The launcher and address grammar live in [fleet.md](./docs/internals/harness/fleet.md), the delivery gates in [messaging.md](./docs/internals/harness/messaging.md), and the supervised-run machinery in [scripting.md](./docs/internals/harness/scripting.md).
 
 ## A programmable room
 

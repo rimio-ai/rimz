@@ -1,6 +1,6 @@
 # Claude Code protocol reference
 
-> The mapping onto RimZ's internal types lives beside this doc: [claude.md](../../internals/agents/claude.md) maps the hooks, statusline, transcript, account, and spend surfaces onto RimZ's internal types; the agent-agnostic model is [model.md](../../internals/agents/model.md) and the account/spend model is [providers.md](../../internals/agents/providers.md).
+> The mapping onto RimZ's internal types lives beside this doc: [adapter_claude.md](../../internals/agents/adapter_claude.md) maps the hooks, statusline, transcript, account, and spend surfaces onto RimZ's internal types; the agent-agnostic model is [model.md](../../internals/agents/model.md) and the account/spend model is [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the **Claude Code upstream protocol surface** RimZ binds to — the hook events, their stdin payloads and stdout decision schema, the statusline JSON, the auth surface, and the local-OAuth usage endpoint. It is a hand-maintained mirror of Anthropic's published docs plus the credential-file surfaces Claude Code itself uses, kept for fast lookup and pinned to the source URLs below so it can be refreshed when upstream moves. The [`ClaudeAdapter`](../../../crates/rimz/src/agents/adapters/claude/mod.rs) adapter is the only code that reads this surface; everything downstream of it speaks RimZ's internal types.
 
@@ -89,7 +89,7 @@ Per-event decision control rides `hookSpecificOutput` (or, for the post-* and st
 
 ### Hooks RimZ wires
 
-These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/adapters/claude/mod.rs) `INSTALLED_EVENTS` constant installs. The native-event → RimZ status mapping is the [claude.md → Hooks and lifecycle](../../internals/agents/claude.md#hooks-and-lifecycle); the columns here are the upstream fire-time and the event-specific stdin fields the adapter reads.
+These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/adapters/claude/mod.rs) `INSTALLED_EVENTS` constant installs. The native-event → RimZ status mapping is the [adapter_claude.md → Hooks and lifecycle](../../internals/agents/adapter_claude.md#hooks-and-lifecycle); the columns here are the upstream fire-time and the event-specific stdin fields the adapter reads.
 
 | Event | Fires | Event-specific input | RimZ channel |
 | --- | --- | --- | --- |
@@ -111,7 +111,7 @@ These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/adapt
 
 Compaction uses `PreCompact` as the opener. `PostCompact` closes with a known trigger when it arrives, and `SessionStart` with `source = "compact"` is triggerless close evidence so RimZ still closes and counts the bracket when `PostCompact` is missed.
 
-**Model field format.** Only `SessionStart` can receive `model`, and upstream does not guarantee it is present. Observed extended-context launches may carry the capability marker `claude-opus-4-8[1m]`, which signals a 1,000,000-token context window. RimZ strips the marker at reduce time ([model.md → The rollup](../../internals/agents/model.md#the-rollup)) and uses it to derive the window divisor ([claude.md → Context and transcript](../../internals/agents/claude.md#context-and-transcript)).
+**Model field format.** Only `SessionStart` can receive `model`, and upstream does not guarantee it is present. Observed extended-context launches may carry the capability marker `claude-opus-4-8[1m]`, which signals a 1,000,000-token context window. RimZ strips the marker at reduce time ([model.md → The rollup](../../internals/agents/model.md#the-rollup)) and uses it to derive the window divisor ([adapter_claude.md → Context and transcript](../../internals/agents/adapter_claude.md#context-and-transcript)).
 
 **Decision shapes RimZ renders.** A `PermissionRequest` answer:
 
@@ -372,11 +372,11 @@ The helper calls `GET https://api.anthropic.com/api/oauth/usage` with `Authoriza
 }
 ```
 
-`five_hour` and `seven_day` map to 300- and 10080-minute `RateLimitWindow`s. `utilization` is a 0–100 percentage and RimZ rounds/clamps it the same way as statusline `used_percentage`; `1.0` means 1%, not a fully spent window. `extra_usage.is_enabled = false` maps to `ExtraCredits::Disabled`; otherwise `used_credits` and `monthly_limit` are cents converted to USD. The semantics (`metered` inference, plan→brand label, cache cadence) are in [claude.md → Account and balance](../../internals/agents/claude.md#account-and-balance).
+`five_hour` and `seven_day` map to 300- and 10080-minute `RateLimitWindow`s. `utilization` is a 0–100 percentage and RimZ rounds/clamps it the same way as statusline `used_percentage`; `1.0` means 1%, not a fully spent window. `extra_usage.is_enabled = false` maps to `ExtraCredits::Disabled`; otherwise `used_credits` and `monthly_limit` are cents converted to USD. The semantics (`metered` inference, plan→brand label, cache cadence) are in [adapter_claude.md → Account and balance](../../internals/agents/adapter_claude.md#account-and-balance).
 
 ## Transcript JSONL
 
-Anthropic publishes **no official schema** for the conversation transcript at `transcript_path`. RimZ reads it best-effort and reverse-engineered: each assistant line carries a `message` object, and the newest `message.usage` (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`) plus `message.model` feed the context gauge. Newer usage objects may also carry `iterations`; an iteration whose `type` is `advisor_message` names its own `model` and usage buckets and represents a separately billed nested request. The field → internal mapping and the window-divisor rule are in [claude.md → Context and transcript](../../internals/agents/claude.md#context-and-transcript); there is no source URL to pin.
+Anthropic publishes **no official schema** for the conversation transcript at `transcript_path`. RimZ reads it best-effort and reverse-engineered: each assistant line carries a `message` object, and the newest `message.usage` (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`) plus `message.model` feed the context gauge. Newer usage objects may also carry `iterations`; an iteration whose `type` is `advisor_message` names its own `model` and usage buckets and represents a separately billed nested request. The field → internal mapping and the window-divisor rule are in [adapter_claude.md → Context and transcript](../../internals/agents/adapter_claude.md#context-and-transcript); there is no source URL to pin.
 
 ### Transcript death certificate
 
@@ -389,4 +389,4 @@ Older Claude sessions, or sessions whose hooks were installed after the failure,
 {"type": "system", "subtype": "turn_duration", "timestamp": "2026-06-04T02:56:32.923Z"}
 ```
 
-[`detect_turn_error`](../../../crates/rimz/src/agents/adapters/claude/statusline.rs) reads the flagged assistant entry off the bounded tail on each statusline push as the backstop. It classifies labels containing "spend limit" as spend-limit paused, labels containing "usage limit", "session limit", "rate limit", "quota", or "too many requests" as rate-limit paused, transient server/transport labels ("overloaded", "server is busy", "server error", "internal server error", "service unavailable", "bad gateway", "gateway timeout", "stalled", "timed out", "timeout", "connection error", "connection closed", "connection reset", "connection lost", "socket hang up", "broken pipe", "econnreset", "mid-response", "mid-stream", or "network error") as the backoff paused class, and other API-error labels as failed; the decision rule and the internal mapping are [claude.md → Turn-death marker](../../internals/agents/claude.md#turn-death-marker). Reverse-engineered like the rest of this section; no source URL to pin.
+[`detect_turn_error`](../../../crates/rimz/src/agents/adapters/claude/statusline.rs) reads the flagged assistant entry off the bounded tail on each statusline push as the backstop. It classifies labels containing "spend limit" as spend-limit paused, labels containing "usage limit", "session limit", "rate limit", "quota", or "too many requests" as rate-limit paused, transient server/transport labels ("overloaded", "server is busy", "server error", "internal server error", "service unavailable", "bad gateway", "gateway timeout", "stalled", "timed out", "timeout", "connection error", "connection closed", "connection reset", "connection lost", "socket hang up", "broken pipe", "econnreset", "mid-response", "mid-stream", or "network error") as the backoff paused class, and other API-error labels as failed; the decision rule and the internal mapping are [adapter_claude.md → Turn-death marker](../../internals/agents/adapter_claude.md#turn-death-marker). Reverse-engineered like the rest of this section; no source URL to pin.

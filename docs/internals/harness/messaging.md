@@ -1,6 +1,6 @@
 # The message system
 
-> How text reaches a running agent: the durable record, the delivery decision, the pane write, the reply wait, the channel lanes that scope addressing, and the transcript that reads the conversation back. The code is `crates/rimz/src/message/`; [harness.md](./harness.md) is the map for this area and owns the [address grammar](./harness.md#the-address) this module resolves through. For users, the commands are [cli/message.md](../../reference/cli/message.md), [cli/transcript.md](../../reference/cli/transcript.md), [cli/channel.md](../../reference/cli/channel.md), and [cli/asks.md](../../reference/cli/asks.md).
+> How text reaches a running agent: the durable record, the delivery decision, the pane write, the reply wait, the channel lanes that scope addressing, and the transcript that reads the conversation back. The code is `crates/rimz/src/message/`; [fleet.md](./fleet.md) is the map for this area and owns the [address grammar](./fleet.md#the-address) this module resolves through. For users, the commands are [cli/message.md](../../reference/cli/message.md), [cli/transcript.md](../../reference/cli/transcript.md), [cli/channel.md](../../reference/cli/channel.md), and [cli/asks.md](../../reference/cli/asks.md).
 
 ## What the module does
 

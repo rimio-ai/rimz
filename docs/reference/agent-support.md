@@ -190,19 +190,19 @@ The detail for each agent — its full coverage rationale, permission-mode mappi
 
 | Agent | Mapping | Upstream protocol |
 | --- | --- | --- |
-| Claude Code | [claude.md](../internals/agents/claude.md) | [claude-reference.md](../externals/agent-adapter/claude-reference.md) |
-| Codex | [codex.md](../internals/agents/codex.md) | [codex-reference.md](../externals/agent-adapter/codex-reference.md) |
-| Pi | [pi.md](../internals/agents/pi.md) | [pi-reference.md](../externals/agent-adapter/pi-reference.md) |
-| OpenCode | [opencode.md](../internals/agents/opencode.md) | [opencode-reference.md](../externals/agent-adapter/opencode-reference.md) |
-| Antigravity CLI | [antigravity.md](../internals/agents/antigravity.md) | [antigravity-reference.md](../externals/agent-adapter/antigravity-reference.md) |
-| Copilot | [copilot.md](../internals/agents/copilot.md) | [copilot-reference.md](../externals/agent-adapter/copilot-reference.md) |
-| Droid | [droid.md](../internals/agents/droid.md) | [droid-reference.md](../externals/agent-adapter/droid-reference.md) |
-| Cursor | [cursor.md](../internals/agents/cursor.md) | [cursor-reference.md](../externals/agent-adapter/cursor-reference.md) |
-| Amp | [amp.md](../internals/agents/amp.md) | [amp-reference.md](../externals/agent-adapter/amp-reference.md) |
-| Kiro CLI | [kiro.md](../internals/agents/kiro.md) | [kiro-reference.md](../externals/agent-adapter/kiro-reference.md) |
-| Qwen Code | [qwen.md](../internals/agents/qwen.md) | [qwen-reference.md](../externals/agent-adapter/qwen-reference.md) |
-| Kimi | [kimi.md](../internals/agents/kimi.md) | [kimi-reference.md](../externals/agent-adapter/kimi-reference.md) |
-| Grok Build | [grok.md](../internals/agents/grok.md) | [grok-reference.md](../externals/agent-adapter/grok-reference.md) |
+| Claude Code | [adapter_claude.md](../internals/agents/adapter_claude.md) | [claude-reference.md](../externals/agent-adapter/claude-reference.md) |
+| Codex | [adapter_codex.md](../internals/agents/adapter_codex.md) | [codex-reference.md](../externals/agent-adapter/codex-reference.md) |
+| Pi | [adapter_pi.md](../internals/agents/adapter_pi.md) | [pi-reference.md](../externals/agent-adapter/pi-reference.md) |
+| OpenCode | [adapter_opencode.md](../internals/agents/adapter_opencode.md) | [opencode-reference.md](../externals/agent-adapter/opencode-reference.md) |
+| Antigravity CLI | [adapter_antigravity.md](../internals/agents/adapter_antigravity.md) | [antigravity-reference.md](../externals/agent-adapter/antigravity-reference.md) |
+| Copilot | [adapter_copilot.md](../internals/agents/adapter_copilot.md) | [copilot-reference.md](../externals/agent-adapter/copilot-reference.md) |
+| Droid | [adapter_droid.md](../internals/agents/adapter_droid.md) | [droid-reference.md](../externals/agent-adapter/droid-reference.md) |
+| Cursor | [adapter_cursor.md](../internals/agents/adapter_cursor.md) | [cursor-reference.md](../externals/agent-adapter/cursor-reference.md) |
+| Amp | [adapter_amp.md](../internals/agents/adapter_amp.md) | [amp-reference.md](../externals/agent-adapter/amp-reference.md) |
+| Kiro CLI | [adapter_kiro.md](../internals/agents/adapter_kiro.md) | [kiro-reference.md](../externals/agent-adapter/kiro-reference.md) |
+| Qwen Code | [adapter_qwen.md](../internals/agents/adapter_qwen.md) | [qwen-reference.md](../externals/agent-adapter/qwen-reference.md) |
+| Kimi | [adapter_kimi.md](../internals/agents/adapter_kimi.md) | [kimi-reference.md](../externals/agent-adapter/kimi-reference.md) |
+| Grok Build | [adapter_grok.md](../internals/agents/adapter_grok.md) | [grok-reference.md](../externals/agent-adapter/grok-reference.md) |
 
 ## Versions
 

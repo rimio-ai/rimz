@@ -1,10 +1,10 @@
 # RimZ-owned worktrees
 
-> The full life of a RimZ-owned Git worktree: the ownership marker, creation and seeding, the proof that a branch's work landed, and every path that removes a tree. The code is `crates/rimz/src/worktree.rs` plus its three private submodules; [harness.md](./harness.md) is the map for this area. For users, the commands are [cli/worktree.md](../../reference/cli/worktree.md) and the guide is [worktrees.md](../../guide/worktrees.md).
+> The full life of a RimZ-owned Git worktree: the ownership marker, creation and seeding, the proof that a branch's work landed, and every path that removes a tree. The code is `crates/rimz/src/worktree.rs` plus its three private submodules; [fleet.md](./fleet.md) is the map for this area. For users, the commands are [cli/worktree.md](../../reference/cli/worktree.md) and the guide is [worktrees.md](../../guide/worktrees.md).
 
 A worktree is one Git checkout of the repository on its own branch, and RimZ runs its whole life: create it for a line of work, seed it with the untracked files an agent needs, and reclaim it once its work has landed on the base branch. The tree's name is also a [channel](./messaging.md#channels), so `@coder#feat-a` addresses the agent working inside it.
 
-The subsystem stands on its own. `rimz worktree new`, `list`, `remove`, and the `rimz gc` sweep work whether or not an agent ever launches into a tree, and the harness calls the same entry points when it does ([harness.md](./harness.md#reclaiming-a-pane)). What agents do inside a tree belongs to [harness.md](./harness.md); the lane the tree backs belongs to [messaging.md](./messaging.md#channels).
+The subsystem stands on its own. `rimz worktree new`, `list`, `remove`, and the `rimz gc` sweep work whether or not an agent ever launches into a tree, and the harness calls the same entry points when it does ([fleet.md](./fleet.md#reclaiming-a-pane)). What agents do inside a tree belongs to [fleet.md](./fleet.md); the lane the tree backs belongs to [messaging.md](./messaging.md#channels).
 
 ## The one rule: RimZ touches only what it marked
 
@@ -194,13 +194,13 @@ Four callers enter the same domain path.
 | Clean interactive quit | Record the end trace, print the relaunch hint, exec a shell inside the tree. `rimz gc` reclaims it later. |
 | Supervised `-p` run completes | Run cleanup in the foreground; an interactive prompt is allowed. |
 | Tab or pane close, or SIGHUP/SIGTERM, while the mux session still accepts closes | Spawn cleanup detached with `--non-interactive`, null stdio, and its own process group, so it survives the disappearing pane. |
-| Abrupt exit with the mux session gone, wedged, or resurrected | Skip cleanup entirely. Recovery comes from the sidebar producer's live roster ([harness.md](./harness.md#reclaiming-a-pane)). |
+| Abrupt exit with the mux session gone, wedged, or resurrected | Skip cleanup entirely. Recovery comes from the sidebar producer's live roster ([fleet.md](./fleet.md#reclaiming-a-pane)). |
 
 Cleanup prefers the on-disk `rimz worktree cleanup <path>` binary over its own in-process implementation, and falls back in-process when the binary cannot be resolved or spawned. The non-interactive path sleeps briefly first so the store roster settles before protection facts are read. On the way in, the wrapper refuses to launch at all if the marker vanished between the launch decision and the exec, rather than silently running the agent in the project root.
 
 **`rimz gc`** sweeps every managed tree in the repository that assesses Removable, measures the bytes reclaimed, and runs `git worktree prune` afterwards. It requires a readable agent roster and skips the whole worktree area without one, reporting why, alongside its other skip reasons (not a repository, no store, listing failed). Every managed tree appears in the report: removed trees with their branch fate, retained trees with the reason that kept them. `--dry-run` produces the same accounting without acting. Named channel records outlive `gc`; only `rimz channel rm` removes those.
 
-**Cohort relaunch** handles `rimz agents <team> -w <name>` against a tree that already exists. `inspect_cohort_relaunch` classifies the prior cohort as absent, present, or closed; a closed cohort in a Removable tree offers to remove and recreate, and a closed cohort in a kept tree offers a resume instead ([harness.md](./harness.md#cohort-relaunch-reconciliation)).
+**Cohort relaunch** handles `rimz agents <team> -w <name>` against a tree that already exists. `inspect_cohort_relaunch` classifies the prior cohort as absent, present, or closed; a closed cohort in a Removable tree offers to remove and recreate, and a closed cohort in a kept tree offers a resume instead ([fleet.md](./fleet.md#cohort-relaunch-reconciliation)).
 
 ## Invariants worth preserving
 

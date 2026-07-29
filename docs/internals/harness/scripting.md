@@ -1,6 +1,6 @@
 # Supervised runs
 
-> One supervised turn end to end: the durable record, the completion signal, the wait, verification and retry, the output projections, and pane reclamation. [harness.md](./harness.md) is the map for this area and owns the launch machinery a run rides on. For users, the guide is [scripting.md](../../guide/scripting.md) and the flag reference is [cli/agents.md](../../reference/cli/agents.md#supervised-runs--p).
+> One supervised turn end to end: the durable record, the completion signal, the wait, verification and retry, the output projections, and pane reclamation. [fleet.md](./fleet.md) is the map for this area and owns the launch machinery a run rides on. For users, the guide is [scripting.md](../../guide/scripting.md) and the flag reference is [cli/agents.md](../../reference/cli/agents.md#supervised-runs--p).
 
 ## What a supervised run is
 
@@ -68,7 +68,7 @@ Terminal statuses are absorbing. `mark_terminal` returns a `wrote` flag that is 
 
 The driver is `cli::supervised::run_supervised`. One call can contain several attempts, and the order inside one attempt matters.
 
-1. **Prepare.** Resolve the workspace and machine config, resolve and finalize the one-cell layout ([harness.md § From spec to panes](./harness.md#from-spec-to-panes)), and reject a comma-bearing prompt that was probably a mistyped spec.
+1. **Prepare.** Resolve the workspace and machine config, resolve and finalize the one-cell layout ([fleet.md § From spec to panes](./fleet.md#from-spec-to-panes)), and reject a comma-bearing prompt that was probably a mistyped spec.
 2. **Gate on dollars.** The provider-account quota gate and [`budget::scope_gate`](./budget.md#the-fail-fast-gate) run before the room is touched, and again at the top of every attempt. A refusal returns `SupervisedRunOutcome::BudgetExceeded` and never writes a record or opens a pane, which is why exit `125` is distinguishable from a run that started and then hit a cap.
 3. **Birth the room.** A caller outside a room gets one; an attended caller may reset a stuck room, while a non-interactive caller requires an explicit reset instead of silently resetting under a script.
 4. **Build the identity.** A `RunRecord` is constructed in memory, including a `deadline_at` when the request carries `--timeout`; the store opens a launch batch that mints the provisional agent row and name, and that name is stamped onto the record. On a retry attempt an explicit `--name` is downgraded to a soft name, so the fresh attempt can remint while the prior ended row keeps its handle.
@@ -164,7 +164,7 @@ An adapter with no verified turn-completion signal refuses `-p` before opening a
 
 ## Background runs and joining
 
-`--bg` splits starting a run from waiting on it. The driver opens the pane, prints the agent name, and returns without binding a waiter. `rimz agents wait <ref>...` then polls the durable records of one or several runs, joining with `JoinMode::All` or, with `--any`, settling on the first to finish. A reference is the printed name, a run id, or any [agent address](./harness.md#the-address), so one handle threads through `wait`, `show`, `stop`, and `message`.
+`--bg` splits starting a run from waiting on it. The driver opens the pane, prints the agent name, and returns without binding a waiter. `rimz agents wait <ref>...` then polls the durable records of one or several runs, joining with `JoinMode::All` or, with `--any`, settling on the first to finish. A reference is the printed name, a run id, or any [agent address](./fleet.md#the-address), so one handle threads through `wait`, `show`, `stop`, and `message`.
 
 Because the record is the run, a `wait` in a different shell, a later CI step, or another machine sharing the state directory sees exactly what the launching process would have seen.
 
@@ -186,7 +186,7 @@ A loop fire calls the same `run_supervised` driver with a `SupervisedRunRequest`
 
 ## See also
 
-- [harness.md](./harness.md): the launch, address, and cleanup machinery a run rides on.
+- [fleet.md](./fleet.md): the launch, address, and cleanup machinery a run rides on.
 - [loops.md](./loops.md): driving these runs on a clock.
 - [messaging.md](./messaging.md): the delivery path a verify re-prompt uses.
 - [store.md](../store.md): where run records sit among the other durable state.

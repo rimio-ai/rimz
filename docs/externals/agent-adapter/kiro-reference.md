@@ -1,6 +1,6 @@
 # Kiro CLI protocol reference
 
-> RimZ's verified mapping is in [kiro.md](../../internals/agents/kiro.md). This document records the pinned upstream surface and stock Kiro CLI 2.12.1 evidence.
+> RimZ's verified mapping is in [adapter_kiro.md](../../internals/agents/adapter_kiro.md). This document records the pinned upstream surface and stock Kiro CLI 2.12.1 evidence.
 
 This reference targets the early-access v3 engine selected by `kiro-cli chat --v3`, not the older embedded engine. Verification baseline: **2026-07-13**, Kiro CLI **2.12.1**, authenticated stock interactive TUI.
 

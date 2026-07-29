@@ -14,7 +14,7 @@
 //! `~/.claude/settings.json` under per-matcher `_rimz_managed` markers. The
 //! `PermissionRequest` blocking hook is marked `_rimz_sync = true`; an existing
 //! async marker on it is a hard install error (see [`CLAUDE_HOOKS`] and
-//! `docs/internals/agents/claude.md`). The `PreToolUse` blocking sub-events ride the
+//! `docs/internals/agents/adapter_claude.md`). The `PreToolUse` blocking sub-events ride the
 //! broad `PreToolUse` hook and self-classify from `tool_name`.
 
 pub(crate) mod account;

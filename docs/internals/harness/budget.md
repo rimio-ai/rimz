@@ -1,6 +1,6 @@
 # Dollar budgets
 
-> The budget engine: the scopes it enforces, the ledgers it keeps, the verdict that decides a park, the one human waiver, the pane interrupt, and the fail-fast gate programmatic callers hit. The code is [`harness/budget.rs`](../../../crates/rimz/src/harness/budget.rs). [harness.md](./harness.md) is the map for this area. For users, the guide is [budget.md](../../guide/budget.md) and the commands are [cli/agents.md](../../reference/cli/agents.md#inspect-and-change-a-budget).
+> The budget engine: the scopes it enforces, the ledgers it keeps, the verdict that decides a park, the one human waiver, the pane interrupt, and the fail-fast gate programmatic callers hit. The code is [`harness/budget.rs`](../../../crates/rimz/src/harness/budget.rs). [fleet.md](./fleet.md) is the map for this area. For users, the guide is [budget.md](../../guide/budget.md) and the commands are [cli/agents.md](../../reference/cli/agents.md#inspect-and-change-a-budget).
 
 ## What the engine does
 

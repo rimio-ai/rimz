@@ -1,6 +1,6 @@
 # Loop scheduling
 
-> The scheduler: where task definitions live, who keeps time, what one fire does, and the unattended recovery the same elder runs alongside it. [harness.md](./harness.md) is the map for this area. For users, the guide is [loops.md](../../guide/loops.md) and the flag reference is [cli/loop.md](../../reference/cli/loop.md).
+> The scheduler: where task definitions live, who keeps time, what one fire does, and the unattended recovery the same elder runs alongside it. [fleet.md](./fleet.md) is the map for this area. For users, the guide is [loops.md](../../guide/loops.md) and the flag reference is [cli/loop.md](../../reference/cli/loop.md).
 
 ## What the scheduler does
 
@@ -238,7 +238,7 @@ Four `Assist` variants live in the log today:
 
 - [scripting.md](./scripting.md): the supervised run every `agent` task spawns.
 - [messaging.md](./messaging.md): the delivery path every `wake` task uses.
-- [harness.md](./harness.md): launch compilation and addressing.
+- [fleet.md](./fleet.md): launch compilation and addressing.
 - [budget.md](./budget.md): the dollar scopes the gate ladder reads, and the park the `Budget` class waits out.
 - [providers.md](../agents/providers.md): account windows, capacity readings, and the pricing behind recorded cost.
 - [sidebar/state.md](../sidebar/state.md#renderers-the-producer-and-consumers): how the elder is elected and what else runs on its tick.

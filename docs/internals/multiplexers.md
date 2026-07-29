@@ -21,7 +21,7 @@ Three rules follow from that split, and they are the ones to internalize before 
 
 **Cross-backend policy stays pure and above the backends.** [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) owns the one-sidebar-per-view planner and its accounting, [`width.rs`](../../crates/rimz/src/mux/width.rs) owns sizing arithmetic, and [`sidebar/presence/projector.rs`](../../crates/rimz/src/sidebar/presence/projector.rs) owns the event taxonomy. Each backend collects native facts and executes native effects; neither decides policy. These modules unit-test with no multiplexer installed.
 
-**Backends stay ignorant of agents.** The CLI hands `open_tab` backend-neutral pane argv and layout geometry. Agent resolution, prompts, and worktree cleanup are already compiled into that argv (`rimz agents exec …`), so no backend knows what an agent kind or a worktree is. The layout IR is in [harness.md](./harness/harness.md#the-layout-ir); worktree cleanup is in [worktrees.md](./harness/worktrees.md#who-triggers-removal).
+**Backends stay ignorant of agents.** The CLI hands `open_tab` backend-neutral pane argv and layout geometry. Agent resolution, prompts, and worktree cleanup are already compiled into that argv (`rimz agents exec …`), so no backend knows what an agent kind or a worktree is. The layout IR is in [fleet.md](./harness/fleet.md#the-layout-ir); worktree cleanup is in [worktrees.md](./harness/worktrees.md#who-triggers-removal).
 
 ## Module map
 

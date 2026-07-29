@@ -42,7 +42,7 @@ The harness is a product area, not a single Rust module. It spans four source tr
 
 | Page | Owns | Source |
 | --- | --- | --- |
-| harness.md (this page) | Spawn, address, resume, reclaim | [`harness/`](../../../crates/rimz/src/harness) |
+| fleet.md (this page) | Spawn, address, resume, reclaim | [`harness/`](../../../crates/rimz/src/harness) |
 | [scripting.md](./scripting.md) | Supervised `-p` runs | [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), [`run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) |
 | [loops.md](./loops.md) | Scheduled tasks and unattended recovery | [`harness/schedule/`](../../../crates/rimz/src/harness/schedule), [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs) |
 | [budget.md](./budget.md) | Dollar caps and the park they produce | [`harness/budget.rs`](../../../crates/rimz/src/harness/budget.rs), [`cli/budget.rs`](../../../crates/rimz/src/cli/budget.rs) |

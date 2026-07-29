@@ -1,6 +1,6 @@
 # GitHub Copilot CLI protocol reference
 
-> RimZ ships a hooks-first Copilot adapter documented in [copilot.md](../../internals/agents/copilot.md). This reference retains the live-verification and enrichment gaps that bound the current integration; the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
+> RimZ ships a hooks-first Copilot adapter documented in [adapter_copilot.md](../../internals/agents/adapter_copilot.md). This reference retains the live-verification and enrichment gaps that bound the current integration; the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the **GitHub Copilot CLI upstream protocol surface** relevant to RimZ — lifecycle hooks and their decision channel, session identity and persistence, the statusline command, OpenTelemetry, programmatic and ACP modes, authentication, remote control, configuration, and permission modes. It is an implementation research record, not a claim that RimZ currently supports Copilot.
 
@@ -510,7 +510,7 @@ The official prerequisite says the cwd must be a Git repository hosted on GitHub
 
 ## Implementation footprints and open gaps
 
-The hooks-first adapter implements the lifecycle, transcript correlation, selected statusline, and narrow OTel fallback documented in [copilot.md](../../internals/agents/copilot.md). Version-pinned Copilot CLI 1.0.70 fixtures cover a clean prompt-mode turn, hook/system noise, final output, and metadata-only OTel; sanitized 1.0.71 fixtures pin child correlation and the modern statusline field scopes. The remaining live-verification items follow.
+The hooks-first adapter implements the lifecycle, transcript correlation, selected statusline, and narrow OTel fallback documented in [adapter_copilot.md](../../internals/agents/adapter_copilot.md). Version-pinned Copilot CLI 1.0.70 fixtures cover a clean prompt-mode turn, hook/system noise, final output, and metadata-only OTel; sanitized 1.0.71 fixtures pin child correlation and the modern statusline field scopes. The remaining live-verification items follow.
 
 1. Install a user hook file containing every native camelCase event; prove discovery in interactive and `-p` modes, `disableAllHooks`, `COPILOT_HOME`, path quoting, cwd, environment inheritance, timeout, stderr, neutral stdout, and uninstall.
 2. Record hook payloads for new/resume/new-session switching, prompt, success/failure tool calls, every permission choice, `ask_user`, stop, errors, manual/auto compaction, non-`general-purpose` built-ins, nested children, and every session-end reason.

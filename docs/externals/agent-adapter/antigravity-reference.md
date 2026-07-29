@@ -1,6 +1,6 @@
 # Antigravity CLI protocol reference
 
-> The landed adapter mapping is [antigravity.md](../../internals/agents/antigravity.md), the agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), the adapter implementation playbook is [agent-adapters.md](../../contributing/agent-adapters.md), and account, balance, spend, and pricing semantics are in [providers.md](../../internals/agents/providers.md).
+> The landed adapter mapping is [adapter_antigravity.md](../../internals/agents/adapter_antigravity.md), the agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), the adapter implementation playbook is [agent-adapters.md](../../contributing/agent-adapters.md), and account, balance, spend, and pricing semantics are in [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the official **Antigravity CLI upstream surface** a RimZ adapter can bind to: the `agy` process and launch flags, JSON command hooks, custom statusline state, conversations, local persistence, permission and artifact waits, subagents, headless runs, authentication, models, and quota presentation.
 

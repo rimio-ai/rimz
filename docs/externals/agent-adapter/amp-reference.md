@@ -1,8 +1,8 @@
 # Amp CLI protocol reference
 
-> RimZ's landed mapping is [amp.md](../../internals/agents/amp.md). This document records the upstream surface behind it; the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
+> RimZ's landed mapping is [adapter_amp.md](../../internals/agents/adapter_amp.md). This document records the upstream surface behind it; the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
 
-This is the single home for the **Amp CLI upstream protocol surface** relevant to RimZ: the Plugin API lifecycle and decision seam, thread identity and state, transcript access, tool classification, execute-mode JSONL, permissions, configuration and trust, authentication and usage, remote control, runners, and launch modes. It is the implementation research and drift-check record; current RimZ support claims live in [amp.md](../../internals/agents/amp.md) and [agent-support.md](../../reference/agent-support.md).
+This is the single home for the **Amp CLI upstream protocol surface** relevant to RimZ: the Plugin API lifecycle and decision seam, thread identity and state, transcript access, tool classification, execute-mode JSONL, permissions, configuration and trust, authentication and usage, remote control, runners, and launch modes. It is the implementation research and drift-check record; current RimZ support claims live in [adapter_amp.md](../../internals/agents/adapter_amp.md) and [agent-support.md](../../reference/agent-support.md).
 
 Refresh baseline: Amp CLI [`@ampcode/cli` 0.0.1783946745-g8c4c0a](https://www.npmjs.com/package/@ampcode/cli/v/0.0.1783946745-g8c4c0a), released **2026-07-13**, and the rolling official Amp manual and generated `@ampcode/plugin` type reference available on **2026-07-13**. The exact CLI reports `0.0.1783946745-g8c4c0a (released 2026-07-13T12:45:45.000Z)`, and `amp plugins show-docs` from that binary is the type-reference baseline used here.
 

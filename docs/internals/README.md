@@ -13,16 +13,16 @@ Read the shape first: [DESIGN.md](../../DESIGN.md) states the attention problem,
 | [model.md](./agents/model.md) | The agent model: the rollup, the state machine, the displayed-status ladder, and the instance lifecycle. |
 | [adapter.md](./agents/adapter.md) | The adapter layer: the registry, the capability traits, the hook path, install, context sources, and declared coverage. |
 | [plugin.md](./agents/plugin.md) | Third-party plugin loading, the canonical process wire, derived descriptors, and probe execution. |
-| [claude.md](./agents/claude.md), [codex.md](./agents/codex.md), [amp.md](./agents/amp.md), [copilot.md](./agents/copilot.md), [kimi.md](./agents/kimi.md), [pi.md](./agents/pi.md), [opencode.md](./agents/opencode.md), [antigravity.md](./agents/antigravity.md), [cursor.md](./agents/cursor.md), [droid.md](./agents/droid.md), [kiro.md](./agents/kiro.md), [qwen.md](./agents/qwen.md), [grok.md](./agents/grok.md) | Per-kind adapter mappings: how each native event, transcript, and account surface folds onto RimZ's types. |
+| [adapter_claude.md](./agents/adapter_claude.md), [adapter_codex.md](./agents/adapter_codex.md), [adapter_amp.md](./agents/adapter_amp.md), [adapter_copilot.md](./agents/adapter_copilot.md), [adapter_kimi.md](./agents/adapter_kimi.md), [adapter_pi.md](./agents/adapter_pi.md), [adapter_opencode.md](./agents/adapter_opencode.md), [adapter_antigravity.md](./agents/adapter_antigravity.md), [adapter_cursor.md](./agents/adapter_cursor.md), [adapter_droid.md](./agents/adapter_droid.md), [adapter_kiro.md](./agents/adapter_kiro.md), [adapter_qwen.md](./agents/adapter_qwen.md), [adapter_grok.md](./agents/adapter_grok.md) | Per-kind adapter mappings: how each native event, transcript, and account surface folds onto RimZ's types. |
 | [providers.md](./agents/providers.md) | Accounts, balances, spend, and the token-pricing table behind the provider dashboard. |
 
 ## The harness
 
-The harness runs the fleet: spawn, address, message, and reclaim. It is a product area rather than a single module, spanning `harness/`, `message/`, `worktree.rs`, and `trust.rs`. Start at [harness.md](./harness/harness.md), which maps the area and names the source tree behind each page.
+The harness runs the fleet: spawn, address, message, and reclaim. It is a product area rather than a single module, spanning `harness/`, `message/`, `worktree.rs`, and `trust.rs`. Start at [fleet.md](./harness/fleet.md), which maps the area and names the source tree behind each page.
 
 | Page | What it owns |
 | --- | --- |
-| [harness.md](./harness/harness.md) | The area map and the launch core: the rules that shape the design, the state-machine index, the layout IR, the exec wrapper, the address grammar, resume planning, and pane reclamation. |
+| [fleet.md](./harness/fleet.md) | The area map and the launch core: the rules that shape the design, the state-machine index, the layout IR, the exec wrapper, the address grammar, resume planning, and pane reclamation. |
 | [scripting.md](./harness/scripting.md) | Supervised `-p` runs: the durable run record, the completion fold, the wake socket, verification and retry, and the output projections. |
 | [loops.md](./harness/loops.md) | Loop scheduling: the task catalog and its sources, elder firing, the fire gate ladder, run history, and the assist log. |
 | [budget.md](./harness/budget.md) | Dollar caps: the scopes, the ledgers on disk, the verdict, the human waiver, the pane interrupt, and the fail-fast gate. |
