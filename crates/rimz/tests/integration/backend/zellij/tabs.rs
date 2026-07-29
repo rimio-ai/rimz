@@ -6,6 +6,85 @@ use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, SidebarPaneOptions, TabOptions
 use tempfile::TempDir;
 
 use super::support::*;
+use crate::common::CommandTimeoutExt;
+
+#[test]
+fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
+    require_zellij!();
+
+    let room = LiveZellijSession::new("rename-tab");
+    room.create_background();
+    let _client = AttachedClient::attach(&room, 100, 30);
+    open_new_tab(room.path(), room.name());
+    open_new_tab(room.path(), room.name());
+    let before = expect_list_panes(room.path(), room.name());
+    let ids = before.tab_ids();
+    assert_eq!(
+        ids.len(),
+        3,
+        "fixture should start with three tabs: {before:?}"
+    );
+    let removed = ids[1];
+    let target_id = ids[2];
+    let output = room
+        .command()
+        .args([
+            "--session",
+            room.name(),
+            "action",
+            "close-tab-by-id",
+            &removed.to_string(),
+        ])
+        .bounded_output()
+        .expect("close middle tab");
+    assert!(
+        output.status.success(),
+        "close middle tab failed: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let shifted = poll_until(
+        Duration::from_secs(10),
+        || list_panes(room.path(), room.name()),
+        |snapshot| snapshot.tab_ids() == vec![ids[0], target_id],
+        "middle tab close",
+    );
+    let target = shifted
+        .panes
+        .iter()
+        .find(|pane| !pane.is_plugin && pane.tab_id == target_id)
+        .expect("target tab work pane");
+    assert_ne!(
+        target.tab_position,
+        Some(target_id),
+        "fixture must distinguish stable id from shifted position",
+    );
+    let anchor = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target.id));
+
+    room.backend()
+        .rename_tab(room.name(), &anchor, "work ✓")
+        .expect("rename shifted tab by its pane anchor");
+
+    let renamed = poll_until(
+        Duration::from_secs(10),
+        || list_panes(room.path(), room.name()),
+        |snapshot| {
+            snapshot
+                .panes
+                .iter()
+                .filter(|pane| pane.tab_id == target_id)
+                .all(|pane| pane.tab_name.as_deref() == Some("work ✓"))
+        },
+        "renamed stable-id tab",
+    );
+    assert!(
+        renamed
+            .panes
+            .iter()
+            .filter(|pane| pane.tab_id != target_id)
+            .all(|pane| pane.tab_name.as_deref() != Some("work ✓")),
+        "rename should not affect another tab: {renamed:?}",
+    );
+}
 
 #[test]
 fn open_tab_unfocused_routes_input_back_to_source() {

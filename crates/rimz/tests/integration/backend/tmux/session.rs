@@ -14,6 +14,22 @@ fn terminal_feature_count(stdout: &str, feature: &str) -> usize {
 }
 
 #[test]
+fn rename_tab_targets_the_anchor_panes_window() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-rename-tab";
+    server.ensure_with_shell(session);
+    let anchor = list_session_panes(&server, session)[0].pane_id.clone();
+
+    server
+        .backend
+        .rename_tab(session, &anchor, "work ✓")
+        .expect("rename pane's window");
+
+    assert_eq!(server.display(session, "#{window_name}"), "work ✓");
+}
+
+#[test]
 fn ensure_session_applies_room_contract() {
     require_tmux!();
     let server = TmuxServer::new();
