@@ -283,17 +283,37 @@ fn collect_functions_keeps_parent_aggregate_and_skips_nested_closures() {
 }
 
 #[test]
-fn inline_test_marker_finds_inline_and_sibling_test_modules() {
+fn inline_test_marker_finds_the_trailing_test_only_region() {
     assert_eq!(
-        inline_test_marker_line("fn live() {}\n#[cfg(test)]\n\nmod tests {\n}\n"),
+        inline_test_marker_line(
+            "fn live() {}\n#[cfg(test)]\n#[path = \"checks.rs\"]\nmod checks {\n    const BRACE: char = '}';\n}\n"
+        ),
         Some(2)
     );
     assert_eq!(
-        inline_test_marker_line("fn live() {}\n#[cfg(test)]\nmod tests;\n"),
+        inline_test_marker_line(
+            "fn live() {}\n#[cfg(test)]\nmod first {}\n\n#[cfg(test)]\nmod second;\n"
+        ),
         Some(2)
     );
+}
+
+#[test]
+fn inline_test_marker_rejects_early_cfg_test_items() {
     assert_eq!(
-        inline_test_marker_line("#[cfg(test)]\nfn helper() {}\n"),
+        inline_test_marker_line(
+            "#[cfg(test)]\nuse serde_json::Map;\n\nfn live() {}\n#[cfg(test)]\nmod checks {}\n"
+        ),
+        Some(5)
+    );
+    assert_eq!(
+        inline_test_marker_line("#[cfg(test)]\nmod conformance;\npub mod context;\n"),
+        None
+    );
+    assert_eq!(
+        inline_test_marker_line(
+            "struct Spec {\n    #[cfg(test)]\n    test_payload: &'static str,\n}\n"
+        ),
         None
     );
     assert_eq!(inline_test_marker_line("fn live() {}\n"), None);
@@ -304,6 +324,14 @@ fn file_loc_splits_at_the_inline_test_marker() {
     assert_eq!(split_file_loc(100.0, None), (100.0, 0.0));
     assert_eq!(split_file_loc(100.0, Some(61)), (60.0, 40.0));
     assert_eq!(split_file_loc(100.0, Some(1)), (0.0, 100.0));
+}
+
+#[test]
+fn test_files_include_sibling_and_nested_test_sources() {
+    assert!(is_test_file(Path::new("src/module/tests.rs")));
+    assert!(is_test_file(Path::new("src/module/tests/cases.rs")));
+    assert!(is_test_file(Path::new("src/module/reap_tests.rs")));
+    assert!(!is_test_file(Path::new("src/module/testkit.rs")));
 }
 
 #[test]
