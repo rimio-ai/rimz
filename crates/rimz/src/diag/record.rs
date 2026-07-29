@@ -223,6 +223,24 @@ impl HostedCarryDropReason {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalSessionBindRejectReason {
+    StaleLaunchClock,
+    PaneReserved,
+    NoEvidence,
+}
+
+impl LocalSessionBindRejectReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StaleLaunchClock => "stale_launch_clock",
+            Self::PaneReserved => "pane_reserved",
+            Self::NoEvidence => "no_evidence",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DiagEvent {
@@ -401,6 +419,17 @@ pub enum DiagEvent {
         pane_id: PaneId,
         session: String,
     },
+    LocalSessionBindRejected {
+        agent_kind: AgentKind,
+        agent_session_id: AgentSessionId,
+        pane_id: PaneId,
+        reason: LocalSessionBindRejectReason,
+    },
+    GhostSessionBind {
+        agent_kind: AgentKind,
+        agent_session_id: AgentSessionId,
+        pane_id: PaneId,
+    },
     GroupMigration {
         pane_id: PaneId,
         from: GroupIdentity,
@@ -528,6 +557,7 @@ impl DiagEvent {
             Self::FrameAnomaly { .. } => DiagSeverity::Warn,
             Self::RendererPanic { .. } => DiagSeverity::Error,
             Self::RendererSignalDeath { .. } => DiagSeverity::Error,
+            Self::GhostSessionBind { .. } => DiagSeverity::Error,
             Self::RendererExit {
                 cause: RendererExitCause::DegradedGaveUp,
             } => DiagSeverity::Warn,
@@ -546,6 +576,7 @@ impl DiagEvent {
                     HostedCarryDropReason::ProbeReportsAbsent | HostedCarryDropReason::CarryExpired,
                 ..
             }
+            | Self::LocalSessionBindRejected { .. }
             | Self::GroupMigration { .. }
             | Self::NewbornQuarantined { .. }
             | Self::MixedBuildWriters { .. }
@@ -597,6 +628,8 @@ impl DiagEvent {
             Self::RowConflict { .. } => "row_conflict",
             Self::DuplicatePaneId { .. } => "duplicate_pane_id",
             Self::ForeignSessionPane { .. } => "foreign_session_pane",
+            Self::LocalSessionBindRejected { .. } => "local_session_bind_rejected",
+            Self::GhostSessionBind { .. } => "ghost_session_bind",
             Self::GroupMigration { .. } => "group_migration",
             Self::NewbornQuarantined { .. } => "newborn_quarantined",
             Self::MixedBuildWriters { .. } => "mixed_build_writers",
@@ -741,6 +774,24 @@ impl DiagEvent {
             Self::ForeignSessionPane { pane_id, session } => {
                 format!("{}:{pane_id}:{session}", self.kind_name())
             }
+            Self::LocalSessionBindRejected {
+                agent_kind,
+                agent_session_id,
+                pane_id,
+                reason,
+            } => format!(
+                "{}:{agent_kind}:{agent_session_id}:{pane_id}:{}",
+                self.kind_name(),
+                reason.as_str()
+            ),
+            Self::GhostSessionBind {
+                agent_kind,
+                agent_session_id,
+                pane_id,
+            } => format!(
+                "{}:{agent_kind}:{agent_session_id}:{pane_id}",
+                self.kind_name()
+            ),
             Self::GroupMigration {
                 pane_id, from, to, ..
             } => {
@@ -1101,6 +1152,22 @@ impl DiagEvent {
             Self::DuplicatePaneId { pane_id } => format!("duplicate {pane_id} suppressed"),
             Self::ForeignSessionPane { pane_id, session } => {
                 format!("dropped {pane_id} from session {session}")
+            }
+            Self::LocalSessionBindRejected {
+                agent_kind,
+                agent_session_id,
+                pane_id,
+                reason,
+            } => format!(
+                "rejected local {agent_kind}/{agent_session_id} bind to {pane_id}: {}",
+                reason.as_str()
+            ),
+            Self::GhostSessionBind {
+                agent_kind,
+                agent_session_id,
+                pane_id,
+            } => {
+                format!("local {agent_kind}/{agent_session_id} bound to re-launched pane {pane_id}")
             }
             Self::GroupMigration {
                 pane_id, from, to, ..
