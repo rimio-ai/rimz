@@ -50,7 +50,7 @@ use rimz::harness::plan::{
     resolve_fork_placement, resolve_placement, validate_agent_name,
 };
 use rimz::harness::resume::{PostureDegrade, ResumePosture};
-use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
+use rimz::harness::run::{PermissionMode, RunRecord, RunStatus, SupervisedRunOutcome};
 use rimz::harness::spec::{AgentCell, Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::{DeliveryGate, gate_open};
@@ -89,9 +89,9 @@ pub(in crate::cli) use stop::StopTracker;
 use stop::stop_agent;
 pub(in crate::cli) use stop::stop_resolved;
 use supervised::OutputFormat;
-use supervised::run::run_print;
+use supervised::run::{run_print, run_supervised};
 use top::{TopArgs, run_top};
-pub(in crate::cli) use wait::wait_agent;
+pub(in crate::cli) use wait::{wait_agent, wait_agent_batch};
 
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
 const CHILD_WAIT_POLL: Duration = Duration::from_millis(25);
@@ -658,6 +658,38 @@ fn dispatch_launch(launch: AgentLaunchArgs, json: bool, globals: &GlobalFlags) -
         );
     }
     launch_layout(args, globals, true)
+}
+
+pub(in crate::cli) struct BackgroundLaunch {
+    pub name: String,
+    pub run_id: rimz::RunId,
+}
+
+pub(in crate::cli) enum BackgroundLaunchOutcome {
+    Launched(BackgroundLaunch),
+    BudgetExceeded { reason: String },
+}
+
+pub(in crate::cli) fn launch_supervised_background(
+    launch: AgentLaunchArgs,
+    globals: &GlobalFlags,
+) -> Result<BackgroundLaunchOutcome> {
+    let args = AgentsArgs::from_launch(launch);
+    let (request, presentation) = into_supervised_request(args)?;
+    match run_supervised(request, presentation, globals)? {
+        SupervisedRunOutcome::Background { agent_name, run_id } => {
+            Ok(BackgroundLaunchOutcome::Launched(BackgroundLaunch {
+                name: agent_name,
+                run_id,
+            }))
+        }
+        SupervisedRunOutcome::BudgetExceeded { reason } => {
+            Ok(BackgroundLaunchOutcome::BudgetExceeded { reason })
+        }
+        SupervisedRunOutcome::Record(_) => {
+            bail!("background supervised launch returned a blocking run record")
+        }
+    }
 }
 
 fn into_supervised_request(

@@ -15,11 +15,11 @@ pub(in crate::cli) fn wait_agent(
     if stream_output && references.len() > 1 {
         bail!("--stream tails one target; wait on a single reference");
     }
-    let ctx = Ctx::open(globals)?;
-    let store = &ctx.store;
-    let snapshot = ctx.cached_snapshot()?;
-    let current_channel = ctx.channel();
     if stream_output {
+        let ctx = Ctx::open(globals)?;
+        let store = &ctx.store;
+        let snapshot = ctx.cached_snapshot()?;
+        let current_channel = ctx.channel();
         let options = WaitStreamOptions {
             timeout,
             from_start,
@@ -34,13 +34,36 @@ pub(in crate::cli) fn wait_agent(
         );
     }
 
+    let style = WaitStyle::new(references.len(), any, json);
+    wait_non_stream_request(references, any, timeout, style, globals)
+}
+
+pub(in crate::cli) fn wait_agent_batch(
+    references: Vec<String>,
+    json: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    wait_non_stream_request(references, false, None, WaitStyle::batch(json), globals)
+}
+
+fn wait_non_stream_request(
+    references: Vec<String>,
+    any: bool,
+    timeout: Option<Duration>,
+    style: WaitStyle,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let ctx = Ctx::open(globals)?;
+    let store = &ctx.store;
+    let snapshot = ctx.cached_snapshot()?;
+    let current_channel = ctx.channel();
     wait_non_stream(
         store,
         &snapshot,
         references,
         any,
         timeout,
-        json,
+        style,
         current_channel,
     )
 }
@@ -81,14 +104,13 @@ fn wait_non_stream(
     references: Vec<String>,
     any: bool,
     timeout: Option<Duration>,
-    json: bool,
+    style: WaitStyle,
     current_channel: Option<&str>,
 ) -> Result<()> {
     let targets = references
         .iter()
         .map(|reference| resolve_wait_target(store, snapshot, reference, current_channel))
         .collect::<Result<Vec<_>>>()?;
-    let style = WaitStyle::new(targets.len(), any, json);
     let mut waits = WaitSet::new(
         targets,
         if any { JoinMode::Any } else { JoinMode::All },
@@ -112,15 +134,15 @@ fn wait_non_stream(
     }
 }
 
-#[derive(Clone, Copy)]
-enum WaitStyle {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WaitStyle {
     Single { json: bool },
     Any { json: bool },
     All { json: bool },
 }
 
 impl WaitStyle {
-    fn new(target_count: usize, any: bool, json: bool) -> Self {
+    pub(super) fn new(target_count: usize, any: bool, json: bool) -> Self {
         if target_count == 1 && !any {
             Self::Single { json }
         } else if any {
@@ -128,6 +150,10 @@ impl WaitStyle {
         } else {
             Self::All { json }
         }
+    }
+
+    pub(super) const fn batch(json: bool) -> Self {
+        Self::All { json }
     }
 
     fn report_progress(self, waits: &WaitSet, settled: &[usize]) -> Result<()> {
