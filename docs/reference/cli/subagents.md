@@ -4,27 +4,31 @@
 
 Run it only from a RimZ-launched agent. A user-shell invocation fails before opening the room and points to `rimz agents` or `rimz teams`. The mechanics behind the sugar — the ancestry stamp and its depth cap, the caller-scoped verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
 
-## Fan out work
+## Launch and fan out work
 
 ```sh
 rimz subagents claude "trace the authentication call path"
-rimz subagents codex "find the smallest safe fix"
-rimz subagents launch reviewer "review the proposed API"
 ```
 
-Each launch is equivalent to a one-cell `rimz agents <spec> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately, so a parent can start several children without waiting between launches. Pass `--fg` to block until the child finishes and print its result instead.
+Each launch is equivalent to a one-cell `rimz agents <spec> <prompt> -p` run with a timeout. It blocks until the child finishes and prints its result. Pass `--bg` to print the minted petname immediately, so a parent can start several children without waiting between launches.
+
+```sh
+first=$(rimz subagents codex "find the smallest safe fix" --bg)
+second=$(rimz subagents launch reviewer "review the proposed API" --bg)
+rimz subagents wait "$first" "$second"
+```
 
 The bare form and `launch` verb are equivalent. A prompt is mandatory: the parent must supply the whole assignment as the second positional argument. The child inherits the parent's current checkout and lane.
 
 | Behavior | Default | Override |
 | --- | --- | --- |
-| Execution | supervised print mode, background | `--fg` blocks and prints the result |
+| Execution | supervised print mode, blocking | `--bg` returns immediately with the child's petname |
 | Checkout | caller's current checkout | fixed |
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
 | Pane after completion | close | `--keep` |
 | Address | minted petname | `--name/-n` |
 
-A finished child closes its own pane: the close follows the run reaching a terminal status, not the parent joining it, so it happens whether or not `wait` is ever called. `--keep` opts out and leaves the pane for `stop` or `rimz gc`.
+A finished child's in-pane wrapper closes its pane from the durable terminal record, independently of the parent waiting for the result. `--keep` opts out and leaves the pane for `stop` or `rimz gc`.
 
 The launch surface deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--top-level`, `--resume`, placement flags, output/input formats, retries, and verification. Use `rimz agents` when the launch needs those controls; use `rimz teams` when the workers are peers rather than children.
 

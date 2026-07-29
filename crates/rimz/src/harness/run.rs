@@ -79,6 +79,9 @@ pub struct SupervisedRunRequest {
     pub channel: Option<String>,
     pub name: Option<String>,
     pub background: bool,
+    /// Let the in-pane wrapper reclaim the provider and pane from the durable
+    /// run outcome, independently of the launching process.
+    pub self_cleanup_on_completion: bool,
     pub force_new_tab: bool,
     /// Launch as a top-level agent even when the caller is another agent.
     pub top_level: bool,
