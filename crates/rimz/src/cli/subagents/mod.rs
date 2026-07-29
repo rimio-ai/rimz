@@ -1,11 +1,14 @@
 //! `rimz subagents` — agent-only supervised child launch and lifecycle sugar.
 
-use std::io::Write;
+use std::collections::{BTreeMap, HashSet};
+use std::fs;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{Ctx, GlobalFlags, agents_cmd, render};
 use rimz::agents::AgentState;
@@ -26,6 +29,8 @@ pub struct SubagentsArgs {
 enum SubagentsSubcmd {
     /// Launch one supervised child agent.
     Launch(SubagentLaunchArgs),
+    /// Launch children from a JSON task list and join them.
+    Fanout(FanoutArgs),
     /// List this agent's children.
     #[command(alias = "ls")]
     List {
@@ -65,6 +70,38 @@ enum SubagentsSubcmd {
         #[arg(long, conflicts_with = "names")]
         all: bool,
     },
+}
+
+#[derive(Debug, Args)]
+struct FanoutArgs {
+    /// Tasks JSON; stdin when omitted.
+    #[arg(value_name = "FILE")]
+    file: Option<PathBuf>,
+    /// Launch the children without joining them.
+    #[arg(long)]
+    bg: bool,
+    /// Stop each child after this duration.
+    #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
+    timeout: Option<Duration>,
+    /// Leave child panes open after completion.
+    #[arg(long)]
+    keep: bool,
+    /// Emit JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct FanoutTask {
+    spec: Option<String>,
+    prompt: Option<String>,
+    name: Option<String>,
+    model: Option<String>,
+    agent: Option<String>,
+    effort: Option<String>,
+    timeout: Option<String>,
+    max_turns: Option<u32>,
+    description: Option<String>,
 }
 
 #[derive(Debug, Default, PartialEq, Args)]
@@ -117,6 +154,7 @@ pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
     require_agent_caller(crate::cli::send::agent_caller())?;
     match args.command {
         Some(SubagentsSubcmd::Launch(launch)) => launch_child(launch, globals),
+        Some(SubagentsSubcmd::Fanout(fanout)) => fanout_children(fanout, globals),
         Some(SubagentsSubcmd::List { json }) => list_children(json, globals),
         Some(SubagentsSubcmd::Types { json }) => list_types(json),
         Some(SubagentsSubcmd::Wait {
@@ -153,6 +191,152 @@ fn launch_child(args: SubagentLaunchArgs, globals: &GlobalFlags) -> Result<()> {
     let config = rimz::config::MachineConfig::load().context("loading machine config")?;
     let launch = args.into_agent_launch(&config.agents.subagents)?;
     agents_cmd::run(agents_cmd::AgentsArgs::from_launch(launch), globals)
+}
+
+fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
+    let (raw, source) = match args.file.as_deref() {
+        Some(path) => (
+            fs::read_to_string(path)
+                .with_context(|| format!("reading fanout tasks from `{}`", path.display()))?,
+            format!("`{}`", path.display()),
+        ),
+        None => {
+            let mut raw = String::new();
+            std::io::stdin()
+                .read_to_string(&mut raw)
+                .context("reading fanout tasks from stdin")?;
+            (raw, "stdin".to_owned())
+        }
+    };
+    let config = rimz::config::MachineConfig::load().context("loading machine config")?;
+    let launches = parse_fanout_launches(&raw, &args, &config.agents.subagents)
+        .with_context(|| format!("validating fanout tasks from {source}"))?;
+    let mut launched = Vec::with_capacity(launches.len());
+    for (index, launch) in launches.into_iter().enumerate() {
+        match agents_cmd::launch_supervised_background(launch, globals) {
+            Ok(agents_cmd::BackgroundLaunchOutcome::Launched(child)) => {
+                if !args.json {
+                    writeln!(render::out(), "{}", child.name)?;
+                }
+                launched.push(child);
+            }
+            Ok(agents_cmd::BackgroundLaunchOutcome::BudgetExceeded { reason }) => {
+                let err = anyhow::Error::msg(reason)
+                    .context(fanout_launch_error_context(index, &launched));
+                render::report(&err);
+                std::process::exit(rimz::harness::run::RunStatus::BudgetExceeded.exit_code());
+            }
+            Err(err) => {
+                return Err(err).context(fanout_launch_error_context(index, &launched));
+            }
+        }
+    }
+    if args.bg {
+        if args.json {
+            #[derive(Serialize)]
+            struct BackgroundReport<'a> {
+                run_id: &'a rimz::RunId,
+            }
+
+            let report = launched
+                .iter()
+                .map(|child| {
+                    (
+                        child.name.as_str(),
+                        BackgroundReport {
+                            run_id: &child.run_id,
+                        },
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            render::json(&report)?;
+        }
+        return Ok(());
+    }
+    let names = launched.into_iter().map(|child| child.name).collect();
+    agents_cmd::wait_agent_batch(names, args.json, globals)
+}
+
+fn fanout_launch_error_context(index: usize, launched: &[agents_cmd::BackgroundLaunch]) -> String {
+    if launched.is_empty() {
+        return format!("launching fanout task {}", index + 1);
+    }
+    let names = launched
+        .iter()
+        .map(|child| child.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "launching fanout task {} after starting {names}; the launched children keep running, so join or stop them with `rimz subagents wait` or `rimz subagents stop --all`",
+        index + 1
+    )
+}
+
+fn parse_fanout_launches(
+    raw: &str,
+    args: &FanoutArgs,
+    defaults: &rimz::config::SubagentsConfig,
+) -> Result<Vec<agents_cmd::AgentLaunchArgs>> {
+    let tasks: Vec<FanoutTask> =
+        serde_json::from_str(raw).context("fanout input must be a JSON task array")?;
+    if tasks.is_empty() {
+        bail!("fanout needs at least one task");
+    }
+    let mut names = HashSet::new();
+    for (index, task) in tasks.iter().enumerate() {
+        if let Some(name) = task.name.as_deref() {
+            rimz::harness::plan::validate_agent_name(name)
+                .with_context(|| format!("task {} ({name})", index + 1))?;
+            if !names.insert(name) {
+                bail!("task {} repeats child name `{name}`", index + 1);
+            }
+        }
+    }
+    tasks
+        .into_iter()
+        .enumerate()
+        .map(|(index, task)| {
+            let label = task
+                .name
+                .as_deref()
+                .map(|name| format!(" ({name})"))
+                .unwrap_or_default();
+            task.into_agent_launch(args, defaults)
+                .with_context(|| format!("task {}{label}", index + 1))
+        })
+        .collect()
+}
+
+impl FanoutTask {
+    fn into_agent_launch(
+        self,
+        fanout: &FanoutArgs,
+        defaults: &rimz::config::SubagentsConfig,
+    ) -> Result<agents_cmd::AgentLaunchArgs> {
+        let timeout = self
+            .timeout
+            .as_deref()
+            .map(crate::cli::supervised::parse_timeout)
+            .transpose()
+            .map_err(anyhow::Error::msg)
+            .context("parsing timeout")?
+            .or(fanout.timeout);
+        SubagentLaunchArgs {
+            spec: self.spec,
+            prompt: self.prompt,
+            name: self.name,
+            model: self.model,
+            agent: self.agent,
+            effort: self.effort,
+            timeout,
+            bg: true,
+            keep: fanout.keep,
+            description: self.description,
+            max_turns: self.max_turns,
+            passthrough: Vec::new(),
+        }
+        .into_agent_launch(defaults)
+    }
 }
 
 impl SubagentLaunchArgs {
@@ -554,6 +738,138 @@ mod tests {
     }
 
     #[test]
+    fn fanout_task_matches_the_single_launch_surface() {
+        let fanout = parse(&[
+            "rimz",
+            "fanout",
+            "tasks.json",
+            "--timeout",
+            "10m",
+            "--keep",
+            "--bg",
+            "--json",
+        ]);
+        let Some(SubagentsSubcmd::Fanout(fanout)) = fanout.command else {
+            panic!("fanout command");
+        };
+        assert_eq!(fanout.file, Some(PathBuf::from("tasks.json")));
+        assert!(fanout.bg);
+        assert!(fanout.json);
+        let launches = parse_fanout_launches(
+            r#"[{
+                "spec": "claude",
+                "prompt": "review this",
+                "name": "auth-review",
+                "model": "opus",
+                "agent": "reviewer",
+                "effort": "high",
+                "timeout": "5m",
+                "max_turns": 4,
+                "description": "checks auth"
+            }]"#,
+            &fanout,
+            &rimz::config::SubagentsConfig::default(),
+        )
+        .expect("fanout launch");
+        let agents = AgentsHarness::try_parse_from([
+            "rimz",
+            "claude",
+            "review this",
+            "--name",
+            "auth-review",
+            "--model",
+            "opus",
+            "--agent",
+            "reviewer",
+            "--effort",
+            "high",
+            "--timeout",
+            "5m",
+            "--max-turns",
+            "4",
+            "--description",
+            "checks auth",
+            "--keep",
+            "-p",
+            "--bg",
+        ])
+        .expect("parse equivalent agents launch")
+        .args;
+        let mut agents = agents;
+        agents.launch.self_cleanup_on_completion = true;
+
+        assert_eq!(launches, vec![agents.launch]);
+    }
+
+    #[test]
+    fn fanout_timeout_precedence_is_task_then_flag_then_config() {
+        let Some(SubagentsSubcmd::Fanout(flagged)) =
+            parse(&["rimz", "fanout", "--timeout", "10m"]).command
+        else {
+            panic!("fanout command");
+        };
+        let defaults = rimz::config::SubagentsConfig {
+            timeout: "20m".to_owned(),
+        };
+
+        let task = parse_fanout_launches(
+            r#"[{"spec":"codex","prompt":"one","timeout":"5m"}]"#,
+            &flagged,
+            &defaults,
+        )
+        .expect("task timeout");
+        assert_eq!(task[0].timeout, Some(Duration::from_secs(5 * 60)));
+
+        let flag =
+            parse_fanout_launches(r#"[{"spec":"codex","prompt":"one"}]"#, &flagged, &defaults)
+                .expect("flag timeout");
+        assert_eq!(flag[0].timeout, Some(Duration::from_secs(10 * 60)));
+
+        let Some(SubagentsSubcmd::Fanout(unflagged)) = parse(&["rimz", "fanout"]).command else {
+            panic!("fanout command");
+        };
+        let config = parse_fanout_launches(
+            r#"[{"spec":"codex","prompt":"one"}]"#,
+            &unflagged,
+            &defaults,
+        )
+        .expect("config timeout");
+        assert_eq!(config[0].timeout, Some(Duration::from_secs(20 * 60)));
+    }
+
+    #[test]
+    fn fanout_validates_the_whole_task_list_before_launch() {
+        let Some(SubagentsSubcmd::Fanout(fanout)) = parse(&["rimz", "fanout"]).command else {
+            panic!("fanout command");
+        };
+        let defaults = rimz::config::SubagentsConfig::default();
+
+        let empty = parse_fanout_launches("[]", &fanout, &defaults).expect_err("empty task list");
+        assert!(empty.to_string().contains("at least one task"));
+
+        let missing_prompt =
+            parse_fanout_launches(r#"[{"spec":"codex","name":"auth"}]"#, &fanout, &defaults)
+                .expect_err("missing prompt");
+        assert!(format!("{missing_prompt:#}").contains("task 1 (auth)"));
+        assert!(format!("{missing_prompt:#}").contains("prompt from the parent"));
+
+        let duplicate = parse_fanout_launches(
+            r#"[
+                {"spec":"codex","prompt":"one","name":"auth"},
+                {"spec":"claude","prompt":"two","name":"auth"}
+            ]"#,
+            &fanout,
+            &defaults,
+        )
+        .expect_err("duplicate name");
+        assert!(
+            duplicate
+                .to_string()
+                .contains("task 2 repeats child name `auth`")
+        );
+    }
+
+    #[test]
     fn unattended_launch_flags_are_rejected() {
         for args in [
             &["rimz", "claude", "review this", "--ask"][..],
@@ -715,6 +1031,14 @@ mod tests {
 
     #[test]
     fn lifecycle_verbs_parse() {
+        assert!(matches!(
+            parse(&["rimz", "fanout", "tasks.json", "--bg"]).command,
+            Some(SubagentsSubcmd::Fanout(FanoutArgs {
+                bg: true,
+                file: Some(_),
+                ..
+            }))
+        ));
         assert!(matches!(
             parse(&["rimz", "wait", "swift-otter", "--any"]).command,
             Some(SubagentsSubcmd::Wait { any: true, .. })

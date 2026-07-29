@@ -779,7 +779,9 @@ fn finish_spawn_effect(
                 TaskFireNotice::None,
             )
         }
-        SupervisedRunOutcome::Background => (LoopRunPresentation::default(), TaskFireNotice::None),
+        SupervisedRunOutcome::Background { .. } => {
+            (LoopRunPresentation::default(), TaskFireNotice::None)
+        }
         SupervisedRunOutcome::BudgetExceeded { reason } => {
             record.result = LoopRunResult::BudgetSkipped;
             record.error = Some(reason.clone());
