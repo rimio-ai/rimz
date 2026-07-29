@@ -19,23 +19,12 @@ use rimz::message::{DeliveryGate, deliver};
 use super::Ctx;
 
 pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
-    let AutoContinueRequest {
-        workspace_id,
-        kind,
-        agent_id,
-        pane_id,
-        message_id: retry_message_id,
-        parked_since,
-        text,
-        reason,
-        label,
-    } = request;
-    let text = text.trim();
+    let text = request.text.trim();
     if text.is_empty() {
         return Ok(());
     }
 
-    let ctx = Ctx::for_workspace(workspace_id, Some(pane_id.mux()))?;
+    let ctx = Ctx::for_workspace(request.workspace_id.clone(), Some(request.pane_id.mux()))?;
     let snapshot = ctx
         .resolution_snapshot_with_context()
         .context("reading auto-continue delivery snapshot")?;
@@ -44,22 +33,22 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
     let agent = snapshot
         .agents
         .iter()
-        .find(|agent| agent.kind == kind && agent.agent_id == agent_id)
+        .find(|agent| agent.kind == request.kind && agent.agent_id == request.agent_id)
         .context("auto-continue target agent is no longer in the rollup")?;
     snapshot
         .agent_panes
         .iter()
         .find(|pane| {
-            pane.kind == kind
-                && pane.agent_id.as_ref() == Some(&agent_id)
-                && pane.pane_id == pane_id
+            pane.kind == request.kind
+                && pane.agent_id.as_ref() == Some(&request.agent_id)
+                && pane.pane_id == request.pane_id
         })
         .context("auto-continue target pane is no longer bound to the agent")?;
 
-    let message_id = if let Some(message_id) = retry_message_id {
+    let message_id = if let Some(message_id) = request.message_id {
         message_id
     } else {
-        let gate = if reason == "budget_day_reset" {
+        let gate = if request.reason == "budget_day_reset" {
             DeliveryGate::Done
         } else {
             DeliveryGate::Resume
@@ -70,7 +59,7 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
             agent,
             text.to_owned(),
             gate,
-            Some(&pane_id),
+            Some(&request.pane_id),
         )
         .context("queueing auto-continue resume message")?
     };
@@ -79,12 +68,12 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
         store,
         &message_id,
         Duration::ZERO,
-        Some(pane_id.mux()),
+        Some(request.pane_id.mux()),
         deliver::DeliveryPolicy::Boundary,
     )
     .context("delivering auto-continue resume message")?;
     let delivery_failure = if !delivered {
-        let failure_reason = format!("resume delivery gate closed ({reason})");
+        let failure_reason = format!("resume delivery gate closed ({})", request.reason);
         store
             .record_message_delivery_failures(
                 std::slice::from_ref(&message_id),
@@ -101,11 +90,11 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
     rimz::harness::assist_log::append(&AssistRecord {
         at: Timestamp::now(),
         assist: Assist::AutoContinue {
-            kind,
-            agent_id,
-            label,
-            park: reason,
-            parked_since: Some(parked_since),
+            kind: request.kind,
+            agent_id: request.agent_id,
+            label: request.label,
+            park: request.reason,
+            parked_since: Some(request.parked_since),
             delivered,
             message_id: message_id.to_string(),
         },

@@ -19,23 +19,14 @@ use rimz::message::{
 use super::Ctx;
 
 pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
-    let IdleCompactRequest {
-        workspace_id,
-        kind,
-        agent_id,
-        pane_id,
-        command,
-        occupied_tokens: producer_occupied,
-        label,
-    } = request;
-    let expected_command = rimz::agents::spec_by_kind(kind.as_str())
+    let expected_command = rimz::agents::spec_by_kind(request.kind.as_str())
         .and_then(|spec| spec.launch.compact_command())
         .context("idle-compaction target adapter has no compact command")?;
-    if command != expected_command {
+    if request.command != expected_command {
         bail!(
             "idle-compaction command `{}` does not match {} adapter command `{expected_command}`",
-            command,
-            kind
+            request.command,
+            request.kind
         );
     }
 
@@ -44,7 +35,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         return Ok(());
     }
 
-    let ctx = Ctx::for_workspace(workspace_id.clone(), Some(pane_id.mux()))?;
+    let ctx = Ctx::for_workspace(request.workspace_id.clone(), Some(request.pane_id.mux()))?;
     let snapshot = ctx
         .resolution_snapshot_with_context()
         .context("reading idle-compaction delivery snapshot")?;
@@ -53,15 +44,15 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     let agent = snapshot
         .agents
         .iter()
-        .find(|agent| agent.kind == kind && agent.agent_id == agent_id)
+        .find(|agent| agent.kind == request.kind && agent.agent_id == request.agent_id)
         .context("idle-compaction target agent is no longer in the rollup")?;
     snapshot
         .agent_panes
         .iter()
         .find(|pane| {
-            pane.kind == kind
-                && pane.agent_id.as_ref() == Some(&agent_id)
-                && pane.pane_id == pane_id
+            pane.kind == request.kind
+                && pane.agent_id.as_ref() == Some(&request.agent_id)
+                && pane.pane_id == request.pane_id
         })
         .context("idle-compaction target pane is no longer bound to the agent")?;
 
@@ -86,9 +77,9 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     else {
         return Ok(());
     };
-    if producer_occupied != occupied_tokens {
+    if request.occupied_tokens != occupied_tokens {
         tracing::debug!(
-            producer_occupied,
+            producer_occupied = request.occupied_tokens,
             current_occupied = occupied_tokens,
             "idle-compaction context reading changed before helper validation",
         );
@@ -106,7 +97,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     }
 
     let mut message = MessageRecord::new(
-        workspace_id,
+        request.workspace_id,
         agent,
         expected_command.to_owned(),
         true,
@@ -116,14 +107,14 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     .with_sender(MessageSender::System)
     .with_automated(true)
     .with_body(MessageBody::Command)
-    .with_pane_id(pane_id.clone());
+    .with_pane_id(request.pane_id.clone());
     message.compacted_context_tokens = Some(occupied_tokens);
     let message_id = message.message_id.clone();
     if let Err(err) = store.queue_message(&message, &workspace.session_name) {
         append_assist(
-            &label,
-            kind,
-            agent_id,
+            &request.label,
+            request.kind,
+            request.agent_id,
             idle_secs,
             occupied_tokens,
             &message_id,
@@ -138,15 +129,15 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         store,
         &message_id,
         Duration::ZERO,
-        Some(pane_id.mux()),
+        Some(request.pane_id.mux()),
         deliver::DeliveryPolicy::Boundary,
     ) {
         Ok(delivered) => delivered,
         Err(err) => {
             append_assist(
-                &label,
-                kind,
-                agent_id,
+                &request.label,
+                request.kind,
+                request.agent_id,
                 idle_secs,
                 occupied_tokens,
                 &message_id,
@@ -172,9 +163,9 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         }
     };
     append_assist(
-        &label,
-        kind,
-        agent_id,
+        &request.label,
+        request.kind,
+        request.agent_id,
         idle_secs,
         occupied_tokens,
         &message_id,
