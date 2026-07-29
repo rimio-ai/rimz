@@ -77,8 +77,27 @@ fn env_unwind_reaps_marker_children_and_roots() {
 
 #[test]
 fn owner_sigkill_still_reaps_descendants_and_roots() {
+    let _home = tempfile::Builder::new()
+        .prefix("rimz-test-home-")
+        .rand_bytes(6)
+        .tempdir()
+        .expect("fake-owner HOME");
+    let _runtime = tempfile::Builder::new()
+        .prefix("rr")
+        .rand_bytes(6)
+        .tempdir_in("/tmp")
+        .expect("fake-owner runtime");
+    let spec = SandboxSpec {
+        home_root: _home
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| _home.path().to_path_buf()),
+        runtime_root: _runtime.path().to_path_buf(),
+    };
+    let encoded = serde_json::to_string(&spec).expect("serialize fake-owner spec");
     let mut owner = Command::new(env!("CARGO_BIN_EXE_rimz-test-reaper"))
         .arg("--fake-owner")
+        .arg(encoded)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -92,6 +111,7 @@ fn owner_sigkill_still_reaps_descendants_and_roots() {
             .expect("read fake-owner report");
         serde_json::from_str(&line).expect("parse fake-owner report")
     };
+    assert_eq!(report.spec, spec);
     assert!(
         sandbox_processes(&report.spec).contains(&report.child_pid),
         "fake owner's child carries its sandbox marker"

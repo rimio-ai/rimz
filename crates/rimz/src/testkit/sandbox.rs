@@ -8,14 +8,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tempfile::TempDir;
 
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 const REAPER_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+const RANDOM_BYTES: usize = 6;
 const HOME_PREFIX: &str = "rimz-test-home-";
 const RUNTIME_PREFIX: &str = "rr";
 const ZELLIJ_PREFIX: &str = "rz";
-const RANDOM_BYTES: usize = 6;
 
 /// Roots whose environment values identify every process owned by one fixture.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -40,80 +39,21 @@ pub enum SandboxError {
     Serialize(#[from] serde_json::Error),
 }
 
-/// Owns one fixture's roots and the independent process that reaps them.
+/// Owns one fixture's cleanup lease and the independent process that reaps it.
 ///
 /// The reaper's stdin is a keepalive: orderly drop and abrupt owner death both
 /// close it, so cleanup does not rely on this process reaching `Drop`.
 pub struct TestSandbox {
-    _roots: Vec<TempDir>,
     spec: SandboxSpec,
     reaper: Option<ReaperHandle>,
 }
 
 impl TestSandbox {
-    /// Allocate the split HOME/runtime shape used by the integration `Env`.
-    pub fn new() -> Result<Self, SandboxError> {
-        let home = tempfile::Builder::new()
-            .prefix(HOME_PREFIX)
-            .rand_bytes(RANDOM_BYTES)
-            .tempdir()
-            .map_err(|source| SandboxError::Io {
-                action: "creating test HOME",
-                path: std::env::temp_dir(),
-                source,
-            })?;
-        let runtime = tempfile::Builder::new()
-            .prefix(RUNTIME_PREFIX)
-            .rand_bytes(RANDOM_BYTES)
-            .tempdir_in("/tmp")
-            .map_err(|source| SandboxError::Io {
-                action: "creating short test runtime",
-                path: PathBuf::from("/tmp"),
-                source,
-            })?;
-        let spec = SandboxSpec {
-            home_root: canonical_or_owned(home.path()),
-            // Keep `/tmp` lexical here: the managed tmux socket has the same
-            // short path shape on macOS even though `/tmp` resolves through
-            // `/private`.
-            runtime_root: runtime.path().to_path_buf(),
-        };
+    /// Arm cleanup for fixture-allocated roots before any child is spawned.
+    pub fn arm(spec: SandboxSpec, reaper_bin: &Path) -> Result<Self, SandboxError> {
         validate(&spec)?;
-        Ok(Self {
-            _roots: vec![home, runtime],
-            spec,
-            reaper: None,
-        })
-    }
-
-    /// Allocate the single-root namespace expected by the Zellij live fixtures.
-    pub fn zellij() -> Result<Self, SandboxError> {
-        let root = tempfile::Builder::new()
-            .prefix(ZELLIJ_PREFIX)
-            .rand_bytes(RANDOM_BYTES)
-            .tempdir()
-            .map_err(|source| SandboxError::Io {
-                action: "creating Zellij test namespace",
-                path: std::env::temp_dir(),
-                source,
-            })?;
-        let root_path = canonical_or_owned(root.path());
-        let spec = SandboxSpec {
-            home_root: root_path.clone(),
-            runtime_root: root_path,
-        };
-        validate(&spec)?;
-        Ok(Self {
-            _roots: vec![root],
-            spec,
-            reaper: None,
-        })
-    }
-
-    /// Start the independent keepalive reaper before any fixture child exists.
-    pub fn arm(mut self, reaper_bin: &Path) -> Result<Self, SandboxError> {
-        self.reaper = Some(ReaperHandle::spawn(reaper_bin, &self.spec)?);
-        Ok(self)
+        let reaper = Some(ReaperHandle::spawn(reaper_bin, &spec)?);
+        Ok(Self { spec, reaper })
     }
 
     pub fn spec(&self) -> &SandboxSpec {
@@ -349,7 +289,7 @@ fn reap_sandbox_processes(spec: &SandboxSpec) {
     if pids.is_empty() {
         return;
     }
-    signal_processes("-TERM", &pids);
+    signal_processes(nix::sys::signal::Signal::SIGTERM, &pids);
     let deadline = Instant::now() + CLEANUP_TIMEOUT;
     loop {
         let remaining = sandbox_processes(spec);
@@ -357,7 +297,7 @@ fn reap_sandbox_processes(spec: &SandboxSpec) {
             return;
         }
         if Instant::now() >= deadline {
-            signal_processes("-KILL", &remaining);
+            signal_processes(nix::sys::signal::Signal::SIGKILL, &remaining);
             return;
         }
         thread::sleep(Duration::from_millis(10));
@@ -407,11 +347,12 @@ fn environment_mentions_root(environment: &[u8], root: &Path) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn signal_processes(signal: &str, pids: &[u32]) {
-    let mut command = Command::new("kill");
-    command.arg(signal).arg("--");
-    command.args(pids.iter().map(u32::to_string));
-    reap_bounded(command);
+fn signal_processes(signal: nix::sys::signal::Signal, pids: &[u32]) {
+    for pid in pids {
+        if let Ok(pid) = i32::try_from(*pid) {
+            let _ = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), signal);
+        }
+    }
 }
 
 fn remove_tree_bounded(root: &Path) {
