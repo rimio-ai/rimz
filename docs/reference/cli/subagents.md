@@ -39,7 +39,7 @@ rimz subagents wait calm-fox --stream
 rimz subagents wait --json
 ```
 
-With no names, `wait` joins every supervised child recorded beneath the caller, including children that finished before the command started. Explicit names must resolve inside that same set. Joins, `--any`, streaming, JSON, timeout behavior, output, and exit codes are the same durable machinery as [`rimz agents wait`](./agents.md#wait).
+With no names, `wait` joins every supervised child recorded beneath the caller, including children that finished before the command started; `--any` instead considers only children still running, since it reports the first to finish. Explicit names must resolve inside that same set. Joins, streaming, JSON, timeout behavior, output, and exit codes are the same durable machinery as [`rimz agents wait`](./agents.md#wait).
 
 The result remains available after the child pane closes because the run record, not the pane, is truth.
 
