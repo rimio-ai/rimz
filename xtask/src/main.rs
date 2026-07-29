@@ -20,6 +20,7 @@ mod sccache;
 mod screenshot;
 mod source_files;
 mod spinner;
+mod survey;
 mod theme;
 
 #[cfg(test)]
@@ -158,6 +159,11 @@ const TASKS: &[TaskInfo] = &[
         runs: complexity::USAGE,
     },
     TaskInfo {
+        name: "survey",
+        summary: "Map per-module size, commit pace, and optional coupling.",
+        runs: survey::USAGE,
+    },
+    TaskInfo {
         name: "invariants",
         summary: "Run repository architecture invariants.",
         runs: "grep-style invariants implemented in xtask",
@@ -282,6 +288,7 @@ fn task_accepts_args(task: &str) -> bool {
             | "sandbox"
             | "perf"
             | "complexity"
+            | "survey"
             | "pricing-refresh"
             | "screenshot"
             | "gate"
@@ -335,6 +342,7 @@ fn dispatch(task: &str, args: &[String], root: &Path) -> Result<()> {
         "externals" => gates::externals(root),
         "perf" => gates::perf(root, args),
         "complexity" => complexity::complexity(root, args),
+        "survey" => survey::survey(root, args),
         "invariants" => invariants::invariants(root),
         "docs-links" => docs_links::docs_links(root),
         "gate" => gates::gate(root, args),
