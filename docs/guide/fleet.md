@@ -181,9 +181,9 @@ $ rimz agents attribution
 forge team · 2 agents · 36m active · $29.39
 
   @planner · Claude · claude-opus-5@xhigh
-      effort: 15m active · $16.72 incl. subagents
-      calls:  84 tool calls
-      tokens: 11k input, 148k output, 16m cache read
+      effort:    15m active · $16.72 incl. subagents
+      calls:     84 tool calls
+      tokens:    11k input, 148k output, 16m cache read
       subagents: 3 × explore ($2.19)
 
   @coder · Codex · gpt-5.6-sol@xhigh
@@ -194,9 +194,7 @@ forge team · 2 agents · 36m active · $29.39
 Total · 2 agents · 36m active · $29.39
 ```
 
-The `--md` form turns the same audit into a linked pull-request receipt: its
-summary names aggregate agent-time, cost, author messages, and answered asks,
-and its closing provenance links readers back to the command reference.
+The `--md` form turns the same audit into a linked pull-request receipt: its summary names aggregate agent-time, cost, author messages, and answered asks, and its closing provenance links readers back to the command reference.
 
 **Find what is burning CPU or tokens.** When the machine gets loud, `rimz agents top` ranks the live fleet by the resources each agent's pane process tree is using. It streams by default; `--once` takes a sample and exits for a script:
 
