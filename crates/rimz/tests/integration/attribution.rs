@@ -346,6 +346,73 @@ fn attribution_output_modes_conflict_at_the_cli_boundary() {
 }
 
 #[test]
+fn attribution_markdown_drops_opened_turns_without_recorded_contributions() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let session = "sess-opened-turn-only";
+    let mut registered =
+        AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Registered);
+    registered.launch.team = Some("forge".to_owned());
+    registered.launch.role = Some("reviewer".to_owned());
+    registered.launch.channel = Some("feature".to_owned());
+    registered.worktree_path = Some(env.project_root.display().to_string());
+    env.store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionStart",
+            &registered,
+        ))
+        .expect("register attribution agent");
+    env.store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "UserPromptSubmit",
+            &AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::TurnStarted),
+        ))
+        .expect("open attribution turn");
+
+    let panel = env
+        .rimz()
+        .arg("--root")
+        .arg(&env.project_root)
+        .args(["agents", "attribution", "#feature"])
+        .output()
+        .expect("run panel attribution");
+    assert!(panel.status.success());
+    assert!(
+        String::from_utf8(panel.stdout)
+            .expect("panel utf8")
+            .contains("@reviewer")
+    );
+
+    let json = env
+        .rimz()
+        .arg("--root")
+        .arg(&env.project_root)
+        .args(["agents", "attribution", "#feature", "--json"])
+        .output()
+        .expect("run JSON attribution");
+    assert!(json.status.success());
+    let json: Value = serde_json::from_slice(&json.stdout).expect("attribution json");
+    assert_eq!(json["totals"]["agents"], 1);
+
+    let markdown = env
+        .rimz()
+        .arg("--root")
+        .arg(&env.project_root)
+        .args(["agents", "attribution", "#feature", "--md"])
+        .output()
+        .expect("run Markdown attribution");
+    assert!(markdown.status.success());
+    assert!(markdown.stdout.is_empty());
+}
+
+#[test]
 fn attribution_default_stays_in_the_callers_checkout() {
     let env = Env::new();
     env.record(&env.project_root);

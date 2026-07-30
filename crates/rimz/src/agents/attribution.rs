@@ -83,7 +83,6 @@ impl AttributionMember {
     fn has_contribution(&self) -> bool {
         self.active_secs.unwrap_or(0) > 0
             || self.asks > 0
-            || self.asks_answered > 0
             || self.tool_calls > 0
             || self.compactions > 0
             || self.messages != MessageCounts::default()
