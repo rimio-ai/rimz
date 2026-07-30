@@ -504,7 +504,7 @@ fn check_project_config_removed_tables(path: &Path, text: &str) -> Result<()> {
                 .to_owned(),
         });
     }
-    if let Some(detail) = crate::config::retired_append_prompt_key(&doc) {
+    if let Some(detail) = crate::config::retired_agents_key(&doc) {
         return Err(TrustErr::RemovedProjectKey {
             path: path.to_path_buf(),
             detail,

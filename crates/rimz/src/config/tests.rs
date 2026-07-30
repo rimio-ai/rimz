@@ -717,19 +717,34 @@ fn singular_append_prompt_key_fails_with_plural_rename() {
 }
 
 #[test]
-fn agent_launch_depth_defaults_and_parses_machine_override() {
+fn agent_chain_length_defaults_parses_override_and_rejects_retired_key() {
     let dir = tempdir().expect("tempdir");
     let defaulted = load_no_fragments(&write_named(&dir, "agents.toml", ""))
         .expect("load default agents config");
-    assert_eq!(defaulted.agents.max_launch_depth, 1);
+    assert_eq!(defaulted.agents.max_chain_length, 3);
 
     let tuned = load_no_fragments(&write_named(
         &dir,
         "agents.toml",
-        "[agents]\nmax-launch-depth = 3\n",
+        "[agents]\nmax-chain-length = 5\n",
     ))
-    .expect("load launch depth override");
-    assert_eq!(tuned.agents.max_launch_depth, 3);
+    .expect("load chain length override");
+    assert_eq!(tuned.agents.max_chain_length, 5);
+
+    match load_no_fragments(&write_named(
+        &dir,
+        "agents.toml",
+        "[agents]\nmax-launch-depth = 1\n",
+    )) {
+        Err(ConfigErr::RemovedKey { detail, .. }) => {
+            assert!(detail.contains("max-chain-length"), "{detail}");
+            assert!(
+                detail.contains("default also changed from 1 to 3"),
+                "{detail}"
+            );
+        }
+        other => panic!("expected RemovedKey for retired launch-depth key, got {other:?}"),
+    }
 }
 
 #[test]

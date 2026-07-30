@@ -537,6 +537,44 @@ fn launched_child_identity_and_ancestry_survive_provider_adoption() {
 }
 
 #[test]
+fn launched_peer_generation_survives_provider_adoption_without_parenting() {
+    let launch = launch_event(
+        "codex",
+        AgentLaunchPayload {
+            launch_id: Some(AgentSessionId::from("launch_peer")),
+            launch: LaunchParams {
+                launch_depth: Some(2),
+                ..Default::default()
+            },
+            pane_id: Some(PaneId::parse("tmux:%2").expect("pane id")),
+            ..launch_payload("launch_peer", "reviewer")
+        },
+    );
+    let lifecycle = raw_lifecycle_at(
+        "codex",
+        2,
+        json!({
+            "agent_id": "provider-session",
+            "agent_name": "reviewer",
+            "signal": { "signal": "registered" },
+            "pane_id": "tmux:%2",
+        }),
+    );
+
+    let agents = reduce_agent_states(&[launch, lifecycle]);
+
+    assert_eq!(agents.len(), 1);
+    let peer = &agents[0];
+    assert_eq!(peer.agent_id.as_str(), "provider-session");
+    assert_eq!(peer.launch_id.as_deref(), Some("launch_peer"));
+    assert_eq!(peer.parent_agent_id, None);
+    assert_eq!(peer.parent_agent_kind, None);
+    assert_eq!(peer.launch_depth, Some(2));
+    assert!(!peer.is_launched_child());
+    assert!(!peer.is_provider_subagent());
+}
+
+#[test]
 fn explicit_launch_name_survives_session_adoption() {
     let launch = launch_event(
         "claude",

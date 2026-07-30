@@ -89,12 +89,12 @@ pub(super) fn launch_layout(
         layout,
         team_name,
     } = resolved;
-    let ancestry = if rimz::harness::plan::launch_ancestry_required(args.launch.cohort.top_level) {
+    let ancestry = if rimz::harness::plan::launch_ancestry_required() {
         let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
         rimz::harness::plan::resolve_launch_ancestry_from_env(
             &projection.agents,
             false,
-            machine_config.agents.max_launch_depth,
+            machine_config.agents.max_chain_length,
         )?
     } else {
         None

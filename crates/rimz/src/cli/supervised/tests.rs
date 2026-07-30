@@ -61,7 +61,6 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         self_cleanup_on_completion: false,
         subagent,
         force_new_tab: false,
-        top_level: false,
         permission_mode: PermissionMode::Auto,
         agent: None,
         model: None,

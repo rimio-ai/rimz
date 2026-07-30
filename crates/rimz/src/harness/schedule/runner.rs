@@ -608,7 +608,6 @@ impl<'a> TaskFire<'a> {
             self_cleanup_on_completion: false,
             subagent: false,
             force_new_tab: false,
-            top_level: false,
             permission_mode,
             agent: None,
             model: None,
