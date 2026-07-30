@@ -529,42 +529,32 @@ impl MachineConfig {
         notices
             .fragment_errors
             .extend(discovered.errors.drain(..).map(fragment_error_notice));
-        let mut reset_agents = false;
-        let mut reset_subagents = false;
-        loop {
-            match apply_agents_fragments_lenient(
-                &mut config.agents,
-                &mut config.subagents,
-                &discovered.fragments,
-                &agents_path,
-                &mut notices,
-            ) {
-                Ok(()) => break,
-                Err(InvalidAgentsLayer::Agents(err)) if !reset_agents => {
-                    tracing::warn!(
-                        error = %err,
-                        "per-machine agents config invalid; using built-in defaults",
-                    );
-                    config.agents = AgentsConfig::default();
-                    reset_agents = true;
-                }
-                Err(InvalidAgentsLayer::Subagents(err)) if !reset_subagents => {
-                    tracing::warn!(
-                        error = %err,
-                        "per-machine subagent profiles config invalid; using built-in defaults",
-                    );
-                    config.subagents = SubagentProfilesConfig::default();
-                    reset_subagents = true;
-                }
-                Err(InvalidAgentsLayer::Agents(err)) | Err(InvalidAgentsLayer::Subagents(err)) => {
-                    tracing::warn!(
-                        error = %err,
-                        "built-in agents config invalid; ignoring per-machine agents fragments",
-                    );
-                    break;
-                }
+        let folded = fold_agents_fragments_with_fallback(
+            &config.agents,
+            &config.subagents,
+            &discovered.fragments,
+            &agents_path,
+        );
+        for err in folded.base_errors {
+            match err {
+                InvalidAgentsLayer::Agents(err) => tracing::warn!(
+                    error = %err,
+                    "per-machine agents config invalid; using built-in defaults",
+                ),
+                InvalidAgentsLayer::Subagents(err) => tracing::warn!(
+                    error = %err,
+                    "per-machine subagent profiles config invalid; using built-in defaults",
+                ),
             }
         }
+        config.agents = folded.agents;
+        config.subagents = folded.subagents;
+        notices.fragment_errors.extend(
+            folded
+                .deferred_errors
+                .into_iter()
+                .map(fragment_error_notice),
+        );
         config.notices = notices;
         config
     }
@@ -795,9 +785,9 @@ impl MachineConfig {
     }
 }
 
-/// Strictly parse the four per-machine config files, returning one error per
-/// file that exists but cannot load. Runtime loading remains lenient; this
-/// feeds the start notice and `rimz doctor`.
+/// Diagnose parse, I/O, and semantic failures across the per-machine config
+/// files and `~/.agents` fragments. Runtime loading remains lenient; this feeds
+/// the start notice and `rimz doctor`.
 pub fn broken_machine_files() -> Vec<ConfigErr> {
     broken_machine_files_in(&MachineConfigFiles::machine())
 }
@@ -810,7 +800,7 @@ fn broken_machine_files_in(files: &MachineConfigFiles) -> Vec<ConfigErr> {
         load_optional(&files.path(MachineConfigFileKind::Loop), parse_loop_text).map(|_| ()),
     ];
     let mut errors: Vec<_> = checks.into_iter().filter_map(Result::err).collect();
-    let (mut agents, mut subagents) = match load_optional(&agents_path, parse_agents_text) {
+    let (agents, subagents) = match load_optional(&agents_path, parse_agents_text) {
         Ok(Some(file)) => (file.agents, file.subagents),
         Ok(None) => (AgentsConfig::default(), SubagentProfilesConfig::default()),
         Err(err) => {
@@ -820,34 +810,19 @@ fn broken_machine_files_in(files: &MachineConfigFiles) -> Vec<ConfigErr> {
     };
     let mut discovered = discover_agents_home_lenient(files.agents_home());
     errors.append(&mut discovered.errors);
-    let mut reset_agents = false;
-    let mut reset_subagents = false;
-    loop {
-        match fold_agents_fragments(&agents, &subagents, &discovered.fragments, &agents_path) {
-            FragmentFoldOutcome::Applied {
-                deferred_errors, ..
-            } => {
-                errors.extend(deferred_errors);
-                break;
-            }
-            FragmentFoldOutcome::InvalidBase(InvalidAgentsLayer::Agents(err)) if !reset_agents => {
-                errors.push(err);
-                agents = AgentsConfig::default();
-                reset_agents = true;
-            }
-            FragmentFoldOutcome::InvalidBase(InvalidAgentsLayer::Subagents(err))
-                if !reset_subagents =>
-            {
-                errors.push(err);
-                subagents = SubagentProfilesConfig::default();
-                reset_subagents = true;
-            }
-            FragmentFoldOutcome::InvalidBase(err) => {
-                errors.push(err.into_error());
-                break;
-            }
-        }
-    }
+    let folded = fold_agents_fragments_with_fallback(
+        &agents,
+        &subagents,
+        &discovered.fragments,
+        &agents_path,
+    );
+    errors.extend(
+        folded
+            .base_errors
+            .into_iter()
+            .map(InvalidAgentsLayer::into_error),
+    );
+    errors.extend(folded.deferred_errors);
     errors
 }
 
@@ -1408,30 +1383,6 @@ fn overlay_agents_fragment_under(agents: &mut AgentsConfig, fragment: &AgentsFra
     overlay_under(&mut agents.commands.0, fragment.commands.0.clone());
 }
 
-fn apply_agents_fragments_lenient(
-    agents: &mut AgentsConfig,
-    subagents: &mut SubagentProfilesConfig,
-    fragments: &[LoadedAgentsFragment],
-    agents_path: &Path,
-    notices: &mut ConfigNotices,
-) -> std::result::Result<(), InvalidAgentsLayer> {
-    match fold_agents_fragments(agents, subagents, fragments, agents_path) {
-        FragmentFoldOutcome::Applied {
-            agents: merged,
-            subagents: merged_subagents,
-            deferred_errors,
-        } => {
-            *agents = merged;
-            *subagents = merged_subagents;
-            notices
-                .fragment_errors
-                .extend(deferred_errors.into_iter().map(fragment_error_notice));
-            Ok(())
-        }
-        FragmentFoldOutcome::InvalidBase(err) => Err(err),
-    }
-}
-
 enum FragmentFoldOutcome {
     Applied {
         agents: AgentsConfig,
@@ -1486,6 +1437,21 @@ fn fold_agents_fragments(
             pending = deferred.into_iter().map(|(fragment, _)| fragment).collect();
             continue;
         }
+        let (group_agents, group_subagents) = effective_with_fragments(
+            base_agents,
+            base_subagents,
+            accepted
+                .iter()
+                .copied()
+                .chain(deferred.iter().map(|(fragment, _)| *fragment)),
+        );
+        if validate_agents_file(&group_agents, &group_subagents, agents_path).is_ok() {
+            return FragmentFoldOutcome::Applied {
+                agents: group_agents,
+                subagents: group_subagents,
+                deferred_errors: Vec::new(),
+            };
+        }
         if accepted.is_empty()
             && let Err(err) = validate_agents_base(base_agents, base_subagents, agents_path)
         {
@@ -1496,6 +1462,65 @@ fn fold_agents_fragments(
             subagents,
             deferred_errors: deferred.into_iter().map(|(_, err)| err).collect(),
         };
+    }
+}
+
+struct FragmentFoldWithFallback {
+    agents: AgentsConfig,
+    subagents: SubagentProfilesConfig,
+    base_errors: Vec<InvalidAgentsLayer>,
+    deferred_errors: Vec<ConfigErr>,
+}
+
+fn fold_agents_fragments_with_fallback(
+    base_agents: &AgentsConfig,
+    base_subagents: &SubagentProfilesConfig,
+    fragments: &[LoadedAgentsFragment],
+    agents_path: &Path,
+) -> FragmentFoldWithFallback {
+    let mut agents = base_agents.clone();
+    let mut subagents = base_subagents.clone();
+    let mut base_errors = Vec::new();
+    let mut reset_agents = false;
+    let mut reset_subagents = false;
+    loop {
+        match fold_agents_fragments(&agents, &subagents, fragments, agents_path) {
+            FragmentFoldOutcome::Applied {
+                agents,
+                subagents,
+                deferred_errors,
+            } => {
+                return FragmentFoldWithFallback {
+                    agents,
+                    subagents,
+                    base_errors,
+                    deferred_errors,
+                };
+            }
+            FragmentFoldOutcome::InvalidBase(err @ InvalidAgentsLayer::Agents(_))
+                if !reset_agents =>
+            {
+                base_errors.push(err);
+                agents = AgentsConfig::default();
+                reset_agents = true;
+            }
+            FragmentFoldOutcome::InvalidBase(err @ InvalidAgentsLayer::Subagents(_))
+                if !reset_subagents =>
+            {
+                base_errors.push(err);
+                subagents = SubagentProfilesConfig::default();
+                reset_subagents = true;
+            }
+            FragmentFoldOutcome::InvalidBase(err) => {
+                base_errors.push(err);
+                return FragmentFoldWithFallback {
+                    agents,
+                    subagents,
+                    base_errors,
+                    deferred_errors: Vec::new(),
+                };
+            }
+        }
     }
 }
 

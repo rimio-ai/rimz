@@ -93,9 +93,19 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
 fn collect_machine_config() -> model::MachineConfigHealth {
     let broken_files = rimz::config::broken_machine_files()
         .into_iter()
-        .map(|err| model::MachineConfigProblem {
-            path: err.path().display().to_string(),
-            error: config_file_error_detail(&err, err.diagnosis()),
+        .map(|err| {
+            let kind = if err.path().starts_with(rimz::store::paths::agents_home()) {
+                model::MachineConfigProblemKind::Fragment
+            } else if err.diagnosis().is_some() {
+                model::MachineConfigProblemKind::Parse
+            } else {
+                model::MachineConfigProblemKind::Semantic
+            };
+            model::MachineConfigProblem {
+                path: err.path().display().to_string(),
+                error: config_file_error_detail(&err, err.diagnosis()),
+                kind,
+            }
         })
         .collect();
     model::MachineConfigHealth { broken_files }

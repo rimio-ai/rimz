@@ -64,6 +64,15 @@ pub(super) struct MachineConfigHealth {
 pub(super) struct MachineConfigProblem {
     pub(super) path: String,
     pub(super) error: String,
+    #[serde(skip)]
+    pub(super) kind: MachineConfigProblemKind,
+}
+
+#[derive(Debug)]
+pub(super) enum MachineConfigProblemKind {
+    Fragment,
+    Parse,
+    Semantic,
 }
 
 #[derive(Debug, Serialize)]

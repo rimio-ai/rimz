@@ -568,6 +568,49 @@ fn lenient_load_validates_machine_definitions_after_fragment_dependencies_merge(
 }
 
 #[test]
+fn peer_fragments_with_mutual_dependencies_validate_as_a_group() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    let config_path = write(&dir, "");
+    write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "t1",
+        TEAM_FRAGMENT_FILE,
+        "[agents.profiles.p1]\nagent = \"claude\"\n\
+         [agents.teams.t1]\n\
+         [[agents.teams.t1.roles]]\nrole = \"lead\"\nprofile = \"p2\"\n\
+         [subagents.profiles.sa]\nagent = \"sb\"\n",
+    );
+    write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "t2",
+        TEAM_FRAGMENT_FILE,
+        "[agents.profiles.p2]\nagent = \"codex\"\n\
+         [agents.teams.t2]\n\
+         [[agents.teams.t2.roles]]\nrole = \"lead\"\nprofile = \"p1\"\n\
+         [subagents.profiles.sb]\nagent = \"claude\"\n",
+    );
+
+    let strict = MachineConfig::load_from(&config_path, agents_home.path()).expect("strict load");
+    let lenient = MachineConfig::load_lenient_from(&config_path, agents_home.path());
+    let broken = broken_machine_files_in(&MachineConfigFiles::from_paths(
+        config_path,
+        agents_home.path(),
+    ));
+
+    for config in [&strict, &lenient] {
+        assert!(config.agents.teams.0.contains_key("t1"));
+        assert!(config.agents.teams.0.contains_key("t2"));
+        assert!(config.subagents.profiles.0.contains_key("sa"));
+        assert!(config.subagents.profiles.0.contains_key("sb"));
+        assert!(config.notices.fragment_errors.is_empty());
+    }
+    assert!(broken.is_empty(), "{broken:?}");
+}
+
+#[test]
 fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
     let dir = tempdir().expect("tempdir");
     let agents_home = tempdir().expect("agents home");

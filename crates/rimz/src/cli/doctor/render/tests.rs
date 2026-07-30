@@ -1,9 +1,9 @@
 use super::*;
 use crate::cli::doctor::model::{
     HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow, MachineConfigProblem,
-    MessageProblemRow, MuxBinaries, MuxLogIssue, OpenCounts, PresenceCommandFailure,
-    PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry, PresencePlugins, RemoteAgent,
-    StorageRootView, TmuxCaps,
+    MachineConfigProblemKind, MessageProblemRow, MuxBinaries, MuxLogIssue, OpenCounts,
+    PresenceCommandFailure, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry,
+    PresencePlugins, RemoteAgent, StorageRootView, TmuxCaps,
 };
 use rimz::ids::MuxName;
 
@@ -31,6 +31,7 @@ fn machine_config_section_keeps_the_classified_problem_compact() {
         broken_files: vec![MachineConfigProblem {
             path: "/home/eddie/.config/rimz/config.toml".to_owned(),
             error: "line 144: `auto_continue` is defined more than once in the same table; fix: remove the extra `auto_continue` at /home/eddie/.config/rimz/config.toml:144, then re-run".to_owned(),
+            kind: MachineConfigProblemKind::Parse,
         }],
     };
     let out = strip(|w| {
@@ -51,6 +52,26 @@ fn machine_config_section_keeps_the_classified_problem_compact() {
         out.contains("settings in this file use built-in defaults"),
         "{out}"
     );
+}
+
+#[test]
+fn machine_config_fragment_problem_names_launch_precondition() {
+    let config = MachineConfigHealth {
+        broken_files: vec![MachineConfigProblem {
+            path: "/home/eddie/.agents/teams/bad/team.toml".to_owned(),
+            error: "empty layout cell in `claude,,codex`".to_owned(),
+            kind: MachineConfigProblemKind::Fragment,
+        }],
+    };
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_machine_config(w, &config, &mut tally)
+    });
+
+    assert!(out.contains("cannot be used"), "{out}");
+    assert!(out.contains("refuse launches"), "{out}");
+    assert!(!out.contains("unparseable"), "{out}");
+    assert!(!out.contains("built-in defaults"), "{out}");
 }
 
 fn mux_fixture() -> Mux {

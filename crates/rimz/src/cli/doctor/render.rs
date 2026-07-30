@@ -17,10 +17,10 @@ use rimz::trust::TrustState;
 use super::model::{
     AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorImpact, DoctorReport, DoctorState,
     DuplicateSessions, HookStatus, Host, LogScope, LoopTasks, MachineConfigHealth,
-    MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow, Presence, PresencePluginRow,
-    PresencePluginStatus, PresencePluginTelemetry, PresencePlugins, Probe, Protocols, RemoteAgent,
-    RemoteControl, Room, RoomState, SessionHealth, Storage, Terminal, TopologyWriterHealth, Trust,
-    Version, Workspace,
+    MachineConfigProblemKind, MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow,
+    Presence, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry, PresencePlugins,
+    Probe, Protocols, RemoteAgent, RemoteControl, Room, RoomState, SessionHealth, Storage,
+    Terminal, TopologyWriterHealth, Trust, Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -180,16 +180,24 @@ fn render_machine_config(
         return kv.render(w);
     }
     for problem in &config.broken_files {
-        note(
-            tally,
-            w,
-            Health::Warn,
-            &format!(
+        let detail = match problem.kind {
+            MachineConfigProblemKind::Fragment => format!(
+                "{} cannot be used: {}; `rimz agents` and `rimz teams` refuse launches until this fragment is fixed",
+                home_relative(&problem.path),
+                problem.error,
+            ),
+            MachineConfigProblemKind::Parse => format!(
                 "{} is unparseable: {}; settings in this file use built-in defaults",
                 home_relative(&problem.path),
                 problem.error,
             ),
-        )?;
+            MachineConfigProblemKind::Semantic => format!(
+                "{} is invalid: {}; settings in this file use built-in defaults",
+                home_relative(&problem.path),
+                problem.error,
+            ),
+        };
+        note(tally, w, Health::Warn, &detail)?;
     }
     Ok(())
 }
