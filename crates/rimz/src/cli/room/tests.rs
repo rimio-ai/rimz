@@ -48,7 +48,6 @@ fn trust_birth_prompt_offer_renders_only_present_summary_lines() {
             teams: Vec::new(),
             env_agents: vec!["claude".to_owned()],
             hooks: 2,
-            ..SurfaceSummary::default()
         },
     };
     let mut out = Vec::new();
