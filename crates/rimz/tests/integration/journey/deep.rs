@@ -738,11 +738,16 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
         .launch_id
         .clone()
         .expect("RimZ-launched parent has launch id");
+    let parent_pane = wait_for_named_run(&env, "journey-parent", CAPTURE_BUDGET)
+        .pane_id
+        .expect("parent run pane");
+    let parent_pane_raw = parent_pane.raw().to_owned();
 
     let child = env
         .rimz()
         .env("PATH", &agent_path)
         .env("TMUX", tmux_env(&socket))
+        .env("TMUX_PANE", &parent_pane_raw)
         .env(rimz::harness::run::ENV_AGENT_KIND, "codex")
         .env(rimz::harness::run::ENV_AGENT_ID, parent_launch_id.as_str())
         .env("RIMZ_TEST_AGENT_SESSION", "sess-journey-child")
@@ -772,34 +777,96 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
         "journey-child"
     );
 
+    // The first launch returns only after its wrapper's durable pane binding
+    // is visible. Launch the sibling immediately to prove that signal reaches
+    // the next placement decision.
+    let sibling = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("TMUX_PANE", &parent_pane_raw)
+        .env(rimz::harness::run::ENV_AGENT_KIND, "codex")
+        .env(rimz::harness::run::ENV_AGENT_ID, parent_launch_id.as_str())
+        .env("RIMZ_TEST_AGENT_SESSION", "sess-journey-sibling")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "30000")
+        .args([
+            "--mux",
+            "tmux",
+            "subagents",
+            "codex",
+            "review the implementation",
+            "--name",
+            "journey-sibling",
+            "--keep",
+            "--timeout",
+            "2m",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch sibling subagent");
+    assert!(
+        sibling.status.success(),
+        "sibling launch failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&sibling.stdout),
+        String::from_utf8_lossy(&sibling.stderr)
+    );
+
     let child_agent = wait_for_named_agent(&env, "journey-child", false, CAPTURE_BUDGET);
     assert_eq!(
         child_agent.parent_agent_id.as_ref(),
         Some(&parent_agent.agent_id)
     );
     assert_eq!(child_agent.launch_depth, Some(1));
-    let parent_pane = wait_for_named_run(&env, "journey-parent", CAPTURE_BUDGET)
-        .pane_id
-        .expect("parent run pane")
-        .to_string();
+    let sibling_agent = wait_for_named_agent(&env, "journey-sibling", false, CAPTURE_BUDGET);
+    assert_eq!(
+        sibling_agent.parent_agent_id.as_ref(),
+        Some(&parent_agent.agent_id)
+    );
     let child_pane = wait_for_named_run(&env, "journey-child", CAPTURE_BUDGET)
         .pane_id
-        .expect("child run pane")
-        .to_string();
+        .expect("child run pane");
+    let sibling_pane = wait_for_named_run(&env, "journey-sibling", CAPTURE_BUDGET)
+        .pane_id
+        .expect("sibling run pane");
+    let parent_position = tmux_pane_position(&socket, parent_pane.raw());
+    let child_position = tmux_pane_position(&socket, child_pane.raw());
+    let sibling_position = tmux_pane_position(&socket, sibling_pane.raw());
+    assert!(
+        parent_position.0 < child_position.0,
+        "first child must split right of parent: parent={parent_position:?}, child={child_position:?}"
+    );
+    assert_eq!(
+        child_position.0, sibling_position.0,
+        "siblings must share one right-hand column: child={child_position:?}, sibling={sibling_position:?}"
+    );
+    assert_ne!(
+        child_position.1, sibling_position.1,
+        "tmux stacks sibling panes vertically"
+    );
 
     let room = RoomHarness::launch(&env, rimz::ids::MuxName::Tmux);
     let screen = room.wait_for(
-        |screen| screen.contains("subagents (1)") && screen.contains("journey-child"),
+        |screen| {
+            screen.contains("subagents (2)")
+                && screen.contains("journey-child")
+                && screen.contains("journey-sibling")
+        },
         SETTLE,
     );
     assert!(
-        screen.contains("subagents (1)") && screen.contains("journey-child"),
-        "child should render only in the parent's subagent section:\n{screen}"
+        screen.contains("subagents (2)")
+            && screen.contains("journey-child")
+            && screen.contains("journey-sibling"),
+        "children should render only in the parent's subagent section:\n{screen}"
     );
     assert_eq!(
         screen.matches("journey-child").count(),
         1,
         "child should not also render as a top-level card:\n{screen}"
+    );
+    assert_eq!(
+        screen.matches("journey-sibling").count(),
+        1,
+        "sibling should not also render as a top-level card:\n{screen}"
     );
 
     let stopped = env
@@ -822,18 +889,23 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline
-        && (tmux_pane_alive(&socket, &session, &parent_pane)
-            || tmux_pane_alive(&socket, &session, &child_pane))
+        && (tmux_pane_alive(&socket, &session, parent_pane.raw())
+            || tmux_pane_alive(&socket, &session, child_pane.raw())
+            || tmux_pane_alive(&socket, &session, sibling_pane.raw()))
     {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(
-        !tmux_pane_alive(&socket, &session, &parent_pane),
+        !tmux_pane_alive(&socket, &session, parent_pane.raw()),
         "parent pane should be closed"
     );
     assert!(
-        !tmux_pane_alive(&socket, &session, &child_pane),
+        !tmux_pane_alive(&socket, &session, child_pane.raw()),
         "child pane should be closed before its parent"
+    );
+    assert!(
+        !tmux_pane_alive(&socket, &session, sibling_pane.raw()),
+        "sibling pane should be closed before its parent"
     );
 }
 
@@ -1299,6 +1371,36 @@ fn tmux_pane_width(socket: &Path, pane: &str) -> Option<usize> {
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).trim().parse().ok())
         .flatten()
+}
+
+fn tmux_pane_position(socket: &Path, pane: &str) -> (usize, usize) {
+    let out = Command::new("tmux")
+        .scrub_session_env()
+        .arg("-S")
+        .arg(socket)
+        .args([
+            "display-message",
+            "-p",
+            "-t",
+            pane,
+            "#{pane_left} #{pane_top}",
+        ])
+        .bounded_output()
+        .expect("spawn tmux display-message");
+    assert!(out.status.success(), "pane geometry unavailable for {pane}");
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let mut fields = raw.split_whitespace();
+    let left = fields
+        .next()
+        .expect("pane left")
+        .parse()
+        .expect("numeric pane left");
+    let top = fields
+        .next()
+        .expect("pane top")
+        .parse()
+        .expect("numeric pane top");
+    (left, top)
 }
 
 /// Whether `pane` still exists in `session`. A self-closed sidebar pane (and its

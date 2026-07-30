@@ -65,6 +65,12 @@ The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --b
 
 The no-delegation reminder rides a provider-native append-system-text launch flag for Claude, Qwen, and Droid, after any caller-supplied append text. Adapters without that capability keep the same tag-wrapped reminder at the end of the user prompt. The process compiler owns this choice at the adapter boundary, beside the native delegation lockdown, so preflight and the eventual exec compile the same provider argv.
 
+## Pane zones
+
+`RunPlacement::SubagentZone` keeps the subagent doorway outside the general placement/config surface while giving its panes a stable home. For a solo caller, the first child splits right from the caller and later children stack against the newest live pane-backed child. For a configured team member, the first child opens a `<view> subagents` companion tab and children launched by any member of that team cohort stack against the newest child there. Zellij uses its native pane stack; tmux maps the same seam to vertical splits. A failed split falls back to the companion tab, so minimum-pane geometry cannot sink the launch.
+
+Anchor selection reads only durable child ancestry and pane bindings from the store; tab and pane titles are presentation, never identity. The wrapper records that binding asynchronously after the mux starts it, so a subagent launch polls the durable rollup for up to three seconds before returning. Sequential fanouts therefore observe the preceding child's anchor in the normal path. A wrapper that does not bind within the cap does not fail its launch: the next child takes the no-anchor strategy, preserving the prior degradation behavior.
+
 The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output and input formats, retries, and verification. Each of those needs a decision the delegating agent is not well placed to make, and each is still reachable by calling `rimz agents` directly. `specs` lists kinds, profiles, and configured commands but never teams, because one launch produces one agent rather than a cohort.
 
 ## Single launch and fanout share one composition

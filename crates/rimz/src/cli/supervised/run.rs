@@ -23,21 +23,25 @@ use std::sync::Arc;
 pub(super) enum RunPlacement {
     Split,
     LoopZone,
+    SubagentZone,
     Tab,
 }
 
-/// A supervised `-p` run hosts its agent pane in a split of the current tab so
-/// focus stays with the caller; it opens a new tab only when forced or when
-/// there is no ambient pane to split.
+/// A supervised `-p` run normally splits the current tab so focus stays with
+/// the caller. Subagents use their dedicated zone; forced and out-of-pane
+/// launches open a new tab.
 pub(super) fn run_placement(
     force_new_tab: bool,
     has_ambient_pane: bool,
     loop_zone: bool,
+    subagent: bool,
 ) -> RunPlacement {
     if loop_zone && !force_new_tab {
         RunPlacement::LoopZone
     } else if force_new_tab || !has_ambient_pane {
         RunPlacement::Tab
+    } else if subagent {
+        RunPlacement::SubagentZone
     } else {
         RunPlacement::Split
     }
@@ -252,14 +256,15 @@ fn open_attempt_pane(
     pane: &PaneCmd,
 ) -> Result<()> {
     let target = own_pane_id(room.mux_name());
+    let launch_identity = launch_batch.single_identity()?;
     let direction = rimz::mux::detect_terminal_size()
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
         .unwrap_or_default();
-    let tab = || -> Result<()> {
+    let tab = |title: String| -> Result<()> {
         let sidebar = room.sidebar_options(&prepared.launch.cwd, Vec::new(), None);
         room.backend()
             .open_tab(&TabOptions {
-                title: format!("run {}", prepared.adapter.spec().kind),
+                title,
                 panes: LayoutPanes {
                     columns: vec![LayoutColumn {
                         panes: vec![pane.clone()],
@@ -272,48 +277,80 @@ fn open_attempt_pane(
             })
             .map_err(anyhow::Error::from)
     };
-    let open_result =
-        match run_placement(request.force_new_tab, target.is_some(), request.loop_zone) {
-            RunPlacement::Split => room
-                .backend()
-                .split_pane(SplitPaneOptions {
-                    target: target.map_or(SplitTarget::Ambient, SplitTarget::Pane),
-                    cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
-                    command: Some(pane.argv.clone()),
-                    title: None,
-                    close_on_exit: false,
-                    env: rimz::room::pane_identity_env(
-                        &prepared.workspace,
-                        prepared.room_channel.as_deref(),
-                        request.worktree.is_none() && request.from_pr.is_none(),
-                    ),
-                    placement: SplitPlacement::Directional(direction),
-                    focus: false,
-                })
-                .map_err(anyhow::Error::from),
-            RunPlacement::LoopZone => {
-                let env = rimz::room::pane_identity_env(
+    let open_result = match run_placement(
+        request.force_new_tab,
+        target.is_some(),
+        request.loop_zone,
+        request.subagent,
+    ) {
+        RunPlacement::Split => room
+            .backend()
+            .split_pane(SplitPaneOptions {
+                target: target.map_or(SplitTarget::Ambient, SplitTarget::Pane),
+                cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
+                command: Some(pane.argv.clone()),
+                title: None,
+                close_on_exit: false,
+                env: rimz::room::pane_identity_env(
                     &prepared.workspace,
                     prepared.room_channel.as_deref(),
                     request.worktree.is_none() && request.from_pr.is_none(),
-                );
-                match supervised::pane::split_into_loop_zone(
-                    room.backend(),
-                    &prepared.workspace,
-                    &prepared.launch.cwd,
-                    env,
-                    pane,
-                )? {
-                    true => Ok(()),
-                    false => tab(),
-                }
+                ),
+                placement: SplitPlacement::Directional(direction),
+                focus: false,
+            })
+            .map_err(anyhow::Error::from),
+        RunPlacement::LoopZone => {
+            let env = rimz::room::pane_identity_env(
+                &prepared.workspace,
+                prepared.room_channel.as_deref(),
+                request.worktree.is_none() && request.from_pr.is_none(),
+            );
+            match supervised::pane::split_into_loop_zone(
+                room.backend(),
+                &prepared.workspace,
+                &prepared.launch.cwd,
+                env,
+                pane,
+            )? {
+                true => Ok(()),
+                false => tab(format!("run {}", prepared.adapter.spec().kind)),
             }
-            RunPlacement::Tab => tab(),
-        };
+        }
+        RunPlacement::SubagentZone => {
+            let env = rimz::room::pane_identity_env(
+                &prepared.workspace,
+                prepared.room_channel.as_deref(),
+                request.worktree.is_none() && request.from_pr.is_none(),
+            );
+            let sidebar = room.sidebar_options(&prepared.launch.cwd, Vec::new(), None);
+            match supervised::pane::split_into_subagent_zone(
+                room.backend(),
+                &prepared.store,
+                &prepared.workspace,
+                &prepared.launch.cwd,
+                env,
+                sidebar,
+                pane,
+                &launch_identity.name,
+            )? {
+                true => Ok(()),
+                false => tab(supervised::pane::subagent_companion_title(&prepared.store)),
+            }
+        }
+        RunPlacement::Tab => tab(format!("run {}", prepared.adapter.spec().kind)),
+    };
     if let Err(err) = open_result {
         let _ = rimz::harness::run::fail(prepared.store.paths(), run_id);
         let _ = prepared.store.fail_agent_launch_batch(launch_batch);
         return Err(err).context("opening run pane");
+    }
+    if request.subagent {
+        supervised::pane::wait_for_subagent_pane_bind(
+            &prepared.store,
+            &launch_identity.kind,
+            &launch_identity.agent_id,
+        );
     }
     Ok(())
 }

@@ -121,6 +121,8 @@ Only `rimz subagents` creates a parented pane-backed child. The child appears in
 
 Subagent launches are not capped by `[agents] max-chain-length`; that setting governs successive top-level peer launches through `rimz agents` and `rimz teams`. Instead, a subagent cannot launch anything through either doorway. A refused call creates no run, pane, worktree, or provisional agent.
 
+Pane-backed children also share a physical zone instead of repeatedly reshaping the caller's view. A solo parent's first child opens in a right-hand column and later children stack there (native Zellij stacks, vertical tmux panes). A member of a launched team sends its children to a companion `<view> subagents` tab shared by that team's view on both backends. If a child column has no room for another split, RimZ falls back to the companion tab.
+
 ## Configure launch defaults
 
 ```toml

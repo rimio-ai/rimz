@@ -32,20 +32,93 @@ fn stream_json_prompt_rejects_malformed_lines() {
 fn supervised_run_placement_matrix() {
     use super::run::{RunPlacement, run_placement};
 
-    for (force_new_tab, has_ambient_pane, loop_zone, expected) in [
-        (false, true, false, RunPlacement::Split),
-        (true, true, false, RunPlacement::Tab),
-        (false, false, false, RunPlacement::Tab),
-        (false, true, true, RunPlacement::LoopZone),
-        (false, false, true, RunPlacement::LoopZone),
-        (true, true, true, RunPlacement::Tab),
+    for (force_new_tab, has_ambient_pane, loop_zone, subagent, expected) in [
+        (false, true, false, false, RunPlacement::Split),
+        (false, true, false, true, RunPlacement::SubagentZone),
+        (true, true, false, true, RunPlacement::Tab),
+        (false, false, false, true, RunPlacement::Tab),
+        (false, true, true, false, RunPlacement::LoopZone),
+        (false, false, true, false, RunPlacement::LoopZone),
+        (false, true, true, true, RunPlacement::LoopZone),
+        (true, true, true, true, RunPlacement::Tab),
     ] {
         assert_eq!(
-            run_placement(force_new_tab, has_ambient_pane, loop_zone),
+            run_placement(force_new_tab, has_ambient_pane, loop_zone, subagent),
             expected,
-            "force_new_tab={force_new_tab}, has_ambient_pane={has_ambient_pane}, loop_zone={loop_zone}"
+            "force_new_tab={force_new_tab}, has_ambient_pane={has_ambient_pane}, loop_zone={loop_zone}, subagent={subagent}"
         );
     }
+}
+
+#[test]
+fn subagent_zone_strategy_uses_solo_column_and_team_companion_tab() {
+    use super::pane::{SubagentZoneStrategy, select_subagent_zone_strategy};
+
+    let mut solo = agent_state("codex", "solo", AgentStatus::Running);
+    solo.pane = Some(pane_ref("%1", "work"));
+    assert_eq!(
+        select_subagent_zone_strategy(std::slice::from_ref(&solo), &solo, "room"),
+        Some(SubagentZoneStrategy::SoloRight {
+            session_name: "room".to_owned(),
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
+        })
+    );
+
+    let mut planner = agent_state("claude", "planner", AgentStatus::Running);
+    planner.team = Some("forge".to_owned());
+    planner.channel = Some("design".to_owned());
+    planner.pane = Some(pane_ref("%2", "design"));
+    assert_eq!(
+        select_subagent_zone_strategy(std::slice::from_ref(&planner), &planner, "room"),
+        Some(SubagentZoneStrategy::CompanionTab {
+            title: "design subagents".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn subagent_zone_strategy_anchors_to_newest_child_across_team() {
+    use super::pane::{SubagentZoneStrategy, select_subagent_zone_strategy};
+
+    let mut planner = agent_state("claude", "planner", AgentStatus::Running);
+    planner.team = Some("forge".to_owned());
+    planner.channel = Some("design".to_owned());
+    planner.pane = Some(pane_ref("%1", "design"));
+    let mut coder = agent_state("codex", "coder", AgentStatus::Running);
+    coder.team = Some("forge".to_owned());
+    coder.channel = Some("design".to_owned());
+    coder.pane = Some(pane_ref("%2", "design"));
+    let mut older = launched_child("child-old", &planner, "%3", 10);
+    older.pane.as_mut().unwrap().session_name = "room".to_owned();
+    let newer = launched_child("child-new", &coder, "%4", 20);
+    let agents = vec![planner.clone(), coder, older, newer];
+
+    assert_eq!(
+        select_subagent_zone_strategy(&agents, &planner, "room"),
+        Some(SubagentZoneStrategy::Stack {
+            session_name: "room".to_owned(),
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
+        })
+    );
+}
+
+#[test]
+fn subagent_launch_waits_for_wrapper_pane_bind_but_caps_the_wait() {
+    let mut probes = 0;
+    assert!(super::pane::wait_for_subagent_pane_bind_with(
+        || {
+            probes += 1;
+            probes == 3
+        },
+        Duration::from_secs(1),
+        Duration::ZERO,
+    ));
+    assert_eq!(probes, 3);
+    assert!(!super::pane::wait_for_subagent_pane_bind_with(
+        || false,
+        Duration::ZERO,
+        Duration::ZERO,
+    ));
 }
 
 fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
@@ -434,4 +507,19 @@ fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {
         status,
         ..rimz::testkit::agent_state(kind, id, jiff::Timestamp::UNIX_EPOCH)
     }
+}
+
+fn pane_ref(id: &str, view_name: &str) -> PaneRef {
+    let mut pane = PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, id));
+    pane.view_name = Some(view_name.to_owned());
+    pane
+}
+
+fn launched_child(id: &str, parent: &AgentState, pane_id: &str, registered_at: i64) -> AgentState {
+    let mut child = agent_state("codex", id, AgentStatus::Running);
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.launch_depth = Some(1);
+    child.pane = Some(pane_ref(pane_id, "subagents"));
+    child.registered_at = Some(jiff::Timestamp::from_second(registered_at).unwrap());
+    child
 }
