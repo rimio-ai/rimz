@@ -189,7 +189,7 @@ pub struct RoleBinding {
     pub args: Option<String>,
 }
 
-/// Locate the retired singular prompt-fragment key in machine or project config.
+/// Locate retired agent keys in machine or project config.
 pub(crate) fn retired_agents_key(doc: &toml::Table) -> Option<String> {
     let agents = doc.get("agents").and_then(toml::Value::as_table);
     if agents.is_some_and(|agents| agents.contains_key("max-launch-depth")) {
