@@ -234,7 +234,7 @@ pub fn agent_status_glyph_role(status: AgentStatus) -> GlyphRole {
 /// Strip one status glyph suffix emitted by any built-in or configured glyph
 /// set. The returned base always borrows the observed name, preserving manual
 /// renames byte-for-byte.
-pub(crate) fn strip_status_glyph_suffix<'a>(name: &'a str, theme: &ThemeConfig) -> &'a str {
+pub fn strip_status_glyph_suffix<'a>(name: &'a str, theme: &ThemeConfig) -> &'a str {
     let mut glyphs = STATUS_SUFFIX_ROLES
         .iter()
         .flat_map(|&role| {

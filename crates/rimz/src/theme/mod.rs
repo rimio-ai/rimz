@@ -17,10 +17,10 @@ mod tone;
 
 pub mod fmt;
 
-pub(crate) use glyphs::strip_status_glyph_suffix;
 pub(crate) use glyphs::{GlyphSet, GlyphSetKind};
 pub use glyphs::{
-    agent_status_glyph_role, nerd_font_probe_glyphs, nerd_font_probe_gradient, theme_glyphs,
+    agent_status_glyph_role, nerd_font_probe_glyphs, nerd_font_probe_gradient,
+    strip_status_glyph_suffix, theme_glyphs,
 };
 pub use identity::Identity;
 pub(crate) use palette::HEAT_RAMP_WARM_START;
