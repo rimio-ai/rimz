@@ -65,9 +65,13 @@ struct Report {
     version: u8,
     verb: &'static str,
     path: PathBuf,
+    total_import_edges: usize,
     import_edges: Vec<ImportEdge>,
+    total_external_surface: usize,
     external_surface: Vec<ExternalSurface>,
+    total_cochange_edges: usize,
     cochange_edges: Vec<CochangeEdge>,
+    total_divergence: usize,
     divergence: Vec<Divergence>,
     parse_failures: usize,
 }
@@ -270,13 +274,26 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             .then_with(|| left.left.cmp(&right.left))
             .then_with(|| left.right.cmp(&right.right))
     });
+    let total_import_edges = import_edges.len();
+    let total_external_surface = external_surface.len();
+    let total_cochange_edges = cochange_edges.len();
+    let total_divergence = divergence.len();
+    import_edges.truncate(args.top);
+    external_surface.truncate(args.top);
+    let mut cochange_edges = cochange_edges;
+    cochange_edges.truncate(args.top);
+    divergence.truncate(args.top);
     Ok(Report {
         version: 1,
         verb: "seams",
         path: args.path.clone(),
+        total_import_edges,
         import_edges,
+        total_external_surface,
         external_surface,
+        total_cochange_edges,
         cochange_edges,
+        total_divergence,
         divergence,
         parse_failures: syntax.parse_failures.len(),
     })
@@ -315,7 +332,11 @@ fn print_report(report: &Report, top: usize) {
     for edge in report.import_edges.iter().take(top) {
         println!("{} -> {}: {}", edge.from, edge.to, edge.items);
     }
-    bounded_tail(report.import_edges.len(), top, "import edges");
+    bounded_tail(
+        report.total_import_edges,
+        report.import_edges.len(),
+        "import edges",
+    );
     println!();
     println!("External surface");
     for surface in report.external_surface.iter().take(top) {
@@ -324,13 +345,21 @@ fn print_report(report: &Report, top: usize) {
             surface.module, surface.outside, surface.items
         );
     }
-    bounded_tail(report.external_surface.len(), top, "surface rows");
+    bounded_tail(
+        report.total_external_surface,
+        report.external_surface.len(),
+        "surface rows",
+    );
     println!();
     println!("Co-change edges");
     for edge in report.cochange_edges.iter().take(top) {
         println!("{} <> {}: {} commits", edge.left, edge.right, edge.commits);
     }
-    bounded_tail(report.cochange_edges.len(), top, "co-change edges");
+    bounded_tail(
+        report.total_cochange_edges,
+        report.cochange_edges.len(),
+        "co-change edges",
+    );
     println!();
     println!("Divergence");
     for row in report.divergence.iter().take(top) {
@@ -339,12 +368,16 @@ fn print_report(report: &Report, top: usize) {
             row.kind, row.left, row.right, row.imports, row.cochanges
         );
     }
-    bounded_tail(report.divergence.len(), top, "divergence rows");
+    bounded_tail(
+        report.total_divergence,
+        report.divergence.len(),
+        "divergence rows",
+    );
     println!(
         "total: {} import edges, {} co-change edges, {} divergence rows, {} parse failures",
-        report.import_edges.len(),
-        report.cochange_edges.len(),
-        report.divergence.len(),
+        report.total_import_edges,
+        report.total_cochange_edges,
+        report.total_divergence,
         report.parse_failures
     );
 }
@@ -353,9 +386,9 @@ fn print_report(report: &Report, top: usize) {
     clippy::print_stdout,
     reason = "xtask atlas bounded report is the command's stdout contract"
 )]
-fn bounded_tail(total: usize, top: usize, label: &str) {
-    if total > top {
-        println!("… and {} more {label}", total - top);
+fn bounded_tail(total: usize, shown: usize, label: &str) {
+    if total > shown {
+        println!("… and {} more {label}", total - shown);
     }
 }
 

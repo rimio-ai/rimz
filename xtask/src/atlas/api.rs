@@ -58,7 +58,9 @@ struct Report {
     version: u8,
     verb: &'static str,
     path: PathBuf,
+    total_modules: usize,
     modules: Vec<ModuleApi>,
+    total_single_caller_items: usize,
     single_caller_items: Vec<ItemOccurrence>,
     parse_failures: usize,
 }
@@ -214,11 +216,17 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             .then_with(|| left.path.cmp(&right.path))
             .then_with(|| left.line.cmp(&right.line))
     });
+    let total_modules = modules.len();
+    let total_single_caller_items = single_caller_items.len();
+    modules.truncate(args.top);
+    single_caller_items.truncate(args.top);
     Ok(Report {
         version: 1,
         verb: "api",
         path: args.path.clone(),
+        total_modules,
         modules,
+        total_single_caller_items,
         single_caller_items,
         parse_failures: syntax.parse_failures.len(),
     })
@@ -341,8 +349,11 @@ fn print_report(report: &Report, top: usize) {
             delta
         );
     }
-    if report.modules.len() > top {
-        println!("… and {} more modules", report.modules.len() - top);
+    if report.total_modules > report.modules.len() {
+        println!(
+            "… and {} more modules",
+            report.total_modules - report.modules.len()
+        );
     }
     println!();
     println!("Single-outside-module public items (`occ` is identifier occurrences)");
@@ -356,17 +367,15 @@ fn print_report(report: &Report, top: usize) {
             item.occurrences
         );
     }
-    if report.single_caller_items.len() > top {
+    if report.total_single_caller_items > report.single_caller_items.len() {
         println!(
             "… and {} more single-outside-module items",
-            report.single_caller_items.len() - top
+            report.total_single_caller_items - report.single_caller_items.len()
         );
     }
     println!(
         "total: {} modules, {} shortlist items, {} parse failures",
-        report.modules.len(),
-        report.single_caller_items.len(),
-        report.parse_failures
+        report.total_modules, report.total_single_caller_items, report.parse_failures
     );
 }
 
