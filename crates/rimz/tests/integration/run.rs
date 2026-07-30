@@ -2037,7 +2037,7 @@ fn wait_multi_blocks_until_all_terminal() {
     );
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "swift-otter completed\nquiet-fox completed\n"
+        "--- swift-otter ---\n\n--- quiet-fox ---\n\n"
     );
 }
 
@@ -2142,10 +2142,13 @@ fn wait_any_prints_first_finisher_and_leaves_rest_running() {
 
     let out = child.wait_with_output().expect("wait for first finisher");
     assert!(out.status.success());
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "quiet-fox\n");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "--- quiet-fox ---\n\n"
+    );
     assert_eq!(
         String::from_utf8_lossy(&out.stderr),
-        "quiet-fox completed\n"
+        "rimz: run completed but no final assistant message was extracted\n"
     );
     let other = rimz::harness::run::load(store.paths(), &otter.run_id).expect("load other run");
     assert_eq!(other.status, RunStatus::Running);
@@ -2203,7 +2206,10 @@ fn wait_any_first_finisher_failure_is_nonzero() {
         .wait_with_output()
         .expect("wait for failed first finisher");
     assert_eq!(out.status.code(), Some(1));
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "quiet-fox\n");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "--- quiet-fox (failed) ---\n\n"
+    );
 }
 
 #[test]
@@ -2222,10 +2228,13 @@ fn wait_any_same_poll_selects_first_input_reference() {
         .expect("wait on same-poll terminals");
 
     assert!(out.status.success(), "first input exit code must win");
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "swift-otter\n");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "--- swift-otter ---\n\n"
+    );
     assert_eq!(
         String::from_utf8_lossy(&out.stderr),
-        "swift-otter completed\n"
+        "rimz: run completed but no final assistant message was extracted\n"
     );
 }
 
