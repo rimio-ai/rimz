@@ -160,10 +160,11 @@ fn evaluate(root: &Path, target: &Target) -> Result<Report> {
             .iter()
             .map(|file| file.pub_items.len())
             .sum::<usize>();
-        let module_entry = absolute
-            .is_dir()
-            .then(|| module.path.join("mod.rs"))
-            .unwrap_or_else(|| module.path.clone());
+        let module_entry = if absolute.is_dir() {
+            module.path.join("mod.rs")
+        } else {
+            module.path.clone()
+        };
         let target_module = crate_module_for_path(&module_entry);
         let mut unallowed_imports = parsed
             .files
