@@ -490,7 +490,7 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
 
     let before = jiff::Timestamp::now();
-    run_success(
+    let scheduled = run_success(
         env.rimz().env("RIMZ_TEST_PANE_LIST", &pane_fixture).args([
             "message",
             "--schedule",
@@ -500,11 +500,17 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
         ]),
         "scheduled message",
     );
+    let scheduled_id = queued_id_from_stdout(&scheduled.stdout);
+    assert_eq!(
+        String::from_utf8_lossy(&scheduled.stdout).trim(),
+        format!("queued for @claude#feature-scheduled ({scheduled_id})")
+    );
 
     let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].pane_id, None, "delivery re-resolves the pane");
     let future_id = pending[0].message_id.clone();
+    assert_eq!(future_id.as_str(), scheduled_id);
     let not_before = pending[0].not_before.expect("scheduled timestamp");
     assert!(not_before > before);
     assert!(not_before <= before + jiff::SignedDuration::from_secs(61 * 60));
@@ -1697,8 +1703,8 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
             .args(["message", "@claude", "--", "go"]),
         "send at open gate",
     );
-    assert_single_sigil_sent(&sent.stdout);
-    let sent_id = sent_id_from_stdout(&sent.stdout);
+    assert_single_sigil_delivered(&sent.stdout);
+    let sent_id = delivered_id_from_stdout(&sent.stdout);
     assert!(env.store().list_pending_messages().unwrap().is_empty());
     assert_text_then_enter(&trace_log, &user_message("go"));
     let fresh = message_by_id(&env, &MessageId::parse(&sent_id).expect("message id"));
@@ -1731,6 +1737,12 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
         "queue while running",
     );
     let queued_id = queued_id_from_stdout(&queued.stdout);
+    assert_eq!(
+        String::from_utf8_lossy(&queued.stdout).trim(),
+        format!(
+            "queued for @claude#feature-boundary ({queued_id}) — @claude#feature-boundary is running; send now: rimz message steer {queued_id}"
+        )
+    );
     assert_eq!(
         message_by_id(&env, &MessageId::parse(&queued_id).expect("message id")).status,
         MessageStatus::Queued
@@ -1789,6 +1801,45 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
 }
 
 #[test]
+fn busy_queue_confirmation_points_to_the_record_steer_command() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-queue-hint", "feature-queue-hint", pane_env);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+
+    let queued = run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", &pane_fixture).args([
+            "message",
+            "@claude",
+            "--",
+            "send this exact record",
+        ]),
+        "queue while running",
+    );
+    let message_id = queued_id_from_stdout(&queued.stdout);
+    assert_eq!(
+        String::from_utf8_lossy(&queued.stdout).trim(),
+        format!(
+            "queued for @claude#feature-queue-hint ({message_id}) — @claude#feature-queue-hint is running; send now: rimz message steer {message_id}"
+        )
+    );
+
+    let trace_log = env.project_root.join("zellij-queue-hint-trace.log");
+    let steered = run_success(
+        traced_rimz(&env, "zellij-queue-hint-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "steer", &message_id]),
+        "steer hinted record",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&steered.stdout).trim(),
+        format!("sent to @claude ({message_id})")
+    );
+    assert_text_then_enter(&trace_log, &user_message("send this exact record"));
+}
+
+#[test]
 fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
     let env = Env::new();
     env.write_config(&env.project_root, "");
@@ -1813,7 +1864,7 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
             .args(["message", "@claude", "--", "recover me"]),
         "send-now message",
     );
-    let message_id = sent_id_from_stdout(&out.stdout);
+    let message_id = delivered_id_from_stdout(&out.stdout);
     assert_text_then_enter(&first_trace, &user_message("recover me"));
     let first_last_sent_at =
         message_by_id(&env, &MessageId::parse(&message_id).expect("message id"))
@@ -1898,7 +1949,7 @@ fn shortened_reconcile_window_preserves_prompt_for_late_correlated_ack() {
             .args(["message", "@claude", "--", "arrived once"]),
         "send prompt",
     );
-    let message_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).expect("message id");
+    let message_id = MessageId::parse(&delivered_id_from_stdout(&sent.stdout)).expect("message id");
     let first_live = env.store().list_messages().expect("messages");
     let first_record = first_live
         .iter()
@@ -2043,7 +2094,7 @@ fn send_now_submit_failure_leaves_sent_record() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let message_id = MessageId::parse(&sent_id_from_stdout(&out.stdout)).expect("message id");
+    let message_id = MessageId::parse(&delivered_id_from_stdout(&out.stdout)).expect("message id");
     assert!(
         trace_lines(&trace_log)
             .iter()
@@ -3609,8 +3660,14 @@ fn queued_id_from_stdout(stdout: &[u8]) -> String {
     let trimmed = text.trim();
     trimmed
         .strip_prefix("queued for ")
-        .and_then(|rest| rest.rsplit_once('('))
-        .and_then(|(_, id)| id.strip_suffix(')'))
+        .and_then(|rest| {
+            rest.split_whitespace().find_map(|token| {
+                token
+                    .strip_prefix('(')
+                    .and_then(|token| token.strip_suffix(')'))
+                    .filter(|token| token.starts_with("msg_"))
+            })
+        })
         .map(str::to_owned)
         .unwrap_or_else(|| panic!("expected `queued for @target (msg_...)`, got `{trimmed}`"))
 }
@@ -3629,15 +3686,15 @@ fn assert_second_precision_created(shown: &str) {
     assert!(!absolute.contains('.'), "{line}");
 }
 
-fn sent_id_from_stdout(stdout: &[u8]) -> String {
+fn delivered_id_from_stdout(stdout: &[u8]) -> String {
     let text = String::from_utf8_lossy(stdout);
     let trimmed = text.trim();
     trimmed
-        .strip_prefix("sent to ")
+        .strip_prefix("delivered to ")
         .and_then(|rest| rest.rsplit_once('('))
         .and_then(|(_, id)| id.strip_suffix(')'))
         .map(str::to_owned)
-        .unwrap_or_else(|| panic!("expected `sent to @target (msg_...)`, got `{trimmed}`"))
+        .unwrap_or_else(|| panic!("expected `delivered to @target (msg_...)`, got `{trimmed}`"))
 }
 
 fn fixed_message_id(value: u64) -> MessageId {
@@ -3650,6 +3707,15 @@ fn assert_single_sigil_sent(stdout: &[u8]) {
     assert!(
         trimmed.starts_with("sent to @") && !trimmed.starts_with("sent to @@"),
         "send confirmation should carry one sigil: {trimmed}"
+    );
+}
+
+fn assert_single_sigil_delivered(stdout: &[u8]) {
+    let text = String::from_utf8_lossy(stdout);
+    let trimmed = text.trim();
+    assert!(
+        trimmed.starts_with("delivered to @") && !trimmed.starts_with("delivered to @@"),
+        "delivery confirmation should carry one sigil: {trimmed}"
     );
 }
 

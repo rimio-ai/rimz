@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use rimz::ids::AgentKind;
-use rimz::message::dispatch::DispatchOutcome;
+use rimz::message::dispatch::{DispatchOutcome, ParkReason};
 use rimz::message::{AutoCompact, MessageSender};
 
 const AGENT_WAIT_DEADLINE: Duration = Duration::from_secs(3600);
@@ -271,11 +271,22 @@ pub(crate) enum ReportMode {
 pub(crate) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<String> {
     match outcome {
         DispatchOutcome::Sent { label, message_id } => {
-            Some(format!("sent to {label} ({message_id})"))
+            Some(format!("delivered to {label} ({message_id})"))
         }
-        DispatchOutcome::Queued { label, message_id } => {
-            Some(format!("queued for {label} ({message_id})"))
-        }
+        DispatchOutcome::Queued {
+            label,
+            message_id,
+            reason,
+        } => Some(match reason {
+            Some(ParkReason::Status(status)) => format!(
+                "queued for {label} ({message_id}) — {label} is {}; send now: rimz message steer {message_id}",
+                status.as_str()
+            ),
+            Some(ParkReason::WaitingOnPrompt) => format!(
+                "queued for {label} ({message_id}) — {label} is waiting on a prompt in its pane; answer it or force: rimz message steer {message_id} --force"
+            ),
+            None => format!("queued for {label} ({message_id})"),
+        }),
         DispatchOutcome::CompactionPending { label, message_id } => Some(format!(
             "compacting {label}; queued {message_id} (delivers when compaction completes)"
         )),
@@ -325,7 +336,9 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
                 sent.push(format!("{label} ({message_id})"));
                 sent_labels.push(label.as_str());
             }
-            DispatchOutcome::Queued { label, message_id } => {
+            DispatchOutcome::Queued {
+                label, message_id, ..
+            } => {
                 queued.push(format!("{label} ({message_id})"));
             }
             DispatchOutcome::CompactionPending { label, message_id } => {
@@ -509,6 +522,45 @@ mod tests {
             json: true,
         };
         validate_reply_wait(wait, true, false, false).unwrap();
+    }
+
+    #[test]
+    fn boundary_confirmations_distinguish_delivery_and_park_reasons() {
+        let message_id = rimz::ids::MessageId::parse("msg_0123456789abcdef").unwrap();
+        let label = "@coder".to_owned();
+        let outcome = |reason| DispatchOutcome::Queued {
+            label: label.clone(),
+            message_id: message_id.clone(),
+            reason,
+        };
+
+        assert_eq!(
+            render_dispatch_outcome(&DispatchOutcome::Sent {
+                label: label.clone(),
+                message_id: message_id.clone(),
+            })
+            .as_deref(),
+            Some("delivered to @coder (msg_0123456789abcdef)")
+        );
+        assert_eq!(
+            render_dispatch_outcome(&outcome(Some(ParkReason::Status(
+                rimz::agents::AgentStatus::Running,
+            ))))
+            .as_deref(),
+            Some(
+                "queued for @coder (msg_0123456789abcdef) — @coder is running; send now: rimz message steer msg_0123456789abcdef"
+            )
+        );
+        assert_eq!(
+            render_dispatch_outcome(&outcome(Some(ParkReason::WaitingOnPrompt))).as_deref(),
+            Some(
+                "queued for @coder (msg_0123456789abcdef) — @coder is waiting on a prompt in its pane; answer it or force: rimz message steer msg_0123456789abcdef --force"
+            )
+        );
+        assert_eq!(
+            render_dispatch_outcome(&outcome(None)).as_deref(),
+            Some("queued for @coder (msg_0123456789abcdef)")
+        );
     }
 
     #[test]

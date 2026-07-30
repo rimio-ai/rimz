@@ -151,6 +151,7 @@ fn parked_reply_reanchors_when_delivery_starts() {
     let outcome = DispatchOutcome::Queued {
         label: "@claude".to_owned(),
         message_id: MessageId::new(),
+        reason: None,
     };
     let mut leg = Leg::new(target, &outcome, 0);
 
