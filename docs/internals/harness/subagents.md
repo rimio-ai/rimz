@@ -1,6 +1,6 @@
 # Agent-launched subagents
 
-> One agent delegating a bounded prompt to another. This page owns the child lifecycle: the agent-only doorway, what a launch desugars to, the ancestry stamp and its depth cap, how the caller-scoped verbs decide who its children are, and the boundary with the provider-native children that share the name. The supervised run underneath a child is [scripting.md](./scripting.md); the launch core it rides on is [fleet.md](./fleet.md).
+> One agent delegating a bounded prompt to another. This page owns the child lifecycle: the agent-only launch and lifecycle verbs, what a launch desugars to, the ancestry stamp and its depth cap, how the caller-scoped verbs decide who its children are, and the boundary with the provider-native children that share the name. The supervised run underneath a child is [scripting.md](./scripting.md); the launch core it rides on is [fleet.md](./fleet.md).
 
 ## Two things are called a subagent
 
@@ -61,7 +61,7 @@ This complements, rather than replaces, `max-launch-depth`. The depth check bloc
 | `keep` | `--keep`, default false | the pane closes itself on completion |
 | everything else | default | see the omissions below |
 
-The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --bg --timeout 30m`, while additionally arming the in-pane wrapper's self-cleanup because this doorway omits retries and verification. `--wait` leaves that launch unchanged, then passes the minted petname to the shared batch-wait path; `--wait=DURATION` adds a caller-side join deadline without changing the child's timeout. Everything after that point — the run record, the completion fold, the wake socket, pane reclamation — is [scripting.md](./scripting.md) unchanged, which is the reason this page does not restate any of it.
+The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --bg --timeout 30m`, while additionally arming the in-pane wrapper's self-cleanup because this doorway omits retries and verification. `--wait` leaves that launch unchanged, then passes the minted petname to the shared single-name wait path; `--wait=DURATION` adds a caller-side join deadline without changing the child's timeout. Everything after that point — the run record, the completion fold, the wake socket, pane reclamation — is [scripting.md](./scripting.md) unchanged, which is the reason this page does not restate any of it.
 
 The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--top-level`, `--resume`, placement flags, output and input formats, retries, and verification. Each of those needs a decision the delegating agent is not well placed to make, and each is still reachable by calling `rimz agents` directly. `specs` lists kinds, profiles, and configured commands but never teams, because one launch produces one agent rather than a cohort.
 
@@ -73,7 +73,7 @@ Parsing, required fields, timeout syntax, and duplicate explicit names are valid
 
 The supervised runner's background outcome carries the minted petname and run ID back to the subagents command. Single launch prints the identity directly, while fanout collects every identity. This avoids rediscovering children from a before/after store snapshot, which could confuse another launch racing in the same family.
 
-By default, either form returns after launching; fanout can also render its collected run IDs as JSON. With `--wait`, single launch passes one petname and fanout passes its exact collected set to `agents_cmd::wait_agent_batch`. The normal multi-target wait renderer, caller-side deadline, and aggregate exit code therefore own both waited result paths.
+By default, either form returns after launching; fanout can also render its collected run IDs as JSON. With `--wait`, single launch uses `agents_cmd::wait_agent` and its single-result renderer, while fanout passes its exact collected set to `agents_cmd::wait_agent_batch`. The existing wait renderers, caller-side deadline, and exit-code paths therefore own both waited results: one launch renders the final answer or full JSON run record, while fanout renders labeled statuses or a result map.
 
 A runtime failure during that loop aborts the remaining launches and reports every child already started. Those children are not rolled back: their durable run records, deadlines, self-cleanup, and caller-scoped `wait`/`stop` behavior remain the ordinary supervised lifecycle. Validation failures are different — because desugaring completed before the loop, they launch nothing.
 
