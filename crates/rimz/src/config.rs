@@ -1051,6 +1051,13 @@ impl DiscoveredAgentsHome {
         {
             return Some(path.clone());
         }
+        if let LayoutErr::ProfileCycle { chain } = source {
+            for profile in chain.split(" -> ") {
+                if let Some(path) = self.sources.profiles.get(profile) {
+                    return Some(path.clone());
+                }
+            }
+        }
         let team = match source {
             LayoutErr::UnknownRoleInTeam { team, .. }
             | LayoutErr::UnknownLeaderRole { team, .. }
@@ -1074,6 +1081,23 @@ impl DiscoveredAgentsHome {
         }
         if let LayoutErr::InvalidCommand { command, .. } = source {
             return self.sources.commands.get(command).cloned();
+        }
+        if let LayoutErr::UnknownCell { cell, .. } = source {
+            return self
+                .fragment
+                .teams
+                .0
+                .iter()
+                .find(|(_, team)| {
+                    team.layout.as_deref().is_some_and(|layout| {
+                        layout
+                            .split([',', '+', '/', ':'])
+                            .map(str::trim)
+                            .any(|token| token == cell)
+                    })
+                })
+                .and_then(|(team, _)| self.sources.teams.get(team))
+                .cloned();
         }
         None
     }

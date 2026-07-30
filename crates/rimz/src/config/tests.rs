@@ -378,6 +378,13 @@ fn invalid_fragment_reference_has_the_same_source_error_in_both_loaders() {
         AGENT_FRAGMENT_FILE,
         "[agents.profiles.good]\nagent = \"claude\"\n",
     );
+    write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "bad-layout",
+        TEAM_FRAGMENT_FILE,
+        "[agents.teams.bad-layout]\nlayout = \"missing-cell\"\n",
+    );
 
     let strict =
         MachineConfig::load_from(&config_path, agents_home.path()).expect_err("strict failure");
@@ -396,8 +403,11 @@ fn invalid_fragment_reference_has_the_same_source_error_in_both_loaders() {
         "strict: {strict}\nlenient: {launch_failure}"
     );
     assert!(launch_failure.contains("missing-kind"), "{launch_failure}");
+    assert!(launch_failure.contains("missing-cell"), "{launch_failure}");
+    assert_eq!(lenient.notices.fragment_errors.len(), 2);
     assert!(lenient.agents.profiles.0.contains_key("good"));
     assert!(!lenient.agents.profiles.0.contains_key("broken"));
+    assert!(!lenient.agents.teams.0.contains_key("bad-layout"));
 }
 
 #[test]
