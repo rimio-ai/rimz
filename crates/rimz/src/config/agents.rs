@@ -67,10 +67,11 @@ impl Default for SubagentsConfig {
     }
 }
 
-/// Profile configuration used only by the `rimz subagents` launch doorway.
+/// Top-level `[subagents]` profile configuration used only by the
+/// `rimz subagents` launch doorway.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
-pub struct SubagentsRoot {
+pub struct SubagentProfilesConfig {
     #[serde(default)]
     pub profiles: ProfilesConfig,
 }

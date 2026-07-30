@@ -228,6 +228,7 @@ pub fn resolve_launch(
     let layout = match crate::harness::spec::resolve_spec_with_agent_override(
         spec,
         profiles,
+        &launch.profiles,
         commands,
         &launch.teams,
         agent_override,
