@@ -526,7 +526,9 @@ impl MachineConfig {
         }
         let mut discovered = discover_agents_home_lenient(files.agents_home());
         notices.unknown_keys.append(&mut discovered.unknown_keys);
-        notices.fragment_errors.append(&mut discovered.errors);
+        notices
+            .fragment_errors
+            .extend(discovered.errors.drain(..).map(fragment_error_notice));
         let mut reset_agents = false;
         let mut reset_subagents = false;
         loop {
@@ -801,18 +803,51 @@ pub fn broken_machine_files() -> Vec<ConfigErr> {
 }
 
 fn broken_machine_files_in(files: &MachineConfigFiles) -> Vec<ConfigErr> {
+    let agents_path = files.path(MachineConfigFileKind::Agents);
     let checks = [
         load_optional(files.core_path(), parse_core_text_strict).map(|_| ()),
         load_optional(&files.path(MachineConfigFileKind::Theme), parse_theme_text).map(|_| ()),
-        load_optional(
-            &files.path(MachineConfigFileKind::Agents),
-            parse_agents_text,
-        )
-        .map(|_| ()),
         load_optional(&files.path(MachineConfigFileKind::Loop), parse_loop_text).map(|_| ()),
     ];
     let mut errors: Vec<_> = checks.into_iter().filter_map(Result::err).collect();
-    errors.extend(broken_agents_home_fragments(files.agents_home()));
+    let (mut agents, mut subagents) = match load_optional(&agents_path, parse_agents_text) {
+        Ok(Some(file)) => (file.agents, file.subagents),
+        Ok(None) => (AgentsConfig::default(), SubagentProfilesConfig::default()),
+        Err(err) => {
+            errors.push(err);
+            (AgentsConfig::default(), SubagentProfilesConfig::default())
+        }
+    };
+    let mut discovered = discover_agents_home_lenient(files.agents_home());
+    errors.append(&mut discovered.errors);
+    let mut reset_agents = false;
+    let mut reset_subagents = false;
+    loop {
+        match fold_agents_fragments(&agents, &subagents, &discovered.fragments, &agents_path) {
+            FragmentFoldOutcome::Applied {
+                deferred_errors, ..
+            } => {
+                errors.extend(deferred_errors);
+                break;
+            }
+            FragmentFoldOutcome::InvalidBase(InvalidAgentsLayer::Agents(err)) if !reset_agents => {
+                errors.push(err);
+                agents = AgentsConfig::default();
+                reset_agents = true;
+            }
+            FragmentFoldOutcome::InvalidBase(InvalidAgentsLayer::Subagents(err))
+                if !reset_subagents =>
+            {
+                errors.push(err);
+                subagents = SubagentProfilesConfig::default();
+                reset_subagents = true;
+            }
+            FragmentFoldOutcome::InvalidBase(err) => {
+                errors.push(err.into_error());
+                break;
+            }
+        }
+    }
     errors
 }
 
@@ -951,7 +986,7 @@ struct DiscoveredAgentsHome {
     subagents: SubagentProfilesConfig,
     fragments: Vec<LoadedAgentsFragment>,
     unknown_keys: Vec<UnknownConfigKey>,
-    errors: Vec<AgentsFragmentError>,
+    errors: Vec<ConfigErr>,
 }
 
 struct LoadedAgentsFragment {
@@ -1230,7 +1265,7 @@ fn discover_agents_home_lenient(root: &Path) -> DiscoveredAgentsHome {
     let mut discovered = DiscoveredAgentsHome::default();
     let paths = agents_home_fragment_paths(root);
     for err in paths.errors {
-        discovered.errors.push(fragment_error_notice(err));
+        discovered.errors.push(err);
     }
     for path in paths.paths {
         match load_optional(&path, parse_agents_fragment_text_collecting) {
@@ -1245,7 +1280,7 @@ fn discover_agents_home_lenient(root: &Path) -> DiscoveredAgentsHome {
             }
             Ok(None) => {}
             Err(err) => {
-                discovered.errors.push(fragment_error_notice(err));
+                discovered.errors.push(err);
             }
         }
     }
@@ -1266,17 +1301,6 @@ fn fragment_error_notice(err: ConfigErr) -> AgentsFragmentError {
             message: other.to_string(),
         },
     }
-}
-
-fn broken_agents_home_fragments(root: &Path) -> Vec<ConfigErr> {
-    let discovered = agents_home_fragment_paths(root);
-    let mut errors = discovered.errors;
-    for path in discovered.paths {
-        if let Err(err) = load_optional(&path, parse_agents_fragment_text_collecting) {
-            errors.push(err);
-        }
-    }
-    errors
 }
 
 fn merge_agents_fragment(out: &mut AgentsFragment, fragment: AgentsFragment) {
@@ -1359,19 +1383,23 @@ fn apply_agents_home_collecting(
     agents_path: &Path,
     notices: &mut ConfigNotices,
 ) -> Result<()> {
-    let mut merged = agents.clone();
-    let mut merged_subagents = subagents.clone();
     let discovered = discover_agents_home_collecting(root)?;
     notices.unknown_keys.extend(discovered.unknown_keys);
-    overlay_agents_fragment_under(&mut merged, &discovered.fragment);
-    overlay_under(
-        &mut merged_subagents.profiles.0,
-        discovered.subagents.profiles.0,
-    );
-    validate_agents_file(&merged, &merged_subagents, agents_path)?;
-    *agents = merged;
-    *subagents = merged_subagents;
-    Ok(())
+    match fold_agents_fragments(agents, subagents, &discovered.fragments, agents_path) {
+        FragmentFoldOutcome::Applied {
+            agents: merged,
+            subagents: merged_subagents,
+            deferred_errors,
+        } => {
+            if let Some(err) = deferred_errors.into_iter().next() {
+                return Err(err);
+            }
+            *agents = merged;
+            *subagents = merged_subagents;
+            Ok(())
+        }
+        FragmentFoldOutcome::InvalidBase(err) => Err(err.into_error()),
+    }
 }
 
 fn overlay_agents_fragment_under(agents: &mut AgentsConfig, fragment: &AgentsFragment) {
@@ -1387,8 +1415,40 @@ fn apply_agents_fragments_lenient(
     agents_path: &Path,
     notices: &mut ConfigNotices,
 ) -> std::result::Result<(), InvalidAgentsLayer> {
-    let base_agents = agents.clone();
-    let base_subagents = subagents.clone();
+    match fold_agents_fragments(agents, subagents, fragments, agents_path) {
+        FragmentFoldOutcome::Applied {
+            agents: merged,
+            subagents: merged_subagents,
+            deferred_errors,
+        } => {
+            *agents = merged;
+            *subagents = merged_subagents;
+            notices
+                .fragment_errors
+                .extend(deferred_errors.into_iter().map(fragment_error_notice));
+            Ok(())
+        }
+        FragmentFoldOutcome::InvalidBase(err) => Err(err),
+    }
+}
+
+enum FragmentFoldOutcome {
+    Applied {
+        agents: AgentsConfig,
+        subagents: SubagentProfilesConfig,
+        deferred_errors: Vec<ConfigErr>,
+    },
+    InvalidBase(InvalidAgentsLayer),
+}
+
+fn fold_agents_fragments(
+    base_agents: &AgentsConfig,
+    base_subagents: &SubagentProfilesConfig,
+    fragments: &[LoadedAgentsFragment],
+    agents_path: &Path,
+) -> FragmentFoldOutcome {
+    let mut agents = base_agents.clone();
+    let mut subagents = base_subagents.clone();
     let mut accepted = Vec::new();
     let mut pending: Vec<_> = fragments.iter().collect();
     loop {
@@ -1396,14 +1456,14 @@ fn apply_agents_fragments_lenient(
         let mut progressed = false;
         for fragment in pending {
             let (candidate_agents, candidate_subagents) = effective_with_fragments(
-                &base_agents,
-                &base_subagents,
+                base_agents,
+                base_subagents,
                 accepted.iter().copied().chain(std::iter::once(fragment)),
             );
             match validate_agents_file(&candidate_agents, &candidate_subagents, &fragment.path) {
                 Ok(()) => {
-                    *agents = candidate_agents;
-                    *subagents = candidate_subagents;
+                    agents = candidate_agents;
+                    subagents = candidate_subagents;
                     accepted.push(fragment);
                     progressed = true;
                 }
@@ -1411,22 +1471,39 @@ fn apply_agents_fragments_lenient(
             }
         }
         if deferred.is_empty() {
-            if accepted.is_empty() {
-                validate_agents_base(&base_agents, &base_subagents, agents_path)?;
+            if accepted.is_empty()
+                && let Err(err) = validate_agents_base(base_agents, base_subagents, agents_path)
+            {
+                return FragmentFoldOutcome::InvalidBase(err);
             }
-            return Ok(());
+            return FragmentFoldOutcome::Applied {
+                agents,
+                subagents,
+                deferred_errors: Vec::new(),
+            };
         }
         if progressed {
             pending = deferred.into_iter().map(|(fragment, _)| fragment).collect();
             continue;
         }
-        if accepted.is_empty() {
-            validate_agents_base(&base_agents, &base_subagents, agents_path)?;
+        if accepted.is_empty()
+            && let Err(err) = validate_agents_base(base_agents, base_subagents, agents_path)
+        {
+            return FragmentFoldOutcome::InvalidBase(err);
         }
-        for (_, err) in deferred {
-            notices.fragment_errors.push(fragment_error_notice(err));
+        return FragmentFoldOutcome::Applied {
+            agents,
+            subagents,
+            deferred_errors: deferred.into_iter().map(|(_, err)| err).collect(),
+        };
+    }
+}
+
+impl InvalidAgentsLayer {
+    fn into_error(self) -> ConfigErr {
+        match self {
+            Self::Agents(err) | Self::Subagents(err) => err,
         }
-        return Ok(());
     }
 }
 

@@ -199,6 +199,56 @@ fn broken_machine_files_reports_each_broken_agents_home_fragment() {
 }
 
 #[test]
+fn broken_machine_files_reports_semantically_invalid_agents_home_fragment() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    let broken = write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "broken",
+        TEAM_FRAGMENT_FILE,
+        "[agents.teams.broken]\nlayout = \"claude,,codex\"\n",
+    );
+
+    let errors = broken_machine_files_in(&MachineConfigFiles::from_paths(
+        dir.path().join(CONFIG_FILE),
+        agents_home.path(),
+    ));
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].path(), broken);
+    assert!(errors[0].to_string().contains("empty layout cell"));
+}
+
+#[test]
+fn broken_machine_files_reports_fragment_semantics_after_invalid_machine_base() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    write_named(
+        &dir,
+        AGENTS_FILE,
+        "[agents.teams.machine-broken]\nlayout = \"missing-cell\"\n",
+    );
+    let agents_path = dir.path().join(AGENTS_FILE);
+    let fragment = write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "fragment-broken",
+        TEAM_FRAGMENT_FILE,
+        "[agents.teams.fragment-broken]\nlayout = \"claude,,codex\"\n",
+    );
+
+    let errors = broken_machine_files_in(&MachineConfigFiles::from_paths(
+        dir.path().join(CONFIG_FILE),
+        agents_home.path(),
+    ));
+
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(errors.iter().any(|err| err.path() == agents_path));
+    assert!(errors.iter().any(|err| err.path() == fragment));
+}
+
+#[test]
 fn lenient_load_falls_back_only_for_the_broken_file() {
     let dir = tempdir().expect("tempdir");
     let config_path = write(&dir, "not = = toml");
@@ -368,7 +418,7 @@ fn invalid_fragment_reference_has_the_same_source_error_in_both_loaders() {
     let dir = tempdir().expect("tempdir");
     let agents_home = tempdir().expect("agents home");
     let config_path = write(&dir, "");
-    write_agents_home_fragment(
+    let bad_profile = write_agents_home_fragment(
         agents_home.path(),
         AGENTS_HOME_PROFILES_SUBDIR,
         "broken",
@@ -412,6 +462,8 @@ fn invalid_fragment_reference_has_the_same_source_error_in_both_loaders() {
         .agents_fragment_failure()
         .expect("lenient launch precondition");
 
+    assert_eq!(strict.path(), bad_profile);
+    assert_eq!(lenient.notices.fragment_errors[0].path, bad_profile);
     assert!(
         strict
             .to_string()
