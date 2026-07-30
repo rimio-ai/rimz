@@ -49,6 +49,7 @@ fn build_with(
         me: None,
         runtime: &runtime,
         active_grace_secs: 180,
+        require_contribution: false,
         scope: AttributionScope::default(),
         now: at(100),
     })
@@ -249,7 +250,8 @@ fn agents_without_a_recorded_contribution_are_omitted() {
     turn_contributor.role = Some("reviewer".to_owned());
     turn_contributor.turn_started_at = Some(at(35));
 
-    let report = build_for(&[idle, contributor, turn_contributor]);
+    let agents = [idle, contributor, turn_contributor];
+    let report = build_for(&agents);
 
     assert_eq!(report.totals.agents, 2);
     assert_eq!(report.groups.len(), 2);
@@ -279,6 +281,27 @@ fn agents_without_a_recorded_contribution_are_omitted() {
     assert_eq!(durable.compactions, 0);
     assert_eq!(durable.tokens, TokenSplit::default());
     assert_eq!(durable.cost_usd, None);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime paths");
+    let refs = agents.iter().collect::<Vec<_>>();
+    let report = build(AttributionRequest {
+        agents: &refs,
+        peers: &refs,
+        subagents: &[],
+        transcript: &[],
+        me: None,
+        runtime: &runtime,
+        active_grace_secs: 180,
+        require_contribution: true,
+        scope: AttributionScope::default(),
+        now: at(100),
+    });
+
+    assert_eq!(report.totals.agents, 1);
+    assert_eq!(report.groups.len(), 1);
+    assert_eq!(report.groups[0].team.as_ref().unwrap().name, "forge");
 }
 
 #[test]
@@ -313,9 +336,19 @@ fn transcript_counts_messages_asks_and_sent_credit_per_slot() {
     cross_lane.from = Some("@planner#feature".to_owned());
     let mut system_nudge = entry("claude", "planner-session", TranscriptKind::Prompt);
     system_nudge.from = Some("rimz".to_owned());
+    let ask_id = crate::ids::AskId::parse("ask_0123456789abcdef").expect("ask id");
+    let mut ask = entry("claude", "planner-session", TranscriptKind::Ask);
+    ask.id = Some(ask_id.clone());
+    let mut answer = entry("claude", "planner-session", TranscriptKind::Answer);
+    answer.id = Some(ask_id);
+    let mut unrelated_answer = entry("claude", "planner-session", TranscriptKind::Answer);
+    unrelated_answer.id =
+        Some(crate::ids::AskId::parse("ask_0123456789abcdee").expect("unrelated ask id"));
     let transcript = vec![
         entry("claude", "planner-session", TranscriptKind::Prompt),
-        entry("claude", "planner-session", TranscriptKind::Ask),
+        ask,
+        answer,
+        unrelated_answer,
         received,
         cross_lane,
         system_nudge,
@@ -328,6 +361,7 @@ fn transcript_counts_messages_asks_and_sent_credit_per_slot() {
         .find(|member| member.handle == "@planner")
         .expect("planner");
     assert_eq!(planner.asks, 1);
+    assert_eq!(planner.asks_answered, 1);
     assert_eq!(
         planner.messages,
         MessageCounts {
@@ -337,6 +371,7 @@ fn transcript_counts_messages_asks_and_sent_credit_per_slot() {
         }
     );
     assert_eq!(report.totals.asks, 1);
+    assert_eq!(report.totals.asks_answered, 1);
     assert_eq!(report.totals.messages.from_user, 1);
     assert_eq!(report.totals.messages.from_teammates, 2);
 }
