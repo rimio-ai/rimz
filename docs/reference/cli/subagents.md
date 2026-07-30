@@ -1,6 +1,6 @@
 # Subagents
 
-`rimz subagents` is the agent-only doorway for delegating one bounded prompt to a supervised child. It is syntax sugar over `rimz agents`: the child gets a real pane, durable run record, petname, parent link, and sidebar entry without making the parent choose the supervision flags.
+`rimz subagents` provides agent-only launch and lifecycle verbs for delegating one bounded prompt to a supervised child. It is syntax sugar over `rimz agents`: the child gets a real pane, durable run record, petname, parent link, and sidebar entry without making the parent choose the supervision flags.
 
 Launch and lifecycle commands run only from a RimZ-launched agent. A user-shell invocation fails before opening the room and points to `rimz agents` or `rimz teams`; the read-only `specs` catalog is available from either context. The mechanics behind the sugar — the ancestry stamp and its depth cap, the caller-scoped verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
 
@@ -24,7 +24,7 @@ JSON
 
 `fanout` reads a JSON task array from `FILE`, or from stdin when `FILE` is omitted. It validates the whole list and opens each child pane in sequence. The children run in parallel after their panes open, and each minted petname prints as it launches.
 
-By default, `fanout` returns after launching. Use `--wait[=DURATION]` to join exactly the children from that fanout, optionally with a caller-side deadline; the final lines report each durable outcome, and the command exits nonzero if any child does. This wait deadline is distinct from the children's `--timeout`. With background fanout `--json`, RimZ emits a map from petname to `run_id`; with `--wait --json` on a launch or fanout, it emits the same result map as `rimz subagents wait --json`.
+By default, `fanout` returns after launching. Use `--wait[=DURATION]` to join exactly the children from that fanout, optionally with a caller-side deadline; the final lines report each durable outcome, and the command exits nonzero if any child does. This wait deadline is distinct from the children's `--timeout`. With background fanout `--json`, RimZ emits a map from petname to `run_id`; with `--wait --json`, fanout emits the same labeled result map as a plural `rimz subagents wait --json`.
 
 Each array entry has the single-launch fields that make sense for data-driven delegation:
 
@@ -51,7 +51,7 @@ All tasks are validated before the first launch. If a runtime failure occurs aft
 rimz subagents claude "trace the authentication call path"
 ```
 
-Each launch is equivalent to a one-cell `rimz agents <spec> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately, so a parent can start several children without waiting between launches. Pass `--wait[=DURATION]` to print the petname and then join the child through the same result path as fanout. `--json` is accepted on a single launch only with `--wait`; it emits the one-entry result map without the human petname line.
+Each launch is equivalent to a one-cell `rimz agents <spec> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately, so a parent can start several children without waiting between launches. Pass `--wait[=DURATION]` to print the petname and then join the child like `subagents wait <name>`, including its final message or failure tail. `--json` is accepted on a single launch only with `--wait`; it emits the full run record, the same shape as `subagents wait <name> --json`, without the human petname line.
 
 ```sh
 first=$(rimz subagents codex "find the smallest safe fix")

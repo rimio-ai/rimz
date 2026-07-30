@@ -87,7 +87,7 @@ struct FanoutArgs {
     /// Tasks JSON; stdin when omitted.
     #[arg(value_name = "FILE")]
     file: Option<PathBuf>,
-    /// Wait for every launched child and print its result.
+    /// Wait for every launched child and print its result; use `--wait=5m` for a deadline.
     #[arg(
         long,
         value_name = "DURATION",
@@ -153,7 +153,7 @@ struct SubagentLaunchArgs {
     /// Stop the child after this duration.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<Duration>,
-    /// Wait for the child and print its result.
+    /// Wait for the child and print its result; use `--wait=5m` for a deadline.
     #[arg(
         long,
         value_name = "DURATION",
@@ -245,7 +245,15 @@ fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> 
     let Some(timeout) = wait else {
         return Ok(());
     };
-    agents_cmd::wait_agent_batch(vec![child.name], json, timeout, globals)
+    agents_cmd::wait_agent(
+        vec![child.name],
+        false,
+        timeout,
+        false,
+        false,
+        json,
+        globals,
+    )
 }
 
 fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
@@ -401,10 +409,19 @@ impl SubagentLaunchArgs {
         defaults: &rimz::config::SubagentsConfig,
     ) -> Result<agents_cmd::AgentLaunchArgs> {
         let spec = self.spec.context("a subagent needs an agent spec")?;
+        if self.wait == Some(None)
+            && let Some(prompt) = self.prompt.as_deref()
+        {
+            let duration = prompt.trim();
+            if crate::cli::supervised::parse_timeout(duration).is_ok() {
+                bail!(
+                    "prompt `{prompt}` looks like a wait duration; did you mean `--wait={duration}`?"
+                );
+            }
+        }
         let prompt = match (self.prompt, self.prompt_file) {
             (Some(prompt), None) if !prompt.trim().is_empty() => prompt,
-            (None, Some(path)) => crate::cli::send::read_prompt_file(&path)
-                .with_context(|| format!("reading prompt from `{}`", path.display()))?,
+            (None, Some(path)) => crate::cli::send::read_prompt_file(&path)?,
             (Some(_), Some(_)) => {
                 bail!("a subagent task cannot set both `prompt` and `prompt_file`")
             }
@@ -817,6 +834,15 @@ mod tests {
         assert!(
             Harness::try_parse_from(["rimz", "claude", "review this", "--wait", "5m"]).is_err()
         );
+
+        let swallowed = parse(&["rimz", "claude", "--wait", "5m"]);
+        assert_eq!(swallowed.launch.wait, Some(None));
+        assert_eq!(swallowed.launch.prompt.as_deref(), Some("5m"));
+        let error = swallowed
+            .launch
+            .into_agent_launch(&rimz::config::SubagentsConfig::default())
+            .expect_err("space-form duration must not become the prompt");
+        assert!(error.to_string().contains("did you mean `--wait=5m`?"));
     }
 
     #[test]
