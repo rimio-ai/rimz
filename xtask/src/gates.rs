@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+use crate::atlas::conform_ratchet;
 use crate::build::{build_plugin, verify_vendored_plugin};
 use crate::docs_links::docs_links;
 use crate::invariants::invariants;
@@ -240,6 +241,7 @@ pub(crate) fn gate(root: &Path, args: &[String]) -> Result<()> {
     let steps = [
         ("fmt", fmt_step),
         ("invariants", gate_invariants),
+        ("conform", gate_conform),
         ("docs-links", gate_docs_links),
         ("lint", gate_lint),
         ("test", gate_test),
@@ -301,6 +303,10 @@ fn gate_fmt_check(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateRes
 
 fn gate_invariants(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
     Ok(in_process_gate(|| invariants(root)))
+}
+
+fn gate_conform(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
+    Ok(in_process_gate(|| conform_ratchet(root)))
 }
 
 fn gate_docs_links(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
@@ -425,11 +431,12 @@ pub(crate) fn checks(root: &Path) -> Result<()> {
     let checks_start = Instant::now();
     let mut timings: Vec<(String, Duration)> = Vec::new();
 
-    // Instant text gates first — a formatting, invariant, or doc-link break
+    // Instant text gates first — a formatting, invariant, conform, or doc-link break
     // aborts before any compile is paid for.
     for (name, gate) in [
         ("fmt", fmt as Gate),
         ("invariants", invariants),
+        ("conform", conform_ratchet),
         ("docs-links", docs_links),
     ] {
         let (name, elapsed, result) = timed(name, || gate(root));

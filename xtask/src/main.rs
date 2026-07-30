@@ -3,9 +3,9 @@
 #![deny(clippy::print_stdout)]
 #![deny(clippy::print_stderr)]
 
+mod atlas;
 mod brew;
 mod build;
-mod complexity;
 mod deadline;
 mod docs_links;
 mod files;
@@ -20,7 +20,6 @@ mod sccache;
 mod screenshot;
 mod source_files;
 mod spinner;
-mod survey;
 mod theme;
 
 #[cfg(test)]
@@ -154,14 +153,9 @@ const TASKS: &[TaskInfo] = &[
         runs: "cargo bench -p rimz --features testkit --locked",
     },
     TaskInfo {
-        name: "complexity",
-        summary: "Rank source and test functions above refactor thresholds.",
-        runs: complexity::USAGE,
-    },
-    TaskInfo {
-        name: "survey",
-        summary: "Map per-module size, commit pace, and optional coupling.",
-        runs: survey::USAGE,
+        name: "atlas",
+        summary: "Measure and ratchet architecture refactor programs.",
+        runs: atlas::USAGE,
     },
     TaskInfo {
         name: "invariants",
@@ -287,8 +281,7 @@ fn task_accepts_args(task: &str) -> bool {
             | "test-archive"
             | "sandbox"
             | "perf"
-            | "complexity"
-            | "survey"
+            | "atlas"
             | "pricing-refresh"
             | "screenshot"
             | "gate"
@@ -341,8 +334,7 @@ fn dispatch(task: &str, args: &[String], root: &Path) -> Result<()> {
         "semver" => gates::semver(root),
         "externals" => gates::externals(root),
         "perf" => gates::perf(root, args),
-        "complexity" => complexity::complexity(root, args),
-        "survey" => survey::survey(root, args),
+        "atlas" => atlas::atlas(root, args),
         "invariants" => invariants::invariants(root),
         "docs-links" => docs_links::docs_links(root),
         "gate" => gates::gate(root, args),

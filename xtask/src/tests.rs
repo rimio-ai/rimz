@@ -131,6 +131,23 @@ fn screenshot_subcommand_help_reaches_the_task_parser() {
 }
 
 #[test]
+fn atlas_accepts_verbs_and_verb_help() {
+    for argv in [
+        args(&["atlas", "rank"]),
+        args(&["atlas", "conform", "--ratchet"]),
+        args(&["atlas", "shapes", "--help"]),
+    ] {
+        assert_eq!(
+            parse_args(&argv).unwrap(),
+            Action::Run {
+                task: "atlas",
+                args: &argv[1..],
+            },
+        );
+    }
+}
+
+#[test]
 fn gate_accepts_the_read_only_check_flag() {
     let argv = args(&["gate", "--check"]);
 
