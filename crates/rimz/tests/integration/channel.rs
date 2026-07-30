@@ -111,7 +111,7 @@ fn message_routes_to_named_channel_targets() {
         String::from_utf8_lossy(&inline.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&inline.stdout).contains("sent "),
+        String::from_utf8_lossy(&inline.stdout).contains("delivered to "),
         "inline channel message delivered: {}",
         String::from_utf8_lossy(&inline.stdout)
     );
