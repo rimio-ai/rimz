@@ -271,6 +271,12 @@ pub trait LaunchCapability: CoreCapability {
     /// native restriction.
     fn lockdown_subagent_args(&self, _extra_args: &mut Vec<String>) {}
 
+    /// Provider argv that appends launch-scoped text to the system prompt.
+    /// The default leaves callers to deliver the text through another channel.
+    fn append_system_text_args(&self, _text: &str) -> Option<Vec<String>> {
+        None
+    }
+
     /// Restrict provider-native delegation through launch environment for a
     /// `rimz subagents` child. Applied after every configured launch variable;
     /// the default leaves the environment unchanged.

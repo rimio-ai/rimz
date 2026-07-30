@@ -23,6 +23,14 @@ const ENV_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const ENV_PROBE_POLL: Duration = Duration::from_millis(25);
 static ENV_PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+pub const SUBAGENT_REMINDER: &str = concat!(
+    "<system_reminder>You are a subagent: a supervised child launched by another agent to ",
+    "complete the task above. You must not spawn agents or subagents of any kind — do not use ",
+    "agent, task, or spawn tools, and do not launch `rimz subagents`, `rimz agents`, or ",
+    "`rimz teams`. Do the work yourself with your direct tools and report the result; your final ",
+    "message is returned to your caller when you exit.</system_reminder>"
+);
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProgramLookupErr {
     #[error(
@@ -490,6 +498,9 @@ fn compile_agent_process_with_extra_env(
     let mut action = request.action.clone();
     if request.subagent {
         adapter.lockdown_subagent_args(action.extra_args_mut());
+        if let Some(append_args) = adapter.append_system_text_args(SUBAGENT_REMINDER) {
+            merge_appended_system_text(action.extra_args_mut(), append_args);
+        }
     }
     let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
     let provider_program =
@@ -513,6 +524,29 @@ fn compile_agent_process_with_extra_env(
         argv,
         env,
     })
+}
+
+fn merge_appended_system_text(extra_args: &mut Vec<String>, append_args: Vec<String>) {
+    let mut append_args = append_args.into_iter();
+    let Some(flag) = append_args.next() else {
+        return;
+    };
+    let Some(text) = append_args.next() else {
+        return;
+    };
+    debug_assert!(append_args.next().is_none());
+
+    let matcher = crate::agents::PresetArgMatcher::TextFlag(vec![flag.clone()]);
+    let Some(existing) = matcher.occurrences(extra_args).into_iter().last() else {
+        extra_args.extend([flag, text]);
+        return;
+    };
+    let merged = format!("{}\n\n{text}", existing.value);
+    if existing.argv_range.len() == 1 {
+        extra_args[existing.argv_range.start] = format!("{flag}={merged}");
+    } else {
+        extra_args[existing.argv_range.start + 1] = merged;
+    }
 }
 
 /// Compile one process and resolve managed-account applicability from its final inputs.

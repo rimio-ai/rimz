@@ -147,6 +147,8 @@ fn process_compiler_locks_down_only_subagent_launches() {
                 "--disallowedTools".to_owned(),
                 "Read".to_owned(),
                 "Agent".to_owned(),
+                "--append-system-prompt".to_owned(),
+                SUBAGENT_REMINDER.to_owned(),
                 "--".to_owned(),
                 "inspect".to_owned(),
             ],
@@ -191,6 +193,83 @@ fn process_compiler_locks_down_only_subagent_launches() {
         .expect("subagent process");
         assert!(child.provider_argv.ends_with(&expected_suffix));
     }
+}
+
+#[test]
+fn process_compiler_appends_subagent_reminder_for_native_adapters() {
+    let project = tempfile::tempdir().expect("project");
+    for kind in ["claude", "qwen", "droid"] {
+        let mut invocation = request(
+            kind,
+            ExecAction::Launch {
+                prompt: Some("inspect".to_owned()),
+                extra_args: Vec::new(),
+            },
+        );
+
+        let ordinary = compile_agent_process(
+            project.path(),
+            crate::config::RtkMode::Auto,
+            &invocation,
+            project.path(),
+        )
+        .expect("ordinary process");
+        assert!(
+            !ordinary
+                .provider_argv
+                .iter()
+                .any(|arg| arg == SUBAGENT_REMINDER),
+            "{kind}: {:?}",
+            ordinary.provider_argv
+        );
+
+        invocation.subagent = true;
+        let child = compile_agent_process(
+            project.path(),
+            crate::config::RtkMode::Auto,
+            &invocation,
+            project.path(),
+        )
+        .expect("subagent process");
+        assert!(
+            child
+                .provider_argv
+                .windows(2)
+                .any(|args| args == ["--append-system-prompt", SUBAGENT_REMINDER]),
+            "{kind}: {:?}",
+            child.provider_argv
+        );
+    }
+}
+
+#[test]
+fn process_compiler_merges_subagent_reminder_into_existing_append_flag() {
+    let project = tempfile::tempdir().expect("project");
+    let mut invocation = request(
+        "claude",
+        ExecAction::Launch {
+            prompt: Some("inspect".to_owned()),
+            extra_args: vec!["--append-system-prompt=existing guidance".to_owned()],
+        },
+    );
+    invocation.subagent = true;
+
+    let child = compile_agent_process(
+        project.path(),
+        crate::config::RtkMode::Auto,
+        &invocation,
+        project.path(),
+    )
+    .expect("subagent process");
+    let matcher =
+        crate::agents::PresetArgMatcher::TextFlag(vec!["--append-system-prompt".to_owned()]);
+    let occurrences = matcher.occurrences(&child.provider_argv);
+
+    assert_eq!(occurrences.len(), 1, "{:?}", child.provider_argv);
+    assert_eq!(
+        occurrences[0].value,
+        format!("existing guidance\n\n{SUBAGENT_REMINDER}")
+    );
 }
 
 #[test]

@@ -444,7 +444,11 @@ impl crate::agents::capabilities::CoreCapability for QwenAdapter {
     }
 }
 
-impl crate::agents::capabilities::LaunchCapability for QwenAdapter {}
+impl crate::agents::capabilities::LaunchCapability for QwenAdapter {
+    fn append_system_text_args(&self, text: &str) -> Option<Vec<String>> {
+        Some(vec!["--append-system-prompt".to_owned(), text.to_owned()])
+    }
+}
 
 impl crate::agents::capabilities::HookCapability for QwenAdapter {
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
