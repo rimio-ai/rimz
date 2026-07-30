@@ -2148,7 +2148,7 @@ fn wait_any_prints_first_finisher_and_leaves_rest_running() {
     );
     assert_eq!(
         String::from_utf8_lossy(&out.stderr),
-        "rimz: run completed but no final assistant message was extracted\n"
+        "--- quiet-fox ---\nrimz: run completed but no final assistant message was extracted\n"
     );
     let other = rimz::harness::run::load(store.paths(), &otter.run_id).expect("load other run");
     assert_eq!(other.status, RunStatus::Running);
@@ -2210,6 +2210,7 @@ fn wait_any_first_finisher_failure_is_nonzero() {
         String::from_utf8_lossy(&out.stdout),
         "--- quiet-fox (failed) ---\n\n"
     );
+    assert!(String::from_utf8_lossy(&out.stderr).starts_with("--- quiet-fox (failed) ---\n"));
 }
 
 #[test]
@@ -2234,7 +2235,7 @@ fn wait_any_same_poll_selects_first_input_reference() {
     );
     assert_eq!(
         String::from_utf8_lossy(&out.stderr),
-        "rimz: run completed but no final assistant message was extracted\n"
+        "--- swift-otter ---\nrimz: run completed but no final assistant message was extracted\n"
     );
 }
 
