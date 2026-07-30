@@ -266,7 +266,11 @@ impl crate::agents::capabilities::CoreCapability for DroidAdapter {
     }
 }
 
-impl crate::agents::capabilities::LaunchCapability for DroidAdapter {}
+impl crate::agents::capabilities::LaunchCapability for DroidAdapter {
+    fn append_system_text_args(&self, text: &str) -> Option<Vec<String>> {
+        Some(vec!["--append-system-prompt".to_owned(), text.to_owned()])
+    }
+}
 
 impl crate::agents::capabilities::HookCapability for DroidAdapter {
     fn hook_ingress(&self, pid: Option<u32>) -> super::HookIngressDecision {

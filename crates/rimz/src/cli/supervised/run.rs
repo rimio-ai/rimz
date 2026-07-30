@@ -43,17 +43,20 @@ pub(super) fn run_placement(
     }
 }
 
-const SUBAGENT_REMINDER: &str = concat!(
-    "<system_reminder>You are a subagent: a supervised child launched by another agent to ",
-    "complete the task above. You must not spawn agents or subagents of any kind — do not use ",
-    "agent, task, or spawn tools, and do not launch `rimz subagents`, `rimz agents`, or ",
-    "`rimz teams`. Do the work yourself with your direct tools and report the result; your final ",
-    "message is returned to your caller when you exit.</system_reminder>"
-);
-
-pub(super) fn supervised_prompt(request: &SupervisedRunRequest) -> Cow<'_, str> {
-    if request.subagent {
-        Cow::Owned(format!("{}\n\n{SUBAGENT_REMINDER}", request.prompt))
+pub(super) fn supervised_prompt<'a>(
+    request: &'a SupervisedRunRequest,
+    adapter: &rimz::agents::AgentDefinition,
+) -> Cow<'a, str> {
+    if request.subagent
+        && adapter
+            .append_system_text_args(rimz::harness::launch::SUBAGENT_REMINDER)
+            .is_none()
+    {
+        Cow::Owned(format!(
+            "{}\n\n{}",
+            request.prompt,
+            rimz::harness::launch::SUBAGENT_REMINDER
+        ))
     } else {
         Cow::Borrowed(&request.prompt)
     }
@@ -355,7 +358,6 @@ fn prepare_supervised(
         }
     }
     let resolved = prepare_supervised_launch_layout(request, &spec, &workspace, &machine_config)?;
-    let prompt = supervised_prompt(request);
     let team_name = resolved.team_name;
     let layout = resolved.layout;
     let agent_cells = layout.agent_cells().collect::<Vec<_>>();
@@ -368,6 +370,7 @@ fn prepare_supervised(
     let agent_cell = agent_cells[0];
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
+    let prompt = supervised_prompt(request, adapter);
     let ancestry = if rimz::harness::plan::launch_ancestry_required() {
         let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
         rimz::harness::plan::resolve_launch_ancestry_from_env(

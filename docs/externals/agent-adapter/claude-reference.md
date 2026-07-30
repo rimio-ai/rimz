@@ -17,6 +17,7 @@ Re-fetch these pages to refresh this mirror. `docs.claude.com/en/docs/claude-cod
 | Subagents | <https://code.claude.com/docs/en/sub-agents> |
 | Agent view and background-session supervisor | <https://code.claude.com/docs/en/agent-view> |
 | Settings (`statusLine` / `hooks` config keys, `disableAgentView`) | <https://code.claude.com/docs/en/settings> |
+| CLI flags (system-prompt append) | <https://code.claude.com/docs/en/cli-reference> |
 | Sessions (resume and fork CLI flags) | <https://code.claude.com/docs/en/sessions> |
 | Remote Control (`remote-control`, `--remote-control`, `/remote-control`, version floor, settings) | <https://code.claude.com/docs/en/remote-control> |
 | Release history (version floors and protocol additions) | <https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md> |
@@ -26,6 +27,10 @@ Re-fetch these pages to refresh this mirror. `docs.claude.com/en/docs/claude-cod
 ## Session resume and fork
 
 `claude --resume <id>` reopens a session in place. `claude --resume <id> --fork-session` copies its conversation into a provider-assigned new session id and leaves the source session untouched; RimZ uses that native fork argv and sets the source worktree as the process cwd.
+
+## System-prompt append
+
+`--append-system-prompt <text>` appends launch-scoped text to Claude's default system prompt. RimZ uses the flag for the supervised-subagent no-delegation reminder; it remains separate from the user-facing typed replacement surface built on `--system-prompt-file`.
 
 ## Hooks
 

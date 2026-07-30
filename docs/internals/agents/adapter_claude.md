@@ -38,7 +38,7 @@ Native event → internal mapping. The table says *which native events are wired
 
 **Neutral output.** Claude's neutral path is empty stdout. Permission, plan, and question prompts remain in Claude's own UI, and the sidebar's `?` row routes you there.
 
-**System-prompt replacement.** Claude's typed launch matcher is `--system-prompt-file`. RimZ passes the user's resolved absolute base path when there are no fragments and a content-addressed composed artifact when fragments exist. Claude's native append flag stays outside the typed preset surface; users who deliberately want provider-specific append behavior can put it in raw profile `args`.
+**System-prompt replacement.** Claude's typed launch matcher is `--system-prompt-file`. RimZ passes the user's resolved absolute base path when there are no fragments and a content-addressed composed artifact when fragments exist. Claude's native append flag stays outside the user-facing typed preset surface; RimZ uses it internally to append the no-delegation reminder for supervised subagents, and users who deliberately want provider-specific append behavior can still put it in raw profile `args`.
 
 **Remote-control sessions.** Hooks inherited by a `claude remote-control` SDK child are infrastructure events, so hook ingestion returns the empty neutral output before workspace resolution or store access. A non-empty `CLAUDE_CODE_SESSION_ACCESS_TOKEN` or `CLAUDE_CODE_ENVIRONMENT_KIND=bridge` identifies the session directly; a 32-level process-ancestry walk back to `claude remote-control` covers SDK children that omit those environment markers. The remote session remains owned by Claude's web UI and does not create a RimZ agent card.
 

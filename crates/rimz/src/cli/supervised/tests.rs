@@ -112,7 +112,7 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
 }
 
 #[test]
-fn subagent_prompt_is_composed_after_spec_validation() {
+fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
     let request = supervised_request("codex", true);
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace =
@@ -131,13 +131,22 @@ fn subagent_prompt_is_composed_after_spec_validation() {
         "{err:#}"
     );
 
-    let prompt = super::run::supervised_prompt(&request);
+    let adapter = rimz::agents::find_definition("codex").unwrap();
+    let prompt = super::run::supervised_prompt(&request, adapter);
     assert!(prompt.starts_with("codex\n\n<system_reminder>"));
     assert!(prompt.contains("must not spawn agents or subagents"));
     assert!(prompt.ends_with("</system_reminder>"));
 
     let ordinary = supervised_request("codex", false);
-    assert_eq!(super::run::supervised_prompt(&ordinary), "codex");
+    assert_eq!(super::run::supervised_prompt(&ordinary, adapter), "codex");
+}
+
+#[test]
+fn native_append_adapter_keeps_subagent_reminder_out_of_user_prompt() {
+    let request = supervised_request("claude", true);
+    let adapter = rimz::agents::find_definition("claude").unwrap();
+
+    assert_eq!(super::run::supervised_prompt(&request, adapter), "claude");
 }
 
 #[test]
