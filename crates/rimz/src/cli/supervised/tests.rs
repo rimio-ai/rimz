@@ -71,7 +71,8 @@ fn subagent_zone_strategy_uses_solo_column_and_team_companion_tab() {
     let mut planner = agent_state("claude", "planner", AgentStatus::Running);
     planner.team = Some("forge".to_owned());
     planner.channel = Some("design".to_owned());
-    planner.pane = Some(pane_ref("%2", "design"));
+    let glyph = rimz::theme::theme_glyphs(&theme)(rimz::config::GlyphRole::StatusWorking);
+    planner.pane = Some(pane_ref("%2", &format!("design {glyph}")));
     assert_eq!(
         select_subagent_zone_strategy(
             std::slice::from_ref(&planner),

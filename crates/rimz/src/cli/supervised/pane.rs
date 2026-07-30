@@ -103,7 +103,7 @@ pub(super) fn select_subagent_zone_strategy(
         });
     }
     if team.is_some() {
-        let title = companion_title(caller);
+        let title = companion_title(caller, theme);
         if let Some(pane) = live_panes.iter().rev().find(|pane| {
             pane_in_named_view(pane, &title, theme) && !pane.is_floating && !pane.is_rimz_sidebar()
         }) {
@@ -153,7 +153,7 @@ fn pane_session_name(pane: &PaneRef, fallback: &str) -> String {
     }
 }
 
-fn companion_title(caller: &AgentState) -> String {
+fn companion_title(caller: &AgentState, theme: &rimz::config::ThemeConfig) -> String {
     caller
         .pane
         .as_ref()
@@ -161,18 +161,24 @@ fn companion_title(caller: &AgentState) -> String {
         .filter(|name| !name.is_empty())
         .map_or_else(
             || "subagents".to_owned(),
-            |name| format!("{name} subagents"),
+            |name| {
+                format!(
+                    "{} subagents",
+                    rimz::theme::strip_status_glyph_suffix(name, theme)
+                )
+            },
         )
 }
 
 pub(crate) fn subagent_companion_title(store: &rimz::Store) -> String {
+    let machine = rimz::config::MachineConfig::load_lenient();
     store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .ok()
         .and_then(|projection| {
             rimz::harness::plan::resolve_launch_caller_from_env(&projection.agents)
                 .ok()
-                .map(companion_title)
+                .map(|caller| companion_title(caller, &machine.theme))
         })
         .unwrap_or_else(|| "subagents".to_owned())
 }
