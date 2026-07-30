@@ -527,28 +527,42 @@ impl MachineConfig {
         let mut discovered = discover_agents_home_lenient(files.agents_home());
         notices.unknown_keys.append(&mut discovered.unknown_keys);
         notices.fragment_errors.append(&mut discovered.errors);
-        if let Err(err) = validate_agents_config(&config.agents, &agents_path) {
-            tracing::warn!(
-                error = %err,
-                "per-machine agents config invalid; using built-in defaults",
-            );
-            config.agents = AgentsConfig::default();
+        let mut reset_agents = false;
+        let mut reset_subagents = false;
+        loop {
+            match apply_agents_fragments_lenient(
+                &mut config.agents,
+                &mut config.subagents,
+                &discovered.fragments,
+                &agents_path,
+                &mut notices,
+            ) {
+                Ok(()) => break,
+                Err(InvalidAgentsLayer::Agents(err)) if !reset_agents => {
+                    tracing::warn!(
+                        error = %err,
+                        "per-machine agents config invalid; using built-in defaults",
+                    );
+                    config.agents = AgentsConfig::default();
+                    reset_agents = true;
+                }
+                Err(InvalidAgentsLayer::Subagents(err)) if !reset_subagents => {
+                    tracing::warn!(
+                        error = %err,
+                        "per-machine subagent profiles config invalid; using built-in defaults",
+                    );
+                    config.subagents = SubagentProfilesConfig::default();
+                    reset_subagents = true;
+                }
+                Err(InvalidAgentsLayer::Agents(err)) | Err(InvalidAgentsLayer::Subagents(err)) => {
+                    tracing::warn!(
+                        error = %err,
+                        "built-in agents config invalid; ignoring per-machine agents fragments",
+                    );
+                    break;
+                }
+            }
         }
-        if let Err(err) =
-            validate_subagent_profiles_config(&config.subagents, &config.agents, &agents_path)
-        {
-            tracing::warn!(
-                error = %err,
-                "per-machine subagent profiles config invalid; using built-in defaults",
-            );
-            config.subagents = SubagentProfilesConfig::default();
-        }
-        apply_agents_fragments_lenient(
-            &mut config.agents,
-            &mut config.subagents,
-            discovered.fragments,
-            &mut notices,
-        );
         config.notices = notices;
         config
     }
@@ -1369,13 +1383,14 @@ fn overlay_agents_fragment_under(agents: &mut AgentsConfig, fragment: &AgentsFra
 fn apply_agents_fragments_lenient(
     agents: &mut AgentsConfig,
     subagents: &mut SubagentProfilesConfig,
-    fragments: Vec<LoadedAgentsFragment>,
+    fragments: &[LoadedAgentsFragment],
+    agents_path: &Path,
     notices: &mut ConfigNotices,
-) {
+) -> std::result::Result<(), InvalidAgentsLayer> {
     let base_agents = agents.clone();
     let base_subagents = subagents.clone();
     let mut accepted = Vec::new();
-    let mut pending = fragments;
+    let mut pending: Vec<_> = fragments.iter().collect();
     loop {
         let mut deferred = Vec::new();
         let mut progressed = false;
@@ -1383,7 +1398,7 @@ fn apply_agents_fragments_lenient(
             let (candidate_agents, candidate_subagents) = effective_with_fragments(
                 &base_agents,
                 &base_subagents,
-                accepted.iter().chain(std::iter::once(&fragment)),
+                accepted.iter().copied().chain(std::iter::once(fragment)),
             );
             match validate_agents_file(&candidate_agents, &candidate_subagents, &fragment.path) {
                 Ok(()) => {
@@ -1396,17 +1411,38 @@ fn apply_agents_fragments_lenient(
             }
         }
         if deferred.is_empty() {
-            return;
+            if accepted.is_empty() {
+                validate_agents_base(&base_agents, &base_subagents, agents_path)?;
+            }
+            return Ok(());
         }
         if progressed {
             pending = deferred.into_iter().map(|(fragment, _)| fragment).collect();
             continue;
         }
+        if accepted.is_empty() {
+            validate_agents_base(&base_agents, &base_subagents, agents_path)?;
+        }
         for (_, err) in deferred {
             notices.fragment_errors.push(fragment_error_notice(err));
         }
-        return;
+        return Ok(());
     }
+}
+
+enum InvalidAgentsLayer {
+    Agents(ConfigErr),
+    Subagents(ConfigErr),
+}
+
+fn validate_agents_base(
+    agents: &AgentsConfig,
+    subagents: &SubagentProfilesConfig,
+    path: &Path,
+) -> std::result::Result<(), InvalidAgentsLayer> {
+    validate_agents_config(agents, path).map_err(InvalidAgentsLayer::Agents)?;
+    validate_subagent_profiles_config(subagents, agents, path)
+        .map_err(InvalidAgentsLayer::Subagents)
 }
 
 fn effective_with_fragments<'a>(

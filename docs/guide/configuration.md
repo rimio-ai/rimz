@@ -75,7 +75,7 @@ Today the per-machine layer is live, CLI and env overrides apply where each comm
 
 ### Broken files stay visible
 
-Per-machine settings load leniently. A missing file is the default config, an unknown key is ignored with a warning so an older binary tolerates a newer file, and a machine file RimZ cannot parse falls back to built-in defaults with a startup warning. A broken file under `~/.agents/{profiles,teams}` is isolated instead: read-only views keep every surviving fragment, while `rimz agents`, `rimz teams`, and scheduled-loop launches refuse at entry with the fragment's source error rather than pretending a team or profile is unknown. `rimz doctor` reports the same fragment error and fix.
+Per-machine settings load leniently. A missing file is the default config, an unknown key is ignored with a warning so an older binary tolerates a newer file, and a machine file RimZ cannot parse falls back to built-in defaults with a startup warning. Files under `~/.agents/{profiles,teams}` may contribute agent profiles, teams, commands, and subagent profiles; entries in `agents.toml` win name collisions. A broken fragment is isolated instead: read-only views keep every surviving fragment, while `rimz agents`, `rimz teams`, and scheduled-loop launches refuse at entry with the fragment's source error rather than pretending a team or profile is unknown. `rimz doctor` reports the same fragment error and fix.
 
 ## Generate and refresh the files
 

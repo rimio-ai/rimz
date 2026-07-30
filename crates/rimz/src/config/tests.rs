@@ -484,6 +484,38 @@ fn invalid_machine_definition_does_not_blame_shadowed_fragment() {
 }
 
 #[test]
+fn lenient_load_validates_machine_definitions_after_fragment_dependencies_merge() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    let config_path = write_named(
+        &dir,
+        AGENTS_FILE,
+        "[agents.teams.demo]\n\
+         [[agents.teams.demo.roles]]\nrole = \"lead\"\nprofile = \"fragment-profile\"\n\
+         [subagents.profiles.machine-child]\nagent = \"fragment-parent\"\n",
+    );
+    write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_PROFILES_SUBDIR,
+        "fragment-profile",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.fragment-profile]\nagent = \"claude\"\n\
+         [subagents.profiles.fragment-parent]\nagent = \"claude\"\n",
+    );
+
+    let strict = MachineConfig::load_from(&config_path, agents_home.path()).expect("strict load");
+    let lenient = MachineConfig::load_lenient_from(&config_path, agents_home.path());
+
+    for config in [&strict, &lenient] {
+        assert!(config.agents.teams.0.contains_key("demo"));
+        assert!(config.agents.profiles.0.contains_key("fragment-profile"));
+        assert!(config.subagents.profiles.0.contains_key("machine-child"));
+        assert!(config.subagents.profiles.0.contains_key("fragment-parent"));
+        assert!(config.notices.fragment_errors.is_empty());
+    }
+}
+
+#[test]
 fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
     let dir = tempdir().expect("tempdir");
     let agents_home = tempdir().expect("agents home");
