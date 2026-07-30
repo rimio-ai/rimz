@@ -28,13 +28,7 @@ pub struct SubagentsArgs {
 #[derive(Debug, Subcommand)]
 enum SubagentsSubcmd {
     /// Launch one supervised child agent.
-    Launch {
-        #[command(flatten)]
-        launch: SubagentLaunchArgs,
-        /// Emit the waited result as JSON.
-        #[arg(long)]
-        json: bool,
-    },
+    Launch(Box<LaunchArgs>),
     /// Launch children from a JSON task list.
     Fanout(FanoutArgs),
     /// List this agent's children.
@@ -77,6 +71,15 @@ enum SubagentsSubcmd {
         #[arg(long, conflicts_with = "names")]
         all: bool,
     },
+}
+
+#[derive(Debug, Args)]
+struct LaunchArgs {
+    #[command(flatten)]
+    launch: SubagentLaunchArgs,
+    /// Emit the waited result as JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -178,7 +181,7 @@ pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
         require_agent_caller(crate::cli::send::agent_caller())?;
     }
     match args.command {
-        Some(SubagentsSubcmd::Launch { launch, json }) => launch_child(launch, json, globals),
+        Some(SubagentsSubcmd::Launch(args)) => launch_child(args.launch, args.json, globals),
         Some(SubagentsSubcmd::Fanout(fanout)) => fanout_children(fanout, globals),
         Some(SubagentsSubcmd::List { json }) => list_children(json, globals),
         Some(SubagentsSubcmd::Specs { json }) => list_specs(json),
@@ -202,7 +205,7 @@ fn command_is_agent_only(command: Option<&SubagentsSubcmd>) -> bool {
     match command {
         Some(SubagentsSubcmd::Specs { .. }) => false,
         Some(
-            SubagentsSubcmd::Launch { .. }
+            SubagentsSubcmd::Launch(_)
             | SubagentsSubcmd::Fanout(_)
             | SubagentsSubcmd::List { .. }
             | SubagentsSubcmd::Wait { .. }
@@ -830,16 +833,11 @@ mod tests {
             "--wait",
             "--json",
         ]);
-        assert!(matches!(
-            explicit.command,
-            Some(SubagentsSubcmd::Launch {
-                launch: SubagentLaunchArgs {
-                    wait: Some(None),
-                    ..
-                },
-                json: true,
-            })
-        ));
+        let Some(SubagentsSubcmd::Launch(explicit)) = explicit.command else {
+            panic!("explicit launch");
+        };
+        assert_eq!(explicit.launch.wait, Some(None));
+        assert!(explicit.json);
     }
 
     #[test]
