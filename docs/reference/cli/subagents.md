@@ -115,7 +115,7 @@ Stopping a parent through `rimz agents stop` stops its live pane-backed children
 
 Every child is addressable as `@<petname>`. A supervised print-mode provider is not an interactive message consumer, so do not depend on mid-run steering. A message can park against the address, but v1 does not automatically resume a finished child to consume it.
 
-## Depth and sidebar placement
+## Parentage and sidebar placement
 
 Only `rimz subagents` creates a parented pane-backed child. The child appears in the subagent section nested under its direct parent and is not duplicated as a top-level card. Provider-native children share the product term *subagent* and the same nested presentation.
 
