@@ -277,6 +277,7 @@ fn open_attempt_pane(
             })
             .map_err(anyhow::Error::from)
     };
+    let mut subagent_zone_guard = None;
     let open_result = match run_placement(
         request.force_new_tab,
         target.is_some(),
@@ -317,27 +318,32 @@ fn open_attempt_pane(
                 false => tab(format!("run {}", prepared.adapter.spec().kind)),
             }
         }
-        RunPlacement::SubagentZone => {
-            let env = rimz::room::pane_identity_env(
-                &prepared.workspace,
-                prepared.room_channel.as_deref(),
-                request.worktree.is_none() && request.from_pr.is_none(),
-            );
-            let sidebar = room.sidebar_options(&prepared.launch.cwd, Vec::new(), None);
-            match supervised::pane::split_into_subagent_zone(
-                room.backend(),
-                &prepared.store,
-                &prepared.workspace,
-                &prepared.launch.cwd,
-                env,
-                sidebar,
-                pane,
-                &launch_identity.name,
-            )? {
-                true => Ok(()),
-                false => tab(supervised::pane::subagent_companion_title(&prepared.store)),
+        RunPlacement::SubagentZone => match supervised::pane::lock_subagent_zone(&prepared.store) {
+            Ok(guard) => {
+                subagent_zone_guard = Some(guard);
+                let env = rimz::room::pane_identity_env(
+                    &prepared.workspace,
+                    prepared.room_channel.as_deref(),
+                    request.worktree.is_none() && request.from_pr.is_none(),
+                );
+                let sidebar = room.sidebar_options(&prepared.launch.cwd, Vec::new(), None);
+                match supervised::pane::split_into_subagent_zone(
+                    room.backend(),
+                    &prepared.store,
+                    &prepared.workspace,
+                    &prepared.launch.cwd,
+                    env,
+                    sidebar,
+                    pane,
+                    &launch_identity.name,
+                ) {
+                    Ok(true) => Ok(()),
+                    Ok(false) => tab(supervised::pane::subagent_companion_title(&prepared.store)),
+                    Err(err) => Err(err),
+                }
             }
-        }
+            Err(err) => Err(anyhow::Error::from(err)),
+        },
         RunPlacement::Tab => tab(format!("run {}", prepared.adapter.spec().kind)),
     };
     if let Err(err) = open_result {
@@ -352,6 +358,7 @@ fn open_attempt_pane(
             &launch_identity.agent_id,
         );
     }
+    drop(subagent_zone_guard);
     Ok(())
 }
 
