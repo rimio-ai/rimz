@@ -5,7 +5,7 @@
 //! time comes from runtime sidecars and can become unavailable after GC.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use jiff::Timestamp;
 use serde::Serialize;
@@ -19,7 +19,7 @@ use super::{AgentState, pricing, spending};
 
 pub use super::spending::EffortTokens as TokenSplit;
 
-pub const ATTRIBUTION_SCHEMA: u8 = 2;
+pub const ATTRIBUTION_SCHEMA: u8 = 3;
 const SUBAGENT_TYPE_MAX_CHARS: usize = 24;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -70,6 +70,7 @@ pub struct AttributionMember {
     pub last_activity: Timestamp,
     pub active_secs: Option<u64>,
     pub asks: u64,
+    pub asks_answered: u64,
     pub tool_calls: u64,
     pub compactions: u32,
     pub messages: MessageCounts,
@@ -82,6 +83,7 @@ impl AttributionMember {
     fn has_contribution(&self) -> bool {
         self.active_secs.unwrap_or(0) > 0
             || self.asks > 0
+            || self.asks_answered > 0
             || self.tool_calls > 0
             || self.compactions > 0
             || self.messages != MessageCounts::default()
@@ -112,6 +114,7 @@ pub struct EffortTotals {
     pub wall_clock_secs: u64,
     pub cost_usd: Option<f64>,
     pub asks: u64,
+    pub asks_answered: u64,
     pub tool_calls: u64,
     pub compactions: u32,
     pub messages: MessageCounts,
@@ -133,6 +136,7 @@ pub struct AttributionRequest<'a> {
     pub me: Option<&'a AgentSessionId>,
     pub runtime: &'a RuntimePaths,
     pub active_grace_secs: u32,
+    pub require_contribution: bool,
     pub scope: AttributionScope,
     pub now: Timestamp,
 }
@@ -198,7 +202,10 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
         })
         .collect::<Vec<_>>();
     credit_sent_messages(&mut members, request.transcript);
-    members.retain(|member| member.opened_turn || member.attribution.has_contribution());
+    members.retain(|member| {
+        member.attribution.has_contribution()
+            || (member.opened_turn && !request.require_contribution)
+    });
     members.sort_by(|left, right| member_order(&left.attribution, &right.attribution));
 
     let mut by_team = BTreeMap::<String, Vec<AttributionMember>>::new();
@@ -358,6 +365,13 @@ fn member(
                 .map_or(0, |counts| counts.asks),
         )
     });
+    let asks_answered = records.iter().fold(0u64, |total, agent| {
+        total.saturating_add(
+            conversation_counts
+                .get(&(agent.kind.clone(), agent.agent_id.clone()))
+                .map_or(0, |counts| counts.asks_answered),
+        )
+    });
     let subagents = subagent_stats(records, request.subagents, &effort.subagents);
     let active_secs = records
         .iter()
@@ -395,6 +409,7 @@ fn member(
             .unwrap_or(latest.last_activity),
         active_secs,
         asks,
+        asks_answered,
         tool_calls: records.iter().fold(0u64, |total, agent| {
             total.saturating_add(
                 agent
@@ -417,12 +432,18 @@ fn member(
 #[derive(Clone, Copy, Debug, Default)]
 struct ConversationCounts {
     asks: u64,
+    asks_answered: u64,
     messages: MessageCounts,
 }
 
 fn conversation_counts(
     transcript: &[TranscriptEntry],
 ) -> HashMap<(AgentKind, AgentSessionId), ConversationCounts> {
+    let answered = transcript
+        .iter()
+        .filter(|entry| entry.entry == TranscriptKind::Answer)
+        .filter_map(|entry| entry.id.as_ref())
+        .collect::<HashSet<_>>();
     let mut counts = HashMap::new();
     for entry in transcript {
         let counts = counts
@@ -439,6 +460,9 @@ fn conversation_counts(
             }
             TranscriptKind::Ask => {
                 counts.asks = counts.asks.saturating_add(1);
+                if entry.id.as_ref().is_some_and(|id| answered.contains(id)) {
+                    counts.asks_answered = counts.asks_answered.saturating_add(1);
+                }
             }
             TranscriptKind::Assistant | TranscriptKind::Answer | TranscriptKind::Error => {}
         }
@@ -566,6 +590,7 @@ fn totals_from_refs(members: &[&AttributionMember]) -> EffortTotals {
         };
         totals.cost_usd = spending::sum_optional_cost(totals.cost_usd, member.cost_usd);
         totals.asks = totals.asks.saturating_add(member.asks);
+        totals.asks_answered = totals.asks_answered.saturating_add(member.asks_answered);
         totals.tool_calls = totals.tool_calls.saturating_add(member.tool_calls);
         totals.compactions = totals.compactions.saturating_add(member.compactions);
         totals.messages.from_user = totals
