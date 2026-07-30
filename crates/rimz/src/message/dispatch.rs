@@ -840,7 +840,9 @@ fn dispatch_targets(
     let now = Timestamp::now();
     let decisions = targets
         .iter()
-        .map(|target| dispatch_decision(state, target, mode, now))
+        .map(|target| {
+            dispatch_decision(state.snapshot, state.pending.as_slice(), target, mode, now)
+        })
         .collect::<Vec<_>>();
     let mut live_send = send::LiveSend {
         force: mode.draft.force,
@@ -884,7 +886,8 @@ enum DispatchDecision {
 }
 
 fn dispatch_decision(
-    state: &DispatchState<'_>,
+    snapshot: &SidebarSnapshot,
+    pending: &[MessageRecord],
     target: &ResolvedTarget,
     mode: &PreparedMode,
     now: Timestamp,
@@ -910,7 +913,12 @@ fn dispatch_decision(
     {
         return DispatchDecision::Parked { reason: None };
     }
-    if let Some(agent) = target.bound(state.snapshot).or(target.agent.as_ref()) {
+    let readiness_agent = if target.pane.is_some() {
+        target.bound(snapshot)
+    } else {
+        target.agent.as_ref()
+    };
+    if let Some(agent) = readiness_agent {
         let readiness = deliver::receiver_readiness(agent, mode.draft.gate, mode.draft.force, now);
         if !readiness.accepts_prompt() {
             let reason = if readiness.waiting {
@@ -928,7 +936,7 @@ fn dispatch_decision(
     }
     if target.agent.as_ref().is_some_and(|agent| {
         queue_head(
-            state.pending.iter(),
+            pending.iter(),
             &agent.kind,
             &agent.agent_id,
             agent.name.as_deref(),
@@ -1111,6 +1119,43 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn provisional_pane_skips_readiness_gate() {
+        let launch = agent("launch_pending", AgentStatus::Running);
+        let pane = pane_only("terminal_1", "coder");
+        let snapshot = snapshot_with_panes(vec![launch.clone()], vec![pane.clone()]);
+        let binding = crate::harness::target::pane_binding(&snapshot, &pane, None).unwrap();
+        assert_eq!(
+            binding.kind,
+            crate::harness::target::PaneBindingKind::Provisional
+        );
+        let target = ResolvedTarget {
+            pane: Some(pane),
+            agent: Some(launch),
+        };
+        assert!(target.bound(&snapshot).is_none());
+        let mode = PreparedMode {
+            steer: false,
+            draft: send::MessageDraft {
+                body: MessageBody::Prompt,
+                enter: true,
+                gate: DeliveryGate::Done,
+                sender: MessageSender::Human,
+                automated: false,
+                force: false,
+                auto_compact: None,
+                not_before: None,
+                after: Vec::new(),
+                when: Vec::new(),
+            },
+        };
+
+        assert_eq!(
+            dispatch_decision(&snapshot, &[], &target, &mode, now()),
+            DispatchDecision::Live
+        );
     }
 
     #[test]
