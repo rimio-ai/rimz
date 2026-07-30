@@ -5,8 +5,8 @@ use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
     Expr, ExprAwait, ExprCall, ExprClosure, ExprForLoop, ExprIf, ExprLoop, ExprMatch,
-    ExprMethodCall, ExprReturn, ExprTry, ExprWhile, File, ImplItemFn, Item, ItemFn, ItemMod,
-    UseTree, Visibility,
+    ExprMethodCall, ExprReturn, ExprTry, ExprWhile, File, ImplItem, ImplItemFn, Item, ItemFn,
+    ItemMod, TraitItem, UseTree, Visibility,
 };
 
 use crate::source_files;
@@ -104,6 +104,42 @@ fn analyze_file(path: &Path, file: &File) -> FileSyntax {
 
 fn collect_public_items(items: &[Item], output: &mut Vec<PubItem>) {
     for item in items {
+        if let Item::Impl(item) = item {
+            for method in &item.items {
+                if let ImplItem::Fn(method) = method
+                    && is_boundary_visible(&method.vis)
+                {
+                    output.push(PubItem {
+                        name: method.sig.ident.to_string(),
+                        kind: "fn".to_owned(),
+                        params: Some(method.sig.inputs.len()),
+                        line: method.sig.ident.span().start().line,
+                    });
+                }
+            }
+            continue;
+        }
+        if let Item::Trait(item) = item {
+            if is_boundary_visible(&item.vis) {
+                output.push(PubItem {
+                    name: item.ident.to_string(),
+                    kind: "trait".to_owned(),
+                    params: None,
+                    line: item.ident.span().start().line,
+                });
+                for method in &item.items {
+                    if let TraitItem::Fn(method) = method {
+                        output.push(PubItem {
+                            name: method.sig.ident.to_string(),
+                            kind: "fn".to_owned(),
+                            params: Some(method.sig.inputs.len()),
+                            line: method.sig.ident.span().start().line,
+                        });
+                    }
+                }
+            }
+            continue;
+        }
         let (visibility, name, kind, params, line) = match item {
             Item::Const(item) => (
                 &item.vis,
@@ -144,13 +180,6 @@ fn collect_public_items(items: &[Item], output: &mut Vec<PubItem>) {
                 &item.vis,
                 item.ident.to_string(),
                 "struct",
-                None,
-                item.ident.span().start().line,
-            ),
-            Item::Trait(item) => (
-                &item.vis,
-                item.ident.to_string(),
-                "trait",
                 None,
                 item.ident.span().start().line,
             ),
@@ -197,6 +226,12 @@ fn collect_public_items(items: &[Item], output: &mut Vec<PubItem>) {
                 params,
                 line,
             });
+            if let Item::Mod(item) = item
+                && !is_cfg_test(&item.attrs)
+                && let Some((_, items)) = &item.content
+            {
+                collect_public_items(items, output);
+            }
         }
     }
 }
@@ -230,7 +265,7 @@ impl<'ast> Visit<'ast> for UseCollector<'_> {
             let internal = path
                 .first()
                 .is_some_and(|segment| matches!(segment.as_str(), "crate" | "self" | "super"));
-            let leaf_may_be_module = path.len() == 1 && internal && !grouped;
+            let leaf_may_be_module = path.len() == 1 && !grouped;
             let mut module_path = resolve_import_path(self.file_module, &path);
             if module_path.is_empty() && internal {
                 module_path = "(crate)".to_owned();
@@ -254,25 +289,41 @@ impl<'ast> Visit<'ast> for UseCollector<'_> {
     }
 }
 
-pub(super) fn resolved_import_module(
+pub(super) fn resolved_internal_import(
     import: &ImportedItem,
     known_modules: &std::collections::BTreeSet<String>,
-) -> String {
+    workspace_crates: &std::collections::BTreeSet<String>,
+) -> Option<String> {
+    let module_path = if import.internal {
+        import.module_path.clone()
+    } else {
+        let mut parts = import.module_path.split("::");
+        let crate_name = parts.next()?;
+        if !workspace_crates.contains(crate_name) {
+            return None;
+        }
+        let path = parts.collect::<Vec<_>>().join("::");
+        if path.is_empty() {
+            "(crate)".to_owned()
+        } else {
+            path
+        }
+    };
     if !import.leaf_may_be_module {
-        return import.module_path.clone();
+        return Some(module_path);
     }
-    let candidate = if import.module_path == "(crate)" {
+    let candidate = if module_path == "(crate)" {
         import.item.clone()
     } else {
-        format!("{}::{}", import.module_path, import.item)
+        format!("{module_path}::{}", import.item)
     };
     if known_modules
         .iter()
         .any(|module| module == &candidate || module.starts_with(&format!("{candidate}::")))
     {
-        candidate
+        Some(candidate)
     } else {
-        import.module_path.clone()
+        Some(module_path)
     }
 }
 

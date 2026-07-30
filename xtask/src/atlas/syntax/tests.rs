@@ -41,3 +41,46 @@ fn parse_failures_are_reported_without_aborting_other_files() {
     assert_eq!(report.files.len(), 1);
     assert_eq!(report.parse_failures.len(), 1);
 }
+
+#[test]
+fn public_surface_includes_visible_methods_traits_and_inline_modules() {
+    let report = analyze_sources(&[source(
+        r#"
+pub struct View;
+impl View {
+    pub fn render(&self, width: usize) {}
+    fn hidden(&self) {}
+}
+pub trait Draw {
+    fn draw(&self);
+}
+pub(crate) mod nested {
+    pub fn run() {}
+}
+mod private {
+    pub fn not_boundary() {}
+}
+"#,
+    )]);
+    let names = report.files[0]
+        .pub_items
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["View", "render", "Draw", "draw", "nested", "run"]);
+}
+
+#[test]
+fn workspace_crate_imports_normalize_to_local_module_paths() {
+    let report = analyze_sources(&[source(
+        "use rimz::store::Event;\nuse rimz::agents;\nuse anyhow::Result;\n",
+    )]);
+    let known_modules = ["store", "agents"].map(str::to_owned).into_iter().collect();
+    let workspace_crates = ["rimz".to_owned()].into_iter().collect();
+    let resolved = report.files[0]
+        .imports
+        .iter()
+        .filter_map(|import| resolved_internal_import(import, &known_modules, &workspace_crates))
+        .collect::<Vec<_>>();
+    assert_eq!(resolved, ["store", "agents"]);
+}

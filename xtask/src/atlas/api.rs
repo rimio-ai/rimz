@@ -131,6 +131,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
 fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let scoped_sources = sources::scope_sources(root, &args.path, None)?;
     let all_sources = sources::scope_sources(root, Path::new("."), None)?;
+    let occurrence_corpus = OccurrenceCorpus::new(&all_sources);
     let syntax = syntax::analyze_sources(&scoped_sources);
     let previous = args
         .since
@@ -148,7 +149,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     for file in &syntax.files {
         let module = module_for_path(&file.path, &args.path);
         for item in &file.pub_items {
-            let occurrence = count_occurrences(item, file, &all_sources);
+            let occurrence = count_occurrences(item, file, &occurrence_corpus);
             module_items
                 .entry(module.clone())
                 .or_default()
@@ -245,21 +246,10 @@ fn public_counts(files: &[FileSyntax], scope: &Path) -> BTreeMap<String, usize> 
 fn count_occurrences(
     item: &PubItem,
     defining_file: &FileSyntax,
-    sources: &[Source],
+    corpus: &OccurrenceCorpus,
 ) -> ItemOccurrence {
-    let mut occurrences = 0;
-    let mut modules = BTreeMap::<String, usize>::new();
-    for source in sources {
-        let module = crate_module_for_path(&source.path);
-        if module == defining_file.module_path {
-            continue;
-        }
-        let count = word_occurrences(&source.text, &item.name);
-        if count > 0 {
-            occurrences += count;
-            *modules.entry(module).or_default() += count;
-        }
-    }
+    let (occurrences, outside_modules) =
+        corpus.count_from_module(&defining_file.module_path, &item.name);
     ItemOccurrence {
         module: defining_file.module_path.clone(),
         name: item.name.clone(),
@@ -267,45 +257,67 @@ fn count_occurrences(
         path: defining_file.path.clone(),
         line: item.line,
         occurrences,
-        outside_modules: modules.len(),
+        outside_modules,
     }
 }
 
-pub(super) fn symbol_occurrences(
-    sources: &[Source],
-    defining_path: &Path,
-    symbol: &str,
-) -> (usize, usize) {
-    let defining_module = crate_module_for_path(defining_path);
-    let mut total = 0;
-    let mut modules = BTreeMap::<String, usize>::new();
-    for source in sources {
-        let module = crate_module_for_path(&source.path);
-        if module == defining_module {
-            continue;
-        }
-        let count = word_occurrences(&source.text, symbol);
-        if count > 0 {
-            total += count;
-            *modules.entry(module).or_default() += count;
-        }
-    }
-    (total, modules.len())
+pub(super) struct OccurrenceCorpus {
+    modules: BTreeMap<String, BTreeMap<String, usize>>,
 }
 
-fn word_occurrences(source: &str, needle: &str) -> usize {
-    if needle.is_empty() {
-        return 0;
+impl OccurrenceCorpus {
+    pub(super) fn new(sources: &[Source]) -> Self {
+        let mut modules = BTreeMap::<String, BTreeMap<String, usize>>::new();
+        for source in sources
+            .iter()
+            .filter(|source| !crate::source_files::is_test_file(&source.path))
+        {
+            let counts = modules
+                .entry(crate_module_for_path(&source.path))
+                .or_default();
+            for identifier in production_prefix(&source.text)
+                .split(|character: char| !is_identifier_character(character))
+                .filter(|identifier| !identifier.is_empty())
+            {
+                *counts.entry(identifier.to_owned()).or_default() += 1;
+            }
+        }
+        Self { modules }
     }
-    source
-        .match_indices(needle)
-        .filter(|(index, _)| {
-            let before = source[..*index].chars().next_back();
-            let after = source[*index + needle.len()..].chars().next();
-            !before.is_some_and(is_identifier_character)
-                && !after.is_some_and(is_identifier_character)
-        })
-        .count()
+
+    pub(super) fn count(&self, defining_path: &Path, symbol: &str) -> (usize, usize) {
+        self.count_from_module(&crate_module_for_path(defining_path), symbol)
+    }
+
+    fn count_from_module(&self, defining_module: &str, symbol: &str) -> (usize, usize) {
+        let mut total = 0;
+        let mut outside_modules = 0;
+        for (module, counts) in &self.modules {
+            if module == defining_module {
+                continue;
+            }
+            let count = counts.get(symbol).copied().unwrap_or(0);
+            if count > 0 {
+                total += count;
+                outside_modules += 1;
+            }
+        }
+        (total, outside_modules)
+    }
+}
+
+fn production_prefix(source: &str) -> &str {
+    let Some(marker) = crate::source_files::inline_test_marker_line(source) else {
+        return source;
+    };
+    if marker == 1 {
+        return "";
+    }
+    let end = source
+        .match_indices('\n')
+        .nth(marker as usize - 2)
+        .map_or(source.len(), |(index, _)| index + 1);
+    &source[..end]
 }
 
 fn is_identifier_character(character: char) -> bool {
@@ -385,9 +397,36 @@ mod tests {
 
     #[test]
     fn occurrence_scan_uses_identifier_boundaries() {
+        let sources = vec![Source {
+            path: PathBuf::from("src/caller.rs"),
+            text: "run(); rerun(); run_again(); run".to_owned(),
+        }];
         assert_eq!(
-            word_occurrences("run(); rerun(); run_again(); run", "run"),
-            2
+            OccurrenceCorpus::new(&sources).count(Path::new("src/lib.rs"), "run"),
+            (2, 1)
+        );
+    }
+
+    #[test]
+    fn occurrence_corpus_excludes_test_files_and_inline_test_modules() {
+        let sources = vec![
+            Source {
+                path: PathBuf::from("src/lib.rs"),
+                text: "pub fn target() {}\n".to_owned(),
+            },
+            Source {
+                path: PathBuf::from("src/live.rs"),
+                text: "fn caller() { target(); }\n#[cfg(test)]\nmod tests { fn check() { target(); } }\n"
+                    .to_owned(),
+            },
+            Source {
+                path: PathBuf::from("src/tests.rs"),
+                text: "fn check() { target(); }\n".to_owned(),
+            },
+        ];
+        assert_eq!(
+            OccurrenceCorpus::new(&sources).count(Path::new("src/lib.rs"), "target"),
+            (1, 1)
         );
     }
 

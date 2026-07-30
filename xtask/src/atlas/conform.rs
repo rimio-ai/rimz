@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::api::symbol_occurrences;
-use super::modules::{crate_module_for_path, path_in_scope};
+use super::api::OccurrenceCorpus;
+use super::modules::{crate_module_for_path, path_in_scope, workspace_crate_names};
 use super::sources::{self, Source};
 use super::syntax;
 use super::target::{self, TARGET_FILE, Target};
@@ -141,6 +141,8 @@ fn evaluate(root: &Path, target: &Target) -> Result<Report> {
         .iter()
         .map(|source| crate_module_for_path(&source.path))
         .collect::<BTreeSet<_>>();
+    let workspace_crates = workspace_crate_names(root)?;
+    let occurrence_corpus = OccurrenceCorpus::new(&all_sources);
     let mut rules = Vec::new();
     let mut parse_failures = 0;
     for module in &target.modules {
@@ -170,8 +172,9 @@ fn evaluate(root: &Path, target: &Target) -> Result<Report> {
             .files
             .iter()
             .flat_map(|file| &file.imports)
-            .filter(|import| import.internal)
-            .map(|import| syntax::resolved_import_module(import, &known_modules))
+            .filter_map(|import| {
+                syntax::resolved_internal_import(import, &known_modules, &workspace_crates)
+            })
             .filter(|import| !is_within(import, &target_module))
             .filter(|import| {
                 !module
@@ -203,7 +206,7 @@ fn evaluate(root: &Path, target: &Target) -> Result<Report> {
                 strangler.path.display()
             );
         }
-        let (current, _) = symbol_occurrences(&all_sources, &strangler.path, &strangler.symbol);
+        let (current, _) = occurrence_corpus.count(&strangler.path, &strangler.symbol);
         rules.push(RuleResult {
             kind: "strangler",
             path: strangler.path.clone(),
@@ -356,13 +359,23 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir(root.path().join("src")).unwrap();
         fs::write(
+            root.path().join("Cargo.toml"),
+            "[workspace]\nmembers = []\n[package]\nname = \"probe\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        fs::write(
             root.path().join("src/lib.rs"),
-            "use crate::other::Thing;\npub fn run() -> Thing { Thing }\n",
+            "use probe::other::Thing;\npub fn run() -> Thing { Thing }\n",
         )
         .unwrap();
         fs::write(
             root.path().join("src/other.rs"),
             "pub struct Thing;\nfn caller() { let _ = crate::run(); }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("src/tests.rs"),
+            "fn characterization() { crate::run(); crate::run(); }\n",
         )
         .unwrap();
         fs::write(
@@ -383,6 +396,13 @@ baseline = 5
 
         ratchet(root.path()).unwrap();
         let mut configured = target::load(root.path()).unwrap().unwrap();
+        let mut forbidden = configured.clone();
+        forbidden.modules[0].allowed_imports.clear();
+        let forbidden_report = evaluate(root.path(), &forbidden).unwrap();
+        assert_eq!(forbidden_report.regressions, 1);
+        assert_eq!(forbidden_report.rules[0].unallowed_imports, ["other"]);
+        assert!(enforce(&forbidden_report).is_err());
+
         let report = evaluate(root.path(), &configured).unwrap();
         tighten(&mut configured, &report);
         target::write(root.path(), &configured).unwrap();
