@@ -1490,6 +1490,7 @@ fn child_dirs(path: &Path) -> Result<Vec<PathBuf>> {
     Ok(dirs)
 }
 
+#[cfg(test)]
 fn apply_agents_home(
     agents: &mut AgentsConfig,
     subagents: &SubagentProfilesConfig,
