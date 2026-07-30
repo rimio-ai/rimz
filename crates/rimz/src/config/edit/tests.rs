@@ -1,4 +1,7 @@
 use super::*;
+use crate::config::{
+    AGENT_FRAGMENT_FILE, AGENTS_HOME_PROFILES_SUBDIR, AGENTS_HOME_TEAMS_SUBDIR, TEAM_FRAGMENT_FILE,
+};
 
 fn test_files() -> MachineConfigFiles {
     MachineConfigFiles::from_paths("/tmp/rimz/config.toml", "/tmp/rimz/agents-home")
@@ -319,6 +322,12 @@ fn validates_config_key_read_and_write_surfaces() {
         ("accounts.usage_limit_usd.codex", true),
         ("accounts.budget", true),
         ("accounts.budget.claude", true),
+        ("agents.profiles.demo.agent", true),
+        ("agents.profiles.demo.bogus", false),
+        ("subagents.profiles.demo.effort", true),
+        ("subagents.profiles.demo.bogus", false),
+        ("agents.teams.demo.layout", true),
+        ("agents.teams.demo.bogus", false),
         ("agents.pets", false),
         ("loop", true),
         ("loop.tasks", true),
@@ -329,6 +338,72 @@ fn validates_config_key_read_and_write_surfaces() {
             "{key}"
         );
     }
+}
+
+#[test]
+fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
+    use crate::config::{Profile, RoleBinding, Team};
+    use crate::harness::run::PermissionMode;
+
+    let profile = Profile {
+        agent: "claude".to_owned(),
+        description: Some("test".to_owned()),
+        mode: Some(PermissionMode::Yolo),
+        model: Some("model".to_owned()),
+        effort: Some("high".to_owned()),
+        budget: Some("$1".to_owned()),
+        system_prompt_file: Some(PathBuf::from("system.md")),
+        append_system_prompt_files: vec![PathBuf::from("append.md")],
+        args: Some("--flag".to_owned()),
+    };
+    let team = Team {
+        roles: vec![RoleBinding {
+            role: "lead".to_owned(),
+            profile: "claude".to_owned(),
+            mode: None,
+            model: None,
+            effort: None,
+            budget: None,
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+            args: None,
+        }],
+        leader: Some("lead".to_owned()),
+        layout: Some("lead".to_owned()),
+        scratch_files: vec!["notes/".to_owned()],
+    };
+
+    let profile_keys: std::collections::BTreeSet<_> = toml::Value::try_from(profile)
+        .expect("serialize profile")
+        .as_table()
+        .expect("profile table")
+        .keys()
+        .cloned()
+        .collect();
+    let team_keys: std::collections::BTreeSet<_> = toml::Value::try_from(team)
+        .expect("serialize team")
+        .as_table()
+        .expect("team table")
+        .keys()
+        .cloned()
+        .collect();
+
+    assert_eq!(
+        profile_keys,
+        PROFILE_FIELDS
+            .iter()
+            .map(|field| (*field).to_owned())
+            .collect(),
+        "PROFILE_FIELDS drifted from Profile serialization"
+    );
+    assert_eq!(
+        team_keys,
+        TEAM_FIELDS
+            .iter()
+            .map(|field| (*field).to_owned())
+            .collect(),
+        "TEAM_FIELDS drifted from Team serialization"
+    );
 }
 
 #[test]
@@ -805,7 +880,8 @@ fn repair_agents_home_removes_unknown_keys_preserves_comments_and_is_idempotent(
     let profile_path = profile_dir.join(AGENT_FRAGMENT_FILE);
     std::fs::write(
         &profile_path,
-        "# keep this comment\n[agents.profiles.planner]\nagent = \"claude\"\nfuture = true\n",
+        "# keep this comment\n[agents.profiles.planner]\nagent = \"claude\"\nfuture = true\n\
+         [subagents.profiles.planner-child]\nagent = \"claude\"\neffort = \"high\"\n",
     )
     .expect("profile fragment");
     let team_dir = agents_home.join(AGENTS_HOME_TEAMS_SUBDIR).join("forge");
@@ -829,6 +905,11 @@ fn repair_agents_home_removes_unknown_keys_preserves_comments_and_is_idempotent(
 
     assert_eq!(first.files.len(), 2, "{first:?}");
     assert!(profile.contains("# keep this comment"), "{profile}");
+    assert!(
+        profile.contains("[subagents.profiles.planner-child]"),
+        "{profile}"
+    );
+    assert!(profile.contains("effort = \"high\""), "{profile}");
     assert!(!profile.contains("future = true"), "{profile}");
     assert!(!team.contains("future = true"), "{team}");
     assert!(!team.contains("extra = 1"), "{team}");

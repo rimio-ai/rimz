@@ -356,6 +356,11 @@ fn lenient_load_keeps_surviving_fragments_and_records_each_problem() {
             .message
             .contains("TOML error")
     );
+    assert!(
+        config.notices.fragment_errors[0].message.contains("\n1 |"),
+        "{}",
+        config.notices.fragment_errors[0].message
+    );
 }
 
 #[test]
@@ -378,12 +383,26 @@ fn invalid_fragment_reference_has_the_same_source_error_in_both_loaders() {
         AGENT_FRAGMENT_FILE,
         "[agents.profiles.good]\nagent = \"claude\"\n",
     );
+    let bad_empty = write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "bad-empty",
+        TEAM_FRAGMENT_FILE,
+        "[agents.teams.bad-empty]\nlayout = \"claude,,codex\"\n",
+    );
     write_agents_home_fragment(
         agents_home.path(),
         AGENTS_HOME_TEAMS_SUBDIR,
         "bad-layout",
         TEAM_FRAGMENT_FILE,
         "[agents.teams.bad-layout]\nlayout = \"missing-cell\"\n",
+    );
+    write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "good-team",
+        TEAM_FRAGMENT_FILE,
+        "[agents.teams.good-team]\nlayout = \"claude,codex\"\n",
     );
 
     let strict =
@@ -404,10 +423,64 @@ fn invalid_fragment_reference_has_the_same_source_error_in_both_loaders() {
     );
     assert!(launch_failure.contains("missing-kind"), "{launch_failure}");
     assert!(launch_failure.contains("missing-cell"), "{launch_failure}");
-    assert_eq!(lenient.notices.fragment_errors.len(), 2);
+    assert_eq!(launch_failure.matches("missing-kind").count(), 1);
+    assert_eq!(launch_failure.matches("missing-cell").count(), 1);
+    assert!(
+        launch_failure.contains("empty layout cell"),
+        "{launch_failure}"
+    );
+    assert_eq!(lenient.notices.fragment_errors.len(), 3);
+    assert!(
+        lenient
+            .notices
+            .fragment_errors
+            .iter()
+            .any(|notice| notice.path == bad_empty)
+    );
     assert!(lenient.agents.profiles.0.contains_key("good"));
     assert!(!lenient.agents.profiles.0.contains_key("broken"));
     assert!(!lenient.agents.teams.0.contains_key("bad-layout"));
+    assert!(lenient.agents.teams.0.contains_key("good-team"));
+}
+
+#[test]
+fn invalid_machine_definition_does_not_blame_shadowed_fragment() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    let config_path = write_named(
+        &dir,
+        AGENTS_FILE,
+        "[agents.teams.demo]\n\
+         [[agents.teams.demo.roles]]\nrole = \"lead\"\nprofile = \"missing-profile\"\n",
+    );
+    let fragment = write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "demo",
+        TEAM_FRAGMENT_FILE,
+        "[agents.teams.demo]\nlayout = \"claude,codex\"\n",
+    );
+
+    let strict =
+        MachineConfig::load_from(&config_path, agents_home.path()).expect_err("strict failure");
+    let lenient = MachineConfig::load_lenient_from(&config_path, agents_home.path());
+
+    assert_eq!(strict.path(), dir.path().join(AGENTS_FILE));
+    assert!(
+        lenient.notices.fragment_errors.is_empty(),
+        "healthy shadowed fragment was blamed: {:?}",
+        lenient.notices.fragment_errors
+    );
+    assert_eq!(
+        lenient
+            .agents
+            .teams
+            .0
+            .get("demo")
+            .and_then(|team| team.layout.as_deref()),
+        Some("claude,codex")
+    );
+    assert!(fragment.exists());
 }
 
 #[test]
@@ -456,6 +529,38 @@ fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
             },
         ]
     );
+}
+
+#[test]
+fn agents_home_fragment_subagent_profiles_merge_without_warning() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    let fragment = write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_PROFILES_SUBDIR,
+        "planner",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.planner]\nagent = \"claude\"\n\
+         [subagents.profiles.planner-child]\nagent = \"claude\"\neffort = \"high\"\n",
+    );
+    let config_path = write(&dir, "");
+
+    let strict = MachineConfig::load_from(&config_path, agents_home.path()).expect("strict load");
+    let lenient = MachineConfig::load_lenient_from(&config_path, agents_home.path());
+
+    for config in [&strict, &lenient] {
+        assert!(config.agents.profiles.0.contains_key("planner"));
+        assert!(config.subagents.profiles.0.contains_key("planner-child"));
+        assert!(
+            config
+                .notices
+                .unknown_keys
+                .iter()
+                .all(|notice| notice.path != fragment || notice.key != "subagents"),
+            "{:?}",
+            config.notices
+        );
+    }
 }
 
 #[test]
