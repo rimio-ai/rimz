@@ -48,6 +48,7 @@ rimz teams forge --from-pr 91 --bg
 
 The bare-name form and `launch` verb accept a configured team name and send an optional trailing prompt to its configured leader.
 It uses the same launch and relaunch-reconciliation path as `rimz agents <team>`, including worktree creation, channel placement, pull-request checkout, and existing-cohort focus or recovery.
+When an agent launches a team, its members are top-level peers rather than children of the caller.
 
 `rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend.
 `rimz agents` sets what an agent is — model, effort, prompts, permission posture, name, pane placement, supervised runs.

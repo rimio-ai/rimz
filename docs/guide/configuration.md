@@ -428,14 +428,14 @@ placement = "auto"   # "auto" | "pane" | "tab"
 
 `placement` sets where a launch lands when neither `--new-pane` nor `--new-tab` is passed. `auto` (the default) runs a one-cell non-worktree launch in the current pane and opens a new tab for a worktree, named-channel, or multi-cell launch; `pane` splits a new pane for a one-cell non-worktree launch and otherwise opens a tab; `tab` always opens a tab. The CLI side of placement is in [agents.md → Channel, worktree, and placement](../reference/cli/agents.md#channel-worktree-and-placement).
 
-#### Launch depth
+#### Agent launch chains
 
 ```toml
 [agents]
-max-launch-depth = 1
+max-chain-length = 3
 ```
 
-An agent that runs `rimz agents` or [`rimz subagents`](../reference/cli/subagents.md) launches children beneath its own top-level card. `max-launch-depth` limits that recursion and defaults to one child layer; a launch past the limit fails before creating a pane, worktree, or provisional agent and tells the calling agent not to retry. Deeper configured limits still render as one flat child list under the original top-level ancestor. Pass `--top-level` to `rimz agents` when the new agent should instead be an independent peer with its own card.
+An agent that runs `rimz agents` or `rimz teams` launches independent top-level peers. `max-chain-length` limits successive agent-to-agent launches from a human-started root and defaults to three; a launch past the limit fails before creating a pane, worktree, or provisional agent and tells the calling agent not to retry. The retired `max-launch-depth` key fails config loading with its replacement.
 
 #### Subagent launches
 
@@ -444,7 +444,7 @@ An agent that runs `rimz agents` or [`rimz subagents`](../reference/cli/subagent
 timeout = "30m"
 ```
 
-These defaults apply only to the agent-only `rimz subagents` doorway. `timeout` is the wall-clock limit for each supervised child and defaults to 30 minutes; the producer enforces it even when no process is waiting on the result. Per-launch `--timeout` overrides this table.
+These defaults apply only to the agent-only [`rimz subagents`](../reference/cli/subagents.md) doorway, which is the only launch path that creates a parented child. `timeout` is the wall-clock limit for each supervised child and defaults to 30 minutes; the producer enforces it even when no process is waiting on the result. Per-launch `--timeout` overrides this table. Subagents cannot launch agents or subagents.
 
 ### Worktrees
 

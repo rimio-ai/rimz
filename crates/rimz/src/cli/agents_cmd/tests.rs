@@ -269,6 +269,17 @@ mod parse {
     use super::*;
 
     #[test]
+    fn global_root_override_remains_and_top_level_flag_is_removed() {
+        let parsed =
+            crate::cli::Cli::try_parse_from(["rimz", "agents", "--root", "/repo", "claude"])
+                .expect("global root override");
+        assert_eq!(parsed.global.root.as_deref(), Some(Path::new("/repo")));
+        assert!(
+            crate::cli::Cli::try_parse_from(["rimz", "agents", "claude", "--top-level"]).is_err()
+        );
+    }
+
+    #[test]
     fn launch_forms_parse_public_contract() {
         let argv: Vec<_> = "rimz claude,codex+term fix-tests --worktree=docs --bg"
             .split_ascii_whitespace()
