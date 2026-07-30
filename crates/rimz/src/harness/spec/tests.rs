@@ -529,6 +529,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
     let spec = resolve_spec_with_agent_override(
         Some("planner"),
         &profiles,
+        &profiles,
         &no_commands(),
         &TeamsConfig::default(),
         Some("codex"),
@@ -578,6 +579,7 @@ fn profile_override_supplies_provider_base_and_orders_prompt_fragments() {
     let spec = resolve_spec_with_agent_override(
         Some("planner"),
         &profiles,
+        &profiles,
         &no_commands(),
         &TeamsConfig::default(),
         Some("codex"),
@@ -616,6 +618,7 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
     let same = resolve_spec_with_agent_override(
         Some("planner"),
         &profiles,
+        &profiles,
         &no_commands(),
         &TeamsConfig::default(),
         Some("claude"),
@@ -631,6 +634,7 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
     let chained = resolve_spec_with_agent_override(
         Some("claude"),
         &profiles,
+        &profiles,
         &no_commands(),
         &TeamsConfig::default(),
         Some("switch"),
@@ -641,6 +645,7 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
     assert!(matches!(
         resolve_spec_with_agent_override(
             Some("claude"),
+            &profiles,
             &profiles,
             &no_commands(),
             &TeamsConfig::default(),
@@ -687,6 +692,7 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
     let team_spec = resolve_spec_with_agent_override(
         Some("forge"),
         &profiles,
+        &profiles,
         &no_commands(),
         &teams,
         Some("codex"),
@@ -700,6 +706,7 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
     let role_spec = resolve_spec_with_agent_override(
         Some("forge.planner"),
         &profiles,
+        &profiles,
         &no_commands(),
         &teams,
         Some("codex"),
@@ -712,6 +719,7 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
 
     let virtual_spec = resolve_spec_with_agent_override(
         Some("claude-yolo"),
+        &profiles,
         &profiles,
         &no_commands(),
         &TeamsConfig::default(),

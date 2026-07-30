@@ -144,11 +144,7 @@ pub fn load(
         })?;
     let config_dir = config_path.parent().unwrap_or(project_root);
     agents_spec::resolve_prompt_paths(&mut repo.profiles, &mut repo.teams, config_dir);
-    agents_spec::resolve_prompt_paths(
-        &mut repo.subagent_profiles,
-        &mut TeamsConfig::default(),
-        config_dir,
-    );
+    agents_spec::resolve_profile_prompt_paths(&mut repo.subagent_profiles, config_dir);
     for name in repo.profiles.0.keys() {
         agents_spec::resolve_profile(name, &repo.profiles).map_err(|source| {
             let source = match source {
@@ -181,7 +177,7 @@ pub fn load(
             }
         })?;
     }
-    agents_spec::validate_profile_config(
+    agents_spec::validate_profile_namespace(
         &repo.subagent_profiles,
         &CommandsConfig::default(),
         &TeamsConfig::default(),

@@ -408,6 +408,79 @@ fn profile_scope_reports_profiles_configured_for_the_other_doorway() {
 }
 
 #[test]
+fn subagent_doorway_keeps_team_roles_on_agent_profiles() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "claude-agent".to_owned(),
+        configured_profile("claude", None, Some("opus"), None, None, None),
+    );
+    machine.agents.teams.0.insert(
+        "forge".to_owned(),
+        Team {
+            roles: vec![RoleBinding {
+                role: "reviewer".to_owned(),
+                profile: "claude-agent".to_owned(),
+                mode: None,
+                model: None,
+                effort: None,
+                budget: None,
+                system_prompt_file: None,
+                append_system_prompt_files: Vec::new(),
+                args: None,
+            }],
+            leader: None,
+            layout: None,
+            scratch_files: Vec::new(),
+        },
+    );
+    let launch = effective_launch(&machine, dir.path());
+
+    let qualified = crate::harness::spec::qualify_spec_in_channel(
+        "reviewer",
+        "forge",
+        "forge",
+        &launch.teams,
+        &launch.subagent_profiles,
+        &machine.agents.commands,
+    )
+    .expect("bare lane role qualifies");
+    assert_eq!(qualified, "forge.reviewer");
+
+    for spec in ["forge", "forge.reviewer", qualified.as_ref()] {
+        let resolved = super::resolve_launch(
+            &launch,
+            crate::config::effective::ProfileScope::Subagents,
+            &machine.agents.commands,
+            Some(spec),
+            None,
+        )
+        .expect("team role resolves through the subagents doorway");
+        let cell = resolved.layout.agent_cells().next().expect("agent cell");
+        assert_eq!(cell.kind.as_str(), "claude");
+        assert_eq!(cell.launch.profile.as_deref(), Some("claude-agent"));
+        assert_eq!(cell.launch.role.as_deref(), Some("reviewer"));
+    }
+
+    machine.subagents.profiles.0.insert(
+        "reviewer".to_owned(),
+        configured_profile("codex", None, None, None, None, None),
+    );
+    let launch = effective_launch(&machine, dir.path());
+    assert!(matches!(
+        crate::harness::spec::qualify_spec_in_channel(
+            "reviewer",
+            "forge",
+            "forge",
+            &launch.teams,
+            &launch.subagent_profiles,
+            &machine.agents.commands,
+        ),
+        Err(crate::harness::spec::LayoutErr::AmbiguousInChannel { .. })
+    ));
+}
+
+#[test]
 fn profile_prompt_validation_requires_declared_files() {
     let dir = tempfile::tempdir().expect("temp dir");
     let present = dir.path().join("planner.md");

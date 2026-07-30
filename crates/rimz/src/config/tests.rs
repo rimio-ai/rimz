@@ -388,7 +388,13 @@ fn agents_home_fragments_merge_profiles_commands_and_teams() {
     );
 
     let mut agents = AgentsConfig::default();
-    apply_agents_home(&mut agents, root.path(), &root.path().join("agents.toml")).expect("merge");
+    apply_agents_home(
+        &mut agents,
+        &SubagentProfilesConfig::default(),
+        root.path(),
+        &root.path().join("agents.toml"),
+    )
+    .expect("merge");
 
     assert_eq!(
         agents
@@ -430,8 +436,13 @@ fn agents_home_teams_can_bind_implicit_builtin_profiles() {
     );
 
     let mut agents = AgentsConfig::default();
-    apply_agents_home(&mut agents, root.path(), &root.path().join("agents.toml"))
-        .expect("built-in profiles resolve after fragment merge");
+    apply_agents_home(
+        &mut agents,
+        &SubagentProfilesConfig::default(),
+        root.path(),
+        &root.path().join("agents.toml"),
+    )
+    .expect("built-in profiles resolve after fragment merge");
 
     assert_eq!(
         agents.teams.0.get("forge").map(|team| team.roles.len()),
@@ -466,7 +477,13 @@ fn agents_toml_entries_override_agents_home_fragments() {
         },
     );
 
-    apply_agents_home(&mut agents, root.path(), &root.path().join("agents.toml")).expect("merge");
+    apply_agents_home(
+        &mut agents,
+        &SubagentProfilesConfig::default(),
+        root.path(),
+        &root.path().join("agents.toml"),
+    )
+    .expect("merge");
 
     let profile = agents.profiles.0.get("planner").expect("planner profile");
     assert_eq!(profile.agent, "claude");
@@ -527,7 +544,13 @@ fn agents_home_team_prompt_paths_resolve_against_fragment_dir() {
     );
 
     let mut agents = AgentsConfig::default();
-    apply_agents_home(&mut agents, root.path(), &root.path().join("agents.toml")).expect("merge");
+    apply_agents_home(
+        &mut agents,
+        &SubagentProfilesConfig::default(),
+        root.path(),
+        &root.path().join("agents.toml"),
+    )
+    .expect("merge");
 
     let role = agents
         .teams
@@ -557,6 +580,7 @@ fn absent_agents_home_is_noop_and_malformed_fragment_leaves_config_unchanged() {
 
     apply_agents_home(
         &mut agents,
+        &SubagentProfilesConfig::default(),
         &root.path().join("missing"),
         &root.path().join("agents.toml"),
     )
@@ -588,7 +612,12 @@ fn absent_agents_home_is_noop_and_malformed_fragment_leaves_config_unchanged() {
     let before = agents.clone();
 
     assert!(matches!(
-        apply_agents_home(&mut agents, root.path(), &root.path().join("agents.toml")),
+        apply_agents_home(
+            &mut agents,
+            &SubagentProfilesConfig::default(),
+            root.path(),
+            &root.path().join("agents.toml"),
+        ),
         Err(ConfigErr::Parse { .. })
     ));
     assert_eq!(agents, before);
@@ -1028,6 +1057,44 @@ fn strict_load_validates_subagent_profile_chains_and_team_collisions() {
             ..
         } if name == "peer"
     ));
+}
+
+#[test]
+fn unused_invalid_agent_profile_stays_lazy_and_does_not_hide_siblings() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_named(
+        &dir,
+        "agents.toml",
+        "[agents.profiles.good]\n\
+             agent = \"claude\"\n\
+         [agents.profiles.bad]\n\
+             agent = \"missing\"\n",
+    );
+
+    let strict = load_no_fragments(&config_path).expect("unused profile resolves at launch");
+    assert!(strict.agents.profiles.0.contains_key("good"));
+    assert!(strict.agents.profiles.0.contains_key("bad"));
+
+    let lenient = load_lenient_no_fragments(&config_path);
+    assert!(lenient.agents.profiles.0.contains_key("good"));
+    assert!(lenient.agents.profiles.0.contains_key("bad"));
+}
+
+#[test]
+fn lenient_invalid_subagent_profile_does_not_reset_agent_config() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_named(
+        &dir,
+        "agents.toml",
+        "[agents.profiles.good]\n\
+             agent = \"claude\"\n\
+         [subagents.profiles.bad]\n\
+             agent = \"missing\"\n",
+    );
+
+    let config = load_lenient_no_fragments(&config_path);
+    assert!(config.agents.profiles.0.contains_key("good"));
+    assert!(config.subagents.profiles.0.is_empty());
 }
 
 #[test]

@@ -56,7 +56,7 @@ pub use accounts::{AccountBudgetConfigError, AccountsConfig, UsageLimitUsd};
 pub(crate) use agents::retired_agents_key;
 pub use agents::{
     AgentsConfig, CommandsConfig, LaunchPlacement, Profile, ProfilesConfig, RoleBinding,
-    SubagentsConfig, SubagentsRoot, Team, TeamsConfig,
+    SubagentProfilesConfig, SubagentsConfig, Team, TeamsConfig,
 };
 pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationRole, AnimationSpec, AnimationSpeed,
@@ -362,7 +362,7 @@ pub struct MachineConfig {
     #[serde(skip_serializing_if = "ThemeConfig::is_unset")]
     pub theme: ThemeConfig,
     pub agents: AgentsConfig,
-    pub subagents: SubagentsRoot,
+    pub subagents: SubagentProfilesConfig,
     #[serde(default, skip_serializing_if = "LoopConfig::is_empty")]
     pub r#loop: LoopConfig,
 }
@@ -450,7 +450,7 @@ impl MachineConfig {
 
         let mut config = Self::assemble(core, theme, agents, loop_);
         validate_notifications_config(&config.notifications, files.core_path())?;
-        apply_agents_home_with_subagents(
+        apply_agents_home(
             &mut config.agents,
             &config.subagents,
             files.agents_home(),
@@ -490,7 +490,7 @@ impl MachineConfig {
         };
         let mut merged = config.agents.clone();
         overlay_agents_fragment_under(&mut merged, &fragment);
-        match validate_agents_file(&merged, &config.subagents, &agents_path) {
+        match validate_agents_config(&merged, &agents_path) {
             Ok(()) => config.agents = merged,
             Err(err) => {
                 tracing::warn!(
@@ -499,10 +499,9 @@ impl MachineConfig {
                 );
                 let mut fallback = AgentsConfig::default();
                 overlay_agents_fragment_under(&mut fallback, &fragment);
-                match validate_agents_file(&fallback, &SubagentsRoot::default(), &agents_path) {
+                match validate_agents_config(&fallback, &agents_path) {
                     Ok(()) => {
                         config.agents = fallback;
-                        config.subagents = SubagentsRoot::default();
                     }
                     Err(err) => {
                         tracing::warn!(
@@ -510,10 +509,18 @@ impl MachineConfig {
                             "~/.agents fragments invalid; using built-in defaults",
                         );
                         config.agents = AgentsConfig::default();
-                        config.subagents = SubagentsRoot::default();
                     }
                 }
             }
+        }
+        if let Err(err) =
+            validate_subagent_profiles_config(&config.subagents, &config.agents, &agents_path)
+        {
+            tracing::warn!(
+                error = %err,
+                "per-machine subagent profiles config invalid; using built-in defaults",
+            );
+            config.subagents = SubagentProfilesConfig::default();
         }
         config
     }
@@ -528,12 +535,7 @@ impl MachineConfig {
             )),
             Some(AGENTS_FILE) => {
                 let mut file = parse_agents_text(path, text)?;
-                apply_agents_home_with_subagents(
-                    &mut file.agents,
-                    &file.subagents,
-                    agents_home,
-                    path,
-                )?;
+                apply_agents_home(&mut file.agents, &file.subagents, agents_home, path)?;
                 Ok(Self::assemble(
                     CoreConfig::default(),
                     ThemeConfig::default(),
@@ -836,7 +838,7 @@ struct ThemeFile {
 #[serde(default)]
 struct AgentsFile {
     agents: AgentsConfig,
-    subagents: SubagentsRoot,
+    subagents: SubagentProfilesConfig,
 }
 
 #[derive(Default, Deserialize)]
@@ -1021,7 +1023,7 @@ fn resolve_agents_prompt_paths(
 
 fn resolve_profile_prompt_paths(profiles: &mut ProfilesConfig, source_path: &Path) {
     let source_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
-    crate::harness::spec::resolve_prompt_paths(profiles, &mut TeamsConfig::default(), source_dir);
+    crate::harness::spec::resolve_profile_prompt_paths(profiles, source_dir);
 }
 
 fn discover_agents_home(root: &Path) -> Result<AgentsFragment> {
@@ -1090,14 +1092,9 @@ fn child_dirs(path: &Path) -> Result<Vec<PathBuf>> {
     Ok(dirs)
 }
 
-#[cfg(test)]
-fn apply_agents_home(agents: &mut AgentsConfig, root: &Path, agents_path: &Path) -> Result<()> {
-    apply_agents_home_with_subagents(agents, &SubagentsRoot::default(), root, agents_path)
-}
-
-fn apply_agents_home_with_subagents(
+fn apply_agents_home(
     agents: &mut AgentsConfig,
-    subagents: &SubagentsRoot,
+    subagents: &SubagentProfilesConfig,
     root: &Path,
     agents_path: &Path,
 ) -> Result<()> {
@@ -1131,15 +1128,24 @@ fn validate_agents_config(agents: &AgentsConfig, path: &Path) -> Result<()> {
 
 fn validate_agents_file(
     agents: &AgentsConfig,
-    subagents: &SubagentsRoot,
+    subagents: &SubagentProfilesConfig,
     path: &Path,
 ) -> Result<()> {
     validate_agents_config(agents, path)?;
-    crate::harness::spec::validate_profile_config(
+    validate_subagent_profiles_config(subagents, agents, path)
+}
+
+fn validate_subagent_profiles_config(
+    subagents: &SubagentProfilesConfig,
+    agents: &AgentsConfig,
+    path: &Path,
+) -> Result<()> {
+    crate::harness::spec::validate_profile_namespace(
         &subagents.profiles,
         &agents.commands,
         &agents.teams,
     )
+    .and_then(|()| crate::harness::spec::validate_profile_chains(&subagents.profiles))
     .map_err(|source| ConfigErr::Agents {
         path: path.to_path_buf(),
         source,

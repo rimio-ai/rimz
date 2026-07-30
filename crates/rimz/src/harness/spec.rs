@@ -358,14 +358,7 @@ pub fn resolve_prompt_paths(
     teams: &mut TeamsConfig,
     source_dir: &Path,
 ) {
-    for profile in profiles.0.values_mut() {
-        if let Some(path) = profile.system_prompt_file.as_mut() {
-            *path = resolve_prompt_path(path, source_dir);
-        }
-        for path in &mut profile.append_system_prompt_files {
-            *path = resolve_prompt_path(path, source_dir);
-        }
-    }
+    resolve_profile_prompt_paths(profiles, source_dir);
     for team in teams.0.values_mut() {
         for binding in &mut team.roles {
             if let Some(path) = binding.system_prompt_file.as_mut() {
@@ -374,6 +367,18 @@ pub fn resolve_prompt_paths(
             for path in &mut binding.append_system_prompt_files {
                 *path = resolve_prompt_path(path, source_dir);
             }
+        }
+    }
+}
+
+/// Resolve prompt files declared by profiles against their config source.
+pub fn resolve_profile_prompt_paths(profiles: &mut ProfilesConfig, source_dir: &Path) {
+    for profile in profiles.0.values_mut() {
+        if let Some(path) = profile.system_prompt_file.as_mut() {
+            *path = resolve_prompt_path(path, source_dir);
+        }
+        for path in &mut profile.append_system_prompt_files {
+            *path = resolve_prompt_path(path, source_dir);
         }
     }
 }
@@ -392,7 +397,7 @@ pub fn validate_config(
     commands: &CommandsConfig,
     teams: &TeamsConfig,
 ) -> Result<()> {
-    validate_profile_config(profiles, commands, teams)?;
+    validate_profile_namespace(profiles, commands, teams)?;
     for name in teams.0.keys() {
         let team = teams
             .0
@@ -406,9 +411,9 @@ pub fn validate_config(
     Ok(())
 }
 
-/// Validate a profile namespace and its cell-name collisions without requiring
-/// team role bindings to close over that namespace.
-pub fn validate_profile_config(
+/// Validate profile names and cell-name collisions without resolving every
+/// profile chain or requiring team role bindings to close over the namespace.
+pub fn validate_profile_namespace(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
     teams: &TeamsConfig,
@@ -416,13 +421,18 @@ pub fn validate_profile_config(
     validate_profile_names(profiles)?;
     validate_command_names(commands)?;
     validate_team_names(teams)?;
-    for name in profiles.0.keys() {
-        resolve_profile(name, profiles)?;
-    }
     for name in teams.0.keys() {
         if is_cell_word(name, profiles, commands) {
             return Err(LayoutErr::ReservedTeamName(name.clone()));
         }
+    }
+    Ok(())
+}
+
+/// Resolve every profile chain in a standalone profile namespace.
+pub fn validate_profile_chains(profiles: &ProfilesConfig) -> Result<()> {
+    for name in profiles.0.keys() {
+        resolve_profile(name, profiles)?;
     }
     Ok(())
 }
@@ -496,12 +506,13 @@ pub fn resolve_spec(
     commands: &CommandsConfig,
     teams: &TeamsConfig,
 ) -> Result<LayoutSpec> {
-    resolve_spec_with_agent_override(arg, profiles, commands, teams, None)
+    resolve_spec_with_agent_override(arg, profiles, profiles, commands, teams, None)
 }
 
 pub fn resolve_spec_with_agent_override(
     arg: Option<&str>,
     profiles: &ProfilesConfig,
+    team_profiles: &ProfilesConfig,
     commands: &CommandsConfig,
     teams: &TeamsConfig,
     agent_override: Option<&str>,
@@ -534,7 +545,7 @@ pub fn resolve_spec_with_agent_override(
         return resolve_team_with_base_override(
             raw,
             teams,
-            profiles,
+            team_profiles,
             commands,
             base_override.as_ref(),
         );
@@ -547,7 +558,7 @@ pub fn resolve_spec_with_agent_override(
             team,
             role,
             teams,
-            profiles,
+            team_profiles,
             commands,
             base_override.as_ref(),
         );
