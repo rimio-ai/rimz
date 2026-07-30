@@ -285,7 +285,7 @@ impl<'de> Deserialize<'de> for ThemeGlyphsConfig {
         D: Deserializer<'de>,
     {
         #[derive(Default, Deserialize)]
-        #[serde(default, deny_unknown_fields)]
+        #[serde(default)]
         struct RawThemeGlyphsConfig {
             set: Option<String>,
             unicode: GlyphOverrides,

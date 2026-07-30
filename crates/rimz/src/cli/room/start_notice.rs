@@ -77,6 +77,19 @@ pub(super) fn report_start_notices(workspace: &rimz::ResolvedWorkspace) -> Resul
         .iter()
         .map(broken_config_notice)
         .collect();
+    notices.extend(
+        rimz::config::MachineConfig::load_lenient()
+            .notices
+            .unknown_keys
+            .iter()
+            .map(|notice| {
+                format!(
+                    "unknown config key `{}` in {} — ignored; run `rimz setup` to remove it",
+                    notice.key,
+                    notice.path.display(),
+                )
+            }),
+    );
     notices.extend(root_class_notice(workspace));
     if let Ok(known) = rimz::workspace::known_workspaces() {
         let candidates = overlapping_known(workspace, &known);

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use super::super::{Ctx, GlobalFlags, render};
+use super::super::{Ctx, GlobalFlags, render, report_unknown_config_keys};
 use rimz::agents::AgentState;
 use rimz::config::{CommandsConfig, ProfilesConfig, Team, TeamsConfig};
 use rimz::harness::spec::{AgentCell, LayoutSpec};
@@ -76,6 +76,7 @@ pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
 pub(super) fn load_catalog(globals: &GlobalFlags) -> Result<Vec<TeamReport>> {
     let ctx = Ctx::open(globals)?;
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
+    report_unknown_config_keys(&machine)?;
     let effective = rimz::config::effective::load(
         &machine.agents,
         &machine.subagents.profiles,
@@ -103,6 +104,7 @@ pub(super) fn effective_teams(globals: &GlobalFlags) -> Result<TeamsConfig> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
+    report_unknown_config_keys(&machine)?;
     Ok(rimz::config::effective::load(
         &machine.agents,
         &machine.subagents.profiles,

@@ -22,6 +22,7 @@ Live instances remain visible when their definition has since been removed.
 
 The effective catalogue merges the machine `agents.toml`, fragments under `~/.agents/teams/`, and a trusted repository overlay.
 An unreadable or invalid effective config fails at entry with the source error.
+Unknown fields print a warning, are ignored, and can be removed with `rimz setup`.
 `--json` emits the same catalogue as structured team records with definitions, resolved roles, validation, and live instances.
 
 ## Inspect one team

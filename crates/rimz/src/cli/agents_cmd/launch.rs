@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use super::*;
 use crate::cli::ctx::Ctx;
-use crate::cli::machine_config;
+use crate::cli::{machine_config, report_unknown_config_keys, require_agents_fragments};
 
 use super::placement::{PlacementErrors, PlacementRequest};
 
@@ -17,6 +17,8 @@ pub(super) fn launch_layout(
     let workspace = &ctx.workspace;
     let store = &ctx.store;
     let machine_config = machine_config();
+    require_agents_fragments(&machine_config)?;
+    report_unknown_config_keys(&machine_config)?;
     let effective = rimz::config::effective::load(
         &machine_config.agents,
         &machine_config.subagents.profiles,

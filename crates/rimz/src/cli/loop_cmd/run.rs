@@ -63,6 +63,9 @@ pub(super) fn run_one(
         }
     }
     let config = MachineConfig::load_lenient();
+    if mode == LoopRunMode::Manual {
+        crate::cli::report_unknown_config_keys(&config)?;
+    }
     let check_echo = match mode {
         LoopRunMode::Scheduled => CheckEcho::Capture,
         LoopRunMode::Manual => CheckEcho::Stream {

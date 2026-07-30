@@ -178,6 +178,27 @@ fn broken_machine_files_reports_only_the_unparseable_file() {
 }
 
 #[test]
+fn broken_machine_files_reports_each_broken_agents_home_fragment() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    let broken = write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "broken",
+        TEAM_FRAGMENT_FILE,
+        "not = = toml",
+    );
+
+    let errors = broken_machine_files_in(&MachineConfigFiles::from_paths(
+        dir.path().join(CONFIG_FILE),
+        agents_home.path(),
+    ));
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].path(), broken);
+}
+
+#[test]
 fn lenient_load_falls_back_only_for_the_broken_file() {
     let dir = tempdir().expect("tempdir");
     let config_path = write(&dir, "not = = toml");
@@ -295,6 +316,135 @@ fn lenient_load_falls_back_to_defaults_plus_agents_home() {
             .get("claude-planner")
             .map(|profile| profile.agent.as_str()),
         Some("claude")
+    );
+}
+
+#[test]
+fn lenient_load_keeps_surviving_fragments_and_records_each_problem() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    let good = write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_PROFILES_SUBDIR,
+        "good",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.good]\nagent = \"claude\"\nfuture = true\n",
+    );
+    let broken = write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_PROFILES_SUBDIR,
+        "broken",
+        AGENT_FRAGMENT_FILE,
+        "not = = toml",
+    );
+    let config_path = write(&dir, "");
+
+    let config = MachineConfig::load_lenient_from(&config_path, agents_home.path());
+
+    assert!(config.agents.profiles.0.contains_key("good"));
+    assert_eq!(
+        config.notices.unknown_keys,
+        [UnknownConfigKey {
+            path: good,
+            key: "agents.profiles.good.future".to_owned(),
+        }]
+    );
+    assert_eq!(config.notices.fragment_errors.len(), 1);
+    assert_eq!(config.notices.fragment_errors[0].path, broken);
+    assert!(
+        config.notices.fragment_errors[0]
+            .message
+            .contains("TOML error")
+    );
+}
+
+#[test]
+fn invalid_fragment_reference_has_the_same_source_error_in_both_loaders() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    let config_path = write(&dir, "");
+    write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_PROFILES_SUBDIR,
+        "broken",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.broken]\nagent = \"missing-kind\"\n\
+         [agents.teams.broken-team]\nlayout = \"broken\"\n",
+    );
+    write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_PROFILES_SUBDIR,
+        "good",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.good]\nagent = \"claude\"\n",
+    );
+
+    let strict =
+        MachineConfig::load_from(&config_path, agents_home.path()).expect_err("strict failure");
+    let lenient = MachineConfig::load_lenient_from(&config_path, agents_home.path());
+    let launch_failure = lenient
+        .agents_fragment_failure()
+        .expect("lenient launch precondition");
+
+    assert!(
+        strict
+            .to_string()
+            .contains("invalid per-machine agents config")
+    );
+    assert!(
+        launch_failure.contains("invalid per-machine agents config"),
+        "strict: {strict}\nlenient: {launch_failure}"
+    );
+    assert!(launch_failure.contains("missing-kind"), "{launch_failure}");
+    assert!(lenient.agents.profiles.0.contains_key("good"));
+    assert!(!lenient.agents.profiles.0.contains_key("broken"));
+}
+
+#[test]
+fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    let config_path = write(
+        &dir,
+        "[[daemon.pane]]\ncommand = \"stats\"\nfuture = true\n",
+    );
+    write_named(&dir, THEME_FILE, "[theme.glyphs]\nfuture = true\n");
+    let theme_path = dir.path().join(THEME_FILE);
+    write_named(
+        &dir,
+        AGENTS_FILE,
+        "[agents.profiles.planner]\nagent = \"claude\"\nfuture = true\n",
+    );
+    let agents_path = dir.path().join(AGENTS_FILE);
+    write_named(
+        &dir,
+        LOOP_FILE,
+        "[tasks.nightly]\nagent = \"claude\"\nroot = \"/tmp\"\nfuture = true\n",
+    );
+    let loop_path = dir.path().join(LOOP_FILE);
+
+    let config = MachineConfig::load_from(&config_path, agents_home.path()).expect("load");
+
+    assert_eq!(
+        config.notices.unknown_keys,
+        [
+            UnknownConfigKey {
+                path: config_path,
+                key: "daemon.pane.0.future".to_owned(),
+            },
+            UnknownConfigKey {
+                path: theme_path,
+                key: "theme.glyphs.future".to_owned(),
+            },
+            UnknownConfigKey {
+                path: agents_path,
+                key: "agents.profiles.planner.future".to_owned(),
+            },
+            UnknownConfigKey {
+                path: loop_path,
+                key: "tasks.nightly.future".to_owned(),
+            },
+        ]
     );
 }
 
@@ -796,9 +946,9 @@ fn subagent_launch_defaults_parse_and_round_trip() {
         parsed
     );
 
-    let error = toml::from_str::<AgentsConfig>("[subagents]\nbudget = \"5/day\"\n")
-        .expect_err("removed subagent budget");
-    assert!(error.to_string().contains("unknown field `budget`"));
+    let parsed =
+        toml::from_str::<AgentsConfig>("[subagents]\nbudget = \"5/day\"\n").expect("ignored key");
+    assert_eq!(parsed.subagents, SubagentsConfig::default());
 }
 
 #[test]
@@ -1274,11 +1424,6 @@ fn load_from_surfaces_typed_config_errors() {
         (
             "config.toml",
             "[remote_control]\nclaude = \"yes\"\n",
-            ExpectedErr::Parse,
-        ),
-        (
-            "agents.toml",
-            "[agents.profiles.mixed]\ncommand = \"nvim\"\nagent = \"claude\"\n",
             ExpectedErr::Parse,
         ),
         (
