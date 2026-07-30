@@ -7,10 +7,9 @@ use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Val
 use crate::store::atomic::write_bytes_atomically;
 
 use super::{
-    AGENT_FRAGMENT_FILE, AGENTS_HOME_PROFILES_SUBDIR, AGENTS_HOME_TEAMS_SUBDIR, AnimationRole,
-    ConfigFileDiagnosis, GlyphRole, MachineConfig, MachineConfigFile, MachineConfigFileKind,
-    MachineConfigFiles, TEAM_FRAGMENT_FILE, is_named_glyph_set, parse_agents_fragment_unknown_keys,
-    validate_glyph_cells, validate_glyph_source,
+    AnimationRole, ConfigFileDiagnosis, GlyphRole, MachineConfig, MachineConfigFile,
+    MachineConfigFileKind, MachineConfigFiles, agents_home_fragment_paths, is_named_glyph_set,
+    parse_agents_fragment_unknown_keys, validate_glyph_cells, validate_glyph_source,
 };
 
 type Result<T> = std::result::Result<T, ConfigEditErr>;
@@ -185,14 +184,28 @@ impl ConfigEditor {
     /// preserving the rest of each document's formatting and comments.
     pub fn repair_agents_home(&self) -> Result<FragmentRepairReport> {
         let mut files = Vec::new();
-        for path in agents_home_fragment_paths(self.files.agents_home())? {
+        let discovered = agents_home_fragment_paths(self.files.agents_home());
+        files.extend(
+            discovered
+                .errors
+                .into_iter()
+                .map(|error| FragmentRepairOutcome {
+                    path: error.path().to_path_buf(),
+                    removed: Vec::new(),
+                    error: Some(error.to_string()),
+                }),
+        );
+        for path in discovered.paths {
             let text = match std::fs::read_to_string(&path) {
                 Ok(text) => text,
-                Err(source) => {
-                    return Err(ConfigEditErr::Read {
-                        path: path.clone(),
-                        source,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    files.push(FragmentRepairOutcome {
+                        path,
+                        removed: Vec::new(),
+                        error: Some(error.to_string()),
                     });
+                    continue;
                 }
             };
             let mut doc = match text.parse::<DocumentMut>() {
@@ -326,40 +339,6 @@ pub struct FragmentRepairOutcome {
     pub path: PathBuf,
     pub removed: Vec<String>,
     pub error: Option<String>,
-}
-
-fn agents_home_fragment_paths(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    for (subdir, fragment_file) in [
-        (AGENTS_HOME_PROFILES_SUBDIR, AGENT_FRAGMENT_FILE),
-        (AGENTS_HOME_TEAMS_SUBDIR, TEAM_FRAGMENT_FILE),
-    ] {
-        let dir = root.join(subdir);
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(source) => return Err(ConfigEditErr::Read { path: dir, source }),
-        };
-        for entry in entries {
-            let entry = entry.map_err(|source| ConfigEditErr::Read {
-                path: dir.clone(),
-                source,
-            })?;
-            let path = entry.path();
-            let file_type = entry.file_type().map_err(|source| ConfigEditErr::Read {
-                path: path.clone(),
-                source,
-            })?;
-            if file_type.is_dir() {
-                let fragment = path.join(fragment_file);
-                if fragment.exists() {
-                    paths.push(fragment);
-                }
-            }
-        }
-    }
-    paths.sort();
-    Ok(paths)
 }
 
 fn remove_table_path(table: &mut Table, path: &[&str]) -> bool {
@@ -886,7 +865,9 @@ fn is_known_get_key(files: &MachineConfigFiles, path: &[String]) -> Result<bool>
 }
 
 fn is_unknown_get_shape(path: &[String]) -> bool {
-    matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
+    matches!(path, [root, profiles, _, field] if matches!(root.as_str(), "agents" | "subagents") && profiles == "profiles" && !PROFILE_FIELDS.contains(&field.as_str()))
+        || matches!(path, [root, teams, _, field] if root == "agents" && teams == "teams" && !TEAM_FIELDS.contains(&field.as_str()))
+        || matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "budget" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "agents" && child == "commands" && path.len() > 3)
         || matches!(
