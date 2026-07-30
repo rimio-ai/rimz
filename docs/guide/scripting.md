@@ -154,7 +154,7 @@ rimz subagents fanout --wait <<'JSON'
 JSON
 ```
 
-Each child gets its own deadline and durable run record. Pane opens serialize safely, but the audits run in parallel. By default the command returns the child names for a later `rimz subagents wait`; `--wait` reports one labeled outcome per child immediately and exits nonzero if any child fails. The full task schema and timeout precedence are in the [`subagents` reference](../reference/cli/subagents.md#launch-and-fan-out-work).
+Each child gets its own deadline and durable run record. Pane opens serialize safely, but the audits run in parallel. By default the command returns the child names for a later `rimz subagents wait`; `--wait` prints each answer under a child-name header as it finishes and exits nonzero if any child fails. The full task schema and timeout precedence are in the [`subagents` reference](../reference/cli/subagents.md#launch-and-fan-out-work).
 
 Compare that with an agent's built-in subagents, which run headless inside the parent's harness. A child launched through `rimz subagents` is a first-class member of your room: its own pane, a nested sidebar row, a transcript that outlives the turn, and a question that routes to you instead of failing silently. When the work needs controls that tailored doorway omits, such as `--stdin` or a separate worktree, use `rimz agents -p` directly. From inside an agent, that command starts an independent peer with its own card and counts against `[agents] max-chain-length`; join a background run later through `rimz agents wait <name>` rather than the caller's `rimz subagents` verbs. When the task belongs to a teammate that is already running, hand it over with [`rimz message`](./messaging.md) instead of spawning a fresh turn.
 

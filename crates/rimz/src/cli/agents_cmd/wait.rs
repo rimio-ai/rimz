@@ -38,15 +38,6 @@ pub(in crate::cli) fn wait_agent(
     wait_non_stream_request(references, any, timeout, style, globals)
 }
 
-pub(in crate::cli) fn wait_agent_batch(
-    references: Vec<String>,
-    json: bool,
-    timeout: Option<Duration>,
-    globals: &GlobalFlags,
-) -> Result<()> {
-    wait_non_stream_request(references, false, timeout, WaitStyle::batch(json), globals)
-}
-
 fn wait_non_stream_request(
     references: Vec<String>,
     any: bool,
@@ -153,17 +144,13 @@ impl WaitStyle {
         }
     }
 
-    pub(super) const fn batch(json: bool) -> Self {
-        Self::All { json }
-    }
-
     fn report_progress(self, waits: &WaitSet, settled: &[usize]) -> Result<()> {
         match self {
             Self::Single { .. } => Ok(()),
             Self::Any { json } | Self::All { json } => {
                 report_settled_disappearances(waits, settled)?;
                 if !json {
-                    print_settled_statuses(waits, settled)?;
+                    print_settled_blocks(waits, settled)?;
                 }
                 Ok(())
             }
@@ -199,9 +186,7 @@ impl WaitStyle {
                 if json {
                     print_wait_json(std::iter::once(outcome))
                 } else {
-                    writeln!(render::out(), "{}", outcome.name)?;
-                    print_wait_status(&mut render::err(), outcome)?;
-                    Ok(())
+                    print_wait_block(&mut render::out(), &mut render::err(), outcome)
                 }
             }
             Self::All { json } => {
@@ -209,7 +194,7 @@ impl WaitStyle {
                 if json {
                     print_wait_json(waits.outcomes.iter().flatten())
                 } else {
-                    print_settled_statuses(waits, settled)
+                    print_settled_blocks(waits, settled)
                 }
             }
         }
@@ -223,7 +208,8 @@ impl WaitStyle {
                 if json {
                     print_timeout_json(waits)
                 } else {
-                    print_settled_statuses(waits, settled)
+                    print_settled_blocks(waits, settled)?;
+                    print_pending_timeouts(waits)
                 }
             }
         }
@@ -263,24 +249,25 @@ impl WaitTarget {
     }
 }
 
-struct TargetOutcome {
-    name: String,
-    payload: TerminalPayload,
+pub(super) struct TargetOutcome {
+    pub(super) name: String,
+    pub(super) payload: TerminalPayload,
 }
 
-enum TerminalPayload {
+pub(super) enum TerminalPayload {
     Run(Box<RunRecord>),
     Agent(Box<AgentState>),
     Disappeared,
 }
 
 impl TargetOutcome {
-    fn entry(&self) -> WaitEntryJson {
+    pub(super) fn entry(&self) -> WaitEntryJson {
         match &self.payload {
             TerminalPayload::Run(record) => WaitEntryJson::new(
                 record.status,
                 record.cost_usd,
                 record.transcript_path.clone(),
+                record.last_message.clone(),
                 (record.status == RunStatus::Failed)
                     .then(|| record.failure_tail.clone())
                     .flatten(),
@@ -298,9 +285,11 @@ impl TargetOutcome {
                     .and_then(|cost| cost.total_cost_usd),
                 agent.transcript_path.clone(),
                 None,
+                None,
             ),
             TerminalPayload::Disappeared => WaitEntryJson::new(
                 RunStatus::Failed,
+                None,
                 None,
                 None,
                 Some("agent disappeared while waiting".to_owned()),
@@ -314,13 +303,15 @@ impl TargetOutcome {
 }
 
 #[derive(serde::Serialize)]
-struct WaitEntryJson {
+pub(super) struct WaitEntryJson {
     status: RunStatus,
     exit: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     cost: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     transcript_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -330,6 +321,7 @@ impl WaitEntryJson {
         status: RunStatus,
         cost: Option<f64>,
         transcript_path: Option<String>,
+        last_message: Option<String>,
         error: Option<String>,
     ) -> Self {
         Self {
@@ -337,6 +329,7 @@ impl WaitEntryJson {
             exit: status.exit_code(),
             cost,
             transcript_path,
+            last_message,
             error,
         }
     }
@@ -518,17 +511,34 @@ fn print_wait_json<'a>(outcomes: impl IntoIterator<Item = &'a TargetOutcome>) ->
     render::json(&entries)
 }
 
-fn print_wait_status(out: &mut impl Write, outcome: &TargetOutcome) -> std::io::Result<()> {
+pub(super) fn print_wait_block(
+    out: &mut impl Write,
+    err: &mut impl Write,
+    outcome: &TargetOutcome,
+) -> Result<()> {
     let entry = outcome.entry();
-    writeln!(
-        out,
-        "{} {}",
-        render::paint(render::palette::body(), &outcome.name),
-        render::paint(
-            render::status::run(entry.status),
-            supervised::output::status_label(entry.status)
-        ),
-    )
+    if entry.status == RunStatus::Completed {
+        writeln!(
+            out,
+            "--- {} ---",
+            render::paint(render::palette::body(), &outcome.name)
+        )?;
+    } else {
+        writeln!(
+            out,
+            "--- {} ({}) ---",
+            render::paint(render::palette::body(), &outcome.name),
+            render::paint(
+                render::status::run(entry.status),
+                supervised::output::status_label(entry.status)
+            ),
+        )?;
+    }
+    if let TerminalPayload::Run(record) = &outcome.payload {
+        supervised::output::print_run_output(record, out, err)?;
+    }
+    writeln!(out)?;
+    Ok(())
 }
 
 fn print_single_outcome(outcome: &TargetOutcome, json: bool) -> Result<()> {
@@ -565,13 +575,29 @@ fn report_settled_disappearances(waits: &WaitSet, settled: &[usize]) -> Result<(
     Ok(())
 }
 
-fn print_settled_statuses(waits: &WaitSet, settled: &[usize]) -> Result<()> {
+fn print_settled_blocks(waits: &WaitSet, settled: &[usize]) -> Result<()> {
     let mut out = render::out();
+    let mut err = render::err();
     for &index in settled {
         let outcome = waits
             .outcome(index)
             .context("settled wait without outcome")?;
-        print_wait_status(&mut out, outcome)?;
+        print_wait_block(&mut out, &mut err, outcome)?;
+    }
+    Ok(())
+}
+
+fn print_pending_timeouts(waits: &WaitSet) -> Result<()> {
+    let mut err = render::err();
+    for (target, outcome) in waits.targets.iter().zip(&waits.outcomes) {
+        if outcome.is_none() {
+            writeln!(
+                err,
+                "--- {} ({}) ---",
+                render::paint(render::palette::body(), target.name()),
+                render::paint(render::status::run(RunStatus::TimedOut), "timed out"),
+            )?;
+        }
     }
     Ok(())
 }
@@ -585,7 +611,7 @@ fn print_timeout_json(waits: &WaitSet) -> Result<()> {
             Some(outcome) => (outcome.name.as_str(), outcome.entry()),
             None => (
                 target.name(),
-                WaitEntryJson::new(RunStatus::TimedOut, None, None, None),
+                WaitEntryJson::new(RunStatus::TimedOut, None, None, None, None),
             ),
         })
         .collect::<BTreeMap<_, _>>();

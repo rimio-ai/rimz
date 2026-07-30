@@ -317,7 +317,7 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
         return Ok(());
     };
     let names = launched.into_iter().map(|child| child.name).collect();
-    agents_cmd::wait_agent_batch(names, args.json, wait_timeout, globals)
+    agents_cmd::wait_agent(names, false, wait_timeout, false, false, args.json, globals)
 }
 
 fn fanout_launch_error_context(index: usize, launched: &[agents_cmd::BackgroundLaunch]) -> String {
