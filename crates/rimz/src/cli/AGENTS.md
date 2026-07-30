@@ -7,7 +7,7 @@ Local contract for `crates/rimz/src/cli/` — command parsing, presentation, and
 - clap argument types, stdin/file parsing, workspace lookup at the entry point, interactive prompts, stdout/stderr presentation, exit codes.
 - Cross-command orchestration where one user action intentionally combines room, mux, store, agent, and message operations — `rimz start`, supervised runs, gc sweeps.
 - Human and JSON rendering. Large render surfaces stay here: doctor, stats panels, transcript, pane, loop, and gc reports.
-- Shared CLI-layer modules serve every command: `ctx` (the participant entry: workspace, store, channel, and the snapshot flavours), `render/` (output streams, a process-lazy machine theme, and typed state presentation), `spinner`, `send` (shared send flags and outcome presentation), `address`, `worktree_protection` (runtime pane and agent fact gathering for removal callers), and the target-resolution helpers in `mod.rs`.
+- Shared CLI-layer modules serve every command: `ctx` (the participant entry: workspace, store, channel, and the snapshot flavours), `render/` (output streams, a process-lazy machine theme, and typed state presentation), `spinner`, `send` (shared send flags and outcome presentation), `address`, `spec_report` (agent/profile/command catalog presentation), `worktree_protection` (runtime pane and agent fact gathering for removal callers), and the target-resolution helpers in `mod.rs`.
 - A command addressing the running room opens a `Ctx`; a command that names or creates a room by path resolves through `WorkspaceResolver::resolve` instead, so the store opens only where one is needed.
 
 ## What lives in the domain modules
