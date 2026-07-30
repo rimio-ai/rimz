@@ -450,9 +450,8 @@ pub struct AgentState {
     pub pane: Option<PaneRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_owner: Option<RuntimeOwner>,
-    /// The root session id this agent is a *child* of, set by a provider
-    /// subagent observation or by an agent-launched child stamp and carried
-    /// forward. `None` for a root agent. The sidebar nests a child under its
+    /// The parent session id set by a provider subagent observation or a
+    /// `rimz subagents` launch stamp. The sidebar nests a child under its
     /// parent row and never renders a child as a top-level row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_agent_id: Option<AgentSessionId>,
@@ -460,8 +459,8 @@ pub struct AgentState {
     /// provider-native subagent records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_agent_kind: Option<AgentKind>,
-    /// True nesting depth for pane-backed agent-launched children. Provider
-    /// subagents stay `None`.
+    /// Launch generation from the human root. Set for peer-chain agents and
+    /// `rimz subagents` children; provider-native subagents stay `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_depth: Option<u8>,
     pub worktree_path: Option<String>,
@@ -829,7 +828,7 @@ impl AgentState {
         AgentCardRef::new(&self.kind, &self.agent_id, self.name.as_deref())
     }
 
-    /// A pane-backed child created by another RimZ-launched agent.
+    /// A pane-backed child created through `rimz subagents`.
     pub fn is_launched_child(&self) -> bool {
         self.parent_agent_id.is_some() && self.launch_depth.is_some()
     }

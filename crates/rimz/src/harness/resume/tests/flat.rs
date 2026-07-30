@@ -235,6 +235,23 @@ fn resumes_pane_backed_launched_children_with_their_ancestry() {
 }
 
 #[test]
+fn resumed_peer_keeps_its_launch_generation_without_a_parent() {
+    let peer = AgentState {
+        launch_depth: Some(2),
+        ..agent("claude", "peer", "/code/query-engine", 1)
+    };
+
+    let plan = plan(&[peer]);
+
+    assert_eq!(plan.tabs.len(), 1);
+    let request = decode_exec_request(&single_column(&plan.tabs[0])[0]);
+    assert_eq!(request.identity.launch_id.as_deref(), Some("peer"));
+    assert_eq!(request.identity.params.parent_agent_id, None);
+    assert_eq!(request.identity.params.parent_agent_kind, None);
+    assert_eq!(request.identity.params.launch_depth, Some(2));
+}
+
+#[test]
 fn disambiguates_reborn_tabs_with_the_same_basename() {
     let agents = vec![
         agent("claude", "a1", "/work/repoA/main", 5),

@@ -17,9 +17,9 @@ pub struct AgentsConfig {
     /// Declared before the table fields so the section serializes as valid
     /// TOML (a scalar after a sub-table would bind to the wrong table).
     pub placement: LaunchPlacement,
-    /// Maximum number of agent-launched descendant layers.
-    #[serde(default = "default_max_launch_depth", rename = "max-launch-depth")]
-    pub max_launch_depth: u8,
+    /// Maximum successive agent-to-agent launches from a human-started root.
+    #[serde(default = "default_max_chain_length", rename = "max-chain-length")]
+    pub max_chain_length: u8,
     pub worktree: WorktreeConfig,
     pub attention: AttentionConfig,
     #[serde(default)]
@@ -36,7 +36,7 @@ impl Default for AgentsConfig {
     fn default() -> Self {
         Self {
             placement: LaunchPlacement::default(),
-            max_launch_depth: default_max_launch_depth(),
+            max_chain_length: default_max_chain_length(),
             worktree: WorktreeConfig::default(),
             attention: AttentionConfig::default(),
             subagents: SubagentsConfig::default(),
@@ -47,8 +47,8 @@ impl Default for AgentsConfig {
     }
 }
 
-const fn default_max_launch_depth() -> u8 {
-    1
+const fn default_max_chain_length() -> u8 {
+    3
 }
 
 /// Defaults applied by the agent-only `rimz subagents` launch doorway.
@@ -190,8 +190,14 @@ pub struct RoleBinding {
 }
 
 /// Locate the retired singular prompt-fragment key in machine or project config.
-pub(crate) fn retired_append_prompt_key(doc: &toml::Table) -> Option<String> {
+pub(crate) fn retired_agents_key(doc: &toml::Table) -> Option<String> {
     let agents = doc.get("agents").and_then(toml::Value::as_table);
+    if agents.is_some_and(|agents| agents.contains_key("max-launch-depth")) {
+        return Some(
+            "`max-launch-depth` was renamed to `max-chain-length`; the default also changed from 1 to 3"
+                .to_owned(),
+        );
+    }
     for profiles in [
         agents
             .and_then(|agents| agents.get("profiles"))

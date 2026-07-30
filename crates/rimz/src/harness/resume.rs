@@ -1409,18 +1409,22 @@ pub fn materialize_team_restore_tab(
         let CohortSeed::Resume(agent) = seed else {
             return None;
         };
-        Some(agent.parent_agent_id.clone().zip(agent.launch_depth).map(
-            |(parent_agent_id, launch_depth)| {
-                crate::harness::plan::LaunchAncestry {
+        Some(match (agent.parent_agent_id.clone(), agent.launch_depth) {
+            (Some(parent_agent_id), Some(launch_generation)) => {
+                Some(crate::harness::plan::LaunchAncestry::Subagent {
                     parent_agent_id,
                     parent_agent_kind: agent
                         .parent_agent_kind
                         .clone()
                         .unwrap_or_else(|| agent.kind.clone()),
-                    launch_depth,
-                }
-            },
-        ))
+                    launch_generation,
+                })
+            }
+            (None, Some(launch_generation)) => {
+                Some(crate::harness::plan::LaunchAncestry::Peer { launch_generation })
+            }
+            _ => None,
+        })
     });
     let mut ancestry = resume_ancestries.next().flatten();
     if resume_ancestries.any(|candidate| candidate != ancestry) {

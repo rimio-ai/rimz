@@ -863,9 +863,7 @@ pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
 /// Pane-backed descendants stamped with `parent` as their display parent.
 ///
 /// Ended children remain in this projection so callers can list and wait on
-/// completed supervised work. Lifecycle commands filter to live rows. Launch
-/// ancestry flattens configured depths above one, so this is direct-child
-/// membership only at the default maximum depth of one.
+/// completed supervised work. Lifecycle commands filter to live rows.
 pub fn launched_children<'a>(agents: &'a [AgentState], parent: &AgentState) -> Vec<&'a AgentState> {
     let mut children = agents
         .iter()

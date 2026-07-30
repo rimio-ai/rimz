@@ -86,8 +86,6 @@ pub struct SupervisedRunRequest {
     /// child.
     pub subagent: bool,
     pub force_new_tab: bool,
-    /// Launch as a top-level agent even when the caller is another agent.
-    pub top_level: bool,
     pub permission_mode: PermissionMode,
     pub agent: Option<String>,
     pub model: Option<String>,

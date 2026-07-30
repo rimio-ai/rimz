@@ -57,9 +57,7 @@ fn over_limit_agent_launch_refuses_before_creating_runtime_state() {
                 agent_name: "caller".to_owned(),
                 agent_name_explicit: true,
                 launch: LaunchParams {
-                    parent_agent_id: Some(AgentSessionId::from("root-session")),
-                    parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
-                    launch_depth: Some(1),
+                    launch_depth: Some(3),
                     ..Default::default()
                 },
                 state: AgentLaunchState::Bound,
@@ -88,6 +86,7 @@ fn over_limit_agent_launch_refuses_before_creating_runtime_state() {
         "nested launch unexpectedly succeeded"
     );
     assert!(stderr.contains("launch refused"), "{stderr}");
+    assert!(stderr.contains("maximum chain length of 3"), "{stderr}");
     assert!(stderr.contains("do not retry"), "{stderr}");
     assert!(!stderr.contains("--top-level"), "{stderr}");
     assert_eq!(
@@ -99,6 +98,70 @@ fn over_limit_agent_launch_refuses_before_creating_runtime_state() {
         !env.home_root
             .join("project-worktrees")
             .join("depth-refused")
+            .exists(),
+        "refusal must precede worktree creation"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_caller_refuses_agent_launch_before_creating_runtime_state() {
+    let env = Env::new();
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    let launch_id = AgentSessionId::from("launch_subagent");
+    env.store()
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("codex"),
+            AgentLaunchPayload {
+                agent_id: AgentSessionId::from("provider-subagent"),
+                launch_id: Some(launch_id.clone()),
+                agent_name: "subagent".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    parent_agent_id: Some(AgentSessionId::from("root-session")),
+                    parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+                    launch_depth: Some(1),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: Some("main".to_owned()),
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed subagent caller");
+
+    let output = env
+        .rimz()
+        .args(["agents", "claude", "--worktree=subagent-refused"])
+        .env(rimz::harness::run::ENV_AGENT_KIND, "codex")
+        .env(rimz::harness::run::ENV_AGENT_ID, launch_id.as_str())
+        .output()
+        .expect("run launch from subagent");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "subagent launch unexpectedly succeeded"
+    );
+    assert!(stderr.contains("subagents cannot launch"), "{stderr}");
+    assert!(stderr.contains("do not retry"), "{stderr}");
+    assert_eq!(
+        env.store().read_events().expect("read events").len(),
+        1,
+        "refusal must not append a provisional launch"
+    );
+    assert!(
+        !env.home_root
+            .join("project-worktrees")
+            .join("subagent-refused")
             .exists(),
         "refusal must precede worktree creation"
     );

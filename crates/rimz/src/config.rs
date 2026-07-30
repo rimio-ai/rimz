@@ -53,7 +53,7 @@ mod web;
 mod worktree;
 
 pub use accounts::{AccountBudgetConfigError, AccountsConfig, UsageLimitUsd};
-pub(crate) use agents::retired_append_prompt_key;
+pub(crate) use agents::retired_agents_key;
 pub use agents::{
     AgentsConfig, CommandsConfig, LaunchPlacement, Profile, ProfilesConfig, RoleBinding,
     SubagentsConfig, Team, TeamsConfig,
@@ -973,7 +973,7 @@ fn check_removed_agents_tables(path: &Path, text: &str) -> Result<()> {
             ));
         }
     }
-    if let Some(detail) = agents::retired_append_prompt_key(&doc) {
+    if let Some(detail) = agents::retired_agents_key(&doc) {
         return Err(ConfigErr::RemovedKey {
             path: path.to_path_buf(),
             detail,

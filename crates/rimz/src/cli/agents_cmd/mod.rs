@@ -162,10 +162,6 @@ pub(crate) struct CohortLaunchArgs {
     /// Open the launch in a new tab/window instead of the current view.
     #[arg(long)]
     pub(crate) new_tab: bool,
-    /// Launch as a top-level agent even when invoked by another agent (no
-    /// parent link; not shown as a subagent).
-    #[arg(long)]
-    pub(crate) top_level: bool,
 }
 
 #[derive(Debug, Default, PartialEq, Args)]
@@ -754,7 +750,6 @@ fn into_supervised_request(
         self_cleanup_on_completion: args.launch.cohort.bg || args.launch.self_cleanup_on_completion,
         subagent: args.launch.subagent,
         force_new_tab: args.launch.cohort.new_tab,
-        top_level: args.launch.cohort.top_level,
         permission_mode,
         agent: rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()),
         model: args.launch.model,

@@ -31,12 +31,17 @@ pub struct ResolvedLaunch {
     pub team_name: Option<String>,
 }
 
-/// Flattened parent stamp for one pane-backed agent launched by another agent.
+/// Durable launch stamp for an agent started by another agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LaunchAncestry {
-    pub parent_agent_id: AgentSessionId,
-    pub parent_agent_kind: AgentKind,
-    pub launch_depth: u8,
+pub enum LaunchAncestry {
+    /// A top-level peer that participates in an agent-launch chain.
+    Peer { launch_generation: u8 },
+    /// A pane-backed child created through `rimz subagents`.
+    Subagent {
+        parent_agent_id: AgentSessionId,
+        parent_agent_kind: AgentKind,
+        launch_generation: u8,
+    },
 }
 
 /// Stable identity exported to a RimZ-launched agent process.
@@ -75,51 +80,56 @@ impl LaunchCallerEnv {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LaunchAncestryError {
     #[error(
-        "launch refused: RimZ could not resolve the calling agent's durable launch identity, so it cannot safely verify the configured nesting limit. Launching another agent from here is not permitted; do not retry this command."
+        "launch refused: RimZ could not resolve the calling agent's durable launch identity, so it cannot safely verify the configured chain limit. Launching another agent from here is not permitted; do not retry this command."
     )]
     UnresolvedCaller,
     #[error(
-        "launch refused: this agent is at agent-launch nesting depth {current_depth}, so another agent would exceed this workspace's maximum of {max_depth}. Launching another agent from here is not permitted; do not retry this command."
+        "launch refused: this agent is {current} launches deep in an agent chain, and another launch would exceed this workspace's maximum chain length of {max}. Launching another agent from here is not permitted; do not retry this command."
     )]
-    DepthExceeded { current_depth: u8, max_depth: u8 },
+    ChainExceeded { current: u8, max: u8 },
+    #[error(
+        "launch refused: subagents cannot launch agents or subagents. Do the work yourself and report the result to your caller; do not retry this command."
+    )]
+    SubagentCaller,
 }
 
-/// Resolve the flattened display parent while retaining true launch depth.
+/// Resolve the launch generation and optional direct subagent parent.
 pub fn resolve_launch_ancestry(
     caller: Option<&crate::agents::AgentState>,
-    top_level: bool,
-    max_depth: u8,
+    subagent: bool,
+    max_chain_length: u8,
 ) -> std::result::Result<Option<LaunchAncestry>, LaunchAncestryError> {
-    let Some(caller) = caller.filter(|_| !top_level) else {
+    let Some(caller) = caller else {
         return Ok(None);
     };
-    let current_depth = caller.launch_depth.unwrap_or(0);
-    if current_depth >= max_depth {
-        return Err(LaunchAncestryError::DepthExceeded {
-            current_depth,
-            max_depth,
+    if caller.is_launched_child() {
+        return Err(LaunchAncestryError::SubagentCaller);
+    }
+    let generation = caller.launch_depth.unwrap_or(0);
+    if subagent {
+        return Ok(Some(LaunchAncestry::Subagent {
+            parent_agent_id: caller.agent_id.clone(),
+            parent_agent_kind: caller.kind.clone(),
+            launch_generation: generation.saturating_add(1),
+        }));
+    }
+    if generation >= max_chain_length {
+        return Err(LaunchAncestryError::ChainExceeded {
+            current: generation,
+            max: max_chain_length,
         });
     }
-    Ok(Some(LaunchAncestry {
-        parent_agent_id: caller
-            .parent_agent_id
-            .clone()
-            .unwrap_or_else(|| caller.agent_id.clone()),
-        parent_agent_kind: caller
-            .parent_agent_kind
-            .clone()
-            .unwrap_or_else(|| caller.kind.clone()),
-        launch_depth: current_depth.saturating_add(1),
+    Ok(Some(LaunchAncestry::Peer {
+        launch_generation: generation.saturating_add(1),
     }))
 }
 
 /// Whether this process identifies itself as an agent caller. Human launches
-/// and the explicit top-level escape can skip the audit projection entirely.
-pub fn launch_ancestry_required(top_level: bool) -> bool {
-    !top_level
-        && std::env::var(crate::harness::run::ENV_AGENT_KIND)
-            .ok()
-            .is_some_and(|value| !value.is_empty())
+/// can skip the audit projection entirely.
+pub fn launch_ancestry_required() -> bool {
+    std::env::var(crate::harness::run::ENV_AGENT_KIND)
+        .ok()
+        .is_some_and(|value| !value.is_empty())
 }
 
 /// Resolve the launching process through its stable launch id. Kind
@@ -129,17 +139,14 @@ pub fn launch_ancestry_required(top_level: bool) -> bool {
 /// live pane stamp as legacy identity.
 pub fn resolve_launch_ancestry_from_env(
     agents: &[crate::agents::AgentState],
-    top_level: bool,
-    max_depth: u8,
+    subagent: bool,
+    max_chain_length: u8,
 ) -> std::result::Result<Option<LaunchAncestry>, LaunchAncestryError> {
-    if top_level {
-        return Ok(None);
-    }
-    if !launch_ancestry_required(false) {
+    if !launch_ancestry_required() {
         return Ok(None);
     }
     let caller = resolve_launch_caller_from_env(agents)?;
-    resolve_launch_ancestry(Some(caller), false, max_depth)
+    resolve_launch_ancestry(Some(caller), subagent, max_chain_length)
 }
 
 /// Resolve the pane-backed agent that owns the current process environment.
@@ -835,9 +842,20 @@ pub fn launch_identity_requests(
         launch.channel = channel.map(ToOwned::to_owned);
         launch.kind_ordinal = None;
         if let Some(ancestry) = ancestry {
-            launch.parent_agent_id = Some(ancestry.parent_agent_id.clone());
-            launch.parent_agent_kind = Some(ancestry.parent_agent_kind.clone());
-            launch.launch_depth = Some(ancestry.launch_depth);
+            match ancestry {
+                LaunchAncestry::Peer { launch_generation } => {
+                    launch.launch_depth = Some(*launch_generation);
+                }
+                LaunchAncestry::Subagent {
+                    parent_agent_id,
+                    parent_agent_kind,
+                    launch_generation,
+                } => {
+                    launch.parent_agent_id = Some(parent_agent_id.clone());
+                    launch.parent_agent_kind = Some(parent_agent_kind.clone());
+                    launch.launch_depth = Some(*launch_generation);
+                }
+            }
         }
         requests.push(AgentLaunchRequest {
             kind: cell.kind.clone(),

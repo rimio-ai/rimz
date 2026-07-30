@@ -39,38 +39,54 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
 }
 
 #[test]
-fn launch_ancestry_flattens_to_the_root_and_enforces_true_depth() {
-    assert_eq!(resolve_launch_ancestry(None, false, 1).unwrap(), None);
+fn launch_ancestry_distinguishes_peers_subagents_and_chain_limits() {
+    assert_eq!(resolve_launch_ancestry(None, false, 3).unwrap(), None);
 
     let root = crate::agents::AgentState::stub("claude", "root", AgentStatus::Running);
-    assert_eq!(resolve_launch_ancestry(Some(&root), true, 0).unwrap(), None);
     assert_eq!(
-        resolve_launch_ancestry(Some(&root), false, 1).unwrap(),
-        Some(LaunchAncestry {
+        resolve_launch_ancestry(Some(&root), false, 3).unwrap(),
+        Some(LaunchAncestry::Peer {
+            launch_generation: 1,
+        })
+    );
+    assert_eq!(
+        resolve_launch_ancestry(Some(&root), true, 0).unwrap(),
+        Some(LaunchAncestry::Subagent {
             parent_agent_id: AgentSessionId::from("root"),
             parent_agent_kind: AgentKind::new_unchecked("claude"),
-            launch_depth: 1,
+            launch_generation: 1,
         })
+    );
+
+    let mut peer = crate::agents::AgentState::stub("codex", "peer", AgentStatus::Running);
+    peer.launch_depth = Some(3);
+    let error = resolve_launch_ancestry(Some(&peer), false, 3).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("3 launches deep"));
+    assert!(message.contains("maximum chain length of 3"));
+    assert!(message.contains("do not retry"));
+    assert!(!message.contains("--top-level"));
+
+    assert_eq!(
+        resolve_launch_ancestry(Some(&peer), true, 3).unwrap(),
+        Some(LaunchAncestry::Subagent {
+            parent_agent_id: AgentSessionId::from("peer"),
+            parent_agent_kind: AgentKind::new_unchecked("codex"),
+            launch_generation: 4,
+        }),
+        "subagents do not extend the peer-launch chain"
     );
 
     let mut child = crate::agents::AgentState::stub("codex", "child", AgentStatus::Running);
     child.parent_agent_id = Some(AgentSessionId::from("root"));
     child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
     child.launch_depth = Some(1);
-    assert_eq!(
-        resolve_launch_ancestry(Some(&child), false, 2).unwrap(),
-        Some(LaunchAncestry {
-            parent_agent_id: AgentSessionId::from("root"),
-            parent_agent_kind: AgentKind::new_unchecked("claude"),
-            launch_depth: 2,
-        })
-    );
-
-    let error = resolve_launch_ancestry(Some(&child), false, 1).unwrap_err();
-    let message = error.to_string();
-    assert!(message.contains("nesting depth 1"));
-    assert!(message.contains("do not retry"));
-    assert!(!message.contains("--top-level"));
+    for subagent in [false, true] {
+        let error = resolve_launch_ancestry(Some(&child), subagent, 3).unwrap_err();
+        assert_eq!(error, LaunchAncestryError::SubagentCaller);
+        assert!(error.to_string().contains("subagents cannot launch"));
+        assert!(error.to_string().contains("do not retry"));
+    }
 }
 
 #[test]
@@ -1316,10 +1332,10 @@ fn launch_request_names_and_metadata() {
         },
     }));
 
-    let ancestry = LaunchAncestry {
+    let ancestry = LaunchAncestry::Subagent {
         parent_agent_id: AgentSessionId::from("root-session"),
         parent_agent_kind: AgentKind::new_unchecked("claude"),
-        launch_depth: 2,
+        launch_generation: 2,
     };
     let requests = launch_identity_requests(
         &layout,
@@ -1356,6 +1372,24 @@ fn launch_request_names_and_metadata() {
     );
     assert_eq!(requests[0].launch.launch_depth, Some(2));
     assert_eq!(requests[0].prompt.as_deref(), Some("draft it"));
+
+    let peer_requests = launch_identity_requests(
+        &layout,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(&LaunchAncestry::Peer {
+            launch_generation: 2,
+        }),
+    )
+    .unwrap();
+    assert_eq!(peer_requests[0].launch.parent_agent_id, None);
+    assert_eq!(peer_requests[0].launch.parent_agent_kind, None);
+    assert_eq!(peer_requests[0].launch.launch_depth, Some(2));
 
     let requests = launch_identity_requests(
         &layout,
