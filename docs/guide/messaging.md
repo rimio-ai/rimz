@@ -46,6 +46,8 @@ rimz message --on any @codex "report back either way"     # also delivers after 
 
 By default a parked message waits for a successful or idle turn (`--on done`); `--on any` releases it after a failure too.
 
+The confirmation tells you whether the text delivered or queued. When a busy target caused the queue, it also names the target's status and prints `rimz message steer msg_…`, which promotes that exact record if you decide it should interrupt now.
+
 **Steer the live turn now.** `--steer` interrupts the pane immediately, the way typing into it would, so you can redirect an agent mid-thought.
 
 ```sh

@@ -125,6 +125,7 @@ pub enum DispatchOutcome {
     Queued {
         label: String,
         message_id: MessageId,
+        reason: Option<ParkReason>,
     },
     CompactionPending {
         label: String,
@@ -134,6 +135,12 @@ pub enum DispatchOutcome {
         label: String,
         message_id: MessageId,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParkReason {
+    Status(AgentStatus),
+    WaitingOnPrompt,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -831,9 +838,9 @@ fn dispatch_targets(
     mode: &PreparedMode,
 ) -> Result<(Vec<DispatchOutcome>, Vec<String>)> {
     let now = Timestamp::now();
-    let parks = targets
+    let decisions = targets
         .iter()
-        .map(|target| should_park(state, target, mode, now))
+        .map(|target| dispatch_decision(state, target, mode, now))
         .collect::<Vec<_>>();
     let mut live_send = send::LiveSend {
         force: mode.draft.force,
@@ -844,8 +851,8 @@ fn dispatch_targets(
     let mut preflighted_kinds = BTreeSet::new();
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut compacted = Vec::new();
-    for (target, park) in targets.iter().zip(parks) {
-        if park {
+    for (target, decision) in targets.iter().zip(decisions) {
+        if matches!(decision, DispatchDecision::Parked { .. }) {
             let agent = target
                 .agent
                 .as_ref()
@@ -863,23 +870,33 @@ fn dispatch_targets(
             target,
             text,
             mode,
-            park,
+            decision,
         )?);
     }
     deliver::register_message_wake(state.workspace, state.store)?;
     Ok((outcomes, compacted))
 }
 
-fn should_park(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DispatchDecision {
+    Live,
+    Parked { reason: Option<ParkReason> },
+}
+
+fn dispatch_decision(
     state: &DispatchState<'_>,
     target: &ResolvedTarget,
     mode: &PreparedMode,
     now: Timestamp,
-) -> bool {
+) -> DispatchDecision {
     if mode.steer {
-        return target.pane.is_none();
+        return if target.pane.is_some() {
+            DispatchDecision::Live
+        } else {
+            DispatchDecision::Parked { reason: None }
+        };
     }
-    mode.draft.not_before.is_some()
+    if mode.draft.not_before.is_some()
         || !mode
             .draft
             .after
@@ -890,24 +907,26 @@ fn should_park(
             .when
             .iter()
             .all(|condition| condition.met_at.is_some())
-        || !target_receivable_now(state, target, mode, now)
-}
-
-fn target_receivable_now(
-    state: &DispatchState<'_>,
-    target: &ResolvedTarget,
-    mode: &PreparedMode,
-    now: Timestamp,
-) -> bool {
-    if target.pane.is_none()
-        || target.bound(state.snapshot).is_some_and(|agent| {
-            !deliver::receiver_readiness(agent, mode.draft.gate, mode.draft.force, now)
-                .accepts_prompt()
-        })
     {
-        return false;
+        return DispatchDecision::Parked { reason: None };
     }
-    target.agent.as_ref().is_none_or(|agent| {
+    if let Some(agent) = target.bound(state.snapshot).or(target.agent.as_ref()) {
+        let readiness = deliver::receiver_readiness(agent, mode.draft.gate, mode.draft.force, now);
+        if !readiness.accepts_prompt() {
+            let reason = if readiness.waiting {
+                ParkReason::WaitingOnPrompt
+            } else {
+                ParkReason::Status(readiness.status)
+            };
+            return DispatchDecision::Parked {
+                reason: Some(reason),
+            };
+        }
+    }
+    if target.pane.is_none() {
+        return DispatchDecision::Parked { reason: None };
+    }
+    if target.agent.as_ref().is_some_and(|agent| {
         queue_head(
             state.pending.iter(),
             &agent.kind,
@@ -915,8 +934,11 @@ fn target_receivable_now(
             agent.name.as_deref(),
             now,
         )
-        .is_none()
-    })
+        .is_some()
+    }) {
+        return DispatchDecision::Parked { reason: None };
+    }
+    DispatchDecision::Live
 }
 
 fn dispatch_one(
@@ -926,11 +948,11 @@ fn dispatch_one(
     target: &ResolvedTarget,
     text: &str,
     mode: &PreparedMode,
-    park: bool,
+    decision: DispatchDecision,
 ) -> Result<DispatchOutcome> {
     let handle = target.label(state.snapshot);
-    if park {
-        return dispatch_parked(state, target, text, mode, handle);
+    if let DispatchDecision::Parked { reason } = decision {
+        return dispatch_parked(state, target, text, mode, handle, reason);
     }
     let Some(pane) = target.pane.as_ref() else {
         return Err(DispatchErr::NoDurableSession { label: handle });
@@ -980,6 +1002,7 @@ fn dispatch_one(
             Ok(DispatchOutcome::Queued {
                 label: handle,
                 message_id,
+                reason: None,
             })
         }
         deliver::AttemptOutcome::CompactionPending => {
@@ -998,6 +1021,7 @@ fn dispatch_parked(
     text: &str,
     mode: &PreparedMode,
     handle: String,
+    reason: Option<ParkReason>,
 ) -> Result<DispatchOutcome> {
     let message = state.enqueue(target, None, text, mode, &handle)?;
     let message_id = message.message_id.clone();
@@ -1005,6 +1029,7 @@ fn dispatch_parked(
     Ok(DispatchOutcome::Queued {
         label: handle,
         message_id,
+        reason,
     })
 }
 
