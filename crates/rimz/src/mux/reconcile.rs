@@ -576,15 +576,19 @@ mod tests {
     }
 
     #[test]
-    fn orphan_views_close_without_adding() {
+    fn sidebar_only_subagents_view_closes_without_adding() {
         let plan = plan_reconcile(
-            &[view("orphan", &["terminal_1", "terminal_2"], false)],
+            &[view(
+                "review subagents",
+                &["terminal_1", "terminal_2"],
+                false,
+            )],
             &SidebarLiveness::default(),
         );
         assert_eq!(
             plan.verdicts,
             vec![ViewVerdict::CloseDuplicates {
-                view: "orphan".to_owned(),
+                view: "review subagents".to_owned(),
                 close: vec![pane("terminal_1"), pane("terminal_2")],
             }]
         );
