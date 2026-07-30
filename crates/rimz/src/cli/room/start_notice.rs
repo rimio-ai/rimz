@@ -12,13 +12,31 @@ use crate::cli::render;
 use rimz::room::session::session_probe_timeout;
 
 fn broken_config_notice(err: &rimz::config::ConfigErr) -> String {
-    let path = render::home_relative(&err.path().display().to_string());
-    format!(
-        "{path} is unparseable — every setting in it is ignored and built-in defaults apply: {}; fix the file, then restart",
-        err.diagnosis()
-            .map(rimz::config::ConfigFileDiagnosis::summary)
-            .unwrap_or_else(|| render::one_line_error(err)),
+    broken_config_notice_for(
+        err,
+        err.path().starts_with(rimz::store::paths::agents_home()),
     )
+}
+
+fn broken_config_notice_for(err: &rimz::config::ConfigErr, fragment: bool) -> String {
+    let path = render::home_relative(&err.path().display().to_string());
+    let detail = err
+        .diagnosis()
+        .map(rimz::config::ConfigFileDiagnosis::summary)
+        .unwrap_or_else(|| render::one_line_error(err));
+    if fragment {
+        format!(
+            "{path} cannot be used: {detail}; `rimz agents` and `rimz teams` refuse launches until this fragment is fixed"
+        )
+    } else if err.diagnosis().is_some() {
+        format!(
+            "{path} is unparseable — every setting in it is ignored and built-in defaults apply: {detail}; fix the file, then restart"
+        )
+    } else {
+        format!(
+            "{path} is invalid — every setting in it is ignored and built-in defaults apply: {detail}; fix the file, then restart"
+        )
+    }
 }
 
 fn root_class_notice(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
@@ -298,6 +316,26 @@ mod tests {
             "{notice}"
         );
         assert!(notice.contains("built-in defaults apply"), "{notice}");
+    }
+
+    #[test]
+    fn broken_fragment_notice_names_launch_precondition_not_fallback() {
+        let err = rimz::config::MachineConfig::parse_text(
+            std::path::Path::new("/tmp/agents.toml"),
+            "[agents.teams.bad]\nlayout = \"claude,,codex\"\n",
+            std::path::Path::new("/tmp/missing-agents-home"),
+        )
+        .expect_err("invalid layout fails");
+
+        let notice = broken_config_notice_for(&err, true);
+
+        assert!(
+            notice.contains("/tmp/agents.toml cannot be used"),
+            "{notice}"
+        );
+        assert!(notice.contains("refuse launches"), "{notice}");
+        assert!(!notice.contains("unparseable"), "{notice}");
+        assert!(!notice.contains("built-in defaults"), "{notice}");
     }
 
     #[test]
