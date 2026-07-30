@@ -74,6 +74,10 @@ pub(super) fn cochange(
     max_commit_files: usize,
 ) -> Result<Vec<CochangeEdge>> {
     let commits = parse_history(&git_history(root, scope, since)?)?;
+    Ok(fold_cochange(&commits, scope, max_commit_files))
+}
+
+fn fold_cochange(commits: &[Commit], scope: &Path, max_commit_files: usize) -> Vec<CochangeEdge> {
     let mut counts = BTreeMap::<(String, String), usize>::new();
     for commit in commits {
         let files = commit
@@ -115,7 +119,7 @@ pub(super) fn cochange(
             .then_with(|| left.left.cmp(&right.left))
             .then_with(|| left.right.cmp(&right.right))
     });
-    Ok(edges)
+    edges
 }
 
 fn git_history(root: &Path, scope: &Path, since: Option<&str>) -> Result<String> {
@@ -238,7 +242,7 @@ fn fold_pace(
             .extend(identity.commits);
     }
     let total = commits.len();
-    let window_size = total.saturating_mul(window_pct).div_ceil(100).max(1);
+    let window_size = window_size(total, window_pct);
     let first = total.saturating_sub(window_size);
     let modules = module_commits
         .into_iter()
@@ -246,7 +250,7 @@ fn fold_pace(
             let lifetime = commits.len();
             let window = commits.range(first..).count();
             let share = lifetime as f64 / total as f64;
-            let noisy = lifetime < noise_lifetime || window < noise_window;
+            let noisy = pace_is_noisy(lifetime, window, noise_lifetime, noise_window);
             let pace =
                 (!noisy && share > 0.0).then_some((window as f64 / window_size as f64) / share);
             (
@@ -264,6 +268,19 @@ fn fold_pace(
         commits: total,
         modules,
     }
+}
+
+fn window_size(commits: usize, pct: usize) -> usize {
+    commits.saturating_mul(pct).div_ceil(100).max(1)
+}
+
+fn pace_is_noisy(
+    lifetime_commits: usize,
+    window_commits: usize,
+    noise_lifetime: usize,
+    noise_window: usize,
+) -> bool {
+    lifetime_commits < noise_lifetime || window_commits < noise_window
 }
 
 fn identity_for_path(
@@ -291,6 +308,7 @@ fn new_identity(path: &Path, identities: &mut Vec<Identity>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn cochange_history_parser_preserves_renames() {
@@ -302,5 +320,54 @@ mod tests {
             Change::Rename { ref old, ref new }
                 if old == Path::new("cli/a.rs") && new == Path::new("cli/c.rs")
         ));
+    }
+
+    #[test]
+    fn rename_folding_attributes_old_commits_to_the_head_module() {
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join("src/new/current.rs");
+        fs::create_dir_all(current.parent().unwrap()).unwrap();
+        fs::write(&current, "fn current() {}\n").unwrap();
+        let commits = parse_history(
+            "@a\nA\tsrc/old/current.rs\n\
+             @b\nM\tsrc/old/current.rs\n\
+             @c\nR100\tsrc/old/current.rs\tsrc/new/current.rs\n\
+             @d\nM\tsrc/new/current.rs\n\
+             @e\nA\tsrc/dead.rs\n\
+             @f\nD\tsrc/dead.rs\n",
+        )
+        .unwrap();
+
+        let report = fold_pace(root.path(), Path::new("src"), &commits, 25, 1, 1);
+        assert_eq!(report.commits, 6);
+        assert_eq!(report.modules.len(), 1);
+        assert_eq!(report.modules["new"].commits, 4);
+    }
+
+    #[test]
+    fn windows_round_up_and_noise_checks_both_populations() {
+        assert_eq!(window_size(1, 10), 1);
+        assert_eq!(window_size(10, 10), 1);
+        assert_eq!(window_size(11, 10), 2);
+        assert_eq!(window_size(11, 25), 3);
+        assert!(pace_is_noisy(19, 10, 20, 5));
+        assert!(pace_is_noisy(20, 4, 20, 5));
+        assert!(!pace_is_noisy(20, 5, 20, 5));
+    }
+
+    #[test]
+    fn cochange_fold_counts_module_pairs_and_omits_broad_commits() {
+        let commits = parse_history(
+            "@a\nM\tsrc/a/one.rs\nM\tsrc/b/one.rs\n\
+             @b\nM\tsrc/a/two.rs\nM\tsrc/b/two.rs\n\
+             @c\nM\tsrc/a/three.rs\nM\tsrc/b/three.rs\nM\tsrc/c/three.rs\n",
+        )
+        .unwrap();
+        let edges = fold_cochange(&commits, Path::new("src"), 2);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(
+            (&edges[0].left, &edges[0].right, edges[0].commits),
+            (&"a".to_owned(), &"b".to_owned(), 2)
+        );
     }
 }
