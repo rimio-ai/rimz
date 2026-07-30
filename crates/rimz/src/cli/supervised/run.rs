@@ -339,7 +339,14 @@ fn open_attempt_pane(
                 ) {
                     supervised::pane::SubagentZoneOpen::Opened => Ok(()),
                     supervised::pane::SubagentZoneOpen::CompanionTab => {
-                        tab(supervised::pane::subagent_companion_title(&prepared.store))
+                        let companion = supervised::pane::subagent_companion_title(&prepared.store);
+                        tab(companion).or_else(|err| {
+                            tracing::debug!(
+                                error = %err,
+                                "subagent companion fallback failed; falling back to a run tab",
+                            );
+                            tab(format!("run {}", prepared.adapter.spec().kind))
+                        })
                     }
                     supervised::pane::SubagentZoneOpen::RunTab => {
                         tab(format!("run {}", prepared.adapter.spec().kind))
