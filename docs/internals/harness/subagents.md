@@ -1,6 +1,6 @@
 # Agent-launched subagents
 
-> One agent delegating a bounded prompt to another. This page owns the child lifecycle: the agent-only launch and lifecycle verbs, what a launch desugars to, the ancestry stamp and its depth cap, how the caller-scoped verbs decide who its children are, and the boundary with the provider-native children that share the name. The supervised run underneath a child is [scripting.md](./scripting.md); the launch core it rides on is [fleet.md](./fleet.md).
+> One agent delegating a bounded prompt to another. This page owns the child lifecycle: the agent-only launch and lifecycle verbs, what a launch desugars to, the direct-parent stamp and no-further-launch rule, how the caller-scoped verbs decide who its children are, and the boundary with the provider-native children that share the name. The supervised run underneath a child is [scripting.md](./scripting.md); the launch core it rides on is [fleet.md](./fleet.md).
 
 ## Two things are called a subagent
 
@@ -17,9 +17,9 @@ One field separates them, and both predicates live in [`agents/state.rs`](../../
 | `is_launched_child` | `parent_agent_id.is_some() && launch_depth.is_some()` | RimZ launched it; it has a pane and a run |
 | `is_provider_subagent` | `parent_agent_id.is_some() && launch_depth.is_none()` | the provider launched it inside its own turn |
 
-`launch_depth` is the discriminator: only a RimZ launch path stamps it. A row carrying a parent but no depth came from a hook, and every caller-scoped verb on this page filters it out.
+The field combination is the discriminator. A parent plus `launch_depth` comes from `rimz subagents`; a parent without it came from a hook, and every caller-scoped verb on this page filters that provider-native row out. A peer launched through `rimz agents` carries `launch_depth` without a parent and matches neither predicate.
 
-Both kinds are flattened to a root ancestor, but by different code at different times: a launched child is flattened by the launcher when its stamp is minted, while a provider-native child is flattened by the store writer as it adopts the hook observation. Both then attach to the same parent card through one chokepoint, keyed on `parent_agent_id` alone, so the sidebar's subagent section is deliberately origin-blind and structurally one level deep.
+A launched subagent points directly at its caller, which is necessarily top-level because subagents cannot launch again. Provider-native ancestry is flattened by the store writer as it adopts hook observations. Both then attach to the same parent card through one chokepoint, keyed on `parent_agent_id` alone, so the sidebar's subagent section is deliberately origin-blind and structurally one level deep.
 
 Because a launched child is also a real agent, it would otherwise render twice — once nested, once as its own top-level card. The suppression happens in the pane projection rather than in the attach: a pane whose agent carries a parent binds as a *nested* agent, which records the pane without emitting a row, so long as the parent still has a row of its own. When the parent's row is gone and the child is still live, the child is promoted to a top-level row instead — the alternative would be a live pane that renders nowhere. So a launched child has either a row or a nested entry, never both.
 
@@ -43,9 +43,9 @@ Every prompt launched through `rimz subagents`, including every fanout entry, en
 | Pi | prompt-only: Pi has no built-in subagents, and disabling all third-party extensions would remove unrelated child tools |
 | Other adapters | prompt-only until a provider-native restriction is verified |
 
-The restriction marker is internal to this doorway. An agent launched with `rimz agents` or as a team member keeps its normal provider tools even when it has launch ancestry.
+The restriction marker is internal to this doorway. A peer launched with `rimz agents` or as a team member keeps its normal provider tools even when it carries a launch generation.
 
-This complements, rather than replaces, `max-launch-depth`. The depth check blocks a child from launching another process through RimZ, while the process restriction blocks the provider's native delegation tool. The prompt reminder covers every adapter and states both rules in the child's task context.
+The launch planner independently rejects any `rimz agents` or `rimz subagents` call whose durable caller is a pane-backed child. That check blocks the child from launching another RimZ process, while the process restriction blocks the provider's native delegation tool. The prompt reminder covers every adapter and states both rules in the child's task context.
 
 ## What a launch desugars to
 
@@ -63,7 +63,7 @@ This complements, rather than replaces, `max-launch-depth`. The depth check bloc
 
 The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --bg --timeout 30m`, while additionally arming the in-pane wrapper's self-cleanup because this doorway omits retries and verification. `--wait` leaves that launch unchanged, then passes the minted petname to the shared single-name wait path; `--wait=DURATION` adds a caller-side join deadline without changing the child's timeout. Everything after that point — the run record, the completion fold, the wake socket, pane reclamation — is [scripting.md](./scripting.md) unchanged, which is the reason this page does not restate any of it.
 
-The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--top-level`, `--resume`, placement flags, output and input formats, retries, and verification. Each of those needs a decision the delegating agent is not well placed to make, and each is still reachable by calling `rimz agents` directly. `specs` lists kinds, profiles, and configured commands but never teams, because one launch produces one agent rather than a cohort.
+The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output and input formats, retries, and verification. Each of those needs a decision the delegating agent is not well placed to make, and each is still reachable by calling `rimz agents` directly. `specs` lists kinds, profiles, and configured commands but never teams, because one launch produces one agent rather than a cohort.
 
 ## Single launch and fanout share one composition
 
@@ -77,36 +77,41 @@ By default, either form returns after launching; fanout can also render its coll
 
 A runtime failure during that loop aborts the remaining launches and reports every child already started. Those children are not rolled back: their durable run records, deadlines, self-cleanup, and caller-scoped `wait`/`stop` behavior remain the ordinary supervised lifecycle. Validation failures are different — because desugaring completed before the loop, they launch nothing.
 
-## Ancestry, depth, and flattening
+## Launch generations and parentage
 
 Ancestry resolves in [`plan.rs`](../../../crates/rimz/src/harness/plan.rs) as step 4 of [the compile path](./fleet.md#from-spec-to-panes) — **before** provider preflight, worktree creation, store append, or any mux action, so a refusal leaves nothing behind.
 
 `resolve_launch_caller_from_env` finds the launching agent's durable row. It reads `RIMZ_AGENT_KIND` and `RIMZ_AGENT_ID`, then matches the row whose `launch_id` equals that id, with the kind corroborating the match so a stale cross-provider environment cannot attach a child to the wrong row. Only an agent process with no launch id at all — one that survived an upgrade — may fall back to an unambiguous live pane stamp.
 
-`resolve_launch_ancestry` then produces the stamp:
+`resolve_launch_ancestry` reads the caller's durable `launch_depth` field as a launch generation:
 
 ```text
-current_depth = caller.launch_depth ?? 0
-current_depth >= max_depth               → refuse
-parent_agent_id = caller.parent_agent_id ?? caller.agent_id   ← flattened
-launch_depth    = current_depth + 1                           ← true
+caller is a pane-backed subagent                → refuse
+generation = caller.launch_depth ?? 0
+
+rimz agents / rimz teams:
+  generation >= max_chain_length                → refuse
+  parent_agent_id = None
+  launch_depth = generation + 1
+
+rimz subagents:
+  parent_agent_id = caller.agent_id
+  launch_depth = generation + 1
 ```
 
-That third line is the whole flattening rule. A child inherits *its caller's* parent when the caller has one, and only otherwise points at the caller. So a grandchild is stamped with the same top-level parent as its parent, while `launch_depth` keeps counting honestly. True depth stays available for the cap; display ancestry collapses to one level of nesting under the original top-level agent.
+The durable field keeps its historical wire name so old event logs still replay. A peer-chain agent has a generation but no parent, so `is_launched_child()` and `is_provider_subagent()` both remain false and every consumer treats it as top-level. A `rimz subagents` child has both a direct parent and a generation, so `is_launched_child()` is true. Provider-native subagents retain a parent with no launch generation.
 
-`[agents] max-launch-depth` ([`config/agents.rs`](../../../crates/rimz/src/config/agents.rs)) defaults to `1`. With an unstamped top-level agent reading as depth 0, that permits children and refuses grandchildren.
+`[agents] max-chain-length` ([`config/agents.rs`](../../../crates/rimz/src/config/agents.rs)) defaults to `3`. A human-started agent reads as generation 0; three successive peer launches produce generations 1, 2, and 3, and the generation-3 caller cannot launch another peer. Subagent launches are not chain-checked because a subagent cannot extend the chain.
 
-Fanout does not change that accounting: each array entry is one ordinary launch from the same caller. At the default cap, a top-level agent may fan out, but any child attempting its own fanout is refused before the first task launches.
+Fanout does not change that accounting: each array entry gets the same direct parent and generation. Any child attempting its own launch or fanout is refused before the first task launches.
 
-`--top-level` is the escape hatch, and it short-circuits ahead of everything above: no caller resolution, no store projection read, no depth check, no parent stamp. It is a `rimz agents` flag only. `rimz subagents` never sets it, so a child launched through this doorway cannot escape ancestry — which is what makes the depth cap meaningful against an agent that is itself writing the command line.
-
-Both refusals are `LaunchAncestryError`, and their messages are written for a reader that is itself an agent: each states the refusal, explains the limit, and ends with *do not retry this command*. That phrasing is load-bearing, and so is an omission — the depth message never mentions `--top-level`, which a test pins deliberately. An agent that reads "launch refused" without a terminal instruction tends to retry with a variation, and an agent handed the name of the flag that bypasses the cap tends to use it. The message closes both doors.
+Ancestry failures are `LaunchAncestryError`, and their messages are written for a reader that is itself an agent: each states the refusal, explains the limit, and ends with *do not retry this command*. That phrasing is load-bearing. An agent that reads "launch refused" without a terminal instruction tends to retry with a variation; the message closes that door.
 
 ## Who counts as the caller's children
 
 `list`, `wait`, and `stop` all resolve membership the same way: `resolve_launch_caller_from_env` for the caller, then [`target::launched_children`](../../../crates/rimz/src/harness/target.rs) for the set. Sharing that resolver has one wart worth knowing before you chase it as a bug: a read-only `rimz subagents list` that cannot identify its caller reports `launch refused: …`, because the error text belongs to the launch path it borrows. That function keeps rows where `is_launched_child()` holds and `parent_agent_id` equals the caller's `agent_id`, sorted by registration.
 
-Two consequences fall out of the flattening rule. At the default depth of one, that set is exactly the direct children. Above depth one, the top-level agent sees every descendant, and an intermediate child sees none of its own — because the grandchildren carry the top-level agent's id, not the intermediate's. The caller-scoped verbs follow durable display ancestry, not the true tree.
+Because a subagent cannot launch again, that set is exactly the caller's direct children. Peer-chain agents carry no parent id and never enter it.
 
 Which projection each verb reads is the other half:
 
@@ -121,7 +126,7 @@ Which projection each verb reads is the other half:
 
 Normal completion does not depend on the parent issuing a stop. That is worth stating plainly, because the shape of the API invites the opposite assumption.
 
-1. The parent launches; the ancestry stamp and depth check pass; a run record and pane are created. By default the petname prints immediately; with `--wait`, the parent then joins the result.
+1. The parent launches; the direct-parent stamp and subagent-caller check pass; a run record and pane are created. By default the petname prints immediately; with `--wait`, the parent then joins the result.
 2. The child runs its one turn. Its hooks fold a terminal status into the run record.
 3. The child's own in-pane wrapper notices the terminal record, terminates the provider, and closes the pane independently of the parent. A surviving blocking parent also attempts the same idempotent reclamation after its wait returns; `wait` itself remains only a reader ([scripting.md § Reclaiming the run pane](./scripting.md#reclaiming-the-run-pane)).
 4. The run record survives, so `list` and `wait` still report the outcome after the pane is gone.

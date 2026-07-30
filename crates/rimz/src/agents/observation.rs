@@ -32,8 +32,8 @@ pub enum SessionOrigin {
 /// Launcher-selected parameters shared by launch and lifecycle event payloads.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchParams {
-    /// Root ancestor for an agent launched from another agent. This is store
-    /// identity, not process environment, and stays absent for top-level
+    /// Direct parent for a pane-backed `rimz subagents` child. This is store
+    /// identity, not process environment, and stays absent for top-level peer
     /// launches and provider-native subagents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_agent_id: Option<AgentSessionId>,
@@ -41,8 +41,9 @@ pub struct LaunchParams {
     /// provider kinds; provider-native children default to their own kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_agent_kind: Option<crate::ids::AgentKind>,
-    /// True agent-launch nesting depth. `Some` distinguishes a pane-backed
-    /// launched child from a provider-native, paneless subagent.
+    /// Launch generation from the human root. With a parent, `Some`
+    /// distinguishes a pane-backed launched child from a provider-native,
+    /// paneless subagent; without a parent, it tracks a top-level peer chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_depth: Option<u8>,
     /// The `[agents.profiles]` profile the launcher selected, passed through

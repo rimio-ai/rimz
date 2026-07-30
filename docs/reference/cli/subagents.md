@@ -2,9 +2,9 @@
 
 `rimz subagents` provides agent-only launch and lifecycle verbs for delegating one bounded prompt to a supervised child. It is syntax sugar over `rimz agents`: the child gets a real pane, durable run record, petname, parent link, and sidebar entry without making the parent choose the supervision flags.
 
-Launch and lifecycle commands run only from a RimZ-launched agent. A user-shell invocation fails before opening the room and points to `rimz agents` or `rimz teams`; the read-only `specs` catalog is available from either context. The mechanics behind the sugar — the ancestry stamp and its depth cap, the caller-scoped verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
+Launch and lifecycle commands run only from a RimZ-launched agent. A user-shell invocation fails before opening the room and points to `rimz agents` or `rimz teams`; the read-only `specs` catalog is available from either context. The mechanics behind the sugar — the direct-parent stamp, no-further-launch rule, caller-scoped verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
 
-A child launched through this doorway must complete its assignment directly and cannot spawn further agents. RimZ appends that instruction to the prompt, disables the provider's native delegation tool where a verified restriction exists, and retains the launch-depth check as a backstop for RimZ commands.
+A child launched through this doorway must complete its assignment directly and cannot spawn further agents. RimZ appends that instruction to the prompt, disables the provider's native delegation tool where a verified restriction exists, and refuses both `rimz agents` and `rimz subagents` when the caller is itself a subagent.
 
 ## Launch and fan out work
 
@@ -71,7 +71,7 @@ The bare form and `launch` verb are equivalent. A prompt is mandatory: the paren
 
 A finished child's in-pane wrapper closes its pane from the durable terminal record, independently of the parent waiting for the result. `--keep` opts out and leaves the pane for `stop` or `rimz gc`.
 
-The single-launch surface deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--top-level`, `--resume`, placement flags, output/input formats, retries, and verification. Use `rimz agents` when the launch needs those controls; use `rimz teams` when the workers are peers rather than children.
+The single-launch surface deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output/input formats, retries, and verification. Use `rimz agents` when the launch needs those controls; use `rimz teams` when the workers are peers rather than children.
 
 Model, provider/profile rebasing, effort, description, turn cap, and raw provider arguments remain available. Run `rimz subagents launch --help` for their exact spellings.
 
@@ -117,11 +117,9 @@ Every child is addressable as `@<petname>`. A supervised print-mode provider is 
 
 ## Depth and sidebar placement
 
-A `rimz subagents` launch counts as one normal agent-launch depth. `[agents] max-launch-depth` defaults to one, so a top-level agent may launch children and those children may not launch grandchildren. An over-limit call refuses before creating a run, pane, or provisional child.
+Only `rimz subagents` creates a parented pane-backed child. The child appears in the subagent section nested under its direct parent and is not duplicated as a top-level card. Provider-native children share the product term *subagent* and the same nested presentation.
 
-When `max-launch-depth` is raised above one, RimZ retains true depth but flattens display ancestry under the original top-level agent. The caller-scoped verbs follow that durable display ancestry: the top-level agent sees all descendants, while an intermediate child does not get a separate direct-child set.
-
-Provider-native children and RimZ-launched pane-backed children share the product term *subagent*: both appear in the subagent section nested under the top-level parent's card. No pane-backed child is duplicated as a top-level card.
+Subagent launches are not capped by `[agents] max-chain-length`; that setting governs successive top-level peer launches through `rimz agents` and `rimz teams`. Instead, a subagent cannot launch anything through either doorway. A refused call creates no run, pane, worktree, or provisional agent.
 
 ## Configure launch defaults
 
