@@ -47,12 +47,122 @@ pub(crate) fn inline_test_marker_line(source: &str) -> Option<u64> {
     None
 }
 
-pub(crate) fn split_file_loc(sloc: f64, inline_test_marker: Option<u64>) -> (f64, f64) {
-    let Some(marker) = inline_test_marker else {
-        return (sloc, 0.0);
+pub(crate) fn split_rust_sloc(source: &str) -> (u64, u64) {
+    let total = rust_sloc(source);
+    let Some(marker) = inline_test_marker_line(source) else {
+        return (total, 0);
     };
-    let code_sloc = marker.saturating_sub(1) as f64;
-    (code_sloc, (sloc - code_sloc).max(0.0))
+    let code_end = if marker == 1 {
+        0
+    } else {
+        source
+            .match_indices('\n')
+            .nth(marker as usize - 2)
+            .map_or(source.len(), |(index, _)| index + 1)
+    };
+    let code = rust_sloc(&source[..code_end]);
+    (code, total.saturating_sub(code))
+}
+
+pub(crate) fn rust_sloc(source: &str) -> u64 {
+    let bytes = source.as_bytes();
+    let mut code_lines = 0;
+    let mut line_has_code = false;
+    let mut block_comment_depth = 0_u32;
+    let mut string_escape = false;
+    let mut string = false;
+    let mut raw_string_hashes = None;
+    let mut character_end = None;
+    let mut index = 0;
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'\n' {
+            code_lines += u64::from(line_has_code);
+            line_has_code = string || raw_string_hashes.is_some();
+            string_escape = false;
+            index += 1;
+            continue;
+        }
+        if block_comment_depth > 0 {
+            if bytes[index..].starts_with(b"/*") {
+                block_comment_depth += 1;
+                index += 2;
+            } else if bytes[index..].starts_with(b"*/") {
+                block_comment_depth -= 1;
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if let Some(end) = character_end {
+            if index == end {
+                character_end = None;
+            }
+            index += 1;
+            continue;
+        }
+        if let Some(hashes) = raw_string_hashes {
+            if byte == b'"'
+                && bytes
+                    .get(index + 1..index + 1 + hashes)
+                    .is_some_and(|suffix| suffix.iter().all(|byte| *byte == b'#'))
+            {
+                raw_string_hashes = None;
+                index += hashes + 1;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if string {
+            if string_escape {
+                string_escape = false;
+            } else if byte == b'\\' {
+                string_escape = true;
+            } else if byte == b'"' {
+                string = false;
+            }
+            index += 1;
+            continue;
+        }
+        if bytes[index..].starts_with(b"//") {
+            while index < bytes.len() && bytes[index] != b'\n' {
+                index += 1;
+            }
+            continue;
+        }
+        if bytes[index..].starts_with(b"/*") {
+            block_comment_depth = 1;
+            index += 2;
+            continue;
+        }
+        if let Some((prefix_len, hashes)) = raw_string_start(&bytes[index..]) {
+            line_has_code = true;
+            raw_string_hashes = Some(hashes);
+            index += prefix_len;
+            continue;
+        }
+        if byte == b'\'' {
+            line_has_code = true;
+            character_end = character_literal_end(bytes, index);
+            index += 1;
+            continue;
+        }
+        if byte == b'"' {
+            line_has_code = true;
+            string = true;
+            index += 1;
+            continue;
+        }
+        if !byte.is_ascii_whitespace() {
+            line_has_code = true;
+        }
+        index += 1;
+    }
+
+    code_lines + u64::from(line_has_code)
 }
 
 fn trailing_test_region(source: &str, marker_offset: usize) -> bool {
@@ -321,4 +431,34 @@ fn walk_text_files_inner(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> R
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rust_sloc_splits_trailing_inline_tests() {
+        let source = "fn live() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn works() {}\n}\n";
+        assert_eq!(rust_sloc(source), 6);
+        assert_eq!(split_rust_sloc(source), (1, 5));
+    }
+
+    #[test]
+    fn rust_sloc_ignores_comments_and_understands_nested_and_raw_literals() {
+        let source = r####"
+// comment
+fn live() { /* comment
+    /* nested */
+*/ }
+const URL: &str = "https://example.com/a//b";
+const RAW: &str = r###"not /* a comment */
+still code"###;
+const QUOTE: char = '"';
+// not code after the quote character
+
+fn after_quote() {}
+"####;
+        assert_eq!(rust_sloc(source), 7);
+    }
 }

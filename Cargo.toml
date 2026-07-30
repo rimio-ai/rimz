@@ -31,6 +31,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+syn = { version = "2", features = ["full", "visit"] }
+# Atlas reports source locations from parsed syntax. `span-locations` is
+# additive on proc-macro2 and makes those locations available outside macros.
+proc-macro2 = { version = "1", features = ["span-locations"] }
 # ttyd custom pages inline cached fonts as data URLs. The direct dependency
 # tracks the current API; HTTP dependencies still pin 0.22, with the temporary
 # duplicate documented in deny.toml until that stack catches up.
