@@ -283,7 +283,7 @@ pub(crate) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<Strin
                 status.as_str()
             ),
             Some(ParkReason::WaitingOnPrompt) => format!(
-                "queued for {label} ({message_id}) — {label} is waiting on a prompt in its pane; answer it or force: rimz message steer {message_id} --force"
+                "queued for {label} ({message_id}) — {label} is waiting on input in its pane; answer it or force: rimz message steer {message_id} --force"
             ),
             None => format!("queued for {label} ({message_id})"),
         }),
@@ -554,7 +554,7 @@ mod tests {
         assert_eq!(
             render_dispatch_outcome(&outcome(Some(ParkReason::WaitingOnPrompt))).as_deref(),
             Some(
-                "queued for @coder (msg_0123456789abcdef) — @coder is waiting on a prompt in its pane; answer it or force: rimz message steer msg_0123456789abcdef --force"
+                "queued for @coder (msg_0123456789abcdef) — @coder is waiting on input in its pane; answer it or force: rimz message steer msg_0123456789abcdef --force"
             )
         );
         assert_eq!(
