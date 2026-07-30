@@ -314,9 +314,24 @@ fn prompt_files_resolve_for_single_launch_and_fanout() {
 fn available_specs_include_kinds_profiles_and_commands_but_not_teams() {
     let mut config = rimz::config::MachineConfig::default();
     config.agents.profiles.0.insert(
+        "agent-only".to_owned(),
+        rimz::config::Profile {
+            agent: "claude".to_owned(),
+            description: None,
+            mode: None,
+            model: None,
+            effort: None,
+            budget: None,
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+            args: None,
+        },
+    );
+    config.subagents.profiles.0.insert(
         "planner".to_owned(),
         rimz::config::Profile {
             agent: "claude".to_owned(),
+            description: Some("Plans supervised work".to_owned()),
             mode: None,
             model: Some("fable".to_owned()),
             effort: Some("high".to_owned()),
@@ -326,10 +341,11 @@ fn available_specs_include_kinds_profiles_and_commands_but_not_teams() {
             args: None,
         },
     );
-    config.agents.profiles.0.insert(
+    config.subagents.profiles.0.insert(
         "claude".to_owned(),
         rimz::config::Profile {
             agent: "claude".to_owned(),
+            description: None,
             mode: None,
             model: None,
             effort: None,
@@ -350,14 +366,19 @@ fn available_specs_include_kinds_profiles_and_commands_but_not_teams() {
         .0
         .insert("review".to_owned(), rimz::config::Team::default());
 
-    let specs = available_specs(&config);
+    let specs = crate::cli::spec_report::available_specs(
+        &config.subagents.profiles,
+        &config.agents.commands,
+    );
 
     assert!(specs.iter().any(|entry| entry.source == "kind"));
     assert!(specs.iter().any(|entry| {
         entry.name == "planner"
             && entry.source == "profile"
             && entry.detail() == "claude · fable@high"
+            && entry.description.as_deref() == Some("Plans supervised work")
     }));
+    assert!(!specs.iter().any(|entry| entry.name == "agent-only"));
     assert!(
         specs
             .iter()

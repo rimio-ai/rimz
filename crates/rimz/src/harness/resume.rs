@@ -66,15 +66,20 @@ pub struct LaneRestoreConfig {
 impl LaneRestoreConfig {
     /// The trust-filtered effective launch config for one workspace.
     pub fn load(
-        machine: &crate::config::AgentsConfig,
+        machine: &crate::config::MachineConfig,
         project_root: &Path,
         config_root: &Path,
     ) -> anyhow::Result<Self> {
-        let launch = crate::config::effective::load(machine, project_root, config_root)?;
+        let launch = crate::config::effective::load(
+            &machine.agents,
+            &machine.subagents.profiles,
+            project_root,
+            config_root,
+        )?;
         Ok(Self {
             teams: launch.teams,
             profiles: launch.profiles,
-            commands: machine.commands.clone(),
+            commands: machine.agents.commands.clone(),
         })
     }
 }
@@ -353,6 +358,8 @@ pub struct PostureRequest<'a> {
 /// Recovery paths run unattended at room birth, so this never fails: a profile
 /// that is gone, broken, or now resolves to a different provider degrades to a
 /// bare resume carrying a warning.
+// ponytail: posture records do not stamp the launch doorway; persist profile
+// scope on launch events before subagent-only profiles can resume in posture.
 pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -> ResumePosture {
     let Some(name) = request.profile else {
         return ResumePosture::bare(request.stamped_mode, request.kind);

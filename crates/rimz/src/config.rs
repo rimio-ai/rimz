@@ -56,7 +56,7 @@ pub use accounts::{AccountBudgetConfigError, AccountsConfig, UsageLimitUsd};
 pub(crate) use agents::retired_agents_key;
 pub use agents::{
     AgentsConfig, CommandsConfig, LaunchPlacement, Profile, ProfilesConfig, RoleBinding,
-    SubagentsConfig, Team, TeamsConfig,
+    SubagentsConfig, SubagentsRoot, Team, TeamsConfig,
 };
 pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationRole, AnimationSpec, AnimationSpeed,
@@ -362,6 +362,7 @@ pub struct MachineConfig {
     #[serde(skip_serializing_if = "ThemeConfig::is_unset")]
     pub theme: ThemeConfig,
     pub agents: AgentsConfig,
+    pub subagents: SubagentsRoot,
     #[serde(default, skip_serializing_if = "LoopConfig::is_empty")]
     pub r#loop: LoopConfig,
 }
@@ -449,7 +450,12 @@ impl MachineConfig {
 
         let mut config = Self::assemble(core, theme, agents, loop_);
         validate_notifications_config(&config.notifications, files.core_path())?;
-        apply_agents_home(&mut config.agents, files.agents_home(), &agents_path)?;
+        apply_agents_home_with_subagents(
+            &mut config.agents,
+            &config.subagents,
+            files.agents_home(),
+            &agents_path,
+        )?;
         Ok(config)
     }
 
@@ -484,7 +490,7 @@ impl MachineConfig {
         };
         let mut merged = config.agents.clone();
         overlay_agents_fragment_under(&mut merged, &fragment);
-        match validate_agents_config(&merged, &agents_path) {
+        match validate_agents_file(&merged, &config.subagents, &agents_path) {
             Ok(()) => config.agents = merged,
             Err(err) => {
                 tracing::warn!(
@@ -493,14 +499,18 @@ impl MachineConfig {
                 );
                 let mut fallback = AgentsConfig::default();
                 overlay_agents_fragment_under(&mut fallback, &fragment);
-                match validate_agents_config(&fallback, &agents_path) {
-                    Ok(()) => config.agents = fallback,
+                match validate_agents_file(&fallback, &SubagentsRoot::default(), &agents_path) {
+                    Ok(()) => {
+                        config.agents = fallback;
+                        config.subagents = SubagentsRoot::default();
+                    }
                     Err(err) => {
                         tracing::warn!(
                             error = %err,
                             "~/.agents fragments invalid; using built-in defaults",
                         );
                         config.agents = AgentsConfig::default();
+                        config.subagents = SubagentsRoot::default();
                     }
                 }
             }
@@ -513,23 +523,28 @@ impl MachineConfig {
             Some(THEME_FILE) => Ok(Self::assemble(
                 CoreConfig::default(),
                 parse_theme_text(path, text)?,
-                AgentsConfig::default(),
+                AgentsFile::default(),
                 LoopConfig::default(),
             )),
             Some(AGENTS_FILE) => {
-                let mut agents = parse_agents_text(path, text)?;
-                apply_agents_home(&mut agents, agents_home, path)?;
+                let mut file = parse_agents_text(path, text)?;
+                apply_agents_home_with_subagents(
+                    &mut file.agents,
+                    &file.subagents,
+                    agents_home,
+                    path,
+                )?;
                 Ok(Self::assemble(
                     CoreConfig::default(),
                     ThemeConfig::default(),
-                    agents,
+                    file,
                     LoopConfig::default(),
                 ))
             }
             Some(LOOP_FILE) => Ok(Self::assemble(
                 CoreConfig::default(),
                 ThemeConfig::default(),
-                AgentsConfig::default(),
+                AgentsFile::default(),
                 parse_loop_text(path, text)?,
             )),
             _ => {
@@ -539,7 +554,7 @@ impl MachineConfig {
                 Ok(Self::assemble(
                     core,
                     ThemeConfig::default(),
-                    AgentsConfig::default(),
+                    AgentsFile::default(),
                     LoopConfig::default(),
                 ))
             }
@@ -560,7 +575,7 @@ impl MachineConfig {
     fn assemble(
         core: CoreConfig,
         theme: ThemeConfig,
-        agents: AgentsConfig,
+        agents_file: AgentsFile,
         loop_: LoopConfig,
     ) -> Self {
         Self {
@@ -578,7 +593,8 @@ impl MachineConfig {
             sentry: core.sentry,
             web: core.web,
             theme,
-            agents,
+            agents: agents_file.agents,
+            subagents: agents_file.subagents,
             r#loop: loop_,
         }
     }
@@ -816,10 +832,11 @@ struct ThemeFile {
     colors: Option<InlinePalette>,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 struct AgentsFile {
     agents: AgentsConfig,
+    subagents: SubagentsRoot,
 }
 
 #[derive(Default, Deserialize)]
@@ -916,14 +933,15 @@ fn parse_theme_text(path: &Path, text: &str) -> Result<ThemeConfig> {
     Ok(file.theme)
 }
 
-fn parse_agents_text(path: &Path, text: &str) -> Result<AgentsConfig> {
+fn parse_agents_text(path: &Path, text: &str) -> Result<AgentsFile> {
     check_removed_agents_tables(path, text)?;
     let mut file: AgentsFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
         diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
     })?;
     resolve_agents_prompt_paths(&mut file.agents.profiles, &mut file.agents.teams, path);
-    Ok(file.agents)
+    resolve_profile_prompt_paths(&mut file.subagents.profiles, path);
+    Ok(file)
 }
 
 fn parse_loop_text(path: &Path, text: &str) -> Result<LoopConfig> {
@@ -1001,6 +1019,11 @@ fn resolve_agents_prompt_paths(
     crate::harness::spec::resolve_prompt_paths(profiles, teams, source_dir);
 }
 
+fn resolve_profile_prompt_paths(profiles: &mut ProfilesConfig, source_path: &Path) {
+    let source_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
+    crate::harness::spec::resolve_prompt_paths(profiles, &mut TeamsConfig::default(), source_dir);
+}
+
 fn discover_agents_home(root: &Path) -> Result<AgentsFragment> {
     let mut fragment = AgentsFragment::default();
     discover_agents_home_subdir(
@@ -1067,11 +1090,21 @@ fn child_dirs(path: &Path) -> Result<Vec<PathBuf>> {
     Ok(dirs)
 }
 
+#[cfg(test)]
 fn apply_agents_home(agents: &mut AgentsConfig, root: &Path, agents_path: &Path) -> Result<()> {
+    apply_agents_home_with_subagents(agents, &SubagentsRoot::default(), root, agents_path)
+}
+
+fn apply_agents_home_with_subagents(
+    agents: &mut AgentsConfig,
+    subagents: &SubagentsRoot,
+    root: &Path,
+    agents_path: &Path,
+) -> Result<()> {
     let mut merged = agents.clone();
     let fragment = discover_agents_home(root)?;
     overlay_agents_fragment_under(&mut merged, &fragment);
-    validate_agents_config(&merged, agents_path)?;
+    validate_agents_file(&merged, subagents, agents_path)?;
     *agents = merged;
     Ok(())
 }
@@ -1094,6 +1127,23 @@ fn validate_agents_config(agents: &AgentsConfig, path: &Path) -> Result<()> {
             path: path.to_path_buf(),
             source,
         })
+}
+
+fn validate_agents_file(
+    agents: &AgentsConfig,
+    subagents: &SubagentsRoot,
+    path: &Path,
+) -> Result<()> {
+    validate_agents_config(agents, path)?;
+    crate::harness::spec::validate_profile_config(
+        &subagents.profiles,
+        &agents.commands,
+        &agents.teams,
+    )
+    .map_err(|source| ConfigErr::Agents {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn validate_notifications_config(notifications: &NotificationsPrefs, path: &Path) -> Result<()> {

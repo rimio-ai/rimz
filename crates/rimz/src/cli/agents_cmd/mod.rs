@@ -309,6 +309,13 @@ enum AgentsSubcmd {
     Check(CheckArgs),
     /// Scaffold or validate a machine-tier third-party agent plugin.
     Register(RegisterArgs),
+    /// List agent specs available to launch.
+    #[command(alias = "types")]
+    Specs {
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// List agent cards in the current room.
     #[command(aliases = ["ls", "ps"])]
     List {
@@ -559,6 +566,14 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         Some(AgentsSubcmd::Check(args)) => return run_check(args),
         Some(AgentsSubcmd::Register(args)) => return run_register(args),
+        Some(AgentsSubcmd::Specs { json }) => {
+            let config = rimz::config::MachineConfig::load().context("loading machine config")?;
+            return crate::cli::spec_report::list_specs(
+                &config.agents.profiles,
+                &config.agents.commands,
+                json,
+            );
+        }
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args.request),
         Some(AgentsSubcmd::IdleCompact(args)) => return run_idle_compact(args.request),
@@ -919,12 +934,16 @@ pub(crate) fn create_on_miss(
         .context("resolving current workspace")?;
     let launch = rimz::config::effective::load(
         &machine_config.agents,
+        &machine_config.subagents.profiles,
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
     if !is_launchable_type(&create.selector, &launch.profiles) {
-        launch
-            .block_untrusted_reference(Some(&create.selector), &machine_config.agents.commands)?;
+        launch.block_untrusted_reference(
+            rimz::config::effective::ProfileScope::Agents,
+            Some(&create.selector),
+            &machine_config.agents.commands,
+        )?;
         bail!(
             "`{target}` names a specific agent that is not running; create one with `@<kind>` or a profile from [agents.profiles]"
         );

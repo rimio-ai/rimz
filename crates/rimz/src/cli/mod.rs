@@ -36,6 +36,7 @@ mod send;
 mod sessions;
 mod setup;
 mod sidebar;
+mod spec_report;
 mod spinner;
 mod stats;
 mod statusline;

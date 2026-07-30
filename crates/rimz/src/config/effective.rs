@@ -84,6 +84,7 @@ pub enum ProjectTasksErr {
 #[derive(Default)]
 struct RepoConfig {
     profiles: ProfilesConfig,
+    subagent_profiles: ProfilesConfig,
     teams: TeamsConfig,
 }
 
@@ -100,6 +101,7 @@ pub struct ProjectTasks {
 /// executable surface stays closed.
 pub struct LaunchAgents {
     pub profiles: ProfilesConfig,
+    pub subagent_profiles: ProfilesConfig,
     pub teams: TeamsConfig,
     state: TrustState,
     config_path: PathBuf,
@@ -107,6 +109,7 @@ pub struct LaunchAgents {
 
 pub fn load(
     machine: &AgentsConfig,
+    machine_subagent_profiles: &ProfilesConfig,
     project_root: &Path,
     config_root: &Path,
 ) -> Result<LaunchAgents> {
@@ -115,6 +118,7 @@ pub fn load(
     if report.state != TrustState::Trusted {
         return Ok(LaunchAgents {
             profiles: machine.profiles.clone(),
+            subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
             state: report.state,
             config_path,
@@ -124,6 +128,7 @@ pub fn load(
     let Some(repo_value) = read_repo_value(&config_path)? else {
         return Ok(LaunchAgents {
             profiles: machine.profiles.clone(),
+            subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
             state: report.state,
             config_path,
@@ -139,15 +144,11 @@ pub fn load(
         })?;
     let config_dir = config_path.parent().unwrap_or(project_root);
     agents_spec::resolve_prompt_paths(&mut repo.profiles, &mut repo.teams, config_dir);
-    agents_spec::validate_config(
-        &repo.profiles,
-        &CommandsConfig::default(),
-        &TeamsConfig::default(),
-    )
-    .map_err(|source| EffectiveConfigErr::Agents {
-        path: config_path.clone(),
-        source,
-    })?;
+    agents_spec::resolve_prompt_paths(
+        &mut repo.subagent_profiles,
+        &mut TeamsConfig::default(),
+        config_dir,
+    );
     for name in repo.profiles.0.keys() {
         agents_spec::resolve_profile(name, &repo.profiles).map_err(|source| {
             let source = match source {
@@ -164,6 +165,31 @@ pub fn load(
             }
         })?;
     }
+    for name in repo.subagent_profiles.0.keys() {
+        agents_spec::resolve_profile(name, &repo.subagent_profiles).map_err(|source| {
+            let source = match source {
+                LayoutErr::UnknownProfileBase { profile, base }
+                    if machine_subagent_profiles.0.contains_key(&base) =>
+                {
+                    LayoutErr::RepoProfileEscapesTrust { profile, base }
+                }
+                other => other,
+            };
+            EffectiveConfigErr::Agents {
+                path: config_path.clone(),
+                source,
+            }
+        })?;
+    }
+    agents_spec::validate_profile_config(
+        &repo.subagent_profiles,
+        &CommandsConfig::default(),
+        &TeamsConfig::default(),
+    )
+    .map_err(|source| EffectiveConfigErr::Agents {
+        path: config_path.clone(),
+        source,
+    })?;
     validate_repo_team_profile_closure(&repo).map_err(|source| EffectiveConfigErr::Agents {
         path: config_path.clone(),
         source,
@@ -177,10 +203,13 @@ pub fn load(
 
     let mut profiles = machine.profiles.clone();
     profiles.0.extend(repo.profiles.0);
+    let mut subagent_profiles = machine_subagent_profiles.clone();
+    subagent_profiles.0.extend(repo.subagent_profiles.0);
     let mut teams = machine.teams.clone();
     teams.0.extend(repo.teams.0);
     Ok(LaunchAgents {
         profiles,
+        subagent_profiles,
         teams,
         state: report.state,
         config_path,
@@ -282,6 +311,13 @@ fn task_has_prompt(entry: &TaskEntry) -> bool {
 }
 
 impl LaunchAgents {
+    pub fn profiles_for(&self, scope: ProfileScope) -> &ProfilesConfig {
+        match scope {
+            ProfileScope::Agents => &self.profiles,
+            ProfileScope::Subagents => &self.subagent_profiles,
+        }
+    }
+
     /// Return a trust error only when a requested launch spec would consume a
     /// repo profile or team while the project is not trusted. Repo entries are
     /// otherwise inert: machine profiles, machine commands, and built-in cells
@@ -289,6 +325,7 @@ impl LaunchAgents {
     /// declares profiles.
     pub fn block_untrusted_reference(
         &self,
+        scope: ProfileScope,
         spec: Option<&str>,
         commands: &CommandsConfig,
     ) -> Result<()> {
@@ -301,14 +338,14 @@ impl LaunchAgents {
         let Some(repo_value) = read_repo_value(&self.config_path)? else {
             return Ok(());
         };
-        let repo_profiles = profile_names(&repo_value);
+        let repo_profiles = profile_names(&repo_value, scope);
         let repo_teams = team_names(&repo_value);
         let team_spec = spec.split_once('.').map_or(spec, |(team, _)| team);
         if (repo_profiles.is_empty()
             || !spec_references_repo_profile(
                 spec,
                 &repo_profiles,
-                &self.profiles,
+                self.profiles_for(scope),
                 commands,
                 &self.teams,
             ))
@@ -322,6 +359,12 @@ impl LaunchAgents {
             fix: trust::blocked_fix(self.state),
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProfileScope {
+    Agents,
+    Subagents,
 }
 
 fn read_repo_value(path: &Path) -> Result<Option<toml::Value>> {
@@ -395,6 +438,14 @@ fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig
         .map(toml::Value::try_into)
         .transpose()?
         .unwrap_or_default();
+    let subagent_profiles = value
+        .get("subagents")
+        .and_then(toml::Value::as_table)
+        .and_then(|subagents| subagents.get("profiles"))
+        .cloned()
+        .map(toml::Value::try_into)
+        .transpose()?
+        .unwrap_or_default();
     let teams = value
         .get("agents")
         .and_then(toml::Value::as_table)
@@ -403,13 +454,22 @@ fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig
         .map(toml::Value::try_into)
         .transpose()?
         .unwrap_or_default();
-    Ok(RepoConfig { profiles, teams })
+    Ok(RepoConfig {
+        profiles,
+        subagent_profiles,
+        teams,
+    })
 }
 
-fn profile_names(value: &toml::Value) -> BTreeSet<String> {
-    value
-        .as_table()
-        .and_then(|table| table.get("profiles"))
+fn profile_names(value: &toml::Value, scope: ProfileScope) -> BTreeSet<String> {
+    let profiles = match scope {
+        ProfileScope::Agents => value.get("profiles"),
+        ProfileScope::Subagents => value
+            .get("subagents")
+            .and_then(toml::Value::as_table)
+            .and_then(|subagents| subagents.get("profiles")),
+    };
+    profiles
         .and_then(toml::Value::as_table)
         .map(|profiles| profiles.keys().cloned().collect())
         .unwrap_or_default()

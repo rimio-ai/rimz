@@ -6,9 +6,19 @@ use crate::harness::run::PermissionMode;
 use std::collections::BTreeMap;
 use tempfile::tempdir;
 
+fn load(machine: &AgentsConfig, project_root: &Path, config_root: &Path) -> Result<LaunchAgents> {
+    super::load(
+        machine,
+        &ProfilesConfig::default(),
+        project_root,
+        config_root,
+    )
+}
+
 fn profile(agent: &str, args: Option<&str>) -> Profile {
     Profile {
         agent: agent.to_owned(),
+        description: None,
         mode: None,
         model: None,
         effort: None,
@@ -90,6 +100,15 @@ fn effective_profiles(
     .map(|launch| launch.profiles)
 }
 
+fn effective_subagent_profiles(
+    machine: &ProfilesConfig,
+    project_root: &std::path::Path,
+    config_root: &std::path::Path,
+) -> Result<ProfilesConfig> {
+    super::load(&AgentsConfig::default(), machine, project_root, config_root)
+        .map(|launch| launch.subagent_profiles)
+}
+
 fn effective_teams(
     machine: &TeamsConfig,
     project_root: &std::path::Path,
@@ -113,7 +132,7 @@ fn block_untrusted_profile_reference(
 ) -> Result<()> {
     let agents = machine_agents(profiles.clone(), teams.clone());
     let launch = load(&agents, project_root, config_root)?;
-    launch.block_untrusted_reference(spec, commands)
+    launch.block_untrusted_reference(ProfileScope::Agents, spec, commands)
 }
 
 fn load_project_tasks(
@@ -458,6 +477,79 @@ fn repo_profile_typo_reports_unknown_base_not_machine_escape() {
             source: crate::harness::spec::LayoutErr::UnknownProfileBase { profile, base },
             ..
         } if profile == "child" && base == "typoo"
+    ));
+}
+
+#[test]
+fn trusted_repo_subagent_profile_overlays_machine_profile() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(
+        &project,
+        "[subagents.profiles.reviewer]\nagent = \"codex\"\nargs = \"--repo\"\n",
+    );
+    crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
+    let machine = profiles([("reviewer", profile("claude", Some("--machine")))]);
+
+    let effective =
+        effective_subagent_profiles(&machine, project.path(), config.path()).expect("effective");
+
+    let reviewer = effective.0.get("reviewer").expect("reviewer profile");
+    assert_eq!(reviewer.agent, "codex");
+    assert_eq!(reviewer.args.as_deref(), Some("--repo"));
+}
+
+#[test]
+fn untrusted_repo_subagent_profiles_are_inert_and_block_on_reference() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(
+        &project,
+        "[subagents.profiles.reviewer]\nagent = \"codex\"\n",
+    );
+    let machine = profiles([("local", profile("claude", Some("--local")))]);
+    let launch = super::load(
+        &AgentsConfig::default(),
+        &machine,
+        project.path(),
+        config.path(),
+    )
+    .expect("effective");
+
+    assert_eq!(launch.subagent_profiles, machine);
+    assert!(matches!(
+        launch.block_untrusted_reference(
+            ProfileScope::Subagents,
+            Some("reviewer"),
+            &CommandsConfig::default(),
+        ),
+        Err(EffectiveConfigErr::Blocked {
+            state: "untrusted",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn repo_subagent_profile_cannot_inherit_machine_subagent_profile() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(
+        &project,
+        "[subagents.profiles.child]\nagent = \"machine-base\"\n",
+    );
+    crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
+    let machine = profiles([("machine-base", profile("claude", Some("--machine")))]);
+
+    let err = effective_subagent_profiles(&machine, project.path(), config.path())
+        .expect_err("subagent namespace stays trust-closed");
+
+    assert!(matches!(
+        err,
+        EffectiveConfigErr::Agents {
+            source: crate::harness::spec::LayoutErr::RepoProfileEscapesTrust { profile, base },
+            ..
+        } if profile == "child" && base == "machine-base"
     ));
 }
 

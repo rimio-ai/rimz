@@ -28,6 +28,7 @@ fn planner_profiles() -> ProfilesConfig {
         "planner".to_owned(),
         Profile {
             agent: "claude".to_owned(),
+            description: None,
             mode: None,
             model: None,
             effort: None,
@@ -44,6 +45,61 @@ fn parse_agents(argv: &[&str]) -> AgentsArgs {
     AgentsHarness::try_parse_from(argv)
         .expect("parse agents command")
         .args
+}
+
+#[test]
+fn specs_and_types_parse_as_agent_profile_listings() {
+    for command in ["specs", "types"] {
+        let args = parse_agents(&["rimz", command, "--json"]);
+        assert!(matches!(
+            args.command,
+            Some(AgentsSubcmd::Specs { json: true })
+        ));
+    }
+}
+
+#[test]
+fn agent_specs_list_only_agent_profiles_with_descriptions() {
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "planner".to_owned(),
+        Profile {
+            agent: "claude".to_owned(),
+            description: Some("Plans the main lane".to_owned()),
+            mode: None,
+            model: None,
+            effort: None,
+            budget: None,
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+            args: None,
+        },
+    );
+    machine.subagents.profiles.0.insert(
+        "child-only".to_owned(),
+        Profile {
+            agent: "codex".to_owned(),
+            description: Some("Child profile".to_owned()),
+            mode: None,
+            model: None,
+            effort: None,
+            budget: None,
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+            args: None,
+        },
+    );
+
+    let specs = crate::cli::spec_report::available_specs(
+        &machine.agents.profiles,
+        &machine.agents.commands,
+    );
+    assert!(specs.iter().any(|entry| {
+        entry.name == "planner"
+            && entry.source == "profile"
+            && entry.description.as_deref() == Some("Plans the main lane")
+    }));
+    assert!(!specs.iter().any(|entry| entry.name == "child-only"));
 }
 
 fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
@@ -849,11 +905,16 @@ mod launch_options {
 
         let dir = tempfile::tempdir().expect("temp dir");
         let machine = MachineConfig::default();
-        let effective =
-            rimz::config::effective::load(&machine.agents, dir.path(), &dir.path().join("config"))
-                .expect("effective config");
+        let effective = rimz::config::effective::load(
+            &machine.agents,
+            &machine.subagents.profiles,
+            dir.path(),
+            &dir.path().join("config"),
+        )
+        .expect("effective config");
         let err = rimz::harness::plan::resolve_launch(
             &effective,
+            rimz::config::effective::ProfileScope::Agents,
             &machine.agents.commands,
             Some("codex"),
             Some("ghost"),
@@ -873,10 +934,15 @@ mod launch_options {
         machine: &MachineConfig,
         root: &Path,
     ) -> Result<(ResolvedLaunch, LaunchPreset)> {
-        let effective =
-            rimz::config::effective::load(&machine.agents, root, &root.join("config-home"))?;
+        let effective = rimz::config::effective::load(
+            &machine.agents,
+            &machine.subagents.profiles,
+            root,
+            &root.join("config-home"),
+        )?;
         let resolved = rimz::harness::plan::resolve_launch(
             &effective,
+            rimz::config::effective::ProfileScope::Agents,
             &machine.agents.commands,
             args.launch.spec.as_deref(),
             rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()).as_deref(),
@@ -969,6 +1035,7 @@ mod launch_options {
             "warn".to_owned(),
             rimz::config::Profile {
                 agent: "codex".to_owned(),
+                description: None,
                 mode: None,
                 model: Some("declared".to_owned()),
                 effort: None,
@@ -981,12 +1048,14 @@ mod launch_options {
         let args = parse_agents(&["rimz", "warn,codex", "--name", "one"]);
         let effective = rimz::config::effective::load(
             &machine.agents,
+            &machine.subagents.profiles,
             dir.path(),
             &dir.path().join("config-home"),
         )
         .expect("effective config");
         let resolved = rimz::harness::plan::resolve_launch(
             &effective,
+            rimz::config::effective::ProfileScope::Agents,
             &machine.agents.commands,
             args.launch.spec.as_deref(),
             None,

@@ -38,11 +38,21 @@
 # bare kind cells and virtual cells such as `claude-auto` / `claude-plan`.
 ## [agents.profiles.claude-slim]
 ## agent = "claude"
+## description = "Fast Claude profile for lightweight work"
 ## effort = "low"
 ## budget = "5"                       # session cap; use "20/day" for a local-calendar-day cap
 ## system-prompt-file = "~/.config/rimz/prompts/slim.md"
 ## append-system-prompt-files = ["~/.config/rimz/prompts/rust.md"]
 ## args = "--max-turns 4"
+
+[subagents.profiles]
+# Profiles available only through `rimz subagents`. They use the same fields as
+# agent profiles, but remain a separate namespace so child-specific presets do
+# not become addressable main-agent types.
+## [subagents.profiles.codex-review]
+## agent = "codex"
+## description = "Focused reviewer for supervised child tasks"
+## effort = "high"
 
 [agents.commands]
 # Commands are shell-split raw command panes. They are not addressable agents.

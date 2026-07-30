@@ -45,6 +45,7 @@ Addresses are `@handle[#channel]`; full grammar lives in [agents.md](./docs/refe
 
 ```sh
 rimz agents                          # agent cards, current channel
+rimz agents types                    # agent kinds, profiles, commands, and descriptions
 rimz agents '#auth'                  # one lane's cards
 rimz agents show @coder              # card: activity, context, messages, transcript
 rimz agents logs @coder -n 20        # transcript tail (-f follows)
@@ -58,7 +59,7 @@ rimz teams forge -w feat-x           # launch one configured cohort in a worktre
 rimz teams resume forge              # reopen a configured team cohort
 rimz teams focus|restart|stop forge  # drive one live team cohort
 rimz subagents claude "review this"  # from an agent: launch a supervised child
-rimz subagents specs                 # agent specs available to launch
+rimz subagents specs                 # child kinds, profiles, commands, and descriptions
 rimz subagents wait                  # join every live child and collect results
 rimz subagents list|stop --all       # inspect or stop the caller's own children
 rimz message @coder "rebase first"   # park for the next turn boundary

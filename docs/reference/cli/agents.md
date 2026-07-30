@@ -54,6 +54,15 @@ The `@` sigil is required for `message`, where it also keeps a target from being
 
 `rimz agents` is the card surface and the single launcher. The subsections below cover the forms worth knowing; run `rimz agents --help` (and `--help` on each subcommand) for the full flag list.
 
+### Discover agent specs
+
+```sh
+rimz agents specs
+rimz agents types --json
+```
+
+`specs` lists registered agent kinds, `[agents.profiles]` profiles, and configured launch commands; `types` is an alias. Profile rows include their optional descriptions. Teams are excluded because the catalog describes reusable cell types rather than cohort layouts.
+
 ### Register a third-party kind
 
 ```sh

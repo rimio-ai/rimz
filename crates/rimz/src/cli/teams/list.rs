@@ -78,6 +78,7 @@ pub(super) fn load_catalog(globals: &GlobalFlags) -> Result<Vec<TeamReport>> {
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
     let effective = rimz::config::effective::load(
         &machine.agents,
+        &machine.subagents.profiles,
         &ctx.workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
@@ -104,6 +105,7 @@ pub(super) fn effective_teams(globals: &GlobalFlags) -> Result<TeamsConfig> {
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
     Ok(rimz::config::effective::load(
         &machine.agents,
+        &machine.subagents.profiles,
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?

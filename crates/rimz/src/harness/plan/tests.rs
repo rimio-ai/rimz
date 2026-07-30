@@ -241,6 +241,7 @@ fn configured_profile(
 ) -> Profile {
     Profile {
         agent: agent.to_owned(),
+        description: None,
         mode,
         model: model.map(str::to_owned),
         effort: effort.map(str::to_owned),
@@ -257,10 +258,153 @@ fn effective_launch(
 ) -> crate::config::effective::LaunchAgents {
     crate::config::effective::load(
         &machine.agents,
+        &machine.subagents.profiles,
         project_root,
         &project_root.join("config-home"),
     )
     .expect("effective launch config")
+}
+
+fn resolve_launch(
+    launch: &crate::config::effective::LaunchAgents,
+    commands: &crate::config::CommandsConfig,
+    spec: Option<&str>,
+    agent_override: Option<&str>,
+) -> std::result::Result<ResolvedLaunch, ResolveLaunchError> {
+    super::resolve_launch(
+        launch,
+        crate::config::effective::ProfileScope::Agents,
+        commands,
+        spec,
+        agent_override,
+    )
+}
+
+#[test]
+fn profile_scope_selects_the_doorway_namespace_and_kind_shadowing() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "shared".to_owned(),
+        configured_profile("claude", None, None, None, None, None),
+    );
+    machine.subagents.profiles.0.insert(
+        "shared".to_owned(),
+        configured_profile("codex", None, None, None, None, None),
+    );
+    machine.subagents.profiles.0.insert(
+        "claude".to_owned(),
+        configured_profile("codex", None, None, None, None, None),
+    );
+    let launch = effective_launch(&machine, dir.path());
+
+    let agent = super::resolve_launch(
+        &launch,
+        crate::config::effective::ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("shared"),
+        None,
+    )
+    .expect("agent profile");
+    assert_eq!(
+        agent
+            .layout
+            .agent_cells()
+            .next()
+            .expect("agent cell")
+            .kind
+            .as_str(),
+        "claude"
+    );
+
+    let subagent = super::resolve_launch(
+        &launch,
+        crate::config::effective::ProfileScope::Subagents,
+        &machine.agents.commands,
+        Some("shared"),
+        None,
+    )
+    .expect("subagent profile");
+    assert_eq!(
+        subagent
+            .layout
+            .agent_cells()
+            .next()
+            .expect("subagent cell")
+            .kind
+            .as_str(),
+        "codex"
+    );
+
+    let shadowed_kind = super::resolve_launch(
+        &launch,
+        crate::config::effective::ProfileScope::Subagents,
+        &machine.agents.commands,
+        Some("claude"),
+        None,
+    )
+    .expect("subagent kind shadow");
+    assert_eq!(
+        shadowed_kind
+            .layout
+            .agent_cells()
+            .next()
+            .expect("shadowed cell")
+            .kind
+            .as_str(),
+        "codex"
+    );
+}
+
+#[test]
+fn profile_scope_reports_profiles_configured_for_the_other_doorway() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "main-only".to_owned(),
+        configured_profile("claude", None, None, None, None, None),
+    );
+    machine.subagents.profiles.0.insert(
+        "child-only".to_owned(),
+        configured_profile("codex", None, None, None, None, None),
+    );
+    let launch = effective_launch(&machine, dir.path());
+
+    let err = super::resolve_launch(
+        &launch,
+        crate::config::effective::ProfileScope::Subagents,
+        &machine.agents.commands,
+        Some("main-only"),
+        None,
+    )
+    .expect_err("agent profile must not launch as subagent");
+    assert!(matches!(
+        err,
+        ResolveLaunchError::Layout(crate::harness::spec::LayoutErr::ProfileWrongDoorway {
+            ref name,
+            defined_in: "agents",
+            expected_in: "subagents",
+            ..
+        }) if name == "main-only"
+    ));
+
+    let err = super::resolve_launch(
+        &launch,
+        crate::config::effective::ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("child-only"),
+        None,
+    )
+    .expect_err("subagent profile must not launch as agent");
+    assert!(matches!(
+        err,
+        ResolveLaunchError::Layout(crate::harness::spec::LayoutErr::ProfileWrongDoorway {
+            ref name,
+            defined_in: "subagents",
+            expected_in: "agents",
+            ..
+        }) if name == "child-only"
+    ));
 }
 
 #[test]
@@ -1269,6 +1413,7 @@ fn single_role_team_launch_takes_over_caller_pane() {
         "planner-profile".to_owned(),
         Profile {
             agent: "codex".to_owned(),
+            description: None,
             mode: None,
             model: None,
             effort: None,

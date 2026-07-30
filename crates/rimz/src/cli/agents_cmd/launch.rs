@@ -19,6 +19,7 @@ pub(super) fn launch_layout(
     let machine_config = machine_config();
     let effective = rimz::config::effective::load(
         &machine_config.agents,
+        &machine_config.subagents.profiles,
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
@@ -52,6 +53,7 @@ pub(super) fn launch_layout(
     }
     let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
+        rimz::config::effective::ProfileScope::Agents,
         &machine_config.agents.commands,
         args.launch.spec.as_deref(),
         rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()).as_deref(),
