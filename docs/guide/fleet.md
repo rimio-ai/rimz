@@ -194,7 +194,7 @@ forge team · 2 agents · 36m active · $29.39
 Total · 2 agents · 36m active · $29.39
 ```
 
-The `--md` form turns the same audit into a linked pull-request receipt: its summary names aggregate agent-time, cost, author messages, and answered asks, and its closing provenance links readers back to the command reference.
+The `--md` form turns the same figures and wording into a collapsed pull-request receipt, linking RimZ to its repository and the closing provenance to the command reference.
 
 **Find what is burning CPU or tokens.** When the machine gets loud, `rimz agents top` ranks the live fleet by the resources each agent's pane process tree is using. It streams by default; `--once` takes a sample and exits for a script:
 
