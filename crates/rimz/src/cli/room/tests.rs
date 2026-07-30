@@ -43,6 +43,9 @@ fn trust_birth_prompt_offer_renders_only_present_summary_lines() {
         current_hash: "sha256:test".to_owned(),
         summary: SurfaceSummary {
             task_names: vec!["sync".to_owned()],
+            profiles: Vec::new(),
+            subagent_profiles: Vec::new(),
+            teams: Vec::new(),
             env_agents: vec!["claude".to_owned()],
             hooks: 2,
             ..SurfaceSummary::default()

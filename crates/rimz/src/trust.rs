@@ -149,6 +149,7 @@ pub struct BirthPromptOffer {
 pub struct SurfaceSummary {
     pub task_names: Vec<String>,
     pub profiles: Vec<String>,
+    pub subagent_profiles: Vec<String>,
     pub teams: Vec<String>,
     pub env_agents: Vec<String>,
     pub hooks: usize,
@@ -159,6 +160,7 @@ impl SurfaceSummary {
         Self {
             task_names: config.tasks.keys().cloned().collect(),
             profiles: config.profiles.keys().cloned().collect(),
+            subagent_profiles: config.subagents.profiles.keys().cloned().collect(),
             teams: config.teams().keys().cloned().collect(),
             env_agents: config
                 .agent_entries()
@@ -617,9 +619,16 @@ struct BirthPromptDismissal {
 pub struct ProjectConfig {
     pub agents: ProjectAgents,
     pub profiles: BTreeMap<String, ProjectProfile>,
+    pub subagents: ProjectSubagents,
     pub tasks: BTreeMap<String, ProjectTask>,
     pub hooks: Vec<HookConfig>,
     pub env: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ProjectSubagents {
+    pub profiles: BTreeMap<String, ProjectProfile>,
 }
 
 impl ProjectConfig {
@@ -719,6 +728,8 @@ pub struct HookConfig {
 struct ExecutableSurface<'a> {
     agents: Vec<ExecutableAgent<'a>>,
     profiles: Vec<ExecutableProfile<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    subagent_profiles: Vec<ExecutableProfile<'a>>,
     teams: Vec<ExecutableTeam<'a>>,
     tasks: Vec<ExecutableTask<'a>>,
     hooks: Vec<ExecutableHook<'a>>,
@@ -817,6 +828,21 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 })
                 .collect(),
             profiles: config
+                .profiles
+                .iter()
+                .map(|(name, p)| ExecutableProfile {
+                    name: name.as_str(),
+                    agent: p.agent.as_str(),
+                    mode: p.mode.as_deref(),
+                    model: p.model.as_deref(),
+                    effort: p.effort.as_deref(),
+                    system_prompt_file: p.system_prompt_file.as_deref(),
+                    append_system_prompt_files: p.append_system_prompt_files.as_deref(),
+                    args: p.args.as_deref(),
+                })
+                .collect(),
+            subagent_profiles: config
+                .subagents
                 .profiles
                 .iter()
                 .map(|(name, p)| ExecutableProfile {
@@ -1039,7 +1065,7 @@ mod tests {
     #[test]
     fn birth_prompt_offers_current_hash_and_summary_for_untrusted_config() {
         let dir = project_with(
-            "[tasks.sync]\nagent = \"codex\"\nprompt = \"sync the repo\"\n\n[profiles.planner]\nagent = \"claude\"\n\n[agents.teams.review]\nlayout = \"planner\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
+            "[tasks.sync]\nagent = \"codex\"\nprompt = \"sync the repo\"\n\n[profiles.planner]\nagent = \"claude\"\n\n[subagents.profiles.reviewer]\nagent = \"codex\"\n\n[agents.teams.review]\nlayout = \"planner\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
         );
         let config = tempdir().expect("config root");
         let offer = birth_prompt_with_roots(dir.path(), config.path())

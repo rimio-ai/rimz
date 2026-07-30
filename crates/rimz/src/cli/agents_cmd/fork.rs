@@ -63,6 +63,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", seed.kind))?;
     let effective = rimz::config::effective::load(
         &config.agents,
+        &config.subagents.profiles,
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;

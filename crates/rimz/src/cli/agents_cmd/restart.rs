@@ -208,6 +208,7 @@ fn restart_posture(
 ) -> Result<ResumePosture> {
     let launch = rimz::config::effective::load(
         &machine_config.agents,
+        &machine_config.subagents.profiles,
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;

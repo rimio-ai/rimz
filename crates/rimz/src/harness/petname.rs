@@ -39,7 +39,7 @@ const NOUNS: &[&str] = &[
 /// Words `rimz agents` owns as verbs or cells; no profile, command, team, or agent name may claim them.
 /// TODO(reserved-words): decide whether to reserve the newer restart, resume, budget, logs, history, top, check, register, and refresh verbs.
 pub const RESERVED_AGENT_WORDS: &[&str] = &[
-    "exec", "focus", "fork", "list", "ls", "show", "stop", "term", "wait",
+    "exec", "focus", "fork", "list", "ls", "show", "specs", "stop", "term", "types", "wait",
 ];
 
 pub fn mint(taken: impl IntoIterator<Item = impl AsRef<str>>) -> String {

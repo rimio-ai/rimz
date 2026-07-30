@@ -75,11 +75,18 @@ pub(super) fn prepare_supervised_launch_layout(
 ) -> Result<rimz::harness::plan::ResolvedLaunch> {
     let effective = rimz::config::effective::load(
         &machine_config.agents,
+        &machine_config.subagents.profiles,
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
+    let scope = if request.subagent {
+        rimz::config::effective::ProfileScope::Subagents
+    } else {
+        rimz::config::effective::ProfileScope::Agents
+    };
     let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
+        scope,
         &machine_config.agents.commands,
         Some(spec),
         request.agent.as_deref(),
@@ -87,7 +94,7 @@ pub(super) fn prepare_supervised_launch_layout(
     rimz::harness::plan::reject_prompt_that_looks_like_spec(
         Some(spec),
         Some(&request.prompt),
-        &effective.profiles,
+        effective.profiles_for(scope),
         &machine_config.agents.commands,
         &effective.teams,
     )?;
@@ -387,6 +394,7 @@ fn prepare_supervised(
     // `forge.reviewer`.
     let effective = rimz::config::effective::load(
         &machine_config.agents,
+        &machine_config.subagents.profiles,
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
@@ -396,6 +404,11 @@ fn prepare_supervised(
         .or_else(|| crate::cli::current_channel(&workspace));
     let mut spec = Cow::Borrowed(request.spec.as_str());
     let mut inferred_lane = None;
+    let scope = if request.subagent {
+        rimz::config::effective::ProfileScope::Subagents
+    } else {
+        rimz::config::effective::ProfileScope::Agents
+    };
     if let Some(channel) = lane.as_deref() {
         let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
         if let Some(team) = rimz::harness::target::channel_team(&snapshot.agents, channel) {
@@ -404,7 +417,7 @@ fn prepare_supervised(
                 channel,
                 team,
                 &effective.teams,
-                &effective.profiles,
+                effective.profiles_for(scope),
                 &machine_config.agents.commands,
             )?;
             if matches!(spec, Cow::Owned(_)) {

@@ -218,6 +218,15 @@ pub enum LayoutErr {
         valid_teams: String,
         valid_cells: String,
     },
+    #[error(
+        "profile `{name}` is defined under [{defined_in}.profiles], but {command} resolves [{expected_in}.profiles]; move or copy the profile to the expected section"
+    )]
+    ProfileWrongDoorway {
+        name: String,
+        defined_in: &'static str,
+        command: &'static str,
+        expected_in: &'static str,
+    },
     #[error("team `{team}` has no role `{role}`; declared roles: {valid_roles}")]
     UnknownRoleInTeam {
         team: String,
@@ -383,14 +392,7 @@ pub fn validate_config(
     commands: &CommandsConfig,
     teams: &TeamsConfig,
 ) -> Result<()> {
-    validate_profile_names(profiles)?;
-    validate_command_names(commands)?;
-    validate_team_names(teams)?;
-    for name in teams.0.keys() {
-        if is_cell_word(name, profiles, commands) {
-            return Err(LayoutErr::ReservedTeamName(name.clone()));
-        }
-    }
+    validate_profile_config(profiles, commands, teams)?;
     for name in teams.0.keys() {
         let team = teams
             .0
@@ -399,6 +401,27 @@ pub fn validate_config(
         let prepared = prepare_team(name, team, profiles, None)?;
         if team.layout.is_some() {
             compile_team(name, prepared, profiles, commands, None)?;
+        }
+    }
+    Ok(())
+}
+
+/// Validate a profile namespace and its cell-name collisions without requiring
+/// team role bindings to close over that namespace.
+pub fn validate_profile_config(
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+    teams: &TeamsConfig,
+) -> Result<()> {
+    validate_profile_names(profiles)?;
+    validate_command_names(commands)?;
+    validate_team_names(teams)?;
+    for name in profiles.0.keys() {
+        resolve_profile(name, profiles)?;
+    }
+    for name in teams.0.keys() {
+        if is_cell_word(name, profiles, commands) {
+            return Err(LayoutErr::ReservedTeamName(name.clone()));
         }
     }
     Ok(())

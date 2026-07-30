@@ -57,7 +57,7 @@ You rarely open these by hand: `rimz config set` writes to them for you, and `ri
 | --- | --- |
 | `config.toml` | room behavior: accounts, notifications, remote control, multiplexer defaults, resume, smart compaction |
 | `theme.toml` | sidebar appearance: palette, slots, glyphs, animations, provider styling, pets ([theme.md](./theme.md)) |
-| `agents.toml` | agent profiles, command cells, teams, worktree defaults, attention timing |
+| `agents.toml` | agent and subagent profiles, command cells, teams, worktree defaults, attention timing |
 | `loop.toml` | recurring loop task definitions and scheduled command checks |
 
 Two more things share the directory but are managed for you: `remote.toml` (named SSH room aliases, written by `rimz remote`) and a handful of machine-managed sidecars (trust grants, notification state), which you reach through their own commands rather than by hand ([Sidecars and privacy](#sidecars-and-privacy)).
@@ -71,7 +71,7 @@ RimZ reads configuration in four layers, and a later layer wins:
 3. per-machine config (`~/.config/rimz/`),
 4. CLI flags and `RIMZ_*` environment variables.
 
-Today the per-machine layer is live, CLI and env overrides apply where each command defines them, and the project layer is read for trust. One case inverts the order on purpose: a trusted project's launch names and loop-task names (`[profiles]`, `[agents.teams]`, `[tasks]`) overlay your machine config and win a name collision, so a repository can pin the exact executable surface it hashes (see [Project config](#project-config)).
+Today the per-machine layer is live, CLI and env overrides apply where each command defines them, and the project layer is read for trust. One case inverts the order on purpose: a trusted project's launch names and loop-task names (`[profiles]`, `[subagents.profiles]`, `[agents.teams]`, `[tasks]`) overlay your machine config and win a name collision, so a repository can pin the exact executable surface it hashes (see [Project config](#project-config)).
 
 ### A broken file never blocks the room
 
@@ -335,11 +335,11 @@ archive_after_secs = 86400
 
 ## agents.toml: profiles, teams, and worktrees
 
-This file configures what `rimz agents <spec>` can launch and how worktrees are cut.
+This file configures what `rimz agents <spec>` and `rimz subagents <spec>` can launch and how worktrees are cut.
 
 ### Agent profiles, commands, and teams
 
-Reusable agent **profiles**, raw **command** panes, and named **teams** live in `agents.toml` under `[agents.profiles]`, `[agents.commands]`, and `[agents.teams]`.
+Reusable main-agent **profiles**, raw **command** panes, and named **teams** live in `agents.toml` under `[agents.profiles]`, `[agents.commands]`, and `[agents.teams]`. Supervised-child profiles use the separate top-level `[subagents.profiles]` namespace.
 
 ```toml
 [agents]
@@ -347,6 +347,7 @@ placement = "auto"
 
 [agents.profiles.claude-slim]
 agent = "claude"                                       # a built-in kind, or another profile
+description = "Lightweight main-agent profile"
 effort = "low"
 budget = "5"
 system-prompt-file = "~/.config/rimz/prompts/slim.md"
@@ -359,6 +360,11 @@ system-prompt-file = "~/.config/rimz/prompts/planner.md"
 agent = "codex"
 mode = "yolo"
 model = "gpt-5-codex"
+effort = "high"
+
+[subagents.profiles.reviewer]
+agent = "codex"
+description = "Focused supervised reviewer"
 effort = "high"
 
 [agents.commands]
@@ -384,7 +390,7 @@ mode = "plan"
 
 #### Profiles
 
-A profile is a named agent preset, addressable as `@<name>` once it is running. `agent` is its base, a built-in kind (`claude`, `codex`, …) or another profile that resolves to one, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `system-prompt-file`, `append-system-prompt-files`, and raw `args`. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. Team roles expose the same fields; loop tasks expose the launch fields relevant to scheduled work.
+A profile is a named agent preset. `[agents.profiles]` entries belong to `rimz agents` and become addressable type handles; `[subagents.profiles]` entries belong only to `rimz subagents`. `agent` is the base, a built-in kind (`claude`, `codex`, …) or another profile in the same namespace, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `system-prompt-file`, `append-system-prompt-files`, and raw `args`. Optional `description` is listing metadata shown by `rimz agents types` or `rimz subagents types`; it is not inherited. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. Team roles expose the launch fields; loop tasks expose the subset relevant to scheduled work.
 
 Inheritance flattens at launch to one concrete adapter kind, and **the nearest set value wins for every field except prompt fragments**: a child that sets `args` replaces the base `args`, while `append-system-prompt-files` concatenates parent-first through the profile chain and a team role appends last. Fragments require a resolved `system-prompt-file` base. RimZ reads the pieces, separates them with blank lines, materializes one content-addressed replacement, and passes that complete value through the adapter's existing replacement channel. A `~` expands to home and a relative path roots at the declaring config file. Every source file must exist at launch; a missing one fails with the path to fix.
 
@@ -417,7 +423,9 @@ An inline spec like `rimz agents "claude,codex+term"` keeps the same shape gramm
 
 The [agents CLI reference](../reference/cli/agents.md) lists the built-in virtual cells in full.
 
-Profiles and roles become addressable handles, so they must not shadow `@all`, agent kinds (`@claude`), kind ordinals (`@claude-2`), or the pane and channel sigils (`:`, `#`). Profile, command, and team names also reserve the `agents` subcommand verbs `list`, `ls`, `show`, `stop`, `focus`, `wait`, `term`, and `exec`. A config that still uses a removed table fails fast naming the rename rather than silently dropping it: `[tab]` (with its `[tab.keywords]`/`[tab.layouts]` children) → `placement` under `[agents]` plus `[agents.teams]`; `[agents.aliases]` → `[agents.profiles]` and `[agents.commands]`; `[agents.layouts]` → `[agents.teams]`. The room degrades to defaults with a warning while `rimz config` and `rimz doctor` print the precise rename.
+`rimz subagents` uses the same resolution order except that step 2 reads `[subagents.profiles]`. If a profile exists only in the other namespace, launch fails with the section to move or copy it to.
+
+Profiles and roles become addressable handles, so they must not shadow `@all`, agent kinds (`@claude`), kind ordinals (`@claude-2`), or the pane and channel sigils (`:`, `#`). Profile, command, and team names also reserve the `agents` subcommand verbs `list`, `ls`, `show`, `specs`, `types`, `stop`, `focus`, `wait`, `term`, and `exec`. A config that still uses a removed table fails fast naming the rename rather than silently dropping it: `[tab]` (with its `[tab.keywords]`/`[tab.layouts]` children) → `placement` under `[agents]` plus `[agents.teams]`; `[agents.aliases]` → `[agents.profiles]` and `[agents.commands]`; `[agents.layouts]` → `[agents.teams]`. The room degrades to defaults with a warning while `rimz config` and `rimz doctor` print the precise rename.
 
 #### Placement
 
@@ -445,6 +453,8 @@ timeout = "30m"
 ```
 
 These defaults apply only to the agent-only [`rimz subagents`](../reference/cli/subagents.md) doorway, which is the only launch path that creates a parented child. `timeout` is the wall-clock limit for each supervised child and defaults to 30 minutes; the producer enforces it even when no process is waiting on the result. Per-launch `--timeout` overrides this table. Subagents cannot launch agents or subagents.
+
+Child launch presets live separately under `[subagents.profiles.<name>]`; `[agents.subagents]` continues to hold only doorway defaults such as `timeout`.
 
 ### Worktrees
 
@@ -568,7 +578,7 @@ Which providers appear, their order, and their brand styling are theme and disco
 
 ## Project config
 
-The committed `<repo>/.rimz/config.toml` declares the workspace shape a team shares. RimZ computes the executable-surface trust hash from it, and on a trusted workspace it injects each `[[agents]]` `env` table into that agent's process at launch, applies top-level `[profiles]` and `[agents.teams]` to `rimz agents` launches, and loads `[tasks]` for `rimz loop`. Use one `agents` shape per project config: `[[agents]]` for env entries, or `[agents.teams]` for shared teams. Applying the declared hooks and agent launch command is planned project-config behavior. Room layout is per-machine config: a project config carrying a `[layout]` table is refused with the fix to move it to `$XDG_CONFIG_HOME/rimz/config.toml`. RimZ's own [`.rimz/config.toml`](../../.rimz/config.toml) is a living project-task example; its repository sync task assumes push rights on the remote.
+The committed `<repo>/.rimz/config.toml` declares the workspace shape a team shares. RimZ computes the executable-surface trust hash from it, and on a trusted workspace it injects each `[[agents]]` `env` table into that agent's process at launch, applies top-level `[profiles]` and `[agents.teams]` to `rimz agents` launches, applies `[subagents.profiles]` to `rimz subagents`, and loads `[tasks]` for `rimz loop`. Use one `agents` shape per project config: `[[agents]]` for env entries, or `[agents.teams]` for shared teams. Applying the declared hooks and agent launch command is planned project-config behavior. Room layout is per-machine config: a project config carrying a `[layout]` table is refused with the fix to move it to `$XDG_CONFIG_HOME/rimz/config.toml`. RimZ's own [`.rimz/config.toml`](../../.rimz/config.toml) is a living project-task example; its repository sync task assumes push rights on the remote.
 
 ```toml
 [[agents]]

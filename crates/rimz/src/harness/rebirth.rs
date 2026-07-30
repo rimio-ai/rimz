@@ -306,7 +306,12 @@ fn effective_teams_and_profiles(
     machine: &MachineConfig,
     project_root: &Path,
 ) -> (TeamsConfig, ProfilesConfig) {
-    match crate::config::effective::load(&machine.agents, project_root, &config_home()) {
+    match crate::config::effective::load(
+        &machine.agents,
+        &machine.subagents.profiles,
+        project_root,
+        &config_home(),
+    ) {
         Ok(launch) => (launch.teams, launch.profiles),
         Err(err) => {
             let (config, detail) = err

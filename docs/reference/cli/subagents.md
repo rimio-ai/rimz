@@ -41,7 +41,7 @@ Each array entry has the single-launch fields that make sense for data-driven de
 | `max_turns` | no | Maximum agentic turns |
 | `description` | no | Initial child-card description |
 
-Explicit names must be unique within the list. Relative `prompt_file` paths resolve from the caller's current working directory. A task timeout overrides the fanout-level `--timeout`, which overrides `[agents.subagents] timeout` (30 minutes by default). `--keep` applies to every child. Per-task raw argv, execution mode, and pane retention are deliberately omitted; use profiles for provider arguments or separate single launches when children need different lifecycle controls.
+Explicit names must be unique within the list. Relative `prompt_file` paths resolve from the caller's current working directory. A task timeout overrides the fanout-level `--timeout`, which overrides `[agents.subagents] timeout` (30 minutes by default). `--keep` applies to every child. Per-task raw argv, execution mode, and pane retention are deliberately omitted; use `[subagents.profiles]` for provider arguments or separate single launches when children need different lifecycle controls.
 
 All tasks are validated before the first launch. If a runtime failure occurs after some children have started, the error names them; they keep their normal deadline and cleanup behavior and remain available to `subagents wait` and `subagents stop`.
 
@@ -82,7 +82,7 @@ rimz subagents specs
 rimz subagents specs --json
 ```
 
-`specs` lists every agent kind, configured profile, and configured launch command available for one child. It also works from a user shell; `types` remains an alias for compatibility. Team names are excluded because a subagent launch creates one agent, not a cohort.
+`specs` lists every agent kind, `[subagents.profiles]` profile, and configured launch command available for one child, with a description column for profile metadata. `[agents.profiles]` entries are excluded. It also works from a user shell; `types` is an alias. Team names are excluded because a subagent launch creates one agent, not a cohort.
 
 ## Join results
 

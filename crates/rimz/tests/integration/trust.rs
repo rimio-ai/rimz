@@ -218,6 +218,30 @@ fn config_without_retired_prompt_field_keeps_legacy_surface_hash() {
 }
 
 #[test]
+fn trust_hash_covers_subagent_profile_namespace_and_launch_fields() {
+    let cases = [
+        "[subagents.profiles.x]\nagent = \"claude\"\n",
+        "[subagents.profiles.x]\nagent = \"codex\"\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\nmode = \"ask\"\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\nmodel = \"opus\"\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\neffort = \"low\"\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\nsystem-prompt-file = \"prompts/x.md\"\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\nappend-system-prompt-files = [\"prompts/a.md\"]\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\nargs = \"--profile x\"\n",
+        "[subagents.profiles.y]\nagent = \"claude\"\n",
+    ];
+    let hashes = cases
+        .into_iter()
+        .map(|text| {
+            let config: rimz::trust::ProjectConfig = toml::from_str(text).expect("config");
+            rimz::trust::executable_surface_hash(&config)
+        })
+        .collect::<std::collections::HashSet<_>>();
+
+    assert_eq!(hashes.len(), cases.len());
+}
+
+#[test]
 fn trust_no_config_reports_no_config() {
     let env = Env::new();
     env.rimz()

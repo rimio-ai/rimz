@@ -25,6 +25,7 @@ Every field that can cause a process to run enters the hash. The projection is [
 
 - `[[agents]]` — `name`, `launch_command`, `env`.
 - `[profiles.<name>]` — `agent`, `mode`, `model`, `effort`, `system-prompt-file`, `args`.
+- `[subagents.profiles.<name>]` — the same command-running profile fields in the child-launch namespace.
 - `[agents.teams.<name>]` — `layout`, plus each role's `role`, `profile`, `mode`, `model`, `effort`, `system-prompt-file`, `args`.
 - `[tasks.<name>]` — `agent`, `prompt`, `prompt-file`, `check`, `verify`, `max-attempts`, `on`, `worktree`, `mode`, `effort`, `system-prompt-file`, `timeout`, `at`, `every`, `cron`.
 - `[[hooks]]` — `event`, `command`.
@@ -32,7 +33,7 @@ Every field that can cause a process to run enters the hash. The projection is [
 
 The hash input is canonical JSON over `ExecutableSurface`: struct field order is fixed, `BTreeMap` keys sort, and `Option::None` serializes as `null`, so the same config always hashes to the same bytes. The wire format is `sha256:<hex>`. Non-command fields such as `display_name` or `sidebar_width` deserialize leniently and never touch the hash.
 
-Room layout is per-machine policy, so a project config carrying a `[layout]` table (including `[[layout.initial_panes]]` and `[layout.tmux]`) fails the read with the fix to move it to `$XDG_CONFIG_HOME/rimz/config.toml` ([`check_project_config_removed_tables`](../../../crates/rimz/src/trust.rs)). Personal machine policy stays out of the hash entirely: per-machine `[[notifications.handler]]` and `[notifications].command`, per-machine `[agents.profiles]` and `[agents.teams]`, and per-machine loop `check` commands all live under `~/.config/rimz/` and are never trust-tracked.
+Room layout is per-machine policy, so a project config carrying a `[layout]` table (including `[[layout.initial_panes]]` and `[layout.tmux]`) fails the read with the fix to move it to `$XDG_CONFIG_HOME/rimz/config.toml` ([`check_project_config_removed_tables`](../../../crates/rimz/src/trust.rs)). Personal machine policy stays out of the hash entirely: per-machine `[[notifications.handler]]` and `[notifications].command`, per-machine `[agents.profiles]`, `[subagents.profiles]`, and `[agents.teams]`, and per-machine loop `check` commands all live under `~/.config/rimz/` and are never trust-tracked.
 
 To keep the hashed surface closed and machine-independent, repo profiles may inherit only repo profiles or built-in kinds, repo team roles bind only repo profiles, and repo tasks run only at the project root.
 
@@ -46,6 +47,7 @@ Four surfaces apply today; the rest are hashed but not yet consumed at launch.
 | --- | --- | --- |
 | `[[agents]]` `env` | injected into the agent process | launch refuses with the `rimz trust grant` fix |
 | `[profiles]` | overlaid over machine profiles, winning name collisions | a spec that references a repo profile refuses |
+| `[subagents.profiles]` | overlaid over machine subagent profiles, winning name collisions | a child spec that references a repo subagent profile refuses |
 | `[agents.teams]` | overlaid over machine teams | a spec that references a repo team refuses |
 | `[tasks]` | overlaid over machine loop tasks and state instances, then gated by machine-local task enablement | the project task stays inert; a same-named machine task keeps running |
 | `[[agents]]` `launch_command`, `[[hooks]]`, top-level `[env]` | hashed only | hashed only |

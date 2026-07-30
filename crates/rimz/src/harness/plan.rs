@@ -219,13 +219,15 @@ pub struct ProfilePromptFileError {
 /// Resolve effective profiles/teams without applying runtime launch options.
 pub fn resolve_launch(
     launch: &crate::config::effective::LaunchAgents,
+    scope: crate::config::effective::ProfileScope,
     commands: &crate::config::CommandsConfig,
     spec: Option<&str>,
     agent_override: Option<&str>,
 ) -> std::result::Result<ResolvedLaunch, ResolveLaunchError> {
+    let profiles = launch.profiles_for(scope);
     let layout = match crate::harness::spec::resolve_spec_with_agent_override(
         spec,
-        &launch.profiles,
+        profiles,
         commands,
         &launch.teams,
         agent_override,
@@ -233,8 +235,21 @@ pub fn resolve_launch(
         Ok(layout) => layout,
         Err(err @ crate::harness::spec::LayoutErr::UnknownTeam { .. })
         | Err(err @ crate::harness::spec::LayoutErr::UnknownCell { .. }) => {
-            launch.block_untrusted_reference(spec, commands)?;
+            launch.block_untrusted_reference(scope, spec, commands)?;
+            if let Some(name) = spec
+                .map(str::trim)
+                .filter(|name| other_profiles(launch, scope).0.contains_key(*name))
+            {
+                return Err(wrong_doorway(name, scope).into());
+            }
             return Err(err.into());
+        }
+        Err(crate::harness::spec::LayoutErr::UnknownAgentOverride { .. })
+            if agent_override
+                .map(str::trim)
+                .is_some_and(|name| other_profiles(launch, scope).0.contains_key(name)) =>
+        {
+            return Err(wrong_doorway(agent_override.unwrap_or_default().trim(), scope).into());
         }
         Err(err) => return Err(err.into()),
     };
@@ -246,6 +261,34 @@ pub fn resolve_launch(
         layout,
         team_name,
     })
+}
+
+fn other_profiles(
+    launch: &crate::config::effective::LaunchAgents,
+    scope: crate::config::effective::ProfileScope,
+) -> &crate::config::ProfilesConfig {
+    use crate::config::effective::ProfileScope;
+    match scope {
+        ProfileScope::Agents => &launch.subagent_profiles,
+        ProfileScope::Subagents => &launch.profiles,
+    }
+}
+
+fn wrong_doorway(
+    name: &str,
+    scope: crate::config::effective::ProfileScope,
+) -> crate::harness::spec::LayoutErr {
+    use crate::config::effective::ProfileScope;
+    let (defined_in, command, expected_in) = match scope {
+        ProfileScope::Agents => ("subagents", "`rimz agents`", "agents"),
+        ProfileScope::Subagents => ("agents", "`rimz subagents`", "subagents"),
+    };
+    crate::harness::spec::LayoutErr::ProfileWrongDoorway {
+        name: name.to_owned(),
+        defined_in,
+        command,
+        expected_in,
+    }
 }
 
 /// Require the prompt files carried by finalized launch cells.

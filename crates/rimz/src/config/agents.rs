@@ -67,6 +67,14 @@ impl Default for SubagentsConfig {
     }
 }
 
+/// Profile configuration used only by the `rimz subagents` launch doorway.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SubagentsRoot {
+    #[serde(default)]
+    pub profiles: ProfilesConfig,
+}
+
 fn default_machine_teams() -> TeamsConfig {
     TeamsConfig(BTreeMap::from([(
         "peer".to_owned(),
@@ -105,6 +113,8 @@ pub struct ProfilesConfig(pub BTreeMap<String, Profile>);
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default)]
     pub mode: Option<PermissionMode>,
     #[serde(default)]
@@ -201,6 +211,10 @@ pub(crate) fn retired_agents_key(doc: &toml::Table) -> Option<String> {
     for profiles in [
         agents
             .and_then(|agents| agents.get("profiles"))
+            .and_then(toml::Value::as_table),
+        doc.get("subagents")
+            .and_then(toml::Value::as_table)
+            .and_then(|subagents| subagents.get("profiles"))
             .and_then(toml::Value::as_table),
         doc.get("profiles").and_then(toml::Value::as_table),
     ]

@@ -164,6 +164,11 @@ pub(crate) fn agent_specs() -> Vec<CompletionCandidate> {
     agent_specs_from(&MachineConfig::load_lenient())
 }
 
+pub(crate) fn subagent_specs() -> Vec<CompletionCandidate> {
+    let config = MachineConfig::load_lenient();
+    launch_specs_from(&config, &config.subagents.profiles)
+}
+
 pub(crate) fn team_names() -> Vec<CompletionCandidate> {
     team_names_from(&MachineConfig::load_lenient())
 }
@@ -179,13 +184,20 @@ fn team_names_from(config: &MachineConfig) -> Vec<CompletionCandidate> {
 }
 
 fn agent_specs_from(config: &MachineConfig) -> Vec<CompletionCandidate> {
+    launch_specs_from(config, &config.agents.profiles)
+}
+
+fn launch_specs_from(
+    config: &MachineConfig,
+    profiles: &rimz::config::ProfilesConfig,
+) -> Vec<CompletionCandidate> {
     let mut candidates = Vec::new();
     let mut suffix_bases = Vec::new();
     for kind in rimz::agents::known_kinds() {
         candidates.push(candidate(kind, "agent kind"));
         suffix_bases.push(kind.to_owned());
     }
-    for (name, profile) in &config.agents.profiles.0 {
+    for (name, profile) in &profiles.0 {
         candidates.push(candidate(name, format!("profile · {}", profile.agent)));
         suffix_bases.push(name.clone());
     }
@@ -418,6 +430,32 @@ mod tests {
         assert_eq!(
             team_names_from(&config)[0].get_value().to_string_lossy(),
             "forge"
+        );
+    }
+
+    #[test]
+    fn subagent_specs_use_the_subagent_profile_namespace() {
+        let config: MachineConfig = toml::from_str(
+            r#"
+            [agents.profiles.writer]
+            agent = "claude"
+
+            [subagents.profiles.reviewer]
+            agent = "codex"
+            "#,
+        )
+        .expect("config fixture");
+        let candidates = launch_specs_from(&config, &config.subagents.profiles);
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.get_value() == "reviewer")
+        );
+        assert!(
+            !candidates
+                .iter()
+                .any(|candidate| candidate.get_value() == "writer")
         );
     }
 

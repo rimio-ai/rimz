@@ -129,7 +129,7 @@ struct SubagentLaunchArgs {
     /// Agent kind or configured profile.
     #[arg(
         value_name = "SPEC",
-        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_specs)
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::subagent_specs)
     )]
     spec: Option<String>,
     /// Complete task prompt supplied by the parent agent.
@@ -550,84 +550,9 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
     table.render(&mut render::out()).map_err(Into::into)
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize)]
-struct AgentSpecReport {
-    name: String,
-    source: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    agent: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    effort: Option<String>,
-}
-
-impl AgentSpecReport {
-    fn detail(&self) -> String {
-        let Some(agent) = &self.agent else {
-            return "-".to_owned();
-        };
-        let posture = match (self.model.as_deref(), self.effort.as_deref()) {
-            (Some(model), Some(effort)) => Some(format!("{model}@{effort}")),
-            (Some(model), None) => Some(model.to_owned()),
-            (None, Some(effort)) => Some(format!("@{effort}")),
-            (None, None) => None,
-        };
-        posture.map_or_else(|| agent.clone(), |posture| format!("{agent} · {posture}"))
-    }
-}
-
-fn available_specs(config: &rimz::config::MachineConfig) -> Vec<AgentSpecReport> {
-    let mut specs = rimz::agents::known_kinds()
-        .filter(|kind| !config.agents.profiles.0.contains_key(*kind))
-        .map(|kind| AgentSpecReport {
-            name: kind.to_owned(),
-            source: "kind",
-            agent: None,
-            model: None,
-            effort: None,
-        })
-        .collect::<Vec<_>>();
-    specs.extend(
-        config
-            .agents
-            .profiles
-            .0
-            .iter()
-            .map(|(name, profile)| AgentSpecReport {
-                name: name.clone(),
-                source: "profile",
-                agent: Some(profile.agent.clone()),
-                model: profile.model.clone(),
-                effort: profile.effort.clone(),
-            }),
-    );
-    specs.extend(config.agents.commands.0.keys().map(|name| AgentSpecReport {
-        name: name.clone(),
-        source: "command",
-        agent: None,
-        model: None,
-        effort: None,
-    }));
-    specs
-}
-
 fn list_specs(json: bool) -> Result<()> {
     let config = rimz::config::MachineConfig::load().context("loading machine config")?;
-    let specs = available_specs(&config);
-    if json {
-        return render::json_pretty(&specs);
-    }
-    let mut table = render::Table::new(["SPEC", "SOURCE", "DETAIL"]);
-    for agent_spec in specs {
-        let detail = agent_spec.detail();
-        table.row([
-            render::cell(agent_spec.name),
-            render::cell(agent_spec.source),
-            render::cell(detail).dash(),
-        ]);
-    }
-    table.render(&mut render::out()).map_err(Into::into)
+    crate::cli::spec_report::list_specs(&config.subagents.profiles, &config.agents.commands, json)
 }
 
 fn newest_run_for_child<'a>(

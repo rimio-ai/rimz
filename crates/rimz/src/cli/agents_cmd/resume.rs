@@ -62,7 +62,7 @@ pub(super) fn resume_lane(
         discover_lane_sessions,
         || {
             LaneRestoreConfig::load(
-                &machine_config.agents,
+                &machine_config,
                 &workspace.project_root,
                 &rimz::store::paths::config_home(),
             )

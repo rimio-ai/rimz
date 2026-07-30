@@ -574,7 +574,7 @@ fn as_toml_value(value: &Value) -> Option<toml::Value> {
 fn file_for_key(files: &MachineConfigFiles, path: &[String]) -> MachineConfigFile {
     let kind = match path.first().map(String::as_str) {
         Some("theme") => MachineConfigFileKind::Theme,
-        Some("agents") => MachineConfigFileKind::Agents,
+        Some("agents" | "subagents") => MachineConfigFileKind::Agents,
         Some("loop") => MachineConfigFileKind::Loop,
         _ => MachineConfigFileKind::Core,
     };

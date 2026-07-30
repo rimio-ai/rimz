@@ -795,6 +795,7 @@ fn write_project_trust_offer_to(
     writeln!(out, "until you trust it on this machine:")?;
     write_project_trust_list(&mut *out, "loop tasks", &summary.task_names)?;
     write_project_trust_list(&mut *out, "profiles", &summary.profiles)?;
+    write_project_trust_list(&mut *out, "subagent profiles", &summary.subagent_profiles)?;
     write_project_trust_list(&mut *out, "teams", &summary.teams)?;
     write_project_trust_list(&mut *out, "env for", &summary.env_agents)?;
     if summary.hooks > 0 {

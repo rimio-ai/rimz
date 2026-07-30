@@ -455,6 +455,7 @@ fn agents_toml_entries_override_agents_home_fragments() {
         "planner".to_owned(),
         Profile {
             agent: "claude".to_owned(),
+            description: None,
             mode: None,
             model: Some("opus".to_owned()),
             effort: None,
@@ -574,6 +575,7 @@ fn absent_agents_home_is_noop_and_malformed_fragment_leaves_config_unchanged() {
         "planner".to_owned(),
         Profile {
             agent: "claude".to_owned(),
+            description: None,
             mode: None,
             model: None,
             effort: None,
@@ -832,6 +834,7 @@ fn agent_profiles_commands_and_teams_parse() {
         profiles.get("codex-yolo"),
         Some(&Profile {
             agent: "codex".to_owned(),
+            description: None,
             mode: Some(PermissionMode::Yolo),
             model: Some("gpt-5-codex".to_owned()),
             effort: Some("high".to_owned()),
@@ -845,6 +848,7 @@ fn agent_profiles_commands_and_teams_parse() {
         profiles.get("planner"),
         Some(&Profile {
             agent: "claude".to_owned(),
+            description: None,
             mode: None,
             model: None,
             effort: None,
@@ -927,6 +931,103 @@ fn profile_system_prompt_file_resolves_against_the_config_dir() {
         panic!("planner profile with a system prompt");
     };
     assert_eq!(path, std::path::Path::new("/etc/rimz/planner.md"));
+}
+
+#[test]
+fn agent_and_subagent_profiles_parse_in_separate_namespaces_with_descriptions() {
+    let dir = tempdir().expect("tempdir");
+    let config = load_no_fragments(&write_named(
+        &dir,
+        "agents.toml",
+        "[agents.profiles.opus]\n\
+             agent = \"claude\"\n\
+             description = \"Main planning profile\"\n\
+         [subagents.profiles.opus]\n\
+             agent = \"codex\"\n\
+             description = \"Supervised implementation profile\"\n",
+    ))
+    .expect("load");
+
+    let agent = config.agents.profiles.0.get("opus").expect("agent profile");
+    assert_eq!(agent.agent, "claude");
+    assert_eq!(agent.description.as_deref(), Some("Main planning profile"));
+    let subagent = config
+        .subagents
+        .profiles
+        .0
+        .get("opus")
+        .expect("subagent profile");
+    assert_eq!(subagent.agent, "codex");
+    assert_eq!(
+        subagent.description.as_deref(),
+        Some("Supervised implementation profile")
+    );
+
+    let encoded = toml::to_string(subagent).expect("serialize profile");
+    assert!(encoded.contains("description = \"Supervised implementation profile\""));
+    assert_eq!(
+        toml::from_str::<Profile>(&encoded).expect("round-trip profile"),
+        *subagent
+    );
+}
+
+#[test]
+fn subagent_profile_prompt_file_resolves_against_the_config_dir() {
+    let dir = tempdir().expect("tempdir");
+    let config = load_no_fragments(&write_named(
+        &dir,
+        "agents.toml",
+        "[subagents.profiles.reviewer]\n\
+             agent = \"codex\"\n\
+             system-prompt-file = \"prompts/reviewer.md\"\n",
+    ))
+    .expect("load");
+
+    let profile = config
+        .subagents
+        .profiles
+        .0
+        .get("reviewer")
+        .expect("subagent profile");
+    assert_eq!(
+        profile.system_prompt_file.as_deref(),
+        Some(dir.path().join("prompts/reviewer.md").as_path())
+    );
+}
+
+#[test]
+fn strict_load_validates_subagent_profile_chains_and_team_collisions() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = dir.path().join("missing-agents-home");
+    let unknown_base = write_named(
+        &dir,
+        "agents.toml",
+        "[subagents.profiles.child]\nagent = \"missing\"\n",
+    );
+    let err = MachineConfig::load_from(&unknown_base, &agents_home)
+        .expect_err("unknown subagent base must fail");
+    assert!(matches!(
+        err,
+        ConfigErr::Agents {
+            source: crate::harness::spec::LayoutErr::UnknownProfileBase { profile, base },
+            ..
+        } if profile == "child" && base == "missing"
+    ));
+
+    let collision = write_named(
+        &dir,
+        "agents.toml",
+        "[subagents.profiles.peer]\nagent = \"claude\"\n",
+    );
+    let err =
+        MachineConfig::load_from(&collision, &agents_home).expect_err("team collision must fail");
+    assert!(matches!(
+        err,
+        ConfigErr::Agents {
+            source: crate::harness::spec::LayoutErr::ReservedTeamName(name),
+            ..
+        } if name == "peer"
+    ));
 }
 
 #[test]

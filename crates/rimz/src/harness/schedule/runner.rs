@@ -856,6 +856,7 @@ pub fn resolve_task_spec(
     let machine_config = MachineConfig::load_lenient();
     let launch = crate::config::effective::load(
         &machine_config.agents,
+        &machine_config.subagents.profiles,
         &workspace.project_root,
         &config_home(),
     )?;
@@ -868,7 +869,11 @@ pub fn resolve_task_spec(
         Ok(layout) => layout,
         Err(err @ agents_spec::LayoutErr::UnknownTeam { .. })
         | Err(err @ agents_spec::LayoutErr::UnknownCell { .. }) => {
-            launch.block_untrusted_reference(Some(spec), &machine_config.agents.commands)?;
+            launch.block_untrusted_reference(
+                crate::config::effective::ProfileScope::Agents,
+                Some(spec),
+                &machine_config.agents.commands,
+            )?;
             return Err(err.into());
         }
         Err(err) => return Err(err.into()),
