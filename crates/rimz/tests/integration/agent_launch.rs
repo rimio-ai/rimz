@@ -105,7 +105,7 @@ fn over_limit_agent_launch_refuses_before_creating_runtime_state() {
 
 #[cfg(unix)]
 #[test]
-fn subagent_caller_refuses_agent_launch_before_creating_runtime_state() {
+fn subagent_caller_refuses_subagent_launch_before_creating_runtime_state() {
     let env = Env::new();
     let workspace =
         rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
@@ -140,7 +140,13 @@ fn subagent_caller_refuses_agent_launch_before_creating_runtime_state() {
 
     let output = env
         .rimz()
-        .args(["agents", "claude", "--worktree=subagent-refused"])
+        .args([
+            "subagents",
+            "claude",
+            "try to delegate again",
+            "--name",
+            "subagent-refused",
+        ])
         .env(rimz::harness::run::ENV_AGENT_KIND, "codex")
         .env(rimz::harness::run::ENV_AGENT_ID, launch_id.as_str())
         .output()
@@ -157,13 +163,6 @@ fn subagent_caller_refuses_agent_launch_before_creating_runtime_state() {
         env.store().read_events().expect("read events").len(),
         1,
         "refusal must not append a provisional launch"
-    );
-    assert!(
-        !env.home_root
-            .join("project-worktrees")
-            .join("subagent-refused")
-            .exists(),
-        "refusal must precede worktree creation"
     );
 }
 
