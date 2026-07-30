@@ -52,18 +52,19 @@ fn supervised_run_placement_matrix() {
 
 #[test]
 fn subagent_zone_strategy_uses_solo_column_and_team_companion_tab() {
-    use super::pane::{SubagentSplitFailure, SubagentZoneStrategy, select_subagent_zone_strategy};
+    use super::pane::{SubagentSplitFallback, SubagentZoneStrategy, select_subagent_zone_strategy};
 
+    let theme = rimz::config::ThemeConfig::default();
     let mut solo = agent_state("codex", "solo", AgentStatus::Running);
     solo.pane = Some(pane_ref("%1", "work"));
     let live = vec![solo.pane.clone().unwrap()];
     assert_eq!(
-        select_subagent_zone_strategy(std::slice::from_ref(&solo), &live, &solo, "room"),
+        select_subagent_zone_strategy(std::slice::from_ref(&solo), &live, &solo, "room", &theme),
         Some(SubagentZoneStrategy::Split {
             session_name: "room".to_owned(),
             pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
             placement: rimz::mux::SplitPlacement::Directional(rimz::mux::SplitDirection::Right,),
-            on_failure: SubagentSplitFailure::CompanionTab,
+            on_failure: SubagentSplitFallback::CompanionTab,
         })
     );
 
@@ -77,6 +78,7 @@ fn subagent_zone_strategy_uses_solo_column_and_team_companion_tab() {
             std::slice::from_ref(planner.pane.as_ref().unwrap()),
             &planner,
             "room",
+            &theme,
         ),
         Some(SubagentZoneStrategy::CompanionTab {
             title: "design subagents".to_owned(),
@@ -86,8 +88,9 @@ fn subagent_zone_strategy_uses_solo_column_and_team_companion_tab() {
 
 #[test]
 fn subagent_zone_strategy_anchors_to_newest_child_across_team() {
-    use super::pane::{SubagentSplitFailure, SubagentZoneStrategy, select_subagent_zone_strategy};
+    use super::pane::{SubagentSplitFallback, SubagentZoneStrategy, select_subagent_zone_strategy};
 
+    let theme = rimz::config::ThemeConfig::default();
     let mut planner = agent_state("claude", "planner", AgentStatus::Running);
     planner.team = Some("forge".to_owned());
     planner.channel = Some("design".to_owned());
@@ -107,20 +110,21 @@ fn subagent_zone_strategy_anchors_to_newest_child_across_team() {
     let agents = vec![planner.clone(), coder, older, newer];
 
     assert_eq!(
-        select_subagent_zone_strategy(&agents, &live, &planner, "room"),
+        select_subagent_zone_strategy(&agents, &live, &planner, "room", &theme),
         Some(SubagentZoneStrategy::Split {
             session_name: "room".to_owned(),
             pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
             placement: rimz::mux::SplitPlacement::Stacked,
-            on_failure: SubagentSplitFailure::FailLaunch,
+            on_failure: SubagentSplitFallback::RunTab,
         })
     );
 }
 
 #[test]
 fn subagent_zone_strategy_uses_live_ended_child_and_skips_dead_newer_child() {
-    use super::pane::{SubagentSplitFailure, SubagentZoneStrategy, select_subagent_zone_strategy};
+    use super::pane::{SubagentSplitFallback, SubagentZoneStrategy, select_subagent_zone_strategy};
 
+    let theme = rimz::config::ThemeConfig::default();
     let mut parent = agent_state("codex", "parent", AgentStatus::Running);
     parent.pane = Some(pane_ref("%1", "work"));
     let mut kept = launched_child("kept", &parent, "%2", 10);
@@ -130,24 +134,26 @@ fn subagent_zone_strategy_uses_live_ended_child_and_skips_dead_newer_child() {
     let agents = vec![parent.clone(), kept, dead];
 
     assert_eq!(
-        select_subagent_zone_strategy(&agents, &live, &parent, "room"),
+        select_subagent_zone_strategy(&agents, &live, &parent, "room", &theme),
         Some(SubagentZoneStrategy::Split {
             session_name: "room".to_owned(),
             pane_id: PaneId::from_parts(MuxName::Tmux, "%2"),
             placement: rimz::mux::SplitPlacement::Stacked,
-            on_failure: SubagentSplitFailure::CompanionTab,
+            on_failure: SubagentSplitFallback::CompanionTab,
         })
     );
 }
 
 #[test]
 fn subagent_zone_strategy_reuses_unbound_team_companion_view() {
-    use super::pane::{SubagentSplitFailure, SubagentZoneStrategy, select_subagent_zone_strategy};
+    use super::pane::{SubagentSplitFallback, SubagentZoneStrategy, select_subagent_zone_strategy};
 
+    let theme = rimz::config::ThemeConfig::default();
+    let glyph = rimz::theme::theme_glyphs(&theme)(rimz::config::GlyphRole::StatusWorking);
     let mut planner = agent_state("claude", "planner", AgentStatus::Running);
     planner.team = Some("forge".to_owned());
     planner.pane = Some(pane_ref("%1", "design"));
-    let mut unbound_child = pane_ref("%2", "design subagents");
+    let mut unbound_child = pane_ref("%2", &format!("design subagents {glyph}"));
     unbound_child.session_name = "room".to_owned();
     let mut sidebar = pane_ref("%3", "design subagents");
     sidebar.session_name = "room".to_owned();
@@ -159,12 +165,13 @@ fn subagent_zone_strategy_reuses_unbound_team_companion_view() {
             &[planner.pane.clone().unwrap(), unbound_child],
             &planner,
             "room",
+            &theme,
         ),
         Some(SubagentZoneStrategy::Split {
             session_name: "room".to_owned(),
             pane_id: PaneId::from_parts(MuxName::Tmux, "%2"),
             placement: rimz::mux::SplitPlacement::Stacked,
-            on_failure: SubagentSplitFailure::FailLaunch,
+            on_failure: SubagentSplitFallback::RunTab,
         })
     );
     assert_eq!(
@@ -173,12 +180,13 @@ fn subagent_zone_strategy_reuses_unbound_team_companion_view() {
             &[planner.pane.clone().unwrap(), sidebar],
             &planner,
             "room",
+            &theme,
         ),
         Some(SubagentZoneStrategy::Split {
             session_name: "room".to_owned(),
             pane_id: PaneId::from_parts(MuxName::Tmux, "%3"),
             placement: rimz::mux::SplitPlacement::Directional(rimz::mux::SplitDirection::Right,),
-            on_failure: SubagentSplitFailure::FailLaunch,
+            on_failure: SubagentSplitFallback::RunTab,
         })
     );
 }

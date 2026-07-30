@@ -337,9 +337,13 @@ fn open_attempt_pane(
                     pane,
                     &launch_identity.name,
                 ) {
-                    Ok(true) => Ok(()),
-                    Ok(false) => tab(supervised::pane::subagent_companion_title(&prepared.store)),
-                    Err(err) => Err(err),
+                    supervised::pane::SubagentZoneOpen::Opened => Ok(()),
+                    supervised::pane::SubagentZoneOpen::CompanionTab => {
+                        tab(supervised::pane::subagent_companion_title(&prepared.store))
+                    }
+                    supervised::pane::SubagentZoneOpen::RunTab => {
+                        tab(format!("run {}", prepared.adapter.spec().kind))
+                    }
                 }
             }
             Err(err) => Err(anyhow::Error::from(err)),
