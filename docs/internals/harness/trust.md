@@ -31,7 +31,7 @@ Every field that can cause a process to run enters the hash. The projection is [
 - `[[hooks]]` — `event`, `command`.
 - `[env]` — every key and value.
 
-The hash input is canonical JSON over `ExecutableSurface`: struct field order is fixed, `BTreeMap` keys sort, and `Option::None` serializes as `null`, so the same config always hashes to the same bytes. The wire format is `sha256:<hex>`. Non-command fields such as `display_name` or `sidebar_width` deserialize leniently and never touch the hash.
+The hash input is canonical JSON over `ExecutableSurface`: struct field order is fixed, `BTreeMap` keys sort, and `Option::None` serializes as `null`, so the same config always hashes to the same bytes. Empty `subagent_profiles` is omitted to preserve grants made before that collection existed; once non-empty, the collection and all of its launch fields are hashed. The wire format is `sha256:<hex>`. Non-command fields such as `display_name` or `sidebar_width` deserialize leniently and never touch the hash.
 
 Room layout is per-machine policy, so a project config carrying a `[layout]` table (including `[[layout.initial_panes]]` and `[layout.tmux]`) fails the read with the fix to move it to `$XDG_CONFIG_HOME/rimz/config.toml` ([`check_project_config_removed_tables`](../../../crates/rimz/src/trust.rs)). Personal machine policy stays out of the hash entirely: per-machine `[[notifications.handler]]` and `[notifications].command`, per-machine `[agents.profiles]`, `[subagents.profiles]`, and `[agents.teams]`, and per-machine loop `check` commands all live under `~/.config/rimz/` and are never trust-tracked.
 

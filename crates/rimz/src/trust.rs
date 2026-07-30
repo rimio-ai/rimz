@@ -568,8 +568,9 @@ fn remove_birth_prompt_dismissal(path: &Path) {
 ///
 /// The hash input is canonical JSON over [`ExecutableSurface`], so struct
 /// field order is fixed, `BTreeMap` keys sort, and `Option::None` serializes
-/// as `null`. The wire format is `sha256:<hex>`. Changing this projection is
-/// a product-invariant change that must land alongside a doc update in
+/// as `null`. Empty subagent profiles are omitted for compatibility with
+/// grants made before that collection existed. The wire format is
+/// `sha256:<hex>`. Changing this projection is a product-invariant change that must land alongside a doc update in
 /// [`docs/internals/harness/trust.md`](../../docs/internals/harness/trust.md).
 pub fn executable_surface_hash(config: &ProjectConfig) -> String {
     surface_snapshot(config).hash
@@ -723,7 +724,8 @@ pub struct HookConfig {
 /// Canonical projection of [`ProjectConfig`] into just the fields the trust
 /// hash covers. Serialized as JSON so the byte order is stable across runs
 /// (struct field order is fixed, `BTreeMap` keys sort, `Option::None`
-/// serializes as `null`).
+/// serializes as `null`). The subagent profile collection is omitted when
+/// empty to preserve the pre-collection wire.
 #[derive(Serialize)]
 struct ExecutableSurface<'a> {
     agents: Vec<ExecutableAgent<'a>>,
