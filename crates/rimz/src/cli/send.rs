@@ -402,7 +402,7 @@ fn env_string(key: &str) -> Option<String> {
 
 /// Read a prompt file as-is, trimming only the trailing newline an editor adds so
 /// it never lands as a blank composer line before the submit.
-fn read_prompt_file(path: &Path) -> Result<String> {
+pub(crate) fn read_prompt_file(path: &Path) -> Result<String> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("reading prompt file `{}`", path.display()))?;
     let text = raw.trim_end_matches(['\r', '\n']);
