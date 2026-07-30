@@ -5320,9 +5320,11 @@ version = "0.4.3"
 dependencies = [
  "anyhow",
  "hex",
+ "proc-macro2",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "syn 2.0.118",
  "tempfile",
  "toml",
  "ureq",
