@@ -25,7 +25,7 @@ static ENV_PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub const SUBAGENT_REMINDER: &str = concat!(
     "<system_reminder>You are a subagent: a supervised child launched by another agent to ",
-    "complete the task above. You must not spawn agents or subagents of any kind — do not use ",
+    "complete the task you were given. You must not spawn agents or subagents of any kind — do not use ",
     "agent, task, or spawn tools, and do not launch `rimz subagents`, `rimz agents`, or ",
     "`rimz teams`. Do the work yourself with your direct tools and report the result; your final ",
     "message is returned to your caller when you exit.</system_reminder>"
