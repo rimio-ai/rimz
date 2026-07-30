@@ -134,8 +134,7 @@ fn walk(root: &Path, directory: &Path, sources: &mut Vec<Source>) -> Result<()> 
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            let name = path.file_name().and_then(|name| name.to_str());
-            if matches!(name, Some(".git" | "target")) {
+            if path == root.join(".git") || path == root.join("target") {
                 continue;
             }
             walk(root, &path, sources)?;
@@ -152,4 +151,27 @@ fn walk(root: &Path, directory: &Path, sources: &mut Vec<Source>) -> Result<()> 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn working_tree_walk_keeps_source_modules_named_target() {
+        let root = tempfile::tempdir().unwrap();
+        let source_target = root.path().join("src/harness/target");
+        fs::create_dir_all(&source_target).unwrap();
+        fs::write(source_target.join("mod.rs"), "pub struct Kept;\n").unwrap();
+        fs::create_dir_all(root.path().join("target/generated")).unwrap();
+        fs::write(
+            root.path().join("target/generated/ignored.rs"),
+            "pub struct Ignored;\n",
+        )
+        .unwrap();
+
+        let sources = working_tree_rust_sources(root.path()).unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].path, Path::new("src/harness/target/mod.rs"));
+    }
 }

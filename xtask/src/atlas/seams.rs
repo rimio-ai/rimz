@@ -7,7 +7,7 @@ use serde::Serialize;
 use crate::source_files;
 
 use super::history::{self, CochangeEdge};
-use super::modules::{crate_module_for_path, module_for_path};
+use super::modules::{crate_module_for_path, module_for_path, workspace_crate_names};
 use super::sources;
 use super::syntax;
 use super::{positive_usize, set_once, validate_scope, value};
@@ -18,12 +18,12 @@ const DEFAULT_TOP: usize = 15;
 const USAGE: &str = "cargo xtask atlas seams [--path <prefix>] [--top N] [--since <ref>] [--max-commit-files N] [--min-cochange N] [--json]
 
 Imports come from Rust `use` items; inline fully-qualified paths are not counted.
-Co-change omits commits broader than --max-commit-files.
+Co-change omits commits touching more than --max-commit-files under --path.
 
   --path <path>          root-relative subtree (default crates/rimz/src)
   --top N                rows per section (default 15)
   --since <ref>          restrict co-change to <ref>..HEAD
-  --max-commit-files N   omit broad commits (default 10)
+  --max-commit-files N   omit commits broader than N files under --path (default 10)
   --min-cochange N       divergence threshold (default 3)
   --json                 versioned JSON agent contract (v1)";
 
@@ -47,7 +47,7 @@ struct ImportEdge {
 #[derive(Clone, Debug, Serialize)]
 struct ExternalSurface {
     module: String,
-    outside: String,
+    outside: Vec<String>,
     items: usize,
 }
 
@@ -169,15 +169,23 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .into_iter()
         .filter_map(|path| path.strip_prefix(root).ok().map(crate_module_for_path))
         .collect::<BTreeSet<_>>();
+    let workspace_crates = workspace_crate_names(root)?;
     let scope_module = crate_module_for_path(&args.path.join("mod.rs"));
+    let mut scope_endpoints = syntax
+        .files
+        .iter()
+        .map(|file| module_for_path(&file.path, &args.path))
+        .collect::<BTreeSet<_>>();
+    scope_endpoints.insert("(root)".to_owned());
     let mut imports = BTreeMap::<(String, String), BTreeSet<String>>::new();
     for file in &syntax.files {
         let from = module_for_path(&file.path, &args.path);
         for imported in &file.imports {
-            if !imported.internal {
+            let Some(imported_module) =
+                syntax::resolved_internal_import(imported, &known_modules, &workspace_crates)
+            else {
                 continue;
-            }
-            let imported_module = syntax::resolved_import_module(imported, &known_modules);
+            };
             let to = endpoint(&imported_module, &scope_module);
             if from != to {
                 imports
@@ -202,19 +210,30 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             .then_with(|| left.from.cmp(&right.from))
             .then_with(|| left.to.cmp(&right.to))
     });
-    let mut external_surface = import_edges
-        .iter()
-        .map(|edge| ExternalSurface {
-            module: edge.from.clone(),
-            outside: edge.to.clone(),
-            items: edge.items,
+    let mut surfaces = BTreeMap::<String, (BTreeSet<String>, BTreeSet<(String, String)>)>::new();
+    for ((from, to), items) in &imports {
+        if scope_endpoints.contains(to) {
+            continue;
+        }
+        let surface = surfaces.entry(from.clone()).or_default();
+        surface.0.insert(to.clone());
+        surface
+            .1
+            .extend(items.iter().map(|item| (to.clone(), item.clone())));
+    }
+    let mut external_surface = surfaces
+        .into_iter()
+        .map(|(module, (outside, items))| ExternalSurface {
+            module,
+            outside: outside.into_iter().collect(),
+            items: items.len(),
         })
         .collect::<Vec<_>>();
     external_surface.sort_by(|left, right| {
-        left.module
-            .cmp(&right.module)
-            .then_with(|| right.items.cmp(&left.items))
-            .then_with(|| left.outside.cmp(&right.outside))
+        right
+            .items
+            .cmp(&left.items)
+            .then_with(|| left.module.cmp(&right.module))
     });
 
     let cochange_edges = history::cochange(
@@ -300,6 +319,17 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
 }
 
 fn endpoint(module_path: &str, scope_module: &str) -> String {
+    if scope_module.is_empty() {
+        return if module_path == "(crate)" {
+            "(root)".to_owned()
+        } else {
+            module_path
+                .split("::")
+                .next()
+                .unwrap_or("(root)")
+                .to_owned()
+        };
+    }
     if module_path == scope_module {
         return "(root)".to_owned();
     }
@@ -342,7 +372,9 @@ fn print_report(report: &Report, top: usize) {
     for surface in report.external_surface.iter().take(top) {
         println!(
             "{} -> {}: {} items",
-            surface.module, surface.outside, surface.items
+            surface.module,
+            surface.outside.join(", "),
+            surface.items
         );
     }
     bounded_tail(
