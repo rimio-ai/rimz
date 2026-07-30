@@ -1526,19 +1526,120 @@ fn provider_binding_debug_redacts_account_key() {
 }
 
 #[test]
-fn batch_wait_keeps_labeled_output_for_one_target() {
+fn wait_style_labels_only_plural_or_any_results() {
     assert!(matches!(
         wait::WaitStyle::new(1, false, true),
         wait::WaitStyle::Single { json: true }
     ));
     assert_eq!(
-        wait::WaitStyle::batch(true),
-        wait::WaitStyle::All { json: true }
+        wait::WaitStyle::new(2, false, true),
+        wait::WaitStyle::All { json: true },
     );
     assert_eq!(
-        wait::WaitStyle::batch(false),
-        wait::WaitStyle::All { json: false }
+        wait::WaitStyle::new(1, true, false),
+        wait::WaitStyle::Any { json: false },
     );
+}
+
+#[test]
+fn plural_wait_block_prints_completed_answer() {
+    let mut record = RunRecord::new(
+        WorkspaceId::from_project_root(Path::new("/tmp/rimz-wait")),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        PathBuf::from("/tmp/rimz-wait"),
+    );
+    record.status = RunStatus::Completed;
+    record.last_message = Some("child answer\n".to_owned());
+    let outcome = wait::TargetOutcome {
+        name: "calm-fox".to_owned(),
+        payload: wait::TerminalPayload::Run(Box::new(record)),
+    };
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    wait::print_wait_block(&mut out, &mut err, &outcome).unwrap();
+
+    assert_eq!(
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
+        "--- calm-fox ---\nchild answer\n\n"
+    );
+    assert!(err.is_empty());
+}
+
+#[test]
+fn plural_wait_block_marks_failure_and_prints_forensics() {
+    let mut record = RunRecord::new(
+        WorkspaceId::from_project_root(Path::new("/tmp/rimz-wait")),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        PathBuf::from("/tmp/rimz-wait"),
+    );
+    record.status = RunStatus::Failed;
+    record.failure_tail = Some("provider failed".to_owned());
+    let outcome = wait::TargetOutcome {
+        name: "bright-owl".to_owned(),
+        payload: wait::TerminalPayload::Run(Box::new(record)),
+    };
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    wait::print_wait_block(&mut out, &mut err, &outcome).unwrap();
+
+    assert_eq!(
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
+        "--- bright-owl (failed) ---\n\n"
+    );
+    let err = anstream::adapter::strip_str(&String::from_utf8(err).unwrap()).to_string();
+    assert!(err.contains("rimz: run failed (exit 1)"));
+    assert!(err.contains("provider failed"));
+}
+
+#[test]
+fn plural_wait_block_for_agent_payload_is_header_only() {
+    let agent = agent_with_status(
+        "agent_0123456789abcdef0123456789abcdef",
+        AgentStatus::Idle,
+        TurnPhase::Idle,
+        1_000,
+    );
+    let outcome = wait::TargetOutcome {
+        name: "quiet-lynx".to_owned(),
+        payload: wait::TerminalPayload::Agent(Box::new(agent)),
+    };
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    wait::print_wait_block(&mut out, &mut err, &outcome).unwrap();
+
+    assert_eq!(
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
+        "--- quiet-lynx ---\n\n"
+    );
+    assert!(err.is_empty());
+}
+
+#[test]
+fn plural_wait_json_entry_includes_last_message() {
+    let mut record = RunRecord::new(
+        WorkspaceId::from_project_root(Path::new("/tmp/rimz-wait")),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        PathBuf::from("/tmp/rimz-wait"),
+    );
+    record.status = RunStatus::Completed;
+    record.last_message = Some("finished review".to_owned());
+    let outcome = wait::TargetOutcome {
+        name: "calm-fox".to_owned(),
+        payload: wait::TerminalPayload::Run(Box::new(record)),
+    };
+
+    let value = serde_json::to_value(outcome.entry()).unwrap();
+
+    assert_eq!(value["last_message"], "finished review");
 }
 
 fn bare_exec_args() -> ExecRequest {

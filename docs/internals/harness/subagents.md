@@ -73,7 +73,7 @@ Parsing, required fields, timeout syntax, and duplicate explicit names are valid
 
 The supervised runner's background outcome carries the minted petname and run ID back to the subagents command. Single launch prints the identity directly, while fanout collects every identity. This avoids rediscovering children from a before/after store snapshot, which could confuse another launch racing in the same family.
 
-By default, either form returns after launching; fanout can also render its collected run IDs as JSON. With `--wait`, single launch uses `agents_cmd::wait_agent` and its single-result renderer, while fanout passes its exact collected set to `agents_cmd::wait_agent_batch`. The existing wait renderers, caller-side deadline, and exit-code paths therefore own both waited results: one launch renders the final answer or full JSON run record, while fanout renders labeled statuses or a result map.
+By default, either form returns after launching; fanout can also render its collected run IDs as JSON. With `--wait`, both forms pass their exact collected names to `agents_cmd::wait_agent`. One child therefore uses the single-result renderer and prints only the answer (or the full JSON run record); plural fanouts use the shared multi-result renderer, which prints each answer as it settles beneath a child-name header or returns a labeled JSON map with each run's final message.
 
 A runtime failure during that loop aborts the remaining launches and reports every child already started. Those children are not rolled back: their durable run records, deadlines, self-cleanup, and caller-scoped `wait`/`stop` behavior remain the ordinary supervised lifecycle. Validation failures are different — because desugaring completed before the loop, they launch nothing.
 
