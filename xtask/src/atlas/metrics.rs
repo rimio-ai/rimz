@@ -22,7 +22,7 @@ const HIGH_SLOC: f64 = 100.0;
 const CRITICAL_CYCLOMATIC: f64 = 25.0;
 const CRITICAL_COGNITIVE: f64 = 50.0;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub(super) struct FunctionMetric {
     pub(super) module: String,
     pub(super) path: PathBuf,
@@ -236,9 +236,136 @@ fn over_threshold(value: f64, threshold: f64) -> f64 {
 mod tests {
     use super::*;
 
+    fn metric_sum(sum: u64) -> MetricSum {
+        MetricSum { sum: sum as f64 }
+    }
+
+    fn metrics(cyclomatic: u64, cognitive: u64, sloc: u64) -> Metrics {
+        Metrics {
+            cyclomatic: metric_sum(cyclomatic),
+            cognitive: metric_sum(cognitive),
+            loc: LocMetrics { sloc: sloc as f64 },
+        }
+    }
+
+    fn space(
+        name: &str,
+        kind: &str,
+        start_line: u64,
+        cyclomatic: u64,
+        cognitive: u64,
+        sloc: u64,
+        spaces: Vec<Space>,
+    ) -> Space {
+        Space {
+            name: name.to_owned(),
+            kind: kind.to_owned(),
+            start_line,
+            spaces,
+            metrics: metrics(cyclomatic, cognitive, sloc),
+        }
+    }
+
     #[test]
     fn calibrated_score_ignores_low_cognitive_cyclomatic_noise() {
         assert_eq!(score(50.0, 5.0, 20.0), 0.0);
         assert!(score(30.0, 60.0, 120.0) > 0.0);
+    }
+
+    #[test]
+    fn score_uses_strict_severity_boundaries() {
+        assert_eq!(score(10.0, 15.0, 60.0), 0.0);
+        assert_eq!(score(15.0, 25.0, 100.0), 0.0);
+        assert!(score(16.0, 25.0, 100.0) > 0.0);
+        let high_boundary = score(25.0, 50.0, 100.0);
+        let critical = score(26.0, 50.0, 100.0);
+        assert!(high_boundary > 0.0);
+        assert!(critical > high_boundary);
+        assert!(score(1.0, 51.0, 1.0) > 0.0);
+        assert!(score(1.0, 1.0, 101.0) > 0.0);
+    }
+
+    #[test]
+    fn score_weights_overruns_from_warn_thresholds() {
+        let expected = 2.0 * (1.0 + 0.25 + 1.0 / 12.0);
+        assert!((score(15.0, 30.0, 80.0) - expected).abs() < f64::EPSILON);
+        assert_eq!(score(80.0, 1.0, 60.0), 0.0);
+        assert_eq!(score(80.0, 1.0, 120.0), 0.5);
+    }
+
+    #[test]
+    fn collect_functions_keeps_parent_aggregate_and_skips_nested_closures() {
+        let root = space(
+            "crate",
+            "unit",
+            1,
+            40,
+            30,
+            80,
+            vec![
+                space(
+                    "outer",
+                    "function",
+                    10,
+                    20,
+                    18,
+                    40,
+                    vec![space("<anonymous>", "closure", 12, 12, 9, 8, vec![])],
+                ),
+                space("sibling", "function", 30, 3, 2, 5, vec![]),
+            ],
+        );
+        let mut functions = Vec::new();
+        collect_functions(
+            &root,
+            Path::new("src/demo.rs"),
+            Path::new("src"),
+            None,
+            &mut functions,
+        );
+        assert_eq!(functions.len(), 2);
+        assert_eq!(functions[0].name, "outer");
+        assert_eq!(functions[0].line, 10);
+        assert_eq!(functions[1].name, "sibling");
+    }
+
+    #[test]
+    fn rust_code_analysis_json_contract_deserializes() {
+        let raw = r#"{
+            "name": "example.rs",
+            "start_line": 1,
+            "kind": "unit",
+            "spaces": [{
+                "name": "parse",
+                "start_line": 5,
+                "kind": "function",
+                "spaces": [],
+                "metrics": {
+                    "cyclomatic": { "sum": 7 },
+                    "cognitive": { "sum": 4 },
+                    "loc": { "sloc": 8 }
+                }
+            }],
+            "metrics": {
+                "cyclomatic": { "sum": 9 },
+                "cognitive": { "sum": 5 },
+                "loc": { "sloc": 20 }
+            }
+        }"#;
+        let root: Space = serde_json::from_str(raw).unwrap();
+        let mut functions = Vec::new();
+        collect_functions(
+            &root,
+            Path::new("src/example.rs"),
+            Path::new("src"),
+            None,
+            &mut functions,
+        );
+        assert_eq!(root.metrics.loc.sloc, 20.0);
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].name, "parse");
+        assert_eq!(functions[0].cyclomatic, 7.0);
+        assert_eq!(functions[0].cognitive, 4.0);
+        assert_eq!(functions[0].sloc, 8.0);
     }
 }

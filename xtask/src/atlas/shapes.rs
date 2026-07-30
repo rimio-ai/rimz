@@ -155,13 +155,11 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .map(|function| shingle_set(&function.skeleton))
         .collect::<Vec<_>>();
     let mut union = UnionFind::new(functions.len());
-    let mut similarities = BTreeMap::<(usize, usize), f64>::new();
     for left in 0..functions.len() {
         for right in left + 1..functions.len() {
             let similarity = jaccard(&shingles[left], &shingles[right]);
             if similarity >= args.similarity {
                 union.join(left, right);
-                similarities.insert((left, right), similarity);
             }
         }
     }
@@ -172,7 +170,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let mut clusters = groups
         .into_values()
         .filter(|members| members.len() > 1)
-        .map(|members| cluster(&functions, &similarities, members))
+        .map(|members| cluster(&functions, &shingles, members))
         .collect::<Vec<_>>();
     clusters.sort_by(|left, right| {
         right
@@ -196,7 +194,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
 
 fn cluster(
     functions: &[FnBody],
-    similarities: &BTreeMap<(usize, usize), f64>,
+    shingles: &[BTreeSet<Vec<String>>],
     indexes: Vec<usize>,
 ) -> Cluster {
     let mean_sloc = indexes
@@ -210,7 +208,7 @@ fn cluster(
         .flat_map(|(position, left)| {
             indexes[position + 1..]
                 .iter()
-                .filter_map(move |right| similarities.get(&ordered_indexes(*left, *right)).copied())
+                .map(move |right| jaccard(&shingles[*left], &shingles[*right]))
         })
         .fold(1.0_f64, f64::min);
     let mut members = indexes
@@ -254,14 +252,6 @@ fn jaccard(left: &BTreeSet<Vec<String>>, right: &BTreeSet<Vec<String>>) -> f64 {
     let intersection = left.intersection(right).count();
     let union = left.len() + right.len() - intersection;
     intersection as f64 / union as f64
-}
-
-fn ordered_indexes(left: usize, right: usize) -> (usize, usize) {
-    if left < right {
-        (left, right)
-    } else {
-        (right, left)
-    }
 }
 
 struct UnionFind {
