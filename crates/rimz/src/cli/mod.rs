@@ -666,6 +666,26 @@ pub(crate) fn machine_config() -> std::sync::Arc<rimz::config::MachineConfig> {
     rimz::config::MachineConfig::load_lenient()
 }
 
+pub(crate) fn report_unknown_config_keys(config: &rimz::config::MachineConfig) -> Result<()> {
+    let mut stderr = std::io::stderr().lock();
+    for notice in &config.notices.unknown_keys {
+        writeln!(
+            stderr,
+            "rimz: unknown config key `{}` in {} — ignored; run `rimz setup` to remove it",
+            notice.key,
+            notice.path.display(),
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn require_agents_fragments(config: &rimz::config::MachineConfig) -> Result<()> {
+    if let Some(message) = config.agents_fragment_failure() {
+        anyhow::bail!("{message}");
+    }
+    Ok(())
+}
+
 pub(crate) fn open_store(workspace: &rimz::ResolvedWorkspace) -> Result<Store> {
     let paths = StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing store paths")?;
@@ -736,6 +756,23 @@ mod tests {
             session_name: "rimz-test".to_owned(),
             mux_hint: None,
         }
+    }
+
+    #[test]
+    fn agent_launch_precondition_surfaces_fragment_error() {
+        let mut config = rimz::config::MachineConfig::default();
+        config
+            .notices
+            .fragment_errors
+            .push(rimz::config::AgentsFragmentError {
+                path: PathBuf::from("/tmp/.agents/profiles/broken/agent.toml"),
+                message: "cannot load fragment: syntax error".to_owned(),
+            });
+
+        let error = require_agents_fragments(&config).expect_err("broken fragment");
+
+        assert_eq!(error.to_string(), "cannot load fragment: syntax error");
+        assert!(!error.to_string().contains("unknown team"));
     }
 
     #[test]

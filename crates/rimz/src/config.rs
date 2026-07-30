@@ -8,13 +8,13 @@
 //! RimZ drives *your* box or link *your* accounts, so they live outside the
 //! repo and outside the trust hash — a clone never inherits them.
 //!
-//! A missing file is the default config, and unknown keys are ignored so an
-//! older binary tolerates a newer file. Runtime entry points use
-//! [`MachineConfig::load_lenient`], which degrades a broken file to built-in
-//! defaults with a warning. Room start adds one narrow strict preflight for an
-//! unenforceable account-day cap; strict [`MachineConfig::load`] and
-//! [`MachineConfig::load_from`] otherwise back `rimz config` and `rimz doctor`,
-//! which report the precise error.
+//! A missing file is the default config, and unknown keys are ignored with a
+//! visible warning so an older binary tolerates a newer file. Runtime entry
+//! points use [`MachineConfig::load_lenient`], which degrades a broken machine
+//! file to built-in defaults. A broken `~/.agents` fragment drops only that
+//! fragment from read-only views and blocks launches with its source error.
+//! Strict [`MachineConfig::load`] and [`MachineConfig::load_from`] back config
+//! inspection and report precise errors.
 
 use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
@@ -74,7 +74,8 @@ pub use display::{
     DisplayConfig, HighlightStepsConfig, PixelMode, ProviderTabsMode, ScrollbarMode,
 };
 pub use edit::{
-    ConfigEditErr, ConfigEditor, FileMergeOutcome, MergeAction, MergeReport, SkippedKey,
+    ConfigEditErr, ConfigEditor, FileMergeOutcome, FragmentRepairOutcome, FragmentRepairReport,
+    MergeAction, MergeReport, SkippedKey,
 };
 pub use glyphs::{
     GlyphOverrides, GlyphRole, ThemeGlyphsConfig, glyph_lookup_hint, is_named_glyph_set,
@@ -337,6 +338,37 @@ impl ConfigErr {
 
 pub type Result<T> = std::result::Result<T, ConfigErr>;
 
+/// Non-fatal configuration findings retained for user-facing entry points.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConfigNotices {
+    pub unknown_keys: Vec<UnknownConfigKey>,
+    pub fragment_errors: Vec<AgentsFragmentError>,
+}
+
+/// A key ignored while loading a per-machine config file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownConfigKey {
+    pub path: PathBuf,
+    pub key: String,
+}
+
+/// A `~/.agents` fragment that the lenient loader could not use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentsFragmentError {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+impl ConfigNotices {
+    fn add_unknown_keys(&mut self, path: &Path, keys: Vec<String>) {
+        self.unknown_keys
+            .extend(keys.into_iter().map(|key| UnknownConfigKey {
+                path: path.to_path_buf(),
+                key,
+            }));
+    }
+}
+
 /// Per-machine configuration. Lenient on unknown keys so a newer config never
 /// breaks an older binary, and every field defaults so the smallest useful file
 /// is a single section.
@@ -365,6 +397,8 @@ pub struct MachineConfig {
     pub subagents: SubagentProfilesConfig,
     #[serde(default, skip_serializing_if = "LoopConfig::is_empty")]
     pub r#loop: LoopConfig,
+    #[serde(skip)]
+    pub notices: ConfigNotices,
 }
 
 impl MachineConfig {
@@ -442,20 +476,27 @@ impl MachineConfig {
         let agents_path = files.path(MachineConfigFileKind::Agents);
         let loop_path = files.path(MachineConfigFileKind::Loop);
 
-        let core = load_optional(files.core_path(), parse_core_text)?.unwrap_or_default();
-        validate_account_budgets(&core.accounts, files.core_path())?;
-        let theme = load_optional(&theme_path, parse_theme_text)?.unwrap_or_default();
-        let agents = load_optional(&agents_path, parse_agents_text)?.unwrap_or_default();
-        let loop_ = load_optional(&loop_path, parse_loop_text)?.unwrap_or_default();
+        let core = load_parsed_optional(files.core_path(), parse_core_text_collecting)?;
+        validate_account_budgets(&core.value.accounts, files.core_path())?;
+        let theme = load_parsed_optional(&theme_path, parse_theme_text_collecting)?;
+        let agents = load_parsed_optional(&agents_path, parse_agents_text_collecting)?;
+        let loop_ = load_parsed_optional(&loop_path, parse_loop_text_collecting)?;
 
-        let mut config = Self::assemble(core, theme, agents, loop_);
+        let mut notices = ConfigNotices::default();
+        notices.add_unknown_keys(files.core_path(), core.unknown_keys);
+        notices.add_unknown_keys(&theme_path, theme.unknown_keys);
+        notices.add_unknown_keys(&agents_path, agents.unknown_keys);
+        notices.add_unknown_keys(&loop_path, loop_.unknown_keys);
+        let mut config = Self::assemble(core.value, theme.value, agents.value, loop_.value);
         validate_notifications_config(&config.notifications, files.core_path())?;
-        apply_agents_home(
+        apply_agents_home_collecting(
             &mut config.agents,
             &config.subagents,
             files.agents_home(),
             &agents_path,
+            &mut notices,
         )?;
+        config.notices = notices;
         Ok(config)
     }
 
@@ -465,12 +506,17 @@ impl MachineConfig {
         let agents_path = files.path(MachineConfigFileKind::Agents);
         let loop_path = files.path(MachineConfigFileKind::Loop);
 
-        let core = recover(load_optional(files.core_path(), parse_core_text)).unwrap_or_default();
-        let theme = recover(load_optional(&theme_path, parse_theme_text)).unwrap_or_default();
-        let agents = recover(load_optional(&agents_path, parse_agents_text)).unwrap_or_default();
-        let loop_ = recover(load_optional(&loop_path, parse_loop_text)).unwrap_or_default();
+        let core = recover_parsed(files.core_path(), parse_core_text_collecting);
+        let theme = recover_parsed(&theme_path, parse_theme_text_collecting);
+        let agents = recover_parsed(&agents_path, parse_agents_text_collecting);
+        let loop_ = recover_parsed(&loop_path, parse_loop_text_collecting);
 
-        let mut config = Self::assemble(core, theme, agents, loop_);
+        let mut notices = ConfigNotices::default();
+        notices.add_unknown_keys(files.core_path(), core.unknown_keys);
+        notices.add_unknown_keys(&theme_path, theme.unknown_keys);
+        notices.add_unknown_keys(&agents_path, agents.unknown_keys);
+        notices.add_unknown_keys(&loop_path, loop_.unknown_keys);
+        let mut config = Self::assemble(core.value, theme.value, agents.value, loop_.value);
         if let Err(err) = validate_notifications_config(&config.notifications, files.core_path()) {
             tracing::warn!(
                 error = %err,
@@ -478,40 +524,68 @@ impl MachineConfig {
             );
             config.notifications = NotificationsPrefs::default();
         }
-        let fragment = match discover_agents_home(files.agents_home()) {
-            Ok(fragment) => fragment,
-            Err(err) => {
-                tracing::warn!(
-                    error = %err,
-                    "~/.agents discovery failed; using per-machine agents config only",
-                );
-                AgentsFragment::default()
+        let mut discovered = discover_agents_home_lenient(files.agents_home());
+        notices.unknown_keys.append(&mut discovered.unknown_keys);
+        notices.fragment_errors.append(&mut discovered.errors);
+        loop {
+            let mut merged = config.agents.clone();
+            overlay_agents_fragment_under(&mut merged, &discovered.fragment);
+            match validate_agents_config(&merged, &agents_path) {
+                Ok(()) => {
+                    config.agents = merged;
+                    break;
+                }
+                Err(err) => {
+                    if let Some(path) = discovered.source_for_error(&err) {
+                        tracing::warn!(
+                            error = %err,
+                            fragment = %path.display(),
+                            "~/.agents fragment invalid; ignoring it",
+                        );
+                        notices
+                            .fragment_errors
+                            .push(fragment_error_notice(rehome_agents_error(err, &path)));
+                        discovered.remove_source(&path);
+                        continue;
+                    }
+                    tracing::warn!(
+                        error = %err,
+                        "per-machine agents config invalid; using built-in defaults",
+                    );
+                }
             }
-        };
-        let mut merged = config.agents.clone();
-        overlay_agents_fragment_under(&mut merged, &fragment);
-        match validate_agents_config(&merged, &agents_path) {
-            Ok(()) => config.agents = merged,
-            Err(err) => {
-                tracing::warn!(
-                    error = %err,
-                    "per-machine agents config invalid; using built-in defaults",
-                );
+            loop {
                 let mut fallback = AgentsConfig::default();
-                overlay_agents_fragment_under(&mut fallback, &fragment);
+                overlay_agents_fragment_under(&mut fallback, &discovered.fragment);
                 match validate_agents_config(&fallback, &agents_path) {
                     Ok(()) => {
                         config.agents = fallback;
+                        break;
                     }
                     Err(err) => {
+                        if let Some(path) = discovered.source_for_error(&err) {
+                            tracing::warn!(
+                                error = %err,
+                                fragment = %path.display(),
+                                "~/.agents fragment invalid; ignoring it",
+                            );
+                            notices
+                                .fragment_errors
+                                .push(fragment_error_notice(rehome_agents_error(err, &path)));
+                            discovered.remove_source(&path);
+                            continue;
+                        }
                         tracing::warn!(
                             error = %err,
                             "~/.agents fragments invalid; using built-in defaults",
                         );
+                        notices.fragment_errors.push(fragment_error_notice(err));
                         config.agents = AgentsConfig::default();
+                        break;
                     }
                 }
             }
+            break;
         }
         if let Err(err) =
             validate_subagent_profiles_config(&config.subagents, &config.agents, &agents_path)
@@ -522,10 +596,24 @@ impl MachineConfig {
             );
             config.subagents = SubagentProfilesConfig::default();
         }
+        config.notices = notices;
         config
     }
 
     pub fn parse_text(path: &Path, text: &str, agents_home: &Path) -> Result<Self> {
+        Self::parse_text_with_agents_home(path, text, agents_home, false)
+    }
+
+    fn parse_text_for_edit(path: &Path, text: &str, agents_home: &Path) -> Result<Self> {
+        Self::parse_text_with_agents_home(path, text, agents_home, true)
+    }
+
+    fn parse_text_with_agents_home(
+        path: &Path,
+        text: &str,
+        agents_home: &Path,
+        ignore_broken_fragments: bool,
+    ) -> Result<Self> {
         match path.file_name().and_then(|name| name.to_str()) {
             Some(THEME_FILE) => Ok(Self::assemble(
                 CoreConfig::default(),
@@ -535,7 +623,21 @@ impl MachineConfig {
             )),
             Some(AGENTS_FILE) => {
                 let mut file = parse_agents_text(path, text)?;
-                apply_agents_home(&mut file.agents, &file.subagents, agents_home, path)?;
+                if ignore_broken_fragments {
+                    let discovered = discover_agents_home_lenient(agents_home);
+                    let mut merged = file.agents.clone();
+                    overlay_agents_fragment_under(&mut merged, &discovered.fragment);
+                    validate_agents_file(&merged, &file.subagents, path)?;
+                    file.agents = merged;
+                } else {
+                    apply_agents_home_collecting(
+                        &mut file.agents,
+                        &file.subagents,
+                        agents_home,
+                        path,
+                        &mut ConfigNotices::default(),
+                    )?;
+                }
                 Ok(Self::assemble(
                     CoreConfig::default(),
                     ThemeConfig::default(),
@@ -598,11 +700,25 @@ impl MachineConfig {
             agents: agents_file.agents,
             subagents: agents_file.subagents,
             r#loop: loop_,
+            notices: ConfigNotices::default(),
         }
     }
 
     pub fn time_zone(&self) -> jiff::tz::TimeZone {
         resolve_time_zone(self.timezone.as_deref())
+    }
+
+    /// All unusable `~/.agents` fragments, rendered for a launch precondition
+    /// failure. An empty result means every discovered fragment loaded.
+    pub fn agents_fragment_failure(&self) -> Option<String> {
+        (!self.notices.fragment_errors.is_empty()).then(|| {
+            self.notices
+                .fragment_errors
+                .iter()
+                .map(|notice| notice.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        })
     }
 
     /// Serialize the effective config into a traversable TOML value.
@@ -722,7 +838,9 @@ fn broken_machine_files_in(files: &MachineConfigFiles) -> Vec<ConfigErr> {
         .map(|_| ()),
         load_optional(&files.path(MachineConfigFileKind::Loop), parse_loop_text).map(|_| ()),
     ];
-    checks.into_iter().filter_map(Result::err).collect()
+    let mut errors: Vec<_> = checks.into_iter().filter_map(Result::err).collect();
+    errors.extend(broken_agents_home_fragments(files.agents_home()));
+    errors
 }
 
 fn hash_config_stamp(stamp: &ConfigStamp) -> u64 {
@@ -855,6 +973,139 @@ struct AgentsFragment {
     commands: CommandsConfig,
 }
 
+#[derive(Debug)]
+struct Parsed<T> {
+    value: T,
+    unknown_keys: Vec<String>,
+}
+
+impl<T: Default> Default for Parsed<T> {
+    fn default() -> Self {
+        Self {
+            value: T::default(),
+            unknown_keys: Vec::new(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct DiscoveredAgentsHome {
+    fragment: AgentsFragment,
+    sources: AgentsFragmentSources,
+    unknown_keys: Vec<UnknownConfigKey>,
+    errors: Vec<AgentsFragmentError>,
+}
+
+#[derive(Default)]
+struct AgentsFragmentSources {
+    profiles: BTreeMap<String, PathBuf>,
+    teams: BTreeMap<String, PathBuf>,
+    commands: BTreeMap<String, PathBuf>,
+}
+
+impl DiscoveredAgentsHome {
+    fn merge(&mut self, path: &Path, fragment: AgentsFragment) {
+        self.sources.profiles.extend(
+            fragment
+                .profiles
+                .0
+                .keys()
+                .cloned()
+                .map(|name| (name, path.to_path_buf())),
+        );
+        self.sources.teams.extend(
+            fragment
+                .teams
+                .0
+                .keys()
+                .cloned()
+                .map(|name| (name, path.to_path_buf())),
+        );
+        self.sources.commands.extend(
+            fragment
+                .commands
+                .0
+                .keys()
+                .cloned()
+                .map(|name| (name, path.to_path_buf())),
+        );
+        merge_agents_fragment(&mut self.fragment, fragment);
+    }
+
+    fn source_for_error(&self, err: &ConfigErr) -> Option<PathBuf> {
+        let ConfigErr::Agents { source, .. } = err else {
+            return None;
+        };
+        use crate::harness::spec::LayoutErr;
+        let profile = match source {
+            LayoutErr::InvalidProfile { profile, .. }
+            | LayoutErr::UnknownProfileBase { profile, .. }
+            | LayoutErr::ProfileChainTooDeep { profile }
+            | LayoutErr::InvalidProfileName { name: profile }
+            | LayoutErr::ReservedProfileName { name: profile }
+            | LayoutErr::ProfileShadowsAddress { name: profile, .. } => Some(profile),
+            _ => None,
+        };
+        if let Some(profile) = profile
+            && let Some(path) = self.sources.profiles.get(profile)
+        {
+            return Some(path.clone());
+        }
+        let team = match source {
+            LayoutErr::UnknownRoleInTeam { team, .. }
+            | LayoutErr::UnknownLeaderRole { team, .. }
+            | LayoutErr::InvalidTeamName { name: team }
+            | LayoutErr::EmptyTeam { team }
+            | LayoutErr::UnknownRoleProfile { team, .. }
+            | LayoutErr::InvalidRoleName { team, .. }
+            | LayoutErr::DuplicateRole { team, .. }
+            | LayoutErr::UnknownRoleInLayout { team, .. }
+            | LayoutErr::RoleNotPlaced { team, .. }
+            | LayoutErr::DuplicateRoleInLayout { team, .. }
+            | LayoutErr::InvalidScratchPattern { team, .. }
+            | LayoutErr::RoleShadowsAddress { team, .. } => Some(team),
+            LayoutErr::ReservedTeamName(team) => Some(team),
+            _ => None,
+        };
+        if let Some(team) = team
+            && let Some(path) = self.sources.teams.get(team)
+        {
+            return Some(path.clone());
+        }
+        if let LayoutErr::InvalidCommand { command, .. } = source {
+            return self.sources.commands.get(command).cloned();
+        }
+        None
+    }
+
+    fn remove_source(&mut self, path: &Path) {
+        self.sources.profiles.retain(|name, source| {
+            if source == path {
+                self.fragment.profiles.0.remove(name);
+                false
+            } else {
+                true
+            }
+        });
+        self.sources.teams.retain(|name, source| {
+            if source == path {
+                self.fragment.teams.0.remove(name);
+                false
+            } else {
+                true
+            }
+        });
+        self.sources.commands.retain(|name, source| {
+            if source == path {
+                self.fragment.commands.0.remove(name);
+                false
+            } else {
+                true
+            }
+        });
+    }
+}
+
 fn load_optional<T>(path: &Path, parse: fn(&Path, &str) -> Result<T>) -> Result<Option<T>> {
     match std::fs::read_to_string(path) {
         Ok(text) => parse(path, &text).map(Some),
@@ -864,6 +1115,13 @@ fn load_optional<T>(path: &Path, parse: fn(&Path, &str) -> Result<T>) -> Result<
             source,
         }),
     }
+}
+
+fn load_parsed_optional<T: Default>(
+    path: &Path,
+    parse: fn(&Path, &str) -> Result<Parsed<T>>,
+) -> Result<Parsed<T>> {
+    load_optional(path, parse).map(Option::unwrap_or_default)
 }
 
 fn recover<T>(result: Result<Option<T>>) -> Option<T> {
@@ -885,11 +1143,19 @@ fn recover<T>(result: Result<Option<T>>) -> Option<T> {
     }
 }
 
+fn recover_parsed<T: Default>(
+    path: &Path,
+    parse: fn(&Path, &str) -> Result<Parsed<T>>,
+) -> Parsed<T> {
+    recover(load_optional(path, parse)).unwrap_or_default()
+}
+
 fn parse_core_text(path: &Path, text: &str) -> Result<CoreConfig> {
-    toml::from_str(text).map_err(|source| ConfigErr::Parse {
-        path: path.to_path_buf(),
-        diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
-    })
+    parse_core_text_collecting(path, text).map(|parsed| parsed.value)
+}
+
+fn parse_core_text_collecting(path: &Path, text: &str) -> Result<Parsed<CoreConfig>> {
+    parse_toml_collecting(path, text)
 }
 
 fn parse_core_text_strict(path: &Path, text: &str) -> Result<CoreConfig> {
@@ -911,51 +1177,79 @@ fn parse_unknown_keys<'de, T>(path: &Path, text: &'de str) -> Result<Vec<String>
 where
     T: Deserialize<'de>,
 {
+    parse_toml_collecting::<T>(path, text).map(|parsed| parsed.unknown_keys)
+}
+
+fn parse_toml_collecting<'de, T>(path: &Path, text: &'de str) -> Result<Parsed<T>>
+where
+    T: Deserialize<'de>,
+{
     let deserializer = toml::Deserializer::parse(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
         diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
     })?;
     let mut ignored = Vec::new();
-    let _ = serde_ignored::deserialize::<_, _, T>(deserializer, |path| {
+    let value = serde_ignored::deserialize::<_, _, T>(deserializer, |path| {
         ignored.push(path.to_string());
     })
     .map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
         diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
     })?;
-    Ok(ignored)
+    Ok(Parsed {
+        value,
+        unknown_keys: ignored,
+    })
 }
 
 fn parse_theme_text(path: &Path, text: &str) -> Result<ThemeConfig> {
-    let mut file: ThemeFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
-        path: path.to_path_buf(),
-        diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
-    })?;
-    file.theme.colors = file.colors;
-    Ok(file.theme)
+    parse_theme_text_collecting(path, text).map(|parsed| parsed.value)
+}
+
+fn parse_theme_text_collecting(path: &Path, text: &str) -> Result<Parsed<ThemeConfig>> {
+    let Parsed {
+        mut value,
+        unknown_keys,
+    } = parse_toml_collecting::<ThemeFile>(path, text)?;
+    value.theme.colors = value.colors;
+    Ok(Parsed {
+        value: value.theme,
+        unknown_keys,
+    })
 }
 
 fn parse_agents_text(path: &Path, text: &str) -> Result<AgentsFile> {
+    parse_agents_text_collecting(path, text).map(|parsed| parsed.value)
+}
+
+fn parse_agents_text_collecting(path: &Path, text: &str) -> Result<Parsed<AgentsFile>> {
     check_removed_agents_tables(path, text)?;
-    let mut file: AgentsFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
-        path: path.to_path_buf(),
-        diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
-    })?;
-    resolve_agents_prompt_paths(&mut file.agents.profiles, &mut file.agents.teams, path);
-    resolve_profile_prompt_paths(&mut file.subagents.profiles, path);
-    Ok(file)
+    let Parsed {
+        mut value,
+        unknown_keys,
+    } = parse_toml_collecting::<AgentsFile>(path, text)?;
+    resolve_agents_prompt_paths(&mut value.agents.profiles, &mut value.agents.teams, path);
+    resolve_profile_prompt_paths(&mut value.subagents.profiles, path);
+    Ok(Parsed {
+        value,
+        unknown_keys,
+    })
 }
 
 fn parse_loop_text(path: &Path, text: &str) -> Result<LoopConfig> {
-    let loop_: LoopConfig = toml::from_str(text).map_err(|source| ConfigErr::Parse {
-        path: path.to_path_buf(),
-        diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
-    })?;
-    loop_.validate_budgets().map_err(|source| ConfigErr::Loop {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    Ok(loop_)
+    parse_loop_text_collecting(path, text).map(|parsed| parsed.value)
+}
+
+fn parse_loop_text_collecting(path: &Path, text: &str) -> Result<Parsed<LoopConfig>> {
+    let parsed = parse_toml_collecting::<LoopConfig>(path, text)?;
+    parsed
+        .value
+        .validate_budgets()
+        .map_err(|source| ConfigErr::Loop {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    Ok(parsed)
 }
 
 /// Tables the `[agents]` redesign removed. Serde tolerates unknown keys so a
@@ -1002,14 +1296,24 @@ fn check_removed_agents_tables(path: &Path, text: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_agents_fragment_text(path: &Path, text: &str) -> Result<AgentsFragment> {
+fn parse_agents_fragment_text_collecting(
+    path: &Path,
+    text: &str,
+) -> Result<Parsed<AgentsFragment>> {
     check_removed_agents_tables(path, text)?;
-    let mut file: AgentsFragmentFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
-        path: path.to_path_buf(),
-        diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, text, &source)),
-    })?;
-    resolve_agents_prompt_paths(&mut file.agents.profiles, &mut file.agents.teams, path);
-    Ok(file.agents)
+    let Parsed {
+        mut value,
+        unknown_keys,
+    } = parse_toml_collecting::<AgentsFragmentFile>(path, text)?;
+    resolve_agents_prompt_paths(&mut value.agents.profiles, &mut value.agents.teams, path);
+    Ok(Parsed {
+        value: value.agents,
+        unknown_keys,
+    })
+}
+
+fn parse_agents_fragment_unknown_keys(path: &Path, text: &str) -> Result<Vec<String>> {
+    parse_agents_fragment_text_collecting(path, text).map(|parsed| parsed.unknown_keys)
 }
 
 fn resolve_agents_prompt_paths(
@@ -1026,41 +1330,135 @@ fn resolve_profile_prompt_paths(profiles: &mut ProfilesConfig, source_path: &Pat
     crate::harness::spec::resolve_profile_prompt_paths(profiles, source_dir);
 }
 
+#[cfg(test)]
 fn discover_agents_home(root: &Path) -> Result<AgentsFragment> {
-    let mut fragment = AgentsFragment::default();
+    discover_agents_home_collecting(root).map(|discovered| discovered.fragment)
+}
+
+fn discover_agents_home_collecting(root: &Path) -> Result<DiscoveredAgentsHome> {
+    let mut discovered = DiscoveredAgentsHome::default();
     discover_agents_home_subdir(
         root,
         AGENTS_HOME_PROFILES_SUBDIR,
         AGENT_FRAGMENT_FILE,
-        &mut fragment,
+        &mut discovered,
     )?;
     discover_agents_home_subdir(
         root,
         AGENTS_HOME_TEAMS_SUBDIR,
         TEAM_FRAGMENT_FILE,
-        &mut fragment,
+        &mut discovered,
     )?;
-    Ok(fragment)
+    Ok(discovered)
 }
 
 fn discover_agents_home_subdir(
     root: &Path,
     subdir: &str,
     fragment_file: &str,
-    out: &mut AgentsFragment,
+    out: &mut DiscoveredAgentsHome,
 ) -> Result<()> {
     let mut dirs = child_dirs(&root.join(subdir))?;
     dirs.sort();
     for dir in dirs {
         let path = dir.join(fragment_file);
-        let Some(fragment) = load_optional(&path, parse_agents_fragment_text)? else {
+        let Some(parsed) = load_optional(&path, parse_agents_fragment_text_collecting)? else {
             continue;
         };
-        out.profiles.0.extend(fragment.profiles.0);
-        out.teams.0.extend(fragment.teams.0);
-        out.commands.0.extend(fragment.commands.0);
+        out.unknown_keys
+            .extend(parsed.unknown_keys.into_iter().map(|key| UnknownConfigKey {
+                path: path.clone(),
+                key,
+            }));
+        out.merge(&path, parsed.value);
     }
     Ok(())
+}
+
+fn discover_agents_home_lenient(root: &Path) -> DiscoveredAgentsHome {
+    let mut discovered = DiscoveredAgentsHome::default();
+    for (subdir, fragment_file) in [
+        (AGENTS_HOME_PROFILES_SUBDIR, AGENT_FRAGMENT_FILE),
+        (AGENTS_HOME_TEAMS_SUBDIR, TEAM_FRAGMENT_FILE),
+    ] {
+        let mut dirs = match child_dirs(&root.join(subdir)) {
+            Ok(dirs) => dirs,
+            Err(err) => {
+                tracing::warn!(error = %err, "~/.agents fragment directory unreadable");
+                discovered.errors.push(fragment_error_notice(err));
+                continue;
+            }
+        };
+        dirs.sort();
+        for dir in dirs {
+            let path = dir.join(fragment_file);
+            match load_optional(&path, parse_agents_fragment_text_collecting) {
+                Ok(Some(parsed)) => {
+                    discovered
+                        .unknown_keys
+                        .extend(parsed.unknown_keys.into_iter().map(|key| UnknownConfigKey {
+                            path: path.clone(),
+                            key,
+                        }));
+                    discovered.merge(&path, parsed.value);
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(error = %err, "~/.agents fragment unreadable; ignoring it");
+                    discovered.errors.push(fragment_error_notice(err));
+                }
+            }
+        }
+    }
+    discovered
+}
+
+fn fragment_error_notice(err: ConfigErr) -> AgentsFragmentError {
+    let path = err.path().to_path_buf();
+    AgentsFragmentError {
+        path,
+        message: format!("{:#}", anyhow::Error::new(err)),
+    }
+}
+
+fn rehome_agents_error(err: ConfigErr, path: &Path) -> ConfigErr {
+    match err {
+        ConfigErr::Agents { source, .. } => ConfigErr::Agents {
+            path: path.to_path_buf(),
+            source,
+        },
+        other => other,
+    }
+}
+
+fn broken_agents_home_fragments(root: &Path) -> Vec<ConfigErr> {
+    let mut errors = Vec::new();
+    for (subdir, fragment_file) in [
+        (AGENTS_HOME_PROFILES_SUBDIR, AGENT_FRAGMENT_FILE),
+        (AGENTS_HOME_TEAMS_SUBDIR, TEAM_FRAGMENT_FILE),
+    ] {
+        let mut dirs = match child_dirs(&root.join(subdir)) {
+            Ok(dirs) => dirs,
+            Err(err) => {
+                errors.push(err);
+                continue;
+            }
+        };
+        dirs.sort();
+        for dir in dirs {
+            let path = dir.join(fragment_file);
+            if let Err(err) = load_optional(&path, parse_agents_fragment_text_collecting) {
+                errors.push(err);
+            }
+        }
+    }
+    errors
+}
+
+fn merge_agents_fragment(out: &mut AgentsFragment, fragment: AgentsFragment) {
+    out.profiles.0.extend(fragment.profiles.0);
+    out.teams.0.extend(fragment.teams.0);
+    out.commands.0.extend(fragment.commands.0);
 }
 
 fn child_dirs(path: &Path) -> Result<Vec<PathBuf>> {
@@ -1098,9 +1496,26 @@ fn apply_agents_home(
     root: &Path,
     agents_path: &Path,
 ) -> Result<()> {
+    apply_agents_home_collecting(
+        agents,
+        subagents,
+        root,
+        agents_path,
+        &mut ConfigNotices::default(),
+    )
+}
+
+fn apply_agents_home_collecting(
+    agents: &mut AgentsConfig,
+    subagents: &SubagentProfilesConfig,
+    root: &Path,
+    agents_path: &Path,
+    notices: &mut ConfigNotices,
+) -> Result<()> {
     let mut merged = agents.clone();
-    let fragment = discover_agents_home(root)?;
-    overlay_agents_fragment_under(&mut merged, &fragment);
+    let discovered = discover_agents_home_collecting(root)?;
+    notices.unknown_keys.extend(discovered.unknown_keys);
+    overlay_agents_fragment_under(&mut merged, &discovered.fragment);
     validate_agents_file(&merged, subagents, agents_path)?;
     *agents = merged;
     Ok(())

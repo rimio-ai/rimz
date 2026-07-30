@@ -768,6 +768,102 @@ set_clipboard = "external"
 }
 
 #[test]
+fn merge_defaults_removes_unknown_machine_keys() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "[daemon]\nfuture = true\n\n[[daemon.pane]]\ncommand = \"stats\"\n",
+    )
+    .expect("seed config");
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+
+    let report = editor.merge_defaults().expect("merge");
+    let rendered = std::fs::read_to_string(&path).expect("read config");
+
+    assert!(!rendered.contains("future = true"), "{rendered}");
+    assert!(
+        report.files[0]
+            .skipped
+            .iter()
+            .any(|skipped| skipped.key == "daemon.future"),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn repair_agents_home_removes_unknown_keys_preserves_comments_and_is_idempotent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let agents_home = dir.path().join("agents-home");
+    let profile_dir = agents_home
+        .join(AGENTS_HOME_PROFILES_SUBDIR)
+        .join("planner");
+    std::fs::create_dir_all(&profile_dir).expect("profile dir");
+    let profile_path = profile_dir.join(AGENT_FRAGMENT_FILE);
+    std::fs::write(
+        &profile_path,
+        "# keep this comment\n[agents.profiles.planner]\nagent = \"claude\"\nfuture = true\n",
+    )
+    .expect("profile fragment");
+    let team_dir = agents_home.join(AGENTS_HOME_TEAMS_SUBDIR).join("forge");
+    std::fs::create_dir_all(&team_dir).expect("team dir");
+    let team_path = team_dir.join(TEAM_FRAGMENT_FILE);
+    std::fs::write(
+        &team_path,
+        "[agents.teams.forge]\nfuture = true\n\
+         [[agents.teams.forge.roles]]\nrole = \"planner\"\nprofile = \"planner\"\nextra = 1\n",
+    )
+    .expect("team fragment");
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        &agents_home,
+    ));
+
+    let first = editor.repair_agents_home().expect("repair");
+    let profile = std::fs::read_to_string(&profile_path).expect("read profile");
+    let team = std::fs::read_to_string(&team_path).expect("read team");
+    let second = editor.repair_agents_home().expect("repair again");
+
+    assert_eq!(first.files.len(), 2, "{first:?}");
+    assert!(profile.contains("# keep this comment"), "{profile}");
+    assert!(!profile.contains("future = true"), "{profile}");
+    assert!(!team.contains("future = true"), "{team}");
+    assert!(!team.contains("extra = 1"), "{team}");
+    assert!(second.files.is_empty(), "{second:?}");
+}
+
+#[test]
+fn repair_agents_home_leaves_unparseable_fragments_untouched() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let agents_home = dir.path().join("agents-home");
+    let profile_dir = agents_home.join(AGENTS_HOME_PROFILES_SUBDIR).join("broken");
+    std::fs::create_dir_all(&profile_dir).expect("profile dir");
+    let path = profile_dir.join(AGENT_FRAGMENT_FILE);
+    std::fs::write(&path, "not = = toml").expect("broken fragment");
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        &agents_home,
+    ));
+
+    editor
+        .merge_defaults()
+        .expect("broken fragment does not block machine-file refresh");
+    let report = editor.repair_agents_home().expect("repair");
+
+    assert_eq!(report.files.len(), 1);
+    assert_eq!(report.files[0].path, path);
+    assert!(report.files[0].removed.is_empty());
+    assert!(report.files[0].error.is_some());
+    assert_eq!(
+        std::fs::read_to_string(&report.files[0].path).expect("unchanged"),
+        "not = = toml"
+    );
+}
+
+#[test]
 fn set_document_value_renders_inline_table_arrays_as_table_blocks() {
     let mut doc = r#"
 [agents.teams.forge]

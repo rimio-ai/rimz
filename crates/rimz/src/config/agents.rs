@@ -53,7 +53,7 @@ const fn default_max_chain_length() -> u8 {
 
 /// Defaults applied by the agent-only `rimz subagents` launch doorway.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct SubagentsConfig {
     /// Supervised-run deadline in the CLI duration syntax (`30m`, `2h`).
     pub timeout: String,
@@ -111,7 +111,6 @@ pub struct ProfilesConfig(pub BTreeMap<String, Profile>);
 /// A named agent profile. `agent` is a base reference: either a built-in agent
 /// kind or another profile that resolves to one.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct Profile {
     pub agent: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -149,7 +148,6 @@ pub struct Profile {
 pub struct TeamsConfig(pub BTreeMap<String, Team>);
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct Team {
     #[serde(default)]
     pub roles: Vec<RoleBinding>,
@@ -166,7 +164,6 @@ pub struct Team {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct RoleBinding {
     pub role: String,
     /// A named profile or registered agent kind. A same-named machine profile

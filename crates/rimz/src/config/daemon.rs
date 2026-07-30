@@ -18,7 +18,6 @@ pub struct DaemonConfig {
 /// One middle-column pane. `command = "stats"` is the reserved token for the
 /// live-stats pane; any other command is split into argv and run directly.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct DaemonPane {
     pub command: String,
     /// Working directory. Absolute paths are used as-is; relative paths are

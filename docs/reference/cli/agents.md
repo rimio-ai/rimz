@@ -54,6 +54,8 @@ The `@` sigil is required for `message`, where it also keeps a target from being
 
 `rimz agents` is the card surface and the single launcher. The subsections below cover the forms worth knowing; run `rimz agents --help` (and `--help` on each subcommand) for the full flag list.
 
+Agent launches validate every discovered `~/.agents` fragment before resolving the requested spec. A syntax error or invalid fragment fails at entry with its source path and fix; unknown fields instead print a warning, are ignored, and can be removed with `rimz setup`.
+
 ### Discover agent specs
 
 ```sh

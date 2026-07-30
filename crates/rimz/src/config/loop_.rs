@@ -56,7 +56,7 @@ pub struct Tasks(pub BTreeMap<String, TaskEntry>);
 /// time, an explicit repeat cadence, or a raw cron escape hatch; `agent`
 /// spawns a supervised turn and `wake` delivers to a pinned session.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct TaskEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
@@ -357,13 +357,11 @@ mod tests {
     }
 
     #[test]
-    fn old_task_keys_are_rejected_by_name() {
-        let err = toml::from_str::<Tasks>("[old]\nspec = \"claude\"\nroot = \"/repo\"\n")
-            .expect_err("old key rejected");
-        assert!(
-            err.to_string().contains("unknown field `spec`"),
-            "unexpected error: {err}"
-        );
+    fn unknown_task_keys_are_ignored() {
+        let tasks =
+            toml::from_str::<Tasks>("[old]\nspec = \"claude\"\nroot = \"/repo\"\n").expect("parse");
+        assert_eq!(tasks.0["old"].root, PathBuf::from("/repo"));
+        assert!(tasks.0["old"].agent.is_none());
     }
 
     #[test]

@@ -854,6 +854,9 @@ pub fn resolve_task_spec(
     workspace: &crate::workspace::ResolvedWorkspace,
 ) -> Result<ResolvedTaskSpec> {
     let machine_config = MachineConfig::load_lenient();
+    if let Some(message) = machine_config.agents_fragment_failure() {
+        anyhow::bail!("{message}");
+    }
     let launch = crate::config::effective::load(
         &machine_config.agents,
         &machine_config.subagents.profiles,

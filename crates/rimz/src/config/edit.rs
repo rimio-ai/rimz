@@ -7,9 +7,10 @@ use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Val
 use crate::store::atomic::write_bytes_atomically;
 
 use super::{
-    AnimationRole, ConfigFileDiagnosis, GlyphRole, MachineConfig, MachineConfigFile,
-    MachineConfigFileKind, MachineConfigFiles, is_named_glyph_set, validate_glyph_cells,
-    validate_glyph_source,
+    AGENT_FRAGMENT_FILE, AGENTS_HOME_PROFILES_SUBDIR, AGENTS_HOME_TEAMS_SUBDIR, AnimationRole,
+    ConfigFileDiagnosis, GlyphRole, MachineConfig, MachineConfigFile, MachineConfigFileKind,
+    MachineConfigFiles, TEAM_FRAGMENT_FILE, is_named_glyph_set, parse_agents_fragment_unknown_keys,
+    validate_glyph_cells, validate_glyph_source,
 };
 
 type Result<T> = std::result::Result<T, ConfigEditErr>;
@@ -180,6 +181,64 @@ impl ConfigEditor {
         Ok(MergeReport { files: outcomes })
     }
 
+    /// Remove ignored keys from every generated `~/.agents` fragment while
+    /// preserving the rest of each document's formatting and comments.
+    pub fn repair_agents_home(&self) -> Result<FragmentRepairReport> {
+        let mut files = Vec::new();
+        for path in agents_home_fragment_paths(self.files.agents_home())? {
+            let text = match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(source) => {
+                    return Err(ConfigEditErr::Read {
+                        path: path.clone(),
+                        source,
+                    });
+                }
+            };
+            let mut doc = match text.parse::<DocumentMut>() {
+                Ok(doc) => doc,
+                Err(error) => {
+                    files.push(FragmentRepairOutcome {
+                        path: path.clone(),
+                        removed: Vec::new(),
+                        error: Some(
+                            ConfigFileDiagnosis::from_toml_edit(&path, &text, &error).to_string(),
+                        ),
+                    });
+                    continue;
+                }
+            };
+            let unknown = match parse_agents_fragment_unknown_keys(&path, &text) {
+                Ok(unknown) => unknown,
+                Err(error) => {
+                    files.push(FragmentRepairOutcome {
+                        path: path.clone(),
+                        removed: Vec::new(),
+                        error: Some(error.to_string()),
+                    });
+                    continue;
+                }
+            };
+            let mut removed = Vec::new();
+            for key in unknown {
+                let segments: Vec<_> = key.split('.').collect();
+                if remove_table_path(doc.as_table_mut(), &segments) {
+                    removed.push(key);
+                }
+            }
+            if removed.is_empty() {
+                continue;
+            }
+            write(&path, doc.to_string().as_bytes())?;
+            files.push(FragmentRepairOutcome {
+                path,
+                removed,
+                error: None,
+            });
+        }
+        Ok(FragmentRepairReport { files })
+    }
+
     fn merge_one(&self, kind: MachineConfigFileKind) -> Result<FileMergeOutcome> {
         let file = self.files.file(kind);
         let path = file.path();
@@ -257,8 +316,138 @@ pub struct SkippedKey {
     pub reason: String,
 }
 
+#[derive(Debug, Default)]
+pub struct FragmentRepairReport {
+    pub files: Vec<FragmentRepairOutcome>,
+}
+
+#[derive(Debug)]
+pub struct FragmentRepairOutcome {
+    pub path: PathBuf,
+    pub removed: Vec<String>,
+    pub error: Option<String>,
+}
+
+fn agents_home_fragment_paths(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for (subdir, fragment_file) in [
+        (AGENTS_HOME_PROFILES_SUBDIR, AGENT_FRAGMENT_FILE),
+        (AGENTS_HOME_TEAMS_SUBDIR, TEAM_FRAGMENT_FILE),
+    ] {
+        let dir = root.join(subdir);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(source) => return Err(ConfigEditErr::Read { path: dir, source }),
+        };
+        for entry in entries {
+            let entry = entry.map_err(|source| ConfigEditErr::Read {
+                path: dir.clone(),
+                source,
+            })?;
+            let path = entry.path();
+            let file_type = entry.file_type().map_err(|source| ConfigEditErr::Read {
+                path: path.clone(),
+                source,
+            })?;
+            if file_type.is_dir() {
+                let fragment = path.join(fragment_file);
+                if fragment.exists() {
+                    paths.push(fragment);
+                }
+            }
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn remove_table_path(table: &mut Table, path: &[&str]) -> bool {
+    let Some((segment, rest)) = path.split_first() else {
+        return false;
+    };
+    if rest.is_empty() {
+        return table.remove(segment).is_some();
+    }
+    table
+        .get_mut(segment)
+        .is_some_and(|item| remove_item_path(item, rest))
+}
+
+fn remove_item_path(item: &mut Item, path: &[&str]) -> bool {
+    match item {
+        Item::Table(table) => remove_table_path(table, path),
+        Item::ArrayOfTables(tables) => {
+            if let Some(index) = path
+                .first()
+                .and_then(|segment| segment.parse::<usize>().ok())
+            {
+                return tables
+                    .get_mut(index)
+                    .is_some_and(|table| remove_table_path(table, &path[1..]));
+            }
+            let rest = path.strip_prefix(&["?"]).unwrap_or(path);
+            tables
+                .iter_mut()
+                .map(|table| remove_table_path(table, rest))
+                .fold(false, |removed, current| removed | current)
+        }
+        Item::Value(Value::InlineTable(table)) => remove_inline_path(table, path),
+        Item::Value(Value::Array(array)) => {
+            if let Some(index) = path
+                .first()
+                .and_then(|segment| segment.parse::<usize>().ok())
+            {
+                return array
+                    .get_mut(index)
+                    .is_some_and(|value| remove_value_path(value, &path[1..]));
+            }
+            let rest = path.strip_prefix(&["?"]).unwrap_or(path);
+            array
+                .iter_mut()
+                .map(|value| remove_value_path(value, rest))
+                .fold(false, |removed, current| removed | current)
+        }
+        Item::None | Item::Value(_) => false,
+    }
+}
+
+fn remove_inline_path(table: &mut InlineTable, path: &[&str]) -> bool {
+    let Some((segment, rest)) = path.split_first() else {
+        return false;
+    };
+    if rest.is_empty() {
+        return table.remove(segment).is_some();
+    }
+    table
+        .get_mut(segment)
+        .is_some_and(|value| remove_value_path(value, rest))
+}
+
+fn remove_value_path(value: &mut Value, path: &[&str]) -> bool {
+    match value {
+        Value::InlineTable(table) => remove_inline_path(table, path),
+        Value::Array(array) => {
+            if let Some(index) = path
+                .first()
+                .and_then(|segment| segment.parse::<usize>().ok())
+            {
+                return array
+                    .get_mut(index)
+                    .is_some_and(|value| remove_value_path(value, &path[1..]));
+            }
+            let rest = path.strip_prefix(&["?"]).unwrap_or(path);
+            array
+                .iter_mut()
+                .map(|value| remove_value_path(value, rest))
+                .fold(false, |removed, current| removed | current)
+        }
+        _ => false,
+    }
+}
+
 fn validate_merged_text(path: &Path, text: &str, agents_home: &Path) -> Result<()> {
-    MachineConfig::parse_text(path, text, agents_home)
+    MachineConfig::parse_text_for_edit(path, text, agents_home)
         .map(|_| ())
         .map_err(|source| ConfigEditErr::ValidateMerged {
             path: path.to_path_buf(),
@@ -279,9 +468,9 @@ fn apply_logical_key(
     let pre_image = doc.to_string();
     set_document_value(doc, &document_key_for_set(logical), value)?;
     reject_unknown_set_key(path, logical, doc, core_path)?;
-    match MachineConfig::parse_text(path, &doc.to_string(), agents_home) {
+    match MachineConfig::parse_text_for_edit(path, &doc.to_string(), agents_home) {
         Ok(_) => Ok(()),
-        Err(source) => match MachineConfig::parse_text(path, &pre_image, agents_home) {
+        Err(source) => match MachineConfig::parse_text_for_edit(path, &pre_image, agents_home) {
             Ok(_) => Err(ConfigEditErr::Validate {
                 key: logical.join("."),
                 value: value_display,
@@ -663,11 +852,6 @@ fn reject_if_ignored(
 ) -> Result<()> {
     let ignored = match MachineConfig::parse_text_unknown_keys(path, &doc.to_string()) {
         Ok(ignored) => ignored,
-        Err(err) if err.validation_message().contains("unknown field") => {
-            return Err(ConfigEditErr::UnknownKey {
-                key: logical.join("."),
-            });
-        }
         Err(_) => return Ok(()),
     };
     let document_key = doc_key.join(".");
@@ -695,7 +879,6 @@ fn is_known_get_key(files: &MachineConfigFiles, path: &[String]) -> Result<bool>
     set_document_value(&mut doc, &doc_key, Value::from("__rimz_probe__"))?;
     let ignored = match MachineConfig::parse_text_unknown_keys(file.path(), &doc.to_string()) {
         Ok(ignored) => ignored,
-        Err(err) if err.validation_message().contains("unknown field") => return Ok(false),
         Err(_) => return Ok(true),
     };
     let document_key = doc_key.join(".");
@@ -761,6 +944,8 @@ fn is_disallowed_set_container(path: &[String]) -> bool {
         || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "teams" | "commands"))
         || matches!(path, [root, child, _, ..] if root == "agents" && child == "commands" && path.len() > 3)
         || matches!(path, [root, child, _] if root == "agents" && matches!(child.as_str(), "profiles" | "teams"))
+        || matches!(path, [root, profiles, _, field] if matches!(root.as_str(), "agents" | "subagents") && profiles == "profiles" && !PROFILE_FIELDS.contains(&field.as_str()))
+        || matches!(path, [root, teams, _, field] if root == "agents" && teams == "teams" && !TEAM_FIELDS.contains(&field.as_str()))
         || matches!(path, [root, child] if root == "theme" && matches!(child.as_str(), "display" | "colors" | "providers" | "animations"))
         || matches!(path, [root, display, child] if root == "theme" && display == "display" && matches!(child.as_str(), "context_meter" | "budget_bar" | "highlight_steps"))
         || matches!(path, [root, display, budget, child] if root == "theme" && display == "display" && budget == "budget_bar" && child == "burn_rate")
@@ -798,6 +983,18 @@ fn is_animation_role(role: &str) -> bool {
 
 const CONTEXT_METER_BANDS: &[&str] = &["green", "yellow", "amber", "red"];
 const ANIMATION_FIELDS: &[&str] = &["frames", "color", "effect", "speed"];
+const PROFILE_FIELDS: &[&str] = &[
+    "agent",
+    "description",
+    "mode",
+    "model",
+    "effort",
+    "budget",
+    "system-prompt-file",
+    "append-system-prompt-files",
+    "args",
+];
+const TEAM_FIELDS: &[&str] = &["roles", "leader", "layout", "scratch-files"];
 
 fn parse_edit_value(raw: &str) -> Value {
     raw.parse::<Value>()
