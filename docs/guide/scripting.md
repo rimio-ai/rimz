@@ -141,11 +141,11 @@ A reference is the printed name, a run id, or any [agent address](./messaging.md
 
 ## Agents scripting agents
 
-`rimz agents -p` is a plain shell command, and agents have shell tools — so the caller does not have to be you. `rimz subagents` packages that path for a RimZ-launched agent: single launches and JSON fanouts run in the background by default, inherit the caller's checkout, and print petnames for a later join. Add `--fg` to either form to wait for its result. Claude can hand its diff to Codex for a second opinion, Codex can hand a stubborn bug to Claude, and a planner can fan an audit across three runs. The calling agent sees only commands and durable answers, so subagents mix providers freely; pairing model strengths this way is the same economics that makes [teams](./teams.md) work.
+`rimz agents -p` is a plain shell command, and agents have shell tools — so the caller does not have to be you. `rimz subagents` packages that path for a RimZ-launched agent: single launches and JSON fanouts run in the background by default, inherit the caller's checkout, and print petnames for a later join. Add `--wait` to either form to wait for its result. Claude can hand its diff to Codex for a second opinion, Codex can hand a stubborn bug to Claude, and a planner can fan an audit across three runs. The calling agent sees only commands and durable answers, so subagents mix providers freely; pairing model strengths this way is the same economics that makes [teams](./teams.md) work.
 
 ```sh
 # inside a planner turn: launch three bounded audits, then join all three
-rimz subagents fanout --fg <<'JSON'
+rimz subagents fanout --wait <<'JSON'
 [
   {"spec":"codex","prompt":"review correctness; report concrete findings"},
   {"spec":"claude","prompt":"review the interface; report concrete findings"},
@@ -154,7 +154,7 @@ rimz subagents fanout --fg <<'JSON'
 JSON
 ```
 
-Each child gets its own deadline and durable run record. Pane opens serialize safely, but the audits run in parallel. By default the command returns the child names for a later `rimz subagents wait`; `--fg` reports one labeled outcome per child immediately and exits nonzero if any child fails. The full task schema and timeout precedence are in the [`subagents` reference](../reference/cli/subagents.md#launch-and-fan-out-work).
+Each child gets its own deadline and durable run record. Pane opens serialize safely, but the audits run in parallel. By default the command returns the child names for a later `rimz subagents wait`; `--wait` reports one labeled outcome per child immediately and exits nonzero if any child fails. The full task schema and timeout precedence are in the [`subagents` reference](../reference/cli/subagents.md#launch-and-fan-out-work).
 
 Compare that with an agent's built-in subagents, which run headless inside the parent's harness. A RimZ-launched child is a first-class member of your room: its own pane, a nested sidebar row, a transcript that outlives the turn, and a question that routes to you instead of failing silently. Use `rimz agents -p` directly when the child needs controls the tailored doorway omits, such as `--stdin` or a separate worktree. When the task belongs to a teammate that is already running, hand it over with [`rimz message`](./messaging.md) instead of spawning a fresh turn.
 

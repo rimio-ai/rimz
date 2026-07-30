@@ -2,7 +2,7 @@
 
 `rimz subagents` is the agent-only doorway for delegating one bounded prompt to a supervised child. It is syntax sugar over `rimz agents`: the child gets a real pane, durable run record, petname, parent link, and sidebar entry without making the parent choose the supervision flags.
 
-Run it only from a RimZ-launched agent. A user-shell invocation fails before opening the room and points to `rimz agents` or `rimz teams`. The mechanics behind the sugar — the ancestry stamp and its depth cap, the caller-scoped verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
+Launch and lifecycle commands run only from a RimZ-launched agent. A user-shell invocation fails before opening the room and points to `rimz agents` or `rimz teams`; the read-only `specs` catalog is available from either context. The mechanics behind the sugar — the ancestry stamp and its depth cap, the caller-scoped verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
 
 A child launched through this doorway must complete its assignment directly and cannot spawn further agents. RimZ appends that instruction to the prompt, disables the provider's native delegation tool where a verified restriction exists, and retains the launch-depth check as a backstop for RimZ commands.
 
@@ -12,19 +12,27 @@ A child launched through this doorway must complete its assignment directly and 
 rimz subagents fanout tasks.json
 printf '%s\n' '[{"spec":"codex","prompt":"find the smallest safe fix"}]' \
   | rimz subagents fanout
-rimz subagents fanout tasks.json --fg
+rimz subagents fanout tasks.json --wait
+
+rimz subagents fanout --wait <<'JSON'
+[
+  {"spec":"codex","prompt":"review correctness; report concrete findings"},
+  {"spec":"claude","prompt_file":"/tmp/review-brief.md"}
+]
+JSON
 ```
 
 `fanout` reads a JSON task array from `FILE`, or from stdin when `FILE` is omitted. It validates the whole list and opens each child pane in sequence. The children run in parallel after their panes open, and each minted petname prints as it launches.
 
-By default, `fanout` returns after launching. Use `--fg` to join exactly the children from that fanout; the final lines report each durable outcome, and the command exits nonzero if any child does. With background `--json`, it emits a map from petname to `run_id`; with `--fg --json`, it emits the same result map as `rimz subagents wait --json`.
+By default, `fanout` returns after launching. Use `--wait[=DURATION]` to join exactly the children from that fanout, optionally with a caller-side deadline; the final lines report each durable outcome, and the command exits nonzero if any child does. This wait deadline is distinct from the children's `--timeout`. With background fanout `--json`, RimZ emits a map from petname to `run_id`; with `--wait --json` on a launch or fanout, it emits the same result map as `rimz subagents wait --json`.
 
 Each array entry has the single-launch fields that make sense for data-driven delegation:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `spec` | yes | Agent kind or configured profile |
-| `prompt` | yes | Complete task supplied by the parent |
+| `prompt` | exactly one | Complete task supplied by the parent |
+| `prompt_file` | exactly one | File whose contents become the prompt; exclusive with `prompt` |
 | `name` | no | Durable child petname |
 | `model` | no | Model override |
 | `agent` | no | Profile or provider-kind rebase |
@@ -33,7 +41,7 @@ Each array entry has the single-launch fields that make sense for data-driven de
 | `max_turns` | no | Maximum agentic turns |
 | `description` | no | Initial child-card description |
 
-Explicit names must be unique within the list. A task timeout overrides the fanout-level `--timeout`, which overrides `[agents.subagents] timeout` (30 minutes by default). `--keep` applies to every child. Per-task raw argv, execution mode, and pane retention are deliberately omitted; use profiles for provider arguments or separate single launches when children need different lifecycle controls.
+Explicit names must be unique within the list. Relative `prompt_file` paths resolve from the caller's current working directory. A task timeout overrides the fanout-level `--timeout`, which overrides `[agents.subagents] timeout` (30 minutes by default). `--keep` applies to every child. Per-task raw argv, execution mode, and pane retention are deliberately omitted; use profiles for provider arguments or separate single launches when children need different lifecycle controls.
 
 All tasks are validated before the first launch. If a runtime failure occurs after some children have started, the error names them; they keep their normal deadline and cleanup behavior and remain available to `subagents wait` and `subagents stop`.
 
@@ -43,7 +51,7 @@ All tasks are validated before the first launch. If a runtime failure occurs aft
 rimz subagents claude "trace the authentication call path"
 ```
 
-Each launch is equivalent to a one-cell `rimz agents <spec> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately, so a parent can start several children without waiting between launches. Pass `--fg` to block until the child finishes and print its result instead.
+Each launch is equivalent to a one-cell `rimz agents <spec> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately, so a parent can start several children without waiting between launches. Pass `--wait[=DURATION]` to print the petname and then join the child through the same result path as fanout. `--json` is accepted on a single launch only with `--wait`; it emits the one-entry result map without the human petname line.
 
 ```sh
 first=$(rimz subagents codex "find the smallest safe fix")
@@ -51,11 +59,11 @@ second=$(rimz subagents launch reviewer "review the proposed API")
 rimz subagents wait "$first" "$second"
 ```
 
-The bare form and `launch` verb are equivalent. A prompt is mandatory: the parent must supply the whole assignment as the second positional argument. The child inherits the parent's current checkout and lane.
+The bare form and `launch` verb are equivalent. A prompt is mandatory: the parent must supply the whole assignment as the second positional argument or with `--prompt-file PATH`. Relative paths resolve from the caller's current working directory. The child inherits the parent's current checkout and lane.
 
 | Behavior | Default | Override |
 | --- | --- | --- |
-| Execution | supervised print mode, background | `--fg` waits and prints the result |
+| Execution | supervised print mode, background | `--wait[=DURATION]` joins and prints the result |
 | Checkout | caller's current checkout | fixed |
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
 | Pane after completion | close | `--keep` |
@@ -67,14 +75,14 @@ The single-launch surface deliberately omits `--worktree`, `--from-pr`, `--chann
 
 Model, provider/profile rebasing, effort, description, turn cap, and raw provider arguments remain available. Run `rimz subagents launch --help` for their exact spellings.
 
-## Discover agent types
+## Discover agent specs
 
 ```sh
-rimz subagents types
-rimz subagents types --json
+rimz subagents specs
+rimz subagents specs --json
 ```
 
-`types` lists every agent kind, configured profile, and configured launch command available for one child. Team names are excluded because a subagent launch creates one agent, not a cohort.
+`specs` lists every agent kind, configured profile, and configured launch command available for one child. It also works from a user shell; `types` remains an alias for compatibility. Team names are excluded because a subagent launch creates one agent, not a cohort.
 
 ## Join results
 

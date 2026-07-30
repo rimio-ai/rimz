@@ -58,7 +58,7 @@ rimz teams forge -w feat-x           # launch one configured cohort in a worktre
 rimz teams resume forge              # reopen a configured team cohort
 rimz teams focus|restart|stop forge  # drive one live team cohort
 rimz subagents claude "review this"  # from an agent: launch a supervised child
-rimz subagents types                 # agent types available to launch
+rimz subagents specs                 # agent specs available to launch
 rimz subagents wait                  # join every live child and collect results
 rimz subagents list|stop --all       # inspect or stop the caller's own children
 rimz message @coder "rebase first"   # park for the next turn boundary

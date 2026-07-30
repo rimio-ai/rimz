@@ -1,4 +1,4 @@
-//! `rimz subagents` — agent-only supervised child launch and lifecycle sugar.
+//! `rimz subagents` — supervised child launch and lifecycle sugar.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -20,7 +20,7 @@ pub struct SubagentsArgs {
     command: Option<SubagentsSubcmd>,
     #[command(flatten)]
     launch: SubagentLaunchArgs,
-    /// Emit the caller's child list as JSON.
+    /// Emit the child list or waited launch result as JSON.
     #[arg(long)]
     json: bool,
 }
@@ -28,7 +28,13 @@ pub struct SubagentsArgs {
 #[derive(Debug, Subcommand)]
 enum SubagentsSubcmd {
     /// Launch one supervised child agent.
-    Launch(SubagentLaunchArgs),
+    Launch {
+        #[command(flatten)]
+        launch: SubagentLaunchArgs,
+        /// Emit the waited result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Launch children from a JSON task list.
     Fanout(FanoutArgs),
     /// List this agent's children.
@@ -38,8 +44,9 @@ enum SubagentsSubcmd {
         #[arg(long)]
         json: bool,
     },
-    /// List agent types available to launch.
-    Types {
+    /// List agent specs available to launch.
+    #[command(alias = "types")]
+    Specs {
         /// Emit JSON.
         #[arg(long)]
         json: bool,
@@ -78,8 +85,14 @@ struct FanoutArgs {
     #[arg(value_name = "FILE")]
     file: Option<PathBuf>,
     /// Wait for every launched child and print its result.
-    #[arg(long)]
-    fg: bool,
+    #[arg(
+        long,
+        value_name = "DURATION",
+        num_args = 0..=1,
+        require_equals = true,
+        value_parser = crate::cli::supervised::parse_timeout
+    )]
+    wait: Option<Option<Duration>>,
     /// Stop each child after this duration.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<Duration>,
@@ -95,6 +108,7 @@ struct FanoutArgs {
 struct FanoutTask {
     spec: Option<String>,
     prompt: Option<String>,
+    prompt_file: Option<PathBuf>,
     name: Option<String>,
     model: Option<String>,
     agent: Option<String>,
@@ -118,6 +132,9 @@ struct SubagentLaunchArgs {
     /// Complete task prompt supplied by the parent agent.
     #[arg(value_name = "PROMPT")]
     prompt: Option<String>,
+    /// File whose contents become the child's prompt.
+    #[arg(long = "prompt-file", value_name = "PATH", conflicts_with = "prompt")]
+    prompt_file: Option<PathBuf>,
     /// Durable child petname.
     #[arg(long, short = 'n')]
     name: Option<String>,
@@ -134,8 +151,14 @@ struct SubagentLaunchArgs {
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<Duration>,
     /// Wait for the child and print its result.
-    #[arg(long)]
-    fg: bool,
+    #[arg(
+        long,
+        value_name = "DURATION",
+        num_args = 0..=1,
+        require_equals = true,
+        value_parser = crate::cli::supervised::parse_timeout
+    )]
+    wait: Option<Option<Duration>>,
     /// Leave the child pane open after completion.
     #[arg(long)]
     keep: bool,
@@ -151,12 +174,14 @@ struct SubagentLaunchArgs {
 }
 
 pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
-    require_agent_caller(crate::cli::send::agent_caller())?;
+    if command_is_agent_only(args.command.as_ref()) {
+        require_agent_caller(crate::cli::send::agent_caller())?;
+    }
     match args.command {
-        Some(SubagentsSubcmd::Launch(launch)) => launch_child(launch, globals),
+        Some(SubagentsSubcmd::Launch { launch, json }) => launch_child(launch, json, globals),
         Some(SubagentsSubcmd::Fanout(fanout)) => fanout_children(fanout, globals),
         Some(SubagentsSubcmd::List { json }) => list_children(json, globals),
-        Some(SubagentsSubcmd::Types { json }) => list_types(json),
+        Some(SubagentsSubcmd::Specs { json }) => list_specs(json),
         Some(SubagentsSubcmd::Wait {
             names,
             any,
@@ -165,16 +190,25 @@ pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
             json,
         }) => wait_children(names, any, timeout, stream, json, globals),
         Some(SubagentsSubcmd::Stop { names, all }) => stop_children(names, all, globals),
-        None if args.launch.spec.is_some() => {
-            if args.json {
-                bail!("--json is only supported with `rimz subagents` and `rimz subagents list`");
-            }
-            launch_child(args.launch, globals)
-        }
+        None if args.launch.spec.is_some() => launch_child(args.launch, args.json, globals),
         None => {
             reject_launch_flags_without_spec(&args.launch)?;
             list_children(args.json, globals)
         }
+    }
+}
+
+fn command_is_agent_only(command: Option<&SubagentsSubcmd>) -> bool {
+    match command {
+        Some(SubagentsSubcmd::Specs { .. }) => false,
+        Some(
+            SubagentsSubcmd::Launch { .. }
+            | SubagentsSubcmd::Fanout(_)
+            | SubagentsSubcmd::List { .. }
+            | SubagentsSubcmd::Wait { .. }
+            | SubagentsSubcmd::Stop { .. },
+        )
+        | None => true,
     }
 }
 
@@ -187,10 +221,28 @@ fn require_agent_caller(agent_caller: bool) -> Result<()> {
     )
 }
 
-fn launch_child(args: SubagentLaunchArgs, globals: &GlobalFlags) -> Result<()> {
+fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> Result<()> {
+    let wait = args.wait;
+    if json && wait.is_none() {
+        bail!("--json on a single launch requires --wait");
+    }
     let config = rimz::config::MachineConfig::load().context("loading machine config")?;
     let launch = args.into_agent_launch(&config.agents.subagents)?;
-    agents_cmd::run(agents_cmd::AgentsArgs::from_launch(launch), globals)
+    let child = match agents_cmd::launch_supervised_background(launch, globals)? {
+        agents_cmd::BackgroundLaunchOutcome::Launched(child) => child,
+        agents_cmd::BackgroundLaunchOutcome::BudgetExceeded { reason } => {
+            let err = anyhow::Error::msg(reason).context("launching subagent");
+            render::report(&err);
+            std::process::exit(rimz::harness::run::RunStatus::BudgetExceeded.exit_code());
+        }
+    };
+    if !json {
+        writeln!(render::out(), "{}", child.name)?;
+    }
+    let Some(timeout) = wait else {
+        return Ok(());
+    };
+    agents_cmd::wait_agent_batch(vec![child.name], json, timeout, globals)
 }
 
 fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
@@ -231,7 +283,7 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
             }
         }
     }
-    if !args.fg {
+    let Some(wait_timeout) = args.wait else {
         if args.json {
             #[derive(Serialize)]
             struct BackgroundReport<'a> {
@@ -252,9 +304,9 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
             render::json(&report)?;
         }
         return Ok(());
-    }
+    };
     let names = launched.into_iter().map(|child| child.name).collect();
-    agents_cmd::wait_agent_batch(names, args.json, globals)
+    agents_cmd::wait_agent_batch(names, args.json, wait_timeout, globals)
 }
 
 fn fanout_launch_error_context(index: usize, launched: &[agents_cmd::BackgroundLaunch]) -> String {
@@ -324,12 +376,13 @@ impl FanoutTask {
         SubagentLaunchArgs {
             spec: self.spec,
             prompt: self.prompt,
+            prompt_file: self.prompt_file,
             name: self.name,
             model: self.model,
             agent: self.agent,
             effort: self.effort,
             timeout,
-            fg: false,
+            wait: None,
             keep: fanout.keep,
             description: self.description,
             max_turns: self.max_turns,
@@ -345,10 +398,17 @@ impl SubagentLaunchArgs {
         defaults: &rimz::config::SubagentsConfig,
     ) -> Result<agents_cmd::AgentLaunchArgs> {
         let spec = self.spec.context("a subagent needs an agent spec")?;
-        let prompt = self
-            .prompt
-            .filter(|prompt| !prompt.trim().is_empty())
-            .context("a subagent needs its prompt from the parent")?;
+        let prompt = match (self.prompt, self.prompt_file) {
+            (Some(prompt), None) if !prompt.trim().is_empty() => prompt,
+            (None, Some(path)) => crate::cli::send::read_prompt_file(&path)
+                .with_context(|| format!("reading prompt from `{}`", path.display()))?,
+            (Some(_), Some(_)) => {
+                bail!("a subagent task cannot set both `prompt` and `prompt_file`")
+            }
+            _ => bail!(
+                "a subagent needs its prompt from the parent via `PROMPT`, `--prompt-file`, or `prompt_file`"
+            ),
+        };
         let timeout = self
             .timeout
             .map(Ok)
@@ -360,7 +420,7 @@ impl SubagentLaunchArgs {
             prompt: Some(prompt),
             cohort: agents_cmd::CohortLaunchArgs {
                 description: self.description,
-                bg: !self.fg,
+                bg: true,
                 ..Default::default()
             },
             name: self.name,
@@ -381,12 +441,13 @@ impl SubagentLaunchArgs {
 
 fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
     if args.prompt.is_some()
+        || args.prompt_file.is_some()
         || args.name.is_some()
         || args.model.is_some()
         || args.agent.is_some()
         || args.effort.is_some()
         || args.timeout.is_some()
-        || args.fg
+        || args.wait.is_some()
         || args.keep
         || args.description.is_some()
         || args.max_turns.is_some()
@@ -470,7 +531,7 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
-struct AgentTypeReport {
+struct AgentSpecReport {
     name: String,
     source: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -481,7 +542,7 @@ struct AgentTypeReport {
     effort: Option<String>,
 }
 
-impl AgentTypeReport {
+impl AgentSpecReport {
     fn detail(&self) -> String {
         let Some(agent) = &self.agent else {
             return "-".to_owned();
@@ -496,10 +557,10 @@ impl AgentTypeReport {
     }
 }
 
-fn available_types(config: &rimz::config::MachineConfig) -> Vec<AgentTypeReport> {
-    let mut types = rimz::agents::known_kinds()
+fn available_specs(config: &rimz::config::MachineConfig) -> Vec<AgentSpecReport> {
+    let mut specs = rimz::agents::known_kinds()
         .filter(|kind| !config.agents.profiles.0.contains_key(*kind))
-        .map(|kind| AgentTypeReport {
+        .map(|kind| AgentSpecReport {
             name: kind.to_owned(),
             source: "kind",
             agent: None,
@@ -507,13 +568,13 @@ fn available_types(config: &rimz::config::MachineConfig) -> Vec<AgentTypeReport>
             effort: None,
         })
         .collect::<Vec<_>>();
-    types.extend(
+    specs.extend(
         config
             .agents
             .profiles
             .0
             .iter()
-            .map(|(name, profile)| AgentTypeReport {
+            .map(|(name, profile)| AgentSpecReport {
                 name: name.clone(),
                 source: "profile",
                 agent: Some(profile.agent.clone()),
@@ -521,28 +582,28 @@ fn available_types(config: &rimz::config::MachineConfig) -> Vec<AgentTypeReport>
                 effort: profile.effort.clone(),
             }),
     );
-    types.extend(config.agents.commands.0.keys().map(|name| AgentTypeReport {
+    specs.extend(config.agents.commands.0.keys().map(|name| AgentSpecReport {
         name: name.clone(),
         source: "command",
         agent: None,
         model: None,
         effort: None,
     }));
-    types
+    specs
 }
 
-fn list_types(json: bool) -> Result<()> {
+fn list_specs(json: bool) -> Result<()> {
     let config = rimz::config::MachineConfig::load().context("loading machine config")?;
-    let types = available_types(&config);
+    let specs = available_specs(&config);
     if json {
-        return render::json_pretty(&types);
+        return render::json_pretty(&specs);
     }
-    let mut table = render::Table::new(["TYPE", "SOURCE", "DETAIL"]);
-    for agent_type in types {
-        let detail = agent_type.detail();
+    let mut table = render::Table::new(["SPEC", "SOURCE", "DETAIL"]);
+    for agent_spec in specs {
+        let detail = agent_spec.detail();
         table.row([
-            render::cell(agent_type.name),
-            render::cell(agent_type.source),
+            render::cell(agent_spec.name),
+            render::cell(agent_spec.source),
             render::cell(detail).dash(),
         ]);
     }
@@ -719,8 +780,9 @@ mod tests {
     }
 
     #[test]
-    fn foreground_launch_uses_the_supervised_blocking_path() {
-        let args = parse(&["rimz", "claude", "review this", "--fg"]);
+    fn waited_launch_still_desugars_to_a_background_run() {
+        let args = parse(&["rimz", "claude", "review this", "--wait"]);
+        assert_eq!(args.launch.wait, Some(None));
         let launch = args
             .launch
             .into_agent_launch(&rimz::config::SubagentsConfig::default())
@@ -730,6 +792,7 @@ mod tests {
             "claude",
             "review this",
             "-p",
+            "--bg",
             "--timeout",
             "30m",
         ])
@@ -745,6 +808,41 @@ mod tests {
     }
 
     #[test]
+    fn wait_uses_an_optional_equals_duration() {
+        let args = parse(&["rimz", "claude", "review this", "--wait=5m"]);
+        assert_eq!(args.launch.wait, Some(Some(Duration::from_secs(5 * 60))));
+        assert!(
+            Harness::try_parse_from(["rimz", "claude", "review this", "--wait", "5m"]).is_err()
+        );
+    }
+
+    #[test]
+    fn waited_single_launch_accepts_json_in_both_forms() {
+        let bare = parse(&["rimz", "claude", "review this", "--wait", "--json"]);
+        assert_eq!(bare.launch.wait, Some(None));
+        assert!(bare.json);
+
+        let explicit = parse(&[
+            "rimz",
+            "launch",
+            "claude",
+            "review this",
+            "--wait",
+            "--json",
+        ]);
+        assert!(matches!(
+            explicit.command,
+            Some(SubagentsSubcmd::Launch {
+                launch: SubagentLaunchArgs {
+                    wait: Some(None),
+                    ..
+                },
+                json: true,
+            })
+        ));
+    }
+
+    #[test]
     fn fanout_task_matches_the_single_launch_surface() {
         let fanout = parse(&[
             "rimz",
@@ -753,14 +851,14 @@ mod tests {
             "--timeout",
             "10m",
             "--keep",
-            "--fg",
+            "--wait=2m",
             "--json",
         ]);
         let Some(SubagentsSubcmd::Fanout(fanout)) = fanout.command else {
             panic!("fanout command");
         };
         assert_eq!(fanout.file, Some(PathBuf::from("tasks.json")));
-        assert!(fanout.fg);
+        assert_eq!(fanout.wait, Some(Some(Duration::from_secs(2 * 60))));
         assert!(fanout.json);
         let launches = parse_fanout_launches(
             r#"[{
@@ -863,6 +961,14 @@ mod tests {
         assert!(format!("{missing_prompt:#}").contains("task 1 (auth)"));
         assert!(format!("{missing_prompt:#}").contains("prompt from the parent"));
 
+        let conflicting_prompt = parse_fanout_launches(
+            r#"[{"spec":"codex","prompt":"inline","prompt_file":"prompt.md"}]"#,
+            &fanout,
+            &defaults,
+        )
+        .expect_err("conflicting prompt sources");
+        assert!(format!("{conflicting_prompt:#}").contains("both `prompt` and `prompt_file`"));
+
         let duplicate = parse_fanout_launches(
             r#"[
                 {"spec":"codex","prompt":"one","name":"auth"},
@@ -894,7 +1000,45 @@ mod tests {
     }
 
     #[test]
-    fn available_types_include_kinds_profiles_and_commands_but_not_teams() {
+    fn prompt_files_resolve_for_single_launch_and_fanout() {
+        let dir = tempfile::tempdir().expect("prompt tempdir");
+        let prompt_path = dir.path().join("review.md");
+        std::fs::write(&prompt_path, "review the parser\n").expect("write prompt");
+        let prompt_path = prompt_path.to_string_lossy();
+
+        let args = parse(&["rimz", "codex", "--prompt-file", &prompt_path]);
+        let launch = args
+            .launch
+            .into_agent_launch(&rimz::config::SubagentsConfig::default())
+            .expect("file-backed launch");
+        assert_eq!(launch.prompt.as_deref(), Some("review the parser"));
+
+        let Some(SubagentsSubcmd::Fanout(fanout)) = parse(&["rimz", "fanout"]).command else {
+            panic!("fanout command");
+        };
+        let raw = format!(
+            r#"[{{"spec":"codex","prompt_file":{}}}]"#,
+            serde_json::to_string(prompt_path.as_ref()).expect("json path")
+        );
+        let launches =
+            parse_fanout_launches(&raw, &fanout, &rimz::config::SubagentsConfig::default())
+                .expect("file-backed fanout");
+        assert_eq!(launches[0].prompt.as_deref(), Some("review the parser"));
+
+        assert!(
+            Harness::try_parse_from([
+                "rimz",
+                "codex",
+                "inline prompt",
+                "--prompt-file",
+                prompt_path.as_ref(),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn available_specs_include_kinds_profiles_and_commands_but_not_teams() {
         let mut config = rimz::config::MachineConfig::default();
         config.agents.profiles.0.insert(
             "planner".to_owned(),
@@ -933,29 +1077,29 @@ mod tests {
             .0
             .insert("review".to_owned(), rimz::config::Team::default());
 
-        let types = available_types(&config);
+        let specs = available_specs(&config);
 
-        assert!(types.iter().any(|entry| entry.source == "kind"));
-        assert!(types.iter().any(|entry| {
+        assert!(specs.iter().any(|entry| entry.source == "kind"));
+        assert!(specs.iter().any(|entry| {
             entry.name == "planner"
                 && entry.source == "profile"
                 && entry.detail() == "claude · fable@high"
         }));
         assert!(
-            types
+            specs
                 .iter()
                 .any(|entry| entry.name == "mytool" && entry.source == "command")
         );
         assert_eq!(
-            types.iter().filter(|entry| entry.name == "claude").count(),
+            specs.iter().filter(|entry| entry.name == "claude").count(),
             1
         );
         assert!(
-            types
+            specs
                 .iter()
                 .any(|entry| entry.name == "claude" && entry.source == "profile")
         );
-        assert!(!types.iter().any(|entry| entry.name == "review"));
+        assert!(!specs.iter().any(|entry| entry.name == "review"));
     }
 
     #[test]
@@ -969,9 +1113,26 @@ mod tests {
     }
 
     #[test]
-    fn command_is_agent_only() {
+    fn specs_are_the_only_user_shell_subcommand() {
         let error = require_agent_caller(false).expect_err("human caller");
         assert!(error.to_string().contains("rimz agents <spec>"));
+
+        for argv in [
+            &["rimz", "launch", "codex", "review"][..],
+            &["rimz", "fanout"],
+            &["rimz", "list"],
+            &["rimz", "wait"],
+            &["rimz", "stop", "--all"],
+            &["rimz"],
+        ] {
+            let args = parse(argv);
+            assert!(command_is_agent_only(args.command.as_ref()), "{argv:?}");
+        }
+        for argv in [&["rimz", "specs"][..], &["rimz", "types"]] {
+            let args = parse(argv);
+            assert!(!command_is_agent_only(args.command.as_ref()), "{argv:?}");
+            assert!(matches!(args.command, Some(SubagentsSubcmd::Specs { .. })));
+        }
     }
 
     #[test]
@@ -1042,9 +1203,9 @@ mod tests {
     #[test]
     fn lifecycle_verbs_parse() {
         assert!(matches!(
-            parse(&["rimz", "fanout", "tasks.json", "--fg"]).command,
+            parse(&["rimz", "fanout", "tasks.json", "--wait"]).command,
             Some(SubagentsSubcmd::Fanout(FanoutArgs {
-                fg: true,
+                wait: Some(None),
                 file: Some(_),
                 ..
             }))

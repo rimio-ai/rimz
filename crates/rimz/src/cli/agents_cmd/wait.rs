@@ -41,9 +41,10 @@ pub(in crate::cli) fn wait_agent(
 pub(in crate::cli) fn wait_agent_batch(
     references: Vec<String>,
     json: bool,
+    timeout: Option<Duration>,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    wait_non_stream_request(references, false, None, WaitStyle::batch(json), globals)
+    wait_non_stream_request(references, false, timeout, WaitStyle::batch(json), globals)
 }
 
 fn wait_non_stream_request(
