@@ -516,6 +516,23 @@ pub(super) fn print_wait_block(
     err: &mut impl Write,
     outcome: &TargetOutcome,
 ) -> Result<()> {
+    write_wait_header(out, outcome)?;
+    if let TerminalPayload::Run(record) = &outcome.payload {
+        let emits_diagnostics = record.status != RunStatus::Completed
+            || record
+                .last_message
+                .as_deref()
+                .is_none_or(|message| message.trim().is_empty());
+        if emits_diagnostics {
+            write_wait_header(err, outcome)?;
+        }
+        supervised::output::print_run_output(record, out, err)?;
+    }
+    writeln!(out)?;
+    Ok(())
+}
+
+fn write_wait_header(out: &mut impl Write, outcome: &TargetOutcome) -> Result<()> {
     let entry = outcome.entry();
     if entry.status == RunStatus::Completed {
         writeln!(
@@ -534,10 +551,6 @@ pub(super) fn print_wait_block(
             ),
         )?;
     }
-    if let TerminalPayload::Run(record) = &outcome.payload {
-        supervised::output::print_run_output(record, out, err)?;
-    }
-    writeln!(out)?;
     Ok(())
 }
 

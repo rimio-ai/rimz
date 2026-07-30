@@ -1593,6 +1593,7 @@ fn plural_wait_block_marks_failure_and_prints_forensics() {
         "--- bright-owl (failed) ---\n\n"
     );
     let err = anstream::adapter::strip_str(&String::from_utf8(err).unwrap()).to_string();
+    assert!(err.starts_with("--- bright-owl (failed) ---\n"));
     assert!(err.contains("rimz: run failed (exit 1)"));
     assert!(err.contains("provider failed"));
 }
