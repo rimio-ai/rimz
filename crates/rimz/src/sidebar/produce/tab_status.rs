@@ -221,6 +221,12 @@ mod tests {
             (AgentStatus::Running, "#feat ⢿"),
             (AgentStatus::Success, "#feat ✓"),
         ] {
+            assert_eq!(
+                TabStatus::from_row(status, true)
+                    .expect("tab status fixture")
+                    .glyph(),
+                theme::unicode_glyph(theme::agent_status_glyph_role(status)),
+            );
             let mut snapshot = snapshot(vec![(status, "%1", now)], now);
             snapshot.theme.glyphs = toml::from_str(
                 "set = \"nerd_font\"\n\
