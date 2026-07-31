@@ -29,8 +29,11 @@ pub(super) fn for_explicit_removal(repo_root: &Path, globals: &GlobalFlags) -> R
 /// Best-effort facts for unattended wrapper cleanup.
 ///
 /// Unlike explicit removal, unknown agent liveness remains protective.
-pub(super) fn for_wrapper_cleanup(repo_root: &Path, globals: &GlobalFlags) -> RuntimeProtection {
-    best_effort(repo_root, globals, rimz::worktree::Occupancy::Unproven)
+pub(super) fn for_wrapper_cleanup(
+    workspace: &ResolvedWorkspace,
+    globals: &GlobalFlags,
+) -> RuntimeProtection {
+    best_effort_workspace(workspace, globals, rimz::worktree::Occupancy::Unproven)
 }
 
 /// Required roster facts for automatic gc.
@@ -69,15 +72,25 @@ fn best_effort(
             None
         }
     };
-    let (mux, panes) = list_panes(workspace.as_ref(), globals);
+    let Some(workspace) = workspace.as_ref() else {
+        return RuntimeProtection {
+            protections: rimz::worktree::ProtectionSet::default(),
+            agents: Vec::new(),
+        };
+    };
+    best_effort_workspace(workspace, globals, occupancy)
+}
+
+fn best_effort_workspace(
+    workspace: &ResolvedWorkspace,
+    globals: &GlobalFlags,
+    occupancy: rimz::worktree::Occupancy,
+) -> RuntimeProtection {
+    let (mux, panes) = list_panes(Some(workspace), globals);
     let own_pane = mux.and_then(rimz::mux::own_pane_id);
-    let agents = workspace
-        .as_ref()
-        .and_then(|workspace| {
-            open_store(workspace)
-                .and_then(|store| alive_agents(workspace, &store))
-                .ok()
-        })
+    let agents = open_store(workspace)
+        .and_then(|store| alive_agents(workspace, &store))
+        .ok()
         .unwrap_or_default();
     assemble(&panes, agents, own_pane.as_ref(), occupancy)
 }
