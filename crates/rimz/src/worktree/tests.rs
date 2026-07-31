@@ -194,6 +194,20 @@ fn requested_name_rejects_empty_segments_and_bad_chars() {
 }
 
 #[test]
+fn merge_branch_mismatch_error_quotes_both_branch_names() {
+    let error = WorktreeErr::MergeBranchMismatch {
+        name: "demo".to_owned(),
+        expected: "demo".to_owned(),
+        actual: "detached HEAD".to_owned(),
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "cannot merge worktree `demo`: expected branch `demo`, found `detached HEAD`"
+    );
+}
+
+#[test]
 fn explicit_branch_wins_over_branch_style_spelling() {
     assert_eq!(
         resolve_branch(Some("other"), Some("feat/great"), "feat-great").unwrap(),

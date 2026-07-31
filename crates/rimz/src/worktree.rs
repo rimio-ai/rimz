@@ -70,6 +70,8 @@ pub enum WorktreeErr {
         "cannot merge worktree `{name}`: its checkout has local changes; commit or stash them first"
     )]
     MergeDirtyWorktree { name: String },
+    #[error("cannot merge worktree `{name}`: it is in use by a live agent or an open pane")]
+    MergeInUse { name: String, path: PathBuf },
     #[error(
         "cannot merge worktree `{name}`: the main checkout has local changes; commit or stash them first"
     )]
@@ -81,7 +83,7 @@ pub enum WorktreeErr {
     },
     #[error("cannot merge worktree `{name}`: main must be checked out at {path}")]
     MainNotCheckedOut { name: String, path: PathBuf },
-    #[error("cannot merge worktree `{name}`: expected branch `{expected}`, found `{actual}")]
+    #[error("cannot merge worktree `{name}`: expected branch `{expected}`, found `{actual}`")]
     MergeBranchMismatch {
         name: String,
         expected: String,
@@ -95,6 +97,10 @@ pub enum WorktreeErr {
         "cannot merge worktree `{name}`: main changed while the worktree was rebasing; rerun the command"
     )]
     MainChanged { name: String },
+    #[error(
+        "cannot merge worktree `{name}`: the worktree was rebased onto main but now has local changes; main was not updated"
+    )]
+    MergeDirtyAfterRebase { name: String },
     #[error("cannot merge worktree `{name}`: fast-forwarding main failed: {stderr}")]
     FastForwardFailed { name: String, stderr: String },
     #[error("git command failed in {cwd}: git {args}: {stderr}")]
@@ -687,8 +693,15 @@ pub fn merge_to_main(
     repo_root: &Path,
     config: &WorktreeConfig,
     name: &str,
+    protections: &ProtectionSet,
 ) -> Result<WorktreeMerge> {
     let managed = resolve_owned(repo_root, config, name)?;
+    if protections.protects(&managed.path) {
+        return Err(WorktreeErr::MergeInUse {
+            name: name.to_owned(),
+            path: managed.path,
+        });
+    }
     if current_branch(repo_root).as_deref() != Some("main") {
         return Err(WorktreeErr::MainNotCheckedOut {
             name: name.to_owned(),
@@ -738,7 +751,7 @@ pub fn merge_to_main(
         });
     }
     if !git_stdout(&managed.path, ["status", "--porcelain"])?.is_empty() {
-        return Err(WorktreeErr::MergeDirtyWorktree {
+        return Err(WorktreeErr::MergeDirtyAfterRebase {
             name: name.to_owned(),
         });
     }

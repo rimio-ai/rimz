@@ -403,9 +403,12 @@ fn sweep_worktrees(
     dry_run: bool,
 ) -> Result<()> {
     let store = if dry_run {
-        super::open_existing_store(workspace)?.context(
-            "no RimZ store exists for this repository; refusing to sweep without live-agent state",
-        )?
+        let Some(store) = super::open_existing_store(workspace)? else {
+            let mut out = render::out();
+            writeln!(out, "sweep — skipped · no RimZ store here")?;
+            return Ok(());
+        };
+        store
     } else {
         open_store(workspace)?
     };
@@ -481,21 +484,23 @@ fn merge_worktree(
     globals: &GlobalFlags,
     name: &str,
 ) -> Result<()> {
-    let managed = rimz::worktree::resolve_owned(&workspace.project_root, config, name)?;
     let guard = super::worktree_protection::for_explicit_removal(&workspace.project_root, globals);
-    if guard.protections.protects(&managed.path) {
-        bail!(
+    let merged = match rimz::worktree::merge_to_main(
+        &workspace.project_root,
+        config,
+        name,
+        &guard.protections,
+    ) {
+        Err(rimz::worktree::WorktreeErr::MergeInUse { path, .. }) => bail!(
             "cannot merge worktree `{name}`: it is in use by {}",
-            holder_summary(&guard.agents, &managed.path)
-        );
-    }
-    let merged = rimz::worktree::merge_to_main(&workspace.project_root, config, name)?;
-    #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
-    {
-        println!("merged {} into main", merged.name);
-        println!("  branch : {}", merged.branch);
-        println!("  head   : {}", merged.head);
-    }
+            holder_summary(&guard.agents, &path)
+        ),
+        result => result?,
+    };
+    let mut out = render::out();
+    writeln!(out, "merged {} into main", merged.name)?;
+    writeln!(out, "  branch : {}", merged.branch)?;
+    writeln!(out, "  head   : {}", merged.head)?;
     Ok(())
 }
 
