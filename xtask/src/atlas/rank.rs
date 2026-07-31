@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use crate::source_files;
 
+use super::api::{OccurrenceCorpus, median};
 use super::history;
 use super::metrics::{self, FunctionMetric};
 use super::modules::module_for_path;
@@ -19,7 +20,9 @@ const USAGE: &str = "cargo xtask atlas rank [--path <prefix>] [--top N] [--windo
 
 Ranks modules by churn-weighted size (code × churn%); cx breaks ties.
 Flags: pin = churn% >= threshold and test/code below threshold; hot = non-noisy
-pace >= threshold; shallow = wide public surface with low lines/public item.
+pace >= threshold; shallow = wide, thin, and low-use public surface; hub = wide,
+thin, and high-use public surface. Occurrence counts are whole-word identifiers
+outside the defining file-module, not resolved caller counts.
 Requires rust-code-analysis-cli (`cargo install rust-code-analysis-cli --locked`).
 
   --path <path>          root-relative subtree (default crates/rimz/src)
@@ -32,6 +35,7 @@ Requires rust-code-analysis-cli (`cargo install rust-code-analysis-cli --locked`
   --hot-pace N           hot pace threshold (default 1.5)
   --shallow-pub N        shallow public-item threshold (default 20)
   --shallow-locpub N     shallow lines/public ceiling (default 30)
+  --shallow-occ N        shallow occurrence/item ceiling (default 3)
   --since <ref>          add code and public-item deltas
   --verbose              list top offender functions for shown modules
   --json                 versioned JSON agent contract (v1)";
@@ -48,6 +52,7 @@ struct Args {
     hot_pace: f64,
     shallow_pub: usize,
     shallow_locpub: f64,
+    shallow_occ: f64,
     since: Option<String>,
     verbose: bool,
     json: bool,
@@ -66,6 +71,7 @@ struct Row {
     tests: u64,
     pub_items: usize,
     loc_per_pub: Option<f64>,
+    occurrence_median: f64,
     churn_pct: f64,
     pace: Option<f64>,
     complexity: f64,
@@ -129,6 +135,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut hot_pace = None;
     let mut shallow_pub = None;
     let mut shallow_locpub = None;
+    let mut shallow_occ = None;
     let mut since = None;
     let mut verbose = false;
     let mut json = false;
@@ -217,6 +224,15 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 set_once(&mut shallow_locpub, parsed, "rank", "--shallow-locpub")?;
                 index += 2;
             }
+            "--shallow-occ" => {
+                let parsed = finite_nonnegative(
+                    value(args, index, "rank", "--shallow-occ")?,
+                    "rank",
+                    "--shallow-occ",
+                )?;
+                set_once(&mut shallow_occ, parsed, "rank", "--shallow-occ")?;
+                index += 2;
+            }
             "--since" => {
                 let reference = value(args, index, "rank", "--since")?.to_owned();
                 set_once(&mut since, reference, "rank", "--since")?;
@@ -246,6 +262,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         hot_pace: hot_pace.unwrap_or(1.5),
         shallow_pub: shallow_pub.unwrap_or(20),
         shallow_locpub: shallow_locpub.unwrap_or(30.0),
+        shallow_occ: shallow_occ.unwrap_or(3.0),
         since,
         verbose,
         json,
@@ -254,9 +271,12 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
 
 fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let current_sources = sources::scope_sources(root, &args.path, None)?;
+    let all_sources = sources::scope_sources(root, Path::new("."), None)?;
+    let occurrence_corpus = OccurrenceCorpus::new(&all_sources);
     let syntax = syntax::analyze_sources(&current_sources);
     let current_sizes = sizes(&current_sources, &args.path);
     let current_pub = public_counts(&syntax.files, &args.path);
+    let current_occurrences = occurrence_medians(&syntax.files, &args.path, &occurrence_corpus);
     let previous = args
         .since
         .as_deref()
@@ -280,6 +300,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .map(|(module, size)| {
             let pub_items = current_pub.get(module).copied().unwrap_or(0);
             let loc_per_pub = (pub_items > 0).then_some(size.code as f64 / pub_items as f64);
+            let occurrence_median = current_occurrences.get(module).copied().unwrap_or(0.0);
             let history = pace.modules.get(module).cloned().unwrap_or_default();
             let churn_pct = history.share * 100.0;
             let complexity = metrics.module_scores.get(module).copied().unwrap_or(0.0);
@@ -291,10 +312,15 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             if history.pace.is_some_and(|pace| pace >= args.hot_pace) {
                 flags.push("hot");
             }
-            if pub_items >= args.shallow_pub
-                && loc_per_pub.is_some_and(|ratio| ratio < args.shallow_locpub)
-            {
-                flags.push("shallow");
+            if let Some(flag) = surface_flag(
+                pub_items,
+                loc_per_pub,
+                occurrence_median,
+                args.shallow_pub,
+                args.shallow_locpub,
+                args.shallow_occ,
+            ) {
+                flags.push(flag);
             }
             Row {
                 module: module.clone(),
@@ -302,6 +328,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
                 tests: size.tests,
                 pub_items,
                 loc_per_pub,
+                occurrence_median,
                 churn_pct,
                 pace: history.pace,
                 complexity,
@@ -357,6 +384,24 @@ fn is_pinned(churn_pct: f64, test_code_ratio: Option<f64>, pin_churn: f64, pin_t
     churn_pct >= pin_churn && test_code_ratio.is_some_and(|ratio| ratio < pin_tc)
 }
 
+fn surface_flag(
+    pub_items: usize,
+    loc_per_pub: Option<f64>,
+    occurrence_median: f64,
+    shallow_pub: usize,
+    shallow_locpub: f64,
+    shallow_occ: f64,
+) -> Option<&'static str> {
+    if pub_items < shallow_pub || !loc_per_pub.is_some_and(|ratio| ratio < shallow_locpub) {
+        return None;
+    }
+    Some(if occurrence_median < shallow_occ {
+        "shallow"
+    } else {
+        "hub"
+    })
+}
+
 fn sort_rows(rows: &mut [Row]) {
     rows.sort_by(|left, right| {
         let left_value = left.code as f64 * left.churn_pct;
@@ -393,6 +438,26 @@ fn public_counts(files: &[super::syntax::FileSyntax], scope: &Path) -> BTreeMap<
             .or_default() += file.pub_items.len();
     }
     counts
+}
+
+fn occurrence_medians(
+    files: &[super::syntax::FileSyntax],
+    scope: &Path,
+    corpus: &OccurrenceCorpus,
+) -> BTreeMap<String, f64> {
+    let mut occurrences = BTreeMap::<String, Vec<usize>>::new();
+    for file in files {
+        let module = module_for_path(&file.path, scope);
+        occurrences.entry(module).or_default().extend(
+            file.pub_items
+                .iter()
+                .map(|item| corpus.count_from_module(&file.module_path, &item.name).0),
+        );
+    }
+    occurrences
+        .into_iter()
+        .map(|(module, values)| (module, median(values)))
+        .collect()
 }
 
 #[expect(

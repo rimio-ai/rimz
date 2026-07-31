@@ -377,7 +377,7 @@ impl OccurrenceCorpus {
             .sum()
     }
 
-    fn count_from_module(&self, defining_module: &str, symbol: &str) -> (usize, usize) {
+    pub(super) fn count_from_module(&self, defining_module: &str, symbol: &str) -> (usize, usize) {
         let mut total = 0;
         let mut outside_modules = 0;
         for (module, counts) in &self.modules {
@@ -412,7 +412,7 @@ fn is_identifier_character(character: char) -> bool {
     character == '_' || character.is_alphanumeric()
 }
 
-fn median(mut values: Vec<usize>) -> f64 {
+pub(super) fn median(mut values: Vec<usize>) -> f64 {
     if values.is_empty() {
         return 0.0;
     }
