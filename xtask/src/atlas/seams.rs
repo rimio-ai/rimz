@@ -250,21 +250,15 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .iter()
         .map(|edge| (ordered_pair(&edge.left, &edge.right), edge.commits))
         .collect::<BTreeMap<_, _>>();
+    let (cochange_edges, import_free_cochange_edges) =
+        partition_cochange_edges(cochange_edges, &import_lookup);
     let mut divergence = Vec::new();
-    for edge in &cochange_edges {
-        let imports = import_lookup
-            .get(&(edge.left.clone(), edge.right.clone()))
-            .copied()
-            .unwrap_or(0)
-            + import_lookup
-                .get(&(edge.right.clone(), edge.left.clone()))
-                .copied()
-                .unwrap_or(0);
-        if edge.commits >= args.min_cochange && imports == 0 {
+    for edge in import_free_cochange_edges {
+        if edge.commits >= args.min_cochange {
             divergence.push(Divergence {
                 kind: "cochange-without-import",
-                left: edge.left.clone(),
-                right: edge.right.clone(),
+                left: edge.left,
+                right: edge.right,
                 imports: 0,
                 cochanges: edge.commits,
             });
@@ -315,6 +309,16 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         total_divergence,
         divergence,
         parse_failures: syntax.parse_failures.len(),
+    })
+}
+
+fn partition_cochange_edges(
+    edges: Vec<CochangeEdge>,
+    imports: &BTreeMap<(String, String), usize>,
+) -> (Vec<CochangeEdge>, Vec<CochangeEdge>) {
+    edges.into_iter().partition(|edge| {
+        imports.contains_key(&(edge.left.clone(), edge.right.clone()))
+            || imports.contains_key(&(edge.right.clone(), edge.left.clone()))
     })
 }
 
@@ -383,7 +387,7 @@ fn print_report(report: &Report, top: usize) {
         "surface rows",
     );
     println!();
-    println!("Co-change edges");
+    println!("Co-change edges (pairs with import edges)");
     for edge in report.cochange_edges.iter().take(top) {
         println!("{} <> {}: {} commits", edge.left, edge.right, edge.commits);
     }
@@ -432,5 +436,39 @@ mod tests {
     fn endpoints_follow_scope_granularity() {
         assert_eq!(endpoint("cli::agents_cmd::show", "cli"), "agents_cmd");
         assert_eq!(endpoint("store::event", "cli"), "store");
+    }
+
+    #[test]
+    fn cochange_sections_partition_pairs_by_import_presence() {
+        let edges = vec![
+            CochangeEdge {
+                left: "agents".to_owned(),
+                right: "hooks".to_owned(),
+                commits: 40,
+            },
+            CochangeEdge {
+                left: "agents".to_owned(),
+                right: "store".to_owned(),
+                commits: 20,
+            },
+        ];
+        let imports = BTreeMap::from([(("store".to_owned(), "agents".to_owned()), 2)]);
+
+        let (with_imports, without_imports) = partition_cochange_edges(edges, &imports);
+
+        assert_eq!(
+            with_imports
+                .iter()
+                .map(|edge| ordered_pair(&edge.left, &edge.right))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([("agents".to_owned(), "store".to_owned())])
+        );
+        assert_eq!(
+            without_imports
+                .iter()
+                .map(|edge| ordered_pair(&edge.left, &edge.right))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([("agents".to_owned(), "hooks".to_owned())])
+        );
     }
 }
