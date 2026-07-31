@@ -18,7 +18,9 @@ const DEFAULT_TOP: usize = 15;
 const USAGE: &str = "cargo xtask atlas seams [--path <prefix>] [--top N] [--since <ref>] [--max-commit-files N] [--min-cochange N] [--json]
 
 Imports come from Rust `use` items; inline fully-qualified paths are not counted.
-Co-change omits commits touching more than --max-commit-files under --path.
+The provider table ranks outside modules by distinct imported item names across
+the scoped modules that use them. Co-change omits commits touching more than
+--max-commit-files under --path.
 
   --path <path>          root-relative subtree (default crates/rimz/src)
   --top N                rows per section (default 15)
@@ -52,6 +54,13 @@ struct ExternalSurface {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct ExternalProvider {
+    provider: String,
+    modules: usize,
+    items: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct Divergence {
     kind: &'static str,
     left: String,
@@ -69,6 +78,8 @@ struct Report {
     import_edges: Vec<ImportEdge>,
     total_external_surface: usize,
     external_surface: Vec<ExternalSurface>,
+    total_external_providers: usize,
+    external_providers: Vec<ExternalProvider>,
     total_cochange_edges: usize,
     cochange_edges: Vec<CochangeEdge>,
     total_divergence: usize,
@@ -235,6 +246,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             .cmp(&left.items)
             .then_with(|| left.module.cmp(&right.module))
     });
+    let mut external_providers = external_providers(&imports, &scope_endpoints);
 
     let cochange_edges = history::cochange(
         root,
@@ -289,10 +301,12 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     });
     let total_import_edges = import_edges.len();
     let total_external_surface = external_surface.len();
+    let total_external_providers = external_providers.len();
     let total_cochange_edges = cochange_edges.len();
     let total_divergence = divergence.len();
     import_edges.truncate(args.top);
     external_surface.truncate(args.top);
+    external_providers.truncate(args.top);
     let mut cochange_edges = cochange_edges;
     cochange_edges.truncate(args.top);
     divergence.truncate(args.top);
@@ -304,12 +318,45 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         import_edges,
         total_external_surface,
         external_surface,
+        total_external_providers,
+        external_providers,
         total_cochange_edges,
         cochange_edges,
         total_divergence,
         divergence,
         parse_failures: syntax.parse_failures.len(),
     })
+}
+
+fn external_providers(
+    imports: &BTreeMap<(String, String), BTreeSet<String>>,
+    scope_endpoints: &BTreeSet<String>,
+) -> Vec<ExternalProvider> {
+    let mut providers = BTreeMap::<String, (BTreeSet<String>, BTreeSet<String>)>::new();
+    for ((from, to), items) in imports {
+        if scope_endpoints.contains(to) {
+            continue;
+        }
+        let provider = providers.entry(to.clone()).or_default();
+        provider.0.insert(from.clone());
+        provider.1.extend(items.iter().cloned());
+    }
+    let mut providers = providers
+        .into_iter()
+        .map(|(provider, (modules, items))| ExternalProvider {
+            provider,
+            modules: modules.len(),
+            items: items.len(),
+        })
+        .collect::<Vec<_>>();
+    providers.sort_by(|left, right| {
+        right
+            .items
+            .cmp(&left.items)
+            .then_with(|| right.modules.cmp(&left.modules))
+            .then_with(|| left.provider.cmp(&right.provider))
+    });
+    providers
 }
 
 fn partition_cochange_edges(
@@ -387,6 +434,19 @@ fn print_report(report: &Report, top: usize) {
         "surface rows",
     );
     println!();
+    println!("External providers");
+    for provider in report.external_providers.iter().take(top) {
+        println!(
+            "{} <- {} modules, {} items",
+            provider.provider, provider.modules, provider.items
+        );
+    }
+    bounded_tail(
+        report.total_external_providers,
+        report.external_providers.len(),
+        "provider rows",
+    );
+    println!();
     println!("Co-change edges (pairs with import edges)");
     for edge in report.cochange_edges.iter().take(top) {
         println!("{} <> {}: {} commits", edge.left, edge.right, edge.commits);
@@ -410,8 +470,9 @@ fn print_report(report: &Report, top: usize) {
         "divergence rows",
     );
     println!(
-        "total: {} import edges, {} co-change edges, {} divergence rows, {} parse failures",
+        "total: {} import edges, {} provider rows, {} co-change edges, {} divergence rows, {} parse failures",
         report.total_import_edges,
+        report.total_external_providers,
         report.total_cochange_edges,
         report.total_divergence,
         report.parse_failures
@@ -470,5 +531,33 @@ mod tests {
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from([("agents".to_owned(), "hooks".to_owned())])
         );
+    }
+
+    #[test]
+    fn external_providers_union_modules_and_item_names() {
+        let imports = BTreeMap::from([
+            (
+                ("agents".to_owned(), "harness".to_owned()),
+                BTreeSet::from(["launch".to_owned(), "resume".to_owned()]),
+            ),
+            (
+                ("hooks".to_owned(), "harness".to_owned()),
+                BTreeSet::from(["launch".to_owned(), "stop".to_owned()]),
+            ),
+            (
+                ("hooks".to_owned(), "store".to_owned()),
+                BTreeSet::from(["open".to_owned()]),
+            ),
+            (
+                ("agents".to_owned(), "hooks".to_owned()),
+                BTreeSet::from(["install".to_owned()]),
+            ),
+        ]);
+        let providers = external_providers(&imports, &BTreeSet::from(["hooks".to_owned()]));
+
+        assert_eq!(providers[0].provider, "harness");
+        assert_eq!(providers[0].modules, 2);
+        assert_eq!(providers[0].items, 3);
+        assert_eq!(providers[1].provider, "store");
     }
 }
