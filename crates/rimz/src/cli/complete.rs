@@ -465,6 +465,7 @@ mod tests {
         let workspace = ResolvedWorkspace {
             workspace_id: rimz::WorkspaceId::from_project_root(dir.path()),
             project_root: dir.path().to_path_buf(),
+            cwd_project_root: None,
             root_class: rimz::workspace::RootClass::Directory,
             worktree_root: dir.path().to_path_buf(),
             worktree_branch: None,

@@ -412,6 +412,7 @@ mod tests {
         let workspace = ResolvedWorkspace {
             workspace_id,
             project_root: "/tmp/hooks-test".into(),
+            cwd_project_root: None,
             root_class: rimz::workspace::RootClass::Directory,
             worktree_root: "/tmp/hooks-test".into(),
             worktree_branch: None,
@@ -480,6 +481,7 @@ mod tests {
         let workspace = ResolvedWorkspace {
             workspace_id,
             project_root: "/tmp/hooks-test".into(),
+            cwd_project_root: None,
             root_class: rimz::workspace::RootClass::Directory,
             worktree_root: "/tmp/hooks-test".into(),
             worktree_branch: None,

@@ -5,6 +5,7 @@ fn workspace(root_class: RootClass) -> ResolvedWorkspace {
     ResolvedWorkspace {
         workspace_id: crate::ids::WorkspaceId::from_project_root(&project_root),
         project_root: project_root.clone(),
+        cwd_project_root: (root_class == RootClass::Repo).then(|| project_root.clone()),
         root_class,
         worktree_root: project_root,
         worktree_branch: None,
@@ -70,6 +71,61 @@ fn launch_checkout_reports_non_repository_flags_exactly() {
     assert_eq!(
         from_pr.to_string(),
         "--from-pr requires a git repository-backed room"
+    );
+}
+
+#[test]
+fn launch_checkout_creates_from_the_current_repo_root() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let room_repo = init_test_repo(&dir.path().join("room"));
+    let cwd_repo = init_test_repo(&dir.path().join("current"));
+    let mut workspace = workspace(RootClass::Repo);
+    workspace.project_root = room_repo;
+    workspace.cwd_project_root = Some(cwd_repo.clone());
+
+    let checkout = resolve_launch_checkout(
+        &workspace,
+        &WorktreeConfig::default(),
+        Some("cross-root"),
+        None,
+    )
+    .expect("create from current repo");
+
+    assert_eq!(
+        checkout.cwd,
+        worktree_path(&cwd_repo, &WorktreeConfig::default(), "cross-root").expect("path")
+    );
+    assert!(checkout.cwd.exists());
+    assert!(
+        !worktree_path(
+            &workspace.project_root,
+            &WorktreeConfig::default(),
+            "cross-root"
+        )
+        .expect("room path")
+        .exists()
+    );
+}
+
+#[test]
+fn launch_checkout_falls_back_to_the_room_repo_without_a_current_repo() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let room_repo = init_test_repo(dir.path());
+    let mut workspace = workspace(RootClass::Repo);
+    workspace.project_root = room_repo.clone();
+    workspace.cwd_project_root = None;
+
+    let checkout = resolve_launch_checkout(
+        &workspace,
+        &WorktreeConfig::default(),
+        Some("room-root"),
+        None,
+    )
+    .expect("create from room repo");
+
+    assert_eq!(
+        checkout.cwd,
+        worktree_path(&room_repo, &WorktreeConfig::default(), "room-root").expect("path")
     );
 }
 

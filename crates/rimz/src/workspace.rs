@@ -90,6 +90,10 @@ impl RootClass {
 pub struct ResolvedWorkspace {
     pub workspace_id: WorkspaceId,
     pub project_root: PathBuf,
+    /// The main-repo root of the starting path's own checkout, freshly
+    /// resolved, or an explicit repository root override. `None` when neither
+    /// path is a Git repository.
+    pub cwd_project_root: Option<PathBuf>,
     pub root_class: RootClass,
     pub worktree_root: PathBuf,
     pub worktree_branch: Option<String>,
@@ -414,33 +418,44 @@ impl WorkspaceResolver {
             .canonicalize()
             .unwrap_or_else(|_| start_in.to_path_buf());
 
-        let (project_root, worktree_root, root_class) = if let Some(root) = root_override {
-            let root = root.canonicalize().unwrap_or(root);
-            let class = classify_root(&root)?;
-            (root.clone(), root, class)
-        } else if let Some(pinned) = match mode {
-            ResolveMode::Create => None,
-            ResolveMode::Participate => {
-                read_verified_pin(env).or_else(|| recover_pinned_root(&start, scan))
-            }
-            ResolveMode::ParticipateDaemon => recover_pinned_root(&start, scan),
-        } {
-            // The pane lives in a session that already chose a root; the cwd
-            // still names the worktree the participant works in, for grouping.
-            let worktree_root = match resolve_git(&start)? {
-                Some((_, worktree)) => worktree,
-                None => resolve_marker(&start).unwrap_or_else(|| start.clone()),
+        let (project_root, cwd_project_root, worktree_root, root_class) =
+            if let Some(root) = root_override {
+                let root = root.canonicalize().unwrap_or(root);
+                let class = classify_root(&root)?;
+                let cwd_project_root = (class == RootClass::Repo).then(|| root.clone());
+                (root.clone(), cwd_project_root, root, class)
+            } else if let Some(pinned) = match mode {
+                ResolveMode::Create => None,
+                ResolveMode::Participate => {
+                    read_verified_pin(env).or_else(|| recover_pinned_root(&start, scan))
+                }
+                ResolveMode::ParticipateDaemon => recover_pinned_root(&start, scan),
+            } {
+                // The pane lives in a session that already chose a root; the cwd
+                // still names the worktree the participant works in, for grouping.
+                let (cwd_project_root, worktree_root) = match resolve_git(&start)? {
+                    Some((project, worktree)) => (Some(project), worktree),
+                    None => (
+                        None,
+                        resolve_marker(&start).unwrap_or_else(|| start.clone()),
+                    ),
+                };
+                let class = classify_root(&pinned)?;
+                (pinned, cwd_project_root, worktree_root, class)
+            } else if let Some((project_root, worktree_root)) = resolve_git(&start)? {
+                (
+                    project_root.clone(),
+                    Some(project_root),
+                    worktree_root,
+                    RootClass::Repo,
+                )
+            } else if let Some(marker) = resolve_marker(&start) {
+                (marker.clone(), None, marker, RootClass::Marker)
+            } else {
+                (start.clone(), None, start.clone(), RootClass::Directory)
             };
-            let class = classify_root(&pinned)?;
-            (pinned, worktree_root, class)
-        } else if let Some((project_root, worktree_root)) = resolve_git(&start)? {
-            (project_root, worktree_root, RootClass::Repo)
-        } else if let Some(marker) = resolve_marker(&start) {
-            (marker.clone(), marker, RootClass::Marker)
-        } else {
-            (start.clone(), start.clone(), RootClass::Directory)
-        };
         let project_root = normalized_root(project_root)?;
+        let cwd_project_root = cwd_project_root.map(normalized_root).transpose()?;
         let worktree_root = normalized_root(worktree_root)?;
 
         let workspace_id = WorkspaceId::from_project_root(&project_root);
@@ -450,6 +465,7 @@ impl WorkspaceResolver {
         Ok(ResolvedWorkspace {
             workspace_id,
             project_root,
+            cwd_project_root,
             root_class,
             worktree_root,
             worktree_branch,

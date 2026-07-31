@@ -719,6 +719,7 @@ fn record_live_room_bin_at(
     let workspace = crate::workspace::ResolvedWorkspace {
         workspace_id: record.workspace_id,
         project_root: record.project_root.clone(),
+        cwd_project_root: None,
         root_class: record.root_class,
         worktree_root: record.worktree_root.unwrap_or(record.project_root),
         worktree_branch: None,

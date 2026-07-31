@@ -56,7 +56,7 @@ When an agent launches a team, its members are top-level peers rather than child
 
 The team surface carries these cohort-level controls:
 
-- `-w, --worktree [NAME]` creates or reuses a RimZ-owned worktree; a bare `-w` chooses a fresh name.
+- `-w, --worktree [NAME]` creates or reuses a RimZ-owned worktree in the current Git repository; a bare `-w` chooses a fresh name. Cross-repository room launches use the same confirmation and `--root` rules as [`rimz agents`](./agents.md#channel-worktree-and-placement).
 - `--channel NAME` launches in a durable named lane instead of a worktree.
 - `--from-pr PR` creates or reuses a worktree from a pull-request number or URL.
 - `--description TEXT` seeds the member-card description until agents name their sessions.

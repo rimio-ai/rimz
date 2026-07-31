@@ -473,19 +473,16 @@ pub fn resolve_launch_checkout(
     worktree: Option<&str>,
     from_pr: Option<&PrTarget>,
 ) -> Result<LaunchCheckout> {
+    let repo_root = workspace
+        .cwd_project_root
+        .as_deref()
+        .unwrap_or(&workspace.project_root);
     if let Some(pr) = from_pr {
-        if workspace.root_class != RootClass::Repo {
+        if workspace.cwd_project_root.is_none() && workspace.root_class != RootClass::Repo {
             return Err(WorktreeErr::LaunchPrRequiresRepo);
         }
         let name = worktree.map(str::trim).filter(|name| !name.is_empty());
-        let created = create_from_pr(
-            &workspace.project_root,
-            config,
-            pr,
-            name,
-            None,
-            name.is_some(),
-        )?;
+        let created = create_from_pr(repo_root, config, pr, name, None, name.is_some())?;
         let review_only_reason = created.review_only_reason;
         let marker = created.marker;
         return Ok(LaunchCheckout {
@@ -504,12 +501,12 @@ pub fn resolve_launch_checkout(
             generated_name: false,
         });
     };
-    if workspace.root_class != RootClass::Repo {
+    if workspace.cwd_project_root.is_none() && workspace.root_class != RootClass::Repo {
         return Err(WorktreeErr::LaunchWorktreeRequiresRepo);
     }
     let name = raw_name.trim();
     let created = create(
-        &workspace.project_root,
+        repo_root,
         config,
         (!name.is_empty()).then_some(name),
         None,

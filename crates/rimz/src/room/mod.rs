@@ -163,6 +163,7 @@ impl RoomContext {
         ResolvedWorkspace {
             workspace_id: record.workspace_id.clone(),
             project_root: record.project_root.clone(),
+            cwd_project_root: None,
             root_class: record.root_class,
             worktree_root: record
                 .worktree_root
@@ -423,6 +424,7 @@ mod tests {
         ResolvedWorkspace {
             workspace_id: WorkspaceId::from_project_root(&project_root),
             project_root: project_root.clone(),
+            cwd_project_root: Some(project_root.clone()),
             root_class: RootClass::Repo,
             worktree_root: project_root.join("../rimz-worktrees/demo"),
             worktree_branch: Some("demo".to_owned()),

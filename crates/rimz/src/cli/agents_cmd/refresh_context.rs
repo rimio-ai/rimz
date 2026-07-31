@@ -119,6 +119,7 @@ fn session_pane(
     let workspace = ResolvedWorkspace {
         workspace_id: workspace_id.clone(),
         project_root: record.project_root.clone(),
+        cwd_project_root: None,
         root_class: record.root_class,
         worktree_root: record.project_root,
         worktree_branch: None,
