@@ -37,9 +37,8 @@ pub(super) struct StranglerRule {
     pub(super) config_line: usize,
 }
 
-pub(super) fn load(root: &Path) -> Result<Option<Target>> {
-    let path = root.join(TARGET_FILE);
-    let raw = match fs::read_to_string(&path) {
+pub(super) fn load(path: &Path) -> Result<Option<Target>> {
+    let raw = match fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
@@ -64,12 +63,12 @@ pub(super) fn load(root: &Path) -> Result<Option<Target>> {
     Ok(Some(target))
 }
 
-pub(super) fn write(root: &Path, target: &Target) -> Result<()> {
+pub(super) fn write(path: &Path, target: &Target) -> Result<()> {
     let mut rendered = toml::to_string_pretty(target).context("rendering refactor target TOML")?;
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
-    files::write_atomically(&root.join(TARGET_FILE), rendered.as_bytes())
+    files::write_atomically(path, rendered.as_bytes())
 }
 
 fn section_lines(raw: &str, section: &str) -> Vec<usize> {
