@@ -690,7 +690,8 @@ fn confirm_cross_repo_worktree_with(
     ))?;
     write_stderr(&format!(
         "  room root: {}\n  current git root: {}\n  \
-         the worktree will be created under the current Git root's configured worktree directory",
+         the worktree will be created under the current Git root's configured worktree directory\n  \
+         this room will not list, remove, or garbage-collect that cross-repo worktree",
         workspace.project_root.display(),
         cwd_root.display(),
     ))?;
@@ -704,7 +705,7 @@ fn confirm_cross_repo_worktree_with(
             cwd_root.display(),
         );
     }
-    if !confirm("Create the worktree at the current Git root and continue?")? {
+    if !confirm("Create the worktree at the current Git root and manage its cleanup from there?")? {
         write_stderr("Launch aborted; nothing changed.")?;
         return Ok(false);
     }
@@ -833,7 +834,7 @@ mod tests {
             |question| {
                 assert_eq!(
                     question,
-                    "Create the worktree at the current Git root and continue?"
+                    "Create the worktree at the current Git root and manage its cleanup from there?"
                 );
                 Ok(false)
             },

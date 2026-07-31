@@ -391,11 +391,12 @@ pub(super) fn cleanup_worktree(
     if !interactive {
         std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
     }
+    let workspace = cleanup_workspace(&marker, globals)?;
     let protections =
-        super::worktree_protection::for_wrapper_cleanup(&marker.repo_root, globals).protections;
+        super::worktree_protection::for_wrapper_cleanup(&workspace, globals).protections;
     match protections.assess(path, status) {
         rimz::worktree::RemovalAssessment::Removable => {
-            let removed = remove_for_cleanup(path, &marker, globals, false)?;
+            let removed = remove_for_cleanup(path, &marker, &workspace, false)?;
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "rimz: removed clean worktree {}",
@@ -408,7 +409,7 @@ pub(super) fn cleanup_worktree(
                 match dirty_choice(path)? {
                     DirtyChoice::Keep => {}
                     DirtyChoice::Remove => {
-                        let removed = remove_for_cleanup(path, &marker, globals, true)?;
+                        let removed = remove_for_cleanup(path, &marker, &workspace, true)?;
                         report_kept_branch(&removed);
                     }
                     DirtyChoice::Shell => exec_shell(path)?,
@@ -420,20 +421,40 @@ pub(super) fn cleanup_worktree(
     Ok(())
 }
 
+fn cleanup_workspace(
+    marker: &rimz::worktree::WorktreeMarker,
+    globals: &GlobalFlags,
+) -> Result<ResolvedWorkspace> {
+    resolve_cleanup_workspace(marker, globals.root.clone(), verified_room_pin())
+}
+
+fn resolve_cleanup_workspace(
+    marker: &rimz::worktree::WorktreeMarker,
+    root_override: Option<PathBuf>,
+    room_pin: Option<PathBuf>,
+) -> Result<ResolvedWorkspace> {
+    let root = root_override
+        .or(room_pin)
+        .unwrap_or_else(|| marker.repo_root.clone());
+    WorkspaceResolver::resolve(".", Some(root)).context("resolving cleanup workspace")
+}
+
+fn verified_room_pin() -> Option<PathBuf> {
+    let id = std::env::var_os(rimz::workspace::ENV_WORKSPACE_ID)?;
+    let root = PathBuf::from(std::env::var_os(rimz::workspace::ENV_PROJECT_ROOT)?);
+    rimz::workspace::verify_pin(&id.to_string_lossy(), &root)
+}
+
 fn remove_for_cleanup(
     path: &Path,
     marker: &rimz::worktree::WorktreeMarker,
-    globals: &GlobalFlags,
+    workspace: &ResolvedWorkspace,
     force: bool,
 ) -> Result<rimz::worktree::RemovalOutcome> {
     let removed = rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force)?;
-    let store = (|| -> Result<_> {
-        let workspace = WorkspaceResolver::resolve(removed.repo_root(), globals.root.clone())?;
-        let store = open_store(&workspace)?;
-        Ok((workspace, store))
-    })();
+    let store = open_store(workspace);
     match store {
-        Ok((workspace, store)) => {
+        Ok(store) => {
             let retirement = rimz::worktree::retire_removal(
                 &store,
                 &removed,
@@ -568,21 +589,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn cleanup_workspace_uses_room_pin_and_marker_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let room_root = dir.path().join("room");
+        let repo_root = dir.path().join("repo");
+        std::fs::create_dir_all(&room_root).expect("room root");
+        std::fs::create_dir_all(&repo_root).expect("repo root");
+        let room_root = room_root.canonicalize().expect("canonical room");
+        let repo_root = repo_root.canonicalize().expect("canonical repo");
+        let marker = rimz::worktree::WorktreeMarker {
+            repo_root: repo_root.clone(),
+            ..worktree_marker()
+        };
+
+        let pinned =
+            resolve_cleanup_workspace(&marker, None, Some(room_root.clone())).expect("pinned room");
+        assert_eq!(pinned.project_root, room_root);
+
+        let fallback =
+            resolve_cleanup_workspace(&marker, None, None).expect("marker repository fallback");
+        assert_eq!(fallback.project_root, repo_root);
+    }
+
     fn inspected_worktree(landed: rimz::worktree::LandedVerdict) -> InspectedWorktree {
         let path = PathBuf::from("/repo-worktrees/demo");
         InspectedWorktree {
             managed: rimz::worktree::ManagedWorktree {
-                marker: rimz::worktree::WorktreeMarker {
-                    version: 4,
-                    name: "demo".to_owned(),
-                    branch: "recorded/demo".to_owned(),
-                    base_branch: Some("main".to_owned()),
-                    from_pr: Some(42),
-                    base_ref: "abc123".to_owned(),
-                    repo_root: PathBuf::from("/repo"),
-                    worktree_path: PathBuf::from("/recorded/demo"),
-                    created_at: jiff::Timestamp::now(),
-                },
+                marker: worktree_marker(),
                 path,
                 branch: Some("feature/demo".to_owned()),
             },
@@ -590,6 +624,20 @@ mod tests {
                 dirty: false,
                 landed,
             },
+        }
+    }
+
+    fn worktree_marker() -> rimz::worktree::WorktreeMarker {
+        rimz::worktree::WorktreeMarker {
+            version: 4,
+            name: "demo".to_owned(),
+            branch: "recorded/demo".to_owned(),
+            base_branch: Some("main".to_owned()),
+            from_pr: Some(42),
+            base_ref: "abc123".to_owned(),
+            repo_root: PathBuf::from("/repo"),
+            worktree_path: PathBuf::from("/recorded/demo"),
+            created_at: jiff::Timestamp::now(),
         }
     }
 }
