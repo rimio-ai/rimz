@@ -30,6 +30,17 @@ pub struct RuntimeProjection {
     pub agents: Vec<AgentState>,
 }
 
+/// Read the durable agent rollup without opening a writer-capable [`crate::Store`].
+///
+/// Producer-side repair detectors use this entry point so the sidebar import
+/// graph stays read-only while still retaining ended rows.
+pub fn audit_projection(
+    paths: &crate::StatePaths,
+) -> crate::store::snapshot::Result<RuntimeProjection> {
+    let (_, agents, _) = super::snapshot::catch_up_rollup(paths)?;
+    Ok(RuntimeProjection::from_parts(agents, RuntimeScope::Audit))
+}
+
 impl RuntimeProjection {
     pub fn from_parts(agents: Vec<AgentState>, scope: RuntimeScope) -> Self {
         let ended = agents

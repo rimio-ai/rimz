@@ -218,6 +218,22 @@ fn signal_child(pid: u32, signal: ChildSignal) {
     let _ = kill(Pid::from_raw(pid as i32), signal);
 }
 
+/// SIGTERM a process only while its durable start token still identifies it.
+pub fn signal_process_term(pid: u32, expected_start: Option<&str>) -> bool {
+    if !crate::proc::process_is_live(pid, expected_start) {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        signal_child(pid, ChildSignal::Term);
+        true
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 /// Build a detached `rimz` command with fresh null stdio, anchored to RimZ-owned
 /// shared disk usage so a deleted launch CWD cannot ENOENT the spawn.
 pub(crate) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {

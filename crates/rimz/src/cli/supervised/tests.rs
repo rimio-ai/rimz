@@ -368,6 +368,44 @@ fn stream_event_shapes_are_ndjson_ready() {
     );
 }
 
+#[test]
+fn subagent_run_holds_its_pane_after_terminal_completion() {
+    assert_eq!(run_exit_policy(true, true), (false, true));
+    assert_eq!(run_exit_policy(true, false), (true, true));
+    assert_eq!(run_exit_policy(false, true), (false, false));
+
+    let run_id = rimz::RunId::new();
+    let launch = rimz::agents::LaunchParams::default();
+    let launch_id = rimz::ids::AgentSessionId::from("child-id");
+    let pane = run_pane_cmd(RunPaneCmdArgs {
+        adapter: rimz::agents::definition_by_kind("codex").unwrap(),
+        run_id: &run_id,
+        agent_name: Some("child"),
+        agent_name_explicit: true,
+        launch: &launch,
+        launch_id: Some(&launch_id),
+        cwd: Path::new("/tmp"),
+        prompt: "work",
+        cleanup_worktree: false,
+        permission_args: &[],
+        system_prompt_file: None,
+        append_system_prompt_files: &[],
+        self_cleanup_on_completion: true,
+        subagent: true,
+        provider_account_binding: None,
+    })
+    .unwrap();
+    let request = rimz::harness::launch::decode_exec_request(
+        "codex",
+        None,
+        pane.argv.last().expect("exec payload"),
+    )
+    .unwrap();
+    assert!(!request.close_pane_on_exit);
+    assert!(request.exit_on_run_completion);
+    assert!(request.subagent);
+}
+
 struct RunFixture {
     _dir: tempfile::TempDir,
     workspace_id: WorkspaceId,

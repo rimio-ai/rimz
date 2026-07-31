@@ -550,6 +550,8 @@ fn execute_attempt(
         prompt.to_owned(),
         prepared.launch.cwd.clone(),
     );
+    record.keep = request.keep;
+    record.subagent = request.subagent;
     record.budget.clone_from(&agent_cell.launch.budget);
     record.deadline_at = request
         .timeout

@@ -482,6 +482,19 @@ pub enum DiagEvent {
         second_confirmed_at_ms: u64,
         sigkilled: bool,
     },
+    SubagentOrphanReaped {
+        agent_kind: AgentKind,
+        agent_id: AgentSessionId,
+        parent_agent_id: AgentSessionId,
+        orphaned_at_ms: u64,
+    },
+    SubagentOrphanRepairFailed {
+        agent_kind: AgentKind,
+        agent_id: AgentSessionId,
+        parent_agent_id: AgentSessionId,
+        orphaned_at_ms: u64,
+        error: String,
+    },
     PaneCacheDivergence {
         pane_id: String,
         pid: i32,
@@ -542,6 +555,8 @@ impl DiagEvent {
             | Self::TopologyWriteRejected { .. }
             | Self::RendererOrphanReaped { .. }
             | Self::SidebarOrphanReaped { .. }
+            | Self::SubagentOrphanReaped { .. }
+            | Self::SubagentOrphanRepairFailed { .. }
             | Self::PaneCacheDivergence { .. }
             | Self::SupervisorPreflightRejected { .. }
             | Self::SelfCloseRejected { .. }
@@ -639,6 +654,8 @@ impl DiagEvent {
             Self::RendererSignalDeath { .. } => "renderer_signal_death",
             Self::RendererOrphanReaped { .. } => "renderer_orphan_reaped",
             Self::SidebarOrphanReaped { .. } => "sidebar_orphan_reaped",
+            Self::SubagentOrphanReaped { .. } => "subagent_orphan_reaped",
+            Self::SubagentOrphanRepairFailed { .. } => "subagent_orphan_repair_failed",
             Self::PaneCacheDivergence { .. } => "pane_cache_divergence",
             Self::SupervisorConvergence { .. } => "supervisor_convergence",
             Self::SupervisorPreflightRejected { .. } => "supervisor_preflight_rejected",
@@ -849,6 +866,16 @@ impl DiagEvent {
             | Self::PaneCacheDivergence { pane_id, pid, .. } => {
                 format!("{}:{pane_id}:{pid}", self.kind_name())
             }
+            Self::SubagentOrphanReaped {
+                agent_kind,
+                agent_id,
+                ..
+            }
+            | Self::SubagentOrphanRepairFailed {
+                agent_kind,
+                agent_id,
+                ..
+            } => format!("{}:{agent_kind}:{agent_id}", self.kind_name()),
             Self::SupervisorConvergence { target_build }
             | Self::SupervisorPreflightRejected { target_build, .. } => {
                 format!("{}:{target_build}", self.kind_name())
@@ -1208,6 +1235,23 @@ impl DiagEvent {
                 sigkilled,
             } => format!(
                 "reaped orphaned sidebar {pid} after pane {pane_id} was absent at {first_confirmed_at_ms} and {second_confirmed_at_ms}; sigkill={sigkilled}"
+            ),
+            Self::SubagentOrphanReaped {
+                agent_kind,
+                agent_id,
+                parent_agent_id,
+                orphaned_at_ms,
+            } => format!(
+                "reaped orphaned subagent {agent_kind}/{agent_id} after parent {parent_agent_id} remained ended or absent past grace (evidence timestamp {orphaned_at_ms})"
+            ),
+            Self::SubagentOrphanRepairFailed {
+                agent_kind,
+                agent_id,
+                parent_agent_id,
+                orphaned_at_ms,
+                error,
+            } => format!(
+                "failed to repair orphaned subagent {agent_kind}/{agent_id} after parent {parent_agent_id} remained ended or absent past grace (evidence timestamp {orphaned_at_ms}): {error}"
             ),
             Self::PaneCacheDivergence {
                 pane_id,

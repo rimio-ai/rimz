@@ -235,6 +235,21 @@ fn hidden_helper_requests_round_trip_through_cli() {
     };
     assert_eq!(args.request, run_timeout);
 
+    let orphan_subagent = OrphanSubagentRequest {
+        workspace_id: workspace_id.clone(),
+        child_kind: kind.clone(),
+        child_agent_id: agent_id.clone(),
+        parent_agent_id: AgentSessionId::from("parent -- 1"),
+    };
+    let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
+        "orphan-subagent",
+        &orphan_subagent,
+    ));
+    let Some(AgentsSubcmd::OrphanSubagent(args)) = parsed.command else {
+        panic!("expected orphan-subagent");
+    };
+    assert_eq!(args.request, orphan_subagent);
+
     let refresh_usage = AccountUsageRefreshRequest {
         workspace_id: workspace_id.clone(),
         kind: kind.clone(),

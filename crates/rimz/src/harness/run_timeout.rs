@@ -18,7 +18,11 @@ pub struct RunTimeoutRequest {
 }
 
 /// Detect overdue non-terminal runs and ask short-lived helpers to settle them.
-pub fn enforce(paths: &StatePaths, runtime: &RuntimePaths, now: Timestamp) {
+pub fn enforce(
+    paths: &StatePaths,
+    runtime: &RuntimePaths,
+    now: Timestamp,
+) -> Option<Vec<RunRecord>> {
     let records = match crate::store::run_store::list(&paths.runs_dir) {
         Ok(records) => records,
         Err(err) => {
@@ -27,12 +31,13 @@ pub fn enforce(paths: &StatePaths, runtime: &RuntimePaths, now: Timestamp) {
                 error = &err as &dyn std::error::Error,
                 "sidebar: failed to read supervised runs for timeout enforcement",
             );
-            return;
+            return None;
         }
     };
     for record in records.iter().filter(|record| is_overdue(record, now)) {
         spawn_timeout_helper(runtime, record);
     }
+    Some(records)
 }
 
 fn is_overdue(record: &RunRecord, now: Timestamp) -> bool {

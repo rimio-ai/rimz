@@ -56,12 +56,12 @@ The launch planner independently rejects any `rimz agents` or `rimz subagents` c
 | `print` | always `true` | a child is one bounded turn, never a session |
 | `bg` | always `true` | single launch and fanout share one background-launch composition |
 | join | absent unless `--wait[=DURATION]` | the parent normally keeps moving; the optional duration limits only its join |
-| wrapper self-cleanup | on unless `--keep` | the child reclaims itself from its durable outcome after the parent returns |
+| wrapper completion monitor | on unless `--keep` | the provider stops at the durable outcome while the wrapper keeps the pane |
 | `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | an unattended child must not run forever |
-| `keep` | `--keep`, default false | the pane closes itself on completion |
+| `keep` | `--keep`, default false | disables automatic close even when the parent exits |
 | everything else | default | see the omissions below |
 
-The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --bg --timeout 30m`, while additionally arming the in-pane wrapper's self-cleanup because this doorway omits retries and verification. `--wait` leaves that launch unchanged, then passes the minted petname to the shared single-name wait path; `--wait=DURATION` adds a caller-side join deadline without changing the child's timeout. Everything after that point — the run record, the completion fold, the wake socket, pane reclamation — is [scripting.md](./scripting.md) unchanged, which is the reason this page does not restate any of it.
+The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --bg --timeout 30m`, except that the wrapper retains the pane after the one turn finishes. `--wait` leaves that launch unchanged, then passes the minted petname to the shared single-name wait path; `--wait=DURATION` adds a caller-side join deadline without changing the child's timeout.
 
 The no-delegation reminder rides a provider-native append-system-text launch flag for Claude, Qwen, and Droid, after any caller-supplied append text. Adapters without that capability keep the same tag-wrapped reminder at the end of the user prompt. The process compiler owns this choice at the adapter boundary, beside the native delegation lockdown, so preflight and the eventual exec compile the same provider argv.
 
@@ -134,16 +134,17 @@ Which projection each verb reads is the other half:
 
 ## The lifecycle, end to end
 
-Normal completion does not depend on the parent issuing a stop. That is worth stating plainly, because the shape of the API invites the opposite assumption.
-
 1. The parent launches; the direct-parent stamp and subagent-caller check pass; a run record and pane are created. By default the petname prints immediately; with `--wait`, the parent then joins the result.
 2. The child runs its one turn. Its hooks fold a terminal status into the run record.
-3. The child's own in-pane wrapper notices the terminal record, terminates the provider, and closes the pane independently of the parent. A surviving blocking parent also attempts the same idempotent reclamation after its wait returns; `wait` itself remains only a reader ([scripting.md § Reclaiming the run pane](./scripting.md#reclaiming-the-run-pane)).
-4. The run record survives, so `list` and `wait` still report the outcome after the pane is gone.
+3. The in-pane wrapper notices the terminal record, terminates the provider, transfers the child row's runtime ownership back from the provider pid to itself, and prints a done banner. The wrapper remains alive to hold the pane.
+4. `rimz subagents stop` closes the pane explicitly. If the parent exits instead, the wrapper closes after the parent's durable end stamp or three authoritative pane-absence probes and a final reconfirmation.
+5. The run record survives either close, so `list` and `wait` still report the outcome.
 
-`wait` is a reader over step 4 and has no part in step 3; a parent that never calls it changes nothing. The 30-minute deadline is the backstop for a child whose wrapper cannot finish the job: it is stored on the run record and enforced by the elected room producer, so it fires whether or not the parent is still alive. `--keep` opts out of step 3 and leaves reclamation to `rimz subagents stop` or `rimz gc`.
+`wait` remains only a reader and never closes the pane. `--keep` disables parent-death close as well as completion cleanup, leaving reclamation to `rimz subagents stop` or `rimz gc`.
 
-The one place the parent does reach its children is `stop`. Stopping a parent through `rimz agents stop` — or through `rimz teams stop` reaching that parent — stops its live pane-backed children first, so a cascade cannot strand a child whose only reason to exist was the parent's turn.
+The watchdog probes every 60 seconds on its own thread, rereads the parent row so an in-place restart can move panes, and treats only `RequireAuthoritative` mux absence as a strike. The elected sidebar producer scans for orphans no more than once per minute as a slower durable-record backstop: a live child whose parent has been ended (or missing) for ten minutes starts a hidden repair helper. The helper rechecks the records, closes the child, records its durable end, and emits the warning diagnostic `subagent_orphan_reaped`. A failed close emits `subagent_orphan_repair_failed` and remains eligible for a later scan. Either warning means the wrapper watchdog missed its normal window rather than reporting routine parent shutdown.
+
+Stopping a parent through `rimz agents stop` — or through `rimz teams stop` reaching that parent — still stops its live pane-backed children first.
 
 ## What v1 leaves out
 
@@ -155,7 +156,7 @@ A child is addressable as `@<petname>`, but a supervised print-mode provider is 
 
 ## See also
 
-- [scripting.md](./scripting.md): the supervised run every child is, including the wrapper self-close and the producer-enforced deadline.
+- [scripting.md](./scripting.md): the supervised run every child is, including the subagent retention exception.
 - [fleet.md](./fleet.md): the launch, address, and reclaim machinery, and where ancestry sits in the compile path.
 - [model.md](../agents/model.md): the rollup, and the provider-native subagent rows this page's predicates exclude.
 - [cli/subagents.md](../../reference/cli/subagents.md): the user-facing command and flag surface.

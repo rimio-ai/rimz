@@ -11,5 +11,5 @@ Topic detail lives in [fleet.md](../../../../docs/internals/harness/fleet.md) (s
 - Handle rendering and address resolution read the addressable peer set; raw root rows are for accounting scans.
 - CLI handlers keep argument parsing, presentation, and cross-command orchestration. Harness modules own pure domain rules, durable records, helper argv shape, and side-effect boundaries.
 - Elder-fired helpers in `schedule/fire.rs`, `auto_continue.rs`, `auto_redeem.rs`, and `idle_compact.rs` spawn hidden CLI subprocesses with fresh null stdio.
-- `auto_continue.rs`, `auto_redeem.rs`, and `idle_compact.rs` are in the sidebar import graph. Keep them free of store-writer, run-wake, and broker imports; runtime-cache writes through `store::atomic::write_temp_then_rename_cache` are the allowed durability path.
+- `auto_continue.rs`, `auto_redeem.rs`, `idle_compact.rs`, and `orphan_sweep.rs` are in the sidebar import graph. Keep them free of store-writer, run-wake, and broker imports; runtime-cache writes through `store::atomic::write_temp_then_rename_cache` are the allowed durability path.
 - Assist records append from detached helper CLI handlers and the loop runner; sidebar-graph modules only pass the evidence those writers need.

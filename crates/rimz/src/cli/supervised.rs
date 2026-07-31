@@ -136,6 +136,8 @@ pub(super) struct RunPaneCmdArgs<'a> {
 }
 
 pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
+    let (close_pane_on_exit, exit_on_run_completion) =
+        run_exit_policy(args.self_cleanup_on_completion, args.subagent);
     let rimz_bin = rimz::proc::rimz_exe();
     let argv = rimz::harness::launch::exec_argv(
         &rimz_bin,
@@ -155,8 +157,8 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
             ),
             run_id: Some(args.run_id.clone()),
             worktree_path: args.cleanup_worktree.then(|| args.cwd.to_path_buf()),
-            close_pane_on_exit: args.self_cleanup_on_completion,
-            exit_on_run_completion: args.self_cleanup_on_completion,
+            close_pane_on_exit,
+            exit_on_run_completion,
             subagent: args.subagent,
             identity: rimz::harness::launch::ExecIdentity {
                 name: args.agent_name.map(ToOwned::to_owned),
@@ -167,6 +169,13 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
         },
     )?;
     Ok(PaneCmd { argv })
+}
+
+fn run_exit_policy(self_cleanup_on_completion: bool, subagent: bool) -> (bool, bool) {
+    (
+        self_cleanup_on_completion && !subagent,
+        self_cleanup_on_completion,
+    )
 }
 
 pub(super) fn install_run_interrupt_flag() -> Result<RunCancellation> {

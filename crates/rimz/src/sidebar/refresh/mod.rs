@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::agents::AgentAccount;
 use crate::agents::AgentState;
@@ -61,6 +62,8 @@ use super::enrich::{
 };
 use super::timing::unix_now_ms;
 
+const ORPHAN_SWEEP_SCAN_TTL: Duration = Duration::from_secs(60);
+
 #[derive(Clone, Debug)]
 pub struct RefreshedLanes {
     pub spending: SpendingCaches,
@@ -75,6 +78,7 @@ pub struct ProducerRefreshState {
     git: git_stats::GitRefreshState,
     cohort_rollup: crate::store::snapshot::RollupCursor,
     cohort_effort: crate::agents::spending::EffortParseMemo,
+    orphan_sweep_checked_at_ms: Option<u64>,
 }
 
 /// Supply sidebar workspace scope to the account-global spending service. A
@@ -262,7 +266,14 @@ pub fn refresh_heavy_lanes(
     let mut budget_snapshot = base.clone();
     apply_live_day_spend(&mut budget_snapshot, &spending.workspace);
     crate::harness::budget::enforce(&budget_snapshot, runtime, state_messages_dir, config);
-    crate::harness::run_timeout::enforce(state_paths, runtime, base.now);
+    let runs = crate::harness::run_timeout::enforce(state_paths, runtime, base.now);
+    let now_ms = base.now.as_millisecond().max(0) as u64;
+    if let Some(runs) = runs
+        && orphan_sweep_due(state.orphan_sweep_checked_at_ms, now_ms)
+    {
+        state.orphan_sweep_checked_at_ms = Some(now_ms);
+        crate::harness::orphan_sweep::enforce(state_paths, runtime, &runs, base.now);
+    }
     refresh_diff_stats_for(
         base,
         runtime,
@@ -286,6 +297,12 @@ pub fn refresh_heavy_lanes(
         pr_states: pr_cache.states,
         branch_ci: pr_cache.branch_ci,
     }
+}
+
+fn orphan_sweep_due(checked_at_ms: Option<u64>, now_ms: u64) -> bool {
+    checked_at_ms.is_none_or(|checked_at| {
+        now_ms.saturating_sub(checked_at) >= ORPHAN_SWEEP_SCAN_TTL.as_millis() as u64
+    })
 }
 
 #[cfg(test)]
@@ -362,5 +379,15 @@ mod tests {
         let served = matching_workspace_cache(&runtime, &"a".repeat(64));
 
         assert!(served.tally.is_zero());
+    }
+
+    #[test]
+    fn orphan_sweep_scan_is_ttl_gated() {
+        assert!(orphan_sweep_due(None, 1_000));
+        assert!(!orphan_sweep_due(Some(1_000), 1_001));
+        assert!(orphan_sweep_due(
+            Some(1_000),
+            1_000 + ORPHAN_SWEEP_SCAN_TTL.as_millis() as u64
+        ));
     }
 }

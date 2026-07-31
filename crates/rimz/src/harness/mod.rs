@@ -6,6 +6,8 @@ pub mod auto_redeem;
 pub mod budget;
 pub mod idle_compact;
 pub mod launch;
+pub mod orphan_sweep;
+pub mod parent_watch;
 pub mod petname;
 pub mod plan;
 pub mod prompt_compose;

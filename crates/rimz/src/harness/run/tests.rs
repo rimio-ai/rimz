@@ -62,6 +62,32 @@ fn durable_deadline_defaults_for_old_records_and_times_out_once_due() {
 }
 
 #[test]
+fn retention_flags_default_false_for_old_run_records() {
+    let (_dir, _paths, record) = setup();
+    let mut old_json = serde_json::to_value(&record).expect("serialize run");
+    old_json.as_object_mut().expect("run object").remove("keep");
+    old_json
+        .as_object_mut()
+        .expect("run object")
+        .remove("subagent");
+    old_json
+        .as_object_mut()
+        .expect("run object")
+        .remove("provider_pid");
+    old_json
+        .as_object_mut()
+        .expect("run object")
+        .remove("provider_process_start");
+
+    let old: RunRecord = serde_json::from_value(old_json).expect("deserialize old run");
+
+    assert!(!old.keep);
+    assert!(!old.subagent);
+    assert_eq!(old.provider_pid, None);
+    assert_eq!(old.provider_process_start, None);
+}
+
+#[test]
 fn lifecycle_completion_writes_terminal_record_once() {
     let (_dir, paths, record) = setup();
     let observation = AgentLifecycleObservation::new(
@@ -488,6 +514,20 @@ fn record_pane_persists_launch_pane_id() {
         load(&paths, &record.run_id).unwrap().pane_id.as_ref(),
         Some(&pane_id)
     );
+}
+
+#[test]
+fn record_provider_process_persists_pid_reuse_guard() {
+    let (_dir, paths, record) = setup();
+
+    let updated =
+        record_provider_process(&paths, &record.run_id, 42, Some("start-42".to_owned())).unwrap();
+
+    assert_eq!(updated.provider_pid, Some(42));
+    assert_eq!(updated.provider_process_start.as_deref(), Some("start-42"));
+    let loaded = load(&paths, &record.run_id).unwrap();
+    assert_eq!(loaded.provider_pid, Some(42));
+    assert_eq!(loaded.provider_process_start.as_deref(), Some("start-42"));
 }
 
 #[test]

@@ -66,10 +66,10 @@ The bare form and `launch` verb are equivalent. A prompt is mandatory: the paren
 | Execution | supervised print mode, background | `--wait[=DURATION]` joins and prints the result |
 | Checkout | caller's current checkout | fixed |
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
-| Pane after completion | close | `--keep` |
+| Pane after completion | retained until stop or parent exit | `--keep` also survives parent exit |
 | Address | minted petname | `--name/-n` |
 
-A finished child's in-pane wrapper closes its pane from the durable terminal record, independently of the parent waiting for the result. `--keep` opts out and leaves the pane for `stop` or `rimz gc`.
+A finished child's in-pane wrapper stops the provider but remains alive to hold the pane. The pane closes when the parent runs `rimz subagents stop` or when the parent itself exits, including an external tmux/Zellij pane close. `--keep` disables the parent-exit close and leaves reclamation to `stop` or `rimz gc`.
 
 The single-launch surface deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output/input formats, retries, and verification. Use `rimz agents` when the launch needs those controls; use `rimz teams` when the workers are peers rather than children.
 
@@ -97,7 +97,7 @@ rimz subagents wait --json
 
 With no names, `wait` joins every supervised child recorded beneath the caller, including children that finished before the command started; `--any` instead considers only children still running, since it reports the first to finish. Explicit names must resolve inside that same set. A single result prints as a bare answer; plural and `--any` waits label each answer with its child name. Joins, streaming, JSON, timeout behavior, output, and exit codes are the same durable machinery as [`rimz agents wait`](./agents.md#wait).
 
-The result remains available after the child pane closes because the run record, not the pane, is truth.
+The result is available as soon as the run settles and remains available after the retained pane eventually closes, because the run record, not the pane, is truth.
 
 ## Inspect and drive children
 
