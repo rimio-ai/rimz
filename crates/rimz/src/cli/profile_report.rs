@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -11,6 +12,8 @@ use rimz::config::effective::ProfileScope;
 pub(crate) struct AgentProfileReport {
     pub(crate) name: String,
     pub(crate) source: &'static str,
+    #[serde(skip)]
+    brand_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,6 +38,7 @@ pub(crate) fn available_profiles(
         .map(|(name, profile)| AgentProfileReport {
             name: name.clone(),
             source: "profile",
+            brand_kind: Some(provider_brand_kind(&profile.agent, profiles).to_owned()),
             agent: Some(profile.agent.clone()),
             model: profile.model.clone(),
             effort: profile.effort.clone(),
@@ -45,6 +49,7 @@ pub(crate) fn available_profiles(
     reports.extend(commands.0.keys().map(|name| AgentProfileReport {
         name: name.clone(),
         source: "command",
+        brand_kind: None,
         agent: None,
         model: None,
         effort: None,
@@ -52,6 +57,29 @@ pub(crate) fn available_profiles(
         path: sources.command(name).map(PathBuf::from),
     }));
     reports
+}
+
+fn provider_brand_kind<'a>(
+    raw_agent: &'a str,
+    profiles: &'a rimz::config::ProfilesConfig,
+) -> &'a str {
+    let mut current = raw_agent;
+    let mut seen = HashSet::new();
+    while seen.insert(current) {
+        let Some(profile) = profiles.0.get(current) else {
+            return if rimz::agents::find_definition(current).is_some() {
+                current
+            } else {
+                raw_agent
+            };
+        };
+        let next = profile.agent.as_str();
+        if next == current && rimz::agents::find_definition(next).is_some() {
+            return next;
+        }
+        current = next;
+    }
+    raw_agent
 }
 
 pub(crate) fn list_profiles(
@@ -67,7 +95,7 @@ pub(crate) fn list_profiles(
     if json {
         return render::json_pretty(&reports);
     }
-    render::finish(profile_cards(&reports, &mut render::out()))
+    render::finish(profile_cards(&reports, scope, &mut render::out()))
 }
 
 fn apply_path_visibility(reports: &mut [AgentProfileReport], show_path: bool) {
@@ -78,7 +106,24 @@ fn apply_path_visibility(reports: &mut [AgentProfileReport], show_path: bool) {
     }
 }
 
-fn profile_cards(reports: &[AgentProfileReport], out: &mut impl Write) -> std::io::Result<()> {
+fn profile_cards(
+    reports: &[AgentProfileReport],
+    scope: ProfileScope,
+    out: &mut impl Write,
+) -> std::io::Result<()> {
+    if reports.is_empty() {
+        let profile_section = match scope {
+            ProfileScope::Agents => "agents.profiles",
+            ProfileScope::Subagents => "subagents.profiles",
+        };
+        writeln!(out, "No profiles or commands configured.")?;
+        writeln!(
+            out,
+            "Add one under [{profile_section}] or [agents.commands]."
+        )?;
+        return Ok(());
+    }
+
     for (index, report) in reports.iter().enumerate() {
         if index > 0 {
             writeln!(out)?;
@@ -89,7 +134,8 @@ fn profile_cards(reports: &[AgentProfileReport], out: &mut impl Write) -> std::i
                 let mut segments = vec![agent.as_str()];
                 segments.extend(report.model.as_deref());
                 segments.extend(report.effort.as_deref());
-                (render::palette::identity(agent).bold(), segments)
+                let brand_kind = report.brand_kind.as_deref().unwrap_or(agent);
+                (render::palette::identity(brand_kind).bold(), segments)
             }
             None => (render::palette::muted(), vec!["command"]),
         };
@@ -119,6 +165,7 @@ mod tests {
             AgentProfileReport {
                 name: "planner".to_owned(),
                 source: "profile",
+                brand_kind: Some("codex".to_owned()),
                 agent: Some("codex".to_owned()),
                 model: Some("gpt-5.6".to_owned()),
                 effort: Some("high".to_owned()),
@@ -128,6 +175,7 @@ mod tests {
             AgentProfileReport {
                 name: "reviewer".to_owned(),
                 source: "profile",
+                brand_kind: Some("claude".to_owned()),
                 agent: Some("claude".to_owned()),
                 model: None,
                 effort: Some("max".to_owned()),
@@ -137,6 +185,7 @@ mod tests {
             AgentProfileReport {
                 name: "coder".to_owned(),
                 source: "profile",
+                brand_kind: Some("codex".to_owned()),
                 agent: Some("codex".to_owned()),
                 model: Some("gpt-5.6".to_owned()),
                 effort: None,
@@ -146,6 +195,7 @@ mod tests {
             AgentProfileReport {
                 name: "lint".to_owned(),
                 source: "command",
+                brand_kind: None,
                 agent: None,
                 model: None,
                 effort: None,
@@ -155,8 +205,12 @@ mod tests {
         ];
         let mut output = Vec::new();
 
-        profile_cards(&reports, &mut anstream::StripStream::new(&mut output))
-            .expect("render profile cards");
+        profile_cards(
+            &reports,
+            ProfileScope::Agents,
+            &mut anstream::StripStream::new(&mut output),
+        )
+        .expect("render profile cards");
 
         insta::assert_snapshot!(String::from_utf8(output).expect("utf-8"), @r"
         planner — codex · gpt-5.6 · high
@@ -178,6 +232,7 @@ mod tests {
         let mut reports = vec![AgentProfileReport {
             name: "planner".to_owned(),
             source: "profile",
+            brand_kind: Some("codex".to_owned()),
             agent: Some("codex".to_owned()),
             model: None,
             effort: None,
@@ -192,5 +247,75 @@ mod tests {
 
         let json = serde_json::to_value(&reports).expect("serialize profile reports without paths");
         assert!(json[0].get("path").is_none());
+    }
+
+    #[test]
+    fn empty_catalog_names_the_configuration_section() {
+        let mut output = Vec::new();
+        profile_cards(&[], ProfileScope::Subagents, &mut output).expect("render empty catalog");
+
+        assert_eq!(
+            String::from_utf8(output).expect("utf-8"),
+            "No profiles or commands configured.\n\
+             Add one under [subagents.profiles] or [agents.commands].\n"
+        );
+    }
+
+    #[test]
+    fn chained_profiles_resolve_the_provider_for_brand_tint() {
+        let profiles = rimz::config::ProfilesConfig(
+            [
+                ("deep".to_owned(), profile("planner")),
+                ("planner".to_owned(), profile("claude")),
+                ("claude".to_owned(), profile("claude")),
+            ]
+            .into(),
+        );
+
+        let reports = available_profiles(
+            &profiles,
+            &rimz::config::CommandsConfig::default(),
+            &rimz::config::AgentSpecSources::default(),
+            ProfileScope::Agents,
+        );
+        let deep = reports
+            .iter()
+            .find(|report| report.name == "deep")
+            .expect("deep profile");
+        assert_eq!(deep.agent.as_deref(), Some("planner"));
+        assert_eq!(deep.brand_kind.as_deref(), Some("claude"));
+        assert!(
+            serde_json::to_value(deep)
+                .expect("serialize profile")
+                .get("brand_kind")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn cyclic_profile_brand_falls_back_to_the_raw_agent() {
+        let profiles = rimz::config::ProfilesConfig(
+            [
+                ("planner".to_owned(), profile("reviewer")),
+                ("reviewer".to_owned(), profile("planner")),
+            ]
+            .into(),
+        );
+
+        assert_eq!(provider_brand_kind("reviewer", &profiles), "reviewer");
+    }
+
+    fn profile(agent: &str) -> rimz::config::Profile {
+        rimz::config::Profile {
+            agent: agent.to_owned(),
+            description: None,
+            mode: None,
+            model: None,
+            effort: None,
+            budget: None,
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+            args: None,
+        }
     }
 }

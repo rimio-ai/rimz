@@ -2,7 +2,7 @@
 
 `rimz subagents` provides agent-only launch and lifecycle verbs for delegating one bounded prompt to a supervised child. It is syntax sugar over `rimz agents`: the child gets a real pane, durable run record, petname, parent link, and sidebar entry without making the parent choose the supervision flags.
 
-Launch and lifecycle commands run only from a RimZ-launched agent. A user-shell invocation fails before opening the room and points to `rimz agents` or `rimz teams`; the read-only `specs` catalog is available from either context. The mechanics behind the sugar — the direct-parent stamp, no-further-launch rule, caller-scoped verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
+Launch and lifecycle commands run only from a RimZ-launched agent. A user-shell invocation fails before opening the room and points to `rimz agents` or `rimz teams`; the read-only `profiles` catalog is available from either context. The mechanics behind the sugar — the direct-parent stamp, no-further-launch rule, caller-scoped verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
 
 A child launched through this doorway must complete its assignment directly and cannot spawn further agents. RimZ appends that instruction to the provider's system prompt when it has a native launch flag, falls back to the user prompt for other providers, disables the provider's native delegation tool where a verified restriction exists, and refuses both `rimz agents` and `rimz subagents` when the caller is itself a subagent.
 
