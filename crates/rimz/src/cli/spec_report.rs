@@ -1,7 +1,10 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use serde::Serialize;
 
 use super::render;
+use rimz::config::effective::ProfileScope;
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct AgentSpecReport {
@@ -15,6 +18,8 @@ pub(crate) struct AgentSpecReport {
     pub(crate) effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) path: Option<PathBuf>,
 }
 
 impl AgentSpecReport {
@@ -35,6 +40,8 @@ impl AgentSpecReport {
 pub(crate) fn available_specs(
     profiles: &rimz::config::ProfilesConfig,
     commands: &rimz::config::CommandsConfig,
+    sources: &rimz::config::AgentSpecSources,
+    scope: ProfileScope,
 ) -> Vec<AgentSpecReport> {
     let mut specs = profiles
         .0
@@ -46,6 +53,7 @@ pub(crate) fn available_specs(
             model: profile.model.clone(),
             effort: profile.effort.clone(),
             description: profile.description.clone(),
+            path: sources.profile(scope, name).map(PathBuf::from),
         })
         .collect::<Vec<_>>();
     specs.extend(commands.0.keys().map(|name| AgentSpecReport {
@@ -55,6 +63,7 @@ pub(crate) fn available_specs(
         model: None,
         effort: None,
         description: None,
+        path: sources.command(name).map(PathBuf::from),
     }));
     specs
 }
@@ -62,13 +71,21 @@ pub(crate) fn available_specs(
 pub(crate) fn list_specs(
     profiles: &rimz::config::ProfilesConfig,
     commands: &rimz::config::CommandsConfig,
+    sources: &rimz::config::AgentSpecSources,
+    scope: ProfileScope,
     json: bool,
 ) -> Result<()> {
-    let specs = available_specs(profiles, commands);
+    let specs = available_specs(profiles, commands, sources, scope);
     if json {
         return render::json_pretty(&specs);
     }
-    let mut table = render::Table::new(["SPEC", "SOURCE", "DETAIL", "DESCRIPTION"]);
+    spec_table(specs)
+        .render(&mut render::out())
+        .map_err(Into::into)
+}
+
+fn spec_table(specs: Vec<AgentSpecReport>) -> render::Table {
+    let mut table = render::Table::new(["SPEC", "SOURCE", "DETAIL", "DESCRIPTION", "PATH"]);
     for agent_spec in specs {
         let detail = agent_spec.detail();
         table.row([
@@ -76,7 +93,54 @@ pub(crate) fn list_specs(
             render::cell(agent_spec.source),
             render::cell(detail).dash(),
             render::cell(agent_spec.description.unwrap_or_else(|| "-".to_owned())).dash(),
+            render::cell(
+                agent_spec
+                    .path
+                    .map(|path| render::home_relative(&path.to_string_lossy()))
+                    .unwrap_or_else(|| "-".to_owned()),
+            )
+            .dash(),
         ]);
     }
-    table.render(&mut render::out()).map_err(Into::into)
+    table
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_is_the_final_spec_table_column() {
+        let specs = vec![
+            AgentSpecReport {
+                name: "planner".to_owned(),
+                source: "profile",
+                agent: Some("codex".to_owned()),
+                model: None,
+                effort: None,
+                description: Some("Plans the work".to_owned()),
+                path: Some(PathBuf::from("/tmp/rimz/agents.toml")),
+            },
+            AgentSpecReport {
+                name: "lint".to_owned(),
+                source: "command",
+                agent: None,
+                model: None,
+                effort: None,
+                description: None,
+                path: Some(PathBuf::from("/tmp/.agents/profiles/lint/agent.toml")),
+            },
+        ];
+        let mut output = Vec::new();
+
+        spec_table(specs)
+            .render(&mut anstream::StripStream::new(&mut output))
+            .expect("render spec table");
+
+        insta::assert_snapshot!(String::from_utf8(output).expect("utf-8"), @r"
+        SPEC     SOURCE   DETAIL  DESCRIPTION     PATH
+        planner  profile  codex   Plans the work  /tmp/rimz/agents.toml
+        lint     command  -       -               /tmp/.agents/profiles/lint/agent.toml
+        ");
+    }
 }

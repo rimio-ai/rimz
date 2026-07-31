@@ -359,6 +359,89 @@ pub struct AgentsFragmentError {
     pub message: String,
 }
 
+/// Definition files for the effective configured agent-spec catalog.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentSpecSources {
+    agent_profiles: BTreeMap<String, PathBuf>,
+    subagent_profiles: BTreeMap<String, PathBuf>,
+    commands: BTreeMap<String, PathBuf>,
+}
+
+impl AgentSpecSources {
+    pub fn profile(&self, scope: effective::ProfileScope, name: &str) -> Option<&Path> {
+        match scope {
+            effective::ProfileScope::Agents => self.agent_profiles.get(name),
+            effective::ProfileScope::Subagents => self.subagent_profiles.get(name),
+        }
+        .map(PathBuf::as_path)
+    }
+
+    pub fn command(&self, name: &str) -> Option<&Path> {
+        self.commands.get(name).map(PathBuf::as_path)
+    }
+
+    fn from_layers(
+        agents: &AgentsConfig,
+        subagents: &SubagentProfilesConfig,
+        fragments: &[LoadedAgentsFragment],
+        agents_path: &Path,
+    ) -> Self {
+        let mut sources = Self::default();
+        for fragment in fragments {
+            let path = &fragment.path;
+            sources.agent_profiles.extend(
+                fragment
+                    .file
+                    .agents
+                    .profiles
+                    .0
+                    .keys()
+                    .map(|name| (name.clone(), path.clone())),
+            );
+            sources.subagent_profiles.extend(
+                fragment
+                    .file
+                    .subagents
+                    .profiles
+                    .0
+                    .keys()
+                    .map(|name| (name.clone(), path.clone())),
+            );
+            sources.commands.extend(
+                fragment
+                    .file
+                    .agents
+                    .commands
+                    .0
+                    .keys()
+                    .map(|name| (name.clone(), path.clone())),
+            );
+        }
+        sources.agent_profiles.extend(
+            agents
+                .profiles
+                .0
+                .keys()
+                .map(|name| (name.clone(), agents_path.to_path_buf())),
+        );
+        sources.subagent_profiles.extend(
+            subagents
+                .profiles
+                .0
+                .keys()
+                .map(|name| (name.clone(), agents_path.to_path_buf())),
+        );
+        sources.commands.extend(
+            agents
+                .commands
+                .0
+                .keys()
+                .map(|name| (name.clone(), agents_path.to_path_buf())),
+        );
+        sources
+    }
+}
+
 impl ConfigNotices {
     fn add_unknown_keys(&mut self, path: &Path, keys: Vec<String>) {
         self.unknown_keys
@@ -445,8 +528,14 @@ impl MachineConfig {
     /// Load from the default per-machine paths. Missing files are defaults —
     /// never an error.
     pub fn load() -> Result<Self> {
+        Self::load_with_agent_spec_sources().map(|(config, _)| config)
+    }
+
+    /// Load the strict per-machine config together with the declaring file for
+    /// every configured agent profile and command.
+    pub fn load_with_agent_spec_sources() -> Result<(Self, AgentSpecSources)> {
         let files = MachineConfigFiles::machine();
-        Self::load_from(files.core_path(), files.agents_home())
+        Self::load_from_with_agent_spec_sources(files.core_path(), files.agents_home())
     }
 
     /// Strictly load only the per-machine loop task file. Missing file is the
@@ -471,6 +560,13 @@ impl MachineConfig {
     /// agents-home root before validation — the test and tooling seam. A
     /// nonexistent fragment root means no fragments.
     pub fn load_from(config_path: &Path, agents_home: &Path) -> Result<Self> {
+        Self::load_from_with_agent_spec_sources(config_path, agents_home).map(|(config, _)| config)
+    }
+
+    fn load_from_with_agent_spec_sources(
+        config_path: &Path,
+        agents_home: &Path,
+    ) -> Result<(Self, AgentSpecSources)> {
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
         let theme_path = files.path(MachineConfigFileKind::Theme);
         let agents_path = files.path(MachineConfigFileKind::Agents);
@@ -489,7 +585,7 @@ impl MachineConfig {
         notices.add_unknown_keys(&loop_path, loop_.unknown_keys);
         let mut config = Self::assemble(core.value, theme.value, agents.value, loop_.value);
         validate_notifications_config(&config.notifications, files.core_path())?;
-        apply_agents_home_collecting(
+        let sources = apply_agents_home_collecting(
             &mut config.agents,
             &mut config.subagents,
             files.agents_home(),
@@ -497,7 +593,7 @@ impl MachineConfig {
             &mut notices,
         )?;
         config.notices = notices;
-        Ok(config)
+        Ok((config, sources))
     }
 
     fn load_lenient_from(config_path: &Path, agents_home: &Path) -> Self {
@@ -595,7 +691,7 @@ impl MachineConfig {
                     file.agents = merged;
                     file.subagents = merged_subagents;
                 } else {
-                    apply_agents_home_collecting(
+                    let _ = apply_agents_home_collecting(
                         &mut file.agents,
                         &mut file.subagents,
                         agents_home,
@@ -1349,6 +1445,7 @@ fn apply_agents_home(
         agents_path,
         &mut ConfigNotices::default(),
     )
+    .map(|_| ())
 }
 
 fn apply_agents_home_collecting(
@@ -1357,9 +1454,11 @@ fn apply_agents_home_collecting(
     root: &Path,
     agents_path: &Path,
     notices: &mut ConfigNotices,
-) -> Result<()> {
+) -> Result<AgentSpecSources> {
     let discovered = discover_agents_home_collecting(root)?;
     notices.unknown_keys.extend(discovered.unknown_keys);
+    let sources =
+        AgentSpecSources::from_layers(agents, subagents, &discovered.fragments, agents_path);
     match fold_agents_fragments(agents, subagents, &discovered.fragments, agents_path) {
         FragmentFoldOutcome::Applied {
             agents: merged,
@@ -1371,7 +1470,7 @@ fn apply_agents_home_collecting(
             }
             *agents = merged;
             *subagents = merged_subagents;
-            Ok(())
+            Ok(sources)
         }
         FragmentFoldOutcome::InvalidBase(err) => Err(err.into_error()),
     }

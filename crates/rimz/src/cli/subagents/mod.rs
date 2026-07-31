@@ -551,8 +551,15 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn list_specs(json: bool) -> Result<()> {
-    let config = rimz::config::MachineConfig::load().context("loading machine config")?;
-    crate::cli::spec_report::list_specs(&config.subagents.profiles, &config.agents.commands, json)
+    let (config, sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
+        .context("loading machine config")?;
+    crate::cli::spec_report::list_specs(
+        &config.subagents.profiles,
+        &config.agents.commands,
+        &sources,
+        rimz::config::effective::ProfileScope::Subagents,
+        json,
+    )
 }
 
 fn newest_run_for_child<'a>(

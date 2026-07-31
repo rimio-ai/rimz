@@ -811,6 +811,75 @@ fn agents_home_fragments_merge_profiles_commands_and_teams() {
 }
 
 #[test]
+fn agent_spec_sources_follow_fragment_and_machine_precedence() {
+    let root = tempdir().expect("agents home");
+    let fragment_path = write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_PROFILES_SUBDIR,
+        "base",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.fragment]\n\
+             agent = \"codex\"\n\
+         [agents.profiles.shared]\n\
+             agent = \"codex\"\n\
+         [agents.commands]\n\
+             lint = \"cargo check\"\n\
+         [subagents.profiles.child]\n\
+             agent = \"codex\"\n",
+    );
+    let overriding_fragment_path = write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_PROFILES_SUBDIR,
+        "override",
+        AGENT_FRAGMENT_FILE,
+        "[agents.commands]\n\
+             lint = \"cargo clippy\"\n",
+    );
+    let config_dir = tempdir().expect("config dir");
+    let config_path = write_named(
+        &config_dir,
+        AGENTS_FILE,
+        "[agents.profiles.shared]\n\
+             agent = \"claude\"\n\
+         [agents.commands]\n\
+             shell = \"bash\"\n\
+         [subagents.profiles.local]\n\
+             agent = \"claude\"\n",
+    );
+    let agents_path = config_dir.path().join(AGENTS_FILE);
+
+    let (config, sources) =
+        MachineConfig::load_from_with_agent_spec_sources(&config_path, root.path())
+            .expect("load config with sources");
+
+    assert_eq!(
+        config.agents.commands.0.get("lint"),
+        Some(&"cargo clippy".to_owned())
+    );
+    assert_eq!(
+        sources.profile(effective::ProfileScope::Agents, "fragment"),
+        Some(fragment_path.as_path())
+    );
+    assert_eq!(
+        sources.profile(effective::ProfileScope::Subagents, "child"),
+        Some(fragment_path.as_path())
+    );
+    assert_eq!(
+        sources.command("lint"),
+        Some(overriding_fragment_path.as_path())
+    );
+    assert_eq!(
+        sources.profile(effective::ProfileScope::Agents, "shared"),
+        Some(agents_path.as_path())
+    );
+    assert_eq!(
+        sources.profile(effective::ProfileScope::Subagents, "local"),
+        Some(agents_path.as_path())
+    );
+    assert_eq!(sources.command("shell"), Some(agents_path.as_path()));
+}
+
+#[test]
 fn agents_home_fragments_merge_subagent_profiles_with_paths_and_machine_precedence() {
     let root = tempdir().expect("tempdir");
     let fragment_path = write_agents_home_fragment(

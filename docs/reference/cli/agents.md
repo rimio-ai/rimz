@@ -63,7 +63,7 @@ rimz agents specs
 rimz agents types --json
 ```
 
-`specs` lists `[agents.profiles]` profiles and configured launch commands; `types` is an alias. Profile rows include their optional descriptions. Built-in and registered agent kinds remain directly launchable but are omitted from this configured-spec catalog. Teams are excluded because the catalog describes reusable cell types rather than cohort layouts.
+`specs` lists `[agents.profiles]` profiles and configured launch commands; `types` is an alias. Profile rows include their optional descriptions, and the final path column identifies the file that defines each row. Built-in and registered agent kinds remain directly launchable but are omitted from this configured-spec catalog. Teams are excluded because the catalog describes reusable cell types rather than cohort layouts.
 
 ### Register a third-party kind
 
