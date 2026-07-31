@@ -1,10 +1,7 @@
 use super::*;
 
 fn source(text: &str) -> Source {
-    Source {
-        path: PathBuf::from("crates/rimz/src/cli/demo.rs"),
-        text: text.to_owned(),
-    }
+    Source::new("crates/rimz/src/cli/demo.rs", text)
 }
 
 #[test]

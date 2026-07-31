@@ -4,8 +4,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use crate::source_files;
-
 use super::history::{self, CochangeEdge};
 use super::modules::{crate_module_for_path, module_for_path, workspace_crate_names};
 use super::sources;
@@ -209,14 +207,16 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
 fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let sources = sources::scope_sources(root, &args.path, None)?;
     let syntax = syntax::analyze_sources(&sources);
-    let known_modules = source_files::tracked_rust_files(root)?
+    let known_modules = sources::scope_sources(root, Path::new("."), None)?
         .into_iter()
-        .filter_map(|path| path.strip_prefix(root).ok().map(crate_module_for_path))
+        .filter(|source| source.is_production())
+        .map(|source| crate_module_for_path(&source.path))
         .collect::<BTreeSet<_>>();
     let workspace_crates = workspace_crate_names(root)?;
     let scope_module = crate_module_for_path(&args.path.join("mod.rs"));
     let mut scope_endpoints = sources
         .iter()
+        .filter(|source| source.is_production())
         .map(|source| module_for_path(&source.path, &args.path))
         .collect::<BTreeSet<_>>();
     scope_endpoints.insert("(root)".to_owned());

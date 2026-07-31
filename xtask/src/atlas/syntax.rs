@@ -8,8 +8,6 @@ use syn::{
     UseTree, Visibility,
 };
 
-use crate::source_files;
-
 use super::modules::crate_module_for_path;
 use super::sources::Source;
 
@@ -58,7 +56,7 @@ pub(super) fn analyze_sources(sources: &[Source]) -> SyntaxReport {
     let mut files = Vec::new();
     let mut parse_failures = Vec::new();
     for source in sources {
-        if source_files::is_test_file(&source.path) {
+        if !source.is_production() {
             continue;
         }
         match syn::parse_file(&source.text) {
