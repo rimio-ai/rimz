@@ -473,10 +473,7 @@ pub fn resolve_launch_checkout(
     worktree: Option<&str>,
     from_pr: Option<&PrTarget>,
 ) -> Result<LaunchCheckout> {
-    let repo_root = workspace
-        .cwd_project_root
-        .as_deref()
-        .unwrap_or(&workspace.project_root);
+    let repo_root = workspace.launch_repo_root();
     if let Some(pr) = from_pr {
         if workspace.cwd_project_root.is_none() && workspace.root_class != RootClass::Repo {
             return Err(WorktreeErr::LaunchPrRequiresRepo);

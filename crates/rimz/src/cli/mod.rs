@@ -52,7 +52,7 @@ mod workspace;
 mod worktree;
 mod worktree_protection;
 use std::ffi::OsString;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -662,6 +662,55 @@ pub(crate) fn confirm_with_default(prompt: &str, default_yes: bool) -> Result<bo
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
+pub(crate) fn confirm_cross_repo_worktree(workspace: &rimz::ResolvedWorkspace) -> Result<bool> {
+    confirm_cross_repo_worktree_with(
+        workspace,
+        std::io::stdin().is_terminal(),
+        confirm,
+        |message| writeln!(render::err(), "{message}"),
+    )
+}
+
+fn confirm_cross_repo_worktree_with(
+    workspace: &rimz::ResolvedWorkspace,
+    is_terminal: bool,
+    confirm: impl FnOnce(&str) -> Result<bool>,
+    mut write_stderr: impl FnMut(&str) -> std::io::Result<()>,
+) -> Result<bool> {
+    let Some(cwd_root) = workspace.cwd_project_root.as_deref() else {
+        return Ok(true);
+    };
+    if cwd_root == workspace.project_root {
+        return Ok(true);
+    }
+
+    write_stderr(&format!(
+        "rimz: {} the room root and current Git root differ",
+        render::paint(render::palette::warn().bold(), "warning:")
+    ))?;
+    write_stderr(&format!(
+        "  room root: {}\n  current git root: {}\n  \
+         the worktree will be created under the current Git root's configured worktree directory",
+        workspace.project_root.display(),
+        cwd_root.display(),
+    ))?;
+
+    if !is_terminal {
+        anyhow::bail!(
+            "room root {} differs from current Git root {}; \
+             pass --root {} (or run from the room's checkout) for a non-interactive launch",
+            workspace.project_root.display(),
+            cwd_root.display(),
+            cwd_root.display(),
+        );
+    }
+    if !confirm("Create the worktree at the current Git root and continue?")? {
+        write_stderr("Launch aborted; nothing changed.")?;
+        return Ok(false);
+    }
+    Ok(true)
+}
+
 pub(crate) fn machine_config() -> std::sync::Arc<rimz::config::MachineConfig> {
     rimz::config::MachineConfig::load_lenient()
 }
@@ -757,6 +806,87 @@ mod tests {
             session_name: "rimz-test".to_owned(),
             mux_hint: None,
         }
+    }
+
+    fn workspace_with_roots(room: &str, cwd: Option<&str>) -> rimz::ResolvedWorkspace {
+        let project_root = PathBuf::from(room);
+        rimz::ResolvedWorkspace {
+            workspace_id: rimz::WorkspaceId::from_project_root(&project_root),
+            project_root: project_root.clone(),
+            cwd_project_root: cwd.map(PathBuf::from),
+            root_class: rimz::workspace::RootClass::Repo,
+            worktree_root: project_root,
+            worktree_branch: Some("main".to_owned()),
+            session_name: "rimz-test".to_owned(),
+            mux_hint: None,
+        }
+    }
+
+    #[test]
+    fn cross_repo_worktree_requires_explicit_terminal_confirmation() {
+        let workspace = workspace_with_roots("/repos/room", Some("/repos/current"));
+        let mut output = Vec::new();
+
+        let proceed = confirm_cross_repo_worktree_with(
+            &workspace,
+            true,
+            |question| {
+                assert_eq!(
+                    question,
+                    "Create the worktree at the current Git root and continue?"
+                );
+                Ok(false)
+            },
+            |message| {
+                output.push(message.to_owned());
+                Ok(())
+            },
+        )
+        .expect("confirmation");
+
+        assert!(!proceed);
+        let output = output.join("\n");
+        assert!(output.contains("/repos/room"));
+        assert!(output.contains("/repos/current"));
+        assert!(output.contains("Launch aborted; nothing changed."));
+    }
+
+    #[test]
+    fn cross_repo_worktree_refuses_non_terminal_input_with_root_hint() {
+        let workspace = workspace_with_roots("/repos/room", Some("/repos/current"));
+        let mut output = Vec::new();
+
+        let err = confirm_cross_repo_worktree_with(
+            &workspace,
+            false,
+            |_| -> Result<bool> { panic!("non-terminal input must not prompt") },
+            |message| {
+                output.push(message.to_owned());
+                Ok(())
+            },
+        )
+        .expect_err("non-terminal mismatch must refuse");
+
+        let error = err.to_string();
+        assert!(error.contains("/repos/room"));
+        assert!(error.contains("/repos/current"));
+        assert!(error.contains("--root /repos/current"));
+        assert!(output.join("\n").contains("current Git root"));
+    }
+
+    #[test]
+    fn explicit_root_avoids_cross_repo_confirmation() {
+        let workspace = workspace_with_roots("/repos/current", Some("/repos/current"));
+
+        let proceed = confirm_cross_repo_worktree_with(
+            &workspace,
+            false,
+            |_| -> Result<bool> { panic!("equal roots must not prompt") },
+            |_| panic!("equal roots must not warn"),
+        )
+        .expect("equal roots");
+
+        assert!(proceed);
     }
 
     #[test]

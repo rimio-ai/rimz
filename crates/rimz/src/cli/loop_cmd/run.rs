@@ -120,7 +120,11 @@ pub(super) fn run_one(
                 crate::cli::supervised::SupervisedPresentation::text(prepared.stream),
                 &run_globals,
             )
-            .map(rimz::harness::schedule::runner::TaskFireEffect::Spawn);
+            .and_then(|outcome| {
+                outcome
+                    .map(rimz::harness::schedule::runner::TaskFireEffect::Spawn)
+                    .context("scheduled launch aborted despite its explicit root")
+            });
             finish_task_effect(&mut fire, effect, name, &entry)?
         }
         rimz::harness::schedule::runner::TaskFirePlan::Deliver(prepared) => {

@@ -238,6 +238,7 @@ fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> 
             render::report(&err);
             std::process::exit(rimz::harness::run::RunStatus::BudgetExceeded.exit_code());
         }
+        agents_cmd::BackgroundLaunchOutcome::Aborted => return Ok(()),
     };
     if !json {
         writeln!(render::out(), "{}", child.name)?;
@@ -289,6 +290,7 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
                 render::report(&err);
                 std::process::exit(rimz::harness::run::RunStatus::BudgetExceeded.exit_code());
             }
+            Ok(agents_cmd::BackgroundLaunchOutcome::Aborted) => return Ok(()),
             Err(err) => {
                 return Err(err).context(fanout_launch_error_context(index, &launched));
             }

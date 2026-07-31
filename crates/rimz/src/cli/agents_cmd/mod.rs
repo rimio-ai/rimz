@@ -708,6 +708,7 @@ pub(in crate::cli) struct BackgroundLaunch {
 pub(in crate::cli) enum BackgroundLaunchOutcome {
     Launched(BackgroundLaunch),
     BudgetExceeded { reason: String },
+    Aborted,
 }
 
 pub(in crate::cli) fn launch_supervised_background(
@@ -716,7 +717,10 @@ pub(in crate::cli) fn launch_supervised_background(
 ) -> Result<BackgroundLaunchOutcome> {
     let args = AgentsArgs::from_launch(launch);
     let (request, presentation) = into_supervised_request(args)?;
-    match run_supervised(request, presentation, globals)? {
+    let Some(outcome) = run_supervised(request, presentation, globals)? else {
+        return Ok(BackgroundLaunchOutcome::Aborted);
+    };
+    match outcome {
         SupervisedRunOutcome::Background { agent_name, run_id } => {
             Ok(BackgroundLaunchOutcome::Launched(BackgroundLaunch {
                 name: agent_name,
