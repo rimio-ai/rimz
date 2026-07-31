@@ -1026,47 +1026,6 @@ impl AgentState {
                 .map(f64::from),
         }
     }
-
-    pub(crate) fn backfill_rotation_enrichment_from(&mut self, base: &Self) {
-        // Fill-only rotation merge. `store::snapshot::project::carried_base`
-        // owns the authoritative reducer lifetime list.
-        if self.transcript_path.is_none() {
-            self.transcript_path = base.transcript_path.clone();
-        }
-        if self.worktree_path.is_none() {
-            self.worktree_path = base.worktree_path.clone();
-        }
-        if self.worktree_branch.is_none() {
-            self.worktree_branch = base.worktree_branch.clone();
-        }
-        if self.role.is_none() {
-            self.role = base.role.clone();
-        }
-        if self.team.is_none() {
-            self.team = base.team.clone();
-        }
-        if self.channel.is_none() {
-            self.channel = base.channel.clone();
-        }
-        if self.profile.is_none() {
-            self.profile = base.profile.clone();
-        }
-        if self.model.is_none() {
-            self.model = base.model.clone();
-        }
-        if self.effort.is_none() {
-            self.effort = base.effort.clone();
-        }
-        if self.budget.is_none() {
-            self.budget = base.budget.clone();
-        }
-        if self.usage.context_window.is_none() {
-            self.usage.context_window = base.usage.context_window;
-        }
-        if self.last_compact_command_tokens.is_none() {
-            self.last_compact_command_tokens = base.last_compact_command_tokens;
-        }
-    }
 }
 
 /// Collapse whitespace and drop control characters, returning `None` for blank
