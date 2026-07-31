@@ -15,6 +15,21 @@ fn rank_flags_are_parsed_and_window_is_bounded() {
     assert_eq!(args.top, 4);
     assert!(args.verbose);
     assert_eq!(args.pin_tc, 0.4);
+    assert_eq!(args.shallow_occ, 3.0);
+}
+
+#[test]
+fn wide_thin_surfaces_split_at_the_occurrence_boundary() {
+    assert_eq!(
+        surface_flag(20, Some(29.9), 2.9, 20, 30.0, 3.0),
+        Some("shallow")
+    );
+    assert_eq!(
+        surface_flag(20, Some(29.9), 3.0, 20, 30.0, 3.0),
+        Some("hub")
+    );
+    assert_eq!(surface_flag(19, Some(1.0), 100.0, 20, 30.0, 3.0), None);
+    assert_eq!(surface_flag(20, Some(30.0), 0.0, 20, 30.0, 3.0), None);
 }
 
 #[test]
