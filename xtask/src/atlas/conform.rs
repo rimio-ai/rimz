@@ -1,41 +1,62 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use super::api::OccurrenceCorpus;
-use super::modules::{crate_module_for_path, path_in_scope, workspace_crate_names};
+use super::modules::{
+    crate_module_for_path, path_in_scope, scope_for_matching, workspace_crate_names,
+};
 use super::sources::{self, Source};
 use super::syntax;
-use super::target::{self, TARGET_FILE, Target};
+use super::target::{self, ModuleRule, TARGET_FILE, Target};
 use super::{set_once, validate_scope, value};
 
-const USAGE: &str = "cargo xtask atlas conform [--ratchet|--tighten] [--file <path>] [--json]
+const DEFAULT_PATH: &str = "crates/rimz/src";
+
+const USAGE: &str = "cargo xtask atlas conform [--ratchet|--tighten|--init] [--file <path>] [--path <prefix>] [--json]
 
 Compares the working tree with a refactor target (root refactor-target.toml by
 default). `--ratchet` fails only when current values exceed budgets/baselines or
 an import is outside its allow list. `--tighten` atomically lowers budgets and
 baselines to current values; it never raises them. A strangler counts whole-word
 occurrences of its symbol in non-test Rust under its path (a file or directory).
-A missing default target passes; a missing explicit --file is an error.
+A missing default target passes; a missing explicit --file is an error. `--init`
+creates a clean current-tree baseline and never overwrites an existing target.
+Import allow-lists cover resolved internal `use` declarations only.
 
   --ratchet      fail on regressions (the checks/gate mode)
   --tighten      lower budgets and baselines to current values
+  --init         seed module budgets and import allow-lists from the current tree
   --file <path>  root-relative target file (default refactor-target.toml)
-  --json         versioned JSON agent contract (v1)";
+  --path <path>  root-relative init subtree (default crates/rimz/src)
+  --json         versioned JSON agent contract (v1)
+
+Schema:
+  version = 1
+  [[module]]
+  path = \"crates/rimz/src/cli\"
+  allowed-imports = [\"agents\"]
+  pub-budget = 10
+  [[strangler]]
+  symbol = \"legacy_symbol\"
+  path = \"crates/rimz/src/cli\"
+  baseline = 2";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Report,
     Ratchet,
     Tighten,
+    Init,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     mode: Mode,
     file: Option<PathBuf>,
+    path: Option<PathBuf>,
     json: bool,
 }
 
@@ -76,6 +97,27 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
         .as_deref()
         .unwrap_or_else(|| Path::new(TARGET_FILE));
     let target_path = root.join(target_file);
+    if args.mode == Mode::Init {
+        if target_path.exists() {
+            bail!(
+                "atlas conform --init refuses to overwrite existing target `{}`",
+                target_file.display()
+            );
+        }
+        let scope = args
+            .path
+            .as_deref()
+            .unwrap_or_else(|| Path::new(DEFAULT_PATH));
+        let target = initialize(root, scope)?;
+        let seeded = target.modules.len();
+        target::write(&target_path, &target)?;
+        println!(
+            "initialized {} with {} module rules",
+            target_file.display(),
+            seeded
+        );
+        return Ok(());
+    }
     let Some(mut target) = target::load(&target_path)? else {
         if args.file.is_some() {
             bail!(
@@ -96,7 +138,9 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
                     .context("rendering unconfigured atlas conform JSON")?
                 );
             } else {
-                println!("Atlas conform — no {TARGET_FILE}; nothing to check");
+                println!(
+                    "Atlas conform — no {TARGET_FILE}; nothing to check (seed one with --init)"
+                );
             }
         }
         return Ok(());
@@ -130,6 +174,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
             }
             Ok(())
         }
+        Mode::Init => unreachable!("init returns immediately after writing the new target"),
     }
 }
 
@@ -147,6 +192,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     }
     let mut mode = Mode::Report;
     let mut file = None;
+    let mut path = None;
     let mut json = false;
     let mut index = 0;
     while let Some(arg) = args.get(index) {
@@ -159,12 +205,21 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 mode = Mode::Tighten;
                 index += 1;
             }
-            "--ratchet" | "--tighten" => {
-                bail!("atlas conform --ratchet and --tighten are mutually exclusive")
+            "--init" if mode == Mode::Report => {
+                mode = Mode::Init;
+                index += 1;
+            }
+            "--ratchet" | "--tighten" | "--init" => {
+                bail!("atlas conform --ratchet, --tighten, and --init are mutually exclusive")
             }
             "--file" => {
                 let parsed = validate_scope(value(args, index, "conform", "--file")?, "--file")?;
                 set_once(&mut file, parsed, "conform", "--file")?;
+                index += 2;
+            }
+            "--path" => {
+                let parsed = validate_scope(value(args, index, "conform", "--path")?, "--path")?;
+                set_once(&mut path, parsed, "conform", "--path")?;
                 index += 2;
             }
             "--json" if !json => {
@@ -178,7 +233,97 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     if mode == Mode::Ratchet && json {
         bail!("atlas conform --ratchet does not combine with --json");
     }
-    Ok(Some(Args { mode, file, json }))
+    if mode == Mode::Init && json {
+        bail!("atlas conform --init does not combine with --json");
+    }
+    if mode != Mode::Init && path.is_some() {
+        bail!("atlas conform --path requires --init");
+    }
+    Ok(Some(Args {
+        mode,
+        file,
+        path,
+        json,
+    }))
+}
+
+fn initialize(root: &Path, scope: &Path) -> Result<Target> {
+    let all_sources = sources::working_tree_rust_sources(root)?;
+    let scoped_sources = all_sources
+        .iter()
+        .filter(|source| path_in_scope(&source.path, scope))
+        .cloned()
+        .collect::<Vec<_>>();
+    if scoped_sources.is_empty() {
+        bail!("no Rust files under `{}`", scope.display());
+    }
+    let syntax = syntax::analyze_sources(&scoped_sources);
+    let known_modules = all_sources
+        .iter()
+        .map(|source| crate_module_for_path(&source.path))
+        .collect::<BTreeSet<_>>();
+    let workspace_crates = workspace_crate_names(root)?;
+    let mut files_by_rule = BTreeMap::new();
+    for file in &syntax.files {
+        files_by_rule
+            .entry(direct_rule_path(&file.path, scope))
+            .or_insert_with(Vec::new)
+            .push(file);
+    }
+    let modules = files_by_rule
+        .into_iter()
+        .map(|(path, files)| {
+            let module_entry = if root.join(&path).is_dir() {
+                path.join("mod.rs")
+            } else {
+                path.clone()
+            };
+            let target_module = crate_module_for_path(&module_entry);
+            let imports = files
+                .iter()
+                .flat_map(|file| &file.imports)
+                .filter_map(|import| {
+                    syntax::resolved_internal_import(import, &known_modules, &workspace_crates)
+                })
+                .filter(|import| !is_within(import, &target_module))
+                .collect::<BTreeSet<_>>();
+            let mut allowed_imports = Vec::<String>::new();
+            for import in imports {
+                if !allowed_imports
+                    .iter()
+                    .any(|allowed| is_within(&import, allowed))
+                {
+                    allowed_imports.push(import);
+                }
+            }
+            ModuleRule {
+                path,
+                allowed_imports,
+                pub_budget: files.iter().map(|file| file.pub_items.len()).sum(),
+                config_line: 0,
+            }
+        })
+        .collect();
+    Ok(Target {
+        version: 1,
+        modules,
+        strangler: Vec::new(),
+    })
+}
+
+fn direct_rule_path(path: &Path, scope: &Path) -> PathBuf {
+    let scope = scope_for_matching(scope);
+    let relative = path.strip_prefix(scope).unwrap_or(path);
+    if relative.components().count() <= 1 {
+        path.to_path_buf()
+    } else {
+        scope.join(
+            relative
+                .components()
+                .next()
+                .expect("a scoped source has a first path component"),
+        )
+    }
 }
 
 fn evaluate(root: &Path, target: &Target, target_path: &Path) -> Result<Report> {
@@ -398,6 +543,7 @@ mod tests {
             Some(Args {
                 mode: Mode::Report,
                 file: None,
+                path: None,
                 json: false,
             })
         );
@@ -406,6 +552,7 @@ mod tests {
             Some(Args {
                 mode: Mode::Ratchet,
                 file: None,
+                path: None,
                 json: false,
             })
         );
@@ -418,6 +565,14 @@ mod tests {
             Some(PathBuf::from("targets/cli.toml"))
         );
         assert!(parse_args(&["--file".into(), "/tmp/target.toml".into()]).is_err());
+        assert!(parse_args(&["--path".into(), "src".into()]).is_err());
+        assert_eq!(
+            parse_args(&["--init".into(), "--path".into(), "src".into()])
+                .unwrap()
+                .unwrap()
+                .path,
+            Some(PathBuf::from("src"))
+        );
     }
 
     #[test]
@@ -487,6 +642,46 @@ baseline = 5
         assert_eq!(tightened.modules[0].pub_budget, 1);
         assert_eq!(tightened.strangler[0].baseline, 1);
         assert_eq!(tightened.strangler[1].baseline, 2);
+
+        let initialized_path = root.path().join("initialized.toml");
+        run(
+            root.path(),
+            &[
+                "--init".into(),
+                "--path".into(),
+                "src".into(),
+                "--file".into(),
+                "initialized.toml".into(),
+            ],
+        )
+        .unwrap();
+        let initialized = target::load(&initialized_path).unwrap().unwrap();
+        let initialized_report =
+            evaluate(root.path(), &initialized, Path::new("initialized.toml")).unwrap();
+        assert_eq!(initialized_report.regressions, 0);
+        assert_eq!(initialized.modules.len(), 2);
+        assert_eq!(initialized.modules[0].allowed_imports, ["other"]);
+        let before_tighten = fs::read_to_string(&initialized_path).unwrap();
+        run(
+            root.path(),
+            &[
+                "--tighten".into(),
+                "--file".into(),
+                "initialized.toml".into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(&initialized_path).unwrap(),
+            before_tighten
+        );
+        assert!(
+            run(
+                root.path(),
+                &["--init".into(), "--file".into(), "initialized.toml".into()],
+            )
+            .is_err()
+        );
     }
 
     #[test]
