@@ -46,6 +46,12 @@ pub(super) struct CochangeEdge {
     pub(super) commits: usize,
 }
 
+#[derive(Debug)]
+pub(super) struct CochangeReport {
+    pub(super) commits: usize,
+    pub(super) edges: Vec<CochangeEdge>,
+}
+
 pub(super) fn pace(
     root: &Path,
     scope: &Path,
@@ -71,10 +77,26 @@ pub(super) fn cochange(
     root: &Path,
     scope: &Path,
     since: Option<&str>,
+    window_pct: usize,
     max_commit_files: usize,
-) -> Result<Vec<CochangeEdge>> {
+) -> Result<CochangeReport> {
     let commits = parse_history(&git_history(root, scope, since)?)?;
-    Ok(fold_cochange(&commits, scope, max_commit_files))
+    let commits = if since.is_some() {
+        &commits
+    } else {
+        recent_window(&commits, window_pct)
+    };
+    Ok(CochangeReport {
+        commits: commits.len(),
+        edges: fold_cochange(commits, scope, max_commit_files),
+    })
+}
+
+fn recent_window(commits: &[Commit], window_pct: usize) -> &[Commit] {
+    let first = commits
+        .len()
+        .saturating_sub(window_size(commits.len(), window_pct));
+    &commits[first..]
 }
 
 fn fold_cochange(commits: &[Commit], scope: &Path, max_commit_files: usize) -> Vec<CochangeEdge> {
@@ -368,6 +390,27 @@ mod tests {
         assert_eq!(
             (&edges[0].left, &edges[0].right, edges[0].commits),
             (&"a".to_owned(), &"b".to_owned(), 2)
+        );
+    }
+
+    #[test]
+    fn cochange_window_keeps_the_most_recent_commits() {
+        let commits = parse_history(
+            "@a\nM\tsrc/a/one.rs\nM\tsrc/b/one.rs\n\
+             @b\nM\tsrc/a/two.rs\nM\tsrc/b/two.rs\n\
+             @c\nM\tsrc/a/three.rs\nM\tsrc/b/three.rs\n\
+             @d\nM\tsrc/a/four.rs\nM\tsrc/c/four.rs\n",
+        )
+        .unwrap();
+
+        let recent = recent_window(&commits, 25);
+        let edges = fold_cochange(recent, Path::new("src"), 10);
+
+        assert_eq!(recent.len(), 1);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(
+            (&edges[0].left, &edges[0].right),
+            (&"a".into(), &"c".into())
         );
     }
 }
