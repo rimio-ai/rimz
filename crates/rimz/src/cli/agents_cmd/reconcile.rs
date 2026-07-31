@@ -18,11 +18,7 @@ pub(super) fn reconcile_cohort_launch(
     team: Option<&str>,
     cells: &[rimz::harness::resume::CohortCell],
 ) -> Result<Reconciled> {
-    let repo_root = workspace
-        .cwd_project_root
-        .as_deref()
-        .unwrap_or(&workspace.project_root);
-    let path = rimz::worktree::worktree_path(repo_root, &machine_config.agents.worktree, name)?;
+    let path = cohort_worktree_path(workspace, &machine_config.agents.worktree, name)?;
     if !path.exists() {
         return Ok(Reconciled::Continue);
     }
@@ -76,6 +72,18 @@ pub(super) fn reconcile_cohort_launch(
             }
         }
     }
+}
+
+fn cohort_worktree_path(
+    workspace: &rimz::ResolvedWorkspace,
+    config: &rimz::config::WorktreeConfig,
+    name: &str,
+) -> rimz::worktree::Result<PathBuf> {
+    let repo_root = workspace
+        .cwd_project_root
+        .as_deref()
+        .unwrap_or(&workspace.project_root);
+    rimz::worktree::worktree_path(repo_root, config, name)
 }
 
 fn cohort_subject(spec_display: &str, team: Option<&str>) -> String {
@@ -159,4 +167,36 @@ fn recreate_or_done(
     session_retirement?;
     message_archival?;
     Ok(Reconciled::Continue)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cohort_reconciliation_resolves_worktree_from_current_repo() {
+        let project_root = PathBuf::from("/repos/room");
+        let workspace = rimz::ResolvedWorkspace {
+            workspace_id: rimz::WorkspaceId::from_project_root(&project_root),
+            project_root: project_root.clone(),
+            cwd_project_root: Some(PathBuf::from("/repos/current")),
+            root_class: rimz::workspace::RootClass::Repo,
+            worktree_root: project_root,
+            worktree_branch: Some("main".to_owned()),
+            session_name: "rimz-room".to_owned(),
+            mux_hint: None,
+        };
+
+        let path = cohort_worktree_path(
+            &workspace,
+            &rimz::config::WorktreeConfig::default(),
+            "cross-root",
+        )
+        .expect("worktree path");
+
+        assert_eq!(
+            path,
+            PathBuf::from("/repos/current/../current-worktrees/cross-root")
+        );
+    }
 }
