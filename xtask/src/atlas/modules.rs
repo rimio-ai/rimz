@@ -20,9 +20,16 @@ pub(super) fn module_for_path(path: &Path, scope: &Path) -> String {
     };
     if components.next().is_some() {
         first.as_os_str().to_string_lossy().into_owned()
+    } else if crate::source_files::is_test_file(relative) {
+        "(root)".to_owned()
     } else {
         file_module(relative)
     }
+}
+
+pub(super) fn rust_module_for_path(path: &Path, scope: &Path) -> Option<String> {
+    (path.extension().and_then(std::ffi::OsStr::to_str) == Some("rs"))
+        .then(|| module_for_path(path, scope))
 }
 
 pub(super) fn file_module(path: &Path) -> String {
@@ -141,6 +148,28 @@ mod tests {
         assert_eq!(
             crate_module_for_path(Path::new("crates/rimz/src/cli/agents_cmd/mod.rs")),
             "cli::agents_cmd"
+        );
+        assert_eq!(
+            rust_module_for_path(
+                Path::new("crates/rimz/src/cli/agents_cmd/show.rs"),
+                Path::new("crates/rimz/src/cli")
+            )
+            .as_deref(),
+            Some("agents_cmd")
+        );
+        assert_eq!(
+            rust_module_for_path(
+                Path::new("crates/rimz/src/cli/snapshots/surface.snap"),
+                Path::new("crates/rimz/src/cli")
+            ),
+            None
+        );
+        assert_eq!(
+            module_for_path(
+                Path::new("crates/rimz/src/cli/surface_tests.rs"),
+                Path::new("crates/rimz/src/cli")
+            ),
+            "(root)"
         );
     }
 
