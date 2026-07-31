@@ -567,10 +567,13 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Check(args)) => return run_check(args),
         Some(AgentsSubcmd::Register(args)) => return run_register(args),
         Some(AgentsSubcmd::Specs { json }) => {
-            let config = rimz::config::MachineConfig::load().context("loading machine config")?;
+            let (config, sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
+                .context("loading machine config")?;
             return crate::cli::spec_report::list_specs(
                 &config.agents.profiles,
                 &config.agents.commands,
+                &sources,
+                rimz::config::effective::ProfileScope::Agents,
                 json,
             );
         }

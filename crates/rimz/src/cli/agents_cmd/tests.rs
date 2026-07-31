@@ -93,6 +93,8 @@ fn agent_specs_list_only_agent_profiles_with_descriptions() {
     let specs = crate::cli::spec_report::available_specs(
         &machine.agents.profiles,
         &machine.agents.commands,
+        &rimz::config::AgentSpecSources::default(),
+        rimz::config::effective::ProfileScope::Agents,
     );
     assert!(!specs.iter().any(|entry| entry.source == "kind"));
     assert!(specs.iter().any(|entry| {

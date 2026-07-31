@@ -369,6 +369,8 @@ fn available_specs_include_profiles_and_commands_but_not_kinds_or_teams() {
     let specs = crate::cli::spec_report::available_specs(
         &config.subagents.profiles,
         &config.agents.commands,
+        &rimz::config::AgentSpecSources::default(),
+        rimz::config::effective::ProfileScope::Subagents,
     );
 
     assert!(!specs.iter().any(|entry| entry.source == "kind"));
