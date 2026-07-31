@@ -12,20 +12,24 @@ use super::{positive_usize, set_once, validate_scope, value};
 const DEFAULT_PATH: &str = "crates/rimz/src";
 const DEFAULT_TOP: usize = 20;
 
-const USAGE: &str = "cargo xtask atlas api [--path <prefix>] [--top N] [--since <ref>] [--json]
+const USAGE: &str =
+    "cargo xtask atlas api [--path <prefix>] [--top N] [--module <name>] [--since <ref>] [--json]
 
 Reports public boundary shape and whole-word identifier occurrences outside each
-defining module. `occ` is a ranking heuristic, not a resolved caller count.
+defining file-module. `occ` excludes tests; 0 may mean unreferenced or test-only.
+Common identifiers can over-count, so `occ` is not a resolved caller count.
 
-  --path <path>  root-relative subtree (default crates/rimz/src)
-  --top N        rows per shortlist (default 20)
-  --since <ref>  add public-item delta against a git revision
-  --json         versioned JSON agent contract (v1)";
+  --path <path>    root-relative subtree (default crates/rimz/src)
+  --top N          rows per section (default 20)
+  --module <name>  drill into one module from the module table
+  --since <ref>    add public-item delta against a git revision
+  --json           versioned JSON agent contract (v1)";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     path: PathBuf,
     top: usize,
+    module: Option<String>,
     since: Option<String>,
     json: bool,
 }
@@ -48,9 +52,16 @@ struct ModuleApi {
     pub_types: usize,
     pub_items: usize,
     occurrence_median: f64,
+    zero_occurrences: usize,
     params_median: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     delta_pub: Option<isize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct SingleCallerModule {
+    module: String,
+    items: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,6 +72,7 @@ struct Report {
     total_modules: usize,
     modules: Vec<ModuleApi>,
     total_single_caller_items: usize,
+    single_caller_modules: Vec<SingleCallerModule>,
     single_caller_items: Vec<ItemOccurrence>,
     parse_failures: usize,
 }
@@ -81,7 +93,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
             serde_json::to_string_pretty(&report).context("rendering atlas api JSON")?
         );
     } else {
-        print_report(&report, args.top);
+        print_report(&report, args.top, args.module.as_deref());
     }
     Ok(())
 }
@@ -92,6 +104,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     }
     let mut path = None;
     let mut top = None;
+    let mut module = None;
     let mut since = None;
     let mut json = false;
     let mut index = 0;
@@ -105,6 +118,11 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
             "--top" => {
                 let parsed = positive_usize(value(args, index, "api", "--top")?, "api", "--top")?;
                 set_once(&mut top, parsed, "api", "--top")?;
+                index += 2;
+            }
+            "--module" => {
+                let parsed = value(args, index, "api", "--module")?.to_owned();
+                set_once(&mut module, parsed, "api", "--module")?;
                 index += 2;
             }
             "--since" => {
@@ -123,6 +141,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     Ok(Some(Args {
         path: path.unwrap_or_else(|| PathBuf::from(DEFAULT_PATH)),
         top: top.unwrap_or(DEFAULT_TOP),
+        module,
         since,
         json,
     }))
@@ -169,15 +188,16 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         }
     }
 
-    let mut single_caller_items = Vec::new();
+    let mut scoped_single_caller_items = Vec::new();
     let mut modules = module_items
         .into_iter()
         .map(|(module, items)| {
-            single_caller_items.extend(
+            scoped_single_caller_items.extend(
                 items
                     .iter()
                     .filter(|item| item.outside_modules == 1)
-                    .cloned(),
+                    .cloned()
+                    .map(|item| (module.clone(), item)),
             );
             let (pub_fns, pub_types) = module_kinds.get(&module).copied().unwrap_or_default();
             let pub_items = items.len();
@@ -187,6 +207,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
                     .map(|item| item.occurrences)
                     .collect::<Vec<_>>(),
             );
+            let zero_occurrences = zero_occurrence_count(&items);
             let params_median = module_params
                 .get(&module)
                 .map(|values| median(values.clone()));
@@ -199,6 +220,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
                 pub_types,
                 pub_items,
                 occurrence_median,
+                zero_occurrences,
                 params_median,
                 delta_pub,
             }
@@ -211,16 +233,23 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             .then_with(|| left.occurrence_median.total_cmp(&right.occurrence_median))
             .then_with(|| left.module.cmp(&right.module))
     });
-    single_caller_items.sort_by(|left, right| {
-        left.module
-            .cmp(&right.module)
-            .then_with(|| left.path.cmp(&right.path))
-            .then_with(|| left.line.cmp(&right.line))
+    validate_requested_module(&modules, args.module.as_deref())?;
+    scoped_single_caller_items.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.path.cmp(&right.1.path))
+            .then_with(|| left.1.line.cmp(&right.1.line))
     });
+    let single_caller_modules = single_caller_module_counts(&scoped_single_caller_items);
     let total_modules = modules.len();
-    let total_single_caller_items = single_caller_items.len();
+    let total_single_caller_items = scoped_single_caller_items.len();
+    let single_caller_items = select_single_caller_items(
+        scoped_single_caller_items,
+        args.module.as_deref(),
+        args.top,
+        args.json,
+    );
     modules.truncate(args.top);
-    single_caller_items.truncate(args.top);
     Ok(Report {
         version: 1,
         verb: "api",
@@ -228,9 +257,61 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         total_modules,
         modules,
         total_single_caller_items,
+        single_caller_modules,
         single_caller_items,
         parse_failures: syntax.parse_failures.len(),
     })
+}
+
+fn zero_occurrence_count(items: &[ItemOccurrence]) -> usize {
+    items.iter().filter(|item| item.occurrences == 0).count()
+}
+
+fn validate_requested_module(modules: &[ModuleApi], requested: Option<&str>) -> Result<()> {
+    let Some(requested) = requested else {
+        return Ok(());
+    };
+    if modules.iter().any(|module| module.module == requested) {
+        return Ok(());
+    }
+    bail!(
+        "atlas api --module `{requested}` is not in the module table; choose a module from `cargo xtask atlas api`"
+    )
+}
+
+fn single_caller_module_counts(items: &[(String, ItemOccurrence)]) -> Vec<SingleCallerModule> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for (module, _) in items {
+        *counts.entry(module.clone()).or_default() += 1;
+    }
+    let mut counts = counts
+        .into_iter()
+        .map(|(module, items)| SingleCallerModule { module, items })
+        .collect::<Vec<_>>();
+    counts.sort_by(|left, right| {
+        right
+            .items
+            .cmp(&left.items)
+            .then_with(|| left.module.cmp(&right.module))
+    });
+    counts
+}
+
+fn select_single_caller_items(
+    items: Vec<(String, ItemOccurrence)>,
+    requested_module: Option<&str>,
+    top: usize,
+    json: bool,
+) -> Vec<ItemOccurrence> {
+    let mut selected = items
+        .into_iter()
+        .filter(|(module, _)| requested_module.is_none_or(|requested| module == requested))
+        .map(|(_, item)| item)
+        .collect::<Vec<_>>();
+    if !json {
+        selected.truncate(top);
+    }
+    selected
 }
 
 fn public_counts(files: &[FileSyntax], scope: &Path) -> BTreeMap<String, usize> {
@@ -357,9 +438,9 @@ fn median(mut values: Vec<usize>) -> f64 {
     clippy::print_stdout,
     reason = "xtask atlas api report is the command's stdout contract"
 )]
-fn print_report(report: &Report, top: usize) {
+fn print_report(report: &Report, top: usize, requested_module: Option<&str>) {
     println!("Atlas api — {}", report.path.display());
-    println!("module                    pub fn  pub type  occ/item  params/fn  Δpub");
+    println!("module                    pub fn  pub type  occ/item  occ0  params/fn  Δpub");
     for module in report.modules.iter().take(top) {
         let params = module
             .params_median
@@ -368,11 +449,12 @@ fn print_report(report: &Report, top: usize) {
             .delta_pub
             .map_or_else(|| "—".to_owned(), |value| format!("{value:+}"));
         println!(
-            "{:<25} {:>6}  {:>8}  {:>8.1}  {:>9}  {:>4}",
+            "{:<25} {:>6}  {:>8}  {:>8.1}  {:>4}  {:>9}  {:>4}",
             module.module,
             module.pub_fns,
             module.pub_types,
             module.occurrence_median,
+            module.zero_occurrences,
             params,
             delta
         );
@@ -384,22 +466,42 @@ fn print_report(report: &Report, top: usize) {
         );
     }
     println!();
-    println!("Single-outside-module public items (`occ` is identifier occurrences)");
-    for item in report.single_caller_items.iter().take(top) {
+    if let Some(module) = requested_module {
         println!(
-            "{}::{} {}:{} occ {}",
-            item.module,
-            item.name,
-            item.path.display(),
-            item.line,
-            item.occurrences
+            "Single-outside-module public items in {module} (`occ` is identifier occurrences)"
         );
-    }
-    if report.total_single_caller_items > report.single_caller_items.len() {
-        println!(
-            "… and {} more single-outside-module items",
-            report.total_single_caller_items - report.single_caller_items.len()
-        );
+        for item in report.single_caller_items.iter().take(top) {
+            println!(
+                "{}::{} {}:{} occ {}",
+                item.module,
+                item.name,
+                item.path.display(),
+                item.line,
+                item.occurrences
+            );
+        }
+        let module_total = report
+            .single_caller_modules
+            .iter()
+            .find(|row| row.module == module)
+            .map_or(0, |row| row.items);
+        if module_total > report.single_caller_items.len() {
+            println!(
+                "… and {} more single-outside-module items",
+                module_total - report.single_caller_items.len()
+            );
+        }
+    } else {
+        println!("Single-outside-module public items by module");
+        for module in report.single_caller_modules.iter().take(top) {
+            println!("{}: {} items", module.module, module.items);
+        }
+        if report.single_caller_modules.len() > top {
+            println!(
+                "… and {} more modules",
+                report.single_caller_modules.len() - top
+            );
+        }
     }
     println!(
         "total: {} modules, {} shortlist items, {} parse failures",
@@ -410,6 +512,18 @@ fn print_report(report: &Report, top: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item(name: &str, occurrences: usize) -> ItemOccurrence {
+        ItemOccurrence {
+            module: "crate_module".to_owned(),
+            name: name.to_owned(),
+            kind: "fn".to_owned(),
+            path: PathBuf::from(format!("src/{name}.rs")),
+            line: 1,
+            occurrences,
+            outside_modules: 1,
+        }
+    }
 
     #[test]
     fn occurrence_scan_uses_identifier_boundaries() {
@@ -472,12 +586,77 @@ mod tests {
     #[test]
     fn api_args_reject_duplicates() {
         assert!(parse_args(&["--json".into(), "--json".into()]).is_err());
-        assert_eq!(
-            parse_args(&["--top".into(), "7".into()])
-                .unwrap()
-                .unwrap()
-                .top,
-            7
+        let args = parse_args(&[
+            "--top".into(),
+            "7".into(),
+            "--module".into(),
+            "agents_cmd".into(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(args.top, 7);
+        assert_eq!(args.module.as_deref(), Some("agents_cmd"));
+        assert!(
+            parse_args(&[
+                "--module".into(),
+                "agents_cmd".into(),
+                "--module".into(),
+                "stats".into(),
+            ])
+            .is_err()
         );
+    }
+
+    #[test]
+    fn api_shortlist_aggregates_by_scope_module() {
+        let items = vec![
+            ("stats".to_owned(), item("one", 1)),
+            ("agents_cmd".to_owned(), item("two", 2)),
+            ("stats".to_owned(), item("three", 3)),
+        ];
+
+        assert_eq!(
+            single_caller_module_counts(&items),
+            [
+                SingleCallerModule {
+                    module: "stats".to_owned(),
+                    items: 2,
+                },
+                SingleCallerModule {
+                    module: "agents_cmd".to_owned(),
+                    items: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn api_occurrence_zeros_and_json_shortlist_are_untruncated() {
+        let items = vec![item("zero", 0), item("used", 2), item("also-zero", 0)];
+        assert_eq!(zero_occurrence_count(&items), 2);
+
+        let scoped = items
+            .into_iter()
+            .map(|item| ("stats".to_owned(), item))
+            .collect();
+        assert_eq!(select_single_caller_items(scoped, None, 1, true).len(), 3);
+    }
+
+    #[test]
+    fn api_module_drilldown_rejects_names_outside_the_table() {
+        let modules = vec![ModuleApi {
+            module: "agents_cmd".to_owned(),
+            pub_fns: 1,
+            pub_types: 0,
+            pub_items: 1,
+            occurrence_median: 1.0,
+            zero_occurrences: 0,
+            params_median: Some(0.0),
+            delta_pub: None,
+        }];
+
+        assert!(validate_requested_module(&modules, Some("agents_cmd")).is_ok());
+        let error = validate_requested_module(&modules, Some("missing")).unwrap_err();
+        assert!(error.to_string().contains("module table"));
     }
 }
