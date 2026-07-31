@@ -17,7 +17,7 @@ const DEFAULT_PATH: &str = "crates/rimz/src";
 
 const USAGE: &str = "cargo xtask atlas rank [--path <prefix>] [--top N] [--window <pct>] [--since <ref>] [--verbose] [--json]
 
-Ranks modules by size, interface, history, and calibrated complexity.
+Ranks modules by churn-weighted size (code × churn%); cx breaks ties.
 Flags: pin = churn% >= threshold and test/code below threshold; hot = non-noisy
 pace >= threshold; shallow = wide public surface with low lines/public item.
 Requires rust-code-analysis-cli (`cargo install rust-code-analysis-cli --locked`).
@@ -27,8 +27,8 @@ Requires rust-code-analysis-cli (`cargo install rust-code-analysis-cli --locked`
   --window <pct>         recent history window (default 25)
   --noise-lifetime N     minimum lifetime commits for pace (default 20)
   --noise-window N       minimum window commits for pace (default 5)
-  --pin-churn N          pin churn-percent threshold (default 5)
-  --pin-tc N             pin test/code ceiling (default 0.2)
+  --pin-churn N          pin churn-percent threshold (default 3)
+  --pin-tc N             pin test/code ceiling (default 0.30)
   --hot-pace N           hot pace threshold (default 1.5)
   --shallow-pub N        shallow public-item threshold (default 20)
   --shallow-locpub N     shallow lines/public ceiling (default 30)
@@ -59,7 +59,7 @@ struct Size {
     tests: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 struct Row {
     module: String,
     code: u64,
@@ -241,8 +241,8 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         window: window.unwrap_or(25),
         noise_lifetime: noise_lifetime.unwrap_or(20),
         noise_window: noise_window.unwrap_or(5),
-        pin_churn: pin_churn.unwrap_or(5.0),
-        pin_tc: pin_tc.unwrap_or(0.2),
+        pin_churn: pin_churn.unwrap_or(3.0),
+        pin_tc: pin_tc.unwrap_or(0.30),
         hot_pace: hot_pace.unwrap_or(1.5),
         shallow_pub: shallow_pub.unwrap_or(20),
         shallow_locpub: shallow_locpub.unwrap_or(30.0),
@@ -285,9 +285,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             let complexity = metrics.module_scores.get(module).copied().unwrap_or(0.0);
             let test_code_ratio = (size.code > 0).then_some(size.tests as f64 / size.code as f64);
             let mut flags = Vec::new();
-            if churn_pct >= args.pin_churn
-                && test_code_ratio.is_some_and(|ratio| ratio < args.pin_tc)
-            {
+            if is_pinned(churn_pct, test_code_ratio, args.pin_churn, args.pin_tc) {
                 flags.push("pin");
             }
             if history.pace.is_some_and(|pace| pace >= args.hot_pace) {
@@ -318,13 +316,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             }
         })
         .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        right
-            .complexity
-            .total_cmp(&left.complexity)
-            .then_with(|| right.code.cmp(&left.code))
-            .then_with(|| left.module.cmp(&right.module))
-    });
+    sort_rows(&mut rows);
     let total_modules = rows.len();
     let total_code = rows.iter().map(|row| row.code).sum();
     let total_tests = rows.iter().map(|row| row.tests).sum();
@@ -359,6 +351,22 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         offenders,
         parse_failures: syntax.parse_failures.len(),
     })
+}
+
+fn is_pinned(churn_pct: f64, test_code_ratio: Option<f64>, pin_churn: f64, pin_tc: f64) -> bool {
+    churn_pct >= pin_churn && test_code_ratio.is_some_and(|ratio| ratio < pin_tc)
+}
+
+fn sort_rows(rows: &mut [Row]) {
+    rows.sort_by(|left, right| {
+        let left_value = left.code as f64 * left.churn_pct;
+        let right_value = right.code as f64 * right.churn_pct;
+        right_value
+            .total_cmp(&left_value)
+            .then_with(|| right.complexity.total_cmp(&left.complexity))
+            .then_with(|| right.code.cmp(&left.code))
+            .then_with(|| left.module.cmp(&right.module))
+    });
 }
 
 fn sizes(source_list: &[sources::Source], scope: &Path) -> BTreeMap<String, Size> {
