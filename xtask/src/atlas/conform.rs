@@ -25,11 +25,13 @@ occurrences of its symbol in non-test Rust under its path (a file or directory).
 A missing default target passes; a missing explicit --file is an error. `--init`
 creates a clean current-tree baseline and never overwrites an existing target.
 Import allow-lists cover resolved internal `use` declarations only.
+Split Rust modules (`foo.rs` plus `foo/`) remain separate filesystem rules.
 
   --ratchet      fail on regressions (the checks/gate mode)
   --tighten      lower budgets and baselines to current values
   --init         seed module budgets and import allow-lists from the current tree
-  --file <path>  root-relative target file (default refactor-target.toml)
+  --file <path>  target file (default root refactor-target.toml);
+                 absolute as-is, relative from the repository root
   --path <path>  root-relative init subtree (default crates/rimz/src)
   --json         versioned JSON agent contract (v1)
 
@@ -78,6 +80,8 @@ struct Report {
     version: u8,
     verb: &'static str,
     target: PathBuf,
+    #[serde(skip)]
+    default_target: bool,
     rules: Vec<RuleResult>,
     regressions: usize,
     parse_failures: usize,
@@ -92,16 +96,16 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
         println!("{USAGE}");
         return Ok(());
     };
-    let target_file = args
+    let default_target = args.file.is_none();
+    let target_path = args
         .file
-        .as_deref()
-        .unwrap_or_else(|| Path::new(TARGET_FILE));
-    let target_path = root.join(target_file);
+        .as_ref()
+        .map_or_else(|| root.join(TARGET_FILE), |file| root.join(file));
     if args.mode == Mode::Init {
         if target_path.exists() {
             bail!(
                 "atlas conform --init refuses to overwrite existing target `{}`",
-                target_file.display()
+                target_path.display()
             );
         }
         let scope = args
@@ -113,7 +117,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
         target::write(&target_path, &target)?;
         println!(
             "initialized {} with {} module rules",
-            target_file.display(),
+            target_path.display(),
             seeded
         );
         return Ok(());
@@ -122,7 +126,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
         if args.file.is_some() {
             bail!(
                 "atlas conform target file `{}` does not exist",
-                target_file.display()
+                target_path.display()
             );
         }
         if args.mode != Mode::Ratchet {
@@ -132,7 +136,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
                     serde_json::to_string_pretty(&serde_json::json!({
                         "version": 1,
                         "verb": "conform",
-                        "target": target_file,
+                        "target": target_path,
                         "configured": false,
                     }))
                     .context("rendering unconfigured atlas conform JSON")?
@@ -145,7 +149,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
         }
         return Ok(());
     };
-    let report = evaluate(root, &target, target_file)?;
+    let report = evaluate(root, &target, &target_path, default_target)?;
     match args.mode {
         Mode::Report => {
             if args.json {
@@ -164,7 +168,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
             tighten(&mut target, &report);
             target::write(&target_path, &target)?;
             if !args.json {
-                println!("tightened {}", target_file.display());
+                println!("tightened {}", target_path.display());
             } else {
                 println!(
                     "{}",
@@ -183,7 +187,7 @@ pub(super) fn ratchet(root: &Path) -> Result<()> {
     let Some(target) = target::load(&target_path)? else {
         return Ok(());
     };
-    enforce(&evaluate(root, &target, Path::new(TARGET_FILE))?)
+    enforce(&evaluate(root, &target, &target_path, true)?)
 }
 
 fn parse_args(args: &[String]) -> Result<Option<Args>> {
@@ -213,7 +217,11 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 bail!("atlas conform --ratchet, --tighten, and --init are mutually exclusive")
             }
             "--file" => {
-                let parsed = validate_scope(value(args, index, "conform", "--file")?, "--file")?;
+                let raw = value(args, index, "conform", "--file")?;
+                if raw.is_empty() {
+                    bail!("atlas conform --file requires a non-empty path");
+                }
+                let parsed = PathBuf::from(raw);
                 set_once(&mut file, parsed, "conform", "--file")?;
                 index += 2;
             }
@@ -326,7 +334,12 @@ fn direct_rule_path(path: &Path, scope: &Path) -> PathBuf {
     }
 }
 
-fn evaluate(root: &Path, target: &Target, target_path: &Path) -> Result<Report> {
+fn evaluate(
+    root: &Path,
+    target: &Target,
+    target_path: &Path,
+    default_target: bool,
+) -> Result<Report> {
     let all_sources = sources::working_tree_rust_sources(root)?;
     let known_modules = all_sources
         .iter()
@@ -421,6 +434,7 @@ fn evaluate(root: &Path, target: &Target, target_path: &Path) -> Result<Report> 
         version: 1,
         verb: "conform",
         target: target_path.to_path_buf(),
+        default_target,
         regressions: rules
             .iter()
             .filter(|rule| rule.status == "regression")
@@ -481,7 +495,7 @@ fn enforce(report: &Report) -> Result<()> {
             ));
         }
     }
-    let file_arg = if report.target == Path::new(TARGET_FILE) {
+    let file_arg = if report.default_target {
         String::new()
     } else {
         format!(" --file {}", report.target.display())
@@ -569,7 +583,21 @@ mod tests {
                 .file,
             Some(PathBuf::from("targets/cli.toml"))
         );
-        assert!(parse_args(&["--file".into(), "/tmp/target.toml".into()]).is_err());
+        assert_eq!(
+            parse_args(&["--file".into(), "/tmp/target.toml".into()])
+                .unwrap()
+                .unwrap()
+                .file,
+            Some(PathBuf::from("/tmp/target.toml"))
+        );
+        assert_eq!(
+            parse_args(&["--file".into(), "../target.toml".into()])
+                .unwrap()
+                .unwrap()
+                .file,
+            Some(PathBuf::from("../target.toml"))
+        );
+        assert!(parse_args(&["--file".into(), String::new()]).is_err());
         assert!(parse_args(&["--path".into(), "src".into()]).is_err());
         assert_eq!(
             parse_args(&["--init".into(), "--path".into(), "src".into()])
@@ -641,12 +669,12 @@ baseline = 5
         let mut configured = target::load(&target_path).unwrap().unwrap();
         let mut forbidden = configured.clone();
         forbidden.modules[0].allowed_imports.clear();
-        let forbidden_report = evaluate(root.path(), &forbidden, &target_path).unwrap();
+        let forbidden_report = evaluate(root.path(), &forbidden, &target_path, true).unwrap();
         assert_eq!(forbidden_report.regressions, 1);
         assert_eq!(forbidden_report.rules[0].unallowed_imports, ["other"]);
         assert!(enforce(&forbidden_report).is_err());
 
-        let report = evaluate(root.path(), &configured, &target_path).unwrap();
+        let report = evaluate(root.path(), &configured, &target_path, true).unwrap();
         tighten(&mut configured, &report);
         target::write(&target_path, &configured).unwrap();
         let tightened = target::load(&target_path).unwrap().unwrap();
@@ -654,7 +682,9 @@ baseline = 5
         assert_eq!(tightened.strangler[0].baseline, 1);
         assert_eq!(tightened.strangler[1].baseline, 2);
 
-        let initialized_path = root.path().join("initialized.toml");
+        let target_directory = tempfile::tempdir().unwrap();
+        let initialized_path = target_directory.path().join("initialized.toml");
+        let initialized_arg = initialized_path.display().to_string();
         run(
             root.path(),
             &[
@@ -662,13 +692,13 @@ baseline = 5
                 "--path".into(),
                 "src".into(),
                 "--file".into(),
-                "initialized.toml".into(),
+                initialized_arg.clone(),
             ],
         )
         .unwrap();
         let initialized = target::load(&initialized_path).unwrap().unwrap();
         let initialized_report =
-            evaluate(root.path(), &initialized, Path::new("initialized.toml")).unwrap();
+            evaluate(root.path(), &initialized, &initialized_path, false).unwrap();
         assert_eq!(initialized_report.regressions, 0);
         assert_eq!(initialized.modules.len(), 3);
         assert_eq!(initialized.modules[0].allowed_imports, ["other"]);
@@ -677,11 +707,7 @@ baseline = 5
         let before_tighten = fs::read_to_string(&initialized_path).unwrap();
         run(
             root.path(),
-            &[
-                "--tighten".into(),
-                "--file".into(),
-                "initialized.toml".into(),
-            ],
+            &["--tighten".into(), "--file".into(), initialized_arg.clone()],
         )
         .unwrap();
         assert_eq!(
@@ -691,7 +717,7 @@ baseline = 5
         assert!(
             run(
                 root.path(),
-                &["--init".into(), "--file".into(), "initialized.toml".into()],
+                &["--init".into(), "--file".into(), initialized_arg],
             )
             .is_err()
         );
@@ -768,6 +794,7 @@ baseline = 5
             root.path(),
             &target,
             &root.path().join("custom-target.toml"),
+            false,
         )
         .unwrap();
         assert_eq!(
