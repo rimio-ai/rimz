@@ -366,23 +366,11 @@ impl OccurrenceCorpus {
         Self { modules }
     }
 
-    pub(super) fn count_in_module(&self, module: &str, symbol: &str) -> usize {
-        self.modules
-            .get(module)
-            .and_then(|counts| counts.get(symbol))
-            .copied()
-            .unwrap_or(0)
-    }
-
-    pub(super) fn count_under(&self, module_prefix: &str, symbol: &str) -> usize {
-        self.modules
-            .iter()
-            .filter(|(module, _)| {
-                module_prefix.is_empty()
-                    || *module == module_prefix
-                    || module.starts_with(&format!("{module_prefix}::"))
-            })
-            .map(|(_, counts)| counts.get(symbol).copied().unwrap_or(0))
+    pub(super) fn count_in_sources(sources: &[Source], symbol: &str) -> usize {
+        Self::new(sources)
+            .modules
+            .values()
+            .map(|counts| counts.get(symbol).copied().unwrap_or(0))
             .sum()
     }
 
@@ -561,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn occurrence_scope_distinguishes_files_directories_and_prefix_collisions() {
+    fn occurrence_count_in_sources_sums_only_the_supplied_sources() {
         let sources = vec![
             Source {
                 path: PathBuf::from("src/cli/render.rs"),
@@ -576,11 +564,7 @@ mod tests {
                 text: "target(); target(); target();".to_owned(),
             },
         ];
-        let corpus = OccurrenceCorpus::new(&sources);
-
-        assert_eq!(corpus.count_in_module("cli::render", "target"), 1);
-        assert_eq!(corpus.count_under("cli::render", "target"), 3);
-        assert_eq!(corpus.count_under("", "target"), 6);
+        assert_eq!(OccurrenceCorpus::count_in_sources(&sources, "target"), 6);
     }
 
     #[test]
