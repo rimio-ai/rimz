@@ -5,7 +5,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::modules::{module_for_path, scope_for_matching};
+use super::modules::{rust_module_for_path, scope_for_matching};
 
 #[derive(Debug)]
 struct Commit {
@@ -109,14 +109,15 @@ fn fold_cochange(commits: &[Commit], scope: &Path, max_commit_files: usize) -> V
                 Change::Touch(path) | Change::Delete(path) => path,
                 Change::Rename { new, .. } => new,
             })
+            .filter(|path| path.starts_with(scope_for_matching(scope)))
+            .filter(|path| rust_module_for_path(path, scope).is_some())
             .collect::<BTreeSet<_>>();
         if files.len() > max_commit_files {
             continue;
         }
         let modules = files
             .into_iter()
-            .filter(|path| path.starts_with(scope_for_matching(scope)))
-            .map(|path| module_for_path(path, scope))
+            .filter_map(|path| rust_module_for_path(path, scope))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
@@ -258,8 +259,11 @@ fn fold_pace(
         }) else {
             continue;
         };
+        let Some(module) = rust_module_for_path(&path, scope) else {
+            continue;
+        };
         module_commits
-            .entry(module_for_path(&path, scope))
+            .entry(module)
             .or_default()
             .extend(identity.commits);
     }
@@ -390,6 +394,23 @@ mod tests {
         assert_eq!(
             (&edges[0].left, &edges[0].right, edges[0].commits),
             (&"a".to_owned(), &"b".to_owned(), 2)
+        );
+    }
+
+    #[test]
+    fn cochange_ignores_non_rust_test_data() {
+        let commits = parse_history(
+            "@a\nM\tsrc/a.rs\nM\tsrc/snapshots/a.snap\n\
+             @b\nM\tsrc/a.rs\nM\tsrc/b.rs\nM\tsrc/snapshots/b.snap\n",
+        )
+        .unwrap();
+
+        let edges = fold_cochange(&commits, Path::new("src"), 2);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(
+            (&edges[0].left, &edges[0].right),
+            (&"a".into(), &"b".into())
         );
     }
 
