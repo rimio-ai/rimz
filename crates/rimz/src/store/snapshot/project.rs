@@ -113,6 +113,21 @@ pub(super) fn reduce_agent_states_seeded(
     reduce_agent_states_seeded_with_identity(seed, AgentIdentityState::default(), &events).0
 }
 
+/// The agent key for every event kind that can create a reducer row. Keep this
+/// closed match aligned with the row-creating dispatch arms immediately below.
+pub(super) fn agent_event_key(event: &FoldEvent<'_>) -> Option<(AgentKind, AgentSessionId)> {
+    let agent_id = match &event.kind {
+        EventKind::AgentLifecycle(payload) => payload.observation.agent_id.clone()?,
+        EventKind::AgentLaunch(payload) => payload.agent_id.clone(),
+        EventKind::AgentAttach(payload) => payload.agent_id.clone(),
+        _ => return None,
+    };
+    Some((
+        AgentKind::new_unchecked(event.envelope.source.clone()),
+        agent_id,
+    ))
+}
+
 pub(super) fn reduce_agent_states_seeded_with_identity(
     seed: BTreeMap<(AgentKind, AgentSessionId), AgentState>,
     identity_state: AgentIdentityState,

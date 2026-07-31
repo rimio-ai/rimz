@@ -2,11 +2,14 @@ use std::path::Path;
 
 use super::*;
 
-use crate::agents::AgentStatus;
 use crate::agents::lifecycle;
-use crate::ids::{AgentKind, AgentSessionId, MessageId, WorkspaceId};
+use crate::agents::{AgentStatus, LaunchParams};
+use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
-use crate::store::event::{EventEnvelope, MessageEventMethod};
+use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
+use crate::store::event::{
+    AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod,
+};
 use crate::store::snapshot::testkit::*;
 
 fn recent(secs_ago: u64) -> jiff::Timestamp {

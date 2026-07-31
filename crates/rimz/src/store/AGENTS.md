@@ -13,7 +13,7 @@ Local contract for `crates/rimz/src/store/` — durable workspace state. Extends
 ## Reads
 
 - `snapshot/` reducers stay pure over the event log plus caller-supplied inputs. The sidebar's produce module ([`src/sidebar/produce/`](../sidebar/produce/mod.rs)) supplies the live pane list; nothing under `snapshot/` calls the mux.
-- The fold stays resumable: the rollup cache and its extent stamp carry ended rows across rotation, so a rebuild never silently drops a resumable session.
+- The fold stays resumable: carryover plus the rollup cache and its extent stamp preserve continuing and ended rows across rotation, so a rebuild never silently drops launch identity or a resumable session.
 - Agent and subagent enrichment scans go through [`sidecar.rs`](./sidecar.rs), which gates each scan on stat.
 - [`single_flight.rs`](./single_flight.rs) stays the lock-and-poll election alone and imports no store-writer module. The sidebar depends on it, and the read-only grep matches files under `src/sidebar/` rather than this one, so the boundary holds only where a change here holds it.
 
