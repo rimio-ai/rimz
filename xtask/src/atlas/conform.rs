@@ -585,6 +585,7 @@ mod tests {
     fn configured_target_ratchets_and_tightens_without_subprocesses() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir(root.path().join("src")).unwrap();
+        fs::create_dir(root.path().join("src/nested")).unwrap();
         fs::write(
             root.path().join("Cargo.toml"),
             "[workspace]\nmembers = []\n[package]\nname = \"probe\"\nversion = \"0.0.0\"\n",
@@ -598,6 +599,11 @@ mod tests {
         fs::write(
             root.path().join("src/other.rs"),
             "pub struct Thing;\nfn caller() { let _ = crate::run(); }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("src/nested/mod.rs"),
+            "use probe::other::Thing;\npub fn nested() -> Thing { Thing }\n",
         )
         .unwrap();
         fs::write(
@@ -659,8 +665,10 @@ baseline = 5
         let initialized_report =
             evaluate(root.path(), &initialized, Path::new("initialized.toml")).unwrap();
         assert_eq!(initialized_report.regressions, 0);
-        assert_eq!(initialized.modules.len(), 2);
+        assert_eq!(initialized.modules.len(), 3);
         assert_eq!(initialized.modules[0].allowed_imports, ["other"]);
+        assert_eq!(initialized.modules[1].path, Path::new("src/nested"));
+        assert_eq!(initialized.modules[1].allowed_imports, ["other"]);
         let before_tighten = fs::read_to_string(&initialized_path).unwrap();
         run(
             root.path(),
