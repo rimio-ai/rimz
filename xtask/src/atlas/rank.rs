@@ -520,7 +520,7 @@ fn print_report(report: &Report, show_delta: bool) {
     }
     if report.total_modules > report.rows.len() {
         println!(
-            "… and {} more modules (totals: code {}, tests {}, pub {}, cx {:.1})",
+            "… and {} more modules; overall: code {}, tests {}, pub {}, cx {:.1}",
             report.total_modules - report.rows.len(),
             report.total_code,
             report.total_tests,
@@ -529,7 +529,7 @@ fn print_report(report: &Report, show_delta: bool) {
         );
     } else {
         println!(
-            "totals: code {}, tests {}, pub {}, cx {:.1}",
+            "overall: code {}, tests {}, pub {}, cx {:.1}",
             report.total_code, report.total_tests, report.total_pub_items, report.total_complexity
         );
     }
