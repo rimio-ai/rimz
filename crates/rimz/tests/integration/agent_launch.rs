@@ -201,6 +201,90 @@ fn subagent_caller_refuses_subagent_launch_before_creating_runtime_state() {
 
 #[cfg(unix)]
 #[test]
+fn launch_identity_and_parentage_survive_event_log_rotation() {
+    let env = Env::new();
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    let kind = AgentKind::new_unchecked("codex");
+    let agent_id = AgentSessionId::from("provider-rotated-child");
+    let launch_id = AgentSessionId::from("launch-rotated-child");
+    let parent_id = AgentSessionId::from("provider-parent");
+    env.store()
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &kind,
+            AgentLaunchPayload {
+                agent_id: agent_id.clone(),
+                launch_id: Some(launch_id.clone()),
+                agent_name: "rotated-child".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    parent_agent_id: Some(parent_id.clone()),
+                    parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+                    launch_depth: Some(1),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: Some("main".to_owned()),
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed launched child");
+
+    let outcome = env
+        .store()
+        .rotate_event_log(1, None)
+        .expect("rotate event log");
+    assert!(outcome.rotation.is_rotated());
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            &workspace.session_name,
+            kind.as_str(),
+            "UserPromptSubmit",
+            &AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::TurnStarted),
+        ))
+        .expect("append first post-rotation lifecycle event");
+
+    let output = env
+        .rimz()
+        .args(["subagents", "list", "--json"])
+        .env(rimz::harness::run::ENV_AGENT_KIND, kind.as_str())
+        .env(rimz::harness::run::ENV_AGENT_ID, launch_id.as_str())
+        .output()
+        .expect("resolve rotated launch identity through subagents list");
+    assert!(
+        output.status.success(),
+        "rotated launch identity did not reach the caller resolver: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let projection = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("read audit projection");
+    let child = projection
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == agent_id)
+        .expect("rotated child remains in the audit projection");
+    assert_eq!(child.launch_id.as_ref(), Some(&launch_id));
+    assert_eq!(child.parent_agent_id.as_ref(), Some(&parent_id));
+    assert_eq!(
+        child.parent_agent_kind.as_ref(),
+        Some(&AgentKind::new_unchecked("claude"))
+    );
+    assert_eq!(child.launch_depth, Some(1));
+}
+
+#[cfg(unix)]
+#[test]
 fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
     let env = Env::new();
     let shim_dir = write_env_dump_shim(&env, "codex");

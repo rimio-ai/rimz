@@ -32,8 +32,15 @@ fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
 }
 
 #[test]
-fn live_winner_backfills_trimmed_carryover_enrichment() {
+fn first_post_rotation_event_reduces_against_the_carried_agent() {
     let mut carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
+    carried.launch_id = Some(AgentSessionId::from("launch-1"));
+    carried.parent_agent_id = Some(AgentSessionId::from("parent-1"));
+    carried.parent_agent_kind = Some(AgentKind::new_unchecked("codex"));
+    carried.launch_depth = Some(1);
+    carried.name = Some("lucid-atlas".into());
+    carried.name_explicit = true;
+    carried.pane = Some(pane("%7", "claude", "/repo"));
     carried.transcript_path = Some("/tmp/transcript.jsonl".into());
     carried.worktree_path = Some("/repo".into());
     carried.worktree_branch = Some("main".into());
@@ -45,13 +52,27 @@ fn live_winner_backfills_trimmed_carryover_enrichment() {
     carried.effort = Some("high".into());
     carried.usage.context_window = Some(200_000);
     carried.last_compact_command_tokens = Some(180_000);
-    let live = agent("claude", "agent-1", AgentStatus::Running, 2_000);
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+    let turn_started = lifecycle_at(
+        &workspace,
+        "claude",
+        "UserPromptSubmit",
+        "agent-1",
+        lifecycle::LifecycleSignal::TurnStarted,
+    );
 
-    let merged = merge_agent_rollups(std::slice::from_ref(&carried), std::slice::from_ref(&live));
+    let merged = agent_rollup_with_carryover(&[turn_started], vec![carried.clone()]);
 
     assert_eq!(merged.len(), 1);
     let agent = &merged[0];
     assert_eq!(agent.status, AgentStatus::Running);
+    assert_eq!(agent.launch_id, carried.launch_id);
+    assert_eq!(agent.parent_agent_id, carried.parent_agent_id);
+    assert_eq!(agent.parent_agent_kind, carried.parent_agent_kind);
+    assert_eq!(agent.launch_depth, carried.launch_depth);
+    assert_eq!(agent.name, carried.name);
+    assert_eq!(agent.name_explicit, carried.name_explicit);
+    assert_eq!(agent.pane, carried.pane);
     assert_eq!(agent.transcript_path, carried.transcript_path);
     assert_eq!(agent.worktree_path, carried.worktree_path);
     assert_eq!(agent.worktree_branch, carried.worktree_branch);

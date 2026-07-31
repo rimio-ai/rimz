@@ -18,7 +18,6 @@ use super::project::{
 };
 use super::{Result, SnapshotErr};
 use crate::agents::AgentState;
-use crate::agents::lifecycle::LifecycleSignal;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::message::{DeliveryGate, MessageBody, MessageStatus};
 use crate::store::atomic::{self, write_temp_then_rename};
@@ -104,11 +103,7 @@ pub(super) fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> V
         match map.get(&key) {
             Some(existing) if existing.last_seen > entry.last_seen => {}
             _ => {
-                let mut merged = entry.clone();
-                if let Some(existing) = map.get(&key) {
-                    merged.backfill_rotation_enrichment_from(existing);
-                }
-                map.insert(key, merged);
+                map.insert(key, entry.clone());
             }
         }
     }
@@ -117,7 +112,7 @@ pub(super) fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> V
 
 /// Bump when [`RollupCache`]'s shape changes — a mismatched cache reads as
 /// absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 13;
+const ROLLUP_CACHE_VERSION: u32 = 14;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.
@@ -206,6 +201,19 @@ struct FoldDeltaSeed {
     saw_session_rebirth: bool,
 }
 
+fn agent_key(event: &FoldEvent<'_>) -> Option<(AgentKind, AgentSessionId)> {
+    let agent_id = match &event.kind {
+        EventKind::AgentLifecycle(payload) => payload.observation.agent_id.clone()?,
+        EventKind::AgentLaunch(payload) => payload.agent_id.clone(),
+        EventKind::AgentAttach(payload) => payload.agent_id.clone(),
+        _ => return None,
+    };
+    Some((
+        AgentKind::new_unchecked(event.envelope.source.clone()),
+        agent_id,
+    ))
+}
+
 fn fold_delta(
     mut seed: FoldDeltaSeed,
     mut carryover: EventCarryover,
@@ -217,23 +225,13 @@ fn fold_delta(
     stamp_compact_commands_in_agents(&mut carryover.agents, events);
     seed.saw_session_rebirth |= events_have_rebirth(events);
 
-    // An end can be the first event after rotation. Hydrate that key from the
-    // carryover before reducing so the partial lifecycle observation preserves
-    // the same identity and launch fields it would have kept without rotation.
+    // Any agent event can be the first observation after rotation. Hydrate only
+    // observed keys before reducing so `carried_base` remains the single owner
+    // of lifetime fields without changing raw_agents into a carryover union.
     for event in events {
-        let EventKind::AgentLifecycle(payload) = &event.kind else {
+        let Some(key) = agent_key(event) else {
             continue;
         };
-        if !matches!(payload.observation.signal, LifecycleSignal::Ended) {
-            continue;
-        }
-        let Some(agent_id) = payload.observation.agent_id.clone() else {
-            continue;
-        };
-        let key = (
-            AgentKind::new_unchecked(event.envelope.source.clone()),
-            agent_id,
-        );
         if seed.agents.contains_key(&key) {
             continue;
         }
