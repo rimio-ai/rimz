@@ -504,10 +504,13 @@ fn print_report(report: &Report, top: usize) {
             report.history_commits
         );
     } else {
+        // build_report records a window exactly when no explicit since bound exists.
+        let window = report
+            .history_window_pct
+            .expect("a window-bounded report records its percentage");
         println!(
             "history: {} commits (window {}%)",
-            report.history_commits,
-            report.history_window_pct.unwrap_or(25)
+            report.history_commits, window
         );
     }
     println!(
