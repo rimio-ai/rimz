@@ -19,14 +19,15 @@ const USAGE: &str = "cargo xtask atlas seams [--path <prefix>] [--top N] [--wind
 
 Imports come from Rust `use` items; inline fully-qualified paths are not counted.
 The provider table ranks outside modules by distinct imported item names across
-the scoped modules that use them. Co-change omits commits touching more than
---max-commit-files under --path.
+the scoped modules that use them. Co-change counts Rust source files and omits
+commits touching more than --max-commit-files of them under --path. The `(root)`
+module's pairwise co-change fanout folds into one annotated hub row.
 
   --path <path>          root-relative subtree (default crates/rimz/src)
   --top N                rows per section (default 15)
   --window <pct>         recent co-change history window (default 25)
   --since <ref>          restrict co-change to <ref>..HEAD (excludes --window)
-  --max-commit-files N   omit commits broader than N files under --path (default 10)
+  --max-commit-files N   omit commits broader than N Rust sources (default 10)
   --min-cochange N       divergence threshold (default 3)
   --json                 versioned JSON agent contract (v1)";
 
@@ -95,8 +96,8 @@ struct Report {
     external_providers: Vec<ExternalProvider>,
     total_cochange_edges: usize,
     cochange_edges: Vec<CochangeEdge>,
-    total_cochange_hubs: usize,
-    cochange_hubs: Vec<CochangeHub>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cochange_hub: Option<CochangeHub>,
     total_divergence: usize,
     divergence: Vec<Divergence>,
     parse_failures: usize,
@@ -295,11 +296,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .iter()
         .map(|edge| (ordered_pair(&edge.left, &edge.right), edge.commits))
         .collect::<BTreeMap<_, _>>();
-    let (cochange_edges, mut cochange_hubs) = fold_root_cochange_hub(cochange_edges);
-    let hub_modules = cochange_hubs
-        .iter()
-        .map(|hub| hub.module.as_str())
-        .collect::<BTreeSet<_>>();
+    let (cochange_edges, cochange_hub) = fold_root_cochange_hub(cochange_edges);
     let (cochange_edges, import_free_cochange_edges) =
         partition_cochange_edges(cochange_edges, &import_lookup);
     let mut divergence = Vec::new();
@@ -315,9 +312,6 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         }
     }
     for edge in &import_edges {
-        if hub_modules.contains(edge.from.as_str()) || hub_modules.contains(edge.to.as_str()) {
-            continue;
-        }
         let cochanges = cochange_lookup
             .get(&ordered_pair(&edge.from, &edge.to))
             .copied()
@@ -344,14 +338,12 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let total_external_surface = external_surface.len();
     let total_external_providers = external_providers.len();
     let total_cochange_edges = cochange_edges.len();
-    let total_cochange_hubs = cochange_hubs.len();
     let total_divergence = divergence.len();
     import_edges.truncate(args.top);
     external_surface.truncate(args.top);
     external_providers.truncate(args.top);
     let mut cochange_edges = cochange_edges;
     cochange_edges.truncate(args.top);
-    cochange_hubs.truncate(args.top);
     divergence.truncate(args.top);
     Ok(Report {
         version: 1,
@@ -368,51 +360,31 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         external_providers,
         total_cochange_edges,
         cochange_edges,
-        total_cochange_hubs,
-        cochange_hubs,
+        cochange_hub,
         total_divergence,
         divergence,
         parse_failures: syntax.parse_failures.len(),
     })
 }
 
-fn fold_root_cochange_hub(edges: Vec<CochangeEdge>) -> (Vec<CochangeEdge>, Vec<CochangeHub>) {
-    let mut partners = BTreeMap::<String, BTreeSet<String>>::new();
-    for edge in &edges {
-        partners
-            .entry(edge.left.clone())
-            .or_default()
-            .insert(edge.right.clone());
-        partners
-            .entry(edge.right.clone())
-            .or_default()
-            .insert(edge.left.clone());
-    }
-    let mut hubs = partners
-        .into_iter()
-        .filter(|(module, partners)| module == "(root)" && partners.len() >= 3)
-        .map(|(module, partners)| CochangeHub {
-            module,
-            modules: partners.len(),
-        })
-        .collect::<Vec<_>>();
-    hubs.sort_by(|left, right| {
-        right
-            .modules
-            .cmp(&left.modules)
-            .then_with(|| left.module.cmp(&right.module))
-    });
-    let hub_modules = hubs
+fn fold_root_cochange_hub(
+    mut edges: Vec<CochangeEdge>,
+) -> (Vec<CochangeEdge>, Option<CochangeHub>) {
+    let partners = edges
         .iter()
-        .map(|hub| hub.module.as_str())
-        .collect::<BTreeSet<_>>();
-    let edges = edges
-        .into_iter()
-        .filter(|edge| {
-            !hub_modules.contains(edge.left.as_str()) && !hub_modules.contains(edge.right.as_str())
+        .filter_map(|edge| match (edge.left.as_str(), edge.right.as_str()) {
+            ("(root)", module) | (module, "(root)") => Some(module.to_owned()),
+            _ => None,
         })
-        .collect();
-    (edges, hubs)
+        .collect::<BTreeSet<_>>();
+    let hub = (partners.len() >= 3).then(|| CochangeHub {
+        module: "(root)".to_owned(),
+        modules: partners.len(),
+    });
+    if hub.is_some() {
+        edges.retain(|edge| edge.left != "(root)" && edge.right != "(root)");
+    }
+    (edges, hub)
 }
 
 fn external_providers(
@@ -535,7 +507,7 @@ fn print_report(report: &Report, top: usize) {
     );
     println!();
     println!("Co-change edges (pairs with import edges)");
-    for hub in report.cochange_hubs.iter().take(top) {
+    if let Some(hub) = &report.cochange_hub {
         println!(
             "{}: co-changes with {} modules (hub)",
             hub.module, hub.modules
@@ -548,11 +520,6 @@ fn print_report(report: &Report, top: usize) {
         report.total_cochange_edges,
         report.cochange_edges.len(),
         "co-change edges",
-    );
-    bounded_tail(
-        report.total_cochange_hubs,
-        report.cochange_hubs.len(),
-        "co-change hubs",
     );
     println!();
     println!("Divergence");
@@ -586,7 +553,7 @@ fn print_report(report: &Report, top: usize) {
         "total: {} import edges, {} provider rows, {} co-change hubs, {} co-change edges, {} divergence rows, {} parse failures",
         report.total_import_edges,
         report.total_external_providers,
-        report.total_cochange_hubs,
+        usize::from(report.cochange_hub.is_some()),
         report.total_cochange_edges,
         report.total_divergence,
         report.parse_failures
@@ -685,11 +652,11 @@ mod tests {
                 commits: 1,
             }))
             .collect();
-        let (edges, hubs) = fold_root_cochange_hub(edges);
+        let (edges, hub) = fold_root_cochange_hub(edges);
 
-        assert_eq!(hubs.len(), 1);
-        assert_eq!(hubs[0].module, "(root)");
-        assert_eq!(hubs[0].modules, 4);
+        let hub = hub.unwrap();
+        assert_eq!(hub.module, "(root)");
+        assert_eq!(hub.modules, 4);
         assert_eq!(edges.len(), 1);
         assert_eq!(
             (&edges[0].left, &edges[0].right),
@@ -708,9 +675,9 @@ mod tests {
             })
             .collect();
 
-        let (edges, hubs) = fold_root_cochange_hub(edges);
+        let (edges, hub) = fold_root_cochange_hub(edges);
 
-        assert!(hubs.is_empty());
+        assert!(hub.is_none());
         assert_eq!(edges.len(), 4);
     }
 
