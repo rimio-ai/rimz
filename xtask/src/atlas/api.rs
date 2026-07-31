@@ -69,6 +69,8 @@ struct Report {
     version: u8,
     verb: &'static str,
     path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_module: Option<String>,
     total_modules: usize,
     modules: Vec<ModuleApi>,
     total_single_caller_items: usize,
@@ -254,6 +256,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         version: 1,
         verb: "api",
         path: args.path.clone(),
+        requested_module: args.module.clone(),
         total_modules,
         modules,
         total_single_caller_items,
@@ -642,5 +645,26 @@ mod tests {
         assert!(validate_requested_module(&modules, Some("agents_cmd")).is_ok());
         let error = validate_requested_module(&modules, Some("missing")).unwrap_err();
         assert!(error.to_string().contains("module table"));
+    }
+
+    #[test]
+    fn api_json_identifies_a_filtered_module_drilldown() {
+        let report = Report {
+            version: 1,
+            verb: "api",
+            path: PathBuf::from("src"),
+            requested_module: Some("room".to_owned()),
+            total_modules: 1,
+            modules: Vec::new(),
+            total_single_caller_items: 10,
+            single_caller_modules: Vec::new(),
+            single_caller_items: vec![item("filtered", 1)],
+            parse_failures: 0,
+        };
+
+        let payload = serde_json::to_value(report).unwrap();
+        assert_eq!(payload["requested_module"], "room");
+        assert_eq!(payload["single_caller_items"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["total_single_caller_items"], 10);
     }
 }
