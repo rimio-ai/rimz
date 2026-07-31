@@ -269,7 +269,11 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
             return WorktreeSweepStatus::Skipped(WorktreeSkip::RosterUnavailable);
         }
     };
-    spinner.set("scanning worktrees…");
+    spinner.set(if dry_run {
+        "checking worktrees…"
+    } else {
+        "sweeping worktrees…"
+    });
     match rimz::worktree::sweep_owned(
         &workspace.project_root,
         &protection.protections,

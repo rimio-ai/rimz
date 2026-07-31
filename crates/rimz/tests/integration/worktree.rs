@@ -159,6 +159,27 @@ fn worktree_sweep_previews_then_removes_only_safe_checkouts() {
     assert!(pending.exists(), "unmerged checkout is retained");
 }
 
+#[test]
+fn worktree_sweep_dry_run_skips_an_absent_store_without_failing() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+
+    env.rimz()
+        .args(["worktree", "sweep", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(contains("sweep — skipped · no RimZ store here"));
+
+    env.rimz()
+        .args(["worktree", "sweep"])
+        .assert()
+        .success()
+        .stdout(contains("sweep — nothing to remove · 0 kept"));
+}
+
 #[cfg(unix)]
 #[test]
 fn worktree_cd_execs_the_user_shell_inside_the_named_checkout() {
@@ -261,6 +282,71 @@ fn worktree_merge_refuses_dirty_checkouts() {
         .assert()
         .failure()
         .stderr(contains("the main checkout has local changes"));
+}
+
+#[test]
+fn worktree_merge_refuses_a_checkout_with_a_live_agent() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let worktree = env.home_root.join("project-worktrees/demo");
+    let live_id = AgentSessionId::from("sess-live-merge-worker");
+    let mut live =
+        AgentLifecycleObservation::new(Some(live_id.clone()), LifecycleSignal::Registered);
+    live.worktree_path = Some(worktree.display().to_string());
+    live.worktree_branch = Some("demo".to_owned());
+    live.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        live_id.as_str(),
+        std::process::id(),
+        None,
+    ));
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "SessionStart",
+            &live,
+        ))
+        .expect("append live worktree session");
+
+    env.rimz()
+        .args(["worktree", "merge", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "cannot merge worktree `demo`: it is in use by @claude",
+        ));
+}
+
+#[test]
+fn worktree_merge_refuses_an_in_progress_git_operation() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    std::fs::write(env.project_root.join(".git/MERGE_HEAD"), "pending\n")
+        .expect("mark merge in progress");
+
+    env.rimz()
+        .args(["worktree", "merge", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "the main checkout has a Git operation in progress",
+        ));
 }
 
 #[test]
