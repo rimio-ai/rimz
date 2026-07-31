@@ -17,7 +17,8 @@ const USAGE: &str =
 
 Reports public boundary shape and whole-word identifier occurrences outside each
 defining file-module. `occ` excludes tests; 0 may mean unreferenced or test-only.
-Common identifiers can over-count, so `occ` is not a resolved caller count.
+`occ/item` is the median across a module's public items. Common identifiers can
+over-count, so `occ` is not a resolved caller count.
 
   --path <path>    root-relative subtree (default crates/rimz/src)
   --top N          rows per section (default 20)

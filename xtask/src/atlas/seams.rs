@@ -13,7 +13,7 @@ use super::{positive_usize, set_once, validate_scope, value};
 const DEFAULT_PATH: &str = "crates/rimz/src";
 const DEFAULT_TOP: usize = 15;
 
-const USAGE: &str = "cargo xtask atlas seams [--path <prefix>] [--top N] [--window <pct>] [--since <ref>] [--max-commit-files N] [--min-cochange N] [--json]
+const USAGE: &str = "cargo xtask atlas seams [--path <prefix>] [--top N] [--module <name>] [--window <pct>] [--since <ref>] [--max-commit-files N] [--min-cochange N] [--json]
 
 Imports come from Rust `use` items; inline fully-qualified paths are not counted.
 The provider table ranks outside modules by distinct imported item names across
@@ -23,16 +23,18 @@ module's pairwise co-change fanout folds into one annotated hub row.
 
   --path <path>          root-relative subtree (default crates/rimz/src)
   --top N                rows per section (default 15)
+  --module <name>        list imported item names on one scoped module's edges
   --window <pct>         recent co-change history window (default 25)
   --since <ref>          restrict co-change to <ref>..HEAD (excludes --window)
   --max-commit-files N   omit commits broader than N Rust sources (default 10)
-  --min-cochange N       divergence threshold (default 3)
+  --min-cochange N       co-change and divergence threshold (default 3)
   --json                 versioned JSON agent contract (v1)";
 
 #[derive(Debug)]
 struct Args {
     path: PathBuf,
     top: usize,
+    module: Option<String>,
     window: usize,
     since: Option<String>,
     max_commit_files: usize,
@@ -45,6 +47,13 @@ struct ImportEdge {
     from: String,
     to: String,
     items: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ImportItems {
+    from: String,
+    to: String,
+    items: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -81,6 +90,8 @@ struct Report {
     version: u8,
     verb: &'static str,
     path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_module: Option<String>,
     history_commits: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     history_window_pct: Option<usize>,
@@ -88,6 +99,8 @@ struct Report {
     history_since: Option<String>,
     total_import_edges: usize,
     import_edges: Vec<ImportEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    import_items: Vec<ImportItems>,
     total_external_surface: usize,
     external_surface: Vec<ExternalSurface>,
     total_external_providers: usize,
@@ -97,6 +110,8 @@ struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     cochange_hub: Option<CochangeHub>,
     total_divergence: usize,
+    cochange_without_import: usize,
+    import_without_cochange: usize,
     divergence: Vec<Divergence>,
     parse_failures: usize,
 }
@@ -128,6 +143,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     }
     let mut path = None;
     let mut top = None;
+    let mut module = None;
     let mut window = None;
     let mut since = None;
     let mut max_commit_files = None;
@@ -145,6 +161,11 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 let parsed =
                     positive_usize(value(args, index, "seams", "--top")?, "seams", "--top")?;
                 set_once(&mut top, parsed, "seams", "--top")?;
+                index += 2;
+            }
+            "--module" => {
+                let parsed = value(args, index, "seams", "--module")?.to_owned();
+                set_once(&mut module, parsed, "seams", "--module")?;
                 index += 2;
             }
             "--window" => {
@@ -196,6 +217,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     Ok(Some(Args {
         path: path.unwrap_or_else(|| PathBuf::from(DEFAULT_PATH)),
         top: top.unwrap_or(DEFAULT_TOP),
+        module,
         window: window.unwrap_or(25),
         since,
         max_commit_files: max_commit_files.unwrap_or(10),
@@ -220,6 +242,13 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .map(|source| module_for_path(&source.path, &args.path))
         .collect::<BTreeSet<_>>();
     scope_endpoints.insert("(root)".to_owned());
+    if let Some(requested) = &args.module
+        && !scope_endpoints.contains(requested)
+    {
+        bail!(
+            "atlas seams --module `{requested}` is not in the scoped module set; choose a module from the import or surface tables"
+        );
+    }
     let mut imports = BTreeMap::<(String, String), BTreeSet<String>>::new();
     for file in &syntax.files {
         let from = module_for_path(&file.path, &args.path);
@@ -252,6 +281,17 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             .cmp(&left.items)
             .then_with(|| left.from.cmp(&right.from))
             .then_with(|| left.to.cmp(&right.to))
+    });
+    let import_items = args.module.as_ref().map_or_else(Vec::new, |requested| {
+        imports
+            .iter()
+            .filter(|((from, to), _)| from == requested || to == requested)
+            .map(|((from, to), items)| ImportItems {
+                from: from.clone(),
+                to: to.clone(),
+                items: items.iter().cloned().collect(),
+            })
+            .collect()
     });
     let mut surfaces = BTreeMap::<String, (BTreeSet<String>, BTreeSet<(String, String)>)>::new();
     for ((from, to), items) in &imports {
@@ -297,8 +337,9 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .map(|edge| (ordered_pair(&edge.left, &edge.right), edge.commits))
         .collect::<BTreeMap<_, _>>();
     let (cochange_edges, cochange_hub) = fold_root_cochange_hub(cochange_edges);
-    let (cochange_edges, import_free_cochange_edges) =
+    let (mut cochange_edges, import_free_cochange_edges) =
         partition_cochange_edges(cochange_edges, &import_lookup);
+    cochange_edges.retain(|edge| edge.commits >= args.min_cochange);
     let mut divergence = Vec::new();
     for edge in import_free_cochange_edges {
         if edge.commits >= args.min_cochange {
@@ -334,6 +375,11 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             .then_with(|| left.left.cmp(&right.left))
             .then_with(|| left.right.cmp(&right.right))
     });
+    let cochange_without_import = divergence
+        .iter()
+        .filter(|row| row.kind == "cochange-without-import")
+        .count();
+    let import_without_cochange = divergence.len() - cochange_without_import;
     let total_import_edges = import_edges.len();
     let total_external_surface = external_surface.len();
     let total_external_providers = external_providers.len();
@@ -349,11 +395,13 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         version: 1,
         verb: "seams",
         path: args.path.clone(),
+        requested_module: args.module.clone(),
         history_commits: cochange.commits,
         history_window_pct: args.since.is_none().then_some(args.window),
         history_since: args.since.clone(),
         total_import_edges,
         import_edges,
+        import_items,
         total_external_surface,
         external_surface,
         total_external_providers,
@@ -362,6 +410,8 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         cochange_edges,
         cochange_hub,
         total_divergence,
+        cochange_without_import,
+        import_without_cochange,
         divergence,
         parse_failures: syntax.parse_failures.len(),
     })
@@ -477,6 +527,13 @@ fn print_report(report: &Report, top: usize) {
         report.import_edges.len(),
         "import edges",
     );
+    if let Some(module) = &report.requested_module {
+        println!();
+        println!("Imported items on {module} edges");
+        for edge in &report.import_items {
+            println!("{} -> {}: {}", edge.from, edge.to, edge.items.join(", "));
+        }
+    }
     println!();
     println!("External surface");
     for surface in report.external_surface.iter().take(top) {
@@ -550,12 +607,14 @@ fn print_report(report: &Report, top: usize) {
         );
     }
     println!(
-        "total: {} import edges, {} provider rows, {} co-change hubs, {} co-change edges, {} divergence rows, {} parse failures",
+        "total: {} import edges, {} provider rows, {} co-change hubs, {} co-change edges, {} divergence rows ({} cochange-without-import, {} import-without-cochange), {} parse failures",
         report.total_import_edges,
         report.total_external_providers,
         usize::from(report.cochange_hub.is_some()),
         report.total_cochange_edges,
         report.total_divergence,
+        report.cochange_without_import,
+        report.import_without_cochange,
         report.parse_failures
     );
 }
@@ -593,6 +652,14 @@ mod tests {
             .is_err()
         );
         assert_eq!(parse_args(&[]).unwrap().unwrap().window, 25);
+        assert_eq!(
+            parse_args(&["--module".into(), "agents_cmd".into()])
+                .unwrap()
+                .unwrap()
+                .module
+                .as_deref(),
+            Some("agents_cmd")
+        );
         assert_eq!(
             parse_args(&["--since".into(), "main".into()])
                 .unwrap()

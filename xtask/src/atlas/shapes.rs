@@ -19,6 +19,8 @@ Clusters large functions by Jaccard similarity over the functions and methods
 they call. Generic iterator, conversion, and error-context methods are omitted,
 and a pair must share at least three callees, so the report highlights shared
 domain choreography rather than incidental loop shape.
+Functions with parallel control flow but different callees do not cluster;
+use `rank --verbose` to find those large entry points.
 Clusters spanning more modules and files rank before member-count × mean-sloc.
 
   --path <path>   root-relative subtree (default crates/rimz/src)
@@ -356,7 +358,11 @@ fn is_generic_callee(callee: &str) -> bool {
         ".unwrap_or_else",
         ".with_context",
     ];
-    matches!(callee, "Ok" | "Err" | "Some" | "None" | "drop") || GENERIC_METHODS.contains(&callee)
+    matches!(
+        callee,
+        "Ok" | "Err" | "Some" | "None" | "drop" | "render::out" | "render::paint"
+    ) || callee.starts_with("render::palette::")
+        || GENERIC_METHODS.contains(&callee)
 }
 
 fn jaccard(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64 {
@@ -496,7 +502,17 @@ mod tests {
 
     #[test]
     fn callee_sets_drop_generic_method_noise() {
-        let callees = ["domain::load", ".map", ".context", "Some", ".render"].map(str::to_owned);
+        let callees = [
+            "domain::load",
+            ".map",
+            ".context",
+            "Some",
+            ".render",
+            "render::out",
+            "render::paint",
+            "render::palette::accent",
+        ]
+        .map(str::to_owned);
 
         assert_eq!(callee_set(&callees), set(&["domain::load", ".render"]));
     }
