@@ -37,7 +37,7 @@ fn write_machine_file(path: &std::path::Path, text: &str) {
 }
 
 #[test]
-fn agents_home_profile_fragment_feeds_both_type_catalogues_without_kind_rows() {
+fn agents_home_profile_fragment_feeds_both_profile_catalogues_without_kind_rows() {
     let env = Env::new();
     write_machine_file(
         &env.home_root
@@ -62,19 +62,19 @@ description = "Maps a delegated workspace"
     ] {
         let output = env
             .rimz()
-            .args([doorway, "types", "--json"])
+            .args([doorway, "profiles", "--json"])
             .output()
-            .expect("run type catalogue");
+            .expect("run profile catalogue");
         assert!(
             output.status.success(),
-            "{doorway} types failed:\n{}",
+            "{doorway} profiles failed:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
         let entries: Vec<serde_json::Value> =
-            serde_json::from_slice(&output.stdout).expect("type catalogue json");
+            serde_json::from_slice(&output.stdout).expect("profile catalogue json");
         assert!(
             entries.iter().all(|entry| entry["source"] != "kind"),
-            "{doorway} types must omit built-in kind rows: {entries:?}"
+            "{doorway} profiles must omit built-in kind rows: {entries:?}"
         );
         assert!(
             entries.iter().any(|entry| {
@@ -83,7 +83,11 @@ description = "Maps a delegated workspace"
                     && entry["agent"] == expected_agent
                     && entry["description"] == expected_description
             }),
-            "{doorway} types must include its fragment profile: {entries:?}"
+            "{doorway} profiles must include its fragment profile: {entries:?}"
+        );
+        assert!(
+            entries.iter().all(|entry| entry.get("path").is_none()),
+            "{doorway} profiles must omit paths unless requested: {entries:?}"
         );
     }
 }
