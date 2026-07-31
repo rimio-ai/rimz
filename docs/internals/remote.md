@@ -185,7 +185,7 @@ An attach over a confirmed master pipes and drains SSH stderr instead of letting
 
 A session counts as established once its link probe receives the first ack, once its initial master is confirmed, or once it lives past the gatetime (30 seconds by default). `ReconnectState` folds establishment and consecutive failures across sessions; `settle_zombie_kill` records an intentional kill without classifying its signal exit as fatal.
 
-**Terminal hygiene** wraps every session. `TtyGuard` snapshots local termios at connect, repairs a leftover raw tty at entry, and restores the snapshot after each SSH session. An unclean end also writes the emulator reset string, because `ssh -t` mirrors local tty modes onto the remote pty and a `SIGKILL`ed transport cannot restore terminal-emulator state itself.
+**Terminal hygiene** wraps every session. `TtyGuard` snapshots local termios at connect, repairs a leftover raw tty at entry, and restores the snapshot after each SSH session. Before a retry or zombie replacement, it discards pending tty input so terminal-protocol replies addressed to the dead SSH generation cannot reach the next attach; exit paths never flush, preserving type-ahead for the shell that regains the terminal. An unclean end also writes the emulator reset string, because `ssh -t` mirrors local tty modes onto the remote pty and a `SIGKILL`ed transport cannot restore terminal-emulator state itself.
 
 ## Reconnect pacing and reachability
 

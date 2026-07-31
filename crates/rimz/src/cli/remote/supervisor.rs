@@ -183,6 +183,7 @@ pub(super) fn supervise_remote(
             outage = None;
         }
         let retry_cause = if outcome.killed_zombie {
+            guard.discard_pending_input();
             guard.reset_emulator();
             let _ = writeln!(
                 std::io::stderr().lock(),
@@ -206,6 +207,7 @@ pub(super) fn supervise_remote(
                     )
                 }
                 Verdict::Retry => {
+                    guard.discard_pending_input();
                     guard.reset_emulator();
                     RetryCause::Dropped
                 }

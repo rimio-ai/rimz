@@ -914,6 +914,103 @@ fn supervised_connect_restores_tty_and_resets_emulator_after_retry() {
 }
 
 #[test]
+fn supervised_reconnect_discards_stale_terminal_replies_and_preserves_user_input() {
+    const TERMINAL_REPLIES: &[u8] = b"\x1b[?62;22;52c\x1b[>1;10;0c\x1bP>|ghostty 1.3.1\x1b\\";
+    const USER_MARKER: &[u8] = b"RIMZ-USER-MARKER\r";
+
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let exit_plan = env.project_root.join("ssh-trace.plan");
+    let stdin_plan = env.project_root.join("ssh-stdin.plan");
+    let stdin_log = env.project_root.join("ssh-stdin.log");
+    std::fs::write(&exit_plan, "255\n0\n").expect("write ssh plan");
+    std::fs::write(&stdin_plan, "ignore\nrecord\n").expect("write ssh stdin plan");
+
+    let pair = remote_connect_pty();
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.env("RIMZ_TEST_SSH_PLAN", &exit_plan);
+    cmd.env("RIMZ_TEST_SSH_RAW_TTY", "1");
+    cmd.env("RIMZ_TEST_SSH_SLEEP_MS", "1000");
+    cmd.env("RIMZ_TEST_SSH_STDIN_PLAN", &stdin_plan);
+    cmd.env("RIMZ_TEST_SSH_STDIN_LOG", &stdin_log);
+    cmd.env("RIMZ_TEST_SSH_STDIN_UNTIL", "RIMZ-USER-MARKER");
+    cmd.env("RIMZ_REMOTE_GATETIME_MS", "0");
+
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        output
+    });
+    let mut writer = pair.master.take_writer().expect("take pty writer");
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    while main_invocation_count(&log) < 1 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(main_invocation_count(&log), 1, "first attach did not start");
+    writer
+        .write_all(TERMINAL_REPLIES)
+        .expect("queue terminal replies");
+    writer.flush().expect("flush terminal replies");
+
+    while main_invocation_count(&log) < 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        main_invocation_count(&log),
+        2,
+        "replacement attach did not start"
+    );
+    writer.write_all(USER_MARKER).expect("write user marker");
+    writer.flush().expect("flush user marker");
+    drop(writer);
+
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll remote connect") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    drop(pair.master);
+    let output =
+        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    let status = status.unwrap_or_else(|| panic!("remote connect timed out; output:\n{output}"));
+    assert!(
+        status.success(),
+        "remote connect failed with {status:?}; output:\n{output}"
+    );
+    assert_eq!(main_invocation_count(&log), 2, "one retry: {output}");
+
+    let recorded = std::fs::read(&stdin_log).expect("read replacement attach stdin");
+    assert!(
+        recorded
+            .windows(b"RIMZ-USER-MARKER".len())
+            .any(|window| window == b"RIMZ-USER-MARKER"),
+        "post-handoff user input was not delivered: {recorded:?}"
+    );
+    for stale_token in [
+        b"62;22;52".as_slice(),
+        b"1;10;0c".as_slice(),
+        b"ghostty".as_slice(),
+    ] {
+        assert!(
+            !recorded
+                .windows(stale_token.len())
+                .any(|window| window == stale_token),
+            "stale terminal reply reached replacement attach: {recorded:?}"
+        );
+    }
+}
+
+#[test]
 fn recovery_panel_checks_the_configured_http_204_endpoint() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
