@@ -143,7 +143,6 @@ fn evaluate(root: &Path, target: &Target) -> Result<Report> {
         .map(|source| crate_module_for_path(&source.path))
         .collect::<BTreeSet<_>>();
     let workspace_crates = workspace_crate_names(root)?;
-    let occurrence_corpus = OccurrenceCorpus::new(&all_sources);
     let mut rules = Vec::new();
     let mut parse_failures = 0;
     for module in &target.modules {
@@ -208,17 +207,8 @@ fn evaluate(root: &Path, target: &Target) -> Result<Report> {
                 strangler.path.display()
             );
         }
-        let scope_entry = if absolute.is_dir() {
-            strangler.path.join("mod.rs")
-        } else {
-            strangler.path.clone()
-        };
-        let scope_module = crate_module_for_path(&scope_entry);
-        let current = if absolute.is_dir() {
-            occurrence_corpus.count_under(&scope_module, &strangler.symbol)
-        } else {
-            occurrence_corpus.count_in_module(&scope_module, &strangler.symbol)
-        };
+        let scoped_sources = sources_for_path(&all_sources, &strangler.path, absolute.is_file());
+        let current = OccurrenceCorpus::count_in_sources(&scoped_sources, &strangler.symbol);
         rules.push(RuleResult {
             kind: "strangler",
             path: strangler.path.clone(),
@@ -426,5 +416,83 @@ baseline = 5
         assert_eq!(tightened.modules[0].pub_budget, 1);
         assert_eq!(tightened.strangler[0].baseline, 1);
         assert_eq!(tightened.strangler[1].baseline, 2);
+    }
+
+    #[test]
+    fn strangler_paths_do_not_count_matching_modules_from_other_crates() {
+        let root = tempfile::tempdir().unwrap();
+        for path in ["app/src/legacy", "tool/src/legacy"] {
+            fs::create_dir_all(root.path().join(path)).unwrap();
+        }
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"tool\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        for member in ["app", "tool"] {
+            fs::write(
+                root.path().join(member).join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"{member}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n"
+                ),
+            )
+            .unwrap();
+        }
+        fs::write(root.path().join("app/src/lib.rs"), "pub mod legacy;\n").unwrap();
+        fs::write(
+            root.path().join("app/src/legacy/mod.rs"),
+            "fn doomed() {}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("app/src/legacy/caller.rs"),
+            "fn call() { doomed(); }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("tool/src/lib.rs"),
+            "fn doomed() { doomed(); doomed(); }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("tool/src/legacy/mod.rs"),
+            "fn doomed() { doomed(); }\n",
+        )
+        .unwrap();
+
+        let target = Target {
+            version: 1,
+            modules: Vec::new(),
+            strangler: vec![
+                target::StranglerRule {
+                    symbol: "doomed".to_owned(),
+                    path: PathBuf::from("app/src"),
+                    baseline: 10,
+                    config_line: 1,
+                },
+                target::StranglerRule {
+                    symbol: "doomed".to_owned(),
+                    path: PathBuf::from("app/src/legacy"),
+                    baseline: 10,
+                    config_line: 2,
+                },
+                target::StranglerRule {
+                    symbol: "doomed".to_owned(),
+                    path: PathBuf::from("app/src/lib.rs"),
+                    baseline: 10,
+                    config_line: 3,
+                },
+            ],
+        };
+
+        let report = evaluate(root.path(), &target).unwrap();
+        assert_eq!(
+            report
+                .rules
+                .iter()
+                .map(|rule| rule.current)
+                .collect::<Vec<_>>(),
+            [2, 2, 0]
+        );
     }
 }
