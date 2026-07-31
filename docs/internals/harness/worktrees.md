@@ -34,9 +34,9 @@ The marker lives in the worktree's Git admin directory (`.git/worktrees/<name>/r
 | [`worktree/include.rs`](../../../crates/rimz/src/worktree/include.rs) | `.worktreeinclude` file copying and its containment rules. |
 | [`worktree/link.rs`](../../../crates/rimz/src/worktree/link.rs) | `.worktreelink` directory symlinks. |
 | [`worktree/exclude.rs`](../../../crates/rimz/src/worktree/exclude.rs) | Shared `info/exclude` registration for linked directories and team scratch files. |
-| [`cli/worktree.rs`](../../../crates/rimz/src/cli/worktree.rs) | `rimz worktree new`, `list`, `remove`, and the hidden `cleanup` helper. |
+| [`cli/worktree.rs`](../../../crates/rimz/src/cli/worktree.rs) | The `rimz worktree` lifecycle commands and hidden wrapper-cleanup helper. |
 | [`cli/worktree_protection.rs`](../../../crates/rimz/src/cli/worktree_protection.rs) | Runtime pane and agent fact gathering for explicit removal, wrapper cleanup, and automatic gc. |
-| [`cli/gc.rs`](../../../crates/rimz/src/cli/gc.rs) | The `rimz gc` worktree sweep and its report. |
+| [`cli/gc.rs`](../../../crates/rimz/src/cli/gc.rs) | The aggregate `rimz gc` report around the shared worktree sweep. |
 | [`cli/agents_cmd/exec.rs`](../../../crates/rimz/src/cli/agents_cmd/exec.rs) | The exec wrapper that triggers cleanup when an agent pane ends. |
 | [`cli/agents_cmd/reconcile.rs`](../../../crates/rimz/src/cli/agents_cmd/reconcile.rs) | Cohort relaunch into a worktree that already exists. |
 
@@ -134,6 +134,12 @@ No usable comparison ref yields `Unknown`, which keeps the tree.
 Rung 4 is the interesting one. Patch residue alone does not mean pending: a squash landing followed by more commits on the trunk leaves residue while the work is genuinely in. So residue is resolved by scanning the comparison's exclusive history (`<head>..<comparison>`) for the branch tip's exact tree. Finding it proves the destination once held the branch's complete final state, and its absence is what finally reports pending. That scan runs uncapped, because a landing can be arbitrarily far back; the rung 6 scan of the comparison's own history is capped at `LANDED_BASE_SCAN_CAP` (500 commits).
 
 Together these rungs cover rebased, cherry-picked, squash-landed, and merge-back shapes without ever trusting ancestry counts or sidebar state.
+
+### Landing on main
+
+`rimz worktree merge <name>` is intentionally narrower than the landed-content detector. It requires `main` in the primary checkout, clean main and worktree indexes, no Git operation already in progress, and no other live pane or agent in the managed checkout. It rebases the worktree branch onto `main`, aborts a conflicting rebase, rechecks that main did not move or become dirty, then merges the rebased commit with `--ff-only`. It never creates a merge commit and never forces either checkout. The worktree stays marked after a successful landing so the ordinary sweep can verify and reclaim it.
+
+`sweep_owned` is the single domain implementation used by both `rimz worktree sweep` and the worktree area of `rimz gc`: it partitions managed trees through the same occupancy and landed assessment, removes safe candidates, retires their durable sessions and messages, and returns per-tree failures for the CLI report.
 
 ### `on_trunk_first_parent`, a different question
 

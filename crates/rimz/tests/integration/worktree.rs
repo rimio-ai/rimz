@@ -123,6 +123,189 @@ fn worktree_new_list_and_remove_round_trip() {
 }
 
 #[test]
+fn worktree_sweep_previews_then_removes_only_safe_checkouts() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "landed"])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["worktree", "new", "pending"])
+        .assert()
+        .success();
+    let landed = env.home_root.join("project-worktrees/landed");
+    let pending = env.home_root.join("project-worktrees/pending");
+    commit_file(&pending, "feature.txt", "pending\n", "pending work");
+
+    env.rimz()
+        .args(["worktree", "sweep", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(contains("would remove 1"))
+        .stdout(contains("kept: pending — not merged yet"));
+    assert!(landed.exists(), "dry run keeps landed checkout");
+
+    env.rimz()
+        .args(["worktree", "sweep"])
+        .assert()
+        .success()
+        .stdout(contains("removed 1"))
+        .stdout(contains("kept: pending — not merged yet"));
+    assert!(!landed.exists(), "safe checkout is swept");
+    assert!(pending.exists(), "unmerged checkout is retained");
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_cd_execs_the_user_shell_inside_the_named_checkout() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let worktree = env.home_root.join("project-worktrees/demo");
+    let observed = env.home_root.join("cd-pwd");
+    let shell = env.home_root.join("pwd-shell");
+    std::fs::write(&shell, "#!/bin/sh\npwd > \"$RIMZ_TEST_CD_PWD\"\n").expect("write shell");
+    let mut permissions = std::fs::metadata(&shell)
+        .expect("shell metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&shell, permissions).expect("chmod shell");
+
+    env.rimz()
+        .env("SHELL", &shell)
+        .env("RIMZ_TEST_CD_PWD", &observed)
+        .args(["worktree", "cd", "demo"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        std::fs::read_to_string(observed)
+            .expect("observed cwd")
+            .trim(),
+        worktree.display().to_string()
+    );
+}
+
+#[test]
+fn worktree_merge_rebases_then_fast_forwards_main() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let worktree = env.home_root.join("project-worktrees/demo");
+    commit_file(&worktree, "feature.txt", "feature\n", "feature");
+    commit_file(&env.project_root, "main.txt", "main\n", "advance main");
+    let main_before = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
+
+    env.rimz()
+        .args(["worktree", "merge", "demo"])
+        .assert()
+        .success()
+        .stdout(contains("merged demo into main"));
+
+    let main_after = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
+    assert_eq!(main_after, git_stdout(&worktree, &["rev-parse", "HEAD"]));
+    assert_ne!(main_before, main_after);
+    assert!(
+        Command::new("git")
+            .current_dir(&env.project_root)
+            .args(["merge-base", "--is-ancestor", &main_before, &main_after])
+            .status()
+            .expect("git merge-base")
+            .success(),
+        "rebased feature remains a fast-forward descendant of main"
+    );
+}
+
+#[test]
+fn worktree_merge_refuses_dirty_checkouts() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let worktree = env.home_root.join("project-worktrees/demo");
+    std::fs::write(worktree.join("dirty.txt"), "dirty\n").expect("dirty worktree");
+
+    env.rimz()
+        .args(["worktree", "merge", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains("its checkout has local changes"));
+
+    std::fs::remove_file(worktree.join("dirty.txt")).expect("clean worktree");
+    std::fs::write(env.project_root.join("dirty.txt"), "dirty\n").expect("dirty main");
+    env.rimz()
+        .args(["worktree", "merge", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains("the main checkout has local changes"));
+}
+
+#[test]
+fn worktree_merge_aborts_a_conflicting_rebase_without_advancing_main() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let worktree = env.home_root.join("project-worktrees/demo");
+    std::fs::write(worktree.join("README.md"), "feature\n").expect("feature content");
+    git(&worktree, &["add", "README.md"]);
+    git(&worktree, &["commit", "-m", "feature conflict"]);
+    let feature_before = git_stdout(&worktree, &["rev-parse", "HEAD"]);
+    std::fs::write(env.project_root.join("README.md"), "main\n").expect("main content");
+    git(&env.project_root, &["add", "README.md"]);
+    git(&env.project_root, &["commit", "-m", "main conflict"]);
+    let main_before = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
+
+    env.rimz()
+        .args(["worktree", "merge", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains("rebase onto main failed"))
+        .stderr(contains("no commits were merged into main"));
+
+    assert_eq!(
+        git_stdout(&env.project_root, &["rev-parse", "HEAD"]),
+        main_before
+    );
+    assert_eq!(
+        git_stdout(&worktree, &["rev-parse", "HEAD"]),
+        feature_before
+    );
+    assert!(
+        git_stdout(&worktree, &["status", "--porcelain"]).is_empty(),
+        "failed rebase is aborted cleanly"
+    );
+}
+
+#[test]
 fn worktree_remove_leaves_candidate_cwd_before_git_removal() {
     if git_missing() {
         return;

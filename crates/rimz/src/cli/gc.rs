@@ -1,6 +1,7 @@
 //! `rimz gc` — reclaim stale maintenance state through domain assessments.
 
 use std::io::{self, Write};
+#[cfg(test)]
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -14,6 +15,7 @@ use super::{GlobalFlags, open_store};
 use rimz::store::event_log::RepairOutcome;
 use rimz::store::gc;
 use rimz::workspace::WorkspaceResolver;
+use rimz::worktree::{FailedWorktree, KeptReason, KeptWorktree, SweptWorktree, WorktreeSweep};
 
 #[derive(Debug, Args)]
 pub struct GcArgs {
@@ -235,73 +237,6 @@ impl WorktreeSkip {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct WorktreeSweep {
-    removed: Vec<SweptWorktree>,
-    failed: Vec<FailedWorktree>,
-    kept: Vec<KeptWorktree>,
-}
-
-impl WorktreeSweep {
-    fn swept(&self) -> usize {
-        self.removed.len()
-    }
-
-    fn bytes(&self) -> u64 {
-        self.removed
-            .iter()
-            .fold(0_u64, |total, removed| total.saturating_add(removed.bytes))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct SweptWorktree {
-    name: String,
-    branch: String,
-    path: PathBuf,
-    bytes: u64,
-    branch_deletion: Option<rimz::worktree::BranchDeletion>,
-    archive_error: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct FailedWorktree {
-    path: PathBuf,
-    error: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct KeptWorktree {
-    name: String,
-    path: PathBuf,
-    reason: KeptReason,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum KeptReason {
-    InUse,
-    Dirty,
-    NotMerged,
-}
-
-impl KeptReason {
-    fn text(self) -> &'static str {
-        match self {
-            Self::InUse => "in use",
-            Self::Dirty => "uncommitted changes",
-            Self::NotMerged => "not merged yet",
-        }
-    }
-
-    fn json(self) -> &'static str {
-        match self {
-            Self::InUse => "in_use",
-            Self::Dirty => "uncommitted_changes",
-            Self::NotMerged => "not_merged",
-        }
-    }
-}
-
 fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> WorktreeSweepStatus {
     let Ok(workspace) = WorkspaceResolver::resolve(".", globals.root.clone()) else {
         return WorktreeSweepStatus::Skipped(WorktreeSkip::NotARepo);
@@ -335,122 +270,19 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
         }
     };
     spinner.set("scanning worktrees…");
-    let entries = match rimz::worktree::discover_owned(&workspace.project_root) {
-        Ok(entries) => entries,
+    match rimz::worktree::sweep_owned(
+        &workspace.project_root,
+        &protection.protections,
+        &store,
+        &workspace.session_name,
+        dry_run,
+    ) {
+        Ok(sweep) => WorktreeSweepStatus::Swept(sweep),
         Err(err) => {
             tracing::debug!(error = %err, "worktree gc skipped");
-            return WorktreeSweepStatus::Skipped(WorktreeSkip::ListFailed);
-        }
-    };
-    let inspected = entries
-        .into_iter()
-        .map(|entry| {
-            let status = rimz::worktree::status(&entry.path, &entry.marker)
-                .unwrap_or_else(|_| rimz::worktree::WorktreeStatus::unknown());
-            (entry, status)
-        })
-        .collect();
-    let (candidates, kept) = partition_candidates(inspected, &protection.protections);
-    let total = candidates.len();
-    let mut sweep = WorktreeSweep {
-        kept,
-        ..WorktreeSweep::default()
-    };
-    for (i, (entry, _status)) in candidates.into_iter().enumerate() {
-        let action = if dry_run { "checking" } else { "removing" };
-        spinner.set(format!(
-            "{action} worktree [{}/{}] {}",
-            i + 1,
-            total,
-            entry.marker.name
-        ));
-        let bytes = rimz::disk_usage::dir_size(&entry.path);
-        if dry_run {
-            sweep.removed.push(SweptWorktree {
-                name: entry.marker.name,
-                branch: entry.marker.branch,
-                path: entry.path,
-                bytes,
-                branch_deletion: None,
-                archive_error: None,
-            });
-            continue;
-        }
-        match rimz::worktree::remove_marked_worktree(
-            &workspace.project_root,
-            &entry.path,
-            &entry.marker,
-            false,
-        ) {
-            Ok(removed) => {
-                let retirement = rimz::worktree::retire_removal(
-                    &store,
-                    &removed,
-                    rimz::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
-                    &workspace.session_name,
-                );
-                if let Err(err) = retirement.session_retirement {
-                    tracing::warn!(
-                        worktree = %removed.worktree_name(),
-                        error = %err,
-                        "could not retire sessions for removed worktree",
-                    );
-                }
-                let archive_error = retirement.message_archival.err().map(|err| err.to_string());
-                sweep.removed.push(SweptWorktree {
-                    name: removed.worktree_name().to_owned(),
-                    branch: removed.branch().to_owned(),
-                    path: removed.removed_path().to_owned(),
-                    bytes,
-                    branch_deletion: Some(removed.branch_deletion()),
-                    archive_error,
-                });
-            }
-            Err(err) => sweep.failed.push(FailedWorktree {
-                path: entry.path,
-                error: err.to_string(),
-            }),
+            WorktreeSweepStatus::Skipped(WorktreeSkip::ListFailed)
         }
     }
-    if sweep.swept() > 0 && !dry_run {
-        let _ = rimz::worktree::prune(&workspace.project_root);
-    }
-    WorktreeSweepStatus::Swept(sweep)
-}
-
-fn partition_candidates(
-    entries: Vec<(
-        rimz::worktree::ManagedWorktree,
-        rimz::worktree::WorktreeStatus,
-    )>,
-    protections: &rimz::worktree::ProtectionSet,
-) -> (
-    Vec<(
-        rimz::worktree::ManagedWorktree,
-        rimz::worktree::WorktreeStatus,
-    )>,
-    Vec<KeptWorktree>,
-) {
-    let mut candidates = Vec::new();
-    let mut kept = Vec::new();
-    for (entry, status) in entries {
-        let reason = match protections.assess(&entry.path, status) {
-            rimz::worktree::RemovalAssessment::Removable => None,
-            rimz::worktree::RemovalAssessment::InUse => Some(KeptReason::InUse),
-            rimz::worktree::RemovalAssessment::Dirty => Some(KeptReason::Dirty),
-            rimz::worktree::RemovalAssessment::NotLanded => Some(KeptReason::NotMerged),
-        };
-        if let Some(reason) = reason {
-            kept.push(KeptWorktree {
-                name: entry.marker.name,
-                path: entry.path,
-                reason,
-            });
-        } else {
-            candidates.push((entry, status));
-        }
-    }
-    (candidates, kept)
 }
 
 fn open_store_for_worktree_gc(
@@ -460,11 +292,7 @@ fn open_store_for_worktree_gc(
     if !dry_run {
         return open_store(workspace).map(Some);
     }
-    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing store paths")?;
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
-    Ok(rimz::Store::open_existing(paths, runtime))
+    super::open_existing_store(workspace)
 }
 
 fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
@@ -1297,49 +1125,6 @@ fn parse_duration(raw: &str) -> std::result::Result<Duration, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rimz::{MuxName, PaneId};
-
-    #[test]
-    fn partition_candidates_keeps_protected_dirty_and_unmerged_entries() {
-        let entries = vec![
-            worktree_entry("protected", "/repo-worktrees/protected", true, Some(false)),
-            worktree_entry("dirty", "/repo-worktrees/dirty", true, Some(true)),
-            worktree_entry("unknown", "/repo-worktrees/unknown", false, None),
-            worktree_entry("pending", "/repo-worktrees/pending", false, Some(false)),
-            worktree_entry("clean", "/repo-worktrees/clean", false, Some(true)),
-        ];
-        let protected = rimz::worktree::ProtectionSet::from_facts(
-            &[rimz::worktree::PaneProtectionFact {
-                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_protected"),
-                cwd: Some(PathBuf::from("/repo-worktrees/protected/src")),
-                sidebar: false,
-            }],
-            &[],
-            None,
-            rimz::worktree::Occupancy::Unproven,
-        );
-
-        let (candidates, kept) = partition_candidates(entries, &protected);
-
-        assert_eq!(
-            candidates
-                .iter()
-                .map(|(entry, _)| entry.marker.name.as_str())
-                .collect::<Vec<_>>(),
-            ["clean"]
-        );
-        assert_eq!(
-            kept.iter()
-                .map(|worktree| (worktree.name.as_str(), worktree.reason))
-                .collect::<Vec<_>>(),
-            [
-                ("protected", KeptReason::InUse),
-                ("dirty", KeptReason::Dirty),
-                ("unknown", KeptReason::NotMerged),
-                ("pending", KeptReason::NotMerged),
-            ]
-        );
-    }
 
     #[test]
     fn render_report_names_all_clean_checks() {
@@ -1626,42 +1411,6 @@ mod tests {
                 reason: KeptReason::NotMerged,
             },
         ]
-    }
-
-    fn worktree_entry(
-        name: &str,
-        path: &str,
-        dirty: bool,
-        landed: Option<bool>,
-    ) -> (
-        rimz::worktree::ManagedWorktree,
-        rimz::worktree::WorktreeStatus,
-    ) {
-        let path = PathBuf::from(path);
-        let entry = rimz::worktree::ManagedWorktree {
-            marker: rimz::worktree::WorktreeMarker {
-                version: 4,
-                name: name.to_owned(),
-                branch: name.to_owned(),
-                base_branch: Some("main".to_owned()),
-                from_pr: None,
-                base_ref: "main".to_owned(),
-                repo_root: PathBuf::from("/repo"),
-                worktree_path: path.clone(),
-                created_at: jiff::Timestamp::now(),
-            },
-            path,
-            branch: Some(name.to_owned()),
-        };
-        let status = rimz::worktree::WorktreeStatus {
-            dirty,
-            landed: match landed {
-                Some(true) => rimz::worktree::LandedVerdict::Landed,
-                Some(false) => rimz::worktree::LandedVerdict::Pending,
-                None => rimz::worktree::LandedVerdict::Unknown,
-            },
-        };
-        (entry, status)
     }
 
     fn strip_report(outcome: &GcOutcome) -> String {
