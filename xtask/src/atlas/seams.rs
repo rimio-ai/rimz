@@ -227,16 +227,17 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
 }
 
 fn build_report(root: &Path, args: &Args) -> Result<Report> {
-    let sources = sources::scope_sources(root, &args.path, None)?;
-    let syntax = syntax::analyze_sources(&sources);
-    let known_modules = sources::scope_sources(root, Path::new("."), None)?
+    let all_sources = sources::all_sources(root, None)?;
+    let scoped_sources = sources::sources_in_scope(&all_sources, &args.path)?;
+    let syntax = syntax::analyze_sources(&scoped_sources);
+    let known_modules = all_sources
         .into_iter()
         .filter(|source| source.is_production())
         .map(|source| crate_module_for_path(&source.path))
         .collect::<BTreeSet<_>>();
     let workspace_crates = workspace_crate_names(root)?;
     let scope_module = crate_module_for_path(&args.path.join("mod.rs"));
-    let mut scope_endpoints = sources
+    let mut scope_endpoints = scoped_sources
         .iter()
         .filter(|source| source.is_production())
         .map(|source| module_for_path(&source.path, &args.path))
@@ -338,19 +339,16 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .collect::<BTreeMap<_, _>>();
     let (cochange_edges, cochange_hub) = fold_root_cochange_hub(cochange_edges);
     let (mut cochange_edges, import_free_cochange_edges) =
-        partition_cochange_edges(cochange_edges, &import_lookup);
-    cochange_edges.retain(|edge| edge.commits >= args.min_cochange);
+        partition_cochange_edges(cochange_edges, &import_lookup, args.min_cochange);
     let mut divergence = Vec::new();
     for edge in import_free_cochange_edges {
-        if edge.commits >= args.min_cochange {
-            divergence.push(Divergence {
-                kind: "cochange-without-import",
-                left: edge.left,
-                right: edge.right,
-                imports: 0,
-                cochanges: edge.commits,
-            });
-        }
+        divergence.push(Divergence {
+            kind: "cochange-without-import",
+            left: edge.left,
+            right: edge.right,
+            imports: 0,
+            cochanges: edge.commits,
+        });
     }
     for edge in &import_edges {
         let cochanges = cochange_lookup
@@ -470,11 +468,15 @@ fn external_providers(
 fn partition_cochange_edges(
     edges: Vec<CochangeEdge>,
     imports: &BTreeMap<(String, String), usize>,
+    min_cochange: usize,
 ) -> (Vec<CochangeEdge>, Vec<CochangeEdge>) {
-    edges.into_iter().partition(|edge| {
-        imports.contains_key(&(edge.left.clone(), edge.right.clone()))
-            || imports.contains_key(&(edge.right.clone(), edge.left.clone()))
-    })
+    edges
+        .into_iter()
+        .filter(|edge| edge.commits >= min_cochange)
+        .partition(|edge| {
+            imports.contains_key(&(edge.left.clone(), edge.right.clone()))
+                || imports.contains_key(&(edge.right.clone(), edge.left.clone()))
+        })
 }
 
 fn endpoint(module_path: &str, scope_module: &str) -> String {
@@ -682,10 +684,18 @@ mod tests {
                 right: "store".to_owned(),
                 commits: 20,
             },
+            CochangeEdge {
+                left: "hooks".to_owned(),
+                right: "store".to_owned(),
+                commits: 2,
+            },
         ];
-        let imports = BTreeMap::from([(("store".to_owned(), "agents".to_owned()), 2)]);
+        let imports = BTreeMap::from([
+            (("store".to_owned(), "agents".to_owned()), 2),
+            (("store".to_owned(), "hooks".to_owned()), 1),
+        ]);
 
-        let (with_imports, without_imports) = partition_cochange_edges(edges, &imports);
+        let (with_imports, without_imports) = partition_cochange_edges(edges, &imports, 3);
 
         assert_eq!(
             with_imports

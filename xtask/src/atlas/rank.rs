@@ -272,8 +272,8 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
 }
 
 fn build_report(root: &Path, args: &Args) -> Result<Report> {
-    let current_sources = sources::scope_sources(root, &args.path, None)?;
-    let all_sources = sources::scope_sources(root, Path::new("."), None)?;
+    let all_sources = sources::all_sources(root, None)?;
+    let current_sources = sources::sources_in_scope(&all_sources, &args.path)?;
     let occurrence_corpus = OccurrenceCorpus::new(&all_sources);
     let syntax = syntax::analyze_sources(&current_sources);
     let current_sizes = sizes(&current_sources, &args.path);
@@ -282,7 +282,10 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let previous = args
         .since
         .as_deref()
-        .map(|reference| sources::scope_sources(root, &args.path, Some(reference)))
+        .map(|reference| {
+            let all_sources = sources::all_sources(root, Some(reference))?;
+            sources::sources_in_scope(&all_sources, &args.path)
+        })
         .transpose()?;
     let previous_sizes = previous.as_ref().map(|sources| sizes(sources, &args.path));
     let previous_pub = previous
@@ -419,6 +422,9 @@ fn sort_rows(rows: &mut [Row]) {
 fn sizes(source_list: &[sources::Source], scope: &Path) -> BTreeMap<String, Size> {
     let mut sizes = BTreeMap::<String, Size>::new();
     for source in source_list {
+        if !source.is_production() && !source.is_test() {
+            continue;
+        }
         let module = module_for_path(&source.path, scope);
         let (code, tests) = if source.is_test() {
             (0, source_files::rust_sloc(&source.text))

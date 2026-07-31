@@ -158,14 +158,17 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
 }
 
 fn build_report(root: &Path, args: &Args) -> Result<Report> {
-    let scoped_sources = sources::scope_sources(root, &args.path, None)?;
-    let all_sources = sources::scope_sources(root, Path::new("."), None)?;
+    let all_sources = sources::all_sources(root, None)?;
+    let scoped_sources = sources::sources_in_scope(&all_sources, &args.path)?;
     let occurrence_corpus = OccurrenceCorpus::new(&all_sources);
     let syntax = syntax::analyze_sources(&scoped_sources);
     let previous = args
         .since
         .as_deref()
-        .map(|reference| sources::scope_sources(root, &args.path, Some(reference)))
+        .map(|reference| {
+            let all_sources = sources::all_sources(root, Some(reference))?;
+            sources::sources_in_scope(&all_sources, &args.path)
+        })
         .transpose()?
         .map(|sources| syntax::analyze_sources(&sources));
     let previous_counts = previous
@@ -486,7 +489,7 @@ fn print_report(report: &Report, top: usize, requested_module: Option<&str>, sho
     println!();
     if let Some(module) = requested_module {
         println!("Public items in {module} (`occ` is identifier occurrences)");
-        for item in &report.module_items {
+        for item in report.module_items.iter().take(top) {
             println!(
                 "{}::{} ({}) {}:{} occ {} outside-modules {}",
                 item.module,
@@ -496,6 +499,12 @@ fn print_report(report: &Report, top: usize, requested_module: Option<&str>, sho
                 item.line,
                 item.occurrences,
                 item.outside_modules
+            );
+        }
+        if report.module_items.len() > top {
+            println!(
+                "… and {} more public items (use --json for the complete list)",
+                report.module_items.len() - top
             );
         }
         println!();

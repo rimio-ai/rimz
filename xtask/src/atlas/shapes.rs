@@ -358,10 +358,10 @@ fn is_generic_callee(callee: &str) -> bool {
         ".unwrap_or_else",
         ".with_context",
     ];
-    matches!(
-        callee,
-        "Ok" | "Err" | "Some" | "None" | "drop" | "render::out" | "render::paint"
-    ) || callee.starts_with("render::palette::")
+    matches!(callee, "Ok" | "Err" | "Some" | "None" | "drop")
+        || callee.ends_with("::out")
+        || callee.ends_with("::paint")
+        || callee.split("::").any(|segment| segment == "palette")
         || GENERIC_METHODS.contains(&callee)
 }
 
@@ -511,6 +511,12 @@ mod tests {
             "render::out",
             "render::paint",
             "render::palette::accent",
+            "ui::out",
+            "ui::paint",
+            "ui::palette::accent",
+            "crate::cli::render::out",
+            "super::render::paint",
+            "palette::muted",
         ]
         .map(str::to_owned);
 
