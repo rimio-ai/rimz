@@ -5,7 +5,6 @@
 use std::collections::HashMap;
 
 use crate::agents::AgentStatus;
-use crate::config::GlyphRole;
 use crate::ids::PaneId;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::TAB_SUCCESS_STATUS_TTL;
@@ -40,14 +39,14 @@ impl TabStatus {
         }
     }
 
-    fn glyph_role(self) -> GlyphRole {
-        theme::agent_status_glyph_role(match self {
-            Self::Failed => AgentStatus::Failed,
-            Self::Waiting => AgentStatus::Waiting,
-            Self::Paused => AgentStatus::Paused,
-            Self::Running => AgentStatus::Running,
-            Self::Success => AgentStatus::Success,
-        })
+    fn glyph(self) -> &'static str {
+        match self {
+            Self::Failed => "!",
+            Self::Waiting => "?",
+            Self::Paused => "⏸\u{FE0E}",
+            Self::Running => "⢿",
+            Self::Success => "✓",
+        }
     }
 }
 
@@ -71,8 +70,6 @@ pub(crate) fn desired_tab_renames(snapshot: &SidebarSnapshot, frame: &PaneFrame)
                 statuses
             },
         );
-    let glyph = theme::theme_glyphs(&snapshot.theme);
-
     frame
         .tabs
         .iter()
@@ -87,7 +84,7 @@ pub(crate) fn desired_tab_renames(snapshot: &SidebarSnapshot, frame: &PaneFrame)
             let base = theme::strip_status_glyph_suffix(observed_name, &snapshot.theme);
             let desired_name = status.map_or_else(
                 || base.to_owned(),
-                |status| format!("{base} {}", glyph(status.glyph_role())),
+                |status| format!("{base} {}", status.glyph()),
             );
             (desired_name != *observed_name).then(|| TabRename {
                 anchor,
@@ -215,18 +212,31 @@ mod tests {
     }
 
     #[test]
-    fn configured_status_glyph_is_emitted() {
+    fn tab_status_always_uses_unicode_glyphs() {
         let now = Timestamp::from_second(1_700_000_000).expect("time");
-        let mut snapshot = snapshot(vec![(AgentStatus::Running, "%1", now)], now);
-        snapshot.theme.glyphs = toml::from_str(
-            "[unicode.status]\n\
-             working = \"W\"\n",
-        )
-        .expect("glyph config");
+        for (status, expected) in [
+            (AgentStatus::Failed, "#feat !"),
+            (AgentStatus::Waiting, "#feat ?"),
+            (AgentStatus::Paused, "#feat ⏸\u{FE0E}"),
+            (AgentStatus::Running, "#feat ⢿"),
+            (AgentStatus::Success, "#feat ✓"),
+        ] {
+            let mut snapshot = snapshot(vec![(status, "%1", now)], now);
+            snapshot.theme.glyphs = toml::from_str(
+                "set = \"nerd_font\"\n\
+                 [nerd_font.status]\n\
+                 waiting = \"W\"\n\
+                 attention = \"A\"\n\
+                 paused = \"P\"\n\
+                 working = \"R\"\n\
+                 done = \"D\"\n",
+            )
+            .expect("glyph config");
 
-        let renames = desired_tab_renames(&snapshot, &frame("#feat", &["%1"]));
+            let renames = desired_tab_renames(&snapshot, &frame("#feat", &["%1"]));
 
-        assert_eq!(renames[0].desired_name, "#feat W");
+            assert_eq!(renames[0].desired_name, expected);
+        }
     }
 
     #[test]
