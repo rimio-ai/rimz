@@ -9,6 +9,8 @@
 //! `$RIMZ_TEST_SSH_RAW_TTY` simulates OpenSSH leaving the controlling tty raw;
 //! `$RIMZ_TEST_SSH_TTY_STATE_LOG` records whether each attach inherited sane
 //! shell flags before that transition.
+//! `$RIMZ_TEST_SSH_STDIN_PLAN` chooses whether each visible attach ignores or
+//! records stdin, and `$RIMZ_TEST_SSH_STDIN_LOG` receives the recorded bytes.
 //! `$RIMZ_TEST_SSH_SUSPEND` stops the visible client until its process group
 //! receives `SIGCONT`, exercising the launcher's job-control mirror.
 //! `$RIMZ_TEST_SSH_STDERR` supplies the visible attach's diagnostic output.
@@ -84,7 +86,9 @@ fn main() {
 
     suspend_if_requested();
 
-    if let Ok(ms) = env::var("RIMZ_TEST_SSH_SLEEP_MS")
+    let recorded_stdin = record_stdin_if_requested();
+    if !recorded_stdin
+        && let Ok(ms) = env::var("RIMZ_TEST_SSH_SLEEP_MS")
         && let Ok(ms) = ms.parse::<u64>()
     {
         std::thread::sleep(std::time::Duration::from_millis(ms));
@@ -288,18 +292,79 @@ fn exit_from_plan(key: &str) -> ! {
 }
 
 fn pop_exit_plan(key: &str) -> Option<i32> {
+    pop_plan_line(key).map(|line| {
+        if line.is_empty() {
+            0
+        } else {
+            line.parse().expect("plan line is an exit code")
+        }
+    })
+}
+
+fn pop_plan_line(key: &str) -> Option<String> {
     let plan_path = env::var_os(key)?;
-    let plan = std::fs::read_to_string(&plan_path).expect("read exit plan");
+    let plan = std::fs::read_to_string(&plan_path).expect("read plan");
     let mut lines = plan.lines();
-    let code: i32 = lines
-        .next()
-        .unwrap_or("0")
-        .trim()
-        .parse()
-        .expect("plan line is an exit code");
+    let line = lines.next().unwrap_or_default().trim().to_owned();
     let rest = lines.collect::<Vec<_>>().join("\n");
-    std::fs::write(&plan_path, rest).expect("rewrite exit plan");
-    Some(code)
+    std::fs::write(&plan_path, rest).expect("rewrite plan");
+    Some(line)
+}
+
+fn record_stdin_if_requested() -> bool {
+    match pop_plan_line("RIMZ_TEST_SSH_STDIN_PLAN").as_deref() {
+        None | Some("ignore") => false,
+        Some("record") => {
+            record_stdin_until_sentinel();
+            true
+        }
+        Some(mode) => panic!("unknown stdin plan mode: {mode}"),
+    }
+}
+
+fn record_stdin_until_sentinel() {
+    use std::os::fd::AsFd as _;
+
+    use nix::poll::{PollFd, PollFlags, poll};
+
+    let log_path = env::var_os("RIMZ_TEST_SSH_STDIN_LOG")
+        .expect("RIMZ_TEST_SSH_STDIN_LOG unset for record mode");
+    let sentinel = env::var("RIMZ_TEST_SSH_STDIN_UNTIL")
+        .expect("RIMZ_TEST_SSH_STDIN_UNTIL unset for record mode")
+        .into_bytes();
+    assert!(!sentinel.is_empty(), "stdin sentinel must not be empty");
+
+    let stdin = std::io::stdin();
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .expect("open ssh trace stdin log");
+    let mut recorded = Vec::new();
+    let mut buffer = [0u8; 256];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let mut fds = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];
+        if poll(&mut fds, 50u16).expect("poll ssh trace stdin") == 0 {
+            continue;
+        }
+        let count = stdin
+            .lock()
+            .read(&mut buffer)
+            .expect("read ssh trace stdin");
+        assert_ne!(count, 0, "ssh trace stdin closed before sentinel");
+        log.write_all(&buffer[..count])
+            .expect("write ssh trace stdin log");
+        log.flush().expect("flush ssh trace stdin log");
+        recorded.extend_from_slice(&buffer[..count]);
+        if recorded
+            .windows(sentinel.len())
+            .any(|window| window == sentinel)
+        {
+            return;
+        }
+    }
+    panic!("ssh trace stdin sentinel was not received before deadline");
 }
 
 fn is_config_query(argv: &[String]) -> bool {

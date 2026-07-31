@@ -1,6 +1,6 @@
 use std::io::{self, IsTerminal, Write};
 
-use nix::sys::termios::{self, SetArg, Termios};
+use nix::sys::termios::{self, FlushArg, SetArg, Termios};
 
 use rimz::remote::tty::{EMULATOR_RESET, sanitize_flags, termios_damaged};
 
@@ -22,6 +22,20 @@ impl TtyGuard {
         let stdin = io::stdin();
         if let Err(err) = termios::tcsetattr(&stdin, SetArg::TCSADRAIN, saved) {
             tracing::debug!(error = %err, "local tty restore failed");
+        }
+    }
+
+    /// Discards terminal replies addressed to a dead SSH generation.
+    ///
+    /// Callers must only use this while reconnecting: exit paths preserve
+    /// pending input for the shell that regains the terminal.
+    pub(super) fn discard_pending_input(&self) {
+        if self.saved.is_none() {
+            return;
+        }
+        let stdin = io::stdin();
+        if let Err(err) = termios::tcflush(&stdin, FlushArg::TCIFLUSH) {
+            tracing::debug!(error = %err, "local tty input flush failed");
         }
     }
 
