@@ -340,6 +340,19 @@ fn orphan_reap_events_keep_their_evidence_on_the_wire() {
         cache_observed_at_ms: None,
         authoritative_observed_at_ms: 1_000,
     };
+    let subagent = DiagEvent::SubagentOrphanReaped {
+        agent_kind: AgentKind::new_unchecked("codex"),
+        agent_id: AgentSessionId::from("child"),
+        parent_agent_id: AgentSessionId::from("parent"),
+        orphaned_at_ms: 900,
+    };
+    let subagent_failure = DiagEvent::SubagentOrphanRepairFailed {
+        agent_kind: AgentKind::new_unchecked("codex"),
+        agent_id: AgentSessionId::from("child"),
+        parent_agent_id: AgentSessionId::from("parent"),
+        orphaned_at_ms: 900,
+        error: "pane close failed".to_owned(),
+    };
 
     let reaped_json = serde_json::to_value(&reaped).expect("encode orphan reap");
     assert_eq!(reaped_json["kind"], "sidebar_orphan_reaped");
@@ -347,6 +360,22 @@ fn orphan_reap_events_keep_their_evidence_on_the_wire() {
     assert_eq!(
         serde_json::from_value::<DiagEvent>(reaped_json).expect("decode orphan reap"),
         reaped
+    );
+    let subagent_json = serde_json::to_value(&subagent).expect("encode subagent orphan reap");
+    assert_eq!(subagent_json["kind"], "subagent_orphan_reaped");
+    assert_eq!(subagent.severity(), DiagSeverity::Warn);
+    assert_eq!(
+        serde_json::from_value::<DiagEvent>(subagent_json).expect("decode subagent orphan reap"),
+        subagent
+    );
+    let failure_json =
+        serde_json::to_value(&subagent_failure).expect("encode subagent orphan repair failure");
+    assert_eq!(failure_json["kind"], "subagent_orphan_repair_failed");
+    assert_eq!(subagent_failure.severity(), DiagSeverity::Warn);
+    assert_eq!(
+        serde_json::from_value::<DiagEvent>(failure_json)
+            .expect("decode subagent orphan repair failure"),
+        subagent_failure
     );
 
     let divergence_json = serde_json::to_value(&divergence).expect("encode divergence");

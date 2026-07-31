@@ -5,12 +5,12 @@ use crate::common::{
 };
 use jiff::Timestamp;
 use rimz::agents::{
-    AgentLifecycleObservation, AgentRateLimits, LifecycleSignal, RateLimitCacheEntry,
+    AgentLifecycleObservation, AgentRateLimits, LaunchParams, LifecycleSignal, RateLimitCacheEntry,
     RateLimitWindow, RateLimitsCache,
 };
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, ViewKind};
-use rimz::store::event::EventEnvelope;
+use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
@@ -65,6 +65,117 @@ fn hidden_timeout_helper_settles_only_an_overdue_run() {
             .expect("load future run")
             .status,
         RunStatus::Running
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn hidden_timeout_helper_signals_pre_hook_provider_without_killing_wrapper() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut provider = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn provider");
+    let mut wrapper = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn wrapper");
+    let provider_start =
+        rimz::proc::process_start_token(provider.id()).expect("provider process start token");
+
+    let mut run = create_running_named_run(&env, &store, "pre-hook-timeout");
+    run.subagent = true;
+    run.deadline_at = Some(Timestamp::now() - Duration::from_secs(1));
+    rimz::store::run_store::write(&store.paths().runs_dir, &run).expect("write overdue subagent");
+    rimz::harness::run::record_provider_process(
+        store.paths(),
+        &run.run_id,
+        provider.id(),
+        Some(provider_start.clone()),
+    )
+    .expect("persist provider process");
+
+    let launch_id = AgentSessionId::from("launch-pre-hook-timeout");
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace context");
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            workspace.session_name,
+            &run.kind,
+            AgentLaunchPayload {
+                agent_id: launch_id.clone(),
+                launch_id: Some(launch_id.clone()),
+                agent_name: run.agent_name.clone().expect("run name"),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state: AgentLaunchState::Bound,
+                run_id: Some(run.run_id.clone()),
+                pane_id: Some(PaneId::from_parts(MuxName::Tmux, "%42")),
+                runtime_owner: Some(rimz::store::runtime::process_owner(
+                    rimz::RuntimeOwnerKind::Agent,
+                    launch_id.as_str(),
+                    wrapper.id(),
+                )),
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: Some(run.prompt.clone()),
+                description: None,
+            },
+        ))
+        .expect("append provisional wrapper-owned row");
+    let provisional = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("read provisional row")
+        .agents
+        .into_iter()
+        .find(|agent| agent.agent_id == launch_id)
+        .expect("provisional row");
+    assert_eq!(run.agent_id, None);
+    assert_eq!(
+        provisional.runtime_owner.as_ref().map(|owner| owner.pid),
+        Some(wrapper.id()),
+        "before the first hook the lifecycle row is owned by the wrapper"
+    );
+
+    let request = rimz::harness::run_timeout::RunTimeoutRequest {
+        workspace_id: env.workspace_id.clone(),
+        run_id: run.run_id.clone(),
+    };
+    let output = env
+        .rimz()
+        .current_dir(&env.project_root)
+        .args(rimz::child_process::agent_helper_argv(
+            "run-timeout",
+            &request,
+        ))
+        .output()
+        .expect("run timeout helper");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline
+        && rimz::proc::process_is_live(provider.id(), Some(&provider_start))
+    {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let provider_live = rimz::proc::process_is_live(provider.id(), Some(&provider_start));
+    let wrapper_live = wrapper.try_wait().expect("probe wrapper").is_none();
+    let _ = provider.kill();
+    let _ = wrapper.kill();
+    let _ = provider.wait();
+    let _ = wrapper.wait();
+
+    assert!(
+        output.status.success(),
+        "timeout helper failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!provider_live, "timeout helper should SIGTERM the provider");
+    assert!(
+        wrapper_live,
+        "timeout helper must not signal the wrapper that retains the pane"
     );
 }
 

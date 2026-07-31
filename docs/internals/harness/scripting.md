@@ -76,7 +76,7 @@ The driver is `cli::supervised::run_supervised`. One call can contain several at
 6. **Write the record, then open the pane.** `run::create` persists the record, then the pane opens: a split of the current tab by default, a new tab when forced or when there is no ambient pane, and the locked `rimzd` loop zone for scheduled fires. The pane runs the exec wrapper with `RIMZ_RUN_ID` exported.
 7. **Wait.** The waiter blocks until the record is terminal. `--bg` prints the agent name and returns here.
 8. **Verify.** If `--verify` is set and the run completed, the [verify loop](#verification-re-arms-the-same-run) runs.
-9. **Reclaim.** Unless `--keep`, the pane closes.
+9. **Reclaim.** Unless `--keep`, the pane closes. A `rimz subagents` wrapper is the exception: it stops the provider but retains the pane until explicit stop or parent exit.
 10. **Retry or finish.** A `Failed` run with retries left starts a new attempt with an augmented prompt. Anything else returns the record, which the caller projects to stdout and turns into an exit code.
 
 ## Completion: folding lifecycle observations
@@ -176,7 +176,9 @@ Cleanup is best-effort and split by who is still alive to do it.
 
 **A blocking run** closes the recorded launch pane after the driver finishes, falling back to finding the agent row by `(kind, agent_id)` in the snapshot when no pane id was recorded. Before that close, a non-completed record with no failure tail yet gets one captured from the pane. First writer wins: a wrapper that already captured a tail as it died cannot be overwritten by later cleanup.
 
-**A background run** hands normal completion reclamation to the in-pane wrapper. Unless `--keep`, the wrapper watches the run record, terminates the agent once it is terminal, runs marked-worktree cleanup, and closes its own pane. Concretely, `supervise_child` re-reads the record every 250 ms, sends `SIGTERM` on the first terminal status, escalates to `SIGKILL` 300 ms later, and then settles: the close is self-initiated by the pane's own wrapper, on the record alone, with no involvement from whoever launched it or joins it. A producer-enforced timeout additionally runs the stop backstop from its hidden helper, so a wedged wrapper cannot leave the overdue pane behind.
+**A background run** hands normal completion reclamation to the in-pane wrapper. Unless `--keep`, the wrapper watches the run record, terminates the agent once it is terminal, runs marked-worktree cleanup, and closes its own pane. Concretely, `supervise_child` re-reads the record every 250 ms, sends `SIGTERM` on the first terminal status, escalates to `SIGKILL` 300 ms later, and then settles: the close is self-initiated by the pane's own wrapper, on the record alone, with no involvement from whoever launched it or joins it. A producer-enforced timeout additionally runs the stop backstop from its hidden helper, so a wedged ordinary wrapper cannot leave the overdue pane behind.
+
+**A subagent background run** stops its provider at the same terminal transition but keeps the wrapper alive, so tmux and Zellij both retain the pane. On spawn the wrapper persists the provider PID and process-start token on the run record. Its timeout helper writes and wakes the terminal record and signals exactly that still-identical provider, without running the ordinary pane-close backstop. The pane closes only when `rimz subagents stop` removes it or its parent ends; `--keep` also disables the parent-death close. The child wrapper owns the fast parent watchdog, while the producer's ten-minute durable orphan sweep is a warning-emitting repair path, not normal reclamation.
 
 **A stop or a Ctrl+C-canceled blocking caller** uses the same terminal record and wake path, then closes the recorded pane if it lingers past a short grace. That reclaims a kept run's pane whether the reference given was the run id or the agent name.
 

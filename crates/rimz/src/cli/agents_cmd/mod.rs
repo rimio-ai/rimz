@@ -13,6 +13,7 @@ mod idle_compact;
 pub(in crate::cli) mod launch;
 mod list;
 mod logs;
+mod orphan_subagent;
 mod placement;
 mod reconcile;
 mod refresh;
@@ -48,6 +49,7 @@ use rimz::harness::AutoContinueRequest;
 use rimz::harness::auto_redeem::AutoRedeemRequest;
 use rimz::harness::budget::BudgetParkRequest;
 use rimz::harness::idle_compact::IdleCompactRequest;
+use rimz::harness::orphan_sweep::OrphanSubagentRequest;
 use rimz::harness::plan::{
     LaunchFinalizeOptions, LayoutPaneParams, Placement, ResolvedLaunch, apply_in_place_downgrade,
     cohort_cells, compile_layout_panes, launch_identity_requests, mint_launch_id,
@@ -81,6 +83,7 @@ use launch::*;
 use list::list_agents;
 pub(crate) use list::render_agents_table;
 use logs::logs_agent;
+use orphan_subagent::repair_orphan;
 use refresh::{RefreshArgs, run_refresh};
 use refresh_usage::run_refresh_usage;
 use register::{RegisterArgs, run_register};
@@ -505,6 +508,9 @@ enum AgentsSubcmd {
     /// Hidden helper that settles a supervised run after its durable deadline.
     #[command(hide = true)]
     RunTimeout(HelperRequestArgs<RunTimeoutRequest>),
+    /// Hidden helper that records and repairs a subagent whose parent ended.
+    #[command(hide = true)]
+    OrphanSubagent(HelperRequestArgs<OrphanSubagentRequest>),
     /// Hidden helper the producer spawns to refresh one provider's account usage
     /// (rate-limit windows + paid credits) into the shared cache.
     #[command(hide = true)]
@@ -586,6 +592,9 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args.request),
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args.request),
         Some(AgentsSubcmd::RunTimeout(args)) => return run_timeout(args.request, globals),
+        Some(AgentsSubcmd::OrphanSubagent(args)) => {
+            return repair_orphan(args.request, globals);
+        }
         Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args.request),
         Some(AgentsSubcmd::RefreshContext(args)) => return refresh_context::run(args.request),
         Some(AgentsSubcmd::Budget(args)) => return run_budget(args, globals),

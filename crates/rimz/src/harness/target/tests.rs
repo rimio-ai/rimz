@@ -1424,3 +1424,19 @@ fn team_cohorts_group_live_root_members_by_team_and_lane() {
         vec![("forge", "auth", 3), ("forge", "docs", 1)]
     );
 }
+
+#[test]
+fn launched_children_matches_a_parent_that_adopted_its_provider_session() {
+    let mut parent = agent("codex", "provider-parent", None, "terminal_1");
+    parent.launch_id = Some("launch-parent".into());
+    let mut child = agent("codex", "provider-child", None, "terminal_2");
+    child.parent_agent_id = Some("launch-parent".into());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    let agents = [parent.clone(), child.clone()];
+
+    let children = launched_children(&agents, &parent);
+
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].agent_id, child.agent_id);
+}

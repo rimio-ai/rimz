@@ -271,6 +271,12 @@ pub struct RunRecord {
     pub agent_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
+    /// Spawned provider process owned by the in-pane wrapper.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_pid: Option<u32>,
+    /// Process-start token paired with `provider_pid` to reject PID reuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_process_start: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -283,6 +289,13 @@ pub struct RunRecord {
     pub verify: Option<RunVerify>,
     pub status: RunStatus,
     pub permission_mode: PermissionMode,
+    /// Never reclaim this run's pane automatically, including when its parent
+    /// agent exits.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub keep: bool,
+    /// Pane-backed child launched through `rimz subagents`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub subagent: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -320,6 +333,8 @@ impl RunRecord {
             agent_id: None,
             agent_name: None,
             pane_id: None,
+            provider_pid: None,
+            provider_process_start: None,
             transcript_path: None,
             failure_tail: None,
             retry_of: None,
@@ -327,6 +342,8 @@ impl RunRecord {
             verify: None,
             status: RunStatus::Pending,
             permission_mode,
+            keep: false,
+            subagent: false,
             budget: None,
             cost_usd: None,
             input_tokens: None,
@@ -340,6 +357,10 @@ impl RunRecord {
             completed_at: None,
         }
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 pub fn retry_prompt(base: &str, failure_tail: Option<&str>) -> String {
@@ -414,6 +435,25 @@ pub fn record_pane(paths: &StatePaths, run_id: &RunId, pane_id: PaneId) -> Resul
             return Ok(RecordMutation::Keep(()));
         }
         record.pane_id = Some(pane_id);
+        Ok(RecordMutation::Write(()))
+    })
+    .map(|(record, ())| record)
+}
+
+pub fn record_provider_process(
+    paths: &StatePaths,
+    run_id: &RunId,
+    pid: u32,
+    process_start: Option<String>,
+) -> Result<RunRecord> {
+    update_record(paths, run_id, |record, _| {
+        if record.provider_pid == Some(pid)
+            && record.provider_process_start.as_ref() == process_start.as_ref()
+        {
+            return Ok(RecordMutation::Keep(()));
+        }
+        record.provider_pid = Some(pid);
+        record.provider_process_start = process_start;
         Ok(RecordMutation::Write(()))
     })
     .map(|(record, ())| record)

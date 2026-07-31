@@ -743,6 +743,20 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
         .expect("parent run pane");
     let parent_pane_raw = parent_pane.raw().to_owned();
 
+    // New panes inherit the tmux server environment, not the environment of
+    // the client asking tmux to create them. Give each provider a distinct
+    // native session so the cascade exercises adopted child identities.
+    tmux(
+        &socket,
+        &[
+            "set-environment",
+            "-t",
+            &session,
+            "RIMZ_TEST_AGENT_SESSION",
+            "sess-journey-child",
+        ],
+    );
+
     let child = env
         .rimz()
         .env("PATH", &agent_path)
@@ -780,6 +794,16 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
     // The first launch returns only after its wrapper's durable pane binding
     // is visible. Launch the sibling immediately to prove that signal reaches
     // the next placement decision.
+    tmux(
+        &socket,
+        &[
+            "set-environment",
+            "-t",
+            &session,
+            "RIMZ_TEST_AGENT_SESSION",
+            "sess-journey-sibling",
+        ],
+    );
     let sibling = env
         .rimz()
         .env("PATH", &agent_path)
@@ -910,6 +934,198 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
 }
 
 #[test]
+fn tmux_completed_subagent_lingers_until_parent_pane_disappears() {
+    if which::which("tmux").is_err() {
+        eprintln!("tmux not on PATH; skipping subagent parent-watch smoke");
+        return;
+    }
+    let Some(_rimz) = rimz_bin() else {
+        eprintln!("rimz not built; skipping subagent parent-watch smoke");
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    let stub_dir = write_hook_firing_agent(&env, "codex");
+    let agent_path = path_with_front(&stub_dir);
+    trust_codex_agent_path(&env, &agent_path);
+    let socket = managed_socket(&env.runtime_root);
+    let _server = TmuxServerGuard::new(socket.clone());
+    let session = workspace_session(&env);
+
+    let parent = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("RIMZ_TEST_AGENT_SESSION", "sess-parent-watch-parent")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "30000")
+        .args([
+            "--mux",
+            "tmux",
+            "agents",
+            "codex",
+            "coordinate the review",
+            "--name",
+            "parent-watch-parent",
+            "-p",
+            "--bg",
+            "--keep",
+            "--timeout",
+            "2m",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch parent");
+    assert!(
+        parent.status.success(),
+        "parent launch failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&parent.stdout),
+        String::from_utf8_lossy(&parent.stderr)
+    );
+
+    let parent_agent = wait_for_named_agent(&env, "parent-watch-parent", true, CAPTURE_BUDGET);
+    let parent_launch_id = parent_agent
+        .launch_id
+        .clone()
+        .expect("RimZ-launched parent has launch id");
+    let parent_provider_pid = parent_agent
+        .runtime_owner
+        .as_ref()
+        .expect("parent runtime owner")
+        .pid;
+    let parent_wrapper_pid = rimz::proc::comm_and_ppid(parent_provider_pid)
+        .map(|(_, ppid)| ppid)
+        .expect("parent provider process parent");
+    let parent_actual_pane =
+        tmux_pane_for_pid(&socket, &session, parent_wrapper_pid).expect("parent wrapper pane");
+    let parent_run = wait_for_named_run(&env, "parent-watch-parent", CAPTURE_BUDGET);
+    assert!(
+        !parent_run.status.is_terminal(),
+        "parent run must still be live while its child completes"
+    );
+    let parent_pane = parent_run.pane_id.expect("parent run pane");
+    let parent_pane_raw = parent_pane.raw().to_owned();
+    let panes_before_child = tmux_panes(&socket, &session);
+
+    for (key, value) in [
+        ("RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS", "500"),
+        ("RIMZ_TEST_AGENT_SLEEP_MS", "0"),
+        ("RIMZ_TEST_AGENT_SESSION", "sess-parent-watch-child"),
+    ] {
+        tmux(&socket, &["set-environment", "-t", &session, key, value]);
+    }
+
+    let child = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("TMUX_PANE", &parent_pane_raw)
+        .env(rimz::harness::run::ENV_AGENT_KIND, "codex")
+        .env(rimz::harness::run::ENV_AGENT_ID, parent_launch_id.as_str())
+        .env("RIMZ_TEST_AGENT_SESSION", "sess-parent-watch-child")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "0")
+        .args([
+            "--mux",
+            "tmux",
+            "subagents",
+            "codex",
+            "inspect the implementation",
+            "--name",
+            "parent-watch-child",
+            "--timeout",
+            "2m",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch subagent");
+    assert!(
+        child.status.success(),
+        "subagent launch failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+
+    let child_run = wait_for_named_terminal_run(&env, "parent-watch-child", CAPTURE_BUDGET);
+    assert!(
+        child_run.status.is_terminal(),
+        "hook-firing child should have completed before the lifecycle assertion"
+    );
+    let panes_after_child = tmux_panes(&socket, &session);
+    let new_panes = panes_after_child
+        .difference(&panes_before_child)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        new_panes.len(),
+        1,
+        "subagent launch should add one pane: before={panes_before_child:?}, after={panes_after_child:?}"
+    );
+    let child_pane = &new_panes[0];
+    assert!(
+        tmux_pane_alive(&socket, &session, child_pane),
+        "completed subagent pane should remain visible"
+    );
+    assert!(
+        !tmux_pane_dead(&socket, child_pane),
+        "completed subagent wrapper should remain alive"
+    );
+    let child_wrapper_pid =
+        tmux_pane_pid(&socket, child_pane).expect("completed child wrapper pid");
+    let child_agent = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("read child runtime owner")
+        .agents
+        .into_iter()
+        .find(|agent| agent.name.as_deref() == Some("parent-watch-child"))
+        .expect("completed child row");
+    let child_owner_pid = child_agent
+        .runtime_owner
+        .as_ref()
+        .expect("child runtime owner")
+        .pid;
+    assert_eq!(
+        child_owner_pid, child_wrapper_pid,
+        "lingering child row must be owned by the wrapper, not the exited provider"
+    );
+    assert_ne!(
+        child_agent.status,
+        rimz::agents::AgentStatus::Running,
+        "transferring wrapper ownership must not reopen the completed turn"
+    );
+    assert_ne!(
+        parent_actual_pane, *child_pane,
+        "parent and child must occupy distinct panes"
+    );
+    // This test launches the child from outside tmux by spelling the caller
+    // identity explicitly. Re-stamp the real parent pane that an in-pane
+    // caller already carries before exercising the watchdog decision.
+    env.store()
+        .attach_agent_pane(
+            &parent_agent.kind,
+            &parent_agent.agent_id,
+            parent_agent.launch_id.as_ref(),
+            &session,
+            &rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Tmux, &parent_actual_pane),
+        )
+        .expect("restore synthetic parent pane binding");
+
+    tmux(&socket, &["kill-pane", "-t", &parent_actual_pane]);
+
+    // The watchdog requires three distinct authoritative tmux reads. Keep the
+    // journey's deadline wide enough for those subprocesses on a loaded runner.
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    while Instant::now() < deadline && tmux_pane_alive(&socket, &session, child_pane) {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        !tmux_pane_alive(&socket, &session, child_pane),
+        "subagent wrapper should close its pane after authoritative parent-pane absence"
+    );
+}
+
+#[test]
 fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
     if which::which("tmux").is_err() {
         eprintln!("tmux not on PATH; skipping supervised tmux smoke");
@@ -1027,6 +1243,26 @@ fn wait_for_named_run(env: &Env, name: &str, budget: Duration) -> rimz::harness:
             "timed out waiting for run {name}"
         );
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_named_terminal_run(
+    env: &Env,
+    name: &str,
+    budget: Duration,
+) -> rimz::harness::run::RunRecord {
+    let deadline = Instant::now() + budget;
+    loop {
+        let run = wait_for_named_run(env, name, budget);
+        if run.status.is_terminal() {
+            return run;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for terminal run {name}; last status: {:?}",
+            run.status
+        );
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -1410,13 +1646,83 @@ fn tmux_pane_alive(socket: &Path, session: &str, pane: &str) -> bool {
         .scrub_session_env()
         .arg("-S")
         .arg(socket)
-        .args(["list-panes", "-t", session, "-F", "#{pane_id}"])
+        .args(["list-panes", "-a", "-F", "#{session_name}:#{pane_id}"])
         .bounded_output()
         .expect("spawn tmux list-panes");
+    let expected = format!("{session}:{pane}");
     out.status.success()
         && String::from_utf8_lossy(&out.stdout)
             .lines()
-            .any(|id| id == pane)
+            .any(|id| id == expected)
+}
+
+fn tmux_panes(socket: &Path, session: &str) -> std::collections::BTreeSet<String> {
+    let out = Command::new("tmux")
+        .scrub_session_env()
+        .arg("-S")
+        .arg(socket)
+        .args(["list-panes", "-a", "-F", "#{session_name}:#{pane_id}"])
+        .bounded_output()
+        .expect("spawn tmux list-panes");
+    assert!(
+        out.status.success(),
+        "tmux list-panes failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let prefix = format!("{session}:");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix(&prefix).map(ToOwned::to_owned))
+        .collect()
+}
+
+fn tmux_pane_for_pid(socket: &Path, session: &str, pid: u32) -> Option<String> {
+    let out = Command::new("tmux")
+        .scrub_session_env()
+        .arg("-S")
+        .arg(socket)
+        .args([
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name}:#{pane_id}:#{pane_pid}",
+        ])
+        .bounded_output()
+        .expect("spawn tmux pane pid listing");
+    let prefix = format!("{session}:");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix(&prefix))
+        .find_map(|line| {
+            let (pane, raw_pid) = line.rsplit_once(':')?;
+            (raw_pid.parse::<u32>().ok() == Some(pid)).then(|| pane.to_owned())
+        })
+}
+
+fn tmux_pane_dead(socket: &Path, pane: &str) -> bool {
+    let output = Command::new("tmux")
+        .env("TMUX", tmux_env(socket))
+        .args(["display-message", "-p", "-t", pane, "#{pane_dead}"])
+        .output();
+    output
+        .ok()
+        .filter(|out| out.status.success())
+        .is_some_and(|out| String::from_utf8_lossy(&out.stdout).trim() == "1")
+}
+
+fn tmux_pane_pid(socket: &Path, pane: &str) -> Option<u32> {
+    let output = Command::new("tmux")
+        .scrub_session_env()
+        .arg("-S")
+        .arg(socket)
+        .args(["display-message", "-p", "-t", pane, "#{pane_pid}"])
+        .bounded_output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().parse().ok())
+        .flatten()
 }
 
 /// The rightmost painted column across a captured frame (trailing blanks

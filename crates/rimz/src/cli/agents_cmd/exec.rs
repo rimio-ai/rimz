@@ -140,12 +140,18 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let child = command
         .spawn()
         .with_context(|| format!("running {program}"))?;
+    if let Some(context) = run_context.as_ref() {
+        record_provider_process(context, child.id());
+    }
+    let parent_watchdog =
+        subagent_parent_watchdog(&request, run_context.as_ref(), launch_identity.as_ref());
     let monitor = if request.exit_on_run_completion {
         run_context.as_ref()
     } else {
         None
     };
-    let outcome = supervise_child(child, monitor).context("supervising agent process")?;
+    let outcome =
+        supervise_child(child, monitor, parent_watchdog).context("supervising agent process")?;
     settle_after_exit(
         &request,
         globals,
@@ -188,16 +194,22 @@ fn settle_after_exit(
     entered_worktree: Option<&Path>,
     outcome: ExecOutcome,
 ) -> ! {
+    let ExecOutcome {
+        status,
+        abrupt: child_exit_abrupt,
+        parent_ended,
+        parent_watchdog,
+    } = outcome;
     if let Some(context) = run_context {
         fail_run_if_child_exited_first(context, globals, RUN_EXIT_TERMINAL_GRACE);
     }
     let startup_failure =
-        !outcome.status.success() && mark_launch_failed_if_provisional(invocation, launch_identity);
+        !status.success() && mark_launch_failed_if_provisional(invocation, launch_identity);
 
     let session_name = run_context
         .map(|context| context.session_name.as_str())
         .unwrap_or(&invocation.workspace.session_name);
-    let abrupt = outcome.abrupt || cleanup_signal_received();
+    let abrupt = child_exit_abrupt || cleanup_signal_received();
     let session_accepts_close = !abrupt || session_accepts_agent_close(globals, session_name);
     let deliberate = close_is_deliberate(abrupt, session_accepts_close);
     let ended_session = if deliberate && should_record_end_trace(request) {
@@ -207,12 +219,7 @@ fn settle_after_exit(
     };
     if should_drop_to_shell(request, abrupt) {
         // The trace above stamps the agent ended; gc reclaims any worktree later.
-        drop_to_shell_after_agent_exit(
-            request,
-            &outcome.status,
-            startup_failure,
-            ended_session.as_ref(),
-        );
+        drop_to_shell_after_agent_exit(request, &status, startup_failure, ended_session.as_ref());
     }
     if let Some(path) = entered_worktree
         && deliberate
@@ -223,10 +230,59 @@ fn settle_after_exit(
             "rimz: worktree cleanup did not complete: {err}"
         );
     }
-    if request.close_pane_on_exit {
+    if should_linger_subagent(request, parent_ended) {
+        if let Some(identity) = launch_identity {
+            // Provider hooks temporarily own the runtime row while the turn
+            // runs. The wrapper becomes the long-lived owner once the
+            // provider exits, so dead-provider reaping must not end the pane.
+            attach_own_launch_pane(invocation, identity);
+        }
+        linger_subagent(globals, session_name, run_context, status, parent_watchdog);
+    }
+    if parent_ended || request.close_pane_on_exit {
         close_own_pane(globals, session_name);
     }
-    std::process::exit(outcome.status.code().unwrap_or(1));
+    std::process::exit(status.code().unwrap_or(1));
+}
+
+fn should_linger_subagent(
+    request: &rimz::harness::launch::ExecRequest,
+    parent_ended: bool,
+) -> bool {
+    request.subagent && !parent_ended && !cleanup_signal_received()
+}
+
+fn linger_subagent(
+    globals: &GlobalFlags,
+    session_name: &str,
+    run_context: Option<&RunExecContext>,
+    status: ExitStatus,
+    parent_watchdog: Option<rimz::harness::parent_watch::ParentWatch>,
+) -> ! {
+    let run_status = run_context
+        .and_then(|context| {
+            rimz::harness::run::load(context.store.paths(), &context.run_id)
+                .ok()
+                .map(|record| record.status.as_str())
+        })
+        .unwrap_or("done");
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "rimz: subagent {run_status}; pane held for parent (`rimz subagents stop` closes it)"
+    );
+    loop {
+        if cleanup_signal_received() {
+            std::process::exit(status.code().unwrap_or(1));
+        }
+        if parent_watchdog
+            .as_ref()
+            .is_some_and(|watchdog| watchdog.parent_ended())
+        {
+            close_own_pane(globals, session_name);
+            std::process::exit(status.code().unwrap_or(1));
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
 }
 
 pub(super) fn should_exec_agent_directly(request: &rimz::harness::launch::ExecRequest) -> bool {
@@ -613,6 +669,23 @@ fn record_own_run_pane(context: &RunExecContext) {
     }
 }
 
+fn record_provider_process(context: &RunExecContext, pid: u32) {
+    let process_start = rimz::proc::process_start_token(pid);
+    if let Err(err) = rimz::harness::run::record_provider_process(
+        context.store.paths(),
+        &context.run_id,
+        pid,
+        process_start,
+    ) {
+        tracing::debug!(
+            run_id = %context.run_id,
+            pid,
+            error = %err,
+            "could not persist supervised provider process identity",
+        );
+    }
+}
+
 fn record_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &LaunchIdentity) {
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
         return;
@@ -630,6 +703,42 @@ fn record_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
             error = %err,
             "could not persist provisional agent pane id",
         ),
+    }
+}
+
+fn attach_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &LaunchIdentity) {
+    let Some(pane_id) = rimz::mux::ambient_pane_id() else {
+        return;
+    };
+    let workspace = invocation.workspace;
+    let attached = invocation.store().and_then(|store| {
+        let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+        let current = projection
+            .agents
+            .iter()
+            .find(|agent| {
+                agent.kind == identity.kind
+                    && (agent.launch_id.as_ref() == Some(&identity.agent_id)
+                        || agent.agent_id == identity.agent_id)
+            })
+            .context("resolving current agent row by launch id")?;
+        store.attach_agent_pane(
+            &current.kind,
+            &current.agent_id,
+            Some(&identity.agent_id),
+            &workspace.session_name,
+            &pane_id,
+        )?;
+        Ok(())
+    });
+    if let Err(err) = attached {
+        tracing::debug!(
+            agent_name = %identity.name,
+            launch_id = %identity.agent_id,
+            pane = %pane_id,
+            error = %err,
+            "could not transfer completed subagent pane ownership to its wrapper",
+        );
     }
 }
 
@@ -884,13 +993,18 @@ fn wait_for_terminal_run(context: &RunExecContext, cap: Duration) -> bool {
     }
 }
 
-#[derive(Debug)]
 struct ExecOutcome {
     status: ExitStatus,
     abrupt: bool,
+    parent_ended: bool,
+    parent_watchdog: Option<rimz::harness::parent_watch::ParentWatch>,
 }
 
-fn supervise_child(child: Child, run_monitor: Option<&RunExecContext>) -> Result<ExecOutcome> {
+fn supervise_child(
+    child: Child,
+    run_monitor: Option<&RunExecContext>,
+    parent_watchdog: Option<rimz::harness::parent_watch::ParentWatch>,
+) -> Result<ExecOutcome> {
     let (wake_tx, wake_rx) = mpsc::channel();
     let mut child = rimz::child_process::SupervisedChild::adopt(child, wake_tx.clone());
     #[cfg(unix)]
@@ -907,6 +1021,7 @@ fn supervise_child(child: Child, run_monitor: Option<&RunExecContext>) -> Result
     let mut term_sent_at: Option<Instant> = None;
     let mut kill_sent = false;
     let mut run_completed = false;
+    let mut parent_ended = false;
     let mut next_run_check = Instant::now();
     loop {
         let now = Instant::now();
@@ -914,12 +1029,37 @@ fn supervise_child(child: Child, run_monitor: Option<&RunExecContext>) -> Result
             Ok(Some(status)) => {
                 return Ok(ExecOutcome {
                     status,
-                    abrupt: run_completed || signal_seen_at.is_some() || cleanup_signal_received(),
+                    abrupt: run_completed
+                        || parent_ended
+                        || signal_seen_at.is_some()
+                        || cleanup_signal_received(),
+                    parent_ended,
+                    parent_watchdog,
                 });
             }
             Ok(None) => {}
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
             Err(err) => return Err(err).context("waiting for agent process"),
+        }
+
+        if !parent_ended
+            && parent_watchdog
+                .as_ref()
+                .is_some_and(|watchdog| watchdog.parent_ended())
+        {
+            parent_ended = true;
+            if let Some(monitor) = run_monitor
+                && let Err(err) =
+                    rimz::harness::run::cancel_and_wake(&monitor.store, &monitor.run_id)
+            {
+                tracing::debug!(
+                    run_id = %monitor.run_id,
+                    error = &err as &dyn std::error::Error,
+                    "could not cancel subagent run after parent exit",
+                );
+            }
+            child.signal_term();
+            term_sent_at = Some(now);
         }
 
         if !run_completed
@@ -963,6 +1103,48 @@ fn supervise_child(child: Child, run_monitor: Option<&RunExecContext>) -> Result
         .min();
         rimz::child_process::wait_wake(&wake_rx, deadline);
     }
+}
+
+fn subagent_parent_watchdog(
+    request: &rimz::harness::launch::ExecRequest,
+    run_context: Option<&RunExecContext>,
+    launch_identity: Option<&LaunchIdentity>,
+) -> Option<rimz::harness::parent_watch::ParentWatch> {
+    if !request.subagent {
+        return None;
+    }
+    let Some(context) = run_context else {
+        tracing::debug!("subagent parent watchdog has no supervised run context");
+        return None;
+    };
+    let record = match rimz::harness::run::load(context.store.paths(), &context.run_id) {
+        Ok(record) => record,
+        Err(err) => {
+            tracing::debug!(
+                run_id = %context.run_id,
+                error = &err as &dyn std::error::Error,
+                "subagent parent watchdog could not load run policy",
+            );
+            return None;
+        }
+    };
+    if record.keep {
+        return None;
+    }
+    let Some(identity) = launch_identity else {
+        tracing::debug!("subagent parent watchdog has no launch identity");
+        return None;
+    };
+    Some(
+        rimz::harness::parent_watch::ParentWatchdog::new(
+            context.store.clone(),
+            identity.kind.clone(),
+            identity.agent_id.clone(),
+            rimz::mux::ambient_pane_id(),
+            context.session_name.clone(),
+        )
+        .start(),
+    )
 }
 
 fn reset_cleanup_signal_flag() {
