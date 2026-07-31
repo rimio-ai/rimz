@@ -388,7 +388,6 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     import_edges.truncate(args.top);
     external_surface.truncate(args.top);
     external_providers.truncate(args.top);
-    let mut cochange_edges = cochange_edges;
     cochange_edges.truncate(args.top);
     divergence.truncate(args.top);
     Ok(Report {
