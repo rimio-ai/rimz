@@ -82,7 +82,7 @@ rimz subagents specs
 rimz subagents specs --json
 ```
 
-`specs` lists every agent kind, `[subagents.profiles]` profile, and configured launch command available for one child, with a description column for profile metadata. `[agents.profiles]` entries are excluded. It also works from a user shell; `types` is an alias. Team names are excluded because a subagent launch creates one agent, not a cohort.
+`specs` lists `[subagents.profiles]` profiles and configured launch commands available for one child, with a description column for profile metadata. `[agents.profiles]` entries are excluded. Built-in and registered agent kinds remain directly launchable but are omitted from this configured-spec catalog. It also works from a user shell; `types` is an alias. Team names are excluded because a subagent launch creates one agent, not a cohort.
 
 ## Join results
 

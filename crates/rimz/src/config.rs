@@ -1,6 +1,6 @@
 //! Per-machine settings, loaded from `~/.config/rimz/config.toml`, `theme.toml`, `agents.toml`, and `loop.toml`. [`MachineConfigFiles`] is the ordered file registry, and [`ConfigEditor`] provides strict effective reads plus comment-preserving writes and template merges. This module also owns selectable theme-scheme lookup and validation.
 //!
-//! Agent and team fragments discovered under `~/.agents/{profiles,teams}` are the base layer for `agents.toml`, whose entries take precedence on name clashes. Strict and lenient load paths merge fragments before validating the agents view.
+//! Agent and team fragments discovered under `~/.agents/{profiles,teams}` are the base layer for both profile namespaces in `agents.toml`, whose entries take precedence on name clashes. Strict and lenient load paths merge fragments before validating the agents view.
 //!
 //! This is the personal, never-committed tier. The project-committed tier is
 //! `<root>/.rimz/config.toml`, parsed for the executable-surface hash in

@@ -36,25 +36,18 @@ pub(crate) fn available_specs(
     profiles: &rimz::config::ProfilesConfig,
     commands: &rimz::config::CommandsConfig,
 ) -> Vec<AgentSpecReport> {
-    let mut specs = rimz::agents::known_kinds()
-        .filter(|kind| !profiles.0.contains_key(*kind))
-        .map(|kind| AgentSpecReport {
-            name: kind.to_owned(),
-            source: "kind",
-            agent: None,
-            model: None,
-            effort: None,
-            description: None,
+    let mut specs = profiles
+        .0
+        .iter()
+        .map(|(name, profile)| AgentSpecReport {
+            name: name.clone(),
+            source: "profile",
+            agent: Some(profile.agent.clone()),
+            model: profile.model.clone(),
+            effort: profile.effort.clone(),
+            description: profile.description.clone(),
         })
         .collect::<Vec<_>>();
-    specs.extend(profiles.0.iter().map(|(name, profile)| AgentSpecReport {
-        name: name.clone(),
-        source: "profile",
-        agent: Some(profile.agent.clone()),
-        model: profile.model.clone(),
-        effort: profile.effort.clone(),
-        description: profile.description.clone(),
-    }));
     specs.extend(commands.0.keys().map(|name| AgentSpecReport {
         name: name.clone(),
         source: "command",

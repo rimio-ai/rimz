@@ -311,7 +311,7 @@ fn prompt_files_resolve_for_single_launch_and_fanout() {
 }
 
 #[test]
-fn available_specs_include_kinds_profiles_and_commands_but_not_teams() {
+fn available_specs_include_profiles_and_commands_but_not_kinds_or_teams() {
     let mut config = rimz::config::MachineConfig::default();
     config.agents.profiles.0.insert(
         "agent-only".to_owned(),
@@ -371,7 +371,7 @@ fn available_specs_include_kinds_profiles_and_commands_but_not_teams() {
         &config.agents.commands,
     );
 
-    assert!(specs.iter().any(|entry| entry.source == "kind"));
+    assert!(!specs.iter().any(|entry| entry.source == "kind"));
     assert!(specs.iter().any(|entry| {
         entry.name == "planner"
             && entry.source == "profile"
