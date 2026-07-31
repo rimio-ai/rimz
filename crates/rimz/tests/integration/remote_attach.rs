@@ -914,6 +914,56 @@ fn supervised_connect_restores_tty_and_resets_emulator_after_retry() {
 }
 
 #[test]
+fn supervised_clean_exit_preserves_shell_typeahead() {
+    const TYPEAHEAD: &[u8] = b"rimz-shell-typeahead\n";
+
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let pair = remote_connect_pty();
+    let tty_name = pair.master.tty_name().expect("remote connect pty name");
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.env("RIMZ_TEST_SSH_RAW_TTY", "1");
+    cmd.env("RIMZ_TEST_SSH_SLEEP_MS", "500");
+
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
+    drop(pair.slave);
+    let mut writer = pair.master.take_writer().expect("take pty writer");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while main_invocation_count(&log) < 1 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(main_invocation_count(&log), 1, "attach did not start");
+    writer.write_all(TYPEAHEAD).expect("queue shell typeahead");
+    writer.flush().expect("flush shell typeahead");
+    drop(writer);
+
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll remote connect") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    .expect("remote connect timed out");
+    assert!(status.success(), "remote connect failed with {status:?}");
+
+    let mut tty = std::fs::File::open(tty_name).expect("reopen remote connect pty");
+    nix::fcntl::fcntl(
+        &tty,
+        nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+    )
+    .expect("set remote connect pty nonblocking");
+    let mut queued = vec![0u8; TYPEAHEAD.len()];
+    tty.read_exact(&mut queued)
+        .expect("read queued shell typeahead");
+    assert_eq!(queued, TYPEAHEAD);
+}
+
+#[test]
 fn supervised_reconnect_discards_stale_terminal_replies_and_preserves_user_input() {
     const TERMINAL_REPLIES: &[u8] = b"\x1b[?62;22;52c\x1b[>1;10;0c\x1bP>|ghostty 1.3.1\x1b\\";
     const USER_MARKER: &[u8] = b"RIMZ-USER-MARKER\r";
