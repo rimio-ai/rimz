@@ -36,6 +36,58 @@ fn write_machine_file(path: &std::path::Path, text: &str) {
     std::fs::write(path, text).expect("write config seed");
 }
 
+#[test]
+fn agents_home_profile_fragment_feeds_both_type_catalogues_without_kind_rows() {
+    let env = Env::new();
+    write_machine_file(
+        &env.home_root
+            .join(".agents")
+            .join("profiles")
+            .join("explorer")
+            .join("agent.toml"),
+        r#"
+[agents.profiles.explorer]
+agent = "claude"
+description = "Maps the main workspace"
+
+[subagents.profiles.explorer]
+agent = "codex"
+description = "Maps a delegated workspace"
+"#,
+    );
+
+    for (doorway, expected_agent, expected_description) in [
+        ("agents", "claude", "Maps the main workspace"),
+        ("subagents", "codex", "Maps a delegated workspace"),
+    ] {
+        let output = env
+            .rimz()
+            .args([doorway, "types", "--json"])
+            .output()
+            .expect("run type catalogue");
+        assert!(
+            output.status.success(),
+            "{doorway} types failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let entries: Vec<serde_json::Value> =
+            serde_json::from_slice(&output.stdout).expect("type catalogue json");
+        assert!(
+            entries.iter().all(|entry| entry["source"] != "kind"),
+            "{doorway} types must omit built-in kind rows: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|entry| {
+                entry["name"] == "explorer"
+                    && entry["source"] == "profile"
+                    && entry["agent"] == expected_agent
+                    && entry["description"] == expected_description
+            }),
+            "{doorway} types must include its fragment profile: {entries:?}"
+        );
+    }
+}
+
 fn run_setup_pty(
     env: &Env,
     input: &str,

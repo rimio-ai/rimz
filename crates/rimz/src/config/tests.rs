@@ -811,6 +811,59 @@ fn agents_home_fragments_merge_profiles_commands_and_teams() {
 }
 
 #[test]
+fn agents_home_fragments_merge_subagent_profiles_with_paths_and_machine_precedence() {
+    let root = tempdir().expect("tempdir");
+    let fragment_path = write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_PROFILES_SUBDIR,
+        "reviewer",
+        AGENT_FRAGMENT_FILE,
+        "[subagents.profiles.reviewer]\n\
+             agent = \"codex\"\n\
+             system-prompt-file = \"prompts/reviewer.md\"\n\
+         [subagents.profiles.shared]\n\
+             agent = \"codex\"\n",
+    );
+    let config_dir = tempdir().expect("config dir");
+    let config_path = write_named(
+        &config_dir,
+        AGENTS_FILE,
+        "[subagents.profiles.shared]\n\
+             agent = \"claude\"\n",
+    );
+
+    let config = MachineConfig::load_from(&config_path, root.path()).expect("load fragments");
+
+    let reviewer = config
+        .subagents
+        .profiles
+        .0
+        .get("reviewer")
+        .expect("fragment subagent profile");
+    assert_eq!(reviewer.agent, "codex");
+    assert_eq!(
+        reviewer.system_prompt_file.as_deref(),
+        Some(
+            fragment_path
+                .parent()
+                .expect("fragment dir")
+                .join("prompts/reviewer.md")
+                .as_path()
+        )
+    );
+    assert_eq!(
+        config
+            .subagents
+            .profiles
+            .0
+            .get("shared")
+            .map(|profile| profile.agent.as_str()),
+        Some("claude"),
+        "machine agents.toml must override a same-named fragment profile"
+    );
+}
+
+#[test]
 fn agents_home_teams_can_bind_implicit_builtin_profiles() {
     let root = tempdir().expect("tempdir");
     write_agents_home_fragment(

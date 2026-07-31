@@ -6,7 +6,8 @@
 # only when this machine needs an override.
 
 [agents]
-# Drop-in fragments under ~/.agents/{profiles,teams} merge here; entries in this file override them.
+# Drop-in fragments under ~/.agents/{profiles,teams} merge into matching
+# [agents] and [subagents] tables; entries in this file override them.
 # placement = "auto"                    # launch placement: "auto" (single agent → current pane; team/worktree → new tab), "pane" (split a new pane), or "tab" (always new tab)
 # max-chain-length = 3                  # successive agent-to-agent launches allowed from a human-started root
 # `rimz agents <spec>` names a team or uses inline cells made from profiles,

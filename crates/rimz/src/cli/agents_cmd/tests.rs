@@ -94,6 +94,7 @@ fn agent_specs_list_only_agent_profiles_with_descriptions() {
         &machine.agents.profiles,
         &machine.agents.commands,
     );
+    assert!(!specs.iter().any(|entry| entry.source == "kind"));
     assert!(specs.iter().any(|entry| {
         entry.name == "planner"
             && entry.source == "profile"
