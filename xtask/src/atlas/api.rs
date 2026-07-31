@@ -95,7 +95,12 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
             serde_json::to_string_pretty(&report).context("rendering atlas api JSON")?
         );
     } else {
-        print_report(&report, args.top, args.module.as_deref());
+        print_report(
+            &report,
+            args.top,
+            args.module.as_deref(),
+            args.since.is_some(),
+        );
     }
     Ok(())
 }
@@ -429,26 +434,35 @@ pub(super) fn median(mut values: Vec<usize>) -> f64 {
     clippy::print_stdout,
     reason = "xtask atlas api report is the command's stdout contract"
 )]
-fn print_report(report: &Report, top: usize, requested_module: Option<&str>) {
+fn print_report(report: &Report, top: usize, requested_module: Option<&str>, show_delta: bool) {
     println!("Atlas api — {}", report.path.display());
-    println!("module                    pub fn  pub type  occ/item  occ0  params/fn  Δpub");
+    println!("{}", module_header(show_delta));
     for module in report.modules.iter().take(top) {
         let params = module
             .params_median
             .map_or_else(|| "—".to_owned(), |value| format!("{value:.1}"));
-        let delta = module
-            .delta_pub
-            .map_or_else(|| "—".to_owned(), |value| format!("{value:+}"));
-        println!(
-            "{:<25} {:>6}  {:>8}  {:>8.1}  {:>4}  {:>9}  {:>4}",
-            module.module,
-            module.pub_fns,
-            module.pub_types,
-            module.occurrence_median,
-            module.zero_occurrences,
-            params,
-            delta
-        );
+        if show_delta {
+            println!(
+                "{:<25} {:>6}  {:>8}  {:>8.1}  {:>4}  {:>9}  {:+4}",
+                module.module,
+                module.pub_fns,
+                module.pub_types,
+                module.occurrence_median,
+                module.zero_occurrences,
+                params,
+                module.delta_pub.unwrap_or(0)
+            );
+        } else {
+            println!(
+                "{:<25} {:>6}  {:>8}  {:>8.1}  {:>4}  {:>9}",
+                module.module,
+                module.pub_fns,
+                module.pub_types,
+                module.occurrence_median,
+                module.zero_occurrences,
+                params
+            );
+        }
     }
     if report.total_modules > report.modules.len() {
         println!(
@@ -500,6 +514,14 @@ fn print_report(report: &Report, top: usize, requested_module: Option<&str>) {
     );
 }
 
+fn module_header(show_delta: bool) -> &'static str {
+    if show_delta {
+        "module                    pub fn  pub type  occ/item  occ0  params/fn  Δpub"
+    } else {
+        "module                    pub fn  pub type  occ/item  occ0  params/fn"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,6 +548,12 @@ mod tests {
             OccurrenceCorpus::new(&sources).count_from_module("", "run"),
             (2, 1)
         );
+    }
+
+    #[test]
+    fn api_header_only_advertises_requested_delta() {
+        assert!(!module_header(false).contains("Δpub"));
+        assert!(module_header(true).ends_with("Δpub"));
     }
 
     #[test]
