@@ -79,11 +79,7 @@ fn cohort_worktree_path(
     config: &rimz::config::WorktreeConfig,
     name: &str,
 ) -> rimz::worktree::Result<PathBuf> {
-    let repo_root = workspace
-        .cwd_project_root
-        .as_deref()
-        .unwrap_or(&workspace.project_root);
-    rimz::worktree::worktree_path(repo_root, config, name)
+    rimz::worktree::worktree_path(workspace.launch_repo_root(), config, name)
 }
 
 fn cohort_subject(spec_display: &str, team: Option<&str>) -> String {
@@ -143,10 +139,7 @@ fn recreate_or_done(
         return Ok(Reconciled::Done);
     }
     let removed = rimz::worktree::remove(
-        workspace
-            .cwd_project_root
-            .as_deref()
-            .unwrap_or(&workspace.project_root),
+        workspace.launch_repo_root(),
         &machine_config.agents.worktree,
         name,
         false,

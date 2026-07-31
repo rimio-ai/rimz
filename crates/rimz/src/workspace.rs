@@ -101,6 +101,17 @@ pub struct ResolvedWorkspace {
     pub mux_hint: Option<MuxName>,
 }
 
+impl ResolvedWorkspace {
+    /// The repository launch-created worktrees belong to. A participant may
+    /// keep coordinating through a pinned room while its cwd names another
+    /// repository; outside Git, creation falls back to the room root.
+    pub fn launch_repo_root(&self) -> &Path {
+        self.cwd_project_root
+            .as_deref()
+            .unwrap_or(&self.project_root)
+    }
+}
+
 /// A workspace discovered by scanning the state dir, paired with the mux session
 /// it was last started under. Read straight from `workspace.json`, so it needs
 /// neither a cwd nor a running session — the cwd-independent basis shared by

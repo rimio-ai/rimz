@@ -15,9 +15,42 @@ use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, Ev
 
 #[cfg(unix)]
 use crate::common::{
-    CommandTimeoutExt, Env, exec_args, path_with_front, write_env_dump_shim,
+    CommandTimeoutExt, Env, canonical, exec_args, path_with_front, write_env_dump_shim,
     write_failing_agent_shim, write_fake_bash_shell, write_fake_login_shell,
 };
+
+#[cfg(unix)]
+fn init_launch_repo(path: &std::path::Path) -> bool {
+    std::fs::create_dir_all(path).expect("mkdir repo");
+    let run = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .status()
+    };
+    match run(&["init", "-q", "-b", "main"]) {
+        Ok(status) if status.success() => {}
+        _ => return false,
+    }
+    assert!(
+        run(&["config", "user.email", "rimz@example.test"])
+            .expect("git config email")
+            .success()
+    );
+    assert!(
+        run(&["config", "user.name", "RimZ Test"])
+            .expect("git config name")
+            .success()
+    );
+    std::fs::write(path.join("README.md"), "base\n").expect("base file");
+    assert!(run(&["add", "README.md"]).expect("git add").success());
+    assert!(
+        run(&["commit", "-q", "-m", "base"])
+            .expect("git commit")
+            .success()
+    );
+    true
+}
 
 #[cfg(unix)]
 fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
@@ -442,6 +475,49 @@ fn invalid_new_pane_refuses_an_agents_launch_before_side_effects() {
     assert!(
         !env.state_path_for(&env.project_root).events_log.exists(),
         "a rejected --new-pane must not append launch events",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn supervised_cross_repo_worktree_refuses_non_terminal_input() {
+    let env = Env::new();
+    let current_root = env.home_root.join("current");
+    if !init_launch_repo(&env.project_root) || !init_launch_repo(&current_root) {
+        tracing::warn!("skipping: git unavailable");
+        return;
+    }
+    let room_root = canonical(&env.project_root);
+    let current_root = canonical(&current_root);
+    let workspace_id = rimz::WorkspaceId::from_project_root(&room_root);
+
+    env.rimz()
+        .current_dir(&current_root)
+        .env(rimz::workspace::ENV_WORKSPACE_ID, workspace_id.as_str())
+        .env(rimz::workspace::ENV_PROJECT_ROOT, &room_root)
+        .stdin(std::process::Stdio::null())
+        .args([
+            "agents",
+            "codex",
+            "-p",
+            "fix the parser",
+            "--worktree=supervised-cross-root",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains(format!("room root: {}", room_root.display())))
+        .stderr(contains(format!(
+            "current git root: {}",
+            current_root.display()
+        )))
+        .stderr(contains(format!("--root {}", current_root.display())));
+
+    assert!(
+        !env.home_root
+            .join("current-worktrees")
+            .join("supervised-cross-root")
+            .exists(),
+        "a non-terminal mismatch must refuse before creating the worktree",
     );
 }
 

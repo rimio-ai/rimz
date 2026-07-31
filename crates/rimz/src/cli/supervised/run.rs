@@ -131,7 +131,10 @@ pub(in crate::cli) fn run_print(
     globals: &GlobalFlags,
 ) -> Result<Option<RunRecord>> {
     let output_format = presentation.output_format;
-    let record = match run_supervised(request, presentation, globals)? {
+    let Some(outcome) = run_supervised(request, presentation, globals)? else {
+        return Ok(None);
+    };
+    let record = match outcome {
         SupervisedRunOutcome::Record(record) => Some(*record),
         SupervisedRunOutcome::Background { agent_name, .. } => {
             writeln!(render::out(), "{agent_name}")?;
@@ -384,7 +387,7 @@ fn prepare_supervised(
     request: &SupervisedRunRequest,
     presentation: &SupervisedPresentation,
     globals: &GlobalFlags,
-) -> Result<PreparedRun> {
+) -> Result<Option<PreparedRun>> {
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
     let mode = request.permission_mode;
@@ -449,6 +452,10 @@ fn prepare_supervised(
     } else {
         None
     };
+    let worktree_launch = request.worktree.is_some() || request.from_pr.is_some();
+    if worktree_launch && !crate::cli::confirm_cross_repo_worktree(&workspace)? {
+        return Ok(None);
+    }
     let launch = rimz::worktree::resolve_launch_checkout(
         &workspace,
         &machine_config.agents.worktree,
@@ -503,7 +510,7 @@ fn prepare_supervised(
         team_name.as_deref(),
         request.channel.as_deref().or(inferred_lane.as_deref()),
     );
-    Ok(PreparedRun {
+    Ok(Some(PreparedRun {
         workspace,
         machine_config,
         mode,
@@ -518,7 +525,7 @@ fn prepare_supervised(
         stream_text: presentation.stream_text,
         managed_launch,
         ancestry,
-    })
+    }))
 }
 
 fn execute_attempt(
@@ -762,8 +769,10 @@ pub(in crate::cli) fn run_supervised(
     request: SupervisedRunRequest,
     presentation: SupervisedPresentation,
     globals: &GlobalFlags,
-) -> Result<SupervisedRunOutcome> {
-    let prepared = prepare_supervised(&request, &presentation, globals)?;
+) -> Result<Option<SupervisedRunOutcome>> {
+    let Some(prepared) = prepare_supervised(&request, &presentation, globals)? else {
+        return Ok(None);
+    };
     if let Some(binding) = prepared.managed_launch.binding()
         && let Some(reason) = rimz::agents::provider_budget_gate(
             prepared.store.runtime_paths(),
@@ -772,7 +781,7 @@ pub(in crate::cli) fn run_supervised(
             jiff::Timestamp::now(),
         )
     {
-        return Ok(SupervisedRunOutcome::BudgetExceeded { reason });
+        return Ok(Some(SupervisedRunOutcome::BudgetExceeded { reason }));
     }
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let mut room = rimz::room::RoomContext::from_resolved(
@@ -809,7 +818,7 @@ pub(in crate::cli) fn run_supervised(
                 jiff::Timestamp::now(),
             )
         {
-            return Ok(SupervisedRunOutcome::BudgetExceeded { reason });
+            return Ok(Some(SupervisedRunOutcome::BudgetExceeded { reason }));
         }
         if let Some(reason) = rimz::harness::budget::scope_gate(
             prepared.store.runtime_paths(),
@@ -817,7 +826,7 @@ pub(in crate::cli) fn run_supervised(
             &prepared.machine_config,
             jiff::Timestamp::now(),
         ) {
-            return Ok(SupervisedRunOutcome::BudgetExceeded { reason });
+            return Ok(Some(SupervisedRunOutcome::BudgetExceeded { reason }));
         }
         let attempt_outcome = execute_attempt(
             &prepared,
@@ -830,7 +839,10 @@ pub(in crate::cli) fn run_supervised(
         )?;
         let blocking = match attempt_outcome {
             AttemptOutcome::Background { agent_name, run_id } => {
-                return Ok(SupervisedRunOutcome::Background { agent_name, run_id });
+                return Ok(Some(SupervisedRunOutcome::Background {
+                    agent_name,
+                    run_id,
+                }));
             }
             AttemptOutcome::Blocking(blocking) => *blocking,
         };
@@ -853,7 +865,7 @@ pub(in crate::cli) fn run_supervised(
                     "rimz: worktree cleanup did not complete: {err}"
                 );
             }
-            return Ok(SupervisedRunOutcome::Record(Box::new(record)));
+            return Ok(Some(SupervisedRunOutcome::Record(Box::new(record))));
         }
         let mut stderr = render::err();
         supervised::output::print_run_forensics(&record, &mut stderr)?;
