@@ -90,6 +90,128 @@ fn first_post_rotation_event_reduces_against_the_carried_agent() {
 }
 
 #[test]
+fn launch_and_attach_first_events_reduce_against_the_carried_agent() {
+    let carried = {
+        let mut agent = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
+        agent.launch_id = Some(AgentSessionId::from("launch-1"));
+        agent.parent_agent_id = Some(AgentSessionId::from("parent-1"));
+        agent.parent_agent_kind = Some(AgentKind::new_unchecked("codex"));
+        agent.launch_depth = Some(1);
+        agent
+    };
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+    let kind = AgentKind::new_unchecked("claude");
+    let launch = EventEnvelope::agent_launched(
+        workspace.clone(),
+        "session",
+        &kind,
+        AgentLaunchPayload {
+            agent_id: carried.agent_id.clone(),
+            launch_id: None,
+            agent_name: "lucid-atlas".to_owned(),
+            agent_name_explicit: false,
+            launch: LaunchParams::default(),
+            state: AgentLaunchState::Bound,
+            run_id: None,
+            pane_id: None,
+            runtime_owner: None,
+            worktree_path: None,
+            worktree_branch: None,
+            prompt: None,
+            description: None,
+        },
+    );
+    let launched = agent_rollup_with_carryover(&[launch], vec![carried.clone()]);
+    assert_eq!(launched[0].launch_id, carried.launch_id);
+    assert_eq!(launched[0].parent_agent_id, carried.parent_agent_id);
+    assert_eq!(launched[0].parent_agent_kind, carried.parent_agent_kind);
+    assert_eq!(launched[0].launch_depth, carried.launch_depth);
+
+    let pane_id = PaneId::parse("tmux:%9").expect("pane id");
+    let owner = RuntimeOwner::new(RuntimeOwnerKind::Agent, "agent-1", 42, None);
+    let attach = EventEnvelope::agent_attached(
+        workspace,
+        "session",
+        &kind,
+        AgentAttachPayload {
+            agent_id: carried.agent_id.clone(),
+            launch_id: None,
+            pane_id: pane_id.clone(),
+            pane_pid: Some(42),
+            runtime_owner: owner.clone(),
+        },
+    );
+    let attached = agent_rollup_with_carryover(&[attach], vec![carried.clone()]);
+    assert_eq!(attached[0].launch_id, carried.launch_id);
+    assert_eq!(attached[0].parent_agent_id, carried.parent_agent_id);
+    assert_eq!(attached[0].parent_agent_kind, carried.parent_agent_kind);
+    assert_eq!(attached[0].launch_depth, carried.launch_depth);
+    assert_eq!(
+        attached[0].pane.as_ref().map(|pane| &pane.pane_id),
+        Some(&pane_id)
+    );
+    assert_eq!(attached[0].runtime_owner.as_ref(), Some(&owner));
+}
+
+#[test]
+fn sticky_rebirth_unstamps_carryover_before_a_later_delta_hydrates_it() {
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+    let mut carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
+    carried.pane = Some(pane("%7", "claude", "/repo"));
+    carried.kind_ordinal = Some(7);
+    let carryover = EventCarryover {
+        agents: vec![carried],
+        ..EventCarryover::default()
+    };
+
+    let rebirth_events = vec![EventEnvelope::session_rebirth(workspace.clone(), "session")];
+    let rebirth_events = decode_events(&rebirth_events);
+    let prefix = fold_delta(
+        FoldDeltaSeed::default(),
+        carryover.clone(),
+        &rebirth_events,
+        epoch(),
+    );
+    assert!(prefix.saw_session_rebirth);
+
+    let turn_started = lifecycle_at(
+        &workspace,
+        "claude",
+        "UserPromptSubmit",
+        "agent-1",
+        lifecycle::LifecycleSignal::TurnStarted,
+    );
+    let delta_events = decode_events(std::slice::from_ref(&turn_started));
+    let warm = fold_delta(
+        FoldDeltaSeed {
+            agents: prefix
+                .raw_agents
+                .into_iter()
+                .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
+                .collect(),
+            identity: prefix.agent_identity,
+            saw_session_rebirth: prefix.saw_session_rebirth,
+            ..FoldDeltaSeed::default()
+        },
+        carryover.clone(),
+        &delta_events,
+        epoch(),
+    );
+
+    let cold_events = vec![
+        EventEnvelope::session_rebirth(workspace, "session"),
+        turn_started,
+    ];
+    let cold_events = decode_events(&cold_events);
+    let cold = fold_delta(FoldDeltaSeed::default(), carryover, &cold_events, epoch());
+    assert_eq!(sorted_value(warm.merged.clone()), sorted_value(cold.merged));
+    assert!(
+        warm.merged[0].pane.is_none(),
+        "an earlier rebirth must retire the carried pane before hydration"
+    );
+}
+
+#[test]
 fn carryover_session_end_stamps_and_preserves_resumable_identity() {
     let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
     let mut carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);

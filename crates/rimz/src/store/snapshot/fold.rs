@@ -12,7 +12,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::project::{
-    AgentIdentityState, FoldEvent, backfill_agent_identities, decode_events,
+    AgentIdentityState, FoldEvent, agent_event_key, backfill_agent_identities, decode_events,
     reduce_agent_states_seeded_with_identity, stamp_compact_commands_in_agents,
     unstamp_for_rebirth,
 };
@@ -201,19 +201,6 @@ struct FoldDeltaSeed {
     saw_session_rebirth: bool,
 }
 
-fn agent_key(event: &FoldEvent<'_>) -> Option<(AgentKind, AgentSessionId)> {
-    let agent_id = match &event.kind {
-        EventKind::AgentLifecycle(payload) => payload.observation.agent_id.clone()?,
-        EventKind::AgentLaunch(payload) => payload.agent_id.clone(),
-        EventKind::AgentAttach(payload) => payload.agent_id.clone(),
-        _ => return None,
-    };
-    Some((
-        AgentKind::new_unchecked(event.envelope.source.clone()),
-        agent_id,
-    ))
-}
-
 fn fold_delta(
     mut seed: FoldDeltaSeed,
     mut carryover: EventCarryover,
@@ -223,24 +210,34 @@ fn fold_delta(
     carryover.agent_identity =
         backfill_agent_identities(&mut carryover.agents, carryover.agent_identity);
     stamp_compact_commands_in_agents(&mut carryover.agents, events);
+    let rebirth_precedes_delta = seed.saw_session_rebirth;
     seed.saw_session_rebirth |= events_have_rebirth(events);
+    if rebirth_precedes_delta {
+        unstamp_for_rebirth(&mut carryover.agents);
+        carryover.agent_identity = carryover.agent_identity.with_ordinals_reset();
+    }
+
+    let mut carried_by_key = None;
 
     // Any agent event can be the first observation after rotation. Hydrate only
     // observed keys before reducing so `carried_base` remains the single owner
     // of lifetime fields without changing raw_agents into a carryover union.
     for event in events {
-        let Some(key) = agent_key(event) else {
+        let Some(key) = agent_event_key(event) else {
             continue;
         };
         if seed.agents.contains_key(&key) {
             continue;
         }
-        if let Some(carried) = carryover
-            .agents
-            .iter()
-            .find(|agent| agent.kind == key.0 && agent.agent_id == key.1)
-        {
-            seed.agents.insert(key, carried.clone());
+        let carried_by_key = carried_by_key.get_or_insert_with(|| {
+            carryover
+                .agents
+                .iter()
+                .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
+                .collect::<BTreeMap<_, _>>()
+        });
+        if let Some(carried) = carried_by_key.get(&key) {
+            seed.agents.insert(key, (*carried).clone());
         }
     }
 
