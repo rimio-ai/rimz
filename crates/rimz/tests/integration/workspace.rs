@@ -70,6 +70,7 @@ fn workspace_resolve_uses_nested_git_probe_cwd_for_the_common_dir() {
     let resolved = resolve_workspace_json(&env, &deep);
 
     assert_eq!(resolved.project_root, canonical(&repo));
+    assert_eq!(resolved.cwd_project_root, Some(canonical(&repo)));
     assert_normalized_root(&resolved.project_root);
 }
 
@@ -109,6 +110,7 @@ fn workspace_resolve_from_linked_worktree_uses_the_main_repo_root() {
     let resolved = resolve_workspace_json(&env, &deep);
 
     assert_eq!(resolved.project_root, canonical(&repo));
+    assert_eq!(resolved.cwd_project_root, Some(canonical(&repo)));
     assert_normalized_root(&resolved.project_root);
 }
 

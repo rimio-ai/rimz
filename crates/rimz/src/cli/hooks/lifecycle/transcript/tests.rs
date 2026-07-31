@@ -15,6 +15,7 @@ fn workspace() -> ResolvedWorkspace {
             "/tmp/hooks-test",
         )),
         project_root: std::path::PathBuf::from("/tmp/hooks-test"),
+        cwd_project_root: None,
         root_class: rimz::workspace::RootClass::Directory,
         worktree_root: std::path::PathBuf::from("/tmp/hooks-test/chat"),
         worktree_branch: None,

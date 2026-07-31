@@ -63,6 +63,7 @@ fn hooks_test_workspace(worktree_branch: Option<&str>) -> rimz::ResolvedWorkspac
             "/tmp/hooks-test",
         )),
         project_root: std::path::PathBuf::from("/tmp/hooks-test"),
+        cwd_project_root: None,
         root_class: rimz::workspace::RootClass::Directory,
         worktree_root: std::path::PathBuf::from("/tmp/hooks-test"),
         worktree_branch: worktree_branch.map(ToOwned::to_owned),

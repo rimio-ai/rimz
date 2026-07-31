@@ -233,6 +233,7 @@ mod tests {
         rimz::ResolvedWorkspace {
             workspace_id: WorkspaceId::from_project_root(&root),
             project_root: root.clone(),
+            cwd_project_root: None,
             root_class: class,
             worktree_root: root.clone(),
             worktree_branch: None,

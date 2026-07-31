@@ -271,6 +271,24 @@ fn pin_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     (dir, pinned_root, marker_dir)
 }
 
+fn init_git_repo(path: &Path) {
+    std::fs::create_dir_all(path).expect("mkdir repo");
+    let run = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {args:?}");
+    };
+    run(&["init", "-b", "main"]);
+    run(&["config", "user.email", "rimz@example.test"]);
+    run(&["config", "user.name", "RimZ Test"]);
+    std::fs::write(path.join("README.md"), "base\n").expect("base file");
+    run(&["add", "README.md"]);
+    run(&["commit", "-m", "base"]);
+}
+
 #[test]
 fn participant_pin_beats_the_static_ladder() {
     let (_dir, pinned_root, marker_dir) = pin_fixture();
@@ -294,6 +312,65 @@ fn participant_pin_beats_the_static_ladder() {
         marker_dir.canonicalize().expect("canonical project"),
     );
     assert_eq!(resolved.root_class, RootClass::Directory);
+    assert_eq!(resolved.cwd_project_root, None);
+}
+
+#[test]
+fn participant_pin_tracks_the_starting_paths_repo_root() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pinned_root = dir.path().join("room");
+    let current_root = dir.path().join("current");
+    init_git_repo(&pinned_root);
+    init_git_repo(&current_root);
+    let start = current_root.join("nested");
+    std::fs::create_dir(&start).expect("nested cwd");
+    let pinned_root = pinned_root.canonicalize().expect("canonical room");
+    let current_root = current_root.canonicalize().expect("canonical current");
+    let env = pin_of(
+        WorkspaceId::from_project_root(&pinned_root).to_string(),
+        pinned_root.clone(),
+    );
+
+    let resolved =
+        WorkspaceResolver::resolve_with(ResolveMode::Participate, &start, None, &env, NO_SCAN)
+            .expect("resolve");
+
+    assert_eq!(resolved.project_root, pinned_root);
+    assert_eq!(resolved.cwd_project_root, Some(current_root));
+}
+
+#[test]
+fn participant_pin_tracks_main_repo_from_a_linked_worktree() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pinned_root = dir.path().join("room");
+    let current_root = dir.path().join("current");
+    let linked = dir.path().join("linked");
+    std::fs::create_dir_all(&pinned_root).expect("room");
+    init_git_repo(&current_root);
+    let status = std::process::Command::new("git")
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            linked.to_str().expect("utf8 path"),
+        ])
+        .current_dir(&current_root)
+        .status()
+        .expect("add linked worktree");
+    assert!(status.success());
+    let pinned_root = pinned_root.canonicalize().expect("canonical room");
+    let current_root = current_root.canonicalize().expect("canonical current");
+    let env = pin_of(
+        WorkspaceId::from_project_root(&pinned_root).to_string(),
+        pinned_root,
+    );
+
+    let resolved =
+        WorkspaceResolver::resolve_with(ResolveMode::Participate, &linked, None, &env, NO_SCAN)
+            .expect("resolve");
+
+    assert_eq!(resolved.cwd_project_root, Some(current_root));
 }
 
 #[test]
@@ -313,6 +390,7 @@ fn create_mode_ignores_the_pin() {
         marker_dir.canonicalize().expect("canonical project"),
     );
     assert_eq!(resolved.root_class, RootClass::Marker);
+    assert_eq!(resolved.cwd_project_root, None);
 }
 
 #[test]
@@ -324,7 +402,7 @@ fn root_override_beats_the_pin() {
         pinned_root,
     );
     let forced = dir.path().join("forced");
-    std::fs::create_dir_all(&forced).expect("mkdir forced");
+    init_git_repo(&forced);
 
     let resolved = WorkspaceResolver::resolve_with(
         ResolveMode::Participate,
@@ -337,6 +415,10 @@ fn root_override_beats_the_pin() {
     assert_eq!(
         resolved.project_root,
         forced.canonicalize().expect("canonical forced"),
+    );
+    assert_eq!(
+        resolved.cwd_project_root,
+        Some(resolved.project_root.clone())
     );
 }
 
@@ -400,6 +482,23 @@ fn bare_directory_resolves_as_a_directory_workspace() {
         scratch.canonicalize().expect("canonical scratch"),
     );
     assert_eq!(resolved.project_root, resolved.worktree_root);
+    assert_eq!(resolved.cwd_project_root, None);
+}
+
+#[test]
+fn fresh_git_resolution_tracks_the_project_root() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let repo = dir.path().join("repo");
+    init_git_repo(&repo);
+
+    let resolved =
+        WorkspaceResolver::resolve_with(ResolveMode::Create, &repo, None, &no_env, NO_SCAN)
+            .expect("resolve");
+
+    assert_eq!(
+        resolved.cwd_project_root.as_deref(),
+        Some(resolved.project_root.as_path())
+    );
 }
 
 #[test]

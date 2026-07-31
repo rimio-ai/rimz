@@ -749,6 +749,7 @@ mod tests {
         let project_root = PathBuf::from(project_root);
         rimz::ResolvedWorkspace {
             workspace_id: rimz::WorkspaceId::from_project_root(&project_root),
+            cwd_project_root: Some(project_root.clone()),
             project_root,
             root_class: rimz::workspace::RootClass::Repo,
             worktree_root: PathBuf::from(worktree_root),

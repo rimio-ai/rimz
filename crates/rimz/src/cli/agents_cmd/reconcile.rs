@@ -18,11 +18,11 @@ pub(super) fn reconcile_cohort_launch(
     team: Option<&str>,
     cells: &[rimz::harness::resume::CohortCell],
 ) -> Result<Reconciled> {
-    let path = rimz::worktree::worktree_path(
-        &workspace.project_root,
-        &machine_config.agents.worktree,
-        name,
-    )?;
+    let repo_root = workspace
+        .cwd_project_root
+        .as_deref()
+        .unwrap_or(&workspace.project_root);
+    let path = rimz::worktree::worktree_path(repo_root, &machine_config.agents.worktree, name)?;
     if !path.exists() {
         return Ok(Reconciled::Continue);
     }
@@ -135,7 +135,10 @@ fn recreate_or_done(
         return Ok(Reconciled::Done);
     }
     let removed = rimz::worktree::remove(
-        &workspace.project_root,
+        workspace
+            .cwd_project_root
+            .as_deref()
+            .unwrap_or(&workspace.project_root),
         &machine_config.agents.worktree,
         name,
         false,

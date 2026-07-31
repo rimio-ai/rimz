@@ -567,6 +567,7 @@ mod tests {
         ResolvedWorkspace {
             workspace_id: workspace_id(),
             project_root: std::path::PathBuf::from("/tmp/hooks-test"),
+            cwd_project_root: None,
             root_class: rimz::workspace::RootClass::Directory,
             worktree_root: std::path::PathBuf::from("/tmp/hooks-test"),
             worktree_branch: None,

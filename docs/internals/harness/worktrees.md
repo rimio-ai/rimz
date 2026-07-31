@@ -47,14 +47,14 @@ The domain module runs Git through `crate::proc::git_command` with `LC_ALL=C` an
 `create` and `create_from_pr` walk the same five steps.
 
 1. **Resolve the name.** An omitted name becomes an adjective-noun pair seeded from a UUIDv7, retried with a numeric suffix until an unused directory appears. A requested name is validated per segment (ASCII alphanumerics, `_`, `-`), and a `/` in it names the branch directly while the directory and channel take the dashed spelling: `feat/login` gives branch `feat/login` in directory `feat-login`. `--branch` overrides the derived branch without touching the directory name.
-2. **Resolve the base.** [`WorktreeConfig`](../../../crates/rimz/src/config/worktree.rs) carries the per-machine `dir` template (default `../{repo}-worktrees`, `{repo}` expanding to the repository basename) and `base`. `head` branches from local `HEAD`, `fresh` from `origin/HEAD`, and anything else is a literal ref. Both the resolved commit and the branch name Git reports for that choice go into the marker.
+2. **Resolve the base.** [`WorktreeConfig`](../../../crates/rimz/src/config/worktree.rs) carries the per-machine `dir` template (default `../{repo}-worktrees`, `{repo}` expanding to the repository basename) and `base`. Launch creation resolves that template and runs Git against the starting path's freshly probed main-repository root, not the room's pinned root; a start outside Git falls back to the room root. `head` branches from local `HEAD`, `fresh` from `origin/HEAD`, and anything else is a literal ref. Both the resolved commit and the branch name Git reports for that choice go into the marker.
 3. **Add the tree.** `git worktree add` in one of three shapes: `-b <branch> <base>` for a fresh branch, `--track -b <branch> origin/<branch>` for a same-repository PR head, and a bare `add <path> <branch>` when a local branch already exists and was fast-forwarded to the PR head.
 4. **Write the marker.** Temp-file-plus-rename into the Git admin directory. Ownership begins here, so a failure at this step leaves an ordinary unmanaged Git worktree rather than a half-managed one.
 5. **Seed the tree.** `.worktreeinclude` copies, then `.worktreelink` symlinks, both best-effort.
 
 A launch that names its worktree reuses an existing one; `rimz worktree new` refuses instead. A reused tree is never re-seeded, and `CreatedWorktree` reports zero included and linked counts so the CLI stays quiet about work it did not do.
 
-`resolve_launch_checkout` is the seam the agent launcher enters. It returns the cwd every pane in the layout gets, plus the worktree name that becomes the channel, and it fails fast with `LaunchWorktreeRequiresRepo` when the room is not a Git repository.
+`resolve_launch_checkout` is the seam the agent launcher enters. It returns the cwd every pane in the layout gets, plus the worktree name that becomes the channel, and it fails fast with `LaunchWorktreeRequiresRepo` when neither the current path nor the room root is a Git repository. Before that seam, the CLI compares the current repository root with the room pin: a mismatch is printed with both paths and requires a default-no confirmation, while non-terminal stdin refuses with an explicit `--root` hint. Cohort relaunch reconciliation uses the same selected repository root.
 
 ### From a pull request
 
