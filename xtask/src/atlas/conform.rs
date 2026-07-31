@@ -268,6 +268,7 @@ fn initialize(root: &Path, scope: &Path) -> Result<Target> {
     let syntax = syntax::analyze_sources(&scoped_sources);
     let known_modules = all_sources
         .iter()
+        .filter(|source| source.is_production())
         .map(|source| crate_module_for_path(&source.path))
         .collect::<BTreeSet<_>>();
     let workspace_crates = workspace_crate_names(root)?;
@@ -343,6 +344,7 @@ fn evaluate(
     let all_sources = sources::working_tree_rust_sources(root)?;
     let known_modules = all_sources
         .iter()
+        .filter(|source| source.is_production())
         .map(|source| crate_module_for_path(&source.path))
         .collect::<BTreeSet<_>>();
     let workspace_crates = workspace_crate_names(root)?;

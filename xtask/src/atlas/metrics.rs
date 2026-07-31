@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{runner, source_files};
 
-use super::modules::{module_for_path, path_in_scope};
+use super::modules::module_for_path;
+use super::sources::Source;
 
 const OUTPUT_DIR: &str = "target/atlas-complexity";
 
@@ -67,14 +68,12 @@ struct LocMetrics {
     sloc: f64,
 }
 
-pub(super) fn analyze(root: &Path, scope: &Path) -> Result<MetricsReport> {
+pub(super) fn analyze(root: &Path, scope: &Path, sources: &[Source]) -> Result<MetricsReport> {
     ensure_prerequisite()?;
-    let files = source_files::tracked_rust_files(root)?
-        .into_iter()
-        .filter(|file| {
-            file.strip_prefix(root)
-                .is_ok_and(|path| path_in_scope(path, scope))
-        })
+    let files = sources
+        .iter()
+        .filter(|source| source.is_production())
+        .map(|source| root.join(&source.path))
         .collect::<Vec<_>>();
     if files.is_empty() {
         bail!("no tracked Rust files under `{}`", scope.display());

@@ -293,7 +293,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         args.noise_lifetime,
         args.noise_window,
     )?;
-    let metrics = metrics::analyze(root, &args.path)?;
+    let metrics = metrics::analyze(root, &args.path, &current_sources)?;
 
     let mut rows = current_sizes
         .iter()
@@ -418,8 +418,10 @@ fn sizes(source_list: &[sources::Source], scope: &Path) -> BTreeMap<String, Size
     let mut sizes = BTreeMap::<String, Size>::new();
     for source in source_list {
         let module = module_for_path(&source.path, scope);
-        let (code, tests) = if source_files::is_test_file(&source.path) {
+        let (code, tests) = if source.is_test() {
             (0, source_files::rust_sloc(&source.text))
+        } else if !source.is_production() {
+            (0, 0)
         } else {
             source_files::split_rust_sloc(&source.text)
         };

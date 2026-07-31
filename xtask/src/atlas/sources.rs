@@ -5,6 +5,9 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
+use syn::Meta;
+use syn::punctuated::Punctuated;
+use syn::token::Comma;
 
 use crate::source_files;
 
@@ -15,18 +18,46 @@ pub(super) struct Source {
     pub(super) path: PathBuf,
     #[serde(skip)]
     pub(super) text: String,
+    #[serde(skip)]
+    kind: SourceKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceKind {
+    Production,
+    Test,
+    TestSupport,
+}
+
+impl Source {
+    #[cfg(test)]
+    pub(super) fn new(path: impl Into<PathBuf>, text: impl Into<String>) -> Self {
+        let path = path.into();
+        Self {
+            kind: if source_files::is_test_file(&path) {
+                SourceKind::Test
+            } else {
+                SourceKind::Production
+            },
+            path,
+            text: text.into(),
+        }
+    }
+
+    pub(super) fn is_production(&self) -> bool {
+        self.kind == SourceKind::Production
+    }
+
+    pub(super) fn is_test(&self) -> bool {
+        self.kind == SourceKind::Test
+    }
 }
 
 pub(super) fn scope_sources(root: &Path, scope: &Path, at: Option<&str>) -> Result<Vec<Source>> {
-    let sources = if let Some(revision) = at {
-        revision_sources(root, scope, revision)?
+    let mut sources = if let Some(revision) = at {
+        revision_sources(root, revision)?
     } else {
-        let mut files = source_files::tracked_rust_files(root)?;
-        files.retain(|path| {
-            path.strip_prefix(root)
-                .is_ok_and(|path| path_in_scope(path, scope))
-        });
-        files
+        source_files::tracked_rust_files(root)?
             .into_iter()
             .map(|path| {
                 let relative = path
@@ -38,20 +69,22 @@ pub(super) fn scope_sources(root: &Path, scope: &Path, at: Option<&str>) -> Resu
                 Ok(Source {
                     path: relative,
                     text,
+                    kind: SourceKind::Production,
                 })
             })
             .collect::<Result<Vec<_>>>()?
     };
+    classify_sources(&mut sources);
+    sources.retain(|source| path_in_scope(&source.path, scope));
     if sources.is_empty() {
         bail!("no tracked Rust files under `{}`", scope.display());
     }
     Ok(sources)
 }
 
-fn revision_sources(root: &Path, scope: &Path, revision: &str) -> Result<Vec<Source>> {
+fn revision_sources(root: &Path, revision: &str) -> Result<Vec<Source>> {
     let output = Command::new("git")
         .args(["ls-tree", "-r", "--name-only", revision, "--"])
-        .arg(scope)
         .current_dir(root)
         .output()
         .with_context(|| format!("listing Rust sources at `{revision}`"))?;
@@ -112,7 +145,11 @@ fn revision_sources(root: &Path, scope: &Path, revision: &str) -> Result<Vec<Sou
             .context("reading git cat-file separator")?;
         let text = String::from_utf8(bytes)
             .with_context(|| format!("{} at `{revision}` is not UTF-8", path.display()))?;
-        sources.push(Source { path, text });
+        sources.push(Source {
+            path,
+            text,
+            kind: SourceKind::Production,
+        });
     }
     let status = child.wait().context("waiting for git cat-file")?;
     if !status.success() {
@@ -124,6 +161,7 @@ fn revision_sources(root: &Path, scope: &Path, revision: &str) -> Result<Vec<Sou
 pub(super) fn working_tree_rust_sources(root: &Path) -> Result<Vec<Source>> {
     let mut sources = Vec::new();
     walk(root, root, &mut sources)?;
+    classify_sources(&mut sources);
     Ok(sources)
 }
 
@@ -147,10 +185,133 @@ fn walk(root: &Path, directory: &Path, sources: &mut Vec<Source>) -> Result<()> 
                     .with_context(|| format!("making {} root-relative", path.display()))?
                     .to_path_buf(),
                 text,
+                kind: SourceKind::Production,
             });
         }
     }
     Ok(())
+}
+
+fn classify_sources(sources: &mut [Source]) {
+    for source in sources.iter_mut() {
+        if source_files::is_test_file(&source.path) {
+            source.kind = SourceKind::Test;
+        }
+    }
+
+    let indexes = sources
+        .iter()
+        .enumerate()
+        .map(|(index, source)| (source.path.clone(), index))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut modules = Vec::new();
+    for (parent, source) in sources.iter().enumerate() {
+        let Ok(file) = syn::parse_file(&source.text) else {
+            continue;
+        };
+        for module in file.items.iter().filter_map(|item| match item {
+            syn::Item::Mod(module) if module.content.is_none() => Some(module),
+            _ => None,
+        }) {
+            let declared_kind = conditional_source_kind(&module.attrs);
+            for candidate in module_file_candidates(&source.path, &module.ident.to_string()) {
+                if let Some(child) = indexes.get(&candidate) {
+                    modules.push((parent, *child, declared_kind));
+                    break;
+                }
+            }
+        }
+    }
+
+    loop {
+        let mut changed = false;
+        for &(parent, child, declared_kind) in &modules {
+            let inherited = match sources[parent].kind {
+                SourceKind::Production => declared_kind,
+                kind => Some(kind),
+            };
+            let Some(kind) = inherited else {
+                continue;
+            };
+            let merged = merge_source_kind(sources[child].kind, kind);
+            if merged != sources[child].kind {
+                sources[child].kind = merged;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+fn module_file_candidates(parent: &Path, module: &str) -> [PathBuf; 2] {
+    let directory = match parent.file_name().and_then(std::ffi::OsStr::to_str) {
+        Some("lib.rs" | "main.rs" | "mod.rs") => parent.parent().unwrap_or_else(|| Path::new("")),
+        _ => {
+            let mut directory = parent.to_path_buf();
+            directory.set_extension("");
+            return [
+                directory.join(format!("{module}.rs")),
+                directory.join(module).join("mod.rs"),
+            ];
+        }
+    };
+    [
+        directory.join(format!("{module}.rs")),
+        directory.join(module).join("mod.rs"),
+    ]
+}
+
+fn merge_source_kind(current: SourceKind, declared: SourceKind) -> SourceKind {
+    match (current, declared) {
+        (SourceKind::Test, _) | (_, SourceKind::Test) => SourceKind::Test,
+        (SourceKind::TestSupport, _) | (_, SourceKind::TestSupport) => SourceKind::TestSupport,
+        _ => SourceKind::Production,
+    }
+}
+
+fn conditional_source_kind(attributes: &[syn::Attribute]) -> Option<SourceKind> {
+    attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("cfg"))
+        .filter_map(|attribute| attribute.parse_args::<Meta>().ok())
+        .find_map(|predicate| cfg_predicate_kind(&predicate))
+}
+
+fn cfg_predicate_kind(predicate: &Meta) -> Option<SourceKind> {
+    match predicate {
+        Meta::Path(path) if path.is_ident("test") => Some(SourceKind::Test),
+        Meta::NameValue(value) if value.path.is_ident("feature") => match &value.value {
+            syn::Expr::Lit(value) => match &value.lit {
+                syn::Lit::Str(feature) if feature.value() == "testkit" => {
+                    Some(SourceKind::TestSupport)
+                }
+                _ => None,
+            },
+            _ => None,
+        },
+        Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(Punctuated::<Meta, Comma>::parse_terminated)
+            .ok()?
+            .iter()
+            .find_map(cfg_predicate_kind),
+        Meta::List(list) if list.path.is_ident("any") => {
+            let predicates = list
+                .parse_args_with(Punctuated::<Meta, Comma>::parse_terminated)
+                .ok()?;
+            let kinds = predicates
+                .iter()
+                .map(cfg_predicate_kind)
+                .collect::<Option<Vec<_>>>()?;
+            kinds
+                .into_iter()
+                .reduce(merge_source_kind)
+                .or(Some(SourceKind::Production))
+                .filter(|kind| *kind != SourceKind::Production)
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -173,5 +334,25 @@ mod tests {
         let sources = working_tree_rust_sources(root.path()).unwrap();
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].path, Path::new("src/harness/target/mod.rs"));
+    }
+
+    #[test]
+    fn source_classification_follows_conditional_external_modules() {
+        let mut sources = vec![
+            Source::new(
+                "src/lib.rs",
+                "#[cfg(feature = \"testkit\")]\nmod fixture;\n#[cfg(test)]\nmod checks;\n",
+            ),
+            Source::new("src/fixture.rs", "mod nested;\n"),
+            Source::new("src/fixture/nested.rs", "fn helper() {}\n"),
+            Source::new("src/checks.rs", "fn characterization() {}\n"),
+        ];
+
+        classify_sources(&mut sources);
+
+        assert!(sources[0].is_production());
+        assert_eq!(sources[1].kind, SourceKind::TestSupport);
+        assert_eq!(sources[2].kind, SourceKind::TestSupport);
+        assert!(sources[3].is_test());
     }
 }

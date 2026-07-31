@@ -73,6 +73,8 @@ struct Report {
     requested_module: Option<String>,
     total_modules: usize,
     modules: Vec<ModuleApi>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    module_items: Vec<ItemOccurrence>,
     total_single_caller_items: usize,
     single_caller_modules: Vec<SingleCallerModule>,
     single_caller_items: Vec<ItemOccurrence>,
@@ -195,6 +197,18 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         }
     }
 
+    let mut requested_module_items = args
+        .module
+        .as_ref()
+        .and_then(|module| module_items.get(module))
+        .cloned()
+        .unwrap_or_default();
+    requested_module_items.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.name.cmp(&right.name))
+    });
     let mut scoped_single_caller_items = Vec::new();
     let mut modules = module_items
         .into_iter()
@@ -264,6 +278,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         requested_module: args.module.clone(),
         total_modules,
         modules,
+        module_items: requested_module_items,
         total_single_caller_items,
         single_caller_modules,
         single_caller_items,
@@ -357,10 +372,7 @@ pub(super) struct OccurrenceCorpus {
 impl OccurrenceCorpus {
     pub(super) fn new(sources: &[Source]) -> Self {
         let mut modules = BTreeMap::<String, BTreeMap<String, usize>>::new();
-        for source in sources
-            .iter()
-            .filter(|source| !crate::source_files::is_test_file(&source.path))
-        {
+        for source in sources.iter().filter(|source| source.is_production()) {
             let counts = modules
                 .entry(crate_module_for_path(&source.path))
                 .or_default();
@@ -472,6 +484,20 @@ fn print_report(report: &Report, top: usize, requested_module: Option<&str>, sho
     }
     println!();
     if let Some(module) = requested_module {
+        println!("Public items in {module} (`occ` is identifier occurrences)");
+        for item in &report.module_items {
+            println!(
+                "{}::{} ({}) {}:{} occ {} outside-modules {}",
+                item.module,
+                item.name,
+                item.kind,
+                item.path.display(),
+                item.line,
+                item.occurrences,
+                item.outside_modules
+            );
+        }
+        println!();
         println!(
             "Single-outside-module public items in {module} (`occ` is identifier occurrences)"
         );
@@ -540,10 +566,10 @@ mod tests {
 
     #[test]
     fn occurrence_scan_uses_identifier_boundaries() {
-        let sources = vec![Source {
-            path: PathBuf::from("src/caller.rs"),
-            text: "run(); rerun(); run_again(); run".to_owned(),
-        }];
+        let sources = vec![Source::new(
+            "src/caller.rs",
+            "run(); rerun(); run_again(); run",
+        )];
         assert_eq!(
             OccurrenceCorpus::new(&sources).count_from_module("", "run"),
             (2, 1)
@@ -559,19 +585,12 @@ mod tests {
     #[test]
     fn occurrence_corpus_excludes_test_files_and_inline_test_modules() {
         let sources = vec![
-            Source {
-                path: PathBuf::from("src/lib.rs"),
-                text: "pub fn target() {}\n".to_owned(),
-            },
-            Source {
-                path: PathBuf::from("src/live.rs"),
-                text: "fn caller() { target(); }\n#[cfg(test)]\nmod tests { fn check() { target(); } }\n"
-                    .to_owned(),
-            },
-            Source {
-                path: PathBuf::from("src/tests.rs"),
-                text: "fn check() { target(); }\n".to_owned(),
-            },
+            Source::new("src/lib.rs", "pub fn target() {}\n"),
+            Source::new(
+                "src/live.rs",
+                "fn caller() { target(); }\n#[cfg(test)]\nmod tests { fn check() { target(); } }\n",
+            ),
+            Source::new("src/tests.rs", "fn check() { target(); }\n"),
         ];
         assert_eq!(
             OccurrenceCorpus::new(&sources).count_from_module("", "target"),
@@ -582,18 +601,9 @@ mod tests {
     #[test]
     fn occurrence_count_in_sources_sums_only_the_supplied_sources() {
         let sources = vec![
-            Source {
-                path: PathBuf::from("src/cli/render.rs"),
-                text: "target();".to_owned(),
-            },
-            Source {
-                path: PathBuf::from("src/cli/render/table.rs"),
-                text: "target(); target();".to_owned(),
-            },
-            Source {
-                path: PathBuf::from("src/cli/renderer.rs"),
-                text: "target(); target(); target();".to_owned(),
-            },
+            Source::new("src/cli/render.rs", "target();"),
+            Source::new("src/cli/render/table.rs", "target(); target();"),
+            Source::new("src/cli/renderer.rs", "target(); target(); target();"),
         ];
         assert_eq!(OccurrenceCorpus::count_in_sources(&sources, "target"), 6);
     }
@@ -684,6 +694,7 @@ mod tests {
             requested_module: Some("room".to_owned()),
             total_modules: 1,
             modules: Vec::new(),
+            module_items: vec![item("all-items", 0)],
             total_single_caller_items: 10,
             single_caller_modules: Vec::new(),
             single_caller_items: vec![item("filtered", 1)],
@@ -692,6 +703,7 @@ mod tests {
 
         let payload = serde_json::to_value(report).unwrap();
         assert_eq!(payload["requested_module"], "room");
+        assert_eq!(payload["module_items"].as_array().unwrap().len(), 1);
         assert_eq!(payload["single_caller_items"].as_array().unwrap().len(), 1);
         assert_eq!(payload["total_single_caller_items"], 10);
     }
