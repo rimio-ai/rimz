@@ -199,7 +199,7 @@ The continuous signal is reserved for the **one row that most needs you**, the o
 
 ## Glyphs
 
-`[theme.glyphs]` shapes the sidebar's glyph vocabulary; the [glyph legend](../interface/sidebar.md#reading-the-glyphs) stays the canonical meaning table. `set` chooses the active preset, `unicode` (default) or `nerd_font`, and the matching inline tables overlay it. Glyphs are grouped by the sidebar's on-screen reading order, and the template lists every role in both shipped sets, so customizing is uncomment-and-edit. Each glyph must occupy exactly one cell, or two when a trailing space pads a double-width icon.
+`[theme.glyphs]` shapes the sidebar's glyph vocabulary; the [glyph legend](../interface/sidebar.md#reading-the-glyphs) stays the canonical meaning table. Mux tab status suffixes always use the compact Unicode representatives instead. `set` chooses the active sidebar preset, `unicode` (default) or `nerd_font`, and the matching inline tables overlay it. Glyphs are grouped by the sidebar's on-screen reading order, and the template lists every role in both shipped sets, so customizing is uncomment-and-edit. Each glyph must occupy exactly one cell, or two when a trailing space pads a double-width icon.
 
 ```toml
 [theme.glyphs]
