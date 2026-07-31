@@ -285,8 +285,24 @@ impl OccurrenceCorpus {
         Self { modules }
     }
 
-    pub(super) fn count(&self, defining_path: &Path, symbol: &str) -> (usize, usize) {
-        self.count_from_module(&crate_module_for_path(defining_path), symbol)
+    pub(super) fn count_in_module(&self, module: &str, symbol: &str) -> usize {
+        self.modules
+            .get(module)
+            .and_then(|counts| counts.get(symbol))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(super) fn count_under(&self, module_prefix: &str, symbol: &str) -> usize {
+        self.modules
+            .iter()
+            .filter(|(module, _)| {
+                module_prefix.is_empty()
+                    || *module == module_prefix
+                    || module.starts_with(&format!("{module_prefix}::"))
+            })
+            .map(|(_, counts)| counts.get(symbol).copied().unwrap_or(0))
+            .sum()
     }
 
     fn count_from_module(&self, defining_module: &str, symbol: &str) -> (usize, usize) {
@@ -402,7 +418,7 @@ mod tests {
             text: "run(); rerun(); run_again(); run".to_owned(),
         }];
         assert_eq!(
-            OccurrenceCorpus::new(&sources).count(Path::new("src/lib.rs"), "run"),
+            OccurrenceCorpus::new(&sources).count_from_module("", "run"),
             (2, 1)
         );
     }
@@ -425,9 +441,32 @@ mod tests {
             },
         ];
         assert_eq!(
-            OccurrenceCorpus::new(&sources).count(Path::new("src/lib.rs"), "target"),
+            OccurrenceCorpus::new(&sources).count_from_module("", "target"),
             (1, 1)
         );
+    }
+
+    #[test]
+    fn occurrence_scope_distinguishes_files_directories_and_prefix_collisions() {
+        let sources = vec![
+            Source {
+                path: PathBuf::from("src/cli/render.rs"),
+                text: "target();".to_owned(),
+            },
+            Source {
+                path: PathBuf::from("src/cli/render/table.rs"),
+                text: "target(); target();".to_owned(),
+            },
+            Source {
+                path: PathBuf::from("src/cli/renderer.rs"),
+                text: "target(); target(); target();".to_owned(),
+            },
+        ];
+        let corpus = OccurrenceCorpus::new(&sources);
+
+        assert_eq!(corpus.count_in_module("cli::render", "target"), 1);
+        assert_eq!(corpus.count_under("cli::render", "target"), 3);
+        assert_eq!(corpus.count_under("", "target"), 6);
     }
 
     #[test]

@@ -15,7 +15,8 @@ const USAGE: &str = "cargo xtask atlas conform [--ratchet|--tighten] [--json]
 Compares the working tree with root refactor-target.toml. `--ratchet` fails only
 when current values exceed budgets/baselines or an import is outside its allow
 list. `--tighten` atomically lowers budgets/baselines to current values; it
-never raises them. A missing target file passes.
+never raises them. A strangler counts whole-word occurrences of its symbol in
+non-test Rust under its path (a file or directory). A missing target file passes.
 
   --ratchet  fail on regressions (the checks/gate mode)
   --tighten  lower budgets and baselines to current values
@@ -199,14 +200,25 @@ fn evaluate(root: &Path, target: &Target) -> Result<Report> {
         });
     }
     for strangler in &target.strangler {
-        if !root.join(&strangler.path).is_file() {
+        let absolute = root.join(&strangler.path);
+        if !absolute.exists() {
             bail!(
-                "{TARGET_FILE}:{}: configured strangler path `{}` is not a file",
+                "{TARGET_FILE}:{}: configured strangler path `{}` does not exist",
                 strangler.config_line,
                 strangler.path.display()
             );
         }
-        let (current, _) = occurrence_corpus.count(&strangler.path, &strangler.symbol);
+        let scope_entry = if absolute.is_dir() {
+            strangler.path.join("mod.rs")
+        } else {
+            strangler.path.clone()
+        };
+        let scope_module = crate_module_for_path(&scope_entry);
+        let current = if absolute.is_dir() {
+            occurrence_corpus.count_under(&scope_module, &strangler.symbol)
+        } else {
+            occurrence_corpus.count_in_module(&scope_module, &strangler.symbol)
+        };
         rules.push(RuleResult {
             kind: "strangler",
             path: strangler.path.clone(),
@@ -390,6 +402,10 @@ pub-budget = 5
 symbol = "run"
 path = "src/lib.rs"
 baseline = 5
+[[strangler]]
+symbol = "run"
+path = "src"
+baseline = 5
 "#,
         )
         .unwrap();
@@ -409,5 +425,6 @@ baseline = 5
         let tightened = target::load(root.path()).unwrap().unwrap();
         assert_eq!(tightened.modules[0].pub_budget, 1);
         assert_eq!(tightened.strangler[0].baseline, 1);
+        assert_eq!(tightened.strangler[1].baseline, 2);
     }
 }
