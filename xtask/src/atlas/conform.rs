@@ -15,7 +15,7 @@ use super::{set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
 
-const USAGE: &str = "cargo xtask atlas conform [--ratchet|--tighten|--init] [--file <path>] [--path <prefix>] [--json]
+const USAGE: &str = "cargo xtask atlas conform [--ratchet|--tighten|--init] [--file <path>] [--path <prefix>] [--verbose] [--json]
 
 Compares the working tree with a refactor target (root refactor-target.toml by
 default). `--ratchet` fails only when current values exceed budgets/baselines or
@@ -33,6 +33,7 @@ Split Rust modules (`foo.rs` plus `foo/`) remain separate filesystem rules.
   --file <path>  target file (default root refactor-target.toml);
                  absolute as-is, relative from the repository root
   --path <path>  root-relative init subtree (default crates/rimz/src)
+  --verbose      show every rule instead of folding rules exactly at budget
   --json         versioned JSON agent contract (v1)
 
 Schema:
@@ -59,7 +60,15 @@ struct Args {
     mode: Mode,
     file: Option<PathBuf>,
     path: Option<PathBuf>,
+    verbose: bool,
     json: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct ImportSite {
+    module: String,
+    path: PathBuf,
+    line: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -72,6 +81,7 @@ struct RuleResult {
     budget: usize,
     delta: isize,
     unallowed_imports: Vec<String>,
+    unallowed_import_sites: Vec<ImportSite>,
     config_line: usize,
 }
 
@@ -159,7 +169,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
                         .context("rendering atlas conform JSON")?
                 );
             } else {
-                print_report(&report);
+                print_report(&report, args.verbose);
             }
             Ok(())
         }
@@ -197,6 +207,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut mode = Mode::Report;
     let mut file = None;
     let mut path = None;
+    let mut verbose = false;
     let mut json = false;
     let mut index = 0;
     while let Some(arg) = args.get(index) {
@@ -230,6 +241,11 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 set_once(&mut path, parsed, "conform", "--path")?;
                 index += 2;
             }
+            "--verbose" if !verbose => {
+                verbose = true;
+                index += 1;
+            }
+            "--verbose" => bail!("atlas conform --verbose may only be passed once"),
             "--json" if !json => {
                 json = true;
                 index += 1;
@@ -247,10 +263,17 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     if mode != Mode::Init && path.is_some() {
         bail!("atlas conform --path requires --init");
     }
+    if mode != Mode::Report && verbose {
+        bail!("atlas conform --verbose is only valid for the default report mode");
+    }
+    if json && verbose {
+        bail!("atlas conform --verbose does not combine with --json");
+    }
     Ok(Some(Args {
         mode,
         file,
         path,
+        verbose,
         json,
     }))
 }
@@ -374,23 +397,39 @@ fn evaluate(
             module.path.clone()
         };
         let target_module = crate_module_for_path(&module_entry);
-        let mut unallowed_imports = parsed
-            .files
-            .iter()
-            .flat_map(|file| &file.imports)
-            .filter_map(|import| {
-                syntax::resolved_internal_import(import, &known_modules, &workspace_crates)
+        let mut unallowed = BTreeMap::<String, BTreeSet<(PathBuf, usize)>>::new();
+        for file in &parsed.files {
+            for import in &file.imports {
+                let Some(resolved) =
+                    syntax::resolved_internal_import(import, &known_modules, &workspace_crates)
+                else {
+                    continue;
+                };
+                if is_within(&resolved, &target_module)
+                    || module
+                        .allowed_imports
+                        .iter()
+                        .any(|allowed| is_within(&resolved, allowed))
+                {
+                    continue;
+                }
+                unallowed
+                    .entry(resolved)
+                    .or_default()
+                    .insert((file.path.clone(), import.line));
+            }
+        }
+        let unallowed_imports = unallowed.keys().cloned().collect::<Vec<_>>();
+        let unallowed_import_sites = unallowed
+            .into_iter()
+            .flat_map(|(module, sites)| {
+                sites.into_iter().map(move |(path, line)| ImportSite {
+                    module: module.clone(),
+                    path,
+                    line,
+                })
             })
-            .filter(|import| !is_within(import, &target_module))
-            .filter(|import| {
-                !module
-                    .allowed_imports
-                    .iter()
-                    .any(|allowed| is_within(import, allowed))
-            })
-            .collect::<Vec<_>>();
-        unallowed_imports.sort();
-        unallowed_imports.dedup();
+            .collect();
         let regression = current > module.pub_budget || !unallowed_imports.is_empty();
         rules.push(RuleResult {
             kind: "module",
@@ -401,6 +440,7 @@ fn evaluate(
             budget: module.pub_budget,
             delta: current as isize - module.pub_budget as isize,
             unallowed_imports,
+            unallowed_import_sites,
             config_line: module.config_line,
         });
     }
@@ -429,6 +469,7 @@ fn evaluate(
             budget: strangler.baseline,
             delta: current as isize - strangler.baseline as isize,
             unallowed_imports: Vec::new(),
+            unallowed_import_sites: Vec::new(),
             config_line: strangler.config_line,
         });
     }
@@ -488,12 +529,20 @@ fn enforce(report: &Report) -> Result<()> {
             ));
         }
         if !rule.unallowed_imports.is_empty() {
+            let sites = rule
+                .unallowed_import_sites
+                .iter()
+                .take(5)
+                .map(|site| format!("{}:{} ({})", site.path.display(), site.line, site.module))
+                .collect::<Vec<_>>()
+                .join(", ");
             violations.push(format!(
-                "{}:{}: module `{}` imports outside its allow list: {}",
+                "{}:{}: module `{}` imports outside its allow list: {}\n  source: {}",
                 report.target.display(),
                 rule.config_line,
                 rule.path.display(),
-                rule.unallowed_imports.join(", ")
+                rule.unallowed_imports.join(", "),
+                sites,
             ));
         }
     }
@@ -528,10 +577,11 @@ fn tighten(target: &mut Target, report: &Report) {
     clippy::print_stdout,
     reason = "xtask atlas conform report is the command's stdout contract"
 )]
-fn print_report(report: &Report) {
+fn print_report(report: &Report, verbose: bool) {
     println!("Atlas conform — {}", report.target.display());
     println!("status      kind        current  budget      Δ  rule");
-    for rule in &report.rules {
+    let (rules, folded) = displayed_rules(report, verbose);
+    for rule in rules {
         let label = rule.symbol.as_ref().map_or_else(
             || rule.path.display().to_string(),
             |symbol| format!("{symbol} ({})", rule.path.display()),
@@ -542,7 +592,24 @@ fn print_report(report: &Report) {
         );
         if !rule.unallowed_imports.is_empty() {
             println!("  unallowed imports: {}", rule.unallowed_imports.join(", "));
+            for site in rule.unallowed_import_sites.iter().take(5) {
+                println!(
+                    "    {}:{} imports {}",
+                    site.path.display(),
+                    site.line,
+                    site.module
+                );
+            }
+            if rule.unallowed_import_sites.len() > 5 {
+                println!(
+                    "    … and {} more source locations",
+                    rule.unallowed_import_sites.len() - 5
+                );
+            }
         }
+    }
+    if folded > 0 {
+        println!("… {folded} rules ok at budget (use --verbose to show)");
     }
     println!(
         "summary: {} rules, {} regressions, {} parse failures",
@@ -550,6 +617,25 @@ fn print_report(report: &Report) {
         report.regressions,
         report.parse_failures
     );
+}
+
+fn displayed_rules(report: &Report, verbose: bool) -> (Vec<&RuleResult>, usize) {
+    if verbose {
+        return (report.rules.iter().collect(), 0);
+    }
+    let mut displayed = report
+        .rules
+        .iter()
+        .filter(|rule| rule.status == "regression")
+        .collect::<Vec<_>>();
+    displayed.extend(
+        report
+            .rules
+            .iter()
+            .filter(|rule| rule.status != "regression" && rule.current < rule.budget),
+    );
+    let folded = report.rules.len().saturating_sub(displayed.len());
+    (displayed, folded)
 }
 
 #[cfg(test)]
@@ -565,6 +651,7 @@ mod tests {
                 mode: Mode::Report,
                 file: None,
                 path: None,
+                verbose: false,
                 json: false,
             })
         );
@@ -574,6 +661,7 @@ mod tests {
                 mode: Mode::Ratchet,
                 file: None,
                 path: None,
+                verbose: false,
                 json: false,
             })
         );
@@ -601,6 +689,9 @@ mod tests {
         );
         assert!(parse_args(&["--file".into(), String::new()]).is_err());
         assert!(parse_args(&["--path".into(), "src".into()]).is_err());
+        assert!(parse_args(&["--ratchet".into(), "--verbose".into()]).is_err());
+        assert!(parse_args(&["--json".into(), "--verbose".into()]).is_err());
+        assert!(parse_args(&["--verbose".into()]).unwrap().unwrap().verbose);
         assert_eq!(
             parse_args(&["--init".into(), "--path".into(), "src".into()])
                 .unwrap()
@@ -614,6 +705,46 @@ mod tests {
     fn allow_list_matches_descendants_not_prefix_collisions() {
         assert!(is_within("cli::render::table", "cli::render"));
         assert!(!is_within("cli::renderer", "cli::render"));
+    }
+
+    #[test]
+    fn conform_default_report_prioritizes_regressions_and_headroom() {
+        let rule = |path: &str, status, current, budget| RuleResult {
+            kind: "module",
+            path: PathBuf::from(path),
+            symbol: None,
+            status,
+            current,
+            budget,
+            delta: current as isize - budget as isize,
+            unallowed_imports: Vec::new(),
+            unallowed_import_sites: Vec::new(),
+            config_line: 1,
+        };
+        let report = Report {
+            version: 1,
+            verb: "conform",
+            target: PathBuf::from("target.toml"),
+            default_target: false,
+            rules: vec![
+                rule("at-budget", "ok", 2, 2),
+                rule("headroom", "ok", 1, 3),
+                rule("regression", "regression", 4, 2),
+            ],
+            regressions: 1,
+            parse_failures: 0,
+        };
+
+        let (displayed, folded) = displayed_rules(&report, false);
+        assert_eq!(
+            displayed
+                .iter()
+                .map(|rule| rule.path.as_path())
+                .collect::<Vec<_>>(),
+            [Path::new("regression"), Path::new("headroom")]
+        );
+        assert_eq!(folded, 1);
+        assert_eq!(displayed_rules(&report, true).0.len(), 3);
     }
 
     #[test]
@@ -674,6 +805,14 @@ baseline = 5
         let forbidden_report = evaluate(root.path(), &forbidden, &target_path, true).unwrap();
         assert_eq!(forbidden_report.regressions, 1);
         assert_eq!(forbidden_report.rules[0].unallowed_imports, ["other"]);
+        assert_eq!(
+            forbidden_report.rules[0].unallowed_import_sites,
+            [ImportSite {
+                module: "other".to_owned(),
+                path: PathBuf::from("src/lib.rs"),
+                line: 1,
+            }]
+        );
         assert!(enforce(&forbidden_report).is_err());
 
         let report = evaluate(root.path(), &configured, &target_path, true).unwrap();

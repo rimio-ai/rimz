@@ -23,6 +23,7 @@ pub(super) struct PubItem {
 pub(super) struct ImportedItem {
     pub(super) module_path: String,
     pub(super) item: String,
+    pub(super) line: usize,
     pub(super) internal: bool,
     #[serde(skip)]
     pub(super) leaf_may_be_module: bool,
@@ -258,7 +259,7 @@ impl<'ast> Visit<'ast> for UseCollector<'_> {
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
         let mut flattened = Vec::new();
         flatten_use(&item.tree, &mut Vec::new(), &mut flattened);
-        for (path, item, grouped) in flattened {
+        for (path, imported_item, grouped) in flattened {
             let internal = path
                 .first()
                 .is_some_and(|segment| matches!(segment.as_str(), "crate" | "self" | "super"));
@@ -270,7 +271,8 @@ impl<'ast> Visit<'ast> for UseCollector<'_> {
             if !module_path.is_empty() {
                 self.imports.push(ImportedItem {
                     module_path,
-                    item,
+                    item: imported_item,
+                    line: item.span().start().line,
                     internal,
                     leaf_may_be_module,
                 });

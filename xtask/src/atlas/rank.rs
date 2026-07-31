@@ -19,6 +19,8 @@ const DEFAULT_PATH: &str = "crates/rimz/src";
 const USAGE: &str = "cargo xtask atlas rank [--path <prefix>] [--top N] [--window <pct>] [--since <ref>] [--verbose] [--json]
 
 Ranks modules by churn-weighted size (code × churn%); cx breaks ties.
+`cx` sums severity-weighted cognitive, cyclomatic, and source-line overruns for
+the module's functions; functions below the warning thresholds contribute zero.
 Flags: pin = churn% >= threshold and test/code below threshold; hot = non-noisy
 pace >= threshold; shallow = wide, thin, and low-use public surface; hub = wide,
 thin, and high-use public surface. Occurrence counts are whole-word identifiers

@@ -14,11 +14,11 @@ Modules flagged `pin` get characterization tests before their pass touches them 
 
 ## Reading the verbs
 
-Every verb follows `--path`, prints top-N tables plus a totals line so truncation never hides mass, and emits versioned JSON with `--json`. Text output is bounded (~25–100 lines) and safe to print; route `--json` to a file under `/tmp` and narrow with `jq`.
+Every verb follows `--path`, prints top-N tables plus a totals line so truncation never hides mass, and emits versioned JSON with `--json`. Text output is bounded by default and safe to print; explicit drill-downs can be longer. Route `--json` to a file under `/tmp` and narrow with `jq`. Modules compiled only for `test` or the `testkit` feature are excluded from production measurements; test modules still contribute to `rank`'s `t/c` ratio, while `testkit` support does not.
 
 ### `rank` — where should I look?
 
-One row per module: `code`, `pub`, `loc/pub`, `churn%`, `pace`, `cx`, `t/c`, `flags`. Sort order is churn-weighted size — accretion cost paid daily, not raw bulk.
+One row per module: `code`, `pub`, `loc/pub`, `churn%`, `pace`, `cx`, `t/c`, `flags`. Sort order is churn-weighted size — accretion cost paid daily, not raw bulk. `cx` is the sum of severity-weighted cognitive, cyclomatic, and source-line threshold overruns for the module's functions.
 
 - `loc/pub` is the depth proxy: implementation hidden per public item. High is deep; low with a wide `pub` count is over-publication.
 - Flags are facts, not verdicts: `pin` (churny and under-tested — pin tests first), `hot` (pace ≥ 1.5×), `shallow` (wide, thin, low-use surface — deepen or fold into the caller), `hub` (wide, thin, high-use — a shared surface to treat deliberately).
@@ -31,14 +31,15 @@ Four sections, in rising value:
 
 - **Import edges** and **external surface**: what each module must know from outside. A command module importing 100+ items from eight providers is the measurement of the missing context seam.
 - **External providers**: fan-in ranking — which outside surfaces every pass will touch.
-- **Co-change edges**: files that change together (window-scoped, commits touching more than `--max-commit-files` Rust sources omitted as merge noise).
+- **Co-change edges**: files that change together (window-scoped, commits touching more than `--max-commit-files` Rust sources omitted as merge noise, and pairs below `--min-cochange` hidden).
 - **Divergence** is the payload: `cochange-without-import` pairs are hidden knowledge duplication — two modules that must change together with no declared dependency. These are rehome candidates located for free; read the top rows before believing any target design.
 
 Imports come from `use` items only; inline qualified paths are invisible here (they still count in `conform` stranglers and `api` occurrences).
+Use `--module <name>` to expand every import edge touching one scoped module into its distinct imported item names.
 
 ### `api` — how deep is each boundary?
 
-Per module: `pub fn`, `pub type`, `occ/item` (median outside-file identifier occurrences, tests excluded), `occ0` (items with zero such occurrences), `params/fn`. Then the shortlist of public items used by exactly one outside module — interface that arguably shouldn't be interface. `--module <name>` drills into one module's items with file:line.
+Per module: `pub fn`, `pub type`, `occ/item` (median outside-file identifier occurrences, tests excluded), `occ0` (items with zero such occurrences), `params/fn`. Then the shortlist of public items used by exactly one outside module — interface that arguably shouldn't be interface. `--module <name>` prints every public item in that module with kind, occurrences, outside-module count, and file:line, followed by the single-outside-module shortlist.
 
 `occ` is heuristic whole-word counting, not resolved callers: common names over-count, and `occ0` conflates dead with test-only. Treat a large `occ0` as a demote-or-delete *shortlist to read*, never a deletion list to execute.
 
@@ -50,9 +51,46 @@ Blind spot: functions with the same control flow but different callees (parallel
 
 ### `conform` — am I done?
 
-Compares the tree against `refactor-target.toml`: per-module import allow-lists, pub budgets, and strangler symbol counts that must trend to zero. `--init` seeds a truthful baseline from the current tree and never overwrites; `--tighten` only lowers; `--ratchet` fails only on regression and is inert without a target file. Loosening any rule is a hand edit to the toml — that friction is the point.
+Compares the tree against `refactor-target.toml`: per-module import allow-lists, pub budgets, and strangler symbol counts that must trend to zero. `--init` seeds a truthful baseline from the current tree and never overwrites; `--tighten` only lowers; `--ratchet` fails only on regression and is inert without a target file. The default report shows regressions and budget headroom, folding unchanged rules; `--verbose` restores the full table. Import violations include their source locations. Loosening any rule is a hand edit to the toml — that friction is the point.
 
 Strangler entries make stalled migrations impossible to ignore: add one when a pass leaves old and new paths coexisting, with the old symbol's count as the baseline, and tighten it toward zero as callers migrate.
+
+## From baseline to target
+
+Suppose `conform --init --path crates/rimz/src/cli` records the current legacy command at 12 public items with two providers:
+
+```toml
+[[module]]
+path = "crates/rimz/src/cli/legacy"
+allowed-imports = ["agents", "store"]
+pub-budget = 12
+```
+
+For the pass that moves store knowledge behind the agents seam, edit that rule to the completed shape and make removal of the old bridge explicit:
+
+```toml
+[[module]]
+path = "crates/rimz/src/cli/legacy"
+allowed-imports = ["agents"]
+pub-budget = 8
+
+[[strangler]]
+symbol = "LegacyStoreBridge"
+path = "crates/rimz/src/cli"
+baseline = 0
+```
+
+Before the implementation, `conform` reports the excess public-item count, forbidden import locations, and remaining bridge occurrences. After the pass, a clean `conform --ratchet` proves the target shape, `conform --tighten` preserves any improvement beyond the written budgets, and `rank --since <pre-pass-ref>` proves the pass was net-subtractive. Narrow only the rules owned by the current pass; untouched seeded rules remain a status-quo ratchet until their turn.
+
+## JSON v1 contracts
+
+JSON field names are stable snake_case. All reports carry `version` and `verb`; analysis verbs also carry `path` and `parse_failures`. Top-N truncation applies to text-oriented report arrays unless noted, while totals describe the complete result.
+
+- `rank`: `history_commits`, `total_modules`, `total_code`, `total_tests`, `total_pub_items`, `total_complexity`, `rows`, and optional `offenders`. Each row exposes the named text columns plus `tests`, `occurrence_median`, and optional deltas.
+- `seams`: history bounds; totals and arrays for `import_edges`, `external_surface`, `external_providers`, `cochange_edges`, and `divergence`; optional `cochange_hub`; per-kind divergence totals; and, with `--module`, `requested_module` plus untruncated `import_items` per edge.
+- `api`: `total_modules`, `modules`, `total_single_caller_items`, `single_caller_modules`, and `single_caller_items`. With `--module`, `requested_module` and untruncated `module_items` contain item kind, defining path/line, occurrences, and outside-module count.
+- `shapes`: `eligible_functions`, `total_clusters`, and `clusters`; each cluster includes similarity, score, breadth, shared callees, and member locations/SLOC.
+- `conform`: `target`, `rules`, `regressions`, and `parse_failures`. Module rules include `unallowed_imports` and `unallowed_import_sites`; an absent default target instead returns `configured: false` with its target path.
 
 ## Recipes
 
