@@ -4,9 +4,8 @@ use serde::Serialize;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
-    Expr, ExprAwait, ExprCall, ExprClosure, ExprForLoop, ExprIf, ExprLoop, ExprMatch,
-    ExprMethodCall, ExprReturn, ExprTry, ExprWhile, File, ImplItem, ImplItemFn, Item, ItemFn,
-    ItemMod, TraitItem, UseTree, Visibility,
+    Expr, ExprCall, ExprMethodCall, File, ImplItem, ImplItemFn, Item, ItemFn, ItemMod, TraitItem,
+    UseTree, Visibility,
 };
 
 use crate::source_files;
@@ -37,7 +36,7 @@ pub(super) struct FnBody {
     pub(super) path: PathBuf,
     pub(super) line: usize,
     pub(super) sloc: usize,
-    pub(super) skeleton: Vec<String>,
+    pub(super) callees: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -398,14 +397,14 @@ impl FnCollector<'_> {
     fn push(&mut self, name: String, span: proc_macro2::Span, block: &syn::Block) {
         let start = span.start().line;
         let end = span.end().line;
-        let mut skeleton = Skeleton::default();
-        skeleton.visit_block(block);
+        let mut calls = CallCollector::default();
+        calls.visit_block(block);
         self.functions.push(FnBody {
             name,
             path: self.path.to_path_buf(),
             line: start,
             sloc: end.saturating_sub(start) + 1,
-            skeleton: skeleton.tokens,
+            callees: calls.callees,
         });
     }
 }
@@ -439,83 +438,28 @@ fn is_cfg_test(attributes: &[syn::Attribute]) -> bool {
 }
 
 #[derive(Default)]
-struct Skeleton {
-    tokens: Vec<String>,
+struct CallCollector {
+    callees: Vec<String>,
 }
 
-impl Skeleton {
-    fn nested(&mut self, token: impl Into<String>, visit: impl FnOnce(&mut Self)) {
-        self.tokens.push(token.into());
-        self.tokens.push("(".to_owned());
-        visit(self);
-        self.tokens.push(")".to_owned());
-    }
-}
-
-impl<'ast> Visit<'ast> for Skeleton {
-    fn visit_expr_if(&mut self, expression: &'ast ExprIf) {
-        self.nested("IF", |visitor| visit::visit_expr_if(visitor, expression));
-    }
-
-    fn visit_expr_match(&mut self, expression: &'ast ExprMatch) {
-        self.nested(format!("MATCH{}", expression.arms.len()), |visitor| {
-            visit::visit_expr_match(visitor, expression);
-        });
-    }
-
-    fn visit_expr_for_loop(&mut self, expression: &'ast ExprForLoop) {
-        self.nested("FOR", |visitor| {
-            visit::visit_expr_for_loop(visitor, expression);
-        });
-    }
-
-    fn visit_expr_while(&mut self, expression: &'ast ExprWhile) {
-        self.nested("WHILE", |visitor| {
-            visit::visit_expr_while(visitor, expression);
-        });
-    }
-
-    fn visit_expr_loop(&mut self, expression: &'ast ExprLoop) {
-        self.nested("LOOP", |visitor| {
-            visit::visit_expr_loop(visitor, expression);
-        });
-    }
-
-    fn visit_expr_return(&mut self, expression: &'ast ExprReturn) {
-        self.tokens.push("RET".to_owned());
-        visit::visit_expr_return(self, expression);
-    }
-
-    fn visit_expr_try(&mut self, expression: &'ast ExprTry) {
-        self.tokens.push("TRY".to_owned());
-        visit::visit_expr_try(self, expression);
-    }
-
+impl<'ast> Visit<'ast> for CallCollector {
     fn visit_expr_call(&mut self, expression: &'ast ExprCall) {
-        self.nested("CALL", |visitor| {
-            visit::visit_expr_call(visitor, expression);
-        });
+        if let Expr::Path(path) = expression.func.as_ref() {
+            self.callees.push(
+                path.path
+                    .segments
+                    .iter()
+                    .map(|segment| segment.ident.to_string())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+            );
+        }
+        visit::visit_expr_call(self, expression);
     }
 
     fn visit_expr_method_call(&mut self, expression: &'ast ExprMethodCall) {
-        self.nested("METHOD", |visitor| {
-            visit::visit_expr_method_call(visitor, expression);
-        });
-    }
-
-    fn visit_expr_closure(&mut self, expression: &'ast ExprClosure) {
-        self.nested("CLOSURE", |visitor| {
-            visit::visit_expr_closure(visitor, expression);
-        });
-    }
-
-    fn visit_expr_await(&mut self, expression: &'ast ExprAwait) {
-        self.tokens.push("AWAIT".to_owned());
-        visit::visit_expr_await(self, expression);
-    }
-
-    fn visit_expr(&mut self, expression: &'ast Expr) {
-        visit::visit_expr(self, expression);
+        self.callees.push(format!(".{}", expression.method));
+        visit::visit_expr_method_call(self, expression);
     }
 }
 

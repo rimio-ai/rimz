@@ -10,18 +10,21 @@ use super::syntax::{self, FnBody};
 use super::{finite_nonnegative, positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
+const MIN_SHARED_CALLEES: usize = 3;
 
 const USAGE: &str =
     "cargo xtask atlas shapes [--path <prefix>] [--top N] [--min-sloc N] [--similarity S] [--json]
 
-Clusters large functions by Jaccard similarity over normalized control-flow
-4-grams. Identifiers and literals do not enter the skeleton. Clusters spanning
-more modules and files rank before the existing member-count × mean-sloc score.
+Clusters large functions by Jaccard similarity over the functions and methods
+they call. Generic iterator, conversion, and error-context methods are omitted,
+and a pair must share at least three callees, so the report highlights shared
+domain choreography rather than incidental loop shape.
+Clusters spanning more modules and files rank before member-count × mean-sloc.
 
   --path <path>   root-relative subtree (default crates/rimz/src)
   --top N         clusters to report (default 10)
   --min-sloc N    minimum function source lines (default 40)
-  --similarity S  Jaccard threshold from 0 through 1 (default 0.65)
+  --similarity S  Jaccard threshold from 0 through 1 (default 0.35)
   --json          versioned JSON agent contract (v1)";
 
 #[derive(Debug)]
@@ -48,6 +51,7 @@ struct Cluster {
     score: f64,
     distinct_files: usize,
     distinct_modules: usize,
+    shared_callees: Vec<String>,
     members: Vec<Member>,
 }
 
@@ -139,7 +143,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         path: path.unwrap_or_else(|| PathBuf::from(DEFAULT_PATH)),
         top: top.unwrap_or(10),
         min_sloc: min_sloc.unwrap_or(40),
-        similarity: similarity.unwrap_or(0.65),
+        similarity: similarity.unwrap_or(0.35),
         json,
     }))
 }
@@ -154,14 +158,14 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .filter(|function| function.sloc >= args.min_sloc)
         .cloned()
         .collect::<Vec<_>>();
-    let shingles = functions
+    let callees = functions
         .iter()
-        .map(|function| shingle_set(&function.skeleton))
+        .map(|function| callee_set(&function.callees))
         .collect::<Vec<_>>();
     let mut similarities = vec![vec![0.0; functions.len()]; functions.len()];
     for left in 0..functions.len() {
         for right in left + 1..functions.len() {
-            let similarity = jaccard(&shingles[left], &shingles[right]);
+            let similarity = callee_similarity(&callees[left], &callees[right]);
             similarities[left][right] = similarity;
             similarities[right][left] = similarity;
         }
@@ -169,7 +173,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let mut clusters = complete_linkage_groups(&similarities, args.similarity)
         .into_iter()
         .filter(|members| members.len() > 1)
-        .map(|members| cluster(&functions, &shingles, members, &args.path))
+        .map(|members| cluster(&functions, &callees, members, &args.path))
         .collect::<Vec<_>>();
     sort_clusters(&mut clusters);
     let total_clusters = clusters.len();
@@ -199,7 +203,7 @@ fn sort_clusters(clusters: &mut [Cluster]) {
 
 fn cluster(
     functions: &[FnBody],
-    shingles: &[BTreeSet<Vec<String>>],
+    callees: &[BTreeSet<String>],
     indexes: Vec<usize>,
     scope: &Path,
 ) -> Cluster {
@@ -214,9 +218,17 @@ fn cluster(
         .flat_map(|(position, left)| {
             indexes[position + 1..]
                 .iter()
-                .map(move |right| jaccard(&shingles[*left], &shingles[*right]))
+                .map(move |right| callee_similarity(&callees[*left], &callees[*right]))
         })
         .fold(1.0_f64, f64::min);
+    let shared_callees = indexes
+        .iter()
+        .skip(1)
+        .fold(callees[indexes[0]].clone(), |shared, index| {
+            shared.intersection(&callees[*index]).cloned().collect()
+        })
+        .into_iter()
+        .collect();
     let mut members = indexes
         .into_iter()
         .map(|index| {
@@ -252,24 +264,116 @@ fn cluster(
         score: members.len() as f64 * mean_sloc,
         distinct_files,
         distinct_modules,
+        shared_callees,
         members,
     }
 }
 
-fn shingle_set(tokens: &[String]) -> BTreeSet<Vec<String>> {
-    tokens
-        .windows(4)
-        .map(|window| window.to_vec())
-        .collect::<BTreeSet<_>>()
+fn callee_set(callees: &[String]) -> BTreeSet<String> {
+    callees
+        .iter()
+        .filter(|callee| !is_generic_callee(callee))
+        .cloned()
+        .collect()
 }
 
-fn jaccard(left: &BTreeSet<Vec<String>>, right: &BTreeSet<Vec<String>>) -> f64 {
+fn is_generic_callee(callee: &str) -> bool {
+    const GENERIC_METHODS: &[&str] = &[
+        ".all",
+        ".and_then",
+        ".any",
+        ".as_deref",
+        ".as_mut",
+        ".as_ref",
+        ".as_slice",
+        ".as_str",
+        ".clone",
+        ".cloned",
+        ".cmp",
+        ".collect",
+        ".context",
+        ".copied",
+        ".dedup",
+        ".display",
+        ".enumerate",
+        ".expect",
+        ".extend",
+        ".filter",
+        ".filter_map",
+        ".find",
+        ".file_name",
+        ".first",
+        ".flat_map",
+        ".flatten",
+        ".get",
+        ".get_mut",
+        ".insert",
+        ".into_owned",
+        ".into_iter",
+        ".is_empty",
+        ".is_err",
+        ".is_none",
+        ".is_none_or",
+        ".is_ok",
+        ".is_ok_and",
+        ".is_some",
+        ".is_some_and",
+        ".iter",
+        ".iter_mut",
+        ".join",
+        ".last",
+        ".len",
+        ".lines",
+        ".lock",
+        ".map",
+        ".map_err",
+        ".map_or",
+        ".map_or_else",
+        ".next",
+        ".ok",
+        ".ok_or_else",
+        ".or",
+        ".or_else",
+        ".or_default",
+        ".push",
+        ".sort",
+        ".sort_by",
+        ".sort_by_key",
+        ".split",
+        ".starts_with",
+        ".take",
+        ".then",
+        ".then_some",
+        ".to_owned",
+        ".to_path_buf",
+        ".to_string",
+        ".to_string_lossy",
+        ".transpose",
+        ".trim",
+        ".unwrap",
+        ".unwrap_or",
+        ".unwrap_or_default",
+        ".unwrap_or_else",
+        ".with_context",
+    ];
+    matches!(callee, "Ok" | "Err" | "Some" | "None" | "drop") || GENERIC_METHODS.contains(&callee)
+}
+
+fn jaccard(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64 {
     if left.is_empty() || right.is_empty() {
         return 0.0;
     }
     let intersection = left.intersection(right).count();
     let union = left.len() + right.len() - intersection;
     intersection as f64 / union as f64
+}
+
+fn callee_similarity(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64 {
+    if left.intersection(right).count() < MIN_SHARED_CALLEES {
+        0.0
+    } else {
+        jaccard(left, right)
+    }
 }
 
 fn complete_linkage_groups(similarities: &[Vec<f64>], threshold: f64) -> Vec<Vec<usize>> {
@@ -337,6 +441,20 @@ fn print_report(report: &Report) {
             cluster.mean_sloc,
             cluster.similarity_floor
         );
+        let mut calls = cluster
+            .shared_callees
+            .iter()
+            .take(8)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if cluster.shared_callees.len() > 8 {
+            calls.push_str(&format!(
+                ", … +{}",
+                cluster.shared_callees.len().saturating_sub(8)
+            ));
+        }
+        println!("   calls: {calls}");
         for member in cluster.members.iter().take(5) {
             println!(
                 "   {}:{} {} {} sloc",
@@ -366,19 +484,35 @@ fn print_report(report: &Report) {
 mod tests {
     use super::*;
 
-    fn set(items: &[&str]) -> BTreeSet<Vec<String>> {
-        items
-            .iter()
-            .map(|item| item.split_whitespace().map(str::to_owned).collect())
-            .collect()
+    fn set(items: &[&str]) -> BTreeSet<String> {
+        items.iter().map(|item| (*item).to_owned()).collect()
     }
 
     #[test]
     fn jaccard_scores_shape_similarity() {
-        assert_eq!(jaccard(&set(&["A B C D"]), &set(&["A B C D"])), 1.0);
+        assert_eq!(jaccard(&set(&["open"]), &set(&["open"])), 1.0);
+        assert_eq!(jaccard(&set(&["open", "load"]), &set(&["open"])), 0.5);
+    }
+
+    #[test]
+    fn callee_sets_drop_generic_method_noise() {
+        let callees = ["domain::load", ".map", ".context", "Some", ".render"].map(str::to_owned);
+
+        assert_eq!(callee_set(&callees), set(&["domain::load", ".render"]));
+    }
+
+    #[test]
+    fn choreography_requires_three_shared_callees() {
         assert_eq!(
-            jaccard(&set(&["A B C D", "B C D E"]), &set(&["A B C D"])),
-            0.5
+            callee_similarity(&set(&["load", "resolve"]), &set(&["load", "resolve"])),
+            0.0
+        );
+        assert_eq!(
+            callee_similarity(
+                &set(&["load", "resolve", "launch"]),
+                &set(&["load", "resolve", "launch"])
+            ),
+            1.0
         );
     }
 
@@ -409,7 +543,7 @@ mod tests {
             path: PathBuf::from(path),
             line,
             sloc,
-            skeleton: ["A", "B", "C", "D"].map(str::to_owned).to_vec(),
+            callees: ["prepare", "resolve", "launch"].map(str::to_owned).to_vec(),
         };
         let functions = vec![
             function("src/fixture.rs", 1, 100),
@@ -421,13 +555,13 @@ mod tests {
             function("src/b/two.rs", 1, 50),
             function("src/c/three.rs", 1, 50),
         ];
-        let shingles = functions
+        let callees = functions
             .iter()
-            .map(|function| shingle_set(&function.skeleton))
+            .map(|function| callee_set(&function.callees))
             .collect::<Vec<_>>();
         let mut clusters = vec![
-            cluster(&functions, &shingles, vec![0, 1, 2, 3, 4], Path::new("src")),
-            cluster(&functions, &shingles, vec![5, 6, 7], Path::new("src")),
+            cluster(&functions, &callees, vec![0, 1, 2, 3, 4], Path::new("src")),
+            cluster(&functions, &callees, vec![5, 6, 7], Path::new("src")),
         ];
 
         sort_clusters(&mut clusters);

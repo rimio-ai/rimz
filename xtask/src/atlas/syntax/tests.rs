@@ -8,7 +8,7 @@ fn source(text: &str) -> Source {
 }
 
 #[test]
-fn extracts_boundary_items_imports_params_and_shapes() {
+fn extracts_boundary_items_imports_params_and_callees() {
     let report = analyze_sources(&[source(
         r#"
 use crate::agents::{AgentDefinition, state::Rollup};
@@ -16,7 +16,8 @@ use super::render::table;
 pub(crate) struct View;
 pub(self) fn hidden() {}
 pub fn run(a: usize, b: bool) {
-    if a > 0 { table(); }
+    if a > 0 { table().render(); }
+    View::build();
     match b { true => return, false => {} }
 }
 "#,
@@ -31,8 +32,14 @@ pub fn run(a: usize, b: bool) {
             .collect::<Vec<_>>(),
         ["agents", "agents::state", "cli::render"]
     );
-    assert!(file.fns[1].skeleton.iter().any(|token| token == "IF"));
-    assert!(file.fns[1].skeleton.iter().any(|token| token == "MATCH2"));
+    assert_eq!(
+        file.fns[1]
+            .callees
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["table", ".render", "View::build"])
+    );
 }
 
 #[test]

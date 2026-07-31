@@ -28,7 +28,7 @@ Verbs:
   rank      prioritize modules by size, interface, churn, pace, and complexity
   seams     report imports, external surface, co-change, and divergence
   api       report boundary shape and outside identifier occurrences
-  shapes    cluster large functions by normalized control-flow shape
+  shapes    cluster large functions by shared call choreography
   conform   compare the tree with refactor-target.toml budgets
 
 Run `cargo xtask atlas <verb> --help` for verb-specific flags.";
