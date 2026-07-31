@@ -831,10 +831,11 @@ pub fn sweep_owned(
             }),
         }
     }
-    if !sweep.removed.is_empty() && !dry_run {
-        if let Err(err) = prune(repo_root) {
-            tracing::debug!(error = %err, "could not prune worktree metadata after sweep");
-        }
+    if !sweep.removed.is_empty()
+        && !dry_run
+        && let Err(err) = prune(repo_root)
+    {
+        tracing::debug!(error = %err, "could not prune worktree metadata after sweep");
     }
     Ok(sweep)
 }
