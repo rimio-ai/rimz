@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -19,7 +19,7 @@ Clusters large functions by Jaccard similarity over normalized control-flow
   --path <path>   root-relative subtree (default crates/rimz/src)
   --top N         clusters to report (default 15)
   --min-sloc N    minimum function source lines (default 40)
-  --similarity S  Jaccard threshold from 0 through 1 (default 0.75)
+  --similarity S  Jaccard threshold from 0 through 1 (default 0.53)
   --json          versioned JSON agent contract (v1)";
 
 #[derive(Debug)]
@@ -135,7 +135,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         path: path.unwrap_or_else(|| PathBuf::from(DEFAULT_PATH)),
         top: top.unwrap_or(15),
         min_sloc: min_sloc.unwrap_or(40),
-        similarity: similarity.unwrap_or(0.75),
+        similarity: similarity.unwrap_or(0.53),
         json,
     }))
 }
@@ -154,21 +154,16 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .iter()
         .map(|function| shingle_set(&function.skeleton))
         .collect::<Vec<_>>();
-    let mut union = UnionFind::new(functions.len());
+    let mut similarities = vec![vec![0.0; functions.len()]; functions.len()];
     for left in 0..functions.len() {
         for right in left + 1..functions.len() {
             let similarity = jaccard(&shingles[left], &shingles[right]);
-            if similarity >= args.similarity {
-                union.join(left, right);
-            }
+            similarities[left][right] = similarity;
+            similarities[right][left] = similarity;
         }
     }
-    let mut groups = BTreeMap::<usize, Vec<usize>>::new();
-    for index in 0..functions.len() {
-        groups.entry(union.find(index)).or_default().push(index);
-    }
-    let mut clusters = groups
-        .into_values()
+    let mut clusters = complete_linkage_groups(&similarities, args.similarity)
+        .into_iter()
         .filter(|members| members.len() > 1)
         .map(|members| cluster(&functions, &shingles, members))
         .collect::<Vec<_>>();
@@ -254,31 +249,53 @@ fn jaccard(left: &BTreeSet<Vec<String>>, right: &BTreeSet<Vec<String>>) -> f64 {
     intersection as f64 / union as f64
 }
 
-struct UnionFind {
-    parents: Vec<usize>,
-}
+fn complete_linkage_groups(similarities: &[Vec<f64>], threshold: f64) -> Vec<Vec<usize>> {
+    let mut pairs = (0..similarities.len())
+        .flat_map(|left| {
+            (left + 1..similarities.len())
+                .map(move |right| (similarities[left][right], left, right))
+        })
+        .filter(|(similarity, _, _)| *similarity >= threshold)
+        .collect::<Vec<_>>();
+    pairs.sort_by(|left, right| {
+        right
+            .0
+            .total_cmp(&left.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
 
-impl UnionFind {
-    fn new(len: usize) -> Self {
-        Self {
-            parents: (0..len).collect(),
+    let mut groups = (0..similarities.len())
+        .map(|index| vec![index])
+        .collect::<Vec<_>>();
+    for (_, left, right) in pairs {
+        let left_group = groups
+            .iter()
+            .position(|group| group.contains(&left))
+            .expect("each function remains in exactly one complete-linkage group");
+        let right_group = groups
+            .iter()
+            .position(|group| group.contains(&right))
+            .expect("each function remains in exactly one complete-linkage group");
+        if left_group == right_group
+            || !groups[left_group].iter().all(|left| {
+                groups[right_group]
+                    .iter()
+                    .all(|right| similarities[*left][*right] >= threshold)
+            })
+        {
+            continue;
         }
+        let (keep, remove) = if left_group < right_group {
+            (left_group, right_group)
+        } else {
+            (right_group, left_group)
+        };
+        let removed = groups.remove(remove);
+        groups[keep].extend(removed);
+        groups[keep].sort_unstable();
     }
-
-    fn find(&mut self, index: usize) -> usize {
-        if self.parents[index] != index {
-            self.parents[index] = self.find(self.parents[index]);
-        }
-        self.parents[index]
-    }
-
-    fn join(&mut self, left: usize, right: usize) {
-        let left = self.find(left);
-        let right = self.find(right);
-        if left != right {
-            self.parents[right] = left;
-        }
-    }
+    groups
 }
 
 #[expect(
@@ -332,15 +349,31 @@ mod tests {
     }
 
     #[test]
-    fn jaccard_and_union_find_cluster_shapes() {
+    fn jaccard_scores_shape_similarity() {
         assert_eq!(jaccard(&set(&["A B C D"]), &set(&["A B C D"])), 1.0);
         assert_eq!(
             jaccard(&set(&["A B C D", "B C D E"]), &set(&["A B C D"])),
             0.5
         );
-        let mut union = UnionFind::new(3);
-        union.join(0, 1);
-        assert_eq!(union.find(0), union.find(1));
-        assert_ne!(union.find(0), union.find(2));
+    }
+
+    #[test]
+    fn complete_linkage_does_not_chain_dissimilar_members() {
+        let similarities = vec![
+            vec![1.0, 0.8, 0.6],
+            vec![0.8, 1.0, 0.8],
+            vec![0.6, 0.8, 1.0],
+        ];
+
+        let groups = complete_linkage_groups(&similarities, 0.7);
+
+        assert_eq!(groups, [vec![0, 1], vec![2]]);
+        assert!(groups.iter().all(|group| {
+            group.iter().enumerate().all(|(position, left)| {
+                group[position + 1..]
+                    .iter()
+                    .all(|right| similarities[*left][*right] >= 0.7)
+            })
+        }));
     }
 }
