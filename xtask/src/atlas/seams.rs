@@ -15,7 +15,7 @@ use super::{positive_usize, set_once, validate_scope, value};
 const DEFAULT_PATH: &str = "crates/rimz/src";
 const DEFAULT_TOP: usize = 15;
 
-const USAGE: &str = "cargo xtask atlas seams [--path <prefix>] [--top N] [--since <ref>] [--max-commit-files N] [--min-cochange N] [--json]
+const USAGE: &str = "cargo xtask atlas seams [--path <prefix>] [--top N] [--window <pct>] [--since <ref>] [--max-commit-files N] [--min-cochange N] [--json]
 
 Imports come from Rust `use` items; inline fully-qualified paths are not counted.
 The provider table ranks outside modules by distinct imported item names across
@@ -24,7 +24,8 @@ the scoped modules that use them. Co-change omits commits touching more than
 
   --path <path>          root-relative subtree (default crates/rimz/src)
   --top N                rows per section (default 15)
-  --since <ref>          restrict co-change to <ref>..HEAD
+  --window <pct>         recent co-change history window (default 25)
+  --since <ref>          restrict co-change to <ref>..HEAD (excludes --window)
   --max-commit-files N   omit commits broader than N files under --path (default 10)
   --min-cochange N       divergence threshold (default 3)
   --json                 versioned JSON agent contract (v1)";
@@ -33,6 +34,7 @@ the scoped modules that use them. Co-change omits commits touching more than
 struct Args {
     path: PathBuf,
     top: usize,
+    window: usize,
     since: Option<String>,
     max_commit_files: usize,
     min_cochange: usize,
@@ -74,6 +76,11 @@ struct Report {
     version: u8,
     verb: &'static str,
     path: PathBuf,
+    history_commits: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    history_window_pct: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    history_since: Option<String>,
     total_import_edges: usize,
     import_edges: Vec<ImportEdge>,
     total_external_surface: usize,
@@ -114,6 +121,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     }
     let mut path = None;
     let mut top = None;
+    let mut window = None;
     let mut since = None;
     let mut max_commit_files = None;
     let mut min_cochange = None;
@@ -130,6 +138,18 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 let parsed =
                     positive_usize(value(args, index, "seams", "--top")?, "seams", "--top")?;
                 set_once(&mut top, parsed, "seams", "--top")?;
+                index += 2;
+            }
+            "--window" => {
+                let parsed = positive_usize(
+                    value(args, index, "seams", "--window")?,
+                    "seams",
+                    "--window",
+                )?;
+                if parsed > 100 {
+                    bail!("atlas seams --window must not exceed 100");
+                }
+                set_once(&mut window, parsed, "seams", "--window")?;
                 index += 2;
             }
             "--since" => {
@@ -163,9 +183,13 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
             _ => bail!("unknown atlas seams argument `{arg}`"),
         }
     }
+    if since.is_some() && window.is_some() {
+        bail!("atlas seams --since and --window are mutually exclusive");
+    }
     Ok(Some(Args {
         path: path.unwrap_or_else(|| PathBuf::from(DEFAULT_PATH)),
         top: top.unwrap_or(DEFAULT_TOP),
+        window: window.unwrap_or(25),
         since,
         max_commit_files: max_commit_files.unwrap_or(10),
         min_cochange: min_cochange.unwrap_or(3),
@@ -248,12 +272,14 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     });
     let mut external_providers = external_providers(&imports, &scope_endpoints);
 
-    let cochange_edges = history::cochange(
+    let cochange = history::cochange(
         root,
         &args.path,
         args.since.as_deref(),
+        args.window,
         args.max_commit_files,
     )?;
+    let cochange_edges = cochange.edges;
     let import_lookup = import_edges
         .iter()
         .map(|edge| ((edge.from.clone(), edge.to.clone()), edge.items))
@@ -314,6 +340,9 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         version: 1,
         verb: "seams",
         path: args.path.clone(),
+        history_commits: cochange.commits,
+        history_window_pct: args.since.is_none().then_some(args.window),
+        history_since: args.since.clone(),
         total_import_edges,
         import_edges,
         total_external_surface,
@@ -469,6 +498,18 @@ fn print_report(report: &Report, top: usize) {
         report.divergence.len(),
         "divergence rows",
     );
+    if let Some(since) = &report.history_since {
+        println!(
+            "history: {} commits (since {since})",
+            report.history_commits
+        );
+    } else {
+        println!(
+            "history: {} commits (window {}%)",
+            report.history_commits,
+            report.history_window_pct.unwrap_or(25)
+        );
+    }
     println!(
         "total: {} import edges, {} provider rows, {} co-change edges, {} divergence rows, {} parse failures",
         report.total_import_edges,
@@ -497,6 +538,29 @@ mod tests {
     fn endpoints_follow_scope_granularity() {
         assert_eq!(endpoint("cli::agents_cmd::show", "cli"), "agents_cmd");
         assert_eq!(endpoint("store::event", "cli"), "store");
+    }
+
+    #[test]
+    fn cochange_history_bounds_are_validated() {
+        assert!(parse_args(&["--window".into(), "101".into()]).is_err());
+        assert!(
+            parse_args(&[
+                "--window".into(),
+                "25".into(),
+                "--since".into(),
+                "main".into(),
+            ])
+            .is_err()
+        );
+        assert_eq!(parse_args(&[]).unwrap().unwrap().window, 25);
+        assert_eq!(
+            parse_args(&["--since".into(), "main".into()])
+                .unwrap()
+                .unwrap()
+                .since
+                .as_deref(),
+            Some("main")
+        );
     }
 
     #[test]
