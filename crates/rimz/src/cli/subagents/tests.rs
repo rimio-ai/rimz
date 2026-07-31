@@ -311,7 +311,7 @@ fn prompt_files_resolve_for_single_launch_and_fanout() {
 }
 
 #[test]
-fn available_specs_include_profiles_and_commands_but_not_kinds_or_teams() {
+fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
     let mut config = rimz::config::MachineConfig::default();
     config.agents.profiles.0.insert(
         "agent-only".to_owned(),
@@ -366,36 +366,41 @@ fn available_specs_include_profiles_and_commands_but_not_kinds_or_teams() {
         .0
         .insert("review".to_owned(), rimz::config::Team::default());
 
-    let specs = crate::cli::spec_report::available_specs(
+    let profiles = crate::cli::profile_report::available_profiles(
         &config.subagents.profiles,
         &config.agents.commands,
         &rimz::config::AgentSpecSources::default(),
         rimz::config::effective::ProfileScope::Subagents,
     );
 
-    assert!(!specs.iter().any(|entry| entry.source == "kind"));
-    assert!(specs.iter().any(|entry| {
+    assert!(!profiles.iter().any(|entry| entry.source == "kind"));
+    assert!(profiles.iter().any(|entry| {
         entry.name == "planner"
             && entry.source == "profile"
-            && entry.detail() == "claude · fable@high"
+            && entry.agent.as_deref() == Some("claude")
+            && entry.model.as_deref() == Some("fable")
+            && entry.effort.as_deref() == Some("high")
             && entry.description.as_deref() == Some("Plans supervised work")
     }));
-    assert!(!specs.iter().any(|entry| entry.name == "agent-only"));
+    assert!(!profiles.iter().any(|entry| entry.name == "agent-only"));
     assert!(
-        specs
+        profiles
             .iter()
             .any(|entry| entry.name == "mytool" && entry.source == "command")
     );
     assert_eq!(
-        specs.iter().filter(|entry| entry.name == "claude").count(),
+        profiles
+            .iter()
+            .filter(|entry| entry.name == "claude")
+            .count(),
         1
     );
     assert!(
-        specs
+        profiles
             .iter()
             .any(|entry| entry.name == "claude" && entry.source == "profile")
     );
-    assert!(!specs.iter().any(|entry| entry.name == "review"));
+    assert!(!profiles.iter().any(|entry| entry.name == "review"));
 }
 
 #[test]
@@ -409,7 +414,7 @@ fn launch_requires_parent_prompt() {
 }
 
 #[test]
-fn specs_are_the_only_user_shell_subcommand() {
+fn profiles_are_the_only_user_shell_subcommand() {
     let error = require_agent_caller(false).expect_err("human caller");
     assert!(error.to_string().contains("rimz agents <spec>"));
 
@@ -424,10 +429,20 @@ fn specs_are_the_only_user_shell_subcommand() {
         let args = parse(argv);
         assert!(command_is_agent_only(args.command.as_ref()), "{argv:?}");
     }
-    for argv in [&["rimz", "specs"][..], &["rimz", "types"]] {
-        let args = parse(argv);
-        assert!(!command_is_agent_only(args.command.as_ref()), "{argv:?}");
-        assert!(matches!(args.command, Some(SubagentsSubcmd::Specs { .. })));
+    let args = parse(&["rimz", "profiles", "--path"]);
+    assert!(!command_is_agent_only(args.command.as_ref()));
+    assert!(matches!(
+        args.command,
+        Some(SubagentsSubcmd::Profiles {
+            json: false,
+            path: true
+        })
+    ));
+    for command in ["specs", "types"] {
+        let args = parse(&["rimz", command]);
+        assert!(args.command.is_none());
+        assert_eq!(args.launch.spec.as_deref(), Some(command));
+        assert!(command_is_agent_only(args.command.as_ref()));
     }
 }
 

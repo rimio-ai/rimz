@@ -309,12 +309,14 @@ enum AgentsSubcmd {
     Check(CheckArgs),
     /// Scaffold or validate a machine-tier third-party agent plugin.
     Register(RegisterArgs),
-    /// List agent specs available to launch.
-    #[command(alias = "types")]
-    Specs {
+    /// List agent profiles available to launch.
+    Profiles {
         /// Emit JSON.
         #[arg(long)]
         json: bool,
+        /// Include each profile's defining file path.
+        #[arg(long)]
+        path: bool,
     },
     /// List agent cards in the current room.
     #[command(aliases = ["ls", "ps"])]
@@ -566,15 +568,16 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         Some(AgentsSubcmd::Check(args)) => return run_check(args),
         Some(AgentsSubcmd::Register(args)) => return run_register(args),
-        Some(AgentsSubcmd::Specs { json }) => {
+        Some(AgentsSubcmd::Profiles { json, path }) => {
             let (config, sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
                 .context("loading machine config")?;
-            return crate::cli::spec_report::list_specs(
+            return crate::cli::profile_report::list_profiles(
                 &config.agents.profiles,
                 &config.agents.commands,
                 &sources,
                 rimz::config::effective::ProfileScope::Agents,
                 json,
+                path,
             );
         }
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),

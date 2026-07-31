@@ -38,12 +38,14 @@ enum SubagentsSubcmd {
         #[arg(long)]
         json: bool,
     },
-    /// List agent specs available to launch.
-    #[command(alias = "types")]
-    Specs {
+    /// List agent profiles available to launch.
+    Profiles {
         /// Emit JSON.
         #[arg(long)]
         json: bool,
+        /// Include each profile's defining file path.
+        #[arg(long)]
+        path: bool,
     },
     /// Wait for this agent's supervised children.
     Wait {
@@ -184,7 +186,7 @@ pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(SubagentsSubcmd::Launch(args)) => launch_child(args.launch, args.json, globals),
         Some(SubagentsSubcmd::Fanout(fanout)) => fanout_children(fanout, globals),
         Some(SubagentsSubcmd::List { json }) => list_children(json, globals),
-        Some(SubagentsSubcmd::Specs { json }) => list_specs(json),
+        Some(SubagentsSubcmd::Profiles { json, path }) => list_profiles(json, path),
         Some(SubagentsSubcmd::Wait {
             names,
             any,
@@ -203,7 +205,7 @@ pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
 
 fn command_is_agent_only(command: Option<&SubagentsSubcmd>) -> bool {
     match command {
-        Some(SubagentsSubcmd::Specs { .. }) => false,
+        Some(SubagentsSubcmd::Profiles { .. }) => false,
         Some(
             SubagentsSubcmd::Launch(_)
             | SubagentsSubcmd::Fanout(_)
@@ -550,15 +552,16 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
     table.render(&mut render::out()).map_err(Into::into)
 }
 
-fn list_specs(json: bool) -> Result<()> {
+fn list_profiles(json: bool, path: bool) -> Result<()> {
     let (config, sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
         .context("loading machine config")?;
-    crate::cli::spec_report::list_specs(
+    crate::cli::profile_report::list_profiles(
         &config.subagents.profiles,
         &config.agents.commands,
         &sources,
         rimz::config::effective::ProfileScope::Subagents,
         json,
+        path,
     )
 }
 

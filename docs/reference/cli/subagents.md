@@ -75,14 +75,15 @@ The single-launch surface deliberately omits `--worktree`, `--from-pr`, `--chann
 
 Model, provider/profile rebasing, effort, description, turn cap, and raw provider arguments remain available. Run `rimz subagents launch --help` for their exact spellings.
 
-## Discover agent specs
+## Discover agent profiles
 
 ```sh
-rimz subagents specs
-rimz subagents specs --json
+rimz subagents profiles
+rimz subagents profiles --path
+rimz subagents profiles --json --path
 ```
 
-`specs` lists `[subagents.profiles]` profiles and configured launch commands available for one child, with description and defining-file path columns for profile metadata. `[agents.profiles]` entries are excluded. Built-in and registered agent kinds remain directly launchable but are omitted from this configured-spec catalog. It also works from a user shell; `types` is an alias. Team names are excluded because a subagent launch creates one agent, not a cohort.
+`profiles` lists `[subagents.profiles]` profiles and configured launch commands available for one child as compact cards. Profile cards include their optional descriptions; `--path` adds the defining-file path. JSON also omits `path` unless `--path` is passed, keeps that path absolute, and includes `source` to distinguish profiles from commands. `[agents.profiles]` entries are excluded. Built-in and registered agent kinds remain directly launchable but are omitted from this configured-profile catalog. It also works from a user shell. Team names are excluded because a subagent launch creates one agent, not a cohort.
 
 ## Join results
 

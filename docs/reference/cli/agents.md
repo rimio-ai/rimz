@@ -56,14 +56,15 @@ The `@` sigil is required for `message`, where it also keeps a target from being
 
 Agent launches validate every discovered `~/.agents` fragment before resolving the requested spec. A syntax error or invalid fragment fails at entry with its source path and fix; unknown fields instead print a warning, are ignored, and can be removed with `rimz setup`.
 
-### Discover agent specs
+### Discover agent profiles
 
 ```sh
-rimz agents specs
-rimz agents types --json
+rimz agents profiles
+rimz agents profiles --path
+rimz agents profiles --json --path
 ```
 
-`specs` lists `[agents.profiles]` profiles and configured launch commands; `types` is an alias. Profile rows include their optional descriptions, and the final path column identifies the file that defines each row. Built-in and registered agent kinds remain directly launchable but are omitted from this configured-spec catalog. Teams are excluded because the catalog describes reusable cell types rather than cohort layouts.
+`profiles` lists `[agents.profiles]` profiles and configured launch commands as compact cards. Profile cards include their optional descriptions; `--path` adds the defining-file path. JSON also omits `path` unless `--path` is passed, keeps that path absolute, and includes `source` to distinguish profiles from commands. Built-in and registered agent kinds remain directly launchable but are omitted from this configured-profile catalog. Teams are excluded because the catalog describes reusable cell types rather than cohort layouts.
 
 ### Register a third-party kind
 

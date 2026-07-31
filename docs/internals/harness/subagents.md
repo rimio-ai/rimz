@@ -27,7 +27,7 @@ The two also differ in reach: a pane-backed child is a peer for `rimz message` a
 
 ## The doorway
 
-Launch, fanout, and the caller-scoped `list`, `wait`, and `stop` verbs refuse outside a RimZ-launched agent ([`cli/subagents/mod.rs`](../../../crates/rimz/src/cli/subagents/mod.rs)). The test is one environment variable: `RIMZ_AGENT_KIND`, exported into every agent pane by the [exec wrapper](./fleet.md#the-exec-wrapper). A user shell has no such variable and gets pointed at `rimz agents` or `rimz teams` instead. The read-only `specs` catalog is deliberately exempt because it only loads machine configuration and does not depend on caller ancestry.
+Launch, fanout, and the caller-scoped `list`, `wait`, and `stop` verbs refuse outside a RimZ-launched agent ([`cli/subagents/mod.rs`](../../../crates/rimz/src/cli/subagents/mod.rs)). The test is one environment variable: `RIMZ_AGENT_KIND`, exported into every agent pane by the [exec wrapper](./fleet.md#the-exec-wrapper). A user shell has no such variable and gets pointed at `rimz agents` or `rimz teams` instead. The read-only `profiles` catalog is deliberately exempt because it only loads machine configuration and does not depend on caller ancestry.
 
 This is a usability boundary, not a security one — the same launch is expressible as `rimz agents … -p --bg`, and `subagents` exists so a delegating agent does not have to choose the supervision flags correctly. What the doorway buys is that every child launched through it is *uniformly* supervised, background, deadlined, and self-cleaning.
 
@@ -73,7 +73,7 @@ Zone mutation is serialized per workspace across the mux open and wrapper-bind w
 
 The wrapper records its binding asynchronously after the mux starts it, so a subagent launch polls the durable rollup for up to three seconds before releasing the zone lock and returning. Sequential fanouts therefore observe the preceding child's anchor in the normal path. A wrapper that does not bind within the cap does not fail its launch: a team launch can still find the live companion view from mux truth, while a solo launch takes the no-anchor strategy.
 
-The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output and input formats, retries, and verification. Each of those needs a decision the delegating agent is not well placed to make, and each is still reachable by calling `rimz agents` directly. Its launch resolution and `specs` catalog read `[subagents.profiles]`, while `rimz agents` reads `[agents.profiles]`; a wrong-doorway profile names both sections in the error. Commands and teams remain shared. `specs` never lists teams because one launch produces one agent rather than a cohort.
+The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output and input formats, retries, and verification. Each of those needs a decision the delegating agent is not well placed to make, and each is still reachable by calling `rimz agents` directly. Its launch resolution and `profiles` catalog read `[subagents.profiles]`, while `rimz agents` reads `[agents.profiles]`; a wrong-doorway profile names both sections in the error. Commands and teams remain shared. `profiles` never lists teams because one launch produces one agent rather than a cohort.
 
 ## Single launch and fanout share one composition
 

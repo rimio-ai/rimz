@@ -48,18 +48,24 @@ fn parse_agents(argv: &[&str]) -> AgentsArgs {
 }
 
 #[test]
-fn specs_and_types_parse_as_agent_profile_listings() {
+fn profiles_parse_as_agent_profile_listings_without_legacy_aliases() {
+    let args = parse_agents(&["rimz", "profiles", "--json", "--path"]);
+    assert!(matches!(
+        args.command,
+        Some(AgentsSubcmd::Profiles {
+            json: true,
+            path: true
+        })
+    ));
     for command in ["specs", "types"] {
-        let args = parse_agents(&["rimz", command, "--json"]);
-        assert!(matches!(
-            args.command,
-            Some(AgentsSubcmd::Specs { json: true })
-        ));
+        let args = parse_agents(&["rimz", command]);
+        assert!(args.command.is_none());
+        assert_eq!(args.launch.spec.as_deref(), Some(command));
     }
 }
 
 #[test]
-fn agent_specs_list_only_agent_profiles_with_descriptions() {
+fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     let mut machine = MachineConfig::default();
     machine.agents.profiles.0.insert(
         "planner".to_owned(),
@@ -90,19 +96,19 @@ fn agent_specs_list_only_agent_profiles_with_descriptions() {
         },
     );
 
-    let specs = crate::cli::spec_report::available_specs(
+    let profiles = crate::cli::profile_report::available_profiles(
         &machine.agents.profiles,
         &machine.agents.commands,
         &rimz::config::AgentSpecSources::default(),
         rimz::config::effective::ProfileScope::Agents,
     );
-    assert!(!specs.iter().any(|entry| entry.source == "kind"));
-    assert!(specs.iter().any(|entry| {
+    assert!(!profiles.iter().any(|entry| entry.source == "kind"));
+    assert!(profiles.iter().any(|entry| {
         entry.name == "planner"
             && entry.source == "profile"
             && entry.description.as_deref() == Some("Plans the main lane")
     }));
-    assert!(!specs.iter().any(|entry| entry.name == "child-only"));
+    assert!(!profiles.iter().any(|entry| entry.name == "child-only"));
 }
 
 fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
