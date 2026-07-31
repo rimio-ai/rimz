@@ -1,4 +1,4 @@
-//! RimZ-owned git worktree lifecycle and removal policy.
+//! RimZ-owned git worktree lifecycle, landing, and removal policy.
 //!
 //! Worktrees are identified by a marker stored in the linked worktree's git
 //! admin directory, not in the checkout. The checkout remains pristine, and
@@ -66,6 +66,37 @@ pub enum WorktreeErr {
         "worktree `{name}` is in use by a live agent or an open pane; use --force to remove it"
     )]
     InUse { name: String },
+    #[error(
+        "cannot merge worktree `{name}`: its checkout has local changes; commit or stash them first"
+    )]
+    MergeDirtyWorktree { name: String },
+    #[error(
+        "cannot merge worktree `{name}`: the main checkout has local changes; commit or stash them first"
+    )]
+    MergeDirtyMain { name: String },
+    #[error("cannot merge worktree `{name}`: {checkout} has a Git operation in progress")]
+    MergeOperationInProgress {
+        name: String,
+        checkout: &'static str,
+    },
+    #[error("cannot merge worktree `{name}`: main must be checked out at {path}")]
+    MainNotCheckedOut { name: String, path: PathBuf },
+    #[error("cannot merge worktree `{name}`: expected branch `{expected}`, found `{actual}")]
+    MergeBranchMismatch {
+        name: String,
+        expected: String,
+        actual: String,
+    },
+    #[error(
+        "cannot merge worktree `{name}`: rebase onto main failed; no commits were merged into main: {stderr}"
+    )]
+    RebaseFailed { name: String, stderr: String },
+    #[error(
+        "cannot merge worktree `{name}`: main changed while the worktree was rebasing; rerun the command"
+    )]
+    MainChanged { name: String },
+    #[error("cannot merge worktree `{name}`: fast-forwarding main failed: {stderr}")]
+    FastForwardFailed { name: String, stderr: String },
     #[error("git command failed in {cwd}: git {args}: {stderr}")]
     Git {
         cwd: PathBuf,
@@ -175,6 +206,76 @@ pub struct ManagedWorktree {
     pub marker: WorktreeMarker,
     pub path: PathBuf,
     pub branch: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorktreeMerge {
+    pub name: String,
+    pub branch: String,
+    pub head: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorktreeSweep {
+    pub removed: Vec<SweptWorktree>,
+    pub failed: Vec<FailedWorktree>,
+    pub kept: Vec<KeptWorktree>,
+}
+
+impl WorktreeSweep {
+    pub fn bytes(&self) -> u64 {
+        self.removed
+            .iter()
+            .fold(0_u64, |total, removed| total.saturating_add(removed.bytes))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SweptWorktree {
+    pub name: String,
+    pub branch: String,
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub branch_deletion: Option<BranchDeletion>,
+    pub archive_error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FailedWorktree {
+    pub path: PathBuf,
+    pub error: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeptWorktree {
+    pub name: String,
+    pub path: PathBuf,
+    pub reason: KeptReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeptReason {
+    InUse,
+    Dirty,
+    NotMerged,
+}
+
+impl KeptReason {
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::InUse => "in use",
+            Self::Dirty => "uncommitted changes",
+            Self::NotMerged => "not merged yet",
+        }
+    }
+
+    pub fn json(self) -> &'static str {
+        match self {
+            Self::InUse => "in_use",
+            Self::Dirty => "uncommitted_changes",
+            Self::NotMerged => "not_merged",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -555,6 +656,215 @@ pub fn remove(
     remove_marked_worktree(repo_root, &path, &marker, force)
 }
 
+/// Resolve one named RimZ-owned worktree without accepting an arbitrary Git
+/// checkout at the configured path.
+pub fn resolve_owned(
+    repo_root: &Path,
+    config: &WorktreeConfig,
+    name: &str,
+) -> Result<ManagedWorktree> {
+    ensure_repo(repo_root)?;
+    let path = worktree_path(repo_root, config, name)?;
+    let marker = read_marker_for_worktree(&path)?.ok_or_else(|| WorktreeErr::Unmarked {
+        name: name.to_owned(),
+        path: path.clone(),
+    })?;
+    let branch = current_branch(&path);
+    Ok(ManagedWorktree {
+        marker,
+        path,
+        branch,
+    })
+}
+
+/// Rebase one clean managed worktree onto `main`, then advance the clean main
+/// checkout with a fast-forward-only merge.
+///
+/// The main checkout is updated only after the rebase succeeds. A failed
+/// rebase is aborted before returning, so conflicts never strand the managed
+/// checkout in an in-progress operation.
+pub fn merge_to_main(
+    repo_root: &Path,
+    config: &WorktreeConfig,
+    name: &str,
+) -> Result<WorktreeMerge> {
+    let managed = resolve_owned(repo_root, config, name)?;
+    if current_branch(repo_root).as_deref() != Some("main") {
+        return Err(WorktreeErr::MainNotCheckedOut {
+            name: name.to_owned(),
+            path: repo_root.to_owned(),
+        });
+    }
+    if repository_operation_in_progress(repo_root) {
+        return Err(WorktreeErr::MergeOperationInProgress {
+            name: name.to_owned(),
+            checkout: "the main checkout",
+        });
+    }
+    if repository_operation_in_progress(&managed.path) {
+        return Err(WorktreeErr::MergeOperationInProgress {
+            name: name.to_owned(),
+            checkout: "the worktree checkout",
+        });
+    }
+    if !git_stdout(repo_root, ["status", "--porcelain"])?.is_empty() {
+        return Err(WorktreeErr::MergeDirtyMain {
+            name: name.to_owned(),
+        });
+    }
+    if !git_stdout(&managed.path, ["status", "--porcelain"])?.is_empty() {
+        return Err(WorktreeErr::MergeDirtyWorktree {
+            name: name.to_owned(),
+        });
+    }
+    let actual_branch = managed.branch.as_deref().unwrap_or("detached HEAD");
+    if actual_branch != managed.marker.branch {
+        return Err(WorktreeErr::MergeBranchMismatch {
+            name: name.to_owned(),
+            expected: managed.marker.branch,
+            actual: actual_branch.to_owned(),
+        });
+    }
+
+    let main_head = git_stdout(repo_root, ["rev-parse", "HEAD"])?;
+    if let Err(err) = git_run(
+        &managed.path,
+        ["-c", "rebase.updateRefs=false", "rebase", "main"],
+    ) {
+        let _ = git_run(&managed.path, ["rebase", "--abort"]);
+        return Err(WorktreeErr::RebaseFailed {
+            name: name.to_owned(),
+            stderr: git_error_detail(err),
+        });
+    }
+    if !git_stdout(&managed.path, ["status", "--porcelain"])?.is_empty() {
+        return Err(WorktreeErr::MergeDirtyWorktree {
+            name: name.to_owned(),
+        });
+    }
+    if git_stdout(repo_root, ["rev-parse", "HEAD"])? != main_head
+        || !git_stdout(repo_root, ["status", "--porcelain"])?.is_empty()
+    {
+        return Err(WorktreeErr::MainChanged {
+            name: name.to_owned(),
+        });
+    }
+
+    let head = git_stdout(&managed.path, ["rev-parse", "HEAD"])?;
+    if let Err(err) = git_run(repo_root, ["merge", "--ff-only", head.as_str()]) {
+        return Err(WorktreeErr::FastForwardFailed {
+            name: name.to_owned(),
+            stderr: git_error_detail(err),
+        });
+    }
+    Ok(WorktreeMerge {
+        name: managed.marker.name,
+        branch: managed.marker.branch,
+        head,
+    })
+}
+
+/// Remove every clean, landed, unoccupied RimZ-owned worktree in one repo.
+/// Per-worktree failures are retained in the report so one broken checkout
+/// does not prevent the remaining safe candidates from being reclaimed.
+pub fn sweep_owned(
+    repo_root: &Path,
+    protections: &ProtectionSet,
+    store: &crate::Store,
+    session_name: &str,
+    dry_run: bool,
+) -> Result<WorktreeSweep> {
+    let entries = discover_owned(repo_root)?
+        .into_iter()
+        .map(|entry| {
+            let status =
+                status(&entry.path, &entry.marker).unwrap_or_else(|_| WorktreeStatus::unknown());
+            (entry, status)
+        })
+        .collect();
+    let (candidates, kept) = partition_sweep_candidates(entries, protections);
+    let mut sweep = WorktreeSweep {
+        kept,
+        ..WorktreeSweep::default()
+    };
+    for (entry, _status) in candidates {
+        let bytes = crate::disk_usage::dir_size(&entry.path);
+        if dry_run {
+            sweep.removed.push(SweptWorktree {
+                name: entry.marker.name,
+                branch: entry.marker.branch,
+                path: entry.path,
+                bytes,
+                branch_deletion: None,
+                archive_error: None,
+            });
+            continue;
+        }
+        match remove_marked_worktree(repo_root, &entry.path, &entry.marker, false) {
+            Ok(removed) => {
+                let retirement = retire_removal(
+                    store,
+                    &removed,
+                    WORKTREE_REMOVED_ARCHIVE_REASON,
+                    session_name,
+                );
+                if let Err(err) = retirement.session_retirement {
+                    tracing::warn!(
+                        worktree = %removed.worktree_name(),
+                        error = %err,
+                        "could not retire sessions for removed worktree",
+                    );
+                }
+                let archive_error = retirement.message_archival.err().map(|err| err.to_string());
+                sweep.removed.push(SweptWorktree {
+                    name: removed.worktree_name().to_owned(),
+                    branch: removed.branch().to_owned(),
+                    path: removed.removed_path().to_owned(),
+                    bytes,
+                    branch_deletion: Some(removed.branch_deletion()),
+                    archive_error,
+                });
+            }
+            Err(err) => sweep.failed.push(FailedWorktree {
+                path: entry.path,
+                error: err.to_string(),
+            }),
+        }
+    }
+    if !sweep.removed.is_empty() && !dry_run {
+        if let Err(err) = prune(repo_root) {
+            tracing::debug!(error = %err, "could not prune worktree metadata after sweep");
+        }
+    }
+    Ok(sweep)
+}
+
+fn partition_sweep_candidates(
+    entries: Vec<(ManagedWorktree, WorktreeStatus)>,
+    protections: &ProtectionSet,
+) -> (Vec<(ManagedWorktree, WorktreeStatus)>, Vec<KeptWorktree>) {
+    let mut candidates = Vec::new();
+    let mut kept = Vec::new();
+    for (entry, status) in entries {
+        let reason = match protections.assess(&entry.path, status) {
+            RemovalAssessment::Removable => None,
+            RemovalAssessment::InUse => Some(KeptReason::InUse),
+            RemovalAssessment::Dirty => Some(KeptReason::Dirty),
+            RemovalAssessment::NotLanded => Some(KeptReason::NotMerged),
+        };
+        if let Some(reason) = reason {
+            kept.push(KeptWorktree {
+                name: entry.marker.name,
+                path: entry.path,
+                reason,
+            });
+        } else {
+            candidates.push((entry, status));
+        }
+    }
+    (candidates, kept)
+}
+
 pub fn remove_marked_worktree(
     repo_root: &Path,
     path: &Path,
@@ -578,6 +888,36 @@ pub fn remove_marked_worktree(
         removed_path: path.to_owned(),
         branch_deletion,
     })
+}
+
+fn repository_operation_in_progress(cwd: &Path) -> bool {
+    [
+        "rebase-merge",
+        "rebase-apply",
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+    ]
+    .iter()
+    .any(|name| {
+        git_stdout(cwd, ["rev-parse", "--git-path", name])
+            .map(|path| {
+                let path = PathBuf::from(path);
+                if path.is_absolute() {
+                    path.exists()
+                } else {
+                    cwd.join(path).exists()
+                }
+            })
+            .unwrap_or(true)
+    })
+}
+
+fn git_error_detail(err: WorktreeErr) -> String {
+    match err {
+        WorktreeErr::Git { stderr, .. } => stderr,
+        other => other.to_string(),
+    }
 }
 
 pub fn discover_owned(repo_root: &Path) -> Result<Vec<ManagedWorktree>> {

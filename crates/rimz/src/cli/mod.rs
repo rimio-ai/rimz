@@ -509,7 +509,7 @@ enum Subcmd {
     Update(update::UpdateArgs),
     /// Create, list, and remove named channels.
     Channel(channel::ChannelArgs),
-    /// Create, list, and remove RimZ-owned git worktrees.
+    /// Create, enter, merge, sweep, and remove RimZ-owned git worktrees.
     Worktree(worktree::WorktreeArgs),
     /// Launch agent tabs, optionally in RimZ-owned worktrees.
     Agents(Box<agents_cmd::AgentsArgs>),
@@ -746,6 +746,14 @@ pub(crate) fn open_store(workspace: &rimz::ResolvedWorkspace) -> Result<Store> {
         .record_workspace(workspace)
         .context("recording workspace metadata")?;
     Ok(store)
+}
+
+pub(crate) fn open_existing_store(workspace: &rimz::ResolvedWorkspace) -> Result<Option<Store>> {
+    let paths = StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing store paths")?;
+    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing runtime paths")?;
+    Ok(Store::open_existing(paths, runtime))
 }
 
 pub(crate) fn runtime_paths_for(workspace_id: WorkspaceId) -> Result<RuntimePaths> {

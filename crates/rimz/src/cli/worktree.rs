@@ -1,4 +1,4 @@
-//! `rimz worktree` — prompt, remove, archive, and present managed checkouts.
+//! `rimz worktree` — create, enter, land, sweep, and present managed checkouts.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -60,6 +60,26 @@ enum WorktreeSubcmd {
         #[arg(long)]
         json: bool,
     },
+    /// Remove every clean, merged, unused RimZ-owned worktree.
+    Sweep {
+        /// Report what would be removed without removing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Open a shell in a RimZ-owned worktree.
+    Cd {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::worktrees
+        ))]
+        name: String,
+    },
+    /// Rebase a clean worktree onto main and fast-forward main to it.
+    Merge {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::worktrees
+        ))]
+        name: String,
+    },
     /// Remove a RimZ-owned worktree.
     Remove {
         #[arg(add = clap_complete::ArgValueCandidates::new(
@@ -106,6 +126,9 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             branch,
         } => new_worktree(&workspace, &config, name, base, from_pr, branch),
         WorktreeSubcmd::List { json } => list_worktrees(&workspace, json),
+        WorktreeSubcmd::Sweep { dry_run } => sweep_worktrees(&workspace, globals, dry_run),
+        WorktreeSubcmd::Cd { name } => cd_worktree(&workspace, &config, &name),
+        WorktreeSubcmd::Merge { name } => merge_worktree(&workspace, &config, globals, &name),
         WorktreeSubcmd::Remove { name, force } => {
             remove_worktree(&workspace, &config, globals, name, force)
         }
@@ -370,6 +393,108 @@ fn remove_worktree(
         if removed.branch_deletion() == rimz::worktree::BranchDeletion::KeptUnmerged {
             println!("  branch kept: work not proven merged into its base");
         }
+    }
+    Ok(())
+}
+
+fn sweep_worktrees(
+    workspace: &ResolvedWorkspace,
+    globals: &GlobalFlags,
+    dry_run: bool,
+) -> Result<()> {
+    let store = if dry_run {
+        super::open_existing_store(workspace)?.context(
+            "no RimZ store exists for this repository; refusing to sweep without live-agent state",
+        )?
+    } else {
+        open_store(workspace)?
+    };
+    let guard = super::worktree_protection::for_automatic_gc(workspace, &store, globals)
+        .context("reading the live agent roster before sweeping worktrees")?;
+    let sweep = rimz::worktree::sweep_owned(
+        &workspace.project_root,
+        &guard.protections,
+        &store,
+        &workspace.session_name,
+        dry_run,
+    )?;
+    report_sweep(&sweep, dry_run)?;
+    let problems = sweep.failed.len()
+        + sweep
+            .removed
+            .iter()
+            .filter(|removed| removed.archive_error.is_some())
+            .count();
+    if problems > 0 {
+        bail!("worktree sweep completed with {problems} problem(s)");
+    }
+    Ok(())
+}
+
+fn report_sweep(sweep: &rimz::worktree::WorktreeSweep, dry_run: bool) -> Result<()> {
+    let mut out = render::out();
+    let action = if dry_run { "would remove" } else { "removed" };
+    if sweep.removed.is_empty() {
+        writeln!(out, "sweep — nothing to remove · {} kept", sweep.kept.len())?;
+    } else {
+        writeln!(
+            out,
+            "sweep — {action} {} · {} · {} kept",
+            sweep.removed.len(),
+            render::fmt_bytes(sweep.bytes()),
+            sweep.kept.len(),
+        )?;
+    }
+    for removed in &sweep.removed {
+        writeln!(
+            out,
+            "  {action}: {} — {}",
+            removed.name,
+            removed.path.display()
+        )?;
+        if let Some(err) = removed.archive_error.as_deref() {
+            writeln!(out, "    message archive failed: {err}")?;
+        }
+    }
+    for kept in &sweep.kept {
+        writeln!(out, "  kept: {} — {}", kept.name, kept.reason.text())?;
+    }
+    for failed in &sweep.failed {
+        writeln!(
+            out,
+            "  failed: {} — {}",
+            failed.path.display(),
+            failed.error
+        )?;
+    }
+    Ok(())
+}
+
+fn cd_worktree(workspace: &ResolvedWorkspace, config: &WorktreeConfig, name: &str) -> Result<()> {
+    let managed = rimz::worktree::resolve_owned(&workspace.project_root, config, name)?;
+    exec_shell(&managed.path)
+}
+
+fn merge_worktree(
+    workspace: &ResolvedWorkspace,
+    config: &WorktreeConfig,
+    globals: &GlobalFlags,
+    name: &str,
+) -> Result<()> {
+    let managed = rimz::worktree::resolve_owned(&workspace.project_root, config, name)?;
+    let guard = super::worktree_protection::for_explicit_removal(&workspace.project_root, globals);
+    if guard.protections.protects(&managed.path) {
+        bail!(
+            "cannot merge worktree `{name}`: it is in use by {}",
+            holder_summary(&guard.agents, &managed.path)
+        );
+    }
+    let merged = rimz::worktree::merge_to_main(&workspace.project_root, config, name)?;
+    #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
+    {
+        println!("merged {} into main", merged.name);
+        println!("  branch : {}", merged.branch);
+        println!("  head   : {}", merged.head);
     }
     Ok(())
 }

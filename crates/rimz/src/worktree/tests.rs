@@ -347,6 +347,74 @@ fn removal_assessment_uses_in_use_dirty_landing_precedence() {
 }
 
 #[test]
+fn sweep_partition_keeps_protected_dirty_and_unmerged_entries() {
+    let entries = vec![
+        sweep_entry("protected", true, LandedVerdict::Pending),
+        sweep_entry("dirty", true, LandedVerdict::Landed),
+        sweep_entry("unknown", false, LandedVerdict::Unknown),
+        sweep_entry("pending", false, LandedVerdict::Pending),
+        sweep_entry("clean", false, LandedVerdict::Landed),
+    ];
+    let protected = ProtectionSet::from_facts(
+        &[PaneProtectionFact {
+            pane_id: PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_protected"),
+            cwd: Some(PathBuf::from("/repo-worktrees/protected/src")),
+            sidebar: false,
+        }],
+        &[],
+        None,
+        Occupancy::Unproven,
+    );
+
+    let (candidates, kept) = partition_sweep_candidates(entries, &protected);
+
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|(entry, _)| entry.marker.name.as_str())
+            .collect::<Vec<_>>(),
+        ["clean"]
+    );
+    assert_eq!(
+        kept.iter()
+            .map(|worktree| (worktree.name.as_str(), worktree.reason))
+            .collect::<Vec<_>>(),
+        [
+            ("protected", KeptReason::InUse),
+            ("dirty", KeptReason::Dirty),
+            ("unknown", KeptReason::NotMerged),
+            ("pending", KeptReason::NotMerged),
+        ]
+    );
+}
+
+fn sweep_entry(
+    name: &str,
+    dirty: bool,
+    landed: LandedVerdict,
+) -> (ManagedWorktree, WorktreeStatus) {
+    let path = PathBuf::from(format!("/repo-worktrees/{name}"));
+    (
+        ManagedWorktree {
+            marker: WorktreeMarker {
+                version: 4,
+                name: name.to_owned(),
+                branch: name.to_owned(),
+                base_branch: Some("main".to_owned()),
+                from_pr: None,
+                base_ref: "main".to_owned(),
+                repo_root: PathBuf::from("/repo"),
+                worktree_path: path.clone(),
+                created_at: jiff::Timestamp::now(),
+            },
+            path,
+            branch: Some(name.to_owned()),
+        },
+        WorktreeStatus { dirty, landed },
+    )
+}
+
+#[test]
 fn parses_git_worktree_porcelain() {
     let raw = "\
 worktree /code/query-engine

@@ -20,7 +20,7 @@ A handler parses, calls the domain, and presents; the knowledge lives in its own
 - `config` — format-preserving config editing and bootstrap.
 - `store` — event construction, rotation policy, pane/session binding eligibility.
 - `sidebar` — presence ingestion, topology fencing, cache publication.
-- `worktree` — removal assessment and protection policy, lifecycle cleanup.
+- `worktree` — clean linear landing, sweep assessment, protection policy, and lifecycle cleanup.
 - `agents` — provider argv vocabulary and per-kind context policy (field ownership, merge rules).
 
 ## Boundaries

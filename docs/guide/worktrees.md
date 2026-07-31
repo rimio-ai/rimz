@@ -95,7 +95,7 @@ rimz agents forge -w ingest     # a second forge team, fully isolated
 
 RimZ reclaims a tree only after proving its work landed, so a merged feature cleans itself up and unmerged work is never lost. When a worktree's agents finish and their panes close while the room stays live, RimZ checks the tree: a clean one whose content has reached its base branch is removed along with its branch; a dirty, pending, or unproven one is kept, behind a `keep / remove / shell` prompt when you are watching. "Landed" is measured against the trunk and recognizes merge, squash, and rebase alike.
 
-`rimz worktree list` shows every RimZ-owned tree with the agents inside it, its dirty state, and the landed verdict; `remove` applies the same proof on demand:
+`rimz worktree list` shows every RimZ-owned tree with the agents inside it, its dirty state, and the landed verdict. The other lifecycle commands let you enter, land, reclaim, or explicitly remove one:
 
 ```console
 $ rimz worktree list
@@ -110,9 +110,11 @@ $ rimz worktree remove feat-a
 removed feat-a
 ```
 
+`rimz worktree cd auth` opens your user shell rooted in that checkout; exit the shell to return to the directory where you started. Once a worktree is ready, `rimz worktree merge auth` takes the deliberately narrow landing path: both checkouts must be clean, no other pane or agent may occupy the worktree, the branch rebases onto `main`, and the main checkout advances by fast-forward only. A conflict aborts the rebase and leaves `main` unchanged rather than creating a merge commit.
+
 `remove` guards three things, in that order: an agent or a shell still working in the tree, uncommitted changes, and work not proven landed. Once `@coder` is gone, the same command refuses again for the dirty tree, this time with `worktree `auth` has local changes or work not proven landed`. A stale record left behind by a crashed agent does not count as in use, so a crash never leaves you unable to reclaim the tree.
 
-`--force` overrides the refusal when you have decided the work is disposable, and warns first when it is overriding a live agent. `rimz gc` sweeps what automatic cleanup could not reach — trees left by a crash, or ones that became safe only after a later merge or fetch: it removes every clean, landed tree that no live pane or agent occupies, reports the disk it reclaimed, and previews with `--dry-run`. The full landed-content proof is in [the worktree internals](../internals/harness/worktrees.md#the-content-landed-ladder).
+`--force` overrides the refusal when you have decided the work is disposable, and warns first when it is overriding a live agent. `rimz worktree sweep` reclaims only worktrees left by a crash or made safe by a later merge or fetch: it removes every clean, landed tree that no live pane or agent occupies, reports what it reclaimed, and previews with `--dry-run`. `rimz gc` runs the same worktree sweep alongside the other maintenance areas. The full landed-content proof is in [the worktree internals](../internals/harness/worktrees.md#the-content-landed-ladder).
 
 ## Under the hood
 
