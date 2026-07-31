@@ -14,7 +14,7 @@ Modules flagged `pin` get characterization tests before their pass touches them 
 
 ## Reading the verbs
 
-Every verb follows `--path`, prints top-N tables plus a totals line so truncation never hides mass, and emits versioned JSON with `--json`. Text output is bounded by default and safe to print; explicit drill-downs can be longer. Route `--json` to a file under `/tmp` and narrow with `jq`. Modules compiled only for `test` or the `testkit` feature are excluded from production measurements; test modules still contribute to `rank`'s `t/c` ratio, while `testkit` support does not.
+Every verb follows `--path`, prints top-N tables plus a totals line so truncation never hides mass, and emits versioned JSON with `--json`. Text output is bounded and safe to print; route `--json` to a file under `/tmp` and narrow with `jq`. External modules reached through `cfg(test)` or `cfg(feature = "testkit")` declarations are excluded from production measurements; test modules still contribute to `rank`'s `t/c` ratio, while testkit support does not.
 
 ### `rank` — where should I look?
 
@@ -39,7 +39,7 @@ Use `--module <name>` to expand every import edge touching one scoped module int
 
 ### `api` — how deep is each boundary?
 
-Per module: `pub fn`, `pub type`, `occ/item` (median outside-file identifier occurrences, tests excluded), `occ0` (items with zero such occurrences), `params/fn`. Then the shortlist of public items used by exactly one outside module — interface that arguably shouldn't be interface. `--module <name>` prints every public item in that module with kind, occurrences, outside-module count, and file:line, followed by the single-outside-module shortlist.
+Per module: `pub fn`, `pub type`, `occ/item` (median outside-file identifier occurrences, tests excluded), `occ0` (items with zero such occurrences), `params/fn`. Then the shortlist of public items used by exactly one outside module — interface that arguably shouldn't be interface. `--module <name>` prints the top public items in that module with kind, occurrences, outside-module count, and file:line, followed by the single-outside-module shortlist; `--json` carries the complete item list.
 
 `occ` is heuristic whole-word counting, not resolved callers: common names over-count, and `occ0` conflates dead with test-only. Treat a large `occ0` as a demote-or-delete *shortlist to read*, never a deletion list to execute.
 
@@ -88,7 +88,7 @@ JSON field names are stable snake_case. All reports carry `version` and `verb`; 
 
 - `rank`: `history_commits`, `total_modules`, `total_code`, `total_tests`, `total_pub_items`, `total_complexity`, `rows`, and optional `offenders`. Each row exposes the named text columns plus `tests`, `occurrence_median`, and optional deltas.
 - `seams`: history bounds; totals and arrays for `import_edges`, `external_surface`, `external_providers`, `cochange_edges`, and `divergence`; optional `cochange_hub`; per-kind divergence totals; and, with `--module`, `requested_module` plus untruncated `import_items` per edge.
-- `api`: `total_modules`, `modules`, `total_single_caller_items`, `single_caller_modules`, and `single_caller_items`. With `--module`, `requested_module` and untruncated `module_items` contain item kind, defining path/line, occurrences, and outside-module count.
+- `api`: `total_modules`, `modules`, `total_single_caller_items`, `single_caller_modules`, and `single_caller_items`. With `--module`, `requested_module` and the complete `module_items` array contain item kind, defining path/line, occurrences, and outside-module count; text still follows `--top`.
 - `shapes`: `eligible_functions`, `total_clusters`, and `clusters`; each cluster includes similarity, score, breadth, shared callees, and member locations/SLOC.
 - `conform`: `target`, `rules`, `regressions`, and `parse_failures`. Module rules include `unallowed_imports` and `unallowed_import_sites`; an absent default target instead returns `configured: false` with its target path.
 

@@ -54,6 +54,11 @@ impl Source {
 }
 
 pub(super) fn scope_sources(root: &Path, scope: &Path, at: Option<&str>) -> Result<Vec<Source>> {
+    let sources = all_sources(root, at)?;
+    sources_in_scope(&sources, scope)
+}
+
+pub(super) fn all_sources(root: &Path, at: Option<&str>) -> Result<Vec<Source>> {
     let mut sources = if let Some(revision) = at {
         revision_sources(root, revision)?
     } else {
@@ -75,7 +80,18 @@ pub(super) fn scope_sources(root: &Path, scope: &Path, at: Option<&str>) -> Resu
             .collect::<Result<Vec<_>>>()?
     };
     classify_sources(&mut sources);
-    sources.retain(|source| path_in_scope(&source.path, scope));
+    if sources.is_empty() {
+        bail!("no tracked Rust files in the repository");
+    }
+    Ok(sources)
+}
+
+pub(super) fn sources_in_scope(sources: &[Source], scope: &Path) -> Result<Vec<Source>> {
+    let sources = sources
+        .iter()
+        .filter(|source| path_in_scope(&source.path, scope))
+        .cloned()
+        .collect::<Vec<_>>();
     if sources.is_empty() {
         bail!("no tracked Rust files under `{}`", scope.display());
     }
@@ -276,7 +292,8 @@ fn conditional_source_kind(attributes: &[syn::Attribute]) -> Option<SourceKind> 
         .iter()
         .filter(|attribute| attribute.path().is_ident("cfg"))
         .filter_map(|attribute| attribute.parse_args::<Meta>().ok())
-        .find_map(|predicate| cfg_predicate_kind(&predicate))
+        .filter_map(|predicate| cfg_predicate_kind(&predicate))
+        .reduce(merge_source_kind)
 }
 
 fn cfg_predicate_kind(predicate: &Meta) -> Option<SourceKind> {
@@ -295,7 +312,8 @@ fn cfg_predicate_kind(predicate: &Meta) -> Option<SourceKind> {
             .parse_args_with(Punctuated::<Meta, Comma>::parse_terminated)
             .ok()?
             .iter()
-            .find_map(cfg_predicate_kind),
+            .filter_map(cfg_predicate_kind)
+            .reduce(merge_source_kind),
         Meta::List(list) if list.path.is_ident("any") => {
             let predicates = list
                 .parse_args_with(Punctuated::<Meta, Comma>::parse_terminated)
@@ -304,11 +322,7 @@ fn cfg_predicate_kind(predicate: &Meta) -> Option<SourceKind> {
                 .iter()
                 .map(cfg_predicate_kind)
                 .collect::<Option<Vec<_>>>()?;
-            kinds
-                .into_iter()
-                .reduce(merge_source_kind)
-                .or(Some(SourceKind::Production))
-                .filter(|kind| *kind != SourceKind::Production)
+            kinds.into_iter().reduce(merge_source_kind)
         }
         _ => None,
     }
@@ -354,5 +368,40 @@ mod tests {
         assert_eq!(sources[1].kind, SourceKind::TestSupport);
         assert_eq!(sources[2].kind, SourceKind::TestSupport);
         assert!(sources[3].is_test());
+    }
+
+    #[test]
+    fn cfg_composition_is_order_independent() {
+        let test_then_support: syn::ItemMod = syn::parse_quote! {
+            #[cfg(all(test, feature = "testkit"))]
+            mod fixture;
+        };
+        let support_then_test: syn::ItemMod = syn::parse_quote! {
+            #[cfg(all(feature = "testkit", test))]
+            mod fixture;
+        };
+        let stacked: syn::ItemMod = syn::parse_quote! {
+            #[cfg(feature = "testkit")]
+            #[cfg(test)]
+            mod fixture;
+        };
+        let production_alternative: syn::ItemMod = syn::parse_quote! {
+            #[cfg(any(test, unix))]
+            mod fixture;
+        };
+
+        assert_eq!(
+            conditional_source_kind(&test_then_support.attrs),
+            Some(SourceKind::Test)
+        );
+        assert_eq!(
+            conditional_source_kind(&support_then_test.attrs),
+            Some(SourceKind::Test)
+        );
+        assert_eq!(
+            conditional_source_kind(&stacked.attrs),
+            Some(SourceKind::Test)
+        );
+        assert_eq!(conditional_source_kind(&production_alternative.attrs), None);
     }
 }
