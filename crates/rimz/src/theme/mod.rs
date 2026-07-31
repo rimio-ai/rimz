@@ -17,6 +17,8 @@ mod tone;
 
 pub mod fmt;
 
+#[cfg(test)]
+pub(crate) use glyphs::unicode_glyph;
 pub(crate) use glyphs::{GlyphSet, GlyphSetKind};
 pub use glyphs::{
     agent_status_glyph_role, nerd_font_probe_glyphs, nerd_font_probe_gradient,
