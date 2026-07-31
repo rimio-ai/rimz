@@ -17,9 +17,9 @@ Clusters large functions by Jaccard similarity over normalized control-flow
 4-grams. Identifiers and literals do not enter the skeleton.
 
   --path <path>   root-relative subtree (default crates/rimz/src)
-  --top N         clusters to report (default 15)
+  --top N         clusters to report (default 10)
   --min-sloc N    minimum function source lines (default 40)
-  --similarity S  Jaccard threshold from 0 through 1 (default 0.53)
+  --similarity S  Jaccard threshold from 0 through 1 (default 0.65)
   --json          versioned JSON agent contract (v1)";
 
 #[derive(Debug)]
@@ -133,9 +133,9 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     }
     Ok(Some(Args {
         path: path.unwrap_or_else(|| PathBuf::from(DEFAULT_PATH)),
-        top: top.unwrap_or(15),
+        top: top.unwrap_or(10),
         min_sloc: min_sloc.unwrap_or(40),
-        similarity: similarity.unwrap_or(0.53),
+        similarity: similarity.unwrap_or(0.65),
         json,
     }))
 }
