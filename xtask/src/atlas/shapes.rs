@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
+use super::modules::module_for_path;
 use super::sources;
 use super::syntax::{self, FnBody};
 use super::{finite_nonnegative, positive_usize, set_once, validate_scope, value};
@@ -14,7 +15,8 @@ const USAGE: &str =
     "cargo xtask atlas shapes [--path <prefix>] [--top N] [--min-sloc N] [--similarity S] [--json]
 
 Clusters large functions by Jaccard similarity over normalized control-flow
-4-grams. Identifiers and literals do not enter the skeleton.
+4-grams. Identifiers and literals do not enter the skeleton. Clusters spanning
+more modules and files rank before the existing member-count × mean-sloc score.
 
   --path <path>   root-relative subtree (default crates/rimz/src)
   --top N         clusters to report (default 10)
@@ -44,6 +46,8 @@ struct Cluster {
     similarity_floor: f64,
     mean_sloc: f64,
     score: f64,
+    distinct_files: usize,
+    distinct_modules: usize,
     members: Vec<Member>,
 }
 
@@ -165,15 +169,9 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let mut clusters = complete_linkage_groups(&similarities, args.similarity)
         .into_iter()
         .filter(|members| members.len() > 1)
-        .map(|members| cluster(&functions, &shingles, members))
+        .map(|members| cluster(&functions, &shingles, members, &args.path))
         .collect::<Vec<_>>();
-    clusters.sort_by(|left, right| {
-        right
-            .score
-            .total_cmp(&left.score)
-            .then_with(|| left.members[0].path.cmp(&right.members[0].path))
-            .then_with(|| left.members[0].line.cmp(&right.members[0].line))
-    });
+    sort_clusters(&mut clusters);
     let total_clusters = clusters.len();
     clusters.truncate(args.top);
     Ok(Report {
@@ -187,10 +185,23 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     })
 }
 
+fn sort_clusters(clusters: &mut [Cluster]) {
+    clusters.sort_by(|left, right| {
+        right
+            .distinct_modules
+            .cmp(&left.distinct_modules)
+            .then_with(|| right.distinct_files.cmp(&left.distinct_files))
+            .then_with(|| right.score.total_cmp(&left.score))
+            .then_with(|| left.members[0].path.cmp(&right.members[0].path))
+            .then_with(|| left.members[0].line.cmp(&right.members[0].line))
+    });
+}
+
 fn cluster(
     functions: &[FnBody],
     shingles: &[BTreeSet<Vec<String>>],
     indexes: Vec<usize>,
+    scope: &Path,
 ) -> Cluster {
     let mean_sloc = indexes
         .iter()
@@ -225,10 +236,22 @@ fn cluster(
             .then_with(|| left.path.cmp(&right.path))
             .then_with(|| left.line.cmp(&right.line))
     });
+    let distinct_files = members
+        .iter()
+        .map(|member| &member.path)
+        .collect::<BTreeSet<_>>()
+        .len();
+    let distinct_modules = members
+        .iter()
+        .map(|member| module_for_path(&member.path, scope))
+        .collect::<BTreeSet<_>>()
+        .len();
     Cluster {
         similarity_floor,
         mean_sloc,
         score: members.len() as f64 * mean_sloc,
+        distinct_files,
+        distinct_modules,
         members,
     }
 }
@@ -306,9 +329,11 @@ fn print_report(report: &Report) {
     println!("Atlas shapes — {}", report.path.display());
     for (index, cluster) in report.clusters.iter().enumerate() {
         println!(
-            "{}. {} members, mean {:.1} sloc, similarity floor {:.2}",
+            "{}. {} members across {} files / {} modules, mean {:.1} sloc, similarity floor {:.2}",
             index + 1,
             cluster.members.len(),
+            cluster.distinct_files,
+            cluster.distinct_modules,
             cluster.mean_sloc,
             cluster.similarity_floor
         );
@@ -375,5 +400,40 @@ mod tests {
                     .all(|right| similarities[*left][*right] >= 0.7)
             })
         }));
+    }
+
+    #[test]
+    fn cross_module_clusters_rank_before_larger_single_file_clusters() {
+        let function = |path: &str, line, sloc| FnBody {
+            name: format!("function_{line}"),
+            path: PathBuf::from(path),
+            line,
+            sloc,
+            skeleton: ["A", "B", "C", "D"].map(str::to_owned).to_vec(),
+        };
+        let functions = vec![
+            function("src/fixture.rs", 1, 100),
+            function("src/fixture.rs", 2, 100),
+            function("src/fixture.rs", 3, 100),
+            function("src/fixture.rs", 4, 100),
+            function("src/fixture.rs", 5, 100),
+            function("src/a/one.rs", 1, 50),
+            function("src/b/two.rs", 1, 50),
+            function("src/c/three.rs", 1, 50),
+        ];
+        let shingles = functions
+            .iter()
+            .map(|function| shingle_set(&function.skeleton))
+            .collect::<Vec<_>>();
+        let mut clusters = vec![
+            cluster(&functions, &shingles, vec![0, 1, 2, 3, 4], Path::new("src")),
+            cluster(&functions, &shingles, vec![5, 6, 7], Path::new("src")),
+        ];
+
+        sort_clusters(&mut clusters);
+
+        assert_eq!(clusters[0].distinct_modules, 3);
+        assert_eq!(clusters[0].distinct_files, 3);
+        assert_eq!(clusters[1].score, 500.0);
     }
 }
