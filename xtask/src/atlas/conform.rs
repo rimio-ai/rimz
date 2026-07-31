@@ -481,10 +481,15 @@ fn enforce(report: &Report) -> Result<()> {
             ));
         }
     }
+    let file_arg = if report.target == Path::new(TARGET_FILE) {
+        String::new()
+    } else {
+        format!(" --file {}", report.target.display())
+    };
     bail!(
-        "atlas conform ratchet regressed:\n{}\n\nReduce the current values, run `cargo xtask atlas conform --tighten --file {}` after improvement, or deliberately edit {} to reopen a budget.",
+        "atlas conform ratchet regressed:\n{}\n\nReduce the current values, run `cargo xtask atlas conform --tighten{}` after improvement, or deliberately edit {} to reopen a budget.",
         violations.join("\n"),
-        report.target.display(),
+        file_arg,
         report.target.display()
     )
 }
