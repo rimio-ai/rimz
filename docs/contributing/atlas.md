@@ -6,11 +6,14 @@ The premise: opportunity-driven refactoring never terminates. Atlas exists to ru
 
 ## Program shape
 
-1. **Round 0 — evidence and target.** Run `rank`, `seams`, `api`, and `shapes` over the scope. Write the from-scratch target (a page: modules, seams, what each hides from callers) plus the pass list with prerequisites and line budgets. Seed `refactor-target.toml` with `conform --init`, then narrow it to encode the target: shrink allow-lists, lower pub budgets, add stranglers for paths that must die.
-2. **Each pass — one seam or one submodule.** Verticals take a submodule to its target shape; horizontals collapse one piece of knowledge repeated across many files (`shapes` clusters and `seams` divergence rows are the horizontal detectors). Horizontals usually go first: they fix the shape every vertical then conforms to. A pass exits when its `conform` rules are clean, net source lines fell, and behavior held.
-3. **Ratchet.** `conform --ratchet` runs inside `gate`/`checks`; after improvement, `conform --tighten` locks the gains. Pace and delta columns (`--since`) are the burn-down chart between passes.
+1. **Pass 0 — tidy first.** Before writing any target, demote the `api` `occ0` and single-outside-module surface the compiler confirms unused; rustc arbitrates every demotion, so the risk is near zero. Budgets seeded on the tidied tree start from the real surface instead of ratifying over-publication.
+2. **Round 0 — evidence and target.** Run `rank`, `seams`, `api`, and `shapes` over the scope. Group deep-reading assignments by co-change cluster rather than directory — modules that change together hold one piece of knowledge, and a reader who sees only one member cannot find it. Write the from-scratch target (a page: modules, seams, what each hides from callers) plus the pass list with prerequisites and line budgets. Seed `refactor-target.toml` with `conform --init`, then narrow it to encode the target: shrink allow-lists, lower pub budgets, add stranglers for paths that must die.
+3. **Each pass — one seam or one submodule.** Verticals take a submodule to its target shape; horizontals collapse one piece of knowledge repeated across many files (`shapes` clusters and `seams` divergence rows are the horizontal detectors). Horizontals usually go first: they fix the shape every vertical then conforms to. A pass exits when its `conform` rules are clean, net source lines fell, and behavior held.
+4. **Ratchet.** `conform --ratchet` runs inside `gate`/`checks`; after improvement, `conform --tighten` locks the gains. Pace and delta columns (`--since`) are the burn-down chart between passes.
 
 Modules flagged `pin` get characterization tests before their pass touches them — that is schedulable prerequisite work, visible from `rank` on day one.
+
+**Concurrency.** Passes may run in parallel worktrees when their scopes share no co-change edge in `seams`; a pass whose prerequisite hasn't landed waits rather than stacking on it. Each concurrent pass narrows only its own rules in `refactor-target.toml`, so merges stay per-module. When passes are delegated, the hand-off carries the pass's slice of the target, its owned conform rules with post-pass values, its line budget, and the verification commands — the executor verifies against the code but does not redo Round 0.
 
 ## Reading the verbs
 
@@ -31,8 +34,8 @@ Four sections, in rising value:
 
 - **Import edges** and **external surface**: what each module must know from outside. A command module importing 100+ items from eight providers is the measurement of the missing context seam.
 - **External providers**: fan-in ranking — which outside surfaces every pass will touch.
-- **Co-change edges**: files that change together (window-scoped, commits touching more than `--max-commit-files` Rust sources omitted as merge noise, and pairs below `--min-cochange` hidden).
-- **Divergence** is the payload: `cochange-without-import` pairs are hidden knowledge duplication — two modules that must change together with no declared dependency. These are rehome candidates located for free; read the top rows before believing any target design.
+- **Co-change edges**: files that change together (window-scoped, commits touching more than `--max-commit-files` Rust sources omitted as merge noise, and pairs below `--min-cochange` hidden). This section lists only pairs that also share import edges; co-changing pairs without one appear under Divergence, where they matter most.
+- **Divergence** is the payload: `cochange-without-import` pairs are hidden knowledge duplication — two modules that must change together with no declared dependency. These are rehome candidates located for free; read the top rows before believing any target design. `import-without-cochange` rows are the opposite reading — a declared dependency that never changes together, usually a stable seam and good news, occasionally a dead `use`; they dominate the row count, so read them only when hunting deletions.
 
 Imports come from `use` items only; inline qualified paths are invisible here (they still count in `conform` stranglers and `api` occurrences).
 Use `--module <name>` to expand every import edge touching one scoped module into its distinct imported item names.
