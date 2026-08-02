@@ -4,6 +4,8 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+pub(super) const EXTERNAL_REACH: &str = "(extern)";
+
 pub(super) fn scope_for_matching(scope: &Path) -> &Path {
     match scope.strip_prefix(Path::new(".")) {
         Ok(scope) if scope.as_os_str().is_empty() => Path::new(""),
@@ -65,6 +67,30 @@ pub(super) fn crate_module_for_path(path: &Path) -> String {
         }
     }
     parts.join("::")
+}
+
+pub(super) fn crate_path_for_source(path: &Path) -> PathBuf {
+    let mut crate_path = PathBuf::new();
+    for component in path.components() {
+        let Component::Normal(component) = component else {
+            continue;
+        };
+        if component == "src" {
+            return crate_path;
+        }
+        crate_path.push(component);
+    }
+    path.parent().unwrap_or_else(|| Path::new("")).to_path_buf()
+}
+
+pub(super) fn module_is_within(module: &str, ancestor: &str) -> bool {
+    if ancestor == EXTERNAL_REACH {
+        return true;
+    }
+    if module == EXTERNAL_REACH {
+        return false;
+    }
+    ancestor.is_empty() || module == ancestor || module.starts_with(&format!("{ancestor}::"))
 }
 
 pub(super) fn crate_module_for_row(scope: &Path, row: &str) -> String {
@@ -209,5 +235,15 @@ mod tests {
             .as_deref(),
             Some("import_name")
         );
+    }
+
+    #[test]
+    fn module_containment_models_crate_external_reach() {
+        assert!(module_is_within("store", EXTERNAL_REACH));
+        assert!(module_is_within("", EXTERNAL_REACH));
+        assert!(module_is_within(EXTERNAL_REACH, EXTERNAL_REACH));
+        assert!(!module_is_within(EXTERNAL_REACH, ""));
+        assert!(module_is_within("store::event_log", "store"));
+        assert!(!module_is_within("storehouse", "store"));
     }
 }
