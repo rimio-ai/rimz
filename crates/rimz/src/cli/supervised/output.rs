@@ -72,7 +72,7 @@ pub(crate) fn status_label(status: RunStatus) -> &'static str {
     status.as_str()
 }
 
-pub(crate) fn verify_status_label(verify: &rimz::harness::run::RunVerify) -> String {
+pub(super) fn verify_status_label(verify: &rimz::harness::run::RunVerify) -> String {
     if verify.timed_out {
         "timeout".to_owned()
     } else {

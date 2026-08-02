@@ -170,7 +170,7 @@ fn companion_title(caller: &AgentState, theme: &rimz::config::ThemeConfig) -> St
         )
 }
 
-pub(crate) fn subagent_companion_title(store: &rimz::Store) -> String {
+pub(super) fn subagent_companion_title(store: &rimz::Store) -> String {
     let machine = rimz::config::MachineConfig::load_lenient();
     store
         .runtime_projection(rimz::RuntimeScope::Audit)
@@ -183,7 +183,7 @@ pub(crate) fn subagent_companion_title(store: &rimz::Store) -> String {
         .unwrap_or_else(|| "subagents".to_owned())
 }
 
-pub(crate) fn lock_subagent_zone(
+pub(super) fn lock_subagent_zone(
     store: &rimz::Store,
 ) -> rimz::store::lock::Result<rimz::store::lock::WorkspaceLock> {
     rimz::store::lock::WorkspaceLock::acquire(&store.paths().locks_dir.join("subagent-zone.lock"))
@@ -195,7 +195,7 @@ pub(crate) fn lock_subagent_zone(
     clippy::too_many_arguments,
     reason = "one mux effect carries the complete pane birth contract"
 )]
-pub(crate) fn split_into_subagent_zone(
+pub(super) fn split_into_subagent_zone(
     backend: &dyn rimz::mux::MuxBackend,
     store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,
@@ -326,7 +326,7 @@ fn list_subagent_zone_panes(
         .map_err(anyhow::Error::from)
 }
 
-pub(crate) fn wait_for_subagent_pane_bind(
+pub(super) fn wait_for_subagent_pane_bind(
     store: &rimz::Store,
     kind: &AgentKind,
     launch_id: &AgentSessionId,
@@ -386,7 +386,7 @@ pub(super) fn wait_for_subagent_pane_bind_with(
 
 /// Split a run pane into the loop zone, repairing a missing loop panel first.
 /// `Ok(false)` means the caller should fall back to a run tab.
-pub(crate) fn split_into_loop_zone(
+pub(super) fn split_into_loop_zone(
     backend: &dyn rimz::mux::MuxBackend,
     workspace: &rimz::ResolvedWorkspace,
     cwd: &Path,
@@ -479,7 +479,7 @@ fn list_loop_zone_panes(
     }
 }
 
-pub(crate) fn backend_for_workspace_session(
+pub(super) fn backend_for_workspace_session(
     workspace: &rimz::ResolvedWorkspace,
     globals: &GlobalFlags,
 ) -> Result<Box<dyn rimz::mux::MuxBackend>> {
@@ -492,7 +492,7 @@ pub(crate) fn backend_for_workspace_session(
     Ok(rimz::mux::backend_for(mux))
 }
 
-pub(crate) fn close_run_pane(
+pub(super) fn close_run_pane(
     backend: &dyn rimz::mux::MuxBackend,
     store: &rimz::Store,
     session_name: &str,
@@ -546,7 +546,7 @@ pub(crate) fn capture_failure_tail(
     }
 }
 
-pub(crate) fn close_stopped_run_pane_after_grace(
+pub(super) fn close_stopped_run_pane_after_grace(
     backend: &dyn rimz::mux::MuxBackend,
     store: &rimz::Store,
     session_name: &str,
@@ -592,7 +592,7 @@ pub(crate) fn close_stopped_run_pane_after_grace(
     }
 }
 
-pub(crate) fn latest_resolved_run_pane(
+pub(super) fn latest_resolved_run_pane(
     store: &rimz::Store,
     session_name: &str,
     fallback: &RunRecord,
@@ -614,12 +614,12 @@ fn latest_run_record(store: &rimz::Store, fallback: &RunRecord) -> RunRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ResolvedRunPane {
-    pub(crate) pane_id: PaneId,
-    pub(crate) session_name: String,
+pub(super) struct ResolvedRunPane {
+    pub(super) pane_id: PaneId,
+    pub(super) session_name: String,
 }
 
-pub(crate) fn resolve_run_pane(
+pub(super) fn resolve_run_pane(
     store: &rimz::Store,
     session_name: &str,
     record: &RunRecord,
@@ -649,7 +649,7 @@ fn resolve_run_pane_from_snapshot(
     resolve_run_pane_in_snapshot(&snapshot, session_name, record)
 }
 
-pub(crate) fn resolve_run_pane_in_snapshot(
+pub(super) fn resolve_run_pane_in_snapshot(
     snapshot: &rimz::SidebarSnapshot,
     session_name: &str,
     record: &RunRecord,

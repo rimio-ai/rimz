@@ -484,13 +484,8 @@ pub(super) fn wait_for_master(
     let connect_stage = outage.connect_stage;
     let started = Instant::now();
     outage.panel.begin_wait();
-    let mut reachability = ReachabilityDriver::new(
-        *policy,
-        started,
-        outage.internet_probe.as_ref(),
-        dial_plan,
-        true,
-    );
+    let mut reachability =
+        ReachabilityDriver::new(*policy, started, outage.internet_probe.as_ref(), dial_plan);
     reachability.note_attempt_failed(started);
     let mut master = MasterState::Idle;
     let mut last_reported_error = None;
@@ -698,7 +693,6 @@ struct ReachabilityDriver {
     server_plan: Option<DialPlan>,
     last_network_up: bool,
     last_tun: Option<String>,
-    sample_fingerprint: bool,
 }
 
 impl ReachabilityDriver {
@@ -707,7 +701,6 @@ impl ReachabilityDriver {
         started: Instant,
         internet_probe: Option<&InternetProbe>,
         server_plan: Option<&DialPlan>,
-        sample_fingerprint: bool,
     ) -> Self {
         let interval = dial_interval_from_env();
         let pacer = AttemptPacer::new(
@@ -730,7 +723,6 @@ impl ReachabilityDriver {
             server_plan: server_plan.cloned(),
             last_network_up,
             last_tun: None,
-            sample_fingerprint,
         }
     }
 
@@ -766,9 +758,7 @@ impl ReachabilityDriver {
         let Some(interval) = self.interval.filter(|_| now >= self.next_dial) else {
             return;
         };
-        if self.sample_fingerprint {
-            self.pacer.note_fingerprint(network_fingerprint(), now);
-        }
+        self.pacer.note_fingerprint(network_fingerprint(), now);
         if let Some(probe) = &self.internet_probe
             && !self.internet_pending
         {

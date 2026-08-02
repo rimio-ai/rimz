@@ -59,10 +59,6 @@ pub(crate) fn warn() -> anstyle::Style {
     THEME.style(THEME.palette.warn())
 }
 
-pub(crate) fn paused() -> anstyle::Style {
-    warn()
-}
-
 pub(crate) fn alarm() -> anstyle::Style {
     THEME.style(THEME.palette.alarm())
 }

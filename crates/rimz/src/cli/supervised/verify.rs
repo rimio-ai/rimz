@@ -11,11 +11,11 @@ use rimz::message::{DeliveryGate, deliver};
 
 use super::pane;
 
-pub(crate) fn run_verify(cwd: &Path, cmd: &str, cap: Duration) -> Result<CheckOutcome> {
+pub(super) fn run_verify(cwd: &Path, cmd: &str, cap: Duration) -> Result<CheckOutcome> {
     run_check(cwd, cmd, cap, CheckEcho::Capture)
 }
 
-pub(crate) fn deliver_reprompt(
+pub(super) fn deliver_reprompt(
     workspace: &rimz::ResolvedWorkspace,
     store: &rimz::Store,
     record: &RunRecord,
