@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -13,10 +15,13 @@ use super::sources::Source;
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct PubItem {
+    pub(super) module: String,
     pub(super) name: String,
     pub(super) kind: String,
     pub(super) params: Option<usize>,
     pub(super) line: usize,
+    pub(super) declared: String,
+    pub(super) reach: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -43,6 +48,8 @@ pub(super) struct FileSyntax {
     pub(super) path: PathBuf,
     pub(super) module_path: String,
     pub(super) pub_items: Vec<PubItem>,
+    pub(super) mod_decls: Vec<(String, String)>,
+    pub(super) test_regions: Vec<Range<usize>>,
     pub(super) imports: Vec<ImportedItem>,
     pub(super) fns: Vec<FnBody>,
 }
@@ -51,6 +58,38 @@ pub(super) struct FileSyntax {
 pub(super) struct SyntaxReport {
     pub(super) files: Vec<FileSyntax>,
     pub(super) parse_failures: Vec<PathBuf>,
+}
+
+#[derive(Debug)]
+pub(super) struct ModIndex {
+    declarations: BTreeMap<String, String>,
+}
+
+impl ModIndex {
+    pub(super) fn new(files: &[FileSyntax]) -> Self {
+        let mut declarations = BTreeMap::<String, String>::new();
+        for (module, reach) in files.iter().flat_map(|file| &file.mod_decls) {
+            declarations
+                .entry(module.clone())
+                .and_modify(|existing| {
+                    *existing = narrower_reach(existing, reach, module);
+                })
+                .or_insert_with(|| reach.clone());
+        }
+        Self { declarations }
+    }
+
+    pub(super) fn effective_reach(&self, module: &str, declared_reach: &str) -> String {
+        let mut effective = declared_reach.to_owned();
+        let parts = module.split("::").collect::<Vec<_>>();
+        for end in 1..=parts.len() {
+            let ancestor = parts[..end].join("::");
+            if let Some(reach) = self.declarations.get(&ancestor) {
+                effective = narrower_reach(&effective, reach, module);
+            }
+        }
+        effective
+    }
 }
 
 pub(super) fn analyze_sources(sources: &[Source]) -> SyntaxReport {
@@ -74,7 +113,16 @@ pub(super) fn analyze_sources(sources: &[Source]) -> SyntaxReport {
 fn analyze_file(path: &Path, file: &File) -> FileSyntax {
     let module_path = crate_module_for_path(path);
     let mut pub_items = Vec::new();
-    collect_public_items(&file.items, &mut pub_items);
+    let mut mod_decls = Vec::new();
+    collect_public_items(
+        &file.items,
+        &module_path,
+        "",
+        &mut pub_items,
+        &mut mod_decls,
+    );
+    let mut test_regions = Vec::new();
+    collect_test_regions(&file.items, &mut test_regions);
 
     let imports = {
         let mut use_collector = UseCollector {
@@ -95,12 +143,20 @@ fn analyze_file(path: &Path, file: &File) -> FileSyntax {
         path: path.to_path_buf(),
         module_path,
         pub_items,
+        mod_decls,
+        test_regions,
         imports,
         fns: fn_collector.functions,
     }
 }
 
-fn collect_public_items(items: &[Item], output: &mut Vec<PubItem>) {
+fn collect_public_items(
+    items: &[Item],
+    module: &str,
+    enclosing_reach: &str,
+    output: &mut Vec<PubItem>,
+    mod_decls: &mut Vec<(String, String)>,
+) {
     for item in items {
         if let Item::Impl(item) = item {
             for method in &item.items {
@@ -108,10 +164,17 @@ fn collect_public_items(items: &[Item], output: &mut Vec<PubItem>) {
                     && is_boundary_visible(&method.vis)
                 {
                     output.push(PubItem {
+                        module: module.to_owned(),
                         name: method.sig.ident.to_string(),
                         kind: "fn".to_owned(),
                         params: Some(method.sig.inputs.len()),
                         line: method.sig.ident.span().start().line,
+                        declared: render_visibility(&method.vis),
+                        reach: narrower_reach(
+                            &visibility_reach(&method.vis, module),
+                            enclosing_reach,
+                            module,
+                        ),
                     });
                 }
             }
@@ -119,22 +182,60 @@ fn collect_public_items(items: &[Item], output: &mut Vec<PubItem>) {
         }
         if let Item::Trait(item) = item {
             if is_boundary_visible(&item.vis) {
+                let trait_reach = narrower_reach(
+                    &visibility_reach(&item.vis, module),
+                    enclosing_reach,
+                    module,
+                );
                 output.push(PubItem {
+                    module: module.to_owned(),
                     name: item.ident.to_string(),
                     kind: "trait".to_owned(),
                     params: None,
                     line: item.ident.span().start().line,
+                    declared: render_visibility(&item.vis),
+                    reach: trait_reach.clone(),
                 });
                 for method in &item.items {
                     if let TraitItem::Fn(method) = method {
                         output.push(PubItem {
+                            module: module.to_owned(),
                             name: method.sig.ident.to_string(),
                             kind: "fn".to_owned(),
                             params: Some(method.sig.inputs.len()),
                             line: method.sig.ident.span().start().line,
+                            declared: "inherited".to_owned(),
+                            reach: trait_reach.clone(),
                         });
                     }
                 }
+            }
+            continue;
+        }
+        if let Item::Mod(item) = item {
+            if is_cfg_test(&item.attrs) {
+                continue;
+            }
+            let nested_module = join_module(module, &item.ident.to_string());
+            let module_reach = narrower_reach(
+                &visibility_reach(&item.vis, module),
+                enclosing_reach,
+                module,
+            );
+            mod_decls.push((nested_module.clone(), module_reach.clone()));
+            if is_boundary_visible(&item.vis) {
+                output.push(PubItem {
+                    module: module.to_owned(),
+                    name: item.ident.to_string(),
+                    kind: "mod".to_owned(),
+                    params: None,
+                    line: item.ident.span().start().line,
+                    declared: render_visibility(&item.vis),
+                    reach: module_reach.clone(),
+                });
+            }
+            if let Some((_, items)) = &item.content {
+                collect_public_items(items, &nested_module, &module_reach, output, mod_decls);
             }
             continue;
         }
@@ -159,13 +260,6 @@ fn collect_public_items(items: &[Item], output: &mut Vec<PubItem>) {
                 "fn",
                 Some(item.sig.inputs.len()),
                 item.sig.ident.span().start().line,
-            ),
-            Item::Mod(item) => (
-                &item.vis,
-                item.ident.to_string(),
-                "mod",
-                None,
-                item.ident.span().start().line,
             ),
             Item::Static(item) => (
                 &item.vis,
@@ -207,10 +301,17 @@ fn collect_public_items(items: &[Item], output: &mut Vec<PubItem>) {
                 flatten_use(&item.tree, &mut Vec::new(), &mut names);
                 for (_, name, _) in names {
                     output.push(PubItem {
+                        module: module.to_owned(),
                         name,
                         kind: "use".to_owned(),
                         params: None,
                         line: item.span().start().line,
+                        declared: render_visibility(&item.vis),
+                        reach: narrower_reach(
+                            &visibility_reach(&item.vis, module),
+                            enclosing_reach,
+                            module,
+                        ),
                     });
                 }
                 continue;
@@ -219,18 +320,119 @@ fn collect_public_items(items: &[Item], output: &mut Vec<PubItem>) {
         };
         if is_boundary_visible(visibility) {
             output.push(PubItem {
+                module: module.to_owned(),
                 name,
                 kind: kind.to_owned(),
                 params,
                 line,
+                declared: render_visibility(visibility),
+                reach: narrower_reach(
+                    &visibility_reach(visibility, module),
+                    enclosing_reach,
+                    module,
+                ),
             });
-            if let Item::Mod(item) = item
-                && !is_cfg_test(&item.attrs)
-                && let Some((_, items)) = &item.content
-            {
-                collect_public_items(items, output);
+        }
+    }
+}
+
+fn collect_test_regions(items: &[Item], output: &mut Vec<Range<usize>>) {
+    for item in items {
+        let Item::Mod(item_mod) = item else {
+            continue;
+        };
+        if is_cfg_test(&item_mod.attrs) {
+            let start = item_mod.attrs.first().map_or_else(
+                || item_mod.span().start().line,
+                |attr| attr.span().start().line,
+            );
+            output.push(start..item_mod.span().end().line.saturating_add(1));
+        } else if let Some((_, nested)) = &item_mod.content {
+            collect_test_regions(nested, output);
+        }
+    }
+}
+
+fn join_module(module: &str, name: &str) -> String {
+    if module.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{module}::{name}")
+    }
+}
+
+fn parent_module(module: &str) -> String {
+    module
+        .rsplit_once("::")
+        .map_or_else(String::new, |(parent, _)| parent.to_owned())
+}
+
+fn visibility_reach(visibility: &Visibility, module: &str) -> String {
+    match visibility {
+        Visibility::Public(_) => String::new(),
+        Visibility::Inherited => module.to_owned(),
+        Visibility::Restricted(restricted) => {
+            let path = restricted
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>();
+            match path.first().map(String::as_str) {
+                Some("crate") => path[1..].join("::"),
+                Some("self") => path[1..]
+                    .iter()
+                    .fold(module.to_owned(), |base, part| join_module(&base, part)),
+                Some("super") => {
+                    let mut base = module.to_owned();
+                    let mut index = 0;
+                    while path.get(index).is_some_and(|part| part == "super") {
+                        base = parent_module(&base);
+                        index += 1;
+                    }
+                    path[index..]
+                        .iter()
+                        .fold(base, |base, part| join_module(&base, part))
+                }
+                _ => path.join("::"),
             }
         }
+    }
+}
+
+fn render_visibility(visibility: &Visibility) -> String {
+    match visibility {
+        Visibility::Public(_) => "pub".to_owned(),
+        Visibility::Inherited => "inherited".to_owned(),
+        Visibility::Restricted(restricted) => {
+            let path = restricted
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+            match path.as_str() {
+                "crate" => "pub(crate)".to_owned(),
+                "self" => "pub(self)".to_owned(),
+                "super" => "pub(super)".to_owned(),
+                _ => format!("pub(in {path})"),
+            }
+        }
+    }
+}
+
+fn is_within(module: &str, ancestor: &str) -> bool {
+    ancestor.is_empty() || module == ancestor || module.starts_with(&format!("{ancestor}::"))
+}
+
+fn narrower_reach(left: &str, right: &str, fallback: &str) -> String {
+    if is_within(left, right) {
+        left.to_owned()
+    } else if is_within(right, left) {
+        right.to_owned()
+    } else {
+        fallback.to_owned()
     }
 }
 

@@ -376,11 +376,27 @@ pub(super) struct OccurrenceCorpus {
 impl OccurrenceCorpus {
     pub(super) fn new(sources: &[Source]) -> Self {
         let mut modules = BTreeMap::<String, BTreeMap<String, usize>>::new();
+        let syntax = syntax::analyze_sources(sources);
         for source in sources.iter().filter(|source| source.is_production()) {
             let counts = modules
                 .entry(crate_module_for_path(&source.path))
                 .or_default();
-            for identifier in production_prefix(&source.text)
+            let test_regions = syntax
+                .files
+                .iter()
+                .find(|file| file.path == source.path)
+                .map_or(&[][..], |file| file.test_regions.as_slice());
+            let production = source
+                .text
+                .split_inclusive('\n')
+                .enumerate()
+                .filter(|(index, _)| {
+                    let line = index + 1;
+                    !test_regions.iter().any(|region| region.contains(&line))
+                })
+                .map(|(_, line)| line)
+                .collect::<String>();
+            for identifier in production
                 .split(|character: char| !is_identifier_character(character))
                 .filter(|identifier| !identifier.is_empty())
             {
@@ -413,20 +429,6 @@ impl OccurrenceCorpus {
         }
         (total, outside_modules)
     }
-}
-
-fn production_prefix(source: &str) -> &str {
-    let Some(marker) = crate::source_files::inline_test_marker_line(source) else {
-        return source;
-    };
-    if marker == 1 {
-        return "";
-    }
-    let end = source
-        .match_indices('\n')
-        .nth(marker as usize - 2)
-        .map_or(source.len(), |(index, _)| index + 1);
-    &source[..end]
 }
 
 fn is_identifier_character(character: char) -> bool {

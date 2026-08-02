@@ -276,7 +276,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let current_sources = sources::sources_in_scope(&all_sources, &args.path)?;
     let occurrence_corpus = OccurrenceCorpus::new(&all_sources);
     let syntax = syntax::analyze_sources(&current_sources);
-    let current_sizes = sizes(&current_sources, &args.path);
+    let current_sizes = sizes(&current_sources, &args.path, &syntax.files);
     let current_pub = public_counts(&syntax.files, &args.path);
     let current_occurrences = occurrence_medians(&syntax.files, &args.path, &occurrence_corpus);
     let previous = args
@@ -287,10 +287,16 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             sources::sources_in_scope(&all_sources, &args.path)
         })
         .transpose()?;
-    let previous_sizes = previous.as_ref().map(|sources| sizes(sources, &args.path));
-    let previous_pub = previous
+    let previous_syntax = previous
         .as_ref()
-        .map(|sources| public_counts(&syntax::analyze_sources(sources).files, &args.path));
+        .map(|sources| syntax::analyze_sources(sources));
+    let previous_sizes = previous
+        .as_ref()
+        .zip(previous_syntax.as_ref())
+        .map(|(sources, syntax)| sizes(sources, &args.path, &syntax.files));
+    let previous_pub = previous_syntax
+        .as_ref()
+        .map(|syntax| public_counts(&syntax.files, &args.path));
     let pace = history::pace(
         root,
         &args.path,
@@ -298,7 +304,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         args.noise_lifetime,
         args.noise_window,
     )?;
-    let metrics = metrics::analyze(root, &args.path, &current_sources)?;
+    let metrics = metrics::analyze(root, &args.path, &current_sources, &syntax.files)?;
 
     let mut rows = current_sizes
         .iter()
@@ -419,7 +425,11 @@ fn sort_rows(rows: &mut [Row]) {
     });
 }
 
-fn sizes(source_list: &[sources::Source], scope: &Path) -> BTreeMap<String, Size> {
+fn sizes(
+    source_list: &[sources::Source],
+    scope: &Path,
+    syntax_files: &[super::syntax::FileSyntax],
+) -> BTreeMap<String, Size> {
     let mut sizes = BTreeMap::<String, Size>::new();
     for source in source_list {
         if !source.is_production() && !source.is_test() {
@@ -431,7 +441,11 @@ fn sizes(source_list: &[sources::Source], scope: &Path) -> BTreeMap<String, Size
         } else if !source.is_production() {
             (0, 0)
         } else {
-            source_files::split_rust_sloc(&source.text)
+            let test_regions = syntax_files
+                .iter()
+                .find(|file| file.path == source.path)
+                .map_or(&[][..], |file| file.test_regions.as_slice());
+            source_files::split_rust_sloc(&source.text, test_regions)
         };
         let size = sizes.entry(module).or_default();
         size.code += code;

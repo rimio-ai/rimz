@@ -71,7 +71,88 @@ mod private {
         .iter()
         .map(|item| item.name.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(names, ["View", "render", "Draw", "draw", "nested", "run"]);
+    assert_eq!(
+        names,
+        [
+            "View",
+            "render",
+            "Draw",
+            "draw",
+            "nested",
+            "run",
+            "not_boundary"
+        ]
+    );
+}
+
+#[test]
+fn visibility_reach_follows_restrictions_and_private_module_links() {
+    let report = analyze_sources(&[source(
+        r#"
+pub fn everywhere() {}
+pub(crate) fn in_crate() {}
+pub(super) fn in_parent() {}
+pub(in crate::cli) fn in_cli() {}
+mod private {
+    pub fn confined() {}
+}
+pub(crate) mod visible {
+    pub fn still_in_crate() {}
+}
+"#,
+    )]);
+    let file = &report.files[0];
+    let reaches = file
+        .pub_items
+        .iter()
+        .map(|item| (item.name.as_str(), item.reach.as_str()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(reaches["everywhere"], "");
+    assert_eq!(reaches["in_crate"], "");
+    assert_eq!(reaches["in_parent"], "cli");
+    assert_eq!(reaches["in_cli"], "cli");
+    assert_eq!(reaches["confined"], "cli::demo");
+    assert_eq!(reaches["still_in_crate"], "");
+
+    let index = ModIndex::new(std::slice::from_ref(file));
+    assert_eq!(
+        index.effective_reach("cli::demo::private", reaches["confined"]),
+        "cli::demo"
+    );
+}
+
+#[test]
+fn external_module_declarations_confine_items_in_sibling_files() {
+    let parent = Source::new("crates/rimz/src/cli/mod.rs", "mod demo;\n");
+    let child = source("pub fn confined() {}\n");
+    let report = analyze_sources(&[parent, child]);
+    let index = ModIndex::new(&report.files);
+    let item = &report
+        .files
+        .iter()
+        .find(|file| file.module_path == "cli::demo")
+        .unwrap()
+        .pub_items[0];
+    assert_eq!(index.effective_reach(&item.module, &item.reach), "cli");
+}
+
+#[test]
+fn inline_test_regions_cover_mid_file_trailing_and_multiple_modules() {
+    let report = analyze_sources(&[source(
+        r#"
+fn before() {}
+#[cfg(test)]
+mod first {
+    fn check() {}
+}
+fn middle() {}
+#[cfg(test)]
+mod second {
+    fn check() {}
+}
+"#,
+    )]);
+    assert_eq!(report.files[0].test_regions, [3..7, 8..12]);
 }
 
 #[test]
