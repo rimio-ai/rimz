@@ -197,11 +197,7 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
 
 fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
     let config = machine_config();
-    if !config.web.enabled {
-        bail!(
-            "Browser access is disabled: set `[web] enabled = true` in the RimZ config on the machine serving this room (`rimz config path`) to allow browser sharing."
-        );
-    }
+    ensure_web_enabled(&config)?;
     let context = if let Some(session) = args.session {
         room::ensure_session_room_for_web(&session, globals, args.no_resume, args.confirm_resume)?
     } else {

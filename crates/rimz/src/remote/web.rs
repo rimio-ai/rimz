@@ -9,6 +9,7 @@ use std::ops::RangeInclusive;
 use std::path::Path;
 
 use crate::mux::CommandSpec;
+#[cfg(test)]
 use crate::web::WebOpenPayload;
 
 use super::{
@@ -41,13 +42,6 @@ fn bind_first_local_port(ports: impl IntoIterator<Item = u16>) -> Option<TcpList
 pub fn reserve_forward_port() -> io::Result<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     Ok(listener.local_addr()?.port())
-}
-
-pub fn local_url(remote: &WebOpenPayload, local_port: u16) -> String {
-    format!(
-        "http://127.0.0.1:{local_port}/?room={}",
-        crate::web::encode_query_value(&remote.session)
-    )
 }
 
 fn derive_port(session: &str, range: &RangeInclusive<u16>) -> u16 {
@@ -85,9 +79,7 @@ pub fn web_prep_spec(
     }
     let rimz_args = match &target.spec {
         RemoteSpec::Path(path) => format!("{flags} -- {}", quote_remote_path(path)),
-        RemoteSpec::Session(name) => {
-            format!("{flags} --session {}", sh_quote(name))
-        }
+        RemoteSpec::Session(name) => format!("{flags} --session {}", sh_quote(name)),
     };
     one_shot_spec(
         target,
@@ -251,16 +243,17 @@ mod tests {
 
     #[test]
     fn local_url_percent_encodes_the_browser_room() {
-        let payload = WebOpenPayload::for_session(
-            "rimz/a b",
-            "https://remote",
-            8200,
-            Some(8200),
-            crate::web::WebAuth::Basic,
-            None,
-        );
+        let payload = WebOpenPayload {
+            version: "rimz.web.v2".to_owned(),
+            url: "https://remote/?room=rimz%2Fa%20b".to_owned(),
+            session: "rimz/a b".to_owned(),
+            port: 8200,
+            tunnel_port: Some(8200),
+            auth: crate::web::WebAuth::Basic,
+            credential: None,
+        };
         assert_eq!(
-            local_url(&payload, 8301),
+            payload.local_url(8301),
             "http://127.0.0.1:8301/?room=rimz%2Fa%20b"
         );
     }

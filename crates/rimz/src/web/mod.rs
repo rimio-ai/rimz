@@ -60,7 +60,7 @@ fn without_ttyd_launch_context(spec: CommandSpec) -> CommandSpec {
         .fold(spec, |spec, key| spec.env_remove(key))
 }
 
-pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
+const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
 pub const TTYD_SESSION_OSC: u16 = 7717;
 pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 3;
 
@@ -180,6 +180,12 @@ pub enum WebErr {
     InvalidSession(String),
     #[error(transparent)]
     LiveRoom(#[from] crate::room::LiveRoomErr),
+    #[error(
+        "the remote serves browser access behind a reverse proxy (trusted-header auth) — open `{url}` directly; no SSH tunnel applies"
+    )]
+    TunnelTrustedHeader { url: String },
+    #[error("remote `rimz web open --json` omitted the ttyd credential")]
+    TunnelCredentialMissing,
 }
 
 pub type Result<T> = std::result::Result<T, WebErr>;
@@ -224,7 +230,7 @@ pub struct WebOpenPayload {
 }
 
 impl WebOpenPayload {
-    pub fn for_session(
+    fn for_session(
         session: impl Into<String>,
         base_url: impl Into<String>,
         port: u16,
@@ -248,6 +254,23 @@ impl WebOpenPayload {
 
     pub fn version_ok(&self) -> bool {
         self.version == WEB_SCHEMA_VERSION
+    }
+
+    pub fn tunnel(&self) -> Result<(u16, &WebCredential)> {
+        if matches!(self.auth, WebAuth::TrustedHeader { .. }) && self.credential.is_none() {
+            return Err(WebErr::TunnelTrustedHeader {
+                url: self.url.clone(),
+            });
+        }
+        let credential = self
+            .credential
+            .as_ref()
+            .ok_or(WebErr::TunnelCredentialMissing)?;
+        Ok((self.tunnel_port.unwrap_or(self.port), credential))
+    }
+
+    pub fn local_url(&self, port: u16) -> String {
+        join_session_url(&format!("http://127.0.0.1:{port}"), &self.session)
     }
 }
 
