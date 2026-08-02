@@ -232,7 +232,11 @@ mod tests {
     fn rust_sloc_splits_trailing_inline_tests() {
         let source = "fn live() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn works() {}\n}\n";
         assert_eq!(rust_sloc(source), 6);
-        assert_eq!(split_rust_sloc(source, &[2..7]), (1, 5));
+        let test_region = 2..7;
+        assert_eq!(
+            split_rust_sloc(source, std::slice::from_ref(&test_region)),
+            (1, 5)
+        );
     }
 
     #[test]
