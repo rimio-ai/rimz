@@ -485,9 +485,7 @@ fn render_visibility(visibility: &Visibility) -> String {
 fn narrower_reach(left: &str, right: &str, fallback: &str) -> String {
     if left == EXTERNAL_REACH {
         right.to_owned()
-    } else if right == EXTERNAL_REACH {
-        left.to_owned()
-    } else if module_is_within(left, right) {
+    } else if right == EXTERNAL_REACH || module_is_within(left, right) {
         left.to_owned()
     } else if module_is_within(right, left) {
         right.to_owned()
