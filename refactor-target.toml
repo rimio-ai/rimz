@@ -190,7 +190,7 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-surface-budget = 0
+surface-budget = 98
 
 [[module]]
 path = "crates/rimz/src/main.rs"

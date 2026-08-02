@@ -107,7 +107,7 @@ pub(crate) mod visible {
         .iter()
         .map(|item| (item.name.as_str(), item.reach.as_str()))
         .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(reaches["everywhere"], "");
+    assert_eq!(reaches["everywhere"], EXTERNAL_REACH);
     assert_eq!(reaches["in_crate"], "");
     assert_eq!(reaches["in_parent"], "cli");
     assert_eq!(reaches["in_cli"], "cli");
@@ -115,10 +115,12 @@ pub(crate) mod visible {
     assert_eq!(reaches["still_in_crate"], "");
 
     let index = ModIndex::new(std::slice::from_ref(file));
-    assert_eq!(
-        index.effective_reach("cli::demo::private", reaches["confined"]),
-        "cli::demo"
-    );
+    let confined = file
+        .pub_items
+        .iter()
+        .find(|item| item.name == "confined")
+        .unwrap();
+    assert_eq!(index.effective_reach(file, confined), "cli::demo");
 }
 
 #[test]
@@ -127,13 +129,40 @@ fn external_module_declarations_confine_items_in_sibling_files() {
     let child = source("pub fn confined() {}\n");
     let report = analyze_sources(&[parent, child]);
     let index = ModIndex::new(&report.files);
-    let item = &report
+    let file = report
         .files
         .iter()
         .find(|file| file.module_path == "cli::demo")
-        .unwrap()
-        .pub_items[0];
-    assert_eq!(index.effective_reach(&item.module, &item.reach), "cli");
+        .unwrap();
+    let item = &file.pub_items[0];
+    assert_eq!(index.effective_reach(file, item), "cli");
+}
+
+#[test]
+fn module_declarations_do_not_collide_across_crates() {
+    let report = analyze_sources(&[
+        Source::new("crates/a/src/lib.rs", "pub mod shared;\n"),
+        Source::new("crates/a/src/shared.rs", "pub fn visible() {}\n"),
+        Source::new("crates/b/src/lib.rs", "mod shared;\n"),
+        Source::new("crates/b/src/shared.rs", "pub fn confined() {}\n"),
+    ]);
+    let index = ModIndex::new(&report.files);
+    let effective_reach = |crate_path: &str, name: &str| {
+        let file = report
+            .files
+            .iter()
+            .find(|file| file.crate_path == Path::new(crate_path) && file.module_path == "shared")
+            .unwrap();
+        let item = file
+            .pub_items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap();
+        index.effective_reach(file, item)
+    };
+
+    assert_eq!(effective_reach("crates/a", "visible"), EXTERNAL_REACH);
+    assert_eq!(effective_reach("crates/b", "confined"), "");
 }
 
 #[test]

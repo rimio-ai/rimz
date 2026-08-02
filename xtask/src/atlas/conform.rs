@@ -6,7 +6,8 @@ use serde::Serialize;
 
 use super::api::OccurrenceCorpus;
 use super::modules::{
-    crate_module_for_path, path_in_scope, scope_for_matching, workspace_crate_names,
+    crate_module_for_path, module_is_within, path_in_scope, scope_for_matching,
+    workspace_crate_names,
 };
 use super::sources::{self, Source};
 use super::syntax;
@@ -319,13 +320,13 @@ fn initialize(root: &Path, scope: &Path) -> Result<Target> {
                 .filter_map(|import| {
                     syntax::resolved_internal_import(import, &known_modules, &workspace_crates)
                 })
-                .filter(|import| !is_within(import, &target_module))
+                .filter(|import| !module_is_within(import, &target_module))
                 .collect::<BTreeSet<_>>();
             let mut allowed_imports = Vec::<String>::new();
             for import in imports {
                 if !allowed_imports
                     .iter()
-                    .any(|allowed| is_within(&import, allowed))
+                    .any(|allowed| module_is_within(&import, allowed))
                 {
                     allowed_imports.push(import);
                 }
@@ -405,11 +406,11 @@ fn evaluate(
                 else {
                     continue;
                 };
-                if is_within(&resolved, &target_module)
+                if module_is_within(&resolved, &target_module)
                     || module
                         .allowed_imports
                         .iter()
-                        .any(|allowed| is_within(&resolved, allowed))
+                        .any(|allowed| module_is_within(&resolved, allowed))
                 {
                     continue;
                 }
@@ -455,7 +456,11 @@ fn evaluate(
             );
         }
         let scoped_sources = sources_for_path(&all_sources, &strangler.path, absolute.is_file());
-        let current = OccurrenceCorpus::count_in_sources(&scoped_sources, &strangler.symbol);
+        let current = OccurrenceCorpus::count_in_sources(
+            &scoped_sources,
+            &all_syntax.files,
+            &strangler.symbol,
+        );
         rules.push(RuleResult {
             kind: "strangler",
             path: strangler.path.clone(),
@@ -494,12 +499,16 @@ fn escaping_surface<'a>(
 ) -> usize {
     files
         .into_iter()
-        .flat_map(|file| &file.pub_items)
-        .filter(|item| {
-            let reach = mod_index.effective_reach(&item.module, &item.reach);
-            !is_within(&reach, target_module)
+        .map(|file| {
+            file.pub_items
+                .iter()
+                .filter(|item| {
+                    let reach = mod_index.effective_reach(file, item);
+                    !module_is_within(&reach, target_module)
+                })
+                .count()
         })
-        .count()
+        .sum::<usize>()
 }
 
 fn sources_for_path(sources: &[Source], path: &Path, is_file: bool) -> Vec<Source> {
@@ -514,10 +523,6 @@ fn sources_for_path(sources: &[Source], path: &Path, is_file: bool) -> Vec<Sourc
         })
         .cloned()
         .collect()
-}
-
-fn is_within(path: &str, allowed: &str) -> bool {
-    path == allowed || path.starts_with(&format!("{allowed}::"))
 }
 
 fn enforce(report: &Report) -> Result<()> {
@@ -718,8 +723,8 @@ mod tests {
 
     #[test]
     fn allow_list_matches_descendants_not_prefix_collisions() {
-        assert!(is_within("cli::render::table", "cli::render"));
-        assert!(!is_within("cli::renderer", "cli::render"));
+        assert!(module_is_within("cli::render::table", "cli::render"));
+        assert!(!module_is_within("cli::renderer", "cli::render"));
     }
 
     #[test]
@@ -742,6 +747,18 @@ mod tests {
             .iter()
             .filter(|file| file.module_path.starts_with("feature"));
         assert_eq!(escaping_surface(feature_files, "feature", &index), 1);
+    }
+
+    #[test]
+    fn crate_root_surface_counts_only_crate_external_reach() {
+        let sources = vec![Source::new(
+            "src/lib.rs",
+            "pub fn external() {}\npub(crate) fn crate_only() {}\n",
+        )];
+        let syntax = syntax::analyze_sources(&sources);
+        let index = syntax::ModIndex::new(&syntax.files);
+
+        assert_eq!(escaping_surface(&syntax.files, "", &index), 1);
     }
 
     #[test]
@@ -819,7 +836,7 @@ mod tests {
             r#"
 version = 2
 [[module]]
-path = "src/lib.rs"
+path = "src/nested"
 allowed-imports = ["other"]
 surface-budget = 5
 [[strangler]]
@@ -846,7 +863,7 @@ baseline = 5
             forbidden_report.rules[0].unallowed_import_sites,
             [ImportSite {
                 module: "other".to_owned(),
-                path: PathBuf::from("src/lib.rs"),
+                path: PathBuf::from("src/nested/mod.rs"),
                 line: 1,
             }]
         );
@@ -856,7 +873,7 @@ baseline = 5
         tighten(&mut configured, &report);
         target::write(&target_path, &configured).unwrap();
         let tightened = target::load(&target_path).unwrap().unwrap();
-        assert_eq!(tightened.modules[0].surface_budget, 0);
+        assert_eq!(tightened.modules[0].surface_budget, 1);
         assert_eq!(tightened.strangler[0].baseline, 1);
         assert_eq!(tightened.strangler[1].baseline, 2);
 
@@ -879,7 +896,7 @@ baseline = 5
             evaluate(root.path(), &initialized, &initialized_path, false).unwrap();
         assert_eq!(initialized_report.regressions, 0);
         assert_eq!(initialized.modules.len(), 3);
-        assert_eq!(initialized.modules[0].allowed_imports, ["other"]);
+        assert!(initialized.modules[0].allowed_imports.is_empty());
         assert_eq!(initialized.modules[1].path, Path::new("src/nested"));
         assert_eq!(initialized.modules[1].allowed_imports, ["other"]);
         let before_tighten = fs::read_to_string(&initialized_path).unwrap();

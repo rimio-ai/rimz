@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::modules::{crate_module_for_path, crate_module_for_row, module_for_path};
+use super::modules::{
+    crate_module_for_path, crate_module_for_row, module_for_path, module_is_within,
+};
 use super::sources::{self, Source};
 use super::syntax::{self, FileSyntax, PubItem};
 use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
@@ -51,7 +53,6 @@ pub(super) struct ItemOccurrence {
     production_name_modules: Vec<String>,
     test_name_matches: usize,
     test_name_modules: Vec<String>,
-    #[serde(skip)]
     unreferenced: bool,
 }
 
@@ -170,8 +171,8 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
 fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let all_sources = sources::all_sources(root, None)?;
     let scoped_sources = sources::sources_in_scope(&all_sources, &args.path)?;
-    let occurrence_corpus = OccurrenceCorpus::new(&all_sources);
     let all_syntax = syntax::analyze_sources(&all_sources);
+    let occurrence_corpus = OccurrenceCorpus::from_syntax(&all_sources, &all_syntax.files);
     let mod_index = syntax::ModIndex::new(&all_syntax.files);
     let syntax = syntax::analyze_sources(&scoped_sources);
     let previous = args
@@ -250,7 +251,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
                 items: item_count,
                 escaping_items: items
                     .iter()
-                    .filter(|item| !is_within(&item.effective_reach, &target_module))
+                    .filter(|item| !module_is_within(&item.effective_reach, &target_module))
                     .count(),
                 over_published_items: items.iter().filter(|item| item.over_published).count(),
                 test_only_items: items.iter().filter(|item| item.test_only).count(),
@@ -371,7 +372,7 @@ fn count_occurrences(
     let implied_reach = common_reach(
         std::iter::once(item.module.as_str()).chain(production.modules.iter().map(String::as_str)),
     );
-    let effective_reach = mod_index.effective_reach(&item.module, &item.reach);
+    let effective_reach = mod_index.effective_reach(defining_file, item);
     let over_published = is_strictly_broader(&effective_reach, &implied_reach);
     ItemOccurrence {
         module: item.module.clone(),
@@ -457,12 +458,7 @@ fn common_reach<'a>(modules: impl Iterator<Item = &'a str>) -> String {
 }
 
 fn is_strictly_broader(reach: &str, required: &str) -> bool {
-    reach != required
-        && (reach.is_empty() || required == reach || required.starts_with(&format!("{reach}::")))
-}
-
-fn is_within(module: &str, ancestor: &str) -> bool {
-    ancestor.is_empty() || module == ancestor || module.starts_with(&format!("{ancestor}::"))
+    reach != required && module_is_within(required, reach)
 }
 
 #[derive(Debug)]
@@ -477,18 +473,22 @@ pub(super) struct OccurrenceCorpus {
 }
 
 impl OccurrenceCorpus {
+    #[cfg(test)]
     pub(super) fn new(sources: &[Source]) -> Self {
+        let syntax = syntax::analyze_sources(sources);
+        Self::from_syntax(sources, &syntax.files)
+    }
+
+    pub(super) fn from_syntax(sources: &[Source], syntax_files: &[FileSyntax]) -> Self {
         let mut production = BTreeMap::<String, BTreeMap<String, usize>>::new();
         let mut tests = BTreeMap::<String, BTreeMap<String, usize>>::new();
-        let syntax = syntax::analyze_sources(sources);
         for source in sources {
             let module = crate_module_for_path(&source.path);
             if !source.is_production() {
                 add_identifiers(tests.entry(module).or_default(), &source.text);
                 continue;
             }
-            let test_regions = syntax
-                .files
+            let test_regions = syntax_files
                 .iter()
                 .find(|file| file.path == source.path)
                 .map_or(&[][..], |file| file.test_regions.as_slice());
@@ -514,8 +514,12 @@ impl OccurrenceCorpus {
         Self { production, tests }
     }
 
-    pub(super) fn count_in_sources(sources: &[Source], symbol: &str) -> usize {
-        Self::new(sources)
+    pub(super) fn count_in_sources(
+        sources: &[Source],
+        syntax_files: &[FileSyntax],
+        symbol: &str,
+    ) -> usize {
+        Self::from_syntax(sources, syntax_files)
             .production
             .values()
             .map(|counts| counts.get(symbol).copied().unwrap_or(0))
@@ -796,7 +800,11 @@ mod tests {
             Source::new("src/cli/render/table.rs", "target(); target();"),
             Source::new("src/cli/renderer.rs", "target(); target(); target();"),
         ];
-        assert_eq!(OccurrenceCorpus::count_in_sources(&sources, "target"), 6);
+        let syntax = syntax::analyze_sources(&sources);
+        assert_eq!(
+            OccurrenceCorpus::count_in_sources(&sources, &syntax.files, "target"),
+            6
+        );
     }
 
     #[test]
@@ -909,6 +917,7 @@ mod tests {
         let api_item = &payload["module_items"][0];
         assert!(api_item.get("effective_reach").is_some());
         assert!(api_item.get("production_name_matches").is_some());
+        assert!(api_item.get("unreferenced").is_some());
         assert!(api_item.get("occurrences").is_none());
         assert!(api_item.get("outside_modules").is_none());
         assert!(api_item.get("zero_occurrences").is_none());
@@ -1016,6 +1025,21 @@ mod tests {
         let index = syntax::ModIndex::new(&syntax.files);
         let occurrence = count_occurrences(reexport, root_file, &corpus, &index);
         assert_eq!(occurrence.declared_visibility, "pub");
-        assert_eq!(occurrence.effective_reach, "");
+        assert_eq!(
+            occurrence.effective_reach,
+            super::super::modules::EXTERNAL_REACH
+        );
+    }
+
+    #[test]
+    fn crate_external_reach_is_broader_than_an_implied_crate_module() {
+        assert!(is_strictly_broader(
+            super::super::modules::EXTERNAL_REACH,
+            "store"
+        ));
+        assert!(!is_strictly_broader(
+            super::super::modules::EXTERNAL_REACH,
+            super::super::modules::EXTERNAL_REACH
+        ));
     }
 }

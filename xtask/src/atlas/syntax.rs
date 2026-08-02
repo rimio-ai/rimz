@@ -10,7 +10,9 @@ use syn::{
     UseTree, Visibility,
 };
 
-use super::modules::crate_module_for_path;
+use super::modules::{
+    EXTERNAL_REACH, crate_module_for_path, crate_path_for_source, module_is_within,
+};
 use super::sources::Source;
 
 #[derive(Clone, Debug, Serialize)]
@@ -48,6 +50,7 @@ pub(super) struct FnBody {
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct FileSyntax {
     pub(super) path: PathBuf,
+    pub(super) crate_path: PathBuf,
     pub(super) module_path: String,
     pub(super) pub_items: Vec<PubItem>,
     pub(super) mod_decls: Vec<(String, String)>,
@@ -64,30 +67,32 @@ pub(super) struct SyntaxReport {
 
 #[derive(Debug)]
 pub(super) struct ModIndex {
-    declarations: BTreeMap<String, String>,
+    declarations: BTreeMap<(PathBuf, String), String>,
 }
 
 impl ModIndex {
     pub(super) fn new(files: &[FileSyntax]) -> Self {
-        let mut declarations = BTreeMap::<String, String>::new();
-        for (module, reach) in files.iter().flat_map(|file| &file.mod_decls) {
-            declarations
-                .entry(module.clone())
-                .and_modify(|existing| {
-                    *existing = narrower_reach(existing, reach, module);
-                })
-                .or_insert_with(|| reach.clone());
+        let mut declarations = BTreeMap::<(PathBuf, String), String>::new();
+        for file in files {
+            for (module, reach) in &file.mod_decls {
+                declarations
+                    .entry((file.crate_path.clone(), module.clone()))
+                    .and_modify(|existing| {
+                        *existing = narrower_reach(existing, reach, module);
+                    })
+                    .or_insert_with(|| reach.clone());
+            }
         }
         Self { declarations }
     }
 
-    pub(super) fn effective_reach(&self, module: &str, declared_reach: &str) -> String {
-        let mut effective = declared_reach.to_owned();
-        let parts = module.split("::").collect::<Vec<_>>();
+    pub(super) fn effective_reach(&self, file: &FileSyntax, item: &PubItem) -> String {
+        let mut effective = item.reach.clone();
+        let parts = item.module.split("::").collect::<Vec<_>>();
         for end in 1..=parts.len() {
             let ancestor = parts[..end].join("::");
-            if let Some(reach) = self.declarations.get(&ancestor) {
-                effective = narrower_reach(&effective, reach, module);
+            if let Some(reach) = self.declarations.get(&(file.crate_path.clone(), ancestor)) {
+                effective = narrower_reach(&effective, reach, &item.module);
             }
         }
         effective
@@ -114,12 +119,13 @@ pub(super) fn analyze_sources(sources: &[Source]) -> SyntaxReport {
 
 fn analyze_file(path: &Path, file: &File) -> FileSyntax {
     let module_path = crate_module_for_path(path);
+    let crate_path = crate_path_for_source(path);
     let mut pub_items = Vec::new();
     let mut mod_decls = Vec::new();
     collect_public_items(
         &file.items,
         &module_path,
-        "",
+        EXTERNAL_REACH,
         &mut pub_items,
         &mut mod_decls,
     );
@@ -143,6 +149,7 @@ fn analyze_file(path: &Path, file: &File) -> FileSyntax {
 
     FileSyntax {
         path: path.to_path_buf(),
+        crate_path,
         module_path,
         pub_items,
         mod_decls,
@@ -422,7 +429,7 @@ fn parent_module(module: &str) -> String {
 
 fn visibility_reach(visibility: &Visibility, module: &str) -> String {
     match visibility {
-        Visibility::Public(_) => String::new(),
+        Visibility::Public(_) => EXTERNAL_REACH.to_owned(),
         Visibility::Inherited => module.to_owned(),
         Visibility::Restricted(restricted) => {
             let path = restricted
@@ -475,14 +482,14 @@ fn render_visibility(visibility: &Visibility) -> String {
     }
 }
 
-fn is_within(module: &str, ancestor: &str) -> bool {
-    ancestor.is_empty() || module == ancestor || module.starts_with(&format!("{ancestor}::"))
-}
-
 fn narrower_reach(left: &str, right: &str, fallback: &str) -> String {
-    if is_within(left, right) {
+    if left == EXTERNAL_REACH {
+        right.to_owned()
+    } else if right == EXTERNAL_REACH {
         left.to_owned()
-    } else if is_within(right, left) {
+    } else if module_is_within(left, right) {
+        left.to_owned()
+    } else if module_is_within(right, left) {
         right.to_owned()
     } else {
         fallback.to_owned()

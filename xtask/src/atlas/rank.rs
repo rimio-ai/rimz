@@ -9,7 +9,7 @@ use crate::source_files;
 use super::api::{OccurrenceCorpus, median};
 use super::history;
 use super::metrics::{self, FunctionMetric};
-use super::modules::{crate_module_for_row, module_for_path};
+use super::modules::{crate_module_for_row, module_for_path, module_is_within};
 use super::sources;
 use super::syntax;
 use super::{REPORT_VERSION, finite_nonnegative, positive_usize, set_once, validate_scope, value};
@@ -22,7 +22,7 @@ Ranks modules by churn-weighted size (code × churn%); cx breaks ties.
 `cx` sums severity-weighted cognitive, cyclomatic, and source-line overruns for
 the module's functions; functions below the warning thresholds contribute zero.
 Flags: pin = churn% >= threshold and test/code below threshold; hot = non-noisy
-pace >= threshold; shallow = wide, thin, and low-use public surface; hub = wide,
+pace >= threshold; shallow = wide, thin, and low-use escaping surface; hub = wide,
 thin, and high-use escaping surface. Name matches are whole-word identifiers
 outside the defining file-module, not resolved caller counts.
 Requires rust-code-analysis-cli (`cargo install rust-code-analysis-cli --locked`).
@@ -37,7 +37,7 @@ Requires rust-code-analysis-cli (`cargo install rust-code-analysis-cli --locked`
   --hot-pace N           hot pace threshold (default 1.5)
   --shallow-pub N        shallow escaping-item threshold (default 20)
   --shallow-locpub N     shallow lines/escaping-item ceiling (default 120)
-  --shallow-occ N        shallow occurrence/item ceiling (default 3)
+  --shallow-occ N        shallow name-match/item ceiling (default 3)
   --since <ref>          add row deltas and complete totals deltas
   --verbose              list top offender functions for shown modules
   --json                 versioned JSON agent contract (v2)";
@@ -284,8 +284,8 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
 fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let all_sources = sources::all_sources(root, None)?;
     let current_sources = sources::sources_in_scope(&all_sources, &args.path)?;
-    let occurrence_corpus = OccurrenceCorpus::new(&all_sources);
     let all_syntax = syntax::analyze_sources(&all_sources);
+    let occurrence_corpus = OccurrenceCorpus::from_syntax(&all_sources, &all_syntax.files);
     let mod_index = syntax::ModIndex::new(&all_syntax.files);
     let syntax = syntax::analyze_sources(&current_sources);
     let current_sizes = sizes(&current_sources, &args.path, &syntax.files);
@@ -304,6 +304,9 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let previous_syntax = previous
         .as_ref()
         .map(|(_, sources)| syntax::analyze_sources(sources));
+    let previous_all_syntax = previous
+        .as_ref()
+        .map(|(sources, _)| syntax::analyze_sources(sources));
     let previous_sizes = previous
         .as_ref()
         .zip(previous_syntax.as_ref())
@@ -311,15 +314,13 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let previous_pub = previous_syntax
         .as_ref()
         .map(|syntax| public_counts(&syntax.files, &args.path));
-    let previous_escaping =
-        previous
-            .as_ref()
-            .zip(previous_syntax.as_ref())
-            .map(|((all_sources, _), scoped_syntax)| {
-                let all_syntax = syntax::analyze_sources(all_sources);
-                let mod_index = syntax::ModIndex::new(&all_syntax.files);
-                escaping_counts(&scoped_syntax.files, &args.path, &mod_index)
-            });
+    let previous_escaping = previous_all_syntax
+        .as_ref()
+        .zip(previous_syntax.as_ref())
+        .map(|(all_syntax, scoped_syntax)| {
+            let mod_index = syntax::ModIndex::new(&all_syntax.files);
+            escaping_counts(&scoped_syntax.files, &args.path, &mod_index)
+        });
     let pace = history::pace(
         root,
         &args.path,
@@ -521,17 +522,13 @@ fn escaping_counts(
             .pub_items
             .iter()
             .filter(|item| {
-                let reach = mod_index.effective_reach(&item.module, &item.reach);
-                !is_within(&reach, &target_module)
+                let reach = mod_index.effective_reach(file, item);
+                !module_is_within(&reach, &target_module)
             })
             .count();
         *counts.entry(row).or_default() += escaping;
     }
     counts
-}
-
-fn is_within(module: &str, ancestor: &str) -> bool {
-    ancestor.is_empty() || module == ancestor || module.starts_with(&format!("{ancestor}::"))
 }
 
 fn occurrence_medians(
@@ -545,7 +542,7 @@ fn occurrence_medians(
         occurrences.entry(module).or_default().extend(
             file.pub_items
                 .iter()
-                .map(|item| corpus.count_from_module(&item.module, &item.name).0),
+                .map(|item| corpus.count_from_module(&file.module_path, &item.name).0),
         );
     }
     occurrences

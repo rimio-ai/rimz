@@ -44,7 +44,7 @@ Imports come from `use` items only; inline qualified paths are invisible. `--mod
 
 Per module: `items`, `esc`, `over`, `test-only`, `unref`, `name-occ`, and `params/fn`. `esc` is effective surface escaping the table row; `over` counts items published more broadly than production name evidence implies. `name-occ` is the median production whole-word match count. The single name-caller module shortlist answers where code might belong, not whether it is safe to demote.
 
-`--module <name>` prints each item's declared visibility, effective reach, implied reach, production/test name-match counts, and tags. Effective reach is the innermost confinement across the declaration and every enclosing `mod` link: a `pub fn` behind `mod detail;` cannot escape the parent merely because its own token says `pub`. A same-file signature hop carries a function's implied reach to types named in its signature, covering cases such as an inferred return type.
+`--module <name>` prints each item's declared visibility, effective reach, implied reach, production/test name-match counts, and tags. Effective reach is the innermost confinement across the declaration and every enclosing `mod` link: `(extern)` means the declaration permits use outside the crate, the empty module path means crate-wide, and a `pub fn` behind `mod detail;` cannot escape the parent merely because its own token says `pub`. A same-file signature hop carries a function's implied reach to types named in its signature, covering cases such as an inferred return type.
 
 The evidence remains deliberately heuristic:
 
@@ -103,7 +103,7 @@ Field names are stable snake_case. All reports carry `version` and `verb`; analy
 
 - `rank`: `history_commits`, `total_modules`, `total_code`, `total_tests`, `total_pub_items`, `total_escaping_items`, `total_complexity`, `rows`, and optional `delta_code`, `delta_tests`, `delta_pub`, `delta_esc`, and `offenders`. Rows expose the text columns, `tests`, `name_match_median`, and optional row deltas.
 - `seams`: history bounds; totals and arrays for `import_edges`, `external_surface`, `external_providers`, `cochange_edges`, and `divergence`; optional `cochange_hub`; per-kind divergence totals; and optional `requested_module` plus untruncated `import_items`.
-- `api`: `total_modules`, `modules`, `total_single_name_caller_items`, `single_name_caller_modules`, and `single_name_caller_items`. Module rows contain `items`, `escaping_items`, `over_published_items`, `test_only_items`, `unreferenced_items`, `name_match_median`, `params_median`, and optional deltas. With `--module`, `module_items` carries `name`, `kind`, `module`, `path`, `line`, `declared_visibility`, `effective_reach`, `implied_reach`, `escapes_module`, `over_published`, `test_only`, and production/test name-match counts and module lists.
+- `api`: `total_modules`, `modules`, `total_single_name_caller_items`, `single_name_caller_modules`, and `single_name_caller_items`. Module rows contain `items`, `escaping_items`, `over_published_items`, `test_only_items`, `unreferenced_items`, `name_match_median`, `params_median`, and optional deltas. With `--module`, `module_items` carries `name`, `kind`, `module`, `path`, `line`, `declared_visibility`, `effective_reach`, `implied_reach`, `escapes_module`, `over_published`, `test_only`, `unreferenced`, and production/test name-match counts and module lists. An `effective_reach` of `(extern)` records declared reach beyond the crate; it does not claim a downstream consumer exists.
 - `shapes`: `eligible_functions`, `total_clusters`, and `clusters`; each cluster includes similarity, score, breadth, shared callees, and member locations/SLOC.
 - `conform`: `target`, `rules`, `regressions`, and `parse_failures`. Module rules include unallowed imports and sites; an absent default target instead returns `configured: false`.
 
@@ -123,11 +123,13 @@ Demote-and-check loop:
 
 ```sh
 cargo xtask atlas api --path <scope> --module <m> --json > /tmp/api.json
-jq -r '.module_items[] | select(.over_published) | "\(.path):\(.line)\t\(.name)"' /tmp/api.json
+jq -r '.module_items[] | select(.over_published and .test_name_matches == 0) | "\(.path):\(.line)\t\(.name)"' /tmp/api.json
 # Demote the batch, then let the arbiter rule:
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --all-features
 # Revert every item rustc names; keep the rest; repeat until green.
 ```
+
+Run `test_only` candidates as a deliberate second pass: narrowing them also means updating the tests that consume them, rather than treating test evidence as permission to remove reach.
 
 Per-pass target and line ledger:
 
@@ -147,6 +149,6 @@ Atlas locates; it does not decide. Keep these traps live while interpreting it:
 - Name matches include comments and string literals.
 - The name corpus spans the whole repository even when report rows are `--path`-scoped.
 - Report row labels and name-corpus file-module buckets are different groupings.
-- `pub` and effective reach are measured within one crate, not across crates or downstream packages.
+- Atlas reads declared reach, not downstream use: `(extern)` means `pub` permits use outside the crate, while the name corpus does not inspect dependent packages.
 
 A `shallow` flag can be a module mid-migration and a divergence pair can be legitimate product coupling. Read the code and history (`git log -S`), run the compiler feasibility pass, and let each finding earn its action — collapse, delete, deepen, or rehome — from evidence rather than a table.
