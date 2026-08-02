@@ -37,11 +37,11 @@ Split Rust modules (`foo.rs` plus `foo/`) remain separate filesystem rules.
   --json         versioned JSON agent contract (v2)
 
 Schema:
-  version = 1
+  version = 2
   [[module]]
   path = \"crates/rimz/src/cli\"
   allowed-imports = [\"agents\"]
-  pub-budget = 10
+  surface-budget = 10
   [[strangler]]
   symbol = \"legacy_symbol\"
   path = \"crates/rimz/src/cli\"
@@ -280,6 +280,8 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
 
 fn initialize(root: &Path, scope: &Path) -> Result<Target> {
     let all_sources = sources::working_tree_rust_sources(root)?;
+    let all_syntax = syntax::analyze_sources(&all_sources);
+    let mod_index = syntax::ModIndex::new(&all_syntax.files);
     let scoped_sources = all_sources
         .iter()
         .filter(|source| path_in_scope(&source.path, scope))
@@ -331,13 +333,13 @@ fn initialize(root: &Path, scope: &Path) -> Result<Target> {
             ModuleRule {
                 path,
                 allowed_imports,
-                pub_budget: files.iter().map(|file| file.pub_items.len()).sum(),
+                surface_budget: escaping_surface(files.iter().copied(), &target_module, &mod_index),
                 config_line: 0,
             }
         })
         .collect();
     Ok(Target {
-        version: 1,
+        version: 2,
         modules,
         strangler: Vec::new(),
     })
@@ -365,6 +367,8 @@ fn evaluate(
     default_target: bool,
 ) -> Result<Report> {
     let all_sources = sources::working_tree_rust_sources(root)?;
+    let all_syntax = syntax::analyze_sources(&all_sources);
+    let mod_index = syntax::ModIndex::new(&all_syntax.files);
     let known_modules = all_sources
         .iter()
         .filter(|source| source.is_production())
@@ -386,17 +390,13 @@ fn evaluate(
         let module_sources = sources_for_path(&all_sources, &module.path, absolute.is_file());
         let parsed = syntax::analyze_sources(&module_sources);
         parse_failures += parsed.parse_failures.len();
-        let current = parsed
-            .files
-            .iter()
-            .map(|file| file.pub_items.len())
-            .sum::<usize>();
         let module_entry = if absolute.is_dir() {
             module.path.join("mod.rs")
         } else {
             module.path.clone()
         };
         let target_module = crate_module_for_path(&module_entry);
+        let current = escaping_surface(parsed.files.iter(), &target_module, &mod_index);
         let mut unallowed = BTreeMap::<String, BTreeSet<(PathBuf, usize)>>::new();
         for file in &parsed.files {
             for import in &file.imports {
@@ -430,15 +430,15 @@ fn evaluate(
                 })
             })
             .collect();
-        let regression = current > module.pub_budget || !unallowed_imports.is_empty();
+        let regression = current > module.surface_budget || !unallowed_imports.is_empty();
         rules.push(RuleResult {
             kind: "module",
             path: module.path.clone(),
             symbol: None,
             status: if regression { "regression" } else { "ok" },
             current,
-            budget: module.pub_budget,
-            delta: current as isize - module.pub_budget as isize,
+            budget: module.surface_budget,
+            delta: current as isize - module.surface_budget as isize,
             unallowed_imports,
             unallowed_import_sites,
             config_line: module.config_line,
@@ -485,6 +485,21 @@ fn evaluate(
         rules,
         parse_failures,
     })
+}
+
+fn escaping_surface<'a>(
+    files: impl IntoIterator<Item = &'a syntax::FileSyntax>,
+    target_module: &str,
+    mod_index: &syntax::ModIndex,
+) -> usize {
+    files
+        .into_iter()
+        .flat_map(|file| &file.pub_items)
+        .filter(|item| {
+            let reach = mod_index.effective_reach(&item.module, &item.reach);
+            !is_within(&reach, target_module)
+        })
+        .count()
 }
 
 fn sources_for_path(sources: &[Source], path: &Path, is_file: bool) -> Vec<Source> {
@@ -563,7 +578,7 @@ fn tighten(target: &mut Target, report: &Report) {
     let mut results = report.rules.iter();
     for module in &mut target.modules {
         if let Some(result) = results.next() {
-            module.pub_budget = module.pub_budget.min(result.current);
+            module.surface_budget = module.surface_budget.min(result.current);
         }
     }
     for strangler in &mut target.strangler {
@@ -708,6 +723,28 @@ mod tests {
     }
 
     #[test]
+    fn surface_budget_counts_only_reach_outside_the_rule_module() {
+        let sources = vec![
+            Source::new("src/lib.rs", "mod feature;\n"),
+            Source::new(
+                "src/feature/mod.rs",
+                "mod detail;\npub(in crate) fn crate_wide() {}\n",
+            ),
+            Source::new(
+                "src/feature/detail.rs",
+                "pub(super) fn sibling_only() {}\npub fn behind_private_link() {}\n",
+            ),
+        ];
+        let syntax = syntax::analyze_sources(&sources);
+        let index = syntax::ModIndex::new(&syntax.files);
+        let feature_files = syntax
+            .files
+            .iter()
+            .filter(|file| file.module_path.starts_with("feature"));
+        assert_eq!(escaping_surface(feature_files, "feature", &index), 1);
+    }
+
+    #[test]
     fn conform_default_report_prioritizes_regressions_and_headroom() {
         let rule = |path: &str, status, current, budget| RuleResult {
             kind: "module",
@@ -780,11 +817,11 @@ mod tests {
         fs::write(
             root.path().join(TARGET_FILE),
             r#"
-version = 1
+version = 2
 [[module]]
 path = "src/lib.rs"
 allowed-imports = ["other"]
-pub-budget = 5
+surface-budget = 5
 [[strangler]]
 symbol = "run"
 path = "src/lib.rs"
@@ -819,7 +856,7 @@ baseline = 5
         tighten(&mut configured, &report);
         target::write(&target_path, &configured).unwrap();
         let tightened = target::load(&target_path).unwrap().unwrap();
-        assert_eq!(tightened.modules[0].pub_budget, 1);
+        assert_eq!(tightened.modules[0].surface_budget, 0);
         assert_eq!(tightened.strangler[0].baseline, 1);
         assert_eq!(tightened.strangler[1].baseline, 2);
 
@@ -907,7 +944,7 @@ baseline = 5
         .unwrap();
 
         let target = Target {
-            version: 1,
+            version: 2,
             modules: Vec::new(),
             strangler: vec![
                 target::StranglerRule {
