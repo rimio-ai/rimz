@@ -1,5 +1,4 @@
 version = 1
-strangler = []
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -82,7 +81,39 @@ allowed-imports = [
     "workspace",
     "worktree",
 ]
-pub-budget = 988
+pub-budget = 986
+
+[[module]]
+path = "crates/rimz/src/cli/agents_cmd"
+allowed-imports = [
+    "(crate)",
+    "agents",
+    "cli",
+    "config",
+    "harness",
+    "ids",
+    "message",
+    "mux",
+    "pane",
+    "proc",
+    "room",
+    "sidebar::refresh",
+    "store",
+    "theme",
+    "tui",
+    "workspace",
+]
+pub-budget = 122
+
+[[module]]
+path = "crates/rimz/src/cli/remote"
+allowed-imports = [
+    "cli",
+    "remote",
+    "room::session",
+    "tui",
+]
+pub-budget = 38
 
 [[module]]
 path = "crates/rimz/src/config"
@@ -304,7 +335,7 @@ allowed-imports = [
     "update",
     "web",
 ]
-pub-budget = 217
+pub-budget = 216
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
@@ -483,3 +514,18 @@ allowed-imports = [
     "workspace",
 ]
 pub-budget = 65
+
+[[strangler]]
+symbol = "prepare_supervised"
+path = "crates/rimz/src/cli"
+baseline = 0
+
+[[strangler]]
+symbol = "into_agent_launch"
+path = "crates/rimz/src/cli"
+baseline = 0
+
+[[strangler]]
+symbol = "wait_for_master"
+path = "crates/rimz/src/cli/remote/web.rs"
+baseline = 0
