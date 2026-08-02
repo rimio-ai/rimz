@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use super::modules::{
-    crate_module_for_path, crate_module_for_row, module_for_path, module_is_within,
+    EXTERNAL_REACH, crate_module_for_path, crate_module_for_row, module_for_path, module_is_within,
 };
 use super::sources::{self, Source};
 use super::syntax::{self, FileSyntax, PubItem};
@@ -458,7 +458,7 @@ fn common_reach<'a>(modules: impl Iterator<Item = &'a str>) -> String {
 }
 
 fn is_strictly_broader(reach: &str, required: &str) -> bool {
-    reach != required && module_is_within(required, reach)
+    reach != EXTERNAL_REACH && reach != required && module_is_within(required, reach)
 }
 
 #[derive(Debug)]
@@ -714,6 +714,9 @@ fn display_reach(reach: &str) -> &str {
 
 fn item_tags(item: &ItemOccurrence) -> String {
     let mut tags = Vec::new();
+    if item.effective_reach == EXTERNAL_REACH {
+        tags.push("external");
+    }
     if item.escapes_module {
         tags.push("escapes-module");
     }
@@ -1032,14 +1035,13 @@ mod tests {
     }
 
     #[test]
-    fn crate_external_reach_is_broader_than_an_implied_crate_module() {
-        assert!(is_strictly_broader(
-            super::super::modules::EXTERNAL_REACH,
-            "store"
-        ));
-        assert!(!is_strictly_broader(
-            super::super::modules::EXTERNAL_REACH,
-            super::super::modules::EXTERNAL_REACH
-        ));
+    fn crate_external_reach_is_not_assessed_for_over_publication() {
+        assert!(!is_strictly_broader(EXTERNAL_REACH, "store"));
+        assert!(!is_strictly_broader(EXTERNAL_REACH, EXTERNAL_REACH));
+
+        let mut occurrence = item("public_api", 1);
+        occurrence.effective_reach = EXTERNAL_REACH.to_owned();
+        occurrence.escapes_module = true;
+        assert_eq!(item_tags(&occurrence), "external,escapes-module");
     }
 }

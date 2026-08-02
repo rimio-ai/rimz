@@ -42,9 +42,9 @@ Imports come from `use` items only; inline qualified paths are invisible. `--mod
 
 ### `api` — how deep is each boundary?
 
-Per module: `items`, `esc`, `over`, `test-only`, `unref`, `name-occ`, and `params/fn`. `esc` is effective surface escaping the table row; `over` counts items published more broadly than production name evidence implies. `name-occ` is the median production whole-word match count. The single name-caller module shortlist answers where code might belong, not whether it is safe to demote.
+Per module: `items`, `esc`, `over`, `test-only`, `unref`, `name-occ`, and `params/fn`. `esc` is effective surface escaping the table row; `over` counts assessed items published more broadly than production name evidence implies. Crate-external reach is not assessed for demotion. `name-occ` is the median production whole-word match count. The single name-caller module shortlist answers where code might belong, not whether it is safe to demote.
 
-`--module <name>` prints each item's declared visibility, effective reach, implied reach, production/test name-match counts, and tags. Effective reach is the innermost confinement across the declaration and every enclosing `mod` link: `(extern)` means the declaration permits use outside the crate, the empty module path means crate-wide, and a `pub fn` behind `mod detail;` cannot escape the parent merely because its own token says `pub`. A same-file signature hop carries a function's implied reach to types named in its signature, covering cases such as an inferred return type.
+`--module <name>` prints each item's declared visibility, effective reach, implied reach, production/test name-match counts, and tags. Effective reach is the innermost confinement across the declaration and every enclosing `mod` link: `(extern)` means the declaration permits use outside the crate and carries an `external` tag, the empty module path means crate-wide, and a `pub fn` behind `mod detail;` cannot escape the parent merely because its own token says `pub`. `external` means not assessed for `over_published`, rather than assessed and clean. A same-file signature hop carries a function's implied reach to types named in its signature, covering cases such as an inferred return type.
 
 The evidence remains deliberately heuristic:
 
@@ -131,6 +131,14 @@ RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --all-features
 
 Run `test_only` candidates as a deliberate second pass: narrowing them also means updating the tests that consume them, rather than treating test evidence as permission to remove reach.
 
+`api` does not propose `pub` → `pub(crate)`: its workspace-wide name corpus deliberately folds workspace crates into one module namespace, so it cannot prove crate-external need. To hand-build an investigation list, not a demotion batch:
+
+```sh
+jq -r '.module_items[] | select(.effective_reach == "(extern)" and ((.production_name_modules | length) <= 1)) | "\(.path):\(.line)\t\(.name)"' /tmp/api.json
+```
+
+A referrer in another workspace crate is indistinguishable from an in-crate referrer in this list. Sweep every candidate across crates with `rg`, then let rustc decide. The crate-root `conform` rule, not this hand list, guards the public boundary.
+
 Per-pass target and line ledger:
 
 ```sh
@@ -150,5 +158,6 @@ Atlas locates; it does not decide. Keep these traps live while interpreting it:
 - The name corpus spans the whole repository even when report rows are `--path`-scoped.
 - Report row labels and name-corpus file-module buckets are different groupings.
 - Atlas reads declared reach, not downstream use: `(extern)` means `pub` permits use outside the crate, while the name corpus does not inspect dependent packages.
+- Crate-aware implied reach is a whole-instrument model question: it needs Cargo-target ownership from `[lib]`/`[[bin]]` roots and their `mod` trees, plus a decision about keeping the flat workspace namespace used by seams and conform. RimZ is the concrete trap: `lib.rs` never declares `mod cli;`; `main.rs` owns all of `src/cli/**` while consuming the library as an external crate.
 
 A `shallow` flag can be a module mid-migration and a divergence pair can be legitimate product coupling. Read the code and history (`git log -S`), run the compiler feasibility pass, and let each finding earn its action — collapse, delete, deepen, or rehome — from evidence rather than a table.
