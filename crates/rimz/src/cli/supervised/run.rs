@@ -3,7 +3,7 @@ use crate::cli::supervised;
 
 use crate::cli::render;
 use rimz::agents::transcript::TranscriptCursor;
-use rimz::harness::plan::{LaunchFinalizeOptions, launch_identity_requests};
+use rimz::harness::plan::launch_identity_requests;
 use rimz::harness::run::{
     PermissionMode, RunRecord, RunStatus, SupervisedRunOutcome, SupervisedRunRequest,
 };
@@ -64,65 +64,6 @@ pub(super) fn supervised_prompt<'a>(
     } else {
         Cow::Borrowed(&request.prompt)
     }
-}
-
-/// Resolve and finalize the one-cell layout for a command-neutral supervised request.
-pub(super) fn prepare_supervised_launch_layout(
-    request: &SupervisedRunRequest,
-    spec: &str,
-    workspace: &rimz::ResolvedWorkspace,
-    machine_config: &rimz::config::MachineConfig,
-) -> Result<rimz::harness::plan::ResolvedLaunch> {
-    let effective = rimz::config::effective::load(
-        &machine_config.agents,
-        &machine_config.subagents.profiles,
-        &workspace.project_root,
-        &rimz::store::paths::config_home(),
-    )?;
-    let scope = if request.subagent {
-        rimz::config::effective::ProfileScope::Subagents
-    } else {
-        rimz::config::effective::ProfileScope::Agents
-    };
-    let mut resolved = rimz::harness::plan::resolve_launch(
-        &effective,
-        scope,
-        &machine_config.agents.commands,
-        Some(spec),
-        request.agent.as_deref(),
-    )?;
-    rimz::harness::plan::reject_prompt_that_looks_like_spec(
-        Some(spec),
-        Some(&request.prompt),
-        effective.profiles_for(scope),
-        &machine_config.agents.commands,
-        &effective.teams,
-    )?;
-    let preset = rimz::agents::LaunchPreset {
-        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
-        effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
-        system_prompt_file: request.system_prompt_file.clone(),
-        append_system_prompt_files: request.append_system_prompt_files.clone(),
-    };
-    let warnings = rimz::harness::plan::finalize_launch_layout(
-        &mut resolved.layout,
-        LaunchFinalizeOptions {
-            permission_mode: Some(request.permission_mode),
-            preset: &preset,
-            passthrough: &request.passthrough,
-            budget: request.budget,
-            max_turns: request.max_turns,
-        },
-    )
-    .inspect_err(|err| {
-        for warning in err.warnings() {
-            let _ = writeln!(std::io::stderr(), "{warning}");
-        }
-    })?;
-    for warning in warnings {
-        writeln!(std::io::stderr(), "{warning}")?;
-    }
-    Ok(resolved)
 }
 
 pub(in crate::cli) fn run_print(
@@ -383,7 +324,7 @@ fn open_attempt_pane(
     Ok(())
 }
 
-fn prepare_supervised(
+fn prepare_run(
     request: &SupervisedRunRequest,
     presentation: &SupervisedPresentation,
     globals: &GlobalFlags,
@@ -392,53 +333,70 @@ fn prepare_supervised(
     let machine_config = crate::cli::machine_config();
     let mode = request.permission_mode;
     let store = crate::cli::open_store(&workspace)?;
-    // Inside a team's lane, a bare role names that team's role, exactly as it
-    // does for an interactive launch: in `#forge`, `reviewer` means
-    // `forge.reviewer`.
-    let effective = rimz::config::effective::load(
-        &machine_config.agents,
-        &machine_config.subagents.profiles,
-        &workspace.project_root,
-        &rimz::store::paths::config_home(),
-    )?;
     let lane = request
         .channel
         .clone()
         .or_else(|| crate::cli::current_channel(&workspace));
-    let mut spec = Cow::Borrowed(request.spec.as_str());
-    let mut inferred_lane = None;
     let scope = if request.subagent {
         rimz::config::effective::ProfileScope::Subagents
     } else {
         rimz::config::effective::ProfileScope::Agents
     };
-    if let Some(channel) = lane.as_deref() {
-        let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-        if let Some(team) = rimz::harness::target::channel_team(&snapshot.agents, channel) {
-            spec = rimz::harness::spec::qualify_spec_in_channel(
-                &request.spec,
-                channel,
-                team,
-                &effective.teams,
+    let snapshot = lane
+        .as_ref()
+        .map(|_| store.snapshot_cached().context("reading agent snapshot"))
+        .transpose()?;
+    let (resolved, inferred_lane, warnings) = crate::cli::launch::prepare_cohort(
+        &machine_config,
+        &workspace.project_root,
+        snapshot
+            .as_ref()
+            .map_or(&[][..], |snapshot| snapshot.agents.as_slice()),
+        scope,
+        lane.as_deref(),
+        &request.spec,
+        request.agent.as_deref(),
+        |effective, _layout| {
+            rimz::harness::plan::reject_prompt_that_looks_like_spec(
+                Some(&request.spec),
+                Some(&request.prompt),
                 effective.profiles_for(scope),
                 &machine_config.agents.commands,
+                &effective.teams,
             )?;
-            if matches!(spec, Cow::Owned(_)) {
-                inferred_lane = Some(channel.to_owned());
+            Ok((
+                Some(request.permission_mode),
+                rimz::agents::LaunchPreset {
+                    model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
+                    effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
+                    system_prompt_file: request.system_prompt_file.clone(),
+                    append_system_prompt_files: request.append_system_prompt_files.clone(),
+                },
+                request.passthrough.clone(),
+                request.budget,
+                request.max_turns,
+            ))
+        },
+    )
+    .inspect_err(|err| {
+        if let Some(err) = err.downcast_ref::<rimz::harness::plan::LaunchFinalizeError>() {
+            for warning in err.warnings() {
+                let _ = writeln!(std::io::stderr(), "{warning}");
             }
         }
+    })?;
+    for warning in &warnings {
+        writeln!(std::io::stderr(), "{warning}")?;
     }
-    let resolved = prepare_supervised_launch_layout(request, &spec, &workspace, &machine_config)?;
-    let team_name = resolved.team_name;
-    let layout = resolved.layout;
-    let agent_cells = layout.agent_cells().collect::<Vec<_>>();
+    let agent_cells = resolved.layout.agent_cells().collect::<Vec<_>>();
     if agent_cells.len() != 1 {
         bail!("--print requires a layout with exactly one agent cell");
     }
-    if layout_cell_count(&layout) != 1 {
+    if layout_cell_count(&resolved.layout) != 1 {
         bail!("--print requires a single-cell agent layout");
     }
-    let agent_cell = agent_cells[0];
+    let agent_cell = agent_cells[0].clone();
+    drop(agent_cells);
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
     let prompt = supervised_prompt(request, adapter);
@@ -456,11 +414,14 @@ fn prepare_supervised(
     if worktree_launch && !crate::cli::confirm_cross_repo_worktree(&workspace)? {
         return Ok(None);
     }
-    let launch = rimz::worktree::resolve_launch_checkout(
+    let (launch, room_channel) = crate::cli::launch::materialize(
+        &resolved,
+        inferred_lane.as_deref(),
         &workspace,
-        &machine_config.agents.worktree,
+        &machine_config,
         request.worktree.as_deref(),
         request.from_pr.as_ref(),
+        request.channel.as_deref(),
     )?;
     if let Some(reason) = launch.review_only_reason.as_deref() {
         writeln!(
@@ -502,19 +463,11 @@ fn prepare_supervised(
     if let Some(channel) = request.channel.as_deref() {
         rimz::channel::register(&workspace, store.paths(), channel)?;
     }
-    // An inferred lane joins the exact channel it was inferred from, rather than
-    // one recomputed from the caller's cwd.
-    let room_channel = rimz::harness::target::resolve_room_channel(
-        &workspace.project_root,
-        &launch.cwd,
-        team_name.as_deref(),
-        request.channel.as_deref().or(inferred_lane.as_deref()),
-    );
     Ok(Some(PreparedRun {
         workspace,
         machine_config,
         mode,
-        layout,
+        layout: resolved.layout,
         adapter,
         launch,
         store,
@@ -772,7 +725,7 @@ pub(in crate::cli) fn run_supervised(
     presentation: SupervisedPresentation,
     globals: &GlobalFlags,
 ) -> Result<Option<SupervisedRunOutcome>> {
-    let Some(prepared) = prepare_supervised(&request, &presentation, globals)? else {
+    let Some(prepared) = prepare_run(&request, &presentation, globals)? else {
         return Ok(None);
     };
     if let Some(binding) = prepared.managed_launch.binding()

@@ -244,6 +244,50 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
     }
 }
 
+fn prepare_launch_layout(
+    request: &SupervisedRunRequest,
+    spec: &str,
+    workspace: &rimz::ResolvedWorkspace,
+    machine_config: &rimz::config::MachineConfig,
+) -> anyhow::Result<rimz::harness::spec::LayoutSpec> {
+    let scope = if request.subagent {
+        rimz::config::effective::ProfileScope::Subagents
+    } else {
+        rimz::config::effective::ProfileScope::Agents
+    };
+    crate::cli::launch::prepare_cohort(
+        machine_config,
+        &workspace.project_root,
+        &[],
+        scope,
+        None,
+        spec,
+        request.agent.as_deref(),
+        |effective, _| {
+            rimz::harness::plan::reject_prompt_that_looks_like_spec(
+                Some(spec),
+                Some(&request.prompt),
+                effective.profiles_for(scope),
+                &machine_config.agents.commands,
+                &effective.teams,
+            )?;
+            Ok((
+                Some(request.permission_mode),
+                rimz::agents::LaunchPreset {
+                    model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
+                    effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
+                    system_prompt_file: request.system_prompt_file.clone(),
+                    append_system_prompt_files: request.append_system_prompt_files.clone(),
+                },
+                request.passthrough.clone(),
+                request.budget,
+                request.max_turns,
+            ))
+        },
+    )
+    .map(|(resolved, _, _)| resolved.layout)
+}
+
 #[test]
 fn supervised_launch_normalizes_model_and_effort_overrides() {
     let mut request = supervised_request("fix-it", false);
@@ -253,14 +297,13 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
 
-    let prepared = super::run::prepare_supervised_launch_layout(
+    let prepared = prepare_launch_layout(
         &request,
         &request.spec,
         &workspace,
         &rimz::config::MachineConfig::default(),
     )
-    .expect("prepare supervised launch")
-    .layout;
+    .expect("prepare supervised launch");
     let [
         Cell::Agent(rimz::harness::spec::AgentCell {
             launch: LaunchParams { model, effort, .. },
@@ -281,7 +324,7 @@ fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
 
-    let err = super::run::prepare_supervised_launch_layout(
+    let err = prepare_launch_layout(
         &request,
         "claude",
         &workspace,

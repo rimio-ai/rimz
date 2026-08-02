@@ -11,12 +11,6 @@ struct Harness {
     args: SubagentsArgs,
 }
 
-#[derive(Debug, Parser)]
-struct AgentsHarness {
-    #[command(flatten)]
-    args: agents_cmd::AgentsArgs,
-}
-
 fn parse(argv: &[&str]) -> SubagentsArgs {
     Harness::try_parse_from(argv)
         .expect("parse subagents command")
@@ -28,29 +22,15 @@ fn launch_implies_supervised_background_defaults() {
     let args = parse(&["rimz", "claude", "review this", "--effort", "high"]);
     let launch = args
         .launch
-        .into_agent_launch(&rimz::config::SubagentsConfig::default())
+        .into_request(&rimz::config::SubagentsConfig::default())
         .expect("launch payload");
     assert!(launch.self_cleanup_on_completion);
-    let agents = AgentsHarness::try_parse_from([
-        "rimz",
-        "claude",
-        "review this",
-        "--effort",
-        "high",
-        "-p",
-        "--bg",
-        "--timeout",
-        "30m",
-    ])
-    .expect("parse equivalent agents launch")
-    .args;
-    let mut agents = agents;
-    agents.launch.self_cleanup_on_completion = true;
     assert!(launch.subagent);
-    assert_eq!(launch.prompt.as_deref(), Some("review this"));
-    agents.launch.subagent = true;
-
-    assert_eq!(launch, agents.launch);
+    assert_eq!(launch.spec, "claude");
+    assert_eq!(launch.prompt, "review this");
+    assert_eq!(launch.effort.as_deref(), Some("high"));
+    assert!(launch.background);
+    assert_eq!(launch.timeout, Some(Duration::from_secs(30 * 60)));
 }
 
 #[test]
@@ -59,26 +39,12 @@ fn waited_launch_still_desugars_to_a_background_run() {
     assert_eq!(args.launch.wait, Some(None));
     let launch = args
         .launch
-        .into_agent_launch(&rimz::config::SubagentsConfig::default())
+        .into_request(&rimz::config::SubagentsConfig::default())
         .expect("launch payload");
-    let agents = AgentsHarness::try_parse_from([
-        "rimz",
-        "claude",
-        "review this",
-        "-p",
-        "--bg",
-        "--timeout",
-        "30m",
-    ])
-    .expect("parse equivalent agents launch")
-    .args;
-    let mut agents = agents;
-    agents.launch.self_cleanup_on_completion = true;
     assert!(launch.subagent);
-    assert_eq!(launch.prompt.as_deref(), Some("review this"));
-    agents.launch.subagent = true;
-
-    assert_eq!(launch, agents.launch);
+    assert_eq!(launch.prompt, "review this");
+    assert!(launch.background);
+    assert_eq!(launch.timeout, Some(Duration::from_secs(30 * 60)));
 }
 
 #[test]
@@ -91,7 +57,7 @@ fn wait_uses_an_optional_equals_duration() {
     assert_eq!(swallowed.launch.prompt.as_deref(), Some("5m"));
     let error = swallowed
         .launch
-        .into_agent_launch(&rimz::config::SubagentsConfig::default())
+        .into_request(&rimz::config::SubagentsConfig::default())
         .expect_err("space-form duration must not become the prompt");
     assert!(error.to_string().contains("did you mean `--wait=5m`?"));
 }
@@ -135,7 +101,7 @@ fn fanout_task_matches_the_single_launch_surface() {
     assert_eq!(fanout.file, Some(PathBuf::from("tasks.json")));
     assert_eq!(fanout.wait, Some(Some(Duration::from_secs(2 * 60))));
     assert!(fanout.json);
-    let launches = parse_fanout_launches(
+    let launches = parse_fanout_requests(
         r#"[{
             "spec": "claude",
             "prompt": "review this",
@@ -151,37 +117,16 @@ fn fanout_task_matches_the_single_launch_surface() {
         &rimz::config::SubagentsConfig::default(),
     )
     .expect("fanout launch");
-    let agents = AgentsHarness::try_parse_from([
-        "rimz",
-        "claude",
-        "review this",
-        "--name",
-        "auth-review",
-        "--model",
-        "opus",
-        "--agent",
-        "reviewer",
-        "--effort",
-        "high",
-        "--timeout",
-        "5m",
-        "--max-turns",
-        "4",
-        "--description",
-        "checks auth",
-        "--keep",
-        "-p",
-        "--bg",
-    ])
-    .expect("parse equivalent agents launch")
-    .args;
-    let mut agents = agents;
-    agents.launch.self_cleanup_on_completion = true;
     assert!(launches[0].subagent);
-    assert_eq!(launches[0].prompt.as_deref(), Some("review this"));
-    agents.launch.subagent = true;
-
-    assert_eq!(launches, vec![agents.launch]);
+    assert_eq!(launches[0].prompt, "review this");
+    assert_eq!(launches[0].name.as_deref(), Some("auth-review"));
+    assert_eq!(launches[0].model.as_deref(), Some("opus"));
+    assert_eq!(launches[0].agent.as_deref(), Some("reviewer"));
+    assert_eq!(launches[0].effort.as_deref(), Some("high"));
+    assert_eq!(launches[0].timeout, Some(Duration::from_secs(5 * 60)));
+    assert_eq!(launches[0].max_turns, Some(4));
+    assert_eq!(launches[0].description.as_deref(), Some("checks auth"));
+    assert!(launches[0].keep);
 }
 
 #[test]
@@ -195,7 +140,7 @@ fn fanout_timeout_precedence_is_task_then_flag_then_config() {
         timeout: "20m".to_owned(),
     };
 
-    let task = parse_fanout_launches(
+    let task = parse_fanout_requests(
         r#"[{"spec":"codex","prompt":"one","timeout":"5m"}]"#,
         &flagged,
         &defaults,
@@ -203,14 +148,14 @@ fn fanout_timeout_precedence_is_task_then_flag_then_config() {
     .expect("task timeout");
     assert_eq!(task[0].timeout, Some(Duration::from_secs(5 * 60)));
 
-    let flag = parse_fanout_launches(r#"[{"spec":"codex","prompt":"one"}]"#, &flagged, &defaults)
+    let flag = parse_fanout_requests(r#"[{"spec":"codex","prompt":"one"}]"#, &flagged, &defaults)
         .expect("flag timeout");
     assert_eq!(flag[0].timeout, Some(Duration::from_secs(10 * 60)));
 
     let Some(SubagentsSubcmd::Fanout(unflagged)) = parse(&["rimz", "fanout"]).command else {
         panic!("fanout command");
     };
-    let config = parse_fanout_launches(
+    let config = parse_fanout_requests(
         r#"[{"spec":"codex","prompt":"one"}]"#,
         &unflagged,
         &defaults,
@@ -226,16 +171,16 @@ fn fanout_validates_the_whole_task_list_before_launch() {
     };
     let defaults = rimz::config::SubagentsConfig::default();
 
-    let empty = parse_fanout_launches("[]", &fanout, &defaults).expect_err("empty task list");
+    let empty = parse_fanout_requests("[]", &fanout, &defaults).expect_err("empty task list");
     assert!(empty.to_string().contains("at least one task"));
 
     let missing_prompt =
-        parse_fanout_launches(r#"[{"spec":"codex","name":"auth"}]"#, &fanout, &defaults)
+        parse_fanout_requests(r#"[{"spec":"codex","name":"auth"}]"#, &fanout, &defaults)
             .expect_err("missing prompt");
     assert!(format!("{missing_prompt:#}").contains("task 1 (auth)"));
     assert!(format!("{missing_prompt:#}").contains("prompt from the parent"));
 
-    let conflicting_prompt = parse_fanout_launches(
+    let conflicting_prompt = parse_fanout_requests(
         r#"[{"spec":"codex","prompt":"inline","prompt_file":"prompt.md"}]"#,
         &fanout,
         &defaults,
@@ -243,7 +188,7 @@ fn fanout_validates_the_whole_task_list_before_launch() {
     .expect_err("conflicting prompt sources");
     assert!(format!("{conflicting_prompt:#}").contains("both `prompt` and `prompt_file`"));
 
-    let duplicate = parse_fanout_launches(
+    let duplicate = parse_fanout_requests(
         r#"[
             {"spec":"codex","prompt":"one","name":"auth"},
             {"spec":"claude","prompt":"two","name":"auth"}
@@ -283,9 +228,9 @@ fn prompt_files_resolve_for_single_launch_and_fanout() {
     let args = parse(&["rimz", "codex", "--prompt-file", &prompt_path]);
     let launch = args
         .launch
-        .into_agent_launch(&rimz::config::SubagentsConfig::default())
+        .into_request(&rimz::config::SubagentsConfig::default())
         .expect("file-backed launch");
-    assert_eq!(launch.prompt.as_deref(), Some("review the parser"));
+    assert_eq!(launch.prompt, "review the parser");
 
     let Some(SubagentsSubcmd::Fanout(fanout)) = parse(&["rimz", "fanout"]).command else {
         panic!("fanout command");
@@ -294,9 +239,9 @@ fn prompt_files_resolve_for_single_launch_and_fanout() {
         r#"[{{"spec":"codex","prompt_file":{}}}]"#,
         serde_json::to_string(prompt_path.as_ref()).expect("json path")
     );
-    let launches = parse_fanout_launches(&raw, &fanout, &rimz::config::SubagentsConfig::default())
+    let launches = parse_fanout_requests(&raw, &fanout, &rimz::config::SubagentsConfig::default())
         .expect("file-backed fanout");
-    assert_eq!(launches[0].prompt.as_deref(), Some("review the parser"));
+    assert_eq!(launches[0].prompt, "review the parser");
 
     assert!(
         Harness::try_parse_from([
@@ -408,7 +353,7 @@ fn launch_requires_parent_prompt() {
     let args = parse(&["rimz", "claude"]);
     let error = args
         .launch
-        .into_agent_launch(&rimz::config::SubagentsConfig::default())
+        .into_request(&rimz::config::SubagentsConfig::default())
         .expect_err("missing prompt");
     assert!(error.to_string().contains("prompt from the parent"));
 }

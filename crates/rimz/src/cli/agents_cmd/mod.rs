@@ -50,10 +50,12 @@ use rimz::harness::auto_redeem::AutoRedeemRequest;
 use rimz::harness::budget::BudgetParkRequest;
 use rimz::harness::idle_compact::IdleCompactRequest;
 use rimz::harness::orphan_sweep::OrphanSubagentRequest;
+#[cfg(test)]
+use rimz::harness::plan::{LaunchFinalizeOptions, ResolvedLaunch};
 use rimz::harness::plan::{
-    LaunchFinalizeOptions, LayoutPaneParams, Placement, ResolvedLaunch, apply_in_place_downgrade,
-    cohort_cells, compile_layout_panes, launch_identity_requests, mint_launch_id,
-    resolve_fork_placement, resolve_placement, validate_agent_name,
+    LayoutPaneParams, Placement, apply_in_place_downgrade, cohort_cells, compile_layout_panes,
+    launch_identity_requests, mint_launch_id, resolve_fork_placement, resolve_placement,
+    validate_agent_name,
 };
 use rimz::harness::resume::{PostureDegrade, ResumePosture};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus, SupervisedRunOutcome};
@@ -93,9 +95,8 @@ use resume::resume_lane;
 use run_timeout::run_timeout;
 pub(in crate::cli) use show::focus_resolved;
 use show::{focus_agent, show_agent};
-pub(in crate::cli) use stop::StopTracker;
 use stop::stop_agent;
-pub(in crate::cli) use stop::stop_resolved;
+pub(in crate::cli) use stop::stop_many;
 use supervised::OutputFormat;
 use supervised::run::{run_print, run_supervised};
 use top::{TopArgs, run_top};
@@ -716,12 +717,15 @@ pub(in crate::cli) enum BackgroundLaunchOutcome {
 }
 
 pub(in crate::cli) fn launch_supervised_background(
-    launch: AgentLaunchArgs,
+    request: rimz::harness::run::SupervisedRunRequest,
     globals: &GlobalFlags,
 ) -> Result<BackgroundLaunchOutcome> {
-    let args = AgentsArgs::from_launch(launch);
-    let (request, presentation) = into_supervised_request(args)?;
-    let Some(outcome) = run_supervised(request, presentation, globals)? else {
+    let Some(outcome) = run_supervised(
+        request,
+        supervised::SupervisedPresentation::text(false),
+        globals,
+    )?
+    else {
         return Ok(BackgroundLaunchOutcome::Aborted);
     };
     match outcome {

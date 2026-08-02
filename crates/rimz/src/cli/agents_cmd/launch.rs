@@ -1,7 +1,5 @@
 //! Interactive launch orchestration and presentation.
 
-use std::borrow::Cow;
-
 use super::*;
 use crate::cli::ctx::Ctx;
 use crate::cli::{machine_config, report_unknown_config_keys, require_agents_fragments};
@@ -9,7 +7,7 @@ use crate::cli::{machine_config, report_unknown_config_keys, require_agents_frag
 use super::placement::{PlacementErrors, PlacementRequest};
 
 pub(super) fn launch_layout(
-    mut args: AgentsArgs,
+    args: AgentsArgs,
     globals: &GlobalFlags,
     allow_in_place: bool,
 ) -> Result<()> {
@@ -19,12 +17,6 @@ pub(super) fn launch_layout(
     let machine_config = machine_config();
     require_agents_fragments(&machine_config)?;
     report_unknown_config_keys(&machine_config)?;
-    let effective = rimz::config::effective::load(
-        &machine_config.agents,
-        &machine_config.subagents.profiles,
-        &workspace.project_root,
-        &rimz::store::paths::config_home(),
-    )?;
     // Inside a team's lane, a bare role names that team's role: in `#forge`,
     // `reviewer` means `forge.reviewer`. The lane's agents carry the team, since
     // the channel string alone does not name it. An explicit `--channel` picks
@@ -35,64 +27,53 @@ pub(super) fn launch_layout(
         .channel
         .as_deref()
         .or_else(|| ctx.channel());
-    let mut inferred_lane = None;
-    if let (Some(spec), Some(channel)) = (args.launch.spec.as_deref(), lane) {
-        let snapshot = ctx.cached_snapshot()?;
-        if let Some(team) = rimz::harness::target::channel_team(&snapshot.agents, channel) {
-            let qualified = rimz::harness::spec::qualify_spec_in_channel(
-                spec,
-                channel,
-                team,
-                &effective.teams,
-                &effective.profiles,
-                &machine_config.agents.commands,
-            )?;
-            if let Cow::Owned(qualified) = qualified {
-                args.launch.spec = Some(qualified);
-                inferred_lane = Some(channel.to_owned());
-            }
-        }
-    }
-    let mut resolved = rimz::harness::plan::resolve_launch(
-        &effective,
+    let snapshot = lane.map(|_| ctx.cached_snapshot()).transpose()?;
+    let spec = args
+        .launch
+        .spec
+        .as_deref()
+        .context("agent launch requires a spec")?;
+    let agent_override = rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref());
+    let (resolved, inferred_lane, warnings) = crate::cli::launch::prepare_cohort(
+        &machine_config,
+        &workspace.project_root,
+        snapshot
+            .as_ref()
+            .map_or(&[][..], |snapshot| snapshot.agents.as_slice()),
         rimz::config::effective::ProfileScope::Agents,
-        &machine_config.agents.commands,
-        args.launch.spec.as_deref(),
-        rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()).as_deref(),
-    )?;
-    let preset = validate_resolved_launch_inputs(
-        &args,
-        &effective,
-        &machine_config.agents.commands,
-        &resolved.layout,
-        true,
-    )?;
-    let warnings = rimz::harness::plan::finalize_launch_layout(
-        &mut resolved.layout,
-        LaunchFinalizeOptions {
-            permission_mode: interactive_permission_mode_from_flags(
-                args.launch.ask,
-                args.launch.yolo,
-            )?,
-            preset: &preset,
-            passthrough: &args.launch.passthrough,
-            budget: args.launch.cohort.budget,
-            max_turns: args.launch.max_turns,
+        lane,
+        spec,
+        agent_override.as_deref(),
+        |effective, layout| {
+            let preset = validate_resolved_launch_inputs(
+                &args,
+                effective,
+                &machine_config.agents.commands,
+                layout,
+                true,
+            )?;
+            Ok((
+                interactive_permission_mode_from_flags(args.launch.ask, args.launch.yolo)?,
+                preset,
+                args.launch.passthrough.clone(),
+                args.launch.cohort.budget,
+                args.launch.max_turns,
+            ))
         },
     )
     .inspect_err(|err| {
-        for warning in err.warnings() {
-            let _ = writeln!(std::io::stderr(), "{warning}");
+        if let Some(err) = err.downcast_ref::<rimz::harness::plan::LaunchFinalizeError>() {
+            for warning in err.warnings() {
+                let _ = writeln!(std::io::stderr(), "{warning}");
+            }
         }
     })?;
     for warning in &warnings {
         writeln!(std::io::stderr(), "{warning}")?;
     }
-    let ResolvedLaunch {
-        teams,
-        layout,
-        team_name,
-    } = resolved;
+    let teams = &resolved.teams;
+    let layout = &resolved.layout;
+    let team_name = &resolved.team_name;
     let ancestry = if rimz::harness::plan::launch_ancestry_required() {
         let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
         rimz::harness::plan::resolve_launch_ancestry_from_env(
@@ -111,7 +92,7 @@ pub(super) fn launch_layout(
     let prompt_agent_index = prompt
         .map(|_| {
             rimz::harness::spec::prompt_leader(
-                &layout,
+                layout,
                 team_name.as_deref().and_then(|name| teams.0.get(name)),
             )
         })
@@ -148,9 +129,9 @@ pub(super) fn launch_layout(
             allow_in_place,
             &ctx,
             &machine_config,
-            &teams,
-            layout,
-            team_name,
+            teams,
+            layout.clone(),
+            team_name.clone(),
             single_cell,
             worktree_filter.as_deref(),
             ancestry.as_ref(),
@@ -219,8 +200,8 @@ pub(super) fn launch_layout(
                     &ctx,
                     &machine_config,
                     &teams,
-                    layout,
-                    team_name,
+                    layout.clone(),
+                    team_name.clone(),
                     single_cell,
                     Some(&path),
                     ancestry.as_ref(),
@@ -230,15 +211,15 @@ pub(super) fn launch_layout(
         }
     }
 
-    let launch = rimz::worktree::resolve_launch_checkout(
+    let (launch, room_channel) = crate::cli::launch::materialize(
+        &resolved,
+        inferred_lane.as_deref(),
         workspace,
-        &machine_config.agents.worktree,
+        &machine_config,
         args.launch.cohort.worktree.as_deref(),
         args.launch.cohort.from_pr.as_ref(),
+        args.launch.cohort.channel.as_deref(),
     )?;
-    if let Some(team) = team_name.as_deref().and_then(|name| teams.0.get(name)) {
-        rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_files);
-    }
     if let Some(reason) = launch.review_only_reason.as_deref() {
         writeln!(
             std::io::stderr(),
@@ -248,27 +229,15 @@ pub(super) fn launch_layout(
     if let Some(channel) = args.launch.cohort.channel.as_deref() {
         rimz::channel::register(workspace, store.paths(), channel)?;
     }
-    // An inferred lane joins the exact channel it was inferred from, rather than
-    // one recomputed from the caller's cwd — a shell pane that has `cd`'d into a
-    // subdirectory would otherwise stamp that subdirectory's basename.
-    let room_channel = rimz::harness::target::resolve_room_channel(
-        &workspace.project_root,
-        &launch.cwd,
-        team_name.as_deref(),
-        args.launch
-            .cohort
-            .channel
-            .as_deref()
-            .or(inferred_lane.as_deref()),
-    );
     let launch_requests = launch_identity_requests(
-        &layout,
+        &resolved.layout,
         args.launch.name.as_deref(),
         launch.generated_name(),
-        team_name.as_deref(),
-        team_name
+        resolved.team_name.as_deref(),
+        resolved
+            .team_name
             .as_deref()
-            .and_then(|name| teams.0.get(name))
+            .and_then(|name| resolved.teams.0.get(name))
             .map(|team| team.roles.as_slice()),
         room_channel.as_deref(),
         prompt.zip(prompt_agent_index),
@@ -290,17 +259,17 @@ pub(super) fn launch_layout(
     let title = room_channel.as_deref().map_or_else(
         || {
             rimz::harness::spec::default_tab_title(
-                &layout,
+                &resolved.layout,
                 &cwd,
                 worktree_name.as_deref(),
-                team_name.as_deref(),
+                resolved.team_name.as_deref(),
             )
         },
         |channel| format!("#{channel}"),
     );
     let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
     let panes = compile_layout_panes(
-        &layout,
+        &resolved.layout,
         LayoutPaneParams {
             cwd: &cwd,
             cleanup_worktree: worktree_launch,

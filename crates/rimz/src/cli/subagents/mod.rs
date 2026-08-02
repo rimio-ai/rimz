@@ -232,8 +232,8 @@ fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> 
         bail!("--json on a single launch requires --wait");
     }
     let config = rimz::config::MachineConfig::load().context("loading machine config")?;
-    let launch = args.into_agent_launch(&config.agents.subagents)?;
-    let child = match agents_cmd::launch_supervised_background(launch, globals)? {
+    let request = args.into_request(&config.agents.subagents)?;
+    let child = match agents_cmd::launch_supervised_background(request, globals)? {
         agents_cmd::BackgroundLaunchOutcome::Launched(child) => child,
         agents_cmd::BackgroundLaunchOutcome::BudgetExceeded { reason } => {
             let err = anyhow::Error::msg(reason).context("launching subagent");
@@ -275,11 +275,11 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
         }
     };
     let config = rimz::config::MachineConfig::load().context("loading machine config")?;
-    let launches = parse_fanout_launches(&raw, &args, &config.agents.subagents)
+    let requests = parse_fanout_requests(&raw, &args, &config.agents.subagents)
         .with_context(|| format!("validating fanout tasks from {source}"))?;
-    let mut launched = Vec::with_capacity(launches.len());
-    for (index, launch) in launches.into_iter().enumerate() {
-        match agents_cmd::launch_supervised_background(launch, globals) {
+    let mut launched = Vec::with_capacity(requests.len());
+    for (index, request) in requests.into_iter().enumerate() {
+        match agents_cmd::launch_supervised_background(request, globals) {
             Ok(agents_cmd::BackgroundLaunchOutcome::Launched(child)) => {
                 if !args.json {
                     writeln!(render::out(), "{}", child.name)?;
@@ -339,11 +339,11 @@ fn fanout_launch_error_context(index: usize, launched: &[agents_cmd::BackgroundL
     )
 }
 
-fn parse_fanout_launches(
+fn parse_fanout_requests(
     raw: &str,
     args: &FanoutArgs,
     defaults: &rimz::config::SubagentsConfig,
-) -> Result<Vec<agents_cmd::AgentLaunchArgs>> {
+) -> Result<Vec<rimz::harness::run::SupervisedRunRequest>> {
     let tasks: Vec<FanoutTask> =
         serde_json::from_str(raw).context("fanout input must be a JSON task array")?;
     if tasks.is_empty() {
@@ -368,18 +368,18 @@ fn parse_fanout_launches(
                 .as_deref()
                 .map(|name| format!(" ({name})"))
                 .unwrap_or_default();
-            task.into_agent_launch(args, defaults)
+            task.into_request(args, defaults)
                 .with_context(|| format!("task {}{label}", index + 1))
         })
         .collect()
 }
 
 impl FanoutTask {
-    fn into_agent_launch(
+    fn into_request(
         self,
         fanout: &FanoutArgs,
         defaults: &rimz::config::SubagentsConfig,
-    ) -> Result<agents_cmd::AgentLaunchArgs> {
+    ) -> Result<rimz::harness::run::SupervisedRunRequest> {
         let timeout = self
             .timeout
             .as_deref()
@@ -403,15 +403,15 @@ impl FanoutTask {
             max_turns: self.max_turns,
             passthrough: Vec::new(),
         }
-        .into_agent_launch(defaults)
+        .into_request(defaults)
     }
 }
 
 impl SubagentLaunchArgs {
-    fn into_agent_launch(
+    fn into_request(
         self,
         defaults: &rimz::config::SubagentsConfig,
-    ) -> Result<agents_cmd::AgentLaunchArgs> {
+    ) -> Result<rimz::harness::run::SupervisedRunRequest> {
         let spec = self.spec.context("a subagent needs an agent spec")?;
         if self.wait == Some(None)
             && let Some(prompt) = self.prompt.as_deref()
@@ -439,26 +439,35 @@ impl SubagentLaunchArgs {
             .unwrap_or_else(|| crate::cli::supervised::parse_timeout(&defaults.timeout))
             .map_err(anyhow::Error::msg)
             .context("parsing agents.subagents.timeout")?;
-        Ok(agents_cmd::AgentLaunchArgs {
-            spec: Some(spec),
-            prompt: Some(prompt),
-            cohort: agents_cmd::CohortLaunchArgs {
-                description: self.description,
-                bg: true,
-                ..Default::default()
-            },
+        Ok(rimz::harness::run::SupervisedRunRequest {
+            spec,
+            prompt,
+            description: self.description,
+            worktree: None,
+            from_pr: None,
+            channel: None,
             name: self.name,
-            model: self.model,
-            agent: self.agent,
-            effort: self.effort,
-            print: true,
+            background: true,
             self_cleanup_on_completion: true,
             subagent: true,
+            force_new_tab: false,
+            permission_mode: rimz::harness::run::PermissionMode::Auto,
+            agent: rimz::harness::plan::normalized_preset_value(self.agent.as_deref()),
+            model: self.model,
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+            effort: self.effort,
+            budget: None,
+            max_turns: self.max_turns,
             timeout: Some(timeout),
             keep: self.keep,
-            max_turns: self.max_turns,
+            retries: 0,
+            verify: None,
+            max_attempts: None,
+            loop_zone: false,
+            loop_task: None,
             passthrough: self.passthrough,
-            ..Default::default()
+            managed_launch: rimz::agents::ManagedLaunchState::PendingResolution,
         })
     }
 }
@@ -638,25 +647,7 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
     if children.is_empty() {
         bail!("this agent has no live subagents to stop");
     }
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
-    let mut tracker = agents_cmd::StopTracker::default();
-    let mut failed = false;
-    let mut out = render::out();
-    for child in children {
-        let label = rimz::harness::target::agent_handle(child, &peers, true);
-        match agents_cmd::stop_resolved(&ctx, globals, &snapshot, child, &mut tracker) {
-            Ok(true) => writeln!(out, "stopped {label}")?,
-            Ok(false) => {}
-            Err(err) => {
-                failed = true;
-                writeln!(out, "error {label}: {err:#}")?;
-            }
-        }
-    }
-    if failed {
-        std::process::exit(1);
-    }
-    Ok(())
+    agents_cmd::stop_many(&ctx, globals, &snapshot, &children)
 }
 
 fn resolve_child_names<'a>(

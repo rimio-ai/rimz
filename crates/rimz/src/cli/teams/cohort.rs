@@ -72,25 +72,7 @@ pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) ->
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.alive_snapshot()?;
     let cohort = select(team, worktree, ctx.channel(), &snapshot.agents)?;
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
-    let mut tracker = agents_cmd::StopTracker::default();
-    let mut failed = false;
-    let mut out = render::out();
-    for agent in cohort.members.iter().copied() {
-        let label = rimz::harness::target::agent_handle(agent, &peers, true);
-        match agents_cmd::stop_resolved(&ctx, globals, &snapshot, agent, &mut tracker) {
-            Ok(true) => writeln!(out, "stopped {label}")?,
-            Ok(false) => {}
-            Err(err) => {
-                failed = true;
-                writeln!(out, "error {label}: {err:#}")?;
-            }
-        }
-    }
-    if failed {
-        std::process::exit(1);
-    }
-    Ok(())
+    agents_cmd::stop_many(&ctx, globals, &snapshot, &cohort.members)
 }
 
 fn focus_member<'a>(

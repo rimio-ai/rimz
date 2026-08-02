@@ -5,11 +5,6 @@ use std::collections::HashSet;
 use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent};
 use crate::cli::render;
 
-#[derive(Default)]
-pub(in crate::cli) struct StopTracker {
-    stopped: HashSet<(AgentKind, AgentSessionId)>,
-}
-
 pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
@@ -18,33 +13,7 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
     if all {
         let agents =
             rimz::harness::target::resolve_many(&snapshot, &reference, None, current_channel)?;
-        let peers = rimz::harness::target::addressable_agents(&snapshot);
-        let mut tracker = StopTracker::default();
-        let mut failed = false;
-        let mut out = render::out();
-        for agent in agents {
-            let label = rimz::harness::target::agent_handle(agent, &peers, true);
-            match stop_live_agent_tree(
-                workspace,
-                store,
-                globals,
-                &snapshot,
-                &peers,
-                agent,
-                &mut tracker,
-            ) {
-                Ok(true) => writeln!(out, "stopped {label}")?,
-                Ok(false) => {}
-                Err(err) => {
-                    failed = true;
-                    writeln!(out, "error {label}: {err:#}")?;
-                }
-            }
-        }
-        if failed {
-            std::process::exit(1);
-        }
-        return Ok(());
+        return stop_many(&ctx, globals, &snapshot, &agents);
     }
     let live_agent_result =
         crate::cli::resolve_agent_one(&snapshot, &reference, None, current_channel);
@@ -58,7 +27,7 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
             &snapshot,
             &peers,
             live_agent,
-            &mut StopTracker::default(),
+            &mut HashSet::new(),
         )?;
         return Ok(());
     }
@@ -96,28 +65,39 @@ fn stop_live_agent(
     }
 }
 
-pub(in crate::cli) fn stop_resolved(
+pub(in crate::cli) fn stop_many(
     ctx: &Ctx,
     globals: &GlobalFlags,
     snapshot: &rimz::SidebarSnapshot,
-    agent: &AgentState,
-    tracker: &mut StopTracker,
-) -> Result<bool> {
+    agents: &[&AgentState],
+) -> Result<()> {
     let peers = rimz::harness::target::addressable_agents(snapshot);
-    let current = snapshot
-        .agents
-        .iter()
-        .find(|candidate| candidate.kind == agent.kind && candidate.agent_id == agent.agent_id)
-        .unwrap_or(agent);
-    stop_live_agent_tree(
-        &ctx.workspace,
-        &ctx.store,
-        globals,
-        snapshot,
-        &peers,
-        current,
-        tracker,
-    )
+    let mut tracker = HashSet::new();
+    let mut failed = false;
+    let mut out = render::out();
+    for agent in agents {
+        let label = rimz::harness::target::agent_handle(agent, &peers, true);
+        match stop_live_agent_tree(
+            &ctx.workspace,
+            &ctx.store,
+            globals,
+            snapshot,
+            &peers,
+            agent,
+            &mut tracker,
+        ) {
+            Ok(true) => writeln!(out, "stopped {label}")?,
+            Ok(false) => {}
+            Err(err) => {
+                failed = true;
+                writeln!(out, "error {label}: {err:#}")?;
+            }
+        }
+    }
+    if failed {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn stop_live_agent_tree(
@@ -127,10 +107,10 @@ fn stop_live_agent_tree(
     snapshot: &rimz::SidebarSnapshot,
     peers: &[&AgentState],
     agent: &AgentState,
-    tracker: &mut StopTracker,
+    tracker: &mut HashSet<(AgentKind, AgentSessionId)>,
 ) -> Result<bool> {
     let key = (agent.kind.clone(), agent.agent_id.clone());
-    if tracker.stopped.contains(&key) {
+    if tracker.contains(&key) {
         return Ok(false);
     }
 
@@ -153,7 +133,7 @@ fn stop_live_agent_tree(
 
     match stop_live_agent(workspace, store, globals, agent) {
         Ok(()) => {
-            tracker.stopped.insert(key);
+            tracker.insert(key);
         }
         Err(err) => failures.push(format!("{parent_label}: {err:#}")),
     }

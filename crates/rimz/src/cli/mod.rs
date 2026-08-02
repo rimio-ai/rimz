@@ -19,6 +19,7 @@ mod first_run;
 mod gc;
 mod help;
 mod hooks;
+mod launch;
 mod list;
 mod list_pets;
 mod list_themes;
