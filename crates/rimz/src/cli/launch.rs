@@ -24,8 +24,13 @@ pub(super) fn prepare_cohort(
     lane: Option<&str>,
     spec: &str,
     agent_override: Option<&str>,
-    overrides: impl FnOnce(&LaunchAgents, &LayoutSpec) -> Result<CohortOverrides>,
-) -> Result<(ResolvedLaunch, Option<String>, Vec<LaunchFinalizeWarning>)> {
+    overrides: impl FnOnce(&LaunchAgents, &LayoutSpec, &str) -> Result<CohortOverrides>,
+) -> Result<(
+    ResolvedLaunch,
+    Option<String>,
+    Vec<LaunchFinalizeWarning>,
+    String,
+)> {
     let effective = rimz::config::effective::load(
         &machine_config.agents,
         &machine_config.subagents.profiles,
@@ -57,7 +62,7 @@ pub(super) fn prepare_cohort(
         agent_override,
     )?;
     let (permission_mode, preset, passthrough, budget, max_turns) =
-        overrides(&effective, &resolved.layout)?;
+        overrides(&effective, &resolved.layout, &qualified_spec)?;
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
@@ -68,7 +73,12 @@ pub(super) fn prepare_cohort(
             max_turns,
         },
     )?;
-    Ok((resolved, inferred_lane, warnings))
+    Ok((
+        resolved,
+        inferred_lane,
+        warnings,
+        qualified_spec.into_owned(),
+    ))
 }
 
 type CohortOverrides = (
@@ -94,13 +104,8 @@ pub(super) fn materialize(
         worktree,
         from_pr,
     )?;
-    if let Some(team) = resolved
-        .team_name
-        .as_deref()
-        .and_then(|name| resolved.teams.0.get(name))
-    {
-        rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_files);
-    }
+    // An inferred lane joins the exact channel it was inferred from, rather than
+    // one recomputed from the caller's cwd after checkout materialization.
     let room_channel = rimz::harness::target::resolve_room_channel(
         &workspace.project_root,
         &launch.cwd,
@@ -108,4 +113,71 @@ pub(super) fn materialize(
         explicit_channel.or(inferred_lane),
     );
     Ok((launch, room_channel))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rimz::config::{Profile, RoleBinding, Team};
+
+    #[test]
+    fn lane_qualification_reaches_validation_and_the_caller() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut machine = rimz::config::MachineConfig::default();
+        machine.agents.profiles.0.insert(
+            "reviewer-profile".to_owned(),
+            Profile {
+                agent: "claude".to_owned(),
+                description: None,
+                mode: None,
+                model: None,
+                effort: None,
+                budget: None,
+                system_prompt_file: None,
+                append_system_prompt_files: Vec::new(),
+                args: None,
+            },
+        );
+        machine.agents.teams.0.insert(
+            "forge".to_owned(),
+            Team {
+                roles: vec![RoleBinding {
+                    role: "reviewer".to_owned(),
+                    profile: "reviewer-profile".to_owned(),
+                    mode: None,
+                    model: None,
+                    effort: None,
+                    budget: None,
+                    system_prompt_file: None,
+                    append_system_prompt_files: Vec::new(),
+                    args: None,
+                }],
+                ..Team::default()
+            },
+        );
+        let mut agent =
+            rimz::testkit::agent_state("claude", "planner", jiff::Timestamp::UNIX_EPOCH);
+        agent.channel = Some("forge".to_owned());
+        agent.team = Some("forge".to_owned());
+        let mut validated_spec = None;
+
+        let (_, inferred_lane, _, qualified_spec) = prepare_cohort(
+            &machine,
+            dir.path(),
+            &[agent],
+            ProfileScope::Agents,
+            Some("forge"),
+            "reviewer",
+            None,
+            |_, _, spec| {
+                validated_spec = Some(spec.to_owned());
+                Ok((None, LaunchPreset::default(), Vec::new(), None, None))
+            },
+        )
+        .expect("prepare qualified lane launch");
+
+        assert_eq!(validated_spec.as_deref(), Some("forge.reviewer"));
+        assert_eq!(qualified_spec, "forge.reviewer");
+        assert_eq!(inferred_lane.as_deref(), Some("forge"));
+    }
 }

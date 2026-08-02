@@ -7,7 +7,7 @@ use crate::cli::{machine_config, report_unknown_config_keys, require_agents_frag
 use super::placement::{PlacementErrors, PlacementRequest};
 
 pub(super) fn launch_layout(
-    args: AgentsArgs,
+    mut args: AgentsArgs,
     globals: &GlobalFlags,
     allow_in_place: bool,
 ) -> Result<()> {
@@ -32,9 +32,9 @@ pub(super) fn launch_layout(
         .launch
         .spec
         .as_deref()
-        .context("agent launch requires a spec")?;
+        .expect("required launch-spec group guarantees a spec");
     let agent_override = rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref());
-    let (resolved, inferred_lane, warnings) = crate::cli::launch::prepare_cohort(
+    let (resolved, inferred_lane, warnings, qualified_spec) = crate::cli::launch::prepare_cohort(
         &machine_config,
         &workspace.project_root,
         snapshot
@@ -44,9 +44,10 @@ pub(super) fn launch_layout(
         lane,
         spec,
         agent_override.as_deref(),
-        |effective, layout| {
+        |effective, layout, qualified_spec| {
             let preset = validate_resolved_launch_inputs(
                 &args,
+                Some(qualified_spec),
                 effective,
                 &machine_config.agents.commands,
                 layout,
@@ -68,6 +69,7 @@ pub(super) fn launch_layout(
             }
         }
     })?;
+    args.launch.spec = Some(qualified_spec);
     for warning in &warnings {
         writeln!(std::io::stderr(), "{warning}")?;
     }
@@ -220,6 +222,13 @@ pub(super) fn launch_layout(
         args.launch.cohort.from_pr.as_ref(),
         args.launch.cohort.channel.as_deref(),
     )?;
+    if let Some(team) = resolved
+        .team_name
+        .as_deref()
+        .and_then(|name| resolved.teams.0.get(name))
+    {
+        rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_files);
+    }
     if let Some(reason) = launch.review_only_reason.as_deref() {
         writeln!(
             std::io::stderr(),
@@ -699,13 +708,14 @@ pub(super) fn resolve_launch_prompt_files(paths: &[PathBuf]) -> Result<Vec<PathB
 /// Apply CLI-owned launch validation in its user-visible precedence order.
 pub(super) fn validate_resolved_launch_inputs(
     args: &AgentsArgs,
+    spec: Option<&str>,
     effective: &rimz::config::effective::LaunchAgents,
     commands: &rimz::config::CommandsConfig,
     layout: &LayoutSpec,
     enforce_name_cardinality: bool,
 ) -> Result<rimz::agents::LaunchPreset> {
     rimz::harness::plan::reject_prompt_that_looks_like_spec(
-        args.launch.spec.as_deref(),
+        spec,
         args.launch.prompt.as_deref(),
         &effective.profiles,
         commands,

@@ -346,7 +346,7 @@ fn prepare_run(
         .as_ref()
         .map(|_| store.snapshot_cached().context("reading agent snapshot"))
         .transpose()?;
-    let (resolved, inferred_lane, warnings) = crate::cli::launch::prepare_cohort(
+    let (resolved, inferred_lane, warnings, _) = crate::cli::launch::prepare_cohort(
         &machine_config,
         &workspace.project_root,
         snapshot
@@ -356,9 +356,9 @@ fn prepare_run(
         lane.as_deref(),
         &request.spec,
         request.agent.as_deref(),
-        |effective, _layout| {
+        |effective, _layout, qualified_spec| {
             rimz::harness::plan::reject_prompt_that_looks_like_spec(
-                Some(&request.spec),
+                Some(qualified_spec),
                 Some(&request.prompt),
                 effective.profiles_for(scope),
                 &machine_config.agents.commands,

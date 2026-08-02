@@ -101,6 +101,7 @@ fn fanout_task_matches_the_single_launch_surface() {
     assert_eq!(fanout.file, Some(PathBuf::from("tasks.json")));
     assert_eq!(fanout.wait, Some(Some(Duration::from_secs(2 * 60))));
     assert!(fanout.json);
+    let defaults = rimz::config::SubagentsConfig::default();
     let launches = parse_fanout_requests(
         r#"[{
             "spec": "claude",
@@ -114,19 +115,34 @@ fn fanout_task_matches_the_single_launch_surface() {
             "description": "checks auth"
         }]"#,
         &fanout,
-        &rimz::config::SubagentsConfig::default(),
+        &defaults,
     )
     .expect("fanout launch");
-    assert!(launches[0].subagent);
-    assert_eq!(launches[0].prompt, "review this");
-    assert_eq!(launches[0].name.as_deref(), Some("auth-review"));
-    assert_eq!(launches[0].model.as_deref(), Some("opus"));
-    assert_eq!(launches[0].agent.as_deref(), Some("reviewer"));
-    assert_eq!(launches[0].effort.as_deref(), Some("high"));
-    assert_eq!(launches[0].timeout, Some(Duration::from_secs(5 * 60)));
-    assert_eq!(launches[0].max_turns, Some(4));
-    assert_eq!(launches[0].description.as_deref(), Some("checks auth"));
-    assert!(launches[0].keep);
+    let single = parse(&[
+        "rimz",
+        "claude",
+        "review this",
+        "--name",
+        "auth-review",
+        "--model",
+        "opus",
+        "--agent",
+        "reviewer",
+        "--effort",
+        "high",
+        "--timeout",
+        "5m",
+        "--max-turns",
+        "4",
+        "--description",
+        "checks auth",
+        "--keep",
+    ])
+    .launch
+    .into_request(&defaults)
+    .expect("single launch");
+
+    assert_eq!(format!("{launches:?}"), format!("{:?}", vec![single]));
 }
 
 #[test]

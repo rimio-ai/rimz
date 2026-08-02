@@ -717,9 +717,16 @@ pub(in crate::cli) enum BackgroundLaunchOutcome {
 }
 
 pub(in crate::cli) fn launch_supervised_background(
-    request: rimz::harness::run::SupervisedRunRequest,
+    mut request: rimz::harness::run::SupervisedRunRequest,
     globals: &GlobalFlags,
 ) -> Result<BackgroundLaunchOutcome> {
+    crate::cli::send::warn_ignored_stdin();
+    request.prompt = crate::cli::send::combine_text_prompt(Some(&request.prompt), None)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "expected a prompt for `rimz agents <spec> -p` (positional PROMPT or `--stdin`)"
+            )
+        })?;
     let Some(outcome) = run_supervised(
         request,
         supervised::SupervisedPresentation::text(false),

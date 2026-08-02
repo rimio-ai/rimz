@@ -973,6 +973,7 @@ mod launch_options {
         )?;
         let preset = validate_resolved_launch_inputs(
             args,
+            args.launch.spec.as_deref(),
             &effective,
             &machine.agents.commands,
             &resolved.layout,
@@ -1088,6 +1089,7 @@ mod launch_options {
 
         let err = validate_resolved_launch_inputs(
             &args,
+            args.launch.spec.as_deref(),
             &effective,
             &machine.agents.commands,
             &resolved.layout,

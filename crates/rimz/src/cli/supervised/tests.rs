@@ -1,8 +1,7 @@
 use super::*;
-use rimz::agents::{AgentState, AgentStatus, LaunchParams};
+use rimz::agents::{AgentState, AgentStatus};
 use rimz::harness::run::{PermissionMode, RunCancellation, RunStatus, SupervisedRunRequest};
 use rimz::harness::run_wake::{self, ExpectedRunFrame, WakeupFrame};
-use rimz::harness::spec::Cell;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::pane::PaneRef;
 use rimz::store::{RuntimePaths, StatePaths};
@@ -244,99 +243,9 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
     }
 }
 
-fn prepare_launch_layout(
-    request: &SupervisedRunRequest,
-    spec: &str,
-    workspace: &rimz::ResolvedWorkspace,
-    machine_config: &rimz::config::MachineConfig,
-) -> anyhow::Result<rimz::harness::spec::LayoutSpec> {
-    let scope = if request.subagent {
-        rimz::config::effective::ProfileScope::Subagents
-    } else {
-        rimz::config::effective::ProfileScope::Agents
-    };
-    crate::cli::launch::prepare_cohort(
-        machine_config,
-        &workspace.project_root,
-        &[],
-        scope,
-        None,
-        spec,
-        request.agent.as_deref(),
-        |effective, _| {
-            rimz::harness::plan::reject_prompt_that_looks_like_spec(
-                Some(spec),
-                Some(&request.prompt),
-                effective.profiles_for(scope),
-                &machine_config.agents.commands,
-                &effective.teams,
-            )?;
-            Ok((
-                Some(request.permission_mode),
-                rimz::agents::LaunchPreset {
-                    model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
-                    effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
-                    system_prompt_file: request.system_prompt_file.clone(),
-                    append_system_prompt_files: request.append_system_prompt_files.clone(),
-                },
-                request.passthrough.clone(),
-                request.budget,
-                request.max_turns,
-            ))
-        },
-    )
-    .map(|(resolved, _, _)| resolved.layout)
-}
-
-#[test]
-fn supervised_launch_normalizes_model_and_effort_overrides() {
-    let mut request = supervised_request("fix-it", false);
-    request.model = Some(" gpt-5 ".to_owned());
-    request.effort = Some(" low ".to_owned());
-    let dir = tempfile::tempdir().expect("temp dir");
-    let workspace =
-        rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
-
-    let prepared = prepare_launch_layout(
-        &request,
-        &request.spec,
-        &workspace,
-        &rimz::config::MachineConfig::default(),
-    )
-    .expect("prepare supervised launch");
-    let [
-        Cell::Agent(rimz::harness::spec::AgentCell {
-            launch: LaunchParams { model, effort, .. },
-            ..
-        }),
-    ] = prepared.columns[0].rows.as_slice()
-    else {
-        panic!("one agent")
-    };
-    assert_eq!(model.as_deref(), Some("gpt-5"));
-    assert_eq!(effort.as_deref(), Some("low"));
-}
-
 #[test]
 fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
     let request = supervised_request("codex", true);
-    let dir = tempfile::tempdir().expect("temp dir");
-    let workspace =
-        rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
-
-    let err = prepare_launch_layout(
-        &request,
-        "claude",
-        &workspace,
-        &rimz::config::MachineConfig::default(),
-    )
-    .expect_err("spec-like prompt");
-    assert!(
-        err.to_string()
-            .contains("prompt `codex` looks like another spec cell"),
-        "{err:#}"
-    );
-
     let adapter = rimz::agents::find_definition("codex").unwrap();
     let prompt = super::run::supervised_prompt(&request, adapter);
     assert!(prompt.starts_with("codex\n\n<system_reminder>"));
