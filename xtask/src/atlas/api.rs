@@ -1001,5 +1001,21 @@ mod tests {
             ),
             ""
         );
+
+        let syntax = syntax::analyze_sources(&sources);
+        let root_file = syntax
+            .files
+            .iter()
+            .find(|file| file.module_path.is_empty())
+            .unwrap();
+        let reexport = root_file
+            .pub_items
+            .iter()
+            .find(|item| item.kind == "use" && item.name == "Thing")
+            .unwrap();
+        let index = syntax::ModIndex::new(&syntax.files);
+        let occurrence = count_occurrences(reexport, root_file, &corpus, &index);
+        assert_eq!(occurrence.declared_visibility, "pub");
+        assert_eq!(occurrence.effective_reach, "");
     }
 }
