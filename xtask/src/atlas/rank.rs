@@ -38,7 +38,7 @@ Requires rust-code-analysis-cli (`cargo install rust-code-analysis-cli --locked`
   --shallow-pub N        shallow escaping-item threshold (default 20)
   --shallow-locpub N     shallow lines/escaping-item ceiling (default 120)
   --shallow-occ N        shallow occurrence/item ceiling (default 3)
-  --since <ref>          add code and public-item deltas
+  --since <ref>          add row deltas and complete totals deltas
   --verbose              list top offender functions for shown modules
   --json                 versioned JSON agent contract (v2)";
 

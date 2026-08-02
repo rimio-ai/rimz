@@ -27,9 +27,9 @@ use anyhow::{Result, bail};
 pub(crate) const USAGE: &str = "cargo xtask atlas <verb> [flags]
 
 Verbs:
-  rank      prioritize modules by size, interface, churn, pace, and complexity
+  rank      prioritize modules by size, escaping surface, churn, and complexity
   seams     report imports, external surface, co-change, and divergence
-  api       report boundary shape and outside identifier occurrences
+  api       report effective reach and production/test name-match evidence
   shapes    cluster large functions by shared call choreography
   conform   compare the tree with refactor-target.toml budgets
 
