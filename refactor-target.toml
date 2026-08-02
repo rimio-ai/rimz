@@ -1,0 +1,485 @@
+version = 1
+strangler = []
+
+[[module]]
+path = "crates/rimz/src/agent_activity.rs"
+allowed-imports = [
+    "ids",
+    "store",
+]
+pub-budget = 6
+
+[[module]]
+path = "crates/rimz/src/agents"
+allowed-imports = [
+    "(crate)",
+    "agent_activity",
+    "daemon_view",
+    "harness::run",
+    "harness::run_wake",
+    "ids",
+    "mux",
+    "pane",
+    "store",
+    "transcript",
+]
+pub-budget = 2152
+
+[[module]]
+path = "crates/rimz/src/bin"
+allowed-imports = ["testkit::sandbox"]
+pub-budget = 0
+
+[[module]]
+path = "crates/rimz/src/build_id.rs"
+allowed-imports = []
+pub-budget = 7
+
+[[module]]
+path = "crates/rimz/src/channel.rs"
+allowed-imports = [
+    "store::atomic",
+    "store::lock",
+    "store::paths",
+    "workspace",
+]
+pub-budget = 13
+
+[[module]]
+path = "crates/rimz/src/child_process.rs"
+allowed-imports = ["(crate)"]
+pub-budget = 14
+
+[[module]]
+path = "crates/rimz/src/cli"
+allowed-imports = [
+    "(crate)",
+    "agents",
+    "build_id",
+    "config",
+    "diag::record",
+    "disk_usage",
+    "forge",
+    "harness",
+    "ids",
+    "message",
+    "mux",
+    "pane",
+    "proc",
+    "reload",
+    "remote",
+    "room",
+    "sidebar",
+    "sidebar_pane",
+    "store",
+    "theme",
+    "transcript",
+    "trust",
+    "tui",
+    "uninstall",
+    "update",
+    "web",
+    "workspace",
+    "worktree",
+]
+pub-budget = 991
+
+[[module]]
+path = "crates/rimz/src/config"
+allowed-imports = [
+    "agents",
+    "harness::budget",
+    "harness::run",
+    "harness::schedule",
+    "harness::spec",
+    "ids",
+    "message",
+    "sidebar::timing",
+    "store::atomic",
+    "trust",
+]
+pub-budget = 227
+
+[[module]]
+path = "crates/rimz/src/config.rs"
+allowed-imports = [
+    "store::parse_cache",
+    "store::paths",
+]
+pub-budget = 176
+
+[[module]]
+path = "crates/rimz/src/daemon_content.rs"
+allowed-imports = [
+    "child_process",
+    "config",
+]
+pub-budget = 7
+
+[[module]]
+path = "crates/rimz/src/daemon_view.rs"
+allowed-imports = [
+    "config",
+    "ids",
+    "mux",
+    "pane",
+    "store",
+]
+pub-budget = 20
+
+[[module]]
+path = "crates/rimz/src/diag"
+allowed-imports = [
+    "ids",
+    "mux",
+    "remote::link",
+    "sidebar::presence",
+    "store",
+]
+pub-budget = 79
+
+[[module]]
+path = "crates/rimz/src/diag.rs"
+allowed-imports = ["ids"]
+pub-budget = 25
+
+[[module]]
+path = "crates/rimz/src/disk_usage.rs"
+allowed-imports = ["store"]
+pub-budget = 7
+
+[[module]]
+path = "crates/rimz/src/forge.rs"
+allowed-imports = ["store::snapshot"]
+pub-budget = 39
+
+[[module]]
+path = "crates/rimz/src/harness"
+allowed-imports = [
+    "(crate)",
+    "agents",
+    "config",
+    "ids",
+    "message",
+    "mux",
+    "sock",
+    "store",
+    "trust",
+    "workspace",
+]
+pub-budget = 634
+
+[[module]]
+path = "crates/rimz/src/ids.rs"
+allowed-imports = []
+pub-budget = 38
+
+[[module]]
+path = "crates/rimz/src/lane.rs"
+allowed-imports = []
+pub-budget = 9
+
+[[module]]
+path = "crates/rimz/src/lib.rs"
+allowed-imports = [
+    "agents",
+    "harness::run_wake",
+    "harness::target",
+    "ids",
+    "pane",
+    "store",
+    "workspace",
+]
+pub-budget = 98
+
+[[module]]
+path = "crates/rimz/src/main.rs"
+allowed-imports = ["observability"]
+pub-budget = 0
+
+[[module]]
+path = "crates/rimz/src/message"
+allowed-imports = [
+    "(crate)",
+    "agents",
+    "harness::run",
+    "ids",
+    "mux",
+    "store",
+    "workspace",
+]
+pub-budget = 77
+
+[[module]]
+path = "crates/rimz/src/message.rs"
+allowed-imports = [
+    "agents",
+    "ids",
+]
+pub-budget = 89
+
+[[module]]
+path = "crates/rimz/src/mux"
+allowed-imports = [
+    "(crate)",
+    "config",
+    "ids",
+    "pane",
+    "proc",
+    "remote",
+    "sidebar::cache",
+    "sidebar::timing",
+    "store",
+    "workspace",
+]
+pub-budget = 492
+
+[[module]]
+path = "crates/rimz/src/observability"
+allowed-imports = [
+    "config",
+    "workspace",
+]
+pub-budget = 12
+
+[[module]]
+path = "crates/rimz/src/observability.rs"
+allowed-imports = []
+pub-budget = 11
+
+[[module]]
+path = "crates/rimz/src/osc.rs"
+allowed-imports = [
+    "config",
+    "ids",
+]
+pub-budget = 4
+
+[[module]]
+path = "crates/rimz/src/pane"
+allowed-imports = [
+    "ids",
+    "proc",
+]
+pub-budget = 15
+
+[[module]]
+path = "crates/rimz/src/pane.rs"
+allowed-imports = ["ids"]
+pub-budget = 11
+
+[[module]]
+path = "crates/rimz/src/proc"
+allowed-imports = [
+    "(crate)",
+    "ids",
+    "pane",
+]
+pub-budget = 122
+
+[[module]]
+path = "crates/rimz/src/reload.rs"
+allowed-imports = [
+    "config",
+    "diag::record",
+    "ids",
+    "mux",
+    "proc",
+    "room::session",
+    "sidebar::heartbeat",
+    "sidebar::timing",
+    "store",
+    "workspace",
+]
+pub-budget = 11
+
+[[module]]
+path = "crates/rimz/src/remote"
+allowed-imports = [
+    "config",
+    "ids",
+    "mux",
+    "sock",
+    "store",
+    "update",
+    "web",
+]
+pub-budget = 217
+
+[[module]]
+path = "crates/rimz/src/remote_control.rs"
+allowed-imports = [
+    "agents::runtime_control",
+    "config",
+    "room::session",
+    "store",
+]
+pub-budget = 15
+
+[[module]]
+path = "crates/rimz/src/room"
+allowed-imports = [
+    "(crate)",
+    "config",
+    "harness::rebirth",
+    "harness::resume",
+    "ids",
+    "mux",
+    "remote_control",
+    "store",
+    "workspace",
+]
+pub-budget = 62
+
+[[module]]
+path = "crates/rimz/src/sidebar"
+allowed-imports = [
+    "(crate)",
+    "agents",
+    "config",
+    "diag",
+    "forge",
+    "harness::auto_continue",
+    "ids",
+    "lane",
+    "mux",
+    "pane",
+    "proc",
+    "remote::link",
+    "store",
+    "workspace",
+    "worktree",
+]
+pub-budget = 580
+
+[[module]]
+path = "crates/rimz/src/sidebar_pane"
+allowed-imports = [
+    "(crate)",
+    "agents",
+    "config",
+    "diag",
+    "ids",
+    "mux",
+    "observability",
+    "osc",
+    "remote::link",
+    "sidebar",
+    "store::agent_context",
+    "store::paths",
+    "theme",
+    "tui",
+]
+pub-budget = 767
+
+[[module]]
+path = "crates/rimz/src/sock.rs"
+allowed-imports = []
+pub-budget = 14
+
+[[module]]
+path = "crates/rimz/src/store"
+allowed-imports = [
+    "agent_activity",
+    "agents",
+    "config",
+    "daemon_view",
+    "diag::record",
+    "harness::run",
+    "harness::run_wake",
+    "ids",
+    "message",
+    "pane",
+    "proc",
+    "remote::link",
+    "sidebar::events",
+    "sidebar::heartbeat",
+    "sidebar::timing",
+    "sock",
+    "theme",
+    "workspace",
+]
+pub-budget = 794
+
+[[module]]
+path = "crates/rimz/src/theme"
+allowed-imports = [
+    "agents",
+    "config",
+]
+pub-budget = 88
+
+[[module]]
+path = "crates/rimz/src/transcript.rs"
+allowed-imports = [
+    "ids",
+    "store",
+]
+pub-budget = 15
+
+[[module]]
+path = "crates/rimz/src/trust.rs"
+allowed-imports = [
+    "config",
+    "harness::run",
+    "ids",
+    "store::atomic",
+    "store::paths",
+]
+pub-budget = 37
+
+[[module]]
+path = "crates/rimz/src/tui.rs"
+allowed-imports = []
+pub-budget = 15
+
+[[module]]
+path = "crates/rimz/src/uninstall.rs"
+allowed-imports = ["store"]
+pub-budget = 10
+
+[[module]]
+path = "crates/rimz/src/update.rs"
+allowed-imports = []
+pub-budget = 18
+
+[[module]]
+path = "crates/rimz/src/web"
+allowed-imports = [
+    "config",
+    "ids",
+    "mux",
+    "room::session",
+    "sidebar_pane::pixel",
+    "store",
+]
+pub-budget = 112
+
+[[module]]
+path = "crates/rimz/src/workspace.rs"
+allowed-imports = [
+    "ids",
+    "store::workspace_record",
+]
+pub-budget = 21
+
+[[module]]
+path = "crates/rimz/src/worktree"
+allowed-imports = [
+    "config",
+    "forge",
+]
+pub-budget = 6
+
+[[module]]
+path = "crates/rimz/src/worktree.rs"
+allowed-imports = [
+    "agents",
+    "config",
+    "forge",
+    "ids",
+    "pane",
+    "store::runtime",
+    "workspace",
+]
+pub-budget = 65
