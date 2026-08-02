@@ -8,7 +8,6 @@
 
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
@@ -31,7 +30,6 @@ mod hook_install;
 mod install;
 mod lifecycle;
 mod owner;
-mod payload_ids;
 mod proctree;
 
 #[cfg(test)]
@@ -41,9 +39,8 @@ use binding::{enrich_pane_stamp_from_cache, recover_focused_pane_binding};
 pub(in crate::cli) use hook_install::ensure_detected_agent_hooks;
 pub(crate) use install::uninstall_managed_hooks;
 use install::{run_install, run_uninstall};
-pub(crate) use lifecycle::handle_lifecycle_hook;
+use lifecycle::handle_lifecycle_hook;
 use owner::{attach_agent_owner, attach_agent_pane, hook_agent_pid};
-use payload_ids::spawn_refresh_detached;
 use proctree::sibling_agent_pins;
 pub(super) const FOCUSED_PANE_BIND_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(1_000);

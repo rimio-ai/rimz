@@ -82,7 +82,7 @@ allowed-imports = [
     "workspace",
     "worktree",
 ]
-pub-budget = 991
+pub-budget = 988
 
 [[module]]
 path = "crates/rimz/src/config"

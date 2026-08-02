@@ -237,8 +237,6 @@ pub(crate) struct AgentLaunchArgs {
     /// How `--print` renders the supervised run (text, json, stream-json).
     #[arg(long, value_name = "FORMAT", requires = "print")]
     pub(crate) output_format: Option<OutputFormat>,
-    #[arg(skip)]
-    pub(crate) stream_text: bool,
     /// How `--print` reads the prompt (text positional plus explicit stdin, or
     /// stream-json on stdin).
     #[arg(long, value_name = "FORMAT", requires = "print")]
@@ -255,12 +253,6 @@ pub(crate) struct AgentLaunchArgs {
     /// Total agent turns allowed while making --verify pass.
     #[arg(long, value_name = "N", requires = "verify")]
     pub(crate) max_attempts: Option<u32>,
-    /// Internal loop-scheduler placement: target the rimzd loop zone.
-    #[arg(skip)]
-    pub(crate) loop_zone: bool,
-    /// Internal loop-task provenance for supervised run records.
-    #[arg(skip)]
-    pub(crate) loop_task: Option<String>,
     /// Extra argv appended to every launched agent cell.
     #[arg(last = true, conflicts_with = "resume")]
     pub(crate) passthrough: Vec<String>,
@@ -797,8 +789,8 @@ fn into_supervised_request(
         retries: args.launch.retries.unwrap_or(0),
         verify: args.launch.verify,
         max_attempts: args.launch.max_attempts,
-        loop_zone: args.launch.loop_zone,
-        loop_task: args.launch.loop_task,
+        loop_zone: false,
+        loop_task: None,
         passthrough: args.launch.passthrough,
         managed_launch: rimz::agents::ManagedLaunchState::PendingResolution,
     };
@@ -806,7 +798,7 @@ fn into_supervised_request(
         request,
         supervised::SupervisedPresentation {
             output_format,
-            stream_text: args.launch.stream_text,
+            stream_text: false,
         },
     ))
 }

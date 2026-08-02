@@ -28,7 +28,7 @@ pub(crate) fn role(role: StateRole) -> anstyle::Style {
         StateRole::Success => palette::good(),
         StateRole::Working => palette::cool(),
         StateRole::Waiting => palette::warn(),
-        StateRole::Paused => palette::paused(),
+        StateRole::Paused => palette::warn(),
         StateRole::Failed | StateRole::Unavailable => palette::alarm(),
         StateRole::Neutral => palette::muted(),
     }
