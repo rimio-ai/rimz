@@ -23,7 +23,7 @@ pub(super) struct ModuleRule {
     pub(super) path: PathBuf,
     #[serde(default)]
     pub(super) allowed_imports: Vec<String>,
-    pub(super) pub_budget: usize,
+    pub(super) surface_budget: usize,
     #[serde(skip)]
     pub(super) config_line: usize,
 }
@@ -43,15 +43,21 @@ pub(super) fn load(path: &Path) -> Result<Option<Target>> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
     };
-    let mut target: Target =
+    let document: toml::Value =
         toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
-    if target.version != 1 {
+    let version = document
+        .get("version")
+        .and_then(toml::Value::as_integer)
+        .unwrap_or_default();
+    if version != 2 {
         bail!(
-            "{} has unsupported version {}; expected 1",
+            "{} has unsupported version {}; expected 2 (reseed version 1 targets with `cargo xtask atlas conform --init`)",
             path.display(),
-            target.version
+            version
         );
     }
+    let mut target: Target =
+        toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
     let module_lines = section_lines(&raw, "[[module]]");
     let strangler_lines = section_lines(&raw, "[[strangler]]");
     for (index, module) in target.modules.iter_mut().enumerate() {
@@ -86,11 +92,11 @@ mod tests {
     fn schema_accepts_kebab_case_module_fields() {
         let target: Target = toml::from_str(
             r#"
-version = 1
+version = 2
 [[module]]
 path = "crates/rimz/src/cli"
 allowed-imports = ["agents"]
-pub-budget = 10
+surface-budget = 10
 [[strangler]]
 symbol = "old"
 path = "crates/rimz/src/cli/mod.rs"
@@ -99,6 +105,24 @@ baseline = 2
         )
         .unwrap();
         assert_eq!(target.modules[0].allowed_imports, ["agents"]);
+        assert_eq!(target.modules[0].surface_budget, 10);
         assert_eq!(target.strangler[0].baseline, 2);
+    }
+
+    #[test]
+    fn version_one_targets_are_rejected_before_schema_deserialization() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("target.toml");
+        fs::write(
+            &path,
+            "version = 1\n[[module]]\npath = \"src\"\npub-budget = 1\n",
+        )
+        .unwrap();
+        let error = load(&path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported version 1; expected 2")
+        );
     }
 }

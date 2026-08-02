@@ -1,4 +1,4 @@
-version = 1
+version = 2
 strangler = []
 
 [[module]]
@@ -7,7 +7,7 @@ allowed-imports = [
     "ids",
     "store",
 ]
-pub-budget = 6
+surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/agents"
@@ -23,17 +23,17 @@ allowed-imports = [
     "store",
     "transcript",
 ]
-pub-budget = 2152
+surface-budget = 991
 
 [[module]]
 path = "crates/rimz/src/bin"
 allowed-imports = ["testkit::sandbox"]
-pub-budget = 0
+surface-budget = 0
 
 [[module]]
 path = "crates/rimz/src/build_id.rs"
 allowed-imports = []
-pub-budget = 7
+surface-budget = 7
 
 [[module]]
 path = "crates/rimz/src/channel.rs"
@@ -43,12 +43,12 @@ allowed-imports = [
     "store::paths",
     "workspace",
 ]
-pub-budget = 13
+surface-budget = 13
 
 [[module]]
 path = "crates/rimz/src/child_process.rs"
 allowed-imports = ["(crate)"]
-pub-budget = 14
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/cli"
@@ -82,7 +82,7 @@ allowed-imports = [
     "workspace",
     "worktree",
 ]
-pub-budget = 988
+surface-budget = 26
 
 [[module]]
 path = "crates/rimz/src/config"
@@ -98,7 +98,7 @@ allowed-imports = [
     "store::atomic",
     "trust",
 ]
-pub-budget = 227
+surface-budget = 12
 
 [[module]]
 path = "crates/rimz/src/config.rs"
@@ -106,7 +106,7 @@ allowed-imports = [
     "store::parse_cache",
     "store::paths",
 ]
-pub-budget = 176
+surface-budget = 176
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -114,7 +114,7 @@ allowed-imports = [
     "child_process",
     "config",
 ]
-pub-budget = 7
+surface-budget = 7
 
 [[module]]
 path = "crates/rimz/src/daemon_view.rs"
@@ -125,7 +125,7 @@ allowed-imports = [
     "pane",
     "store",
 ]
-pub-budget = 20
+surface-budget = 20
 
 [[module]]
 path = "crates/rimz/src/diag"
@@ -136,22 +136,22 @@ allowed-imports = [
     "sidebar::presence",
     "store",
 ]
-pub-budget = 79
+surface-budget = 79
 
 [[module]]
 path = "crates/rimz/src/diag.rs"
 allowed-imports = ["ids"]
-pub-budget = 25
+surface-budget = 25
 
 [[module]]
 path = "crates/rimz/src/disk_usage.rs"
 allowed-imports = ["store"]
-pub-budget = 7
+surface-budget = 7
 
 [[module]]
 path = "crates/rimz/src/forge.rs"
 allowed-imports = ["store::snapshot"]
-pub-budget = 39
+surface-budget = 39
 
 [[module]]
 path = "crates/rimz/src/harness"
@@ -167,17 +167,17 @@ allowed-imports = [
     "trust",
     "workspace",
 ]
-pub-budget = 634
+surface-budget = 613
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
 allowed-imports = []
-pub-budget = 38
+surface-budget = 38
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
 allowed-imports = []
-pub-budget = 9
+surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/lib.rs"
@@ -190,12 +190,12 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-pub-budget = 98
+surface-budget = 0
 
 [[module]]
 path = "crates/rimz/src/main.rs"
 allowed-imports = ["observability"]
-pub-budget = 0
+surface-budget = 0
 
 [[module]]
 path = "crates/rimz/src/message"
@@ -208,7 +208,7 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-pub-budget = 77
+surface-budget = 73
 
 [[module]]
 path = "crates/rimz/src/message.rs"
@@ -216,7 +216,7 @@ allowed-imports = [
     "agents",
     "ids",
 ]
-pub-budget = 89
+surface-budget = 89
 
 [[module]]
 path = "crates/rimz/src/mux"
@@ -232,7 +232,7 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-pub-budget = 492
+surface-budget = 275
 
 [[module]]
 path = "crates/rimz/src/observability"
@@ -240,12 +240,12 @@ allowed-imports = [
     "config",
     "workspace",
 ]
-pub-budget = 12
+surface-budget = 0
 
 [[module]]
 path = "crates/rimz/src/observability.rs"
 allowed-imports = []
-pub-budget = 11
+surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/osc.rs"
@@ -253,7 +253,7 @@ allowed-imports = [
     "config",
     "ids",
 ]
-pub-budget = 4
+surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/pane"
@@ -261,12 +261,12 @@ allowed-imports = [
     "ids",
     "proc",
 ]
-pub-budget = 15
+surface-budget = 15
 
 [[module]]
 path = "crates/rimz/src/pane.rs"
 allowed-imports = ["ids"]
-pub-budget = 11
+surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/proc"
@@ -275,7 +275,7 @@ allowed-imports = [
     "ids",
     "pane",
 ]
-pub-budget = 122
+surface-budget = 94
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
@@ -291,7 +291,7 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-pub-budget = 11
+surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/remote"
@@ -304,7 +304,7 @@ allowed-imports = [
     "update",
     "web",
 ]
-pub-budget = 217
+surface-budget = 217
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
@@ -314,7 +314,7 @@ allowed-imports = [
     "room::session",
     "store",
 ]
-pub-budget = 15
+surface-budget = 15
 
 [[module]]
 path = "crates/rimz/src/room"
@@ -329,7 +329,7 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-pub-budget = 62
+surface-budget = 51
 
 [[module]]
 path = "crates/rimz/src/sidebar"
@@ -350,7 +350,7 @@ allowed-imports = [
     "workspace",
     "worktree",
 ]
-pub-budget = 580
+surface-budget = 524
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
@@ -370,12 +370,12 @@ allowed-imports = [
     "theme",
     "tui",
 ]
-pub-budget = 767
+surface-budget = 189
 
 [[module]]
 path = "crates/rimz/src/sock.rs"
 allowed-imports = []
-pub-budget = 14
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/store"
@@ -399,7 +399,7 @@ allowed-imports = [
     "theme",
     "workspace",
 ]
-pub-budget = 794
+surface-budget = 412
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -407,7 +407,7 @@ allowed-imports = [
     "agents",
     "config",
 ]
-pub-budget = 88
+surface-budget = 40
 
 [[module]]
 path = "crates/rimz/src/transcript.rs"
@@ -415,7 +415,7 @@ allowed-imports = [
     "ids",
     "store",
 ]
-pub-budget = 15
+surface-budget = 15
 
 [[module]]
 path = "crates/rimz/src/trust.rs"
@@ -426,22 +426,22 @@ allowed-imports = [
     "store::atomic",
     "store::paths",
 ]
-pub-budget = 37
+surface-budget = 37
 
 [[module]]
 path = "crates/rimz/src/tui.rs"
 allowed-imports = []
-pub-budget = 15
+surface-budget = 15
 
 [[module]]
 path = "crates/rimz/src/uninstall.rs"
 allowed-imports = ["store"]
-pub-budget = 10
+surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/update.rs"
 allowed-imports = []
-pub-budget = 18
+surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/web"
@@ -453,7 +453,7 @@ allowed-imports = [
     "sidebar_pane::pixel",
     "store",
 ]
-pub-budget = 112
+surface-budget = 52
 
 [[module]]
 path = "crates/rimz/src/workspace.rs"
@@ -461,7 +461,7 @@ allowed-imports = [
     "ids",
     "store::workspace_record",
 ]
-pub-budget = 21
+surface-budget = 21
 
 [[module]]
 path = "crates/rimz/src/worktree"
@@ -469,7 +469,7 @@ allowed-imports = [
     "config",
     "forge",
 ]
-pub-budget = 6
+surface-budget = 0
 
 [[module]]
 path = "crates/rimz/src/worktree.rs"
@@ -482,4 +482,4 @@ allowed-imports = [
     "store::runtime",
     "workspace",
 ]
-pub-budget = 65
+surface-budget = 65
