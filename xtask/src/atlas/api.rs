@@ -373,7 +373,7 @@ fn count_occurrences(
         std::iter::once(item.module.as_str()).chain(production.modules.iter().map(String::as_str)),
     );
     let effective_reach = mod_index.effective_reach(defining_file, item);
-    let over_published = is_strictly_broader(&effective_reach, &implied_reach);
+    let over_published = is_over_published(&effective_reach, &implied_reach);
     ItemOccurrence {
         module: item.module.clone(),
         name: item.name.clone(),
@@ -434,7 +434,7 @@ fn propagate_signature_reach(items: &[PubItem], occurrences: &mut [ItemOccurrenc
         }
     }
     for item in occurrences {
-        item.over_published = is_strictly_broader(&item.effective_reach, &item.implied_reach);
+        item.over_published = is_over_published(&item.effective_reach, &item.implied_reach);
     }
 }
 
@@ -457,7 +457,7 @@ fn common_reach<'a>(modules: impl Iterator<Item = &'a str>) -> String {
     common.join("::")
 }
 
-fn is_strictly_broader(reach: &str, required: &str) -> bool {
+fn is_over_published(reach: &str, required: &str) -> bool {
     reach != EXTERNAL_REACH && reach != required && module_is_within(required, reach)
 }
 
@@ -1036,8 +1036,8 @@ mod tests {
 
     #[test]
     fn crate_external_reach_is_not_assessed_for_over_publication() {
-        assert!(!is_strictly_broader(EXTERNAL_REACH, "store"));
-        assert!(!is_strictly_broader(EXTERNAL_REACH, EXTERNAL_REACH));
+        assert!(!is_over_published(EXTERNAL_REACH, "store"));
+        assert!(!is_over_published(EXTERNAL_REACH, EXTERNAL_REACH));
 
         let mut occurrence = item("public_api", 1);
         occurrence.effective_reach = EXTERNAL_REACH.to_owned();
