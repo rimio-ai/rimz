@@ -11,7 +11,7 @@ use super::modules::{
 use super::sources::{self, Source};
 use super::syntax;
 use super::target::{self, ModuleRule, TARGET_FILE, Target};
-use super::{set_once, validate_scope, value};
+use super::{REPORT_VERSION, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
 
@@ -34,7 +34,7 @@ Split Rust modules (`foo.rs` plus `foo/`) remain separate filesystem rules.
                  absolute as-is, relative from the repository root
   --path <path>  root-relative init subtree (default crates/rimz/src)
   --verbose      show every rule instead of folding rules exactly at budget
-  --json         versioned JSON agent contract (v1)
+  --json         versioned JSON agent contract (v2)
 
 Schema:
   version = 1
@@ -144,7 +144,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
-                        "version": 1,
+                        "version": REPORT_VERSION,
                         "verb": "conform",
                         "target": target_path,
                         "configured": false,
@@ -474,7 +474,7 @@ fn evaluate(
         });
     }
     Ok(Report {
-        version: 1,
+        version: REPORT_VERSION,
         verb: "conform",
         target: target_path.to_path_buf(),
         default_target,
@@ -722,7 +722,7 @@ mod tests {
             config_line: 1,
         };
         let report = Report {
-            version: 1,
+            version: REPORT_VERSION,
             verb: "conform",
             target: PathBuf::from("target.toml"),
             default_target: false,

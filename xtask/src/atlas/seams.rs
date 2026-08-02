@@ -8,7 +8,7 @@ use super::history::{self, CochangeEdge};
 use super::modules::{crate_module_for_path, module_for_path, workspace_crate_names};
 use super::sources;
 use super::syntax;
-use super::{positive_usize, set_once, validate_scope, value};
+use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
 const DEFAULT_TOP: usize = 15;
@@ -28,7 +28,7 @@ module's pairwise co-change fanout folds into one annotated hub row.
   --since <ref>          restrict co-change to <ref>..HEAD (excludes --window)
   --max-commit-files N   omit commits broader than N Rust sources (default 10)
   --min-cochange N       co-change and divergence threshold (default 3)
-  --json                 versioned JSON agent contract (v1)";
+  --json                 versioned JSON agent contract (v2)";
 
 #[derive(Debug)]
 struct Args {
@@ -389,7 +389,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     cochange_edges.truncate(args.top);
     divergence.truncate(args.top);
     Ok(Report {
-        version: 1,
+        version: REPORT_VERSION,
         verb: "seams",
         path: args.path.clone(),
         requested_module: args.module.clone(),

@@ -22,6 +22,8 @@ pub(super) struct PubItem {
     pub(super) line: usize,
     pub(super) declared: String,
     pub(super) reach: String,
+    #[serde(skip)]
+    pub(super) signature_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -175,6 +177,7 @@ fn collect_public_items(
                             enclosing_reach,
                             module,
                         ),
+                        signature_names: signature_type_names(&method.sig),
                     });
                 }
             }
@@ -195,6 +198,7 @@ fn collect_public_items(
                     line: item.ident.span().start().line,
                     declared: render_visibility(&item.vis),
                     reach: trait_reach.clone(),
+                    signature_names: Vec::new(),
                 });
                 for method in &item.items {
                     if let TraitItem::Fn(method) = method {
@@ -206,6 +210,7 @@ fn collect_public_items(
                             line: method.sig.ident.span().start().line,
                             declared: "inherited".to_owned(),
                             reach: trait_reach.clone(),
+                            signature_names: signature_type_names(&method.sig),
                         });
                     }
                 }
@@ -232,6 +237,7 @@ fn collect_public_items(
                     line: item.ident.span().start().line,
                     declared: render_visibility(&item.vis),
                     reach: module_reach.clone(),
+                    signature_names: Vec::new(),
                 });
             }
             if let Some((_, items)) = &item.content {
@@ -239,13 +245,14 @@ fn collect_public_items(
             }
             continue;
         }
-        let (visibility, name, kind, params, line) = match item {
+        let (visibility, name, kind, params, line, signature_names) = match item {
             Item::Const(item) => (
                 &item.vis,
                 item.ident.to_string(),
                 "const",
                 None,
                 item.ident.span().start().line,
+                type_names(&item.ty),
             ),
             Item::Enum(item) => (
                 &item.vis,
@@ -253,6 +260,11 @@ fn collect_public_items(
                 "enum",
                 None,
                 item.ident.span().start().line,
+                item.variants
+                    .iter()
+                    .flat_map(|variant| variant.fields.iter())
+                    .flat_map(|field| type_names(&field.ty))
+                    .collect(),
             ),
             Item::Fn(item) => (
                 &item.vis,
@@ -260,6 +272,7 @@ fn collect_public_items(
                 "fn",
                 Some(item.sig.inputs.len()),
                 item.sig.ident.span().start().line,
+                signature_type_names(&item.sig),
             ),
             Item::Static(item) => (
                 &item.vis,
@@ -267,6 +280,7 @@ fn collect_public_items(
                 "static",
                 None,
                 item.ident.span().start().line,
+                type_names(&item.ty),
             ),
             Item::Struct(item) => (
                 &item.vis,
@@ -274,6 +288,10 @@ fn collect_public_items(
                 "struct",
                 None,
                 item.ident.span().start().line,
+                item.fields
+                    .iter()
+                    .flat_map(|field| type_names(&field.ty))
+                    .collect(),
             ),
             Item::TraitAlias(item) => (
                 &item.vis,
@@ -281,6 +299,7 @@ fn collect_public_items(
                 "trait-alias",
                 None,
                 item.ident.span().start().line,
+                Vec::new(),
             ),
             Item::Type(item) => (
                 &item.vis,
@@ -288,6 +307,7 @@ fn collect_public_items(
                 "type",
                 None,
                 item.ident.span().start().line,
+                type_names(&item.ty),
             ),
             Item::Union(item) => (
                 &item.vis,
@@ -295,6 +315,11 @@ fn collect_public_items(
                 "union",
                 None,
                 item.ident.span().start().line,
+                item.fields
+                    .named
+                    .iter()
+                    .flat_map(|field| type_names(&field.ty))
+                    .collect(),
             ),
             Item::Use(item) if is_boundary_visible(&item.vis) => {
                 let mut names = Vec::new();
@@ -312,6 +337,7 @@ fn collect_public_items(
                             enclosing_reach,
                             module,
                         ),
+                        signature_names: Vec::new(),
                     });
                 }
                 continue;
@@ -331,8 +357,35 @@ fn collect_public_items(
                     enclosing_reach,
                     module,
                 ),
+                signature_names,
             });
         }
+    }
+}
+
+fn signature_type_names(signature: &syn::Signature) -> Vec<String> {
+    let mut collector = TypeNameCollector::default();
+    collector.visit_signature(signature);
+    collector.names
+}
+
+fn type_names(ty: &syn::Type) -> Vec<String> {
+    let mut collector = TypeNameCollector::default();
+    collector.visit_type(ty);
+    collector.names
+}
+
+#[derive(Default)]
+struct TypeNameCollector {
+    names: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for TypeNameCollector {
+    fn visit_type_path(&mut self, ty: &'ast syn::TypePath) {
+        if let Some(segment) = ty.path.segments.last() {
+            self.names.push(segment.ident.to_string());
+        }
+        visit::visit_type_path(self, ty);
     }
 }
 
