@@ -12,7 +12,7 @@ use super::metrics::{self, FunctionMetric};
 use super::modules::module_for_path;
 use super::sources;
 use super::syntax;
-use super::{finite_nonnegative, positive_usize, set_once, validate_scope, value};
+use super::{REPORT_VERSION, finite_nonnegative, positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
 
@@ -40,7 +40,7 @@ Requires rust-code-analysis-cli (`cargo install rust-code-analysis-cli --locked`
   --shallow-occ N        shallow occurrence/item ceiling (default 3)
   --since <ref>          add code and public-item deltas
   --verbose              list top offender functions for shown modules
-  --json                 versioned JSON agent contract (v1)";
+  --json                 versioned JSON agent contract (v2)";
 
 #[derive(Debug)]
 struct Args {
@@ -376,7 +376,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         Vec::new()
     };
     Ok(Report {
-        version: 1,
+        version: REPORT_VERSION,
         verb: "rank",
         path: args.path.clone(),
         history_commits: pace.commits,

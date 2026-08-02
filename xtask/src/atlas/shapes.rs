@@ -7,7 +7,7 @@ use serde::Serialize;
 use super::modules::module_for_path;
 use super::sources;
 use super::syntax::{self, FnBody};
-use super::{finite_nonnegative, positive_usize, set_once, validate_scope, value};
+use super::{REPORT_VERSION, finite_nonnegative, positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
 const MIN_SHARED_CALLEES: usize = 3;
@@ -27,7 +27,7 @@ Clusters spanning more modules and files rank before member-count × mean-sloc.
   --top N         clusters to report (default 10)
   --min-sloc N    minimum function source lines (default 40)
   --similarity S  Jaccard threshold from 0 through 1 (default 0.35)
-  --json          versioned JSON agent contract (v1)";
+  --json          versioned JSON agent contract (v2)";
 
 #[derive(Debug)]
 struct Args {
@@ -181,7 +181,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let total_clusters = clusters.len();
     clusters.truncate(args.top);
     Ok(Report {
-        version: 1,
+        version: REPORT_VERSION,
         verb: "shapes",
         path: args.path.clone(),
         eligible_functions: functions.len(),

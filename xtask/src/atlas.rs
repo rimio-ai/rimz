@@ -18,6 +18,8 @@ mod sources;
 mod syntax;
 mod target;
 
+pub(super) const REPORT_VERSION: u8 = 2;
+
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Result, bail};
