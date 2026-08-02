@@ -175,7 +175,7 @@ pub(super) fn launch_layout(
         .filter(|name| !name.is_empty())
         .map(|name| rimz::worktree::parse_requested_name(name).map(|requested| requested.name))
         .transpose()?;
-    let cells = cohort_cells(&layout);
+    let cells = cohort_cells(layout);
     if let Some(name) = explicit_worktree_name.as_deref()
         && args.launch.cohort.from_pr.is_none()
         && (team_name.is_some() || cells.len() >= 2)
@@ -199,7 +199,7 @@ pub(super) fn launch_layout(
                     allow_in_place,
                     &ctx,
                     &machine_config,
-                    &teams,
+                    teams,
                     layout.clone(),
                     team_name.clone(),
                     single_cell,
