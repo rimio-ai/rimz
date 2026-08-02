@@ -11,6 +11,7 @@ use crate::{runner, source_files};
 
 use super::modules::module_for_path;
 use super::sources::Source;
+use super::syntax::FileSyntax;
 
 const OUTPUT_DIR: &str = "target/atlas-complexity";
 
@@ -68,7 +69,12 @@ struct LocMetrics {
     sloc: f64,
 }
 
-pub(super) fn analyze(root: &Path, scope: &Path, sources: &[Source]) -> Result<MetricsReport> {
+pub(super) fn analyze(
+    root: &Path,
+    scope: &Path,
+    sources: &[Source],
+    syntax_files: &[FileSyntax],
+) -> Result<MetricsReport> {
     ensure_prerequisite()?;
     let files = sources
         .iter()
@@ -122,10 +128,11 @@ pub(super) fn analyze(root: &Path, scope: &Path, sources: &[Source]) -> Result<M
         if source_files::is_test_file(&path) {
             continue;
         }
-        let marker = fs::read_to_string(root.join(&path))
-            .ok()
-            .and_then(|source| source_files::inline_test_marker_line(&source));
-        collect_functions(&space, &path, scope, marker, &mut functions);
+        let test_regions = syntax_files
+            .iter()
+            .find(|file| file.path == path)
+            .map_or(&[][..], |file| file.test_regions.as_slice());
+        collect_functions(&space, &path, scope, test_regions, &mut functions);
     }
     let mut module_scores = BTreeMap::<String, f64>::new();
     for function in &functions {
@@ -175,11 +182,14 @@ fn collect_functions(
     space: &Space,
     path: &Path,
     scope: &Path,
-    inline_test_marker: Option<u64>,
+    test_regions: &[std::ops::Range<usize>],
     output: &mut Vec<FunctionMetric>,
 ) {
     if matches!(space.kind.as_str(), "function" | "closure") {
-        if inline_test_marker.is_some_and(|line| space.start_line >= line) {
+        if test_regions
+            .iter()
+            .any(|region| region.contains(&(space.start_line as usize)))
+        {
             return;
         }
         let cyclomatic = space.metrics.cyclomatic.sum;
@@ -199,7 +209,7 @@ fn collect_functions(
         return;
     }
     for child in &space.spaces {
-        collect_functions(child, path, scope, inline_test_marker, output);
+        collect_functions(child, path, scope, test_regions, output);
     }
 }
 
@@ -319,7 +329,7 @@ mod tests {
             &root,
             Path::new("src/demo.rs"),
             Path::new("src"),
-            None,
+            &[],
             &mut functions,
         );
         assert_eq!(functions.len(), 2);
@@ -357,7 +367,7 @@ mod tests {
             &root,
             Path::new("src/example.rs"),
             Path::new("src"),
-            None,
+            &[],
             &mut functions,
         );
         assert_eq!(root.metrics.loc.sloc, 20.0);

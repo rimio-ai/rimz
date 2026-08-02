@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -36,32 +37,19 @@ pub(crate) fn is_test_file(path: &Path) -> bool {
             .any(|component| component.as_os_str() == OsStr::new("tests"))
 }
 
-pub(crate) fn inline_test_marker_line(source: &str) -> Option<u64> {
-    let mut offset = 0;
-    for (index, line) in source.split_inclusive('\n').enumerate() {
-        if line.trim() == "#[cfg(test)]" && trailing_test_region(source, offset) {
-            return Some(index as u64 + 1);
-        }
-        offset += line.len();
-    }
-    None
-}
-
-pub(crate) fn split_rust_sloc(source: &str) -> (u64, u64) {
+pub(crate) fn split_rust_sloc(source: &str, test_regions: &[Range<usize>]) -> (u64, u64) {
     let total = rust_sloc(source);
-    let Some(marker) = inline_test_marker_line(source) else {
-        return (total, 0);
-    };
-    let code_end = if marker == 1 {
-        0
-    } else {
-        source
-            .match_indices('\n')
-            .nth(marker as usize - 2)
-            .map_or(source.len(), |(index, _)| index + 1)
-    };
-    let code = rust_sloc(&source[..code_end]);
-    (code, total.saturating_sub(code))
+    let test_source = source
+        .split_inclusive('\n')
+        .enumerate()
+        .filter(|(index, _)| {
+            let line = index + 1;
+            test_regions.iter().any(|region| region.contains(&line))
+        })
+        .map(|(_, line)| line)
+        .collect::<String>();
+    let tests = rust_sloc(&test_source);
+    (total.saturating_sub(tests), tests)
 }
 
 pub(crate) fn rust_sloc(source: &str) -> u64 {
@@ -165,203 +153,6 @@ pub(crate) fn rust_sloc(source: &str) -> u64 {
     code_lines + u64::from(line_has_code)
 }
 
-fn trailing_test_region(source: &str, marker_offset: usize) -> bool {
-    let mut offset = marker_offset;
-    loop {
-        let Some(after_cfg) = consume_cfg_test_line(source, offset) else {
-            return false;
-        };
-        offset = skip_blank_and_attribute_lines(source, after_cfg);
-        let Some(after_module) = consume_mod_item(source, offset) else {
-            return false;
-        };
-        offset = skip_trivia(source, after_module);
-        if offset == source.len() {
-            return true;
-        }
-        if !source[offset..].starts_with("#[cfg(test)]") {
-            return false;
-        }
-    }
-}
-
-fn consume_cfg_test_line(source: &str, offset: usize) -> Option<usize> {
-    let line_end = source[offset..]
-        .find('\n')
-        .map_or(source.len(), |end| offset + end + 1);
-    (source[offset..line_end].trim() == "#[cfg(test)]").then_some(line_end)
-}
-
-fn skip_blank_and_attribute_lines(source: &str, mut offset: usize) -> usize {
-    loop {
-        let line_end = source[offset..]
-            .find('\n')
-            .map_or(source.len(), |end| offset + end + 1);
-        let trimmed = source[offset..line_end].trim();
-        if trimmed.is_empty() || (trimmed.starts_with("#[") && trimmed.ends_with(']')) {
-            offset = line_end;
-            if offset == source.len() {
-                return offset;
-            }
-        } else {
-            return offset;
-        }
-    }
-}
-
-fn consume_mod_item(source: &str, offset: usize) -> Option<usize> {
-    let line_end = source[offset..]
-        .find('\n')
-        .map_or(source.len(), |end| offset + end + 1);
-    let line = source[offset..line_end].trim();
-    let declaration = strip_visibility(line).strip_prefix("mod ")?;
-    let delimiter = declaration.find(['{', ';'])?;
-    let name = declaration[..delimiter].trim();
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|character| character == '_' || character.is_alphanumeric())
-    {
-        return None;
-    }
-    match declaration.as_bytes()[delimiter] {
-        b';' => (declaration[delimiter + 1..].trim().is_empty()).then_some(line_end),
-        b'{' => {
-            let brace = source[offset..line_end].find('{')? + offset;
-            matching_closing_brace(source, brace).map(|closing| closing + 1)
-        }
-        _ => None,
-    }
-}
-
-fn strip_visibility(line: &str) -> &str {
-    let line = line.strip_prefix("pub ").unwrap_or(line);
-    if let Some(rest) = line.strip_prefix("pub(")
-        && let Some(end) = rest.find(')')
-    {
-        return rest[end + 1..].trim_start();
-    }
-    line
-}
-
-fn skip_trivia(source: &str, mut offset: usize) -> usize {
-    let bytes = source.as_bytes();
-    loop {
-        while bytes.get(offset).is_some_and(u8::is_ascii_whitespace) {
-            offset += 1;
-        }
-        if bytes
-            .get(offset..)
-            .is_some_and(|rest| rest.starts_with(b"//"))
-        {
-            offset = source[offset..]
-                .find('\n')
-                .map_or(source.len(), |end| offset + end + 1);
-        } else if bytes
-            .get(offset..)
-            .is_some_and(|rest| rest.starts_with(b"/*"))
-        {
-            let Some(end) = source[offset + 2..].find("*/") else {
-                return source.len();
-            };
-            offset += end + 4;
-        } else {
-            return offset;
-        }
-    }
-}
-
-fn matching_closing_brace(source: &str, opening: usize) -> Option<usize> {
-    let bytes = source.as_bytes();
-    let mut depth = 0_u32;
-    let mut block_comment_depth = 0_u32;
-    let mut line_comment = false;
-    let mut string = false;
-    let mut string_escape = false;
-    let mut raw_string_hashes = None;
-    let mut character_end = None;
-    let mut index = opening;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if line_comment {
-            line_comment = byte != b'\n';
-            index += 1;
-            continue;
-        }
-        if block_comment_depth > 0 {
-            if bytes[index..].starts_with(b"/*") {
-                block_comment_depth += 1;
-                index += 2;
-            } else if bytes[index..].starts_with(b"*/") {
-                block_comment_depth -= 1;
-                index += 2;
-            } else {
-                index += 1;
-            }
-            continue;
-        }
-        if let Some(end) = character_end {
-            if index == end {
-                character_end = None;
-            }
-            index += 1;
-            continue;
-        }
-        if let Some(hashes) = raw_string_hashes {
-            if byte == b'"'
-                && bytes
-                    .get(index + 1..index + 1 + hashes)
-                    .is_some_and(|suffix| suffix.iter().all(|byte| *byte == b'#'))
-            {
-                raw_string_hashes = None;
-                index += hashes + 1;
-            } else {
-                index += 1;
-            }
-            continue;
-        }
-        if string {
-            if string_escape {
-                string_escape = false;
-            } else if byte == b'\\' {
-                string_escape = true;
-            } else if byte == b'"' {
-                string = false;
-            }
-            index += 1;
-            continue;
-        }
-        if bytes[index..].starts_with(b"//") {
-            line_comment = true;
-            index += 2;
-        } else if bytes[index..].starts_with(b"/*") {
-            block_comment_depth = 1;
-            index += 2;
-        } else if let Some((prefix_len, hashes)) = raw_string_start(&bytes[index..]) {
-            raw_string_hashes = Some(hashes);
-            index += prefix_len;
-        } else if byte == b'"' {
-            string = true;
-            index += 1;
-        } else if byte == b'\'' {
-            character_end = character_literal_end(bytes, index);
-            index += 1;
-        } else if byte == b'{' {
-            depth += 1;
-            index += 1;
-        } else if byte == b'}' {
-            depth -= 1;
-            if depth == 0 {
-                return Some(index);
-            }
-            index += 1;
-        } else {
-            index += 1;
-        }
-    }
-    None
-}
-
 pub(crate) fn character_literal_end(bytes: &[u8], opening: usize) -> Option<usize> {
     let mut escaped = false;
     for (relative, byte) in bytes.get(opening + 1..)?.iter().copied().enumerate() {
@@ -441,7 +232,14 @@ mod tests {
     fn rust_sloc_splits_trailing_inline_tests() {
         let source = "fn live() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn works() {}\n}\n";
         assert_eq!(rust_sloc(source), 6);
-        assert_eq!(split_rust_sloc(source), (1, 5));
+        assert_eq!(split_rust_sloc(source, &[2..7]), (1, 5));
+    }
+
+    #[test]
+    fn rust_sloc_splits_multiple_inline_test_regions() {
+        let source =
+            "fn one() {}\n#[cfg(test)]\nmod first {}\nfn two() {}\n#[cfg(test)]\nmod second {}\n";
+        assert_eq!(split_rust_sloc(source, &[2..4, 5..7]), (2, 4));
     }
 
     #[test]
