@@ -9,7 +9,7 @@ use crate::source_files;
 use super::api::{OccurrenceCorpus, median};
 use super::history;
 use super::metrics::{self, FunctionMetric};
-use super::modules::module_for_path;
+use super::modules::{crate_module_for_row, module_for_path};
 use super::sources;
 use super::syntax;
 use super::{REPORT_VERSION, finite_nonnegative, positive_usize, set_once, validate_scope, value};
@@ -23,7 +23,7 @@ Ranks modules by churn-weighted size (code × churn%); cx breaks ties.
 the module's functions; functions below the warning thresholds contribute zero.
 Flags: pin = churn% >= threshold and test/code below threshold; hot = non-noisy
 pace >= threshold; shallow = wide, thin, and low-use public surface; hub = wide,
-thin, and high-use public surface. Occurrence counts are whole-word identifiers
+thin, and high-use escaping surface. Name matches are whole-word identifiers
 outside the defining file-module, not resolved caller counts.
 Requires rust-code-analysis-cli (`cargo install rust-code-analysis-cli --locked`).
 
@@ -35,8 +35,8 @@ Requires rust-code-analysis-cli (`cargo install rust-code-analysis-cli --locked`
   --pin-churn N          pin churn-percent threshold (default 3)
   --pin-tc N             pin test/code ceiling (default 0.30)
   --hot-pace N           hot pace threshold (default 1.5)
-  --shallow-pub N        shallow public-item threshold (default 20)
-  --shallow-locpub N     shallow lines/public ceiling (default 30)
+  --shallow-pub N        shallow escaping-item threshold (default 20)
+  --shallow-locpub N     shallow lines/escaping-item ceiling (default 120)
   --shallow-occ N        shallow occurrence/item ceiling (default 3)
   --since <ref>          add code and public-item deltas
   --verbose              list top offender functions for shown modules
@@ -72,8 +72,9 @@ struct Row {
     code: u64,
     tests: u64,
     pub_items: usize,
-    loc_per_pub: Option<f64>,
-    occurrence_median: f64,
+    escaping_items: usize,
+    loc_per_escape: Option<f64>,
+    name_match_median: f64,
     churn_pct: f64,
     pace: Option<f64>,
     complexity: f64,
@@ -95,6 +96,15 @@ struct Report {
     total_code: u64,
     total_tests: u64,
     total_pub_items: usize,
+    total_escaping_items: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delta_code: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delta_tests: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delta_pub: Option<isize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delta_esc: Option<isize>,
     total_complexity: f64,
     rows: Vec<Row>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -263,7 +273,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         pin_tc: pin_tc.unwrap_or(0.30),
         hot_pace: hot_pace.unwrap_or(1.5),
         shallow_pub: shallow_pub.unwrap_or(20),
-        shallow_locpub: shallow_locpub.unwrap_or(30.0),
+        shallow_locpub: shallow_locpub.unwrap_or(120.0),
         shallow_occ: shallow_occ.unwrap_or(3.0),
         since,
         verbose,
@@ -275,28 +285,41 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let all_sources = sources::all_sources(root, None)?;
     let current_sources = sources::sources_in_scope(&all_sources, &args.path)?;
     let occurrence_corpus = OccurrenceCorpus::new(&all_sources);
+    let all_syntax = syntax::analyze_sources(&all_sources);
+    let mod_index = syntax::ModIndex::new(&all_syntax.files);
     let syntax = syntax::analyze_sources(&current_sources);
     let current_sizes = sizes(&current_sources, &args.path, &syntax.files);
     let current_pub = public_counts(&syntax.files, &args.path);
+    let current_escaping = escaping_counts(&syntax.files, &args.path, &mod_index);
     let current_occurrences = occurrence_medians(&syntax.files, &args.path, &occurrence_corpus);
     let previous = args
         .since
         .as_deref()
         .map(|reference| {
             let all_sources = sources::all_sources(root, Some(reference))?;
-            sources::sources_in_scope(&all_sources, &args.path)
+            let scoped_sources = sources::sources_in_scope(&all_sources, &args.path)?;
+            Ok::<_, anyhow::Error>((all_sources, scoped_sources))
         })
         .transpose()?;
     let previous_syntax = previous
         .as_ref()
-        .map(|sources| syntax::analyze_sources(sources));
+        .map(|(_, sources)| syntax::analyze_sources(sources));
     let previous_sizes = previous
         .as_ref()
         .zip(previous_syntax.as_ref())
-        .map(|(sources, syntax)| sizes(sources, &args.path, &syntax.files));
+        .map(|((_, sources), syntax)| sizes(sources, &args.path, &syntax.files));
     let previous_pub = previous_syntax
         .as_ref()
         .map(|syntax| public_counts(&syntax.files, &args.path));
+    let previous_escaping =
+        previous
+            .as_ref()
+            .zip(previous_syntax.as_ref())
+            .map(|((all_sources, _), scoped_syntax)| {
+                let all_syntax = syntax::analyze_sources(all_sources);
+                let mod_index = syntax::ModIndex::new(&all_syntax.files);
+                escaping_counts(&scoped_syntax.files, &args.path, &mod_index)
+            });
     let pace = history::pace(
         root,
         &args.path,
@@ -310,8 +333,10 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .iter()
         .map(|(module, size)| {
             let pub_items = current_pub.get(module).copied().unwrap_or(0);
-            let loc_per_pub = (pub_items > 0).then_some(size.code as f64 / pub_items as f64);
-            let occurrence_median = current_occurrences.get(module).copied().unwrap_or(0.0);
+            let escaping_items = current_escaping.get(module).copied().unwrap_or(0);
+            let loc_per_escape =
+                (escaping_items > 0).then_some(size.code as f64 / escaping_items as f64);
+            let name_match_median = current_occurrences.get(module).copied().unwrap_or(0.0);
             let history = pace.modules.get(module).cloned().unwrap_or_default();
             let churn_pct = history.share * 100.0;
             let complexity = metrics.module_scores.get(module).copied().unwrap_or(0.0);
@@ -324,9 +349,9 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
                 flags.push("hot");
             }
             if let Some(flag) = surface_flag(
-                pub_items,
-                loc_per_pub,
-                occurrence_median,
+                escaping_items,
+                loc_per_escape,
+                name_match_median,
                 args.shallow_pub,
                 args.shallow_locpub,
                 args.shallow_occ,
@@ -338,8 +363,9 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
                 code: size.code,
                 tests: size.tests,
                 pub_items,
-                loc_per_pub,
-                occurrence_median,
+                escaping_items,
+                loc_per_escape,
+                name_match_median,
                 churn_pct,
                 pace: history.pace,
                 complexity,
@@ -359,7 +385,20 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let total_code = rows.iter().map(|row| row.code).sum();
     let total_tests = rows.iter().map(|row| row.tests).sum();
     let total_pub_items = rows.iter().map(|row| row.pub_items).sum();
+    let total_escaping_items = rows.iter().map(|row| row.escaping_items).sum();
     let total_complexity = rows.iter().map(|row| row.complexity).sum();
+    let delta_code = previous_sizes.as_ref().map(|previous| {
+        total_code as i64 - previous.values().map(|size| size.code).sum::<u64>() as i64
+    });
+    let delta_tests = previous_sizes.as_ref().map(|previous| {
+        total_tests as i64 - previous.values().map(|size| size.tests).sum::<u64>() as i64
+    });
+    let delta_pub = previous_pub
+        .as_ref()
+        .map(|previous| total_pub_items as isize - previous.values().sum::<usize>() as isize);
+    let delta_esc = previous_escaping
+        .as_ref()
+        .map(|previous| total_escaping_items as isize - previous.values().sum::<usize>() as isize);
     rows.truncate(args.top);
     let shown = rows
         .iter()
@@ -384,6 +423,11 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         total_code,
         total_tests,
         total_pub_items,
+        total_escaping_items,
+        delta_code,
+        delta_tests,
+        delta_pub,
+        delta_esc,
         total_complexity,
         rows,
         offenders,
@@ -396,17 +440,17 @@ fn is_pinned(churn_pct: f64, test_code_ratio: Option<f64>, pin_churn: f64, pin_t
 }
 
 fn surface_flag(
-    pub_items: usize,
-    loc_per_pub: Option<f64>,
-    occurrence_median: f64,
+    escaping_items: usize,
+    loc_per_escape: Option<f64>,
+    name_match_median: f64,
     shallow_pub: usize,
     shallow_locpub: f64,
     shallow_occ: f64,
 ) -> Option<&'static str> {
-    if pub_items < shallow_pub || !loc_per_pub.is_some_and(|ratio| ratio < shallow_locpub) {
+    if escaping_items < shallow_pub || !loc_per_escape.is_some_and(|ratio| ratio < shallow_locpub) {
         return None;
     }
-    Some(if occurrence_median < shallow_occ {
+    Some(if name_match_median < shallow_occ {
         "shallow"
     } else {
         "hub"
@@ -464,6 +508,32 @@ fn public_counts(files: &[super::syntax::FileSyntax], scope: &Path) -> BTreeMap<
     counts
 }
 
+fn escaping_counts(
+    files: &[super::syntax::FileSyntax],
+    scope: &Path,
+    mod_index: &syntax::ModIndex,
+) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for file in files {
+        let row = module_for_path(&file.path, scope);
+        let target_module = crate_module_for_row(scope, &row);
+        let escaping = file
+            .pub_items
+            .iter()
+            .filter(|item| {
+                let reach = mod_index.effective_reach(&item.module, &item.reach);
+                !is_within(&reach, &target_module)
+            })
+            .count();
+        *counts.entry(row).or_default() += escaping;
+    }
+    counts
+}
+
+fn is_within(module: &str, ancestor: &str) -> bool {
+    ancestor.is_empty() || module == ancestor || module.starts_with(&format!("{ancestor}::"))
+}
+
 fn occurrence_medians(
     files: &[super::syntax::FileSyntax],
     scope: &Path,
@@ -475,7 +545,7 @@ fn occurrence_medians(
         occurrences.entry(module).or_default().extend(
             file.pub_items
                 .iter()
-                .map(|item| corpus.count_from_module(&file.module_path, &item.name).0),
+                .map(|item| corpus.count_from_module(&item.module, &item.name).0),
         );
     }
     occurrences
@@ -492,14 +562,16 @@ fn print_report(report: &Report, show_delta: bool) {
     println!("Atlas rank — {}", report.path.display());
     if show_delta {
         println!(
-            "module                 code   pub  loc/pub  churn%  pace      cx    t/c  flags          Δcode Δpub"
+            "module                 code   pub   esc  loc/esc  churn%  pace      cx    t/c  flags          Δcode Δpub"
         );
     } else {
-        println!("module                 code   pub  loc/pub  churn%  pace      cx    t/c  flags");
+        println!(
+            "module                 code   pub   esc  loc/esc  churn%  pace      cx    t/c  flags"
+        );
     }
     for row in &report.rows {
-        let loc_per_pub = row
-            .loc_per_pub
+        let loc_per_escape = row
+            .loc_per_escape
             .map_or_else(|| "—".to_owned(), |value| format!("{value:.1}"));
         let pace = row
             .pace
@@ -514,11 +586,12 @@ fn print_report(report: &Report, show_delta: bool) {
         };
         if show_delta {
             println!(
-                "{:<22} {:>6} {:>5} {:>8} {:>7.1} {:>5} {:>7.1} {:>6}  {:<12} {:+6} {:+4}",
+                "{:<22} {:>6} {:>5} {:>5} {:>8} {:>7.1} {:>5} {:>7.1} {:>6}  {:<12} {:+6} {:+4}",
                 row.module,
                 row.code,
                 row.pub_items,
-                loc_per_pub,
+                row.escaping_items,
+                loc_per_escape,
                 row.churn_pct,
                 pace,
                 row.complexity,
@@ -529,11 +602,12 @@ fn print_report(report: &Report, show_delta: bool) {
             );
         } else {
             println!(
-                "{:<22} {:>6} {:>5} {:>8} {:>7.1} {:>5} {:>7.1} {:>6}  {}",
+                "{:<22} {:>6} {:>5} {:>5} {:>8} {:>7.1} {:>5} {:>7.1} {:>6}  {}",
                 row.module,
                 row.code,
                 row.pub_items,
-                loc_per_pub,
+                row.escaping_items,
+                loc_per_escape,
                 row.churn_pct,
                 pace,
                 row.complexity,
@@ -544,18 +618,12 @@ fn print_report(report: &Report, show_delta: bool) {
     }
     if report.total_modules > report.rows.len() {
         println!(
-            "… and {} more modules; overall: code {}, tests {}, pub {}, cx {:.1}",
+            "… and {} more modules; {}",
             report.total_modules - report.rows.len(),
-            report.total_code,
-            report.total_tests,
-            report.total_pub_items,
-            report.total_complexity
+            totals_line(report, show_delta)
         );
     } else {
-        println!(
-            "overall: code {}, tests {}, pub {}, cx {:.1}",
-            report.total_code, report.total_tests, report.total_pub_items, report.total_complexity
-        );
+        println!("{}", totals_line(report, show_delta));
     }
     if !report.offenders.is_empty() {
         println!();
@@ -578,6 +646,28 @@ fn print_report(report: &Report, show_delta: bool) {
         "history: {} commits; parse failures: {}",
         report.history_commits, report.parse_failures
     );
+}
+
+fn totals_line(report: &Report, show_delta: bool) -> String {
+    let base = format!(
+        "overall: code {}, tests {}, pub {}, esc {}, cx {:.1}",
+        report.total_code,
+        report.total_tests,
+        report.total_pub_items,
+        report.total_escaping_items,
+        report.total_complexity
+    );
+    if show_delta {
+        format!(
+            "{base}; Δcode {:+}, Δtests {:+}, Δpub {:+}, Δesc {:+}",
+            report.delta_code.unwrap_or(0),
+            report.delta_tests.unwrap_or(0),
+            report.delta_pub.unwrap_or(0),
+            report.delta_esc.unwrap_or(0),
+        )
+    } else {
+        base
+    }
 }
 
 #[cfg(test)]

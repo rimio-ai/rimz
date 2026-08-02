@@ -15,6 +15,8 @@ fn rank_flags_are_parsed_and_window_is_bounded() {
     assert_eq!(args.top, 4);
     assert!(args.verbose);
     assert_eq!(args.pin_tc, 0.4);
+    assert_eq!(args.shallow_pub, 20);
+    assert_eq!(args.shallow_locpub, 120.0);
     assert_eq!(args.shallow_occ, 3.0);
 }
 
@@ -63,4 +65,36 @@ fn pin_thresholds_match_the_documented_boundaries() {
     assert!(is_pinned(3.4, Some(0.15), 3.0, 0.30));
     assert!(!is_pinned(19.3, Some(0.30), 3.0, 0.30));
     assert!(!is_pinned(2.9, Some(0.10), 3.0, 0.30));
+}
+
+#[test]
+fn totals_line_uses_scope_totals_not_the_top_n_rows() {
+    let report = Report {
+        version: REPORT_VERSION,
+        verb: "rank",
+        path: PathBuf::from("src"),
+        history_commits: 1,
+        total_modules: 3,
+        total_code: 60,
+        total_tests: 15,
+        total_pub_items: 12,
+        total_escaping_items: 6,
+        delta_code: Some(-9),
+        delta_tests: Some(4),
+        delta_pub: Some(-3),
+        delta_esc: Some(-2),
+        total_complexity: 0.0,
+        rows: vec![Row {
+            module: "only-shown".to_owned(),
+            code: 10,
+            ..Row::default()
+        }],
+        offenders: Vec::new(),
+        parse_failures: 0,
+    };
+
+    assert_eq!(
+        totals_line(&report, true),
+        "overall: code 60, tests 15, pub 12, esc 6, cx 0.0; Δcode -9, Δtests +4, Δpub -3, Δesc -2"
+    );
 }

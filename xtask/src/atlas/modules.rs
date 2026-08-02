@@ -67,6 +67,22 @@ pub(super) fn crate_module_for_path(path: &Path) -> String {
     parts.join("::")
 }
 
+pub(super) fn crate_module_for_row(scope: &Path, row: &str) -> String {
+    let scope_entry = if scope.extension().is_some_and(|extension| extension == "rs") {
+        scope.to_path_buf()
+    } else {
+        scope.join("mod.rs")
+    };
+    let scope_module = crate_module_for_path(&scope_entry);
+    if row == "(root)" {
+        scope_module
+    } else if scope_module.is_empty() {
+        row.to_owned()
+    } else {
+        format!("{scope_module}::{row}")
+    }
+}
+
 pub(super) fn path_in_scope(path: &Path, scope: &Path) -> bool {
     path.starts_with(scope_for_matching(scope))
 }
@@ -144,6 +160,10 @@ mod tests {
                 Path::new("crates/rimz/src/cli")
             ),
             "agents_cmd"
+        );
+        assert_eq!(
+            crate_module_for_row(Path::new("crates/rimz/src/cli"), "agents_cmd"),
+            "cli::agents_cmd"
         );
         assert_eq!(
             crate_module_for_path(Path::new("crates/rimz/src/cli/agents_cmd/mod.rs")),

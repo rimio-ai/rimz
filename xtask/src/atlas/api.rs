@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::modules::{crate_module_for_path, module_for_path};
+use super::modules::{crate_module_for_path, crate_module_for_row, module_for_path};
 use super::sources::{self, Source};
 use super::syntax::{self, FileSyntax, PubItem};
 use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
@@ -224,7 +224,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let mut modules = module_items
         .into_iter()
         .map(|(module, items)| {
-            let target_module = report_module_path(&args.path, &module);
+            let target_module = crate_module_for_row(&args.path, &module);
             scoped_single_name_caller_items.extend(
                 items
                     .iter()
@@ -463,22 +463,6 @@ fn is_strictly_broader(reach: &str, required: &str) -> bool {
 
 fn is_within(module: &str, ancestor: &str) -> bool {
     ancestor.is_empty() || module == ancestor || module.starts_with(&format!("{ancestor}::"))
-}
-
-fn report_module_path(scope: &Path, row: &str) -> String {
-    let scope_entry = if scope.extension().is_some_and(|extension| extension == "rs") {
-        scope.to_path_buf()
-    } else {
-        scope.join("mod.rs")
-    };
-    let scope_module = crate_module_for_path(&scope_entry);
-    if row == "(root)" {
-        scope_module
-    } else if scope_module.is_empty() {
-        row.to_owned()
-    } else {
-        format!("{scope_module}::{row}")
-    }
 }
 
 #[derive(Debug)]
