@@ -65,36 +65,41 @@ pub fn teardown_room(
     }
 }
 
-/// Whether `cmdline` belongs to an orphaned room process worth sweeping. The
-/// exact, path-derived `session_name` is unique within an environment domain;
-/// the caller applies the domain guard before signalling. Within that scope we
-/// take a leaked rimz sidebar / agent app-server daemon for this workspace, and
-/// — only when `include_mux_server` — an orphaned multiplexer server. `rimz
-/// reset` kills the session first, so its lingering server is a corpse and
-/// sweeping it is safe; `rimz reload` infers "dead" from a best-effort probe, so
-/// it never sweeps a server (a probe that wrongly read a live session as dead
-/// would otherwise destroy it) and reaps only respawnable daemons.
 #[cfg(any(unix, test))]
-fn is_sweep_target(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequiredDomainCheck {
+    World,
+    Mux(MuxName),
+}
+
+/// Classify an orphaned room process and carry the environment-domain guard
+/// required before signalling it. The exact session scopes both server and
+/// daemon matches; `include_mux_server` controls pure server matches only.
+#[cfg(any(unix, test))]
+fn classify_sweep_target(
     cmdline: &str,
     session_name: &str,
     workspace_id: &str,
     include_mux_server: bool,
-) -> bool {
+) -> Option<RequiredDomainCheck> {
     if !cmdline.contains(session_name) {
-        return false;
+        return None;
     }
-    let mux_server = include_mux_server && cmdline.contains("--server");
+    let mux_server = cmdline.contains("--server");
     let workspace_daemon = cmdline.contains(workspace_id)
         && (cmdline.contains("sidebar") || cmdline.contains("app-server"));
-    mux_server || workspace_daemon
+    if !(include_mux_server && mux_server || workspace_daemon) {
+        return None;
+    }
+    Some(if mux_server {
+        RequiredDomainCheck::Mux(MuxName::Zellij)
+    } else {
+        RequiredDomainCheck::World
+    })
 }
 
-/// Pick the pids to sweep: this user's processes only, matching
-/// [`is_sweep_target`], minus the `protected` set (this process and its
-/// ancestors). `include_mux_server` flows through to [`is_sweep_target`]. Pure
-/// over its inputs so the scoping rules are unit-tested without touching real
-/// processes.
+/// Pick ordered `(pid, domain guard)` verdicts for this user's matching
+/// processes, minus this process and its ancestors.
 #[cfg(any(unix, test))]
 fn select_sweep_targets(
     procs: &[ProcInfo],
@@ -103,20 +108,20 @@ fn select_sweep_targets(
     workspace_id: &str,
     protected: &HashSet<u32>,
     include_mux_server: bool,
-) -> Vec<u32> {
+) -> Vec<(u32, RequiredDomainCheck)> {
     procs
         .iter()
         .filter(|proc| proc.real_uid == my_uid)
         .filter(|proc| !protected.contains(&proc.pid))
-        .filter(|proc| {
-            is_sweep_target(
+        .filter_map(|proc| {
+            classify_sweep_target(
                 &proc.cmdline,
                 session_name,
                 workspace_id,
                 include_mux_server,
             )
+            .map(|check| (proc.pid, check))
         })
-        .map(|proc| proc.pid)
         .collect()
 }
 
@@ -159,14 +164,12 @@ pub(crate) fn sweep_orphan_processes(
         include_mux_server,
     )
     .into_iter()
-    .filter(|pid| {
-        let Some(process) = procs.iter().find(|process| process.pid == *pid) else {
-            return false;
+    .filter_map(|(pid, check)| {
+        let matches = match check {
+            RequiredDomainCheck::World => own_domain.same_world_as_process(pid),
+            RequiredDomainCheck::Mux(mux) => own_domain.same_mux_endpoint_as_process(pid, mux),
         };
-        match required_domain_check(&process.cmdline) {
-            RequiredDomainCheck::World => own_domain.same_world_as_process(*pid),
-            RequiredDomainCheck::Mux(mux) => own_domain.same_mux_endpoint_as_process(*pid, mux),
-        }
+        if matches { Some(pid) } else { None }
     })
     .collect::<Vec<_>>();
     kill_pids(&targets, SWEEP_GRACE).signalled
@@ -292,22 +295,6 @@ pub(crate) fn kill_sidebar_serve_for_pane(
     kill_pids(&targets, SWEEP_GRACE).signalled.len()
 }
 
-#[cfg(any(unix, test))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RequiredDomainCheck {
-    World,
-    Mux(MuxName),
-}
-
-#[cfg(any(unix, test))]
-fn required_domain_check(cmdline: &str) -> RequiredDomainCheck {
-    if cmdline.contains("--server") {
-        RequiredDomainCheck::Mux(MuxName::Zellij)
-    } else {
-        RequiredDomainCheck::World
-    }
-}
-
 #[cfg(unix)]
 pub(crate) fn current_uid() -> u32 {
     nix::unistd::getuid().as_raw()
@@ -405,6 +392,16 @@ mod tests {
                     "rimz codex app-server serve --workspace-id {WS} --session-name {SESSION}"
                 ),
             ),
+            // A workspace daemon containing `--server` is selected even when mux
+            // server sweeping is disabled, but still requires the mux-domain guard.
+            proc(
+                13,
+                1,
+                me,
+                &format!(
+                    "rimz sidebar serve --server --workspace-id {WS} --session-name {SESSION}"
+                ),
+            ),
             // A different user's identical server — excluded by uid.
             proc(
                 20,
@@ -423,33 +420,30 @@ mod tests {
             proc(22, 1, me, "zsh"),
             // A claude agent pane — no session name in argv, never swept.
             proc(23, 1, me, "claude --worktree main"),
+            // An unrelated tmux server is excluded by the session-name scope.
+            proc(24, 1, me, "tmux -L unrelated start-server"),
         ];
         let protected = HashSet::new();
-        let mut got = select_sweep_targets(&procs, me, SESSION, WS, &protected, true);
-        got.sort_unstable();
-        assert_eq!(got, vec![10, 11, 12]);
+        assert_eq!(
+            select_sweep_targets(&procs, me, SESSION, WS, &protected, true),
+            vec![
+                (10, RequiredDomainCheck::Mux(MuxName::Zellij)),
+                (11, RequiredDomainCheck::World),
+                (12, RequiredDomainCheck::World),
+                (13, RequiredDomainCheck::Mux(MuxName::Zellij)),
+            ],
+        );
 
         // `rimz reload`'s dead-session sweep excludes the mux server (pid 10), so a
         // probe that misread a live session as gone can only reap respawnable
         // daemons, never tear the session down.
-        let mut daemons_only = select_sweep_targets(&procs, me, SESSION, WS, &protected, false);
-        daemons_only.sort_unstable();
-        assert_eq!(daemons_only, vec![11, 12]);
-    }
-
-    #[test]
-    fn sweep_requires_mux_endpoint_only_for_the_zellij_server() {
         assert_eq!(
-            required_domain_check("zellij --server /run/user/1000/zellij/rimz-room"),
-            RequiredDomainCheck::Mux(MuxName::Zellij),
-        );
-        assert_eq!(
-            required_domain_check("rimz sidebar serve --session-name rimz-room"),
-            RequiredDomainCheck::World,
-        );
-        assert_eq!(
-            required_domain_check("rimz codex app-server serve --session-name rimz-room"),
-            RequiredDomainCheck::World,
+            select_sweep_targets(&procs, me, SESSION, WS, &protected, false),
+            vec![
+                (11, RequiredDomainCheck::World),
+                (12, RequiredDomainCheck::World),
+                (13, RequiredDomainCheck::Mux(MuxName::Zellij)),
+            ],
         );
     }
 
@@ -477,7 +471,7 @@ mod tests {
         assert!(protected.contains(&100));
         assert!(protected.contains(&1));
         let got = select_sweep_targets(&procs, me, SESSION, WS, &protected, true);
-        assert_eq!(got, vec![10]);
+        assert_eq!(got, vec![(10, RequiredDomainCheck::Mux(MuxName::Zellij))]);
     }
 
     #[cfg(unix)]
