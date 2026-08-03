@@ -78,7 +78,7 @@ jiff = { version = "0.2", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env", "unstable-ext", "wrap_help"] }
 # Dynamic completion is still feature-gated as unstable, so pin its API until
 # clap stabilizes the environment-driven engine.
-clap_complete = { version = "=4.6.7", features = ["unstable-dynamic"] }
+clap_complete = { version = "=4.6.8", features = ["unstable-dynamic"] }
 # Layout launch flags are authored as shell-like strings in TOML but launched as
 # direct argv, so RimZ needs quote removal without invoking a shell. `shlex` is a
 # tiny POSIX-compatible splitter already present through the build graph and
