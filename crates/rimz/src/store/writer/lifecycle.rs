@@ -478,16 +478,6 @@ fn event_lifecycle_observation(
 }
 
 #[cfg(test)]
-fn auto_rotation_due(log_len: u64, stamp_age: Option<Duration>) -> bool {
-    auto_rotation_due_at(log_len, DEFAULT_EVENT_LOG_ROTATE_BYTES, stamp_age)
-}
-
-#[cfg(test)]
-fn auto_rotation_due_at(log_len: u64, threshold: u64, stamp_age: Option<Duration>) -> bool {
-    log_len >= threshold && stamp_age.is_none_or(|age| age >= AUTO_ROTATE_DEBOUNCE)
-}
-
-#[cfg(test)]
 #[path = "lifecycle/rotation_tests.rs"]
 mod rotation_tests;
 
@@ -928,25 +918,10 @@ mod tests {
     }
 
     #[test]
-    fn auto_rotation_decision_respects_exact_threshold_and_debounce() {
-        assert!(!auto_rotation_due(DEFAULT_EVENT_LOG_ROTATE_BYTES - 1, None));
-        assert!(auto_rotation_due(DEFAULT_EVENT_LOG_ROTATE_BYTES, None));
-        assert!(!auto_rotation_due(
-            DEFAULT_EVENT_LOG_ROTATE_BYTES,
-            Some(AUTO_ROTATE_DEBOUNCE - Duration::from_secs(1))
-        ));
-        assert!(auto_rotation_due(
-            DEFAULT_EVENT_LOG_ROTATE_BYTES,
-            Some(AUTO_ROTATE_DEBOUNCE)
-        ));
-    }
-
-    #[test]
     fn missing_unreadable_and_future_stamps_are_due() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("missing.stamp");
         assert!(debounce::stamp_due(&missing, AUTO_ROTATE_DEBOUNCE));
-        assert!(auto_rotation_due(DEFAULT_EVENT_LOG_ROTATE_BYTES, None));
 
         #[cfg(unix)]
         {
@@ -954,7 +929,6 @@ mod tests {
             std::os::unix::fs::symlink("unreadable.stamp", &unreadable)
                 .expect("create symlink loop");
             assert!(debounce::stamp_due(&unreadable, AUTO_ROTATE_DEBOUNCE));
-            assert!(auto_rotation_due(DEFAULT_EVENT_LOG_ROTATE_BYTES, None));
         }
 
         let future = dir.path().join("future.stamp");
@@ -967,7 +941,6 @@ mod tests {
         file.set_times(FileTimes::new().set_modified(SystemTime::now() + Duration::from_secs(60)))
             .expect("set future stamp time");
         assert!(debounce::stamp_due(&future, AUTO_ROTATE_DEBOUNCE));
-        assert!(auto_rotation_due(DEFAULT_EVENT_LOG_ROTATE_BYTES, None));
     }
 
     #[test]

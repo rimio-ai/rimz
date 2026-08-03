@@ -318,6 +318,69 @@ mod tests {
     use crate::agents::AgentLifecycleObservation;
     use crate::agents::lifecycle::LifecycleSignal;
 
+    #[test]
+    fn open_existing_missing_root_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let state_root = dir.path().join("absent-state");
+        let runtime_root = dir.path().join("absent-runtime");
+        let paths = StatePaths::under(workspace_id.clone(), &state_root).unwrap();
+        let runtime = RuntimePaths::under(workspace_id, &runtime_root).unwrap();
+
+        assert!(Store::open_existing(paths.clone(), runtime.clone()).is_none());
+        assert!(!paths.root.exists());
+        assert!(!runtime.root.exists());
+        assert!(!runtime.shared_root.exists());
+    }
+
+    #[test]
+    fn open_creates_state_and_runtime_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+        let runtime = RuntimePaths::under(workspace_id, &dir.path().join("runtime")).unwrap();
+
+        Store::open(paths.clone(), runtime.clone()).unwrap();
+
+        for path in [&paths.snapshots_dir, &paths.runs_dir, &paths.locks_dir] {
+            assert!(path.is_dir(), "{} was not created", path.display());
+        }
+        for path in [
+            &runtime.root,
+            &runtime.shared_root,
+            &runtime.persistent_shared_root,
+            &runtime.sock_dir,
+            &runtime.heartbeat_dir,
+            &runtime.read_marks_dir,
+            &runtime.agent_context_dir,
+            &runtime.subagent_context_dir,
+            &runtime.agent_telemetry_dir,
+            &runtime.agent_activity_dir,
+            &runtime.active_time_dir,
+        ] {
+            assert!(path.is_dir(), "{} was not created", path.display());
+        }
+    }
+
+    #[test]
+    fn wait_fold_base_is_zero_then_frame_aligned() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+        let runtime =
+            RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
+        let store = Store::open(paths.clone(), runtime).unwrap();
+
+        assert_eq!(store.wait_fold_base().unwrap(), 0);
+        event_log::append(&paths.events_log, &lifecycle(&workspace_id, 0)).unwrap();
+        let base = store.wait_fold_base().unwrap();
+        assert_eq!(base, std::fs::metadata(&paths.events_log).unwrap().len());
+        assert_eq!(
+            event_log::read_from_offset(&paths.events_log, base).unwrap(),
+            (Vec::new(), base)
+        );
+    }
+
     fn lifecycle(workspace_id: &WorkspaceId, index: usize) -> EventEnvelope {
         let mut observation = AgentLifecycleObservation::new(
             Some(AgentSessionId::from(format!("agent-{index}"))),

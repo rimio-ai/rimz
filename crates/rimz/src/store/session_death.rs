@@ -49,7 +49,7 @@ pub(crate) fn supersedes(older: &AgentState, newer: &AgentState) -> bool {
 ///
 /// ponytail: daemon-owned continuations abstain; add provider session-instance
 /// proof before promoting app-server-routed sessions.
-pub(crate) fn compaction_continuation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
+fn compaction_continuation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
     newer.compacted_from.as_ref() == Some(&older.agent_id) && same_agent_instance(older, newer)
 }
 
@@ -58,7 +58,7 @@ pub(crate) fn compaction_continuation_supersedes(older: &AgentState, newer: &Age
 /// process. The outer activity guard establishes which record is newer. A
 /// running, waiting, or paused owner remains authoritative because same-process
 /// child hooks can carry a distinct conversation ID while its turn is open.
-pub(crate) fn same_process_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
+fn same_process_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
     if matches!(
         older.status,
         AgentStatus::Running | AgentStatus::Waiting | AgentStatus::Paused
@@ -141,7 +141,7 @@ fn compatible_tokens<T: PartialEq>(older: Option<&T>, newer: Option<&T>) -> bool
 /// An older paneless session does not yield to a newer distinctly stamped pane:
 /// it may still be the occupant of another same-cwd lazy agent pane that only
 /// the projection can bind.
-pub(crate) fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool {
+fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool {
     match (older.pane.as_ref(), newer.pane.as_ref()) {
         (Some(older_pane), Some(newer_pane)) => {
             newer_pane.pane_id == older_pane.pane_id && relaunched_in_pane(older, newer)
@@ -161,7 +161,7 @@ pub(crate) fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool 
 /// paused owner remains authoritative because same-process child hooks can
 /// carry a distinct conversation ID while its turn is open. A fork carries
 /// `Forked` lineage and survives; unknown lineage keeps both.
-pub(crate) fn cleared_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
+fn cleared_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
     if matches!(
         older.status,
         AgentStatus::Running | AgentStatus::Waiting | AgentStatus::Paused
@@ -187,7 +187,7 @@ pub(crate) fn cleared_conversation_supersedes(older: &AgentState, newer: &AgentS
 /// (`SidebarSnapshot::reap_runtime`) and the projection's process-start guard
 /// (`crate::store::snapshot::panes::pane_start_allows_bind`) collapse it instead.
 /// Unknown owners never collapse — a missing pid cannot prove a relaunch.
-pub(crate) fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
+fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
     match (agent_owner_pid(older), agent_owner_pid(newer)) {
         (Some(older_pid), Some(newer_pid)) => older_pid != newer_pid,
         _ => false,

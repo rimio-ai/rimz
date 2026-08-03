@@ -64,7 +64,7 @@ pub struct DeliverySweepUpdate {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DeliveryFailureResult {
-    pub head_found: bool,
+    head_found: bool,
     pub head_sent: bool,
 }
 

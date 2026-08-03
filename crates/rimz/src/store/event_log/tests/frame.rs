@@ -5,6 +5,20 @@ use tempfile::tempdir;
 use super::*;
 
 #[test]
+fn pre_crc_frame_remains_readable() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("events.log.jsonl");
+    let event = test_event("event.emit");
+    let payload = serde_json::to_vec(&event).unwrap();
+    let mut frame = format!("{} ", payload.len()).into_bytes();
+    frame.extend_from_slice(&payload);
+    frame.push(b'\n');
+    fs::write(&path, frame).unwrap();
+
+    assert_eq!(read_all(&path).unwrap(), vec![event]);
+}
+
+#[test]
 fn frame_wire_format_is_len_crc_payload() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("events.log.jsonl");

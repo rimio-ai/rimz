@@ -44,11 +44,6 @@ pub fn list(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
 }
 
 #[must_use = "durability barrier; check the result"]
-pub fn append_history(messages_dir: &Path, message: &MessageRecord) -> Result<()> {
-    append_history_many(messages_dir, std::slice::from_ref(message))
-}
-
-#[must_use = "durability barrier; check the result"]
 pub fn append_history_many(messages_dir: &Path, messages: &[MessageRecord]) -> Result<()> {
     if messages.is_empty() {
         return Ok(());
@@ -258,7 +253,7 @@ mod tests {
         );
         message.status = MessageStatus::Delivered;
 
-        append_history(&messages_dir, &message).unwrap();
+        append_history_many(&messages_dir, std::slice::from_ref(&message)).unwrap();
 
         let history = list_history(&messages_dir).unwrap();
         assert_eq!(history, vec![message]);
@@ -304,7 +299,7 @@ mod tests {
             );
             message.message_id = fixed_message_id(index as u64);
             message.status = MessageStatus::Delivered;
-            append_history(&messages_dir, &message).unwrap();
+            append_history_many(&messages_dir, std::slice::from_ref(&message)).unwrap();
         }
 
         let history = list_history(&messages_dir).unwrap();

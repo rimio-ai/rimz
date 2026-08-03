@@ -228,7 +228,7 @@ impl SidebarWorktreeGroup {
 
 /// The unique non-empty team in a cohort. Unstamped members are tolerated;
 /// two distinct stamped teams make the cohort ambiguous.
-pub fn cohort_team<'a>(teams: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
+pub(super) fn cohort_team<'a>(teams: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
     let mut unique = None;
     for team in teams.into_iter().flatten().filter(|team| !team.is_empty()) {
         match unique {
