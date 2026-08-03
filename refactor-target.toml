@@ -231,7 +231,7 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-surface-budget = 275
+surface-budget = 267
 
 [[module]]
 path = "crates/rimz/src/observability"

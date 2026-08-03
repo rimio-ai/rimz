@@ -90,7 +90,7 @@ pub(super) fn live_session_name_from_line(line: &str) -> Option<String> {
 /// introducer `[` lives at 0x5b which overlaps the final-byte range
 /// (0x40..=0x7e), so we must consume the introducer first and only then
 /// scan for the final byte.
-pub(super) fn strip_ansi(line: &str) -> String {
+fn strip_ansi(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut chars = line.chars();
     while let Some(c) = chars.next() {

@@ -62,7 +62,8 @@ pub fn server_log_file() -> Option<PathBuf> {
         })
 }
 
-pub fn classify_log_line(line: &str) -> Option<super::logtail::LogSeverity> {
+#[cfg(test)]
+fn classify_log_line(line: &str) -> Option<super::logtail::LogSeverity> {
     match parse_log_line(line) {
         super::logtail::RecordLine::Start(start) => start.severity,
         super::logtail::RecordLine::Continuation => None,
@@ -119,14 +120,6 @@ pub fn diagnose_log_record(
 
 pub(crate) fn default_server_socket_path_from(tmpdir: &Path, uid: u32) -> PathBuf {
     tmpdir.join(format!("tmux-{uid}")).join("default")
-}
-
-/// Directory holding the RimZ-owned tmux socket, `<runtime-root>/rimz/tmux`.
-///
-/// `tmux` cannot collide with a workspace runtime root because those are named
-/// `ws_<hex>`.
-pub fn managed_server_socket_dir() -> PathBuf {
-    managed_server_socket_dir_under(&crate::store::paths::runtime_home())
 }
 
 pub(crate) fn managed_server_socket_dir_under(runtime_root: &Path) -> PathBuf {
@@ -303,11 +296,6 @@ impl TmuxBackend {
             version: std::sync::OnceLock::new(),
             socket_dir: std::sync::OnceLock::new(),
         }
-    }
-
-    /// The endpoint this backend addresses.
-    pub fn socket(&self) -> &Path {
-        &self.socket
     }
 
     /// Base `CommandSpec`: `tmux -S <socket>`, run from a cwd that cannot

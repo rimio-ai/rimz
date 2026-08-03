@@ -178,13 +178,6 @@ impl ZellijPaneId {
         }
     }
 
-    pub const fn plugin_id(self) -> Option<u64> {
-        match self {
-            Self::Plugin(id) => Some(id),
-            Self::Terminal(_) => None,
-        }
-    }
-
     /// Native target syntax accepted by Zellij actions.
     pub fn action_target(self) -> String {
         match self {

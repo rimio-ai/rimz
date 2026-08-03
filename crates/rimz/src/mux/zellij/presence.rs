@@ -105,14 +105,14 @@ fn materialized_presence_plugin_path() -> Option<PathBuf> {
         .filter(|path| path.is_file())
 }
 
-pub(super) fn materialized_presence_plugin_path_under(data_root: &std::path::Path) -> PathBuf {
+fn materialized_presence_plugin_path_under(data_root: &std::path::Path) -> PathBuf {
     data_root
         .join("rimz")
         .join("plugins")
         .join(PRESENCE_PLUGIN_FILE)
 }
 
-pub(super) fn materialize_presence_plugin_bytes(
+fn materialize_presence_plugin_bytes(
     bytes: &[u8],
     data_root: &std::path::Path,
 ) -> std::result::Result<Option<PathBuf>, atomic::AtomicErr> {
@@ -397,7 +397,7 @@ impl ZellijBackend {
         }
     }
 
-    pub(super) fn broadcast_presence_retire_for(
+    fn broadcast_presence_retire_for(
         &self,
         session_name: &str,
         writer: &crate::mux::zellij::pane_topology::TopologyWriter,

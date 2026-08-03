@@ -19,7 +19,7 @@ mod raw_pane;
 mod reap;
 mod session;
 mod sidebar;
-pub mod socket;
+pub(crate) mod socket;
 
 #[doc(hidden)]
 pub use pane_pid::ZellijPaneResolver;
@@ -28,7 +28,7 @@ pub(crate) use presence::{
 };
 pub use presence::{ensure_presence_plugin_artifact, presence_plugin_build, presence_plugin_path};
 pub use reap::{ReapOutcome, reap_lineage_clients};
-pub use socket::{socket_headroom, socket_preflight};
+pub use socket::{ZellijSocketHeadroom, socket_headroom, socket_preflight};
 
 use std::env;
 use std::path::PathBuf;
@@ -154,7 +154,8 @@ pub fn live_presence_plugin_ids(session_name: &str) -> Result<Vec<u32>> {
     ZellijBackend::new().live_presence_plugin_ids(session_name)
 }
 
-pub fn classify_log_line(line: &str) -> Option<super::logtail::LogSeverity> {
+#[cfg(test)]
+fn classify_log_line(line: &str) -> Option<super::logtail::LogSeverity> {
     match parse_log_line(line) {
         super::logtail::RecordLine::Start(start) => start.severity,
         super::logtail::RecordLine::Continuation => None,
