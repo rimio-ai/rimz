@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use jiff::{Timestamp, civil::Date, tz::TimeZone};
@@ -23,6 +23,7 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::config::MachineConfig;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
+use crate::store::Store;
 use crate::store::atomic::write_temp_then_rename_cache;
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -833,15 +834,15 @@ fn daily_scope_park(
 
 /// Producer-side enforcement. Ledger files are cache-class durability; pane
 /// interruption and run-store writes stay in the hidden CLI helper.
-pub fn enforce(
+pub(crate) fn enforce(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
-    messages_dir: &Path,
+    store: Option<&Store>,
     config: &MachineConfig,
 ) {
     let now = snapshot.now;
     let zone = config.time_zone();
-    let human_deliveries = delivered_human_messages(messages_dir);
+    let human_deliveries = delivered_human_messages(store);
     let day_cutoff = local_day_cutoff_secs(now, &zone);
     let scopes = evaluate_scopes(snapshot, runtime, config, now, day_cutoff);
     let mut scope_state = read_scope_state(runtime);
@@ -1297,9 +1298,12 @@ fn ledger_for_agent(runtime: &RuntimePaths, agent: &AgentState) -> Option<Budget
     Some(BudgetLedger::new(spec))
 }
 
-fn delivered_human_messages(messages_dir: &Path) -> Vec<MessageRecord> {
-    let mut messages = crate::store::message_store::list(messages_dir).unwrap_or_default();
-    messages.extend(crate::store::message_store::list_history(messages_dir).unwrap_or_default());
+fn delivered_human_messages(store: Option<&Store>) -> Vec<MessageRecord> {
+    let Some(store) = store else {
+        return Vec::new();
+    };
+    let mut messages = store.list_messages().unwrap_or_default();
+    messages.extend(store.list_message_history().unwrap_or_default());
     messages
         .into_iter()
         .filter(is_budget_waiving_delivery)

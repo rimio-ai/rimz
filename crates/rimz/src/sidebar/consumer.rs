@@ -8,7 +8,7 @@
 use crate::ids::PaneId;
 use crate::store::parse_cache::StampedPath;
 use crate::store::snapshot::SidebarSnapshot;
-use crate::{RuntimePaths, StatePaths};
+use crate::{RuntimePaths, StatePaths, Store};
 
 use super::cache::read_snapshot_cache;
 use super::enrich::{FoldOpts, WorkspaceSnapshot, enrich_workspace, project_local};
@@ -214,11 +214,12 @@ fn read_published_workspace_snapshot(
         .map(|frame| SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None))
         .unwrap_or_default();
     let agent_projection = super::agent_projection::read_published(runtime, session, &panes);
+    let store = Store::open_existing(state.clone(), runtime.clone());
     let workspace = enrich_workspace(
         base,
         cache.as_deref(),
         runtime,
-        Some(&state.messages_dir),
+        store.as_ref(),
         FoldOpts {
             producing: false,
             fresh_roots: None,

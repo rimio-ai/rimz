@@ -43,7 +43,7 @@ pub mod event_log;
 pub mod gc;
 pub mod live_roster;
 pub mod lock;
-pub mod message_store;
+mod message_store;
 pub(crate) mod parse_cache;
 pub mod paths;
 pub mod run_store;
@@ -67,6 +67,7 @@ use crate::store::snapshot::SidebarSnapshot;
 
 pub use crate::store::paths::{RuntimePaths, StatePaths};
 pub use crate::store::runtime::{RuntimeProjection, RuntimeScope};
+pub use message_store::MessageStoreErr;
 
 /// High-level handle to a workspace's durable state. Cheap to clone — the
 /// inner state lives behind an `Arc`. Reads here are lock-free; every
@@ -91,7 +92,7 @@ pub enum StoreErr {
     #[error(transparent)]
     EventLog(#[from] event_log::EventLogErr),
     #[error(transparent)]
-    MessageStore(#[from] message_store::MessageStoreErr),
+    MessageStore(#[from] MessageStoreErr),
     #[error(transparent)]
     RunStore(#[from] run_store::RunStoreErr),
     #[error(transparent)]

@@ -1,8 +1,4 @@
 version = 2
-[[strangler]]
-path = "crates/rimz/src/store"
-symbol = "invalidate_snapshot_caches"
-baseline = 3
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -405,7 +401,7 @@ allowed-imports = [
     "theme",
     "workspace",
 ]
-surface-budget = 383
+surface-budget = 376
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"
@@ -494,3 +490,13 @@ allowed-imports = [
     "workspace",
 ]
 surface-budget = 65
+
+[[strangler]]
+symbol = "invalidate_snapshot_caches"
+path = "crates/rimz/src/store"
+baseline = 3
+
+[[strangler]]
+symbol = "message_store"
+path = "crates/rimz/src/harness"
+baseline = 0

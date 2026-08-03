@@ -32,19 +32,19 @@ pub enum MessageStoreErr {
     },
 }
 
-pub type Result<T> = std::result::Result<T, MessageStoreErr>;
+pub(super) type Result<T> = std::result::Result<T, MessageStoreErr>;
 
 #[must_use = "durability barrier; check the result"]
-pub fn replace_all(messages_dir: &Path, messages: &[MessageRecord]) -> Result<()> {
+pub(super) fn replace_all(messages_dir: &Path, messages: &[MessageRecord]) -> Result<()> {
     write_queue(messages_dir, messages)
 }
 
-pub fn list(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
+pub(super) fn list(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
     read_queue(messages_dir)
 }
 
 #[must_use = "durability barrier; check the result"]
-pub fn append_history_many(messages_dir: &Path, messages: &[MessageRecord]) -> Result<()> {
+pub(super) fn append_history_many(messages_dir: &Path, messages: &[MessageRecord]) -> Result<()> {
     if messages.is_empty() {
         return Ok(());
     }
@@ -70,11 +70,11 @@ pub fn append_history_many(messages_dir: &Path, messages: &[MessageRecord]) -> R
     Ok(())
 }
 
-pub fn list_history(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
+pub(super) fn list_history(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
     read_queue_file(&history_path(messages_dir))
 }
 
-pub fn list_pending(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
+pub(super) fn list_pending(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
     Ok(read_queue(messages_dir)?
         .into_iter()
         .filter(|message| message.status == MessageStatus::Queued)

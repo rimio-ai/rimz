@@ -230,11 +230,12 @@ fn auto_continue_tick(
     let base = rimz::store::snapshot::build_with_cursor(state, cursor).expect("rollup");
     let mut config = rimz::config::MachineConfig::default();
     config.resume.auto_continue = true;
+    let store = rimz::Store::open_existing(state.clone(), runtime.clone());
     rimz::sidebar::enrich::enrich(
         base,
         None,
         runtime,
-        Some(&state.messages_dir),
+        store.as_ref(),
         None,
         rimz::sidebar::enrich::FoldOpts {
             producing: true,

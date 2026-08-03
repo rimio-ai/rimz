@@ -24,7 +24,7 @@ mod panes;
 pub(crate) mod tab_status;
 
 use std::collections::{BTreeSet, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::sidebar::agent_projection::{AgentProjection, WiredAgentProjection};
@@ -81,7 +81,7 @@ pub struct ProduceOptions {
 struct ProducerEnrich<'a> {
     runtime: &'a RuntimePaths,
     state: &'a StatePaths,
-    messages_dir: &'a Path,
+    store: Option<&'a Store>,
     exclude: Option<&'a PaneId>,
     min_pane_cache_ms: Option<u64>,
     diag: &'a crate::diag::DiagSink,
@@ -128,13 +128,14 @@ pub(crate) fn produce_workspace_snapshot(
 ) -> Result<ProducedWorkspaceSnapshot> {
     let frame = produce_pane_frame(runtime, opts)?;
     let snapshot = rollup_snapshot(state, cursor)?;
+    let store = Store::open_existing(state.clone(), runtime.clone());
     let workspace = enrich_producing_workspace(
         snapshot,
         Some(&frame),
         ProducerEnrich {
             runtime,
             state,
-            messages_dir: &state.messages_dir,
+            store: store.as_ref(),
             exclude: opts.exclude.as_ref(),
             min_pane_cache_ms: opts.min_pane_cache_ms,
             diag: &opts.diag,
@@ -186,13 +187,14 @@ pub fn produce_snapshot_with_refresh(
 ) -> Result<SidebarSnapshot> {
     let frame = produce_pane_frame(runtime, opts)?;
     let snapshot = rollup_snapshot(state, cursor)?;
+    let store = Store::open_existing(state.clone(), runtime.clone());
     Ok(enrich_with_refresh(
         snapshot,
         Some(frame),
         ProducerEnrich {
             runtime,
             state,
-            messages_dir: &state.messages_dir,
+            store: store.as_ref(),
             exclude: opts.exclude.as_ref(),
             min_pane_cache_ms: opts.min_pane_cache_ms,
             diag: &opts.diag,
@@ -306,13 +308,14 @@ pub fn produce_rollup_snapshot_with_refresh(
     min_pane_cache_ms: Option<u64>,
 ) -> Result<SidebarSnapshot> {
     let snapshot = rollup_snapshot(state, cursor)?;
+    let store = Store::open_existing(state.clone(), runtime.clone());
     Ok(enrich_with_refresh(
         snapshot,
         None,
         ProducerEnrich {
             runtime,
             state,
-            messages_dir: &state.messages_dir,
+            store: store.as_ref(),
             exclude,
             min_pane_cache_ms,
             diag: &crate::diag::DiagSink::disabled(),
@@ -454,7 +457,7 @@ fn enrich_producing_workspace(
         snapshot,
         frame,
         opts.runtime,
-        Some(opts.messages_dir),
+        opts.store,
         FoldOpts {
             producing: true,
             fresh_roots: roots,
@@ -547,7 +550,7 @@ fn enrich_producing_with(
         snapshot,
         frame.as_ref(),
         opts.runtime,
-        Some(opts.messages_dir),
+        opts.store,
         opts.exclude,
         fold,
         opts.diag,

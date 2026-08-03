@@ -67,7 +67,7 @@ fn remove_dir_counting_entries(path: &Path) -> Result<usize> {
     Ok(count)
 }
 
-fn remove_matching_files(root: &Path, prefixes: &[&str]) -> Result<usize> {
+fn remove_diag_logs(root: &Path) -> Result<usize> {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(0),
@@ -88,7 +88,7 @@ fn remove_matching_files(root: &Path, prefixes: &[&str]) -> Result<usize> {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if !prefixes.iter().any(|prefix| name.starts_with(prefix)) {
+        if !name.starts_with("diag.log") {
             continue;
         }
         let meta = fs::symlink_metadata(&path).map_err(|source| StoreErr::Io {
@@ -179,7 +179,7 @@ impl Store {
             self.inner.paths.ensure_dirs()?;
 
             let mut state_entries_removed = 0;
-            state_entries_removed += remove_matching_files(&self.inner.paths.root, &["diag.log"])?;
+            state_entries_removed += remove_diag_logs(&self.inner.paths.root)?;
             state_entries_removed += remove_dir_counting_entries(&crate::diag::frames_dir_under(
                 &self.inner.paths.root,
             ))?;
