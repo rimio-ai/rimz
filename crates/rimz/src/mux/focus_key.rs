@@ -42,7 +42,7 @@ impl FocusChord {
     }
 
     /// tmux root-table key spec: `M-p` / `C-p`.
-    pub fn to_tmux(&self) -> String {
+    pub fn to_tmux(self) -> String {
         let prefix = match self.modifier {
             Modifier::Alt => 'M',
             Modifier::Ctrl => 'C',
