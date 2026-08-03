@@ -35,7 +35,7 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) | The structural sidebar repair planner, pane-role precedence, and transaction executor. |
 | [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) | Current-build heartbeat proof for panes mounted during repair. |
 | [`width.rs`](../../crates/rimz/src/mux/width.rs) | Sidebar sizing: share resolution, native steps, and target spellings. |
-| [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | Destructive teardown shared by `rimz reset` and attended auto-reset. |
+| [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | Destructive teardown and guarded process sweep shared by `rimz reset` and attended auto-reset. |
 | [`domain.rs`](../../crates/rimz/src/mux/domain.rs) | `ProcessDomain`: the guard every heuristic process kill passes. |
 | [`focus_key.rs`](../../crates/rimz/src/mux/focus_key.rs) | Parsing the `[sidebar] focus_key` chord both backends bind. |
 | [`keys.rs`](../../crates/rimz/src/mux/keys.rs) | Named key presses and bracketed-paste markers. |
@@ -53,7 +53,7 @@ Zellij, `crates/rimz/src/mux/zellij/` plus [`zellij.rs`](../../crates/rimz/src/m
 | [`presence.rs`](../../crates/rimz/src/mux/zellij/presence.rs) | Plugin materialization, identity, load and retire pipes. |
 | [`pane_topology.rs`](../../crates/rimz/src/mux/zellij/pane_topology.rs) | The topology cache the plugin publishes. |
 | [`raw_pane.rs`](../../crates/rimz/src/mux/zellij/raw_pane.rs) | Topology projection and sidebar classification. |
-| [`session.rs`](../../crates/rimz/src/mux/zellij/session.rs) | Session discovery and topology-cache reads. |
+| [`session.rs`](../../crates/rimz/src/mux/zellij/session.rs) | Session discovery, topology-cache reads, and serialized-session cache discovery and purge. |
 | [`socket.rs`](../../crates/rimz/src/mux/zellij/socket.rs) | IPC socket path budgeting, which is tight on macOS. |
 | [`reap.rs`](../../crates/rimz/src/mux/zellij/reap.rs) | Pre-attach retirement of orphaned clients from one remote lineage. |
 | [`parse.rs`](../../crates/rimz/src/mux/zellij/parse.rs), [`pane_pid.rs`](../../crates/rimz/src/mux/zellij/pane_pid.rs) | Command-output parsing helpers. |

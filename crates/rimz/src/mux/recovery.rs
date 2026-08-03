@@ -9,8 +9,7 @@
 //! enumerate the current user's process table.
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::RuntimePaths;
@@ -64,57 +63,6 @@ pub fn teardown_room(
         cache_removed,
         processes_swept,
     }
-}
-
-/// Remove Zellij's serialized-session cache for `name` under `cache_root`, across
-/// every `contract_version_*` child so it survives a Zellij contract bump.
-/// Returns the paths removed; a missing cache removes nothing. Pure over its
-/// `cache_root` argument so it is testable against a tempdir.
-pub fn purge_zellij_session_cache_in(cache_root: &Path, name: &str) -> Vec<PathBuf> {
-    let mut removed = Vec::new();
-    for entry in zellij_session_cache_paths_in(cache_root, name) {
-        if remove_path(&entry) {
-            removed.push(entry);
-        }
-    }
-    removed
-}
-
-/// Zellij's serialized-session cache paths for `name`, across every
-/// `contract_version_*` child.
-pub fn zellij_session_cache_paths_in(cache_root: &Path, name: &str) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    let Ok(versions) = fs::read_dir(cache_root.join("zellij")) else {
-        return paths;
-    };
-    for version in versions.flatten() {
-        if !version
-            .file_name()
-            .to_string_lossy()
-            .starts_with("contract_version")
-        {
-            continue;
-        }
-        let entry = version.path().join("session_info").join(name);
-        if entry.exists() {
-            paths.push(entry);
-        }
-    }
-    paths
-}
-
-/// Remove a file or directory, returning whether anything was removed. A path
-/// that does not exist is not an error (the goal state is "gone").
-fn remove_path(path: &Path) -> bool {
-    let Ok(meta) = fs::symlink_metadata(path) else {
-        return false;
-    };
-    let result = if meta.is_dir() {
-        fs::remove_dir_all(path)
-    } else {
-        fs::remove_file(path)
-    };
-    result.is_ok()
 }
 
 /// Whether `cmdline` belongs to an orphaned room process worth sweeping. The
@@ -551,38 +499,6 @@ mod tests {
         assert!(!is_stats_refresh(
             "rimz sidebar serve --workspace ws --session rimz-x"
         ));
-    }
-
-    #[test]
-    fn cache_purge_removes_every_contract_version_and_ignores_absent() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path();
-        // Two contract versions hold this session; a third dir is unrelated.
-        for version in ["contract_version_1", "contract_version_2"] {
-            let entry = root.join("zellij").join(version).join("session_info");
-            fs::create_dir_all(&entry).expect("mkdir");
-            fs::write(entry.join(SESSION), b"serialized").expect("write");
-        }
-        fs::create_dir_all(root.join("zellij").join("permissions")).expect("mkdir");
-
-        let mut removed = purge_zellij_session_cache_in(root, SESSION);
-        removed.sort();
-        assert_eq!(
-            removed.len(),
-            2,
-            "both contract versions purged: {removed:?}"
-        );
-        assert!(
-            !root
-                .join("zellij/contract_version_1/session_info")
-                .join(SESSION)
-                .exists()
-        );
-
-        // A second run finds nothing to remove and does not error.
-        assert!(purge_zellij_session_cache_in(root, SESSION).is_empty());
-        // An absent cache root is a no-op.
-        assert!(purge_zellij_session_cache_in(&root.join("missing"), SESSION).is_empty());
     }
 
     #[test]

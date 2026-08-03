@@ -231,7 +231,7 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-surface-budget = 264
+surface-budget = 262
 
 [[module]]
 path = "crates/rimz/src/mux/mount_proof.rs"
@@ -245,6 +245,34 @@ surface-budget = 2
 path = "crates/rimz/src/mux/reconcile.rs"
 allowed-imports = ["ids"]
 surface-budget = 19
+
+[[module]]
+path = "crates/rimz/src/mux/recovery.rs"
+allowed-imports = [
+    "(crate)",
+    "ids",
+    "mux",
+    "proc",
+]
+surface-budget = 16
+
+[[module]]
+path = "crates/rimz/src/mux/zellij/session.rs"
+allowed-imports = [
+    "config",
+    "ids",
+    "mux",
+    "sidebar::cache",
+    "sidebar::timing",
+    "store::paths",
+    "workspace",
+]
+surface-budget = 15
+
+[[strangler]]
+symbol = "purge_zellij_session_cache_in"
+path = "crates/rimz/src/mux/recovery.rs"
+baseline = 0
 
 [[module]]
 path = "crates/rimz/src/observability"
