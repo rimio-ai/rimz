@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use jiff::Timestamp;
 
+use crate::Store;
 use crate::agents::transcript::TranscriptCursor;
 use crate::agents::{AgentCardRef, AgentDefinition, AgentState, AgentStatus};
 use crate::harness::run::RunStatus;
@@ -17,7 +18,7 @@ use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::message::{MessageRecord, MessageSender, MessageStatus};
 use crate::store::event::EventKind;
 use crate::store::event_log;
-use crate::{Store, store::snapshot::SidebarSnapshot};
+use crate::store::snapshot::SidebarSnapshot;
 
 use super::dispatch::DispatchOutcome;
 

@@ -7,10 +7,8 @@ use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry};
 use crate::sidebar::test_support::{child_agent, pane, pane_in_tab, root_agent};
 use crate::sidebar::timing::unix_now_ms;
 use crate::store::atomic;
-use crate::{
-    RuntimePaths, StatePaths, store::snapshot::SidebarSnapshot,
-    store::snapshot::SidebarWorktreeKind,
-};
+use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeKind};
+use crate::{RuntimePaths, StatePaths};
 use jiff::Timestamp;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

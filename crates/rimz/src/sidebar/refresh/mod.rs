@@ -9,14 +9,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::agents::AgentAccount;
-use crate::agents::AgentState;
+use crate::RuntimePaths;
 use crate::agents::spending::{
     ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
     read_provider_spending_cache, read_workspace_spending_cache,
 };
+use crate::agents::{AgentAccount, AgentState};
 use crate::config::MachineConfig;
-use crate::{RuntimePaths, store::snapshot::SidebarSnapshot};
+use crate::store::snapshot::SidebarSnapshot;
 
 pub mod accounts;
 pub mod cohort_spend;

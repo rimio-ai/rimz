@@ -8,7 +8,8 @@ use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::TAB_SUCCESS_STATUS_TTL;
-use crate::{store::snapshot::SidebarSnapshot, theme};
+use crate::store::snapshot::SidebarSnapshot;
+use crate::theme;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TabRename {

@@ -1,21 +1,17 @@
 //! The fleet make-up line — the cockpit's status buckets.
 
 use crate::agents::AgentStatus;
-use crate::{
-    store::snapshot::SidebarWorktreeGroup, store::snapshot::WorktreePrCi,
-    store::snapshot::WorktreePrState,
-};
+use crate::store::snapshot::{SidebarWorktreeGroup, WorktreePrCi, WorktreePrState};
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::sidebar_pane::render::BodyFilter;
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
     attention_cell_style, status_chip_color, status_glyph, status_rest_style, unread_anim,
 };
 use crate::sidebar_pane::render::theme::Theme;
-use crate::sidebar_pane::render::{HitRegion, HitTarget};
+use crate::sidebar_pane::render::{BodyFilter, HitRegion, HitTarget};
 
 use super::{pin_right, trim_spans_to_width};
 

@@ -20,8 +20,7 @@ use std::time::{Duration, Instant};
 use crate::config::NotificationsPrefs;
 use crate::diag::record::DiagEvent;
 use crate::ids::PaneId;
-use crate::sidebar::events::EventStore;
-use crate::sidebar::events::{SidebarEvent, SidebarEventEnvelope};
+use crate::sidebar::events::{EventStore, SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::focus_anchor::{
     FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
 };
@@ -32,9 +31,8 @@ use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL,
 use crate::sidebar_pane::pixel::probe::escalate_own_pane_passthrough;
 use crate::sidebar_pane::pixel::{PixelRenderCaps, detect_pixel_render_caps};
 use crate::store::paths::PathErr;
-use crate::{
-    MuxName, RuntimePaths, SidebarInstanceId, WorkspaceId, store::snapshot::SidebarSnapshot,
-};
+use crate::store::snapshot::SidebarSnapshot;
+use crate::{MuxName, RuntimePaths, SidebarInstanceId, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::{ClearType, CrosstermBackend};
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
@@ -70,7 +68,9 @@ mod width_control;
 #[cfg(test)]
 use self::loop_state::handle_wakeup;
 use self::loop_state::{LoopFlow, LoopState, MaintenanceContext};
-use self::{notify::*, socket::*, timing::*};
+use self::notify::*;
+use self::socket::*;
+use self::timing::*;
 use fetch::{FetchDispatcher, FetchRequest, FetchUpdate, spawn_fetch_worker};
 use gate::GateState;
 use input::{Wakeup, encode_key, encode_mouse, wait_for_wakeup};

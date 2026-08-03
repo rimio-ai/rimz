@@ -8,12 +8,10 @@ use serde::{Deserialize, Serialize};
 use crate::agents::AgentState;
 use crate::agents::spending::{EffortParseMemo, EffortSessionRef};
 use crate::store::active_time;
-use crate::store::snapshot::RollupCursor;
-use crate::{
-    RuntimePaths, StatePaths, store::snapshot::SidebarCohortEffort,
-    store::snapshot::SidebarSeatEffort, store::snapshot::SidebarSnapshot,
-    store::snapshot::SidebarWorktreeGroup,
+use crate::store::snapshot::{
+    RollupCursor, SidebarCohortEffort, SidebarSeatEffort, SidebarSnapshot, SidebarWorktreeGroup,
 };
+use crate::{RuntimePaths, StatePaths};
 
 use super::super::timing::COHORT_SPEND_TTL;
 

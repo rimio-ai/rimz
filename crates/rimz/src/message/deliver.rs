@@ -15,8 +15,9 @@ use crate::message::{
     command_submit_delay_from_env, delivery_window_from_env, gate_open_for_agent,
     max_delivery_attempts_from_env, message_interval_from_env, older_ready_blocker, queue_head,
 };
+use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
-use crate::{RuntimePaths, Store, store::snapshot::PaneAgent, store::snapshot::SidebarSnapshot};
+use crate::{RuntimePaths, Store};
 
 use super::send;
 

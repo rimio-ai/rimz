@@ -92,7 +92,8 @@ mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
     use crate::sidebar::test_support::root_agent;
-    use crate::{RuntimeOwner, RuntimeOwnerKind, store::snapshot::SidebarSnapshot};
+    use crate::store::snapshot::SidebarSnapshot;
+    use crate::{RuntimeOwner, RuntimeOwnerKind};
 
     #[test]
     fn daemon_reap_due_tracks_cache_ttl() {

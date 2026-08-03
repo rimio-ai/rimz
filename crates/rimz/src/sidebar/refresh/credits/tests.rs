@@ -1,9 +1,10 @@
 use uuid::Uuid;
 
 use super::*;
+use crate::SpendWindow;
 use crate::agents::SpendTally;
 use crate::ids::WorkspaceId;
-use crate::{SpendWindow, store::snapshot::SidebarProviderPanel};
+use crate::store::snapshot::SidebarProviderPanel;
 
 fn runtime() -> (tempfile::TempDir, RuntimePaths) {
     let dir = tempfile::tempdir().unwrap();

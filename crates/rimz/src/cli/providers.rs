@@ -6,12 +6,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use jiff::{Timestamp, tz::TimeZone};
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use serde::Serialize;
 
 use super::GlobalFlags;
 use super::render::{self, KeyVals, cell};
 use super::spinner::Spinner;
+use rimz::RuntimePaths;
 use rimz::agents::spending::{ProviderSpendingCache, read_provider_spending_cache};
 use rimz::agents::{ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally};
 use rimz::config::MachineConfig;
@@ -20,7 +22,7 @@ use rimz::sidebar::refresh::{
     AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts,
     refresh_account_usage_if_due, refresh_account_usage_now,
 };
-use rimz::{RuntimePaths, store::snapshot::DailyBudgetView, store::snapshot::SidebarProviderPanel};
+use rimz::store::snapshot::{DailyBudgetView, SidebarProviderPanel};
 
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 

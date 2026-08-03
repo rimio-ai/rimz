@@ -9,19 +9,15 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::RuntimePaths;
 use crate::agents::spending::SpendingCaches;
 use crate::harness::auto_continue::{self, ResumeMessage};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::{
-    LazyAgentPairingDiagnostic, LazyAgentPairingResult, ResumeOutcome, RuntimeReapInputs,
-    SidebarPresence, SidebarProviderPanel, SidebarRow, SidebarWorktreeGroup, TruthNotice,
-    WorktreePrCi, WorktreePrState, compute_lazy_agent_pairings,
-};
-use crate::{
-    RuntimePaths, store::snapshot::RemoteControlBadge, store::snapshot::SidebarLinkFreshness,
-    store::snapshot::SidebarLinkHealth, store::snapshot::SidebarOwnView,
-    store::snapshot::SidebarSnapshot, store::snapshot::SidebarWorktreeKind,
-    store::snapshot::WorktreeTrunkSync,
+    LazyAgentPairingDiagnostic, LazyAgentPairingResult, RemoteControlBadge, ResumeOutcome,
+    RuntimeReapInputs, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence,
+    SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
+    TruthNotice, WorktreePrCi, WorktreePrState, WorktreeTrunkSync, compute_lazy_agent_pairings,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -36,8 +32,7 @@ use super::refresh::git_stats::{
     worktree_group_path_fields,
 };
 use super::refresh::live_spend::{apply_live_day_spend, apply_live_today_spend};
-use super::refresh::pr::PrLink;
-use super::refresh::pr::read_pr_state_cache;
+use super::refresh::pr::{PrLink, read_pr_state_cache};
 use super::refresh::rate_limits::apply_rate_limit_cache;
 use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 

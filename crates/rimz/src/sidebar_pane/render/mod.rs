@@ -52,14 +52,11 @@ pub(crate) use scrollbar::ScrollbarFade;
 use std::io::{self, Write};
 use std::num::NonZeroU16;
 
-use crate::agents::AgentStatus;
-use crate::agents::TurnPhase;
+use crate::agents::{AgentStatus, TurnPhase};
 use crate::config::{AnimationRole, CardDensityMode, GlyphRole};
 use crate::sidebar_pane::pets::PetAction;
 use crate::sidebar_pane::view::VisibleRoster;
-use crate::{
-    store::snapshot::ProcessState, store::snapshot::SidebarRow, store::snapshot::SidebarSnapshot,
-};
+use crate::store::snapshot::{ProcessState, SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend};
 use ratatui::buffer::CellDiffOption;
 use ratatui::layout::Rect;

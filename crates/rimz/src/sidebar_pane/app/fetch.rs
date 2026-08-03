@@ -24,7 +24,8 @@ use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
 use crate::sidebar::read_marks::ReadMarks;
 use crate::sidebar::unread::{ClearedUnread, OpenedUnread, UnreadEpisodes};
-use crate::{RuntimePaths, StatePaths, store::snapshot::SidebarSnapshot};
+use crate::store::snapshot::SidebarSnapshot;
+use crate::{RuntimePaths, StatePaths};
 
 use super::input::SNAPSHOT_WAKEUP;
 use super::{ServeConfig, tick_for};

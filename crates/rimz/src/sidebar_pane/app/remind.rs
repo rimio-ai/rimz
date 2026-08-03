@@ -218,10 +218,8 @@ fn is_reminder_status(status: AgentStatus) -> bool {
 mod tests {
     use super::*;
     use crate::sidebar_pane::app::fixtures::{pane, snapshot, workspace};
-    use crate::{
-        store::snapshot::AgentCard, store::snapshot::RowCard, store::snapshot::SidebarOwnView,
-        store::snapshot::SidebarRow, store::snapshot::SidebarWorktreeGroup,
-        store::snapshot::SidebarWorktreeKind,
+    use crate::store::snapshot::{
+        AgentCard, RowCard, SidebarOwnView, SidebarRow, SidebarWorktreeGroup, SidebarWorktreeKind,
     };
     use jiff::Timestamp;
 

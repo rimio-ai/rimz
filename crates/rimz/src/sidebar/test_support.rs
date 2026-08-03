@@ -5,10 +5,7 @@ use jiff::Timestamp;
 use crate::agents::{AgentState, AgentStatus, RateLimitWindow, TurnPhase};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
-use crate::{
-    store::snapshot::SidebarSnapshot, store::snapshot::SidebarWorktreeGroup,
-    store::snapshot::SidebarWorktreeKind,
-};
+use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
 
 pub(crate) fn pane(id: &str, command: &str, cwd: &str) -> PaneRef {
     PaneRef {

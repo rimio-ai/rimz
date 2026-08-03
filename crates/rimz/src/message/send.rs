@@ -3,6 +3,7 @@
 use std::thread::sleep;
 use std::time::Duration;
 
+use crate::Store;
 use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::message::{
@@ -10,8 +11,8 @@ use crate::message::{
     WhenCondition,
 };
 use crate::mux::{NamedKey, paste_into_pane, press_pane_key, type_into_pane};
+use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
-use crate::{Store, store::snapshot::PaneAgent, store::snapshot::SidebarSnapshot};
 
 pub type Result<T> = std::result::Result<T, SendErr>;
 

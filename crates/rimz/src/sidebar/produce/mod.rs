@@ -23,10 +23,8 @@ mod metrics;
 mod panes;
 pub(crate) mod tab_status;
 
-use std::{
-    collections::{BTreeSet, HashSet},
-    path::{Path, PathBuf},
-};
+use std::collections::{BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::sidebar::agent_projection::{AgentProjection, WiredAgentProjection};
@@ -37,11 +35,8 @@ use crate::sidebar::enrich::{
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::sidebar::refresh::refresh_heavy_lanes;
 use crate::sidebar::timing::unix_now_ms;
-use crate::store::snapshot::{PaneAgent, SnapshotErr};
-use crate::{
-    ResolvedWorkspace, RuntimePaths, StatePaths, Store, store::snapshot::RowCard,
-    store::snapshot::SidebarSnapshot,
-};
+use crate::store::snapshot::{PaneAgent, RowCard, SidebarSnapshot, SnapshotErr};
+use crate::{ResolvedWorkspace, RuntimePaths, StatePaths, Store};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProduceErr {

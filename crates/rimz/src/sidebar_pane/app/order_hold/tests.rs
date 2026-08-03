@@ -1,9 +1,9 @@
 use super::*;
+use crate::agents::AgentStatus;
 use crate::sidebar_pane::app::fixtures::{pane, snapshot, workspace};
-use crate::{
-    agents::AgentStatus, store::snapshot::AgentCard, store::snapshot::ProcessCard,
-    store::snapshot::RowCard, store::snapshot::SidebarRow, store::snapshot::SidebarStatusCount,
-    store::snapshot::SidebarWorktreeGroup, store::snapshot::SidebarWorktreeKind,
+use crate::store::snapshot::{
+    AgentCard, ProcessCard, RowCard, SidebarRow, SidebarStatusCount, SidebarWorktreeGroup,
+    SidebarWorktreeKind,
 };
 
 fn row(id: &str, raw_pane: &str) -> SidebarRow {
