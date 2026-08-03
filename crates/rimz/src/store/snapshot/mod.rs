@@ -25,8 +25,8 @@ use std::path::PathBuf;
 use crate::store::atomic;
 use crate::store::event_log::EventLogErr;
 
-pub(crate) use assemble::rebuild;
-pub use assemble::{build_from, build_with_cursor, read_fresh_latest};
+pub(crate) use assemble::{build_from, rebuild};
+pub use assemble::{build_with_cursor, read_fresh_latest};
 pub(crate) use fold::{
     EventCarryover, catch_up_rollup, read_carryover, reseed_rollup_cache_for_rotation,
     write_carryover,
@@ -54,7 +54,7 @@ pub use view::{
     SidebarCohortEffort, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
     SidebarProviderPanel, SidebarSeatEffort, SidebarSnapshot, SidebarStatusCount,
     SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice, WorktreePrCi, WorktreePrState,
-    WorktreeTrunkSync, actionable_unread_count, cohort_team, lead_unread_row, triage_key,
+    WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
 };
 pub(crate) use view::{format_plan_label, sort_windows};
 

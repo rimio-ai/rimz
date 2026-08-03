@@ -19,7 +19,8 @@ mod frame;
 mod recovery;
 mod rotation;
 
-pub use recovery::{RepairOutcome, repair};
+pub use recovery::RepairOutcome;
+pub(crate) use recovery::repair;
 pub use rotation::{RotationOutcome, prune_archive, rotate};
 
 pub const DEFAULT_RETENTION_ARG: &str = "14d";
@@ -86,7 +87,7 @@ pub fn append<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 
 /// Append one ordered group with a single filesystem write.
 #[must_use = "durability barrier; check the result"]
-pub fn append_batch(path: &Path, events: &[EventEnvelope]) -> Result<()> {
+pub(crate) fn append_batch(path: &Path, events: &[EventEnvelope]) -> Result<()> {
     if events.is_empty() {
         return Ok(());
     }
@@ -101,7 +102,7 @@ pub fn append_batch(path: &Path, events: &[EventEnvelope]) -> Result<()> {
 }
 
 #[must_use = "durability barrier; check the result"]
-pub fn replace_all(path: &Path, events: &[EventEnvelope]) -> Result<()> {
+pub(crate) fn replace_all(path: &Path, events: &[EventEnvelope]) -> Result<()> {
     let mut bytes = Vec::new();
     for event in events {
         let payload = serde_json::to_vec(event).map_err(atomic::AtomicErr::Json)?;

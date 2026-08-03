@@ -88,7 +88,7 @@ pub fn write_executable_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()
 /// Atomically replace `dst` with a hardlink to the executable at `src`.
 /// Filesystems that reject the link fall back to an executable byte copy.
 #[must_use = "durability barrier; check the result"]
-pub fn link_executable_atomically(src: &Path, dst: &Path) -> Result<()> {
+pub(crate) fn link_executable_atomically(src: &Path, dst: &Path) -> Result<()> {
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent).map_err(|source| AtomicErr::Io {
             path: parent.to_path_buf(),
@@ -328,7 +328,7 @@ pub fn append_record_bytes(path: &Path, line: &[u8]) -> Result<()> {
 /// them, so a single caller per interval makes the whole fleet's appends
 /// durable.
 #[must_use = "durability barrier; check the result"]
-pub fn sync_file_data(path: &Path) -> Result<()> {
+pub(crate) fn sync_file_data(path: &Path) -> Result<()> {
     let file = OpenOptions::new()
         .write(true)
         .open(path)
@@ -348,7 +348,7 @@ pub fn sync_file_data(path: &Path) -> Result<()> {
 /// primitive, cutting a corrupt suffix at a frame boundary. Caller owns the
 /// write serialization point (the workspace lock).
 #[must_use = "durability barrier; check the result"]
-pub fn truncate_file(path: &Path, len: u64) -> Result<()> {
+pub(crate) fn truncate_file(path: &Path, len: u64) -> Result<()> {
     let file = OpenOptions::new()
         .write(true)
         .open(path)
@@ -435,7 +435,11 @@ fn is_orphan_temp_name(name: &str) -> bool {
 /// rename. A hard kill can leave them behind. Only files older than `min_age`
 /// are removed, so an in-flight write stays intact. Reclaimed bytes count a
 /// hardlinked payload only when the sweep removes its final name.
-pub fn sweep_orphan_temps_under(root: &Path, min_age: Duration, dry_run: bool) -> (usize, u64) {
+pub(crate) fn sweep_orphan_temps_under(
+    root: &Path,
+    min_age: Duration,
+    dry_run: bool,
+) -> (usize, u64) {
     let mut stack = vec![root.to_path_buf()];
     let now = SystemTime::now();
     let mut candidates = Vec::new();
@@ -527,7 +531,7 @@ fn removed_payload_bytes(files: &[(PathBuf, std::fs::Metadata)]) -> u64 {
 
 /// Remove old files under `dir` when `keep` selects them for this sweep.
 #[must_use = "maintenance report; surface it to the caller"]
-pub fn prune_old_files(
+pub(crate) fn prune_old_files(
     dir: &Path,
     older_than: Duration,
     keep: impl Fn(&Path) -> bool,
@@ -582,7 +586,7 @@ pub fn prune_old_files(
 }
 
 /// fsync a directory so its rename/unlink operations are durable.
-pub fn sync_dir(dir: &Path) -> Result<()> {
+pub(crate) fn sync_dir(dir: &Path) -> Result<()> {
     let handle = File::open(dir).map_err(|e| AtomicErr::Io {
         path: dir.to_path_buf(),
         source: e,

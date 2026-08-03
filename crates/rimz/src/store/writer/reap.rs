@@ -71,7 +71,7 @@ impl Store {
         })
     }
 
-    pub(crate) fn reap_dead_sessions(&self) -> Result<usize> {
+    fn reap_dead_sessions(&self) -> Result<usize> {
         // The persisted roster protects crash-recovery candidates until room
         // rebirth consumes it. The remaining scan stays lock-free: a live
         // same-id session that races the append clears its end stamp on its

@@ -35,11 +35,12 @@ mod score;
 pub(crate) use providers::{format_plan_label, sort_windows};
 
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
+use model::cohort_team;
 pub use model::{
     DailyBudgetView, PresenceSample, RemoteControlBadge, SidebarCohortEffort, SidebarLinkFreshness,
     SidebarLinkHealth, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort,
     SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrCi, WorktreePrState,
-    WorktreeTrunkSync, actionable_unread_count, cohort_team, lead_unread_row, triage_key,
+    WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
 };
 pub use reap::RuntimeReapInputs;
 

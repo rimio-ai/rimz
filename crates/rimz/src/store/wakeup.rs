@@ -31,7 +31,7 @@ use crate::sidebar::events::{
     RELOAD_CONTROL_WORD, SUPERVISOR_HANDOFF_CONTROL_WORD, SidebarEvent, SidebarEventEnvelope,
 };
 use crate::sidebar::heartbeat::{SidebarHeartbeat, read_current_heartbeats};
-pub use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
+use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
 use crate::store::RuntimePaths;
 use crate::store::event::{EventEnvelope, EventKind};
 

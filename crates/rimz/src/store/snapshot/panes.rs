@@ -506,14 +506,6 @@ pub fn pane_start_allows_bind(last_activity: Timestamp, pane: &PaneRef) -> bool 
         .is_none_or(|start| last_activity >= start)
 }
 
-#[cfg(test)]
-fn pane_start_matches(expected: &PaneRef, actual: &PaneRef) -> bool {
-    match (expected.pane_process_start, actual.pane_process_start) {
-        (Some(expected), Some(actual)) => expected == actual,
-        _ => true,
-    }
-}
-
 fn pane_start_matches_agent_stamp(expected: &PaneRef, actual: &PaneRef) -> bool {
     match (expected.pane_process_start, actual.pane_process_start) {
         (Some(expected), Some(actual)) => expected <= actual,
@@ -662,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_stamp_tolerates_floor_to_exact_start_drift_but_items_do_not() {
+    fn agent_stamp_tolerates_floor_to_exact_start_drift() {
         let floor: Timestamp = "2026-06-05T13:49:53Z".parse().unwrap();
         let exact: Timestamp = "2026-06-05T14:22:43Z".parse().unwrap();
         let stamped = PaneRef {
@@ -677,10 +669,6 @@ mod tests {
         assert!(
             pane_start_matches_agent_stamp(&stamped, &live),
             "old floor-era agent stamps still attach to the now-exact live process"
-        );
-        assert!(
-            !pane_start_matches(&stamped, &live),
-            "standalone item pane refs still require exact start identity"
         );
     }
 

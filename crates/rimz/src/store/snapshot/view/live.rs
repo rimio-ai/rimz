@@ -427,6 +427,8 @@ impl SidebarSnapshot {
     }
 }
 
+// Remove this compatibility path only after LocalSessionBindRejected diagnostics
+// show legacy sessions no longer need evidence-free pane binding.
 fn legacy_fresh_pane_allows_bind(
     pane: &PaneRef,
     observation: &LocalSessionObservation,

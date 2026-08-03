@@ -508,10 +508,6 @@ impl ProcessState {
     pub fn is_busy(&self) -> bool {
         *self == Self::Busy
     }
-
-    pub fn is_stuck(&self) -> bool {
-        *self == Self::Stuck
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

@@ -44,7 +44,7 @@ pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
 
 /// Build the snapshot view from the live store without persisting anything —
 /// the read-only twin of [`rebuild`], safe from a lock-free reader.
-pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
+pub(crate) fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     let (rollup, agents, resume_outcomes) = catch_up_rollup(paths)?;
     assemble_snapshot(paths, rollup.extent, agents, resume_outcomes)
 }

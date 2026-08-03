@@ -137,12 +137,7 @@ pub fn workspaces_dir_under(state_root: &Path) -> PathBuf {
     state_root.join("rimz").join("workspaces")
 }
 
-/// User-scoped immutable RimZ builds used by long-lived room processes.
-pub fn builds_dir() -> PathBuf {
-    builds_dir_under(&state_home())
-}
-
-pub fn builds_dir_under(state_root: &Path) -> PathBuf {
+pub(crate) fn builds_dir_under(state_root: &Path) -> PathBuf {
     state_root.join("rimz").join("builds")
 }
 
@@ -253,7 +248,7 @@ impl RuntimePaths {
         })
     }
 
-    pub fn validated_under(workspace_id: WorkspaceId, runtime_root: &Path) -> Result<Self> {
+    fn validated_under(workspace_id: WorkspaceId, runtime_root: &Path) -> Result<Self> {
         let paths = Self::under(workspace_id, runtime_root)?;
         let budget = SockBudget::for_sock_dir(&paths.sock_dir);
         budget.validate()?;
@@ -301,13 +296,6 @@ impl RuntimePaths {
     /// Content-addressed replacement prompts generated for provider launches.
     pub fn system_prompt_dir(&self) -> PathBuf {
         self.root.join("prompt")
-    }
-
-    /// Sidecar file for one subagent's `subagentStatusLine` enrichment, keyed by
-    /// `(kind, agent_id)` and digested to a safe, fixed-width name like
-    /// [`Self::agent_context_path`].
-    pub fn subagent_context_path(&self, kind: &str, agent_id: &str) -> PathBuf {
-        sidecar::path(&self.subagent_context_dir, "sub", kind, agent_id)
     }
 
     /// Room-scoped Copilot OpenTelemetry JSONL exporter cache.
@@ -714,7 +702,7 @@ pub(crate) fn runtime_home_from(xdg_runtime: Option<&Path>, uid: u32) -> PathBuf
         .unwrap_or_else(|| PathBuf::from("/tmp").join(format!("rimz-{uid}")))
 }
 
-pub fn persistent_shared_home() -> PathBuf {
+fn persistent_shared_home() -> PathBuf {
     state_home().join("rimz").join("shared")
 }
 
