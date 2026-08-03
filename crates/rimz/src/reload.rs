@@ -482,15 +482,13 @@ fn upgrade_live(
             focus_follows_mouse: mux_config.zellij.focus_follows_mouse,
             mouse_click_through: mux_config.zellij.mouse_click_through,
         };
-        let configuration = crate::mux::zellij::presence_plugin_configuration(&presence);
-        let desired_config =
-            crate::mux::zellij::presence_plugin_config_hash(&configuration).unwrap_or_default();
+        let desired_config = crate::mux::zellij::presence_plugin_config_hash_for(&presence);
         let cache = crate::sidebar::cache::read_pane_topology_cache(runtime, &ws.session_name);
         let current_writer = current_presence_plugin_writer(
             cache.as_ref(),
             unix_now_ms(),
             crate::mux::zellij::presence_plugin_build(),
-            desired_config,
+            &desired_config,
         );
         let needs_convergence = match current_writer {
             Some(writer) => match crate::mux::ZellijBackend::new()

@@ -132,7 +132,12 @@ fn materialize_presence_plugin_bytes(
 /// either separator cannot be expressed; `rimz_bin` is omitted and the plugin
 /// falls back to `rimz` on the host PATH. Workspace ids are `ws_` + hex by
 /// construction, always expressible.
-pub(crate) fn presence_plugin_configuration(opts: &super::super::PresencePluginOptions) -> String {
+struct PresencePluginIdentity {
+    configuration: String,
+    config_hash: String,
+}
+
+fn presence_plugin_identity(opts: &super::super::PresencePluginOptions) -> PresencePluginIdentity {
     let mut configuration = format!("workspace_id={}", opts.workspace_id.as_str());
     if opts.session_name.contains([',', '=']) {
         tracing::debug!(
@@ -188,15 +193,16 @@ pub(crate) fn presence_plugin_configuration(opts: &super::super::PresencePluginO
     let config_hash = crate::build_id::of_bytes(configuration.as_bytes());
     configuration.push_str(",plugin_config=");
     configuration.push_str(&config_hash);
-    configuration
+    PresencePluginIdentity {
+        configuration,
+        config_hash,
+    }
 }
 
-pub(crate) fn presence_plugin_config_hash(configuration: &str) -> Option<&str> {
-    configuration
-        .rsplit(',')
-        .next()?
-        .strip_prefix("plugin_config=")
-        .filter(|hash| !hash.is_empty())
+pub(crate) fn presence_plugin_config_hash_for(
+    opts: &super::super::PresencePluginOptions,
+) -> String {
+    presence_plugin_identity(opts).config_hash
 }
 
 impl ZellijBackend {
@@ -245,34 +251,27 @@ impl ZellijBackend {
         opts: &super::super::PresencePluginOptions,
     ) -> Result<()> {
         self.seed_presence_permissions(opts);
-        let configuration = presence_plugin_configuration(opts);
-        if let Some(config) = presence_plugin_config_hash(&configuration) {
-            let desired = PresenceDesired {
-                build: presence_plugin_build().to_owned(),
-                config: config.to_owned(),
-                recorded_at_ms: unix_now_ms(),
-            };
-            match self.runtime_paths_for_workspace(opts.workspace_id.clone()) {
-                Ok(runtime) => {
-                    if let Err(err) = write_presence_desired(&runtime, &desired) {
-                        tracing::debug!(
-                            session = %opts.session_name,
-                            error = %err,
-                            "recording desired presence-plugin identity failed",
-                        );
-                    }
+        let identity = presence_plugin_identity(opts);
+        let desired = PresenceDesired {
+            build: presence_plugin_build().to_owned(),
+            config: identity.config_hash,
+            recorded_at_ms: unix_now_ms(),
+        };
+        match self.runtime_paths_for_workspace(opts.workspace_id.clone()) {
+            Ok(runtime) => {
+                if let Err(err) = write_presence_desired(&runtime, &desired) {
+                    tracing::debug!(
+                        session = %opts.session_name,
+                        error = %err,
+                        "recording desired presence-plugin identity failed",
+                    );
                 }
-                Err(err) => tracing::debug!(
-                    session = %opts.session_name,
-                    error = %err,
-                    "desired presence-plugin identity paths are unavailable",
-                ),
             }
-        } else {
-            tracing::debug!(
+            Err(err) => tracing::debug!(
                 session = %opts.session_name,
-                "desired presence-plugin config identity is unavailable",
-            );
+                error = %err,
+                "desired presence-plugin identity paths are unavailable",
+            ),
         }
         match self.pipe_to_presence_plugin(opts, PRESENCE_BOOT_PIPE, "load") {
             Ok(()) => Ok(()),
@@ -323,20 +322,13 @@ impl ZellijBackend {
                 return;
             }
         };
-        let configuration = presence_plugin_configuration(opts);
-        let Some(expected_config) = presence_plugin_config_hash(&configuration) else {
-            tracing::debug!(
-                session = %opts.session_name,
-                "presence retire skipped because the desired config identity is unavailable",
-            );
-            return;
-        };
+        let identity = presence_plugin_identity(opts);
         let Some(writer) = wait_for_presence_replacement(
             &runtime,
             &opts.session_name,
             floor_ms,
             presence_plugin_build(),
-            expected_config,
+            &identity.config_hash,
             timeout,
             poll_step,
         ) else {
@@ -471,14 +463,14 @@ impl ZellijBackend {
         // defeats Zellij's path-keyed compiled-module cache when owner flows
         // replace the wasm bytes at the canonical artifact path.
         let url = format!("file:{}", opts.wasm.display());
-        let configuration = presence_plugin_configuration(opts);
+        let identity = presence_plugin_identity(opts);
         self.zellij_action(&opts.session_name)
             .args([
                 "pipe",
                 "--plugin",
                 &url,
                 "--plugin-configuration",
-                &configuration,
+                &identity.configuration,
                 "--skip-plugin-cache",
                 "--name",
                 pipe_name,
