@@ -31,7 +31,7 @@ impl SidebarSnapshot {
     /// to the current pane incarnation. These agents are transient snapshot
     /// rows: the durable rollup and event log remain untouched.
     #[doc(hidden)]
-    pub fn with_local_sessions(
+    pub(crate) fn with_local_sessions(
         self,
         panes: &[PaneRef],
         observations: Vec<LocalSessionObservation>,

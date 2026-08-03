@@ -6,6 +6,7 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::store::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
+use super::aggregate::AttentionWindows;
 use super::score::{self, GitRung, GroupCalm};
 use super::{
     SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
@@ -322,20 +323,19 @@ fn row_rank_facts(row: &SidebarRow) -> RankFacts<'_> {
 fn agent_rank_facts(
     agent: &AgentState,
     now: jiff::Timestamp,
-    inactive_after_secs: u32,
-    archive_after_secs: u32,
+    windows: AttentionWindows,
 ) -> RankFacts<'_> {
     let age_secs = score::age_secs(now, agent.last_activity);
     let score = score::attention_score(
         Some(agent.status),
         age_secs,
-        inactive_after_secs,
-        archive_after_secs,
+        windows.inactive_after_secs,
+        windows.archive_after_secs,
     );
     RankFacts {
         is_process: false,
-        inactive: age_secs > inactive_after_secs,
-        archived: age_secs > archive_after_secs,
+        inactive: age_secs > windows.inactive_after_secs,
+        archived: age_secs > windows.archive_after_secs,
         status: Some(agent.status),
         score,
         factor_milli: score::recovered_time_factor_milli(Some(agent.status), score),
@@ -817,7 +817,7 @@ pub fn group_live_agents_by_worktree<'a>(
     snapshot: &SidebarSnapshot,
 ) -> Vec<AgentWorktreeGroup<'a>> {
     let project_root = snapshot.project_root.as_deref();
-    let (inactive_after_secs, archive_after_secs) = rank_windows(snapshot);
+    let windows = AttentionWindows::from_config(&snapshot.attention);
     let resolver = GroupResolver::new(
         GroupRoots {
             project_root,
@@ -851,18 +851,15 @@ pub fn group_live_agents_by_worktree<'a>(
     }
     let mut groups: Vec<AgentWorktreeGroup<'a>> = by_key.into_values().collect();
     for group in &mut groups {
-        sort_listing_agents(
-            &mut group.agents,
-            snapshot.now,
-            inactive_after_secs,
-            archive_after_secs,
-        );
+        sort_listing_agents(&mut group.agents, snapshot.now, windows);
     }
     groups.sort_by_cached_key(|group| {
         group_sort_key(
-            group.agents.iter().copied().map(|agent| {
-                agent_rank_facts(agent, snapshot.now, inactive_after_secs, archive_after_secs)
-            }),
+            group
+                .agents
+                .iter()
+                .copied()
+                .map(|agent| agent_rank_facts(agent, snapshot.now, windows)),
             group.kind,
             GitRung::Unknown,
             &group.label,
@@ -883,33 +880,17 @@ fn agent_ordinal(agent: &AgentState) -> Option<u64> {
 fn sort_listing_agents(
     agents: &mut [&AgentState],
     now: jiff::Timestamp,
-    inactive_after_secs: u32,
-    archive_after_secs: u32,
+    windows: AttentionWindows,
 ) {
     let cohorts = rank_cohort_blocks(
         agents
             .iter()
             .copied()
-            .map(|agent| agent_rank_facts(agent, now, inactive_after_secs, archive_after_secs)),
+            .map(|agent| agent_rank_facts(agent, now, windows)),
     );
-    agents.sort_by_cached_key(|agent| {
-        rank_key(
-            agent_rank_facts(agent, now, inactive_after_secs, archive_after_secs),
-            &cohorts,
-        )
-    });
+    agents.sort_by_cached_key(|agent| rank_key(agent_rank_facts(agent, now, windows), &cohorts));
 }
 
 fn agent_launch_cohort(agent: &AgentState) -> Option<&str> {
     agent.team.as_deref().or(agent.launch_group.as_deref())
-}
-
-fn rank_windows(snapshot: &SidebarSnapshot) -> (u32, u32) {
-    let inactive_after_secs = snapshot.attention.inactive_after_secs.get();
-    let archive_after_secs = snapshot
-        .attention
-        .archive_after_secs
-        .get()
-        .max(inactive_after_secs.saturating_add(1));
-    (inactive_after_secs, archive_after_secs)
 }

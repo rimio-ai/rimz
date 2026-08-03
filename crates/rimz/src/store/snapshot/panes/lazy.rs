@@ -6,7 +6,6 @@ use serde::Serialize;
 
 use super::{PaneBindingEvidence, PaneBindingIndex, pane_binding_evidence, pane_start_allows_bind};
 use crate::agents::AgentSpec;
-use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentState, AgentStatus, SamePaneSessionPolicy, SessionOrigin};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
@@ -780,33 +779,12 @@ fn idle_agent_row(
         attention_score: 0,
         last_activity: pane.pane_process_start.unwrap_or(now),
         card: RowCard::Agent(Box::new(AgentCard {
-            status: AgentStatus::Idle,
-            phase: TurnPhase::Idle,
-            task: None,
-            first_prompt: None,
-            prompt: None,
-            description: None,
             model: default_model.map(ToOwned::to_owned),
-            effort: None,
-            handle: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
             usage: crate::agents::AgentUsageSummary {
                 context_window: definition.default_context_window,
                 ..crate::agents::AgentUsageSummary::default()
             },
-            context: None,
-            context_severity: None,
-            estimated_active_secs: None,
-            // No session yet — the pane's process start is this row's spawn key.
-            registered_at: None,
-            sub_agents: Vec::new(),
-            compacting: false,
-            compaction_count: 0,
-            tool_calls: BTreeMap::new(),
-            tool_repeat: None,
-            turn_error_label: None,
+            ..AgentCard::default()
         })),
     }
 }
