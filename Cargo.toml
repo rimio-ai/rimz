@@ -145,7 +145,7 @@ tungstenite = "0.30"
 # Sentry event without a parallel API. Its transitive tree (sentry-*,
 # `url`/`idna`/`icu`, `rand`) is covered by the imported cargo-vet audit sets in
 # `supply-chain/config.toml`.
-sentry = { version = "0.48", default-features = false, features = [
+sentry = { version = "0.49", default-features = false, features = [
     "backtrace",
     "panic",
     "ureq",
