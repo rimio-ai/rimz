@@ -31,7 +31,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }
 # Atlas reports source locations from parsed syntax. `span-locations` adds
 # compile work to proc-macro2 but is required to expose those locations.
 proc-macro2 = { version = "1", features = ["span-locations"] }
