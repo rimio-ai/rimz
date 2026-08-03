@@ -62,62 +62,6 @@ pub fn server_log_file() -> Option<PathBuf> {
         })
 }
 
-#[cfg(test)]
-fn classify_log_line(line: &str) -> Option<super::logtail::LogSeverity> {
-    match parse_log_line(line) {
-        super::logtail::RecordLine::Start(start) => start.severity,
-        super::logtail::RecordLine::Continuation => None,
-    }
-}
-
-pub fn parse_log_line(line: &str) -> super::logtail::RecordLine {
-    use super::logtail::{LogRecordStart, LogSeverity, RecordLine};
-    if line.is_empty() || line.starts_with([' ', '\t']) {
-        return RecordLine::Continuation;
-    }
-    let lower = line.to_ascii_lowercase();
-    let severity = if lower.contains("panic") {
-        Some(LogSeverity::Panic)
-    } else if lower.contains("fatal") || lower.contains("error") {
-        Some(LogSeverity::Error)
-    } else {
-        None
-    };
-    RecordLine::Start(LogRecordStart {
-        severity,
-        at: line.split_whitespace().next().and_then(parse_log_timestamp),
-        message: line.to_owned(),
-        ..LogRecordStart::default()
-    })
-}
-
-/// tmux opens every log line with `<seconds>.<microseconds>` since the epoch.
-fn parse_log_timestamp(token: &str) -> Option<jiff::Timestamp> {
-    let (seconds, micros) = token.split_once('.')?;
-    let micros: i64 = format!("{micros:0<6}").get(..6)?.parse().ok()?;
-    jiff::Timestamp::new(seconds.parse().ok()?, i32::try_from(micros).ok()? * 1_000).ok()
-}
-
-pub fn diagnose_log_record(
-    _previous: Option<&super::logtail::LogicalRecord>,
-    record: &super::logtail::LogicalRecord,
-    _next: Option<&super::logtail::LogicalRecord>,
-) -> Option<super::logtail::LogDiagnosis> {
-    use super::logtail::{LogDiagnosis, LogImpact, LogSeverity, LogState, normalized_issue_key};
-    let severity = record.start.severity?;
-    Some(LogDiagnosis {
-        key: normalized_issue_key(&record.start.message),
-        state: LogState::Investigate,
-        impact: if severity == LogSeverity::Panic {
-            LogImpact::Alarm
-        } else {
-            LogImpact::Warn
-        },
-        summary: record.start.message.clone(),
-        sample: None,
-    })
-}
-
 pub(crate) fn default_server_socket_path_from(tmpdir: &Path, uid: u32) -> PathBuf {
     tmpdir.join(format!("tmux-{uid}")).join("default")
 }

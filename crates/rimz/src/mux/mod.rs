@@ -11,7 +11,6 @@ mod command;
 pub mod domain;
 mod focus_key;
 mod keys;
-pub mod logtail;
 mod mount_proof;
 mod reconcile;
 pub mod recovery;
