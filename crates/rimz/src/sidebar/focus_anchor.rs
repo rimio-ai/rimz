@@ -267,7 +267,7 @@ fn request_action_with_client_sample(
     };
     store(runtime, &anchor)?;
     drop(_guard);
-    if let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
+    if let Err(err) = crate::sidebar::wakeup::broadcast(
         runtime,
         Some(session_name),
         crate::sidebar::events::SidebarEvent::FocusIntent {

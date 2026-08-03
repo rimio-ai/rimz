@@ -351,7 +351,7 @@ allowed-imports = [
     "workspace",
     "worktree",
 ]
-surface-budget = 524
+surface-budget = 530
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
@@ -410,19 +410,19 @@ allowed-imports = [
     "pane",
     "proc",
     "remote::link",
-    "sidebar::events",
     "sidebar::heartbeat",
     "sidebar::timing",
+    "sidebar::wakeup",
     "sock",
     "theme",
     "workspace",
 ]
-surface-budget = 376
+surface-budget = 365
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"
 allowed-imports = ["store"]
-surface-budget = 38
+surface-budget = 37
 
 [[module]]
 path = "crates/rimz/src/theme"

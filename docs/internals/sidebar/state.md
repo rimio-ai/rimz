@@ -73,6 +73,7 @@ Realtime and presence:
 | Module | What it owns |
 | --- | --- |
 | [`events.rs`](../../../crates/rimz/src/sidebar/events.rs) | The wakeup envelope, the event taxonomy, and the in-memory overlay store. |
+| [`wakeup.rs`](../../../crates/rimz/src/sidebar/wakeup.rs) | Sender-side heartbeat freshness, envelope encoding, and nonblocking datagram fanout. |
 | [`presence.rs`](../../../crates/rimz/src/sidebar/presence.rs) | Zellij presence-wake ingestion and the topology writer gate. `presence/projector.rs` is the shared host policy both backends feed; `presence/tmux.rs` is the control-mode side. |
 | [`fuse.rs`](../../../crates/rimz/src/sidebar/fuse.rs) | Pure fusion of pulled truth, overlay events, and pending focus intent. |
 | [`focus_anchor.rs`](../../../crates/rimz/src/sidebar/focus_anchor.rs) | The two-phase intent behind every RimZ-initiated focus action. |

@@ -129,7 +129,7 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     // Push the update so the `$`/token figure repaints within a wakeup rather
     // than waiting for the sidebar's next poll tick. Best-effort, like every
     // other wakeup: a send failure never fails the statusline render.
-    let _ = rimz::store::wakeup::wake_sidebars(&runtime);
+    let _ = rimz::sidebar::wakeup::wake_store_delta(&runtime, None, None);
     Ok(())
 }
 
@@ -191,7 +191,7 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
     }
     // Repaint the parent's expanded card within a wakeup rather than on the next
     // poll tick. Best-effort, like every other wakeup.
-    let _ = rimz::store::wakeup::wake_sidebars(&runtime);
+    let _ = rimz::sidebar::wakeup::wake_store_delta(&runtime, None, None);
     Ok(())
 }
 

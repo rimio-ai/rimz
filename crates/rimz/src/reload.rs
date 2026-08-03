@@ -32,7 +32,7 @@ use crate::sidebar::heartbeat::SidebarHeartbeat;
 use crate::sidebar::timing::{
     RECONCILE_LIST_TIMEOUT, RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT, unix_now_ms,
 };
-use crate::store::{RuntimePaths, StatePaths, wakeup, workspace_record};
+use crate::store::{RuntimePaths, StatePaths, workspace_record};
 use crate::workspace::{self, KnownWorkspace};
 
 /// Immutable executable generation shared by every long-lived process in a room.
@@ -439,7 +439,7 @@ fn upgrade_live(
     let before_signal = session_heartbeats(runtime, *mux, &ws.session_name);
 
     // 1. Signal live sidebars to re-exec onto the freshly-installed binary.
-    match wakeup::reload_sidebars(runtime) {
+    match crate::sidebar::wakeup::reload_all(runtime) {
         Ok(_) => {}
         Err(err) => {
             tracing::warn!(

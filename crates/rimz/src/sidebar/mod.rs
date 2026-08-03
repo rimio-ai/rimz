@@ -34,6 +34,7 @@ pub mod refresh;
 pub(crate) mod test_support;
 pub mod timing;
 pub mod unread;
+pub mod wakeup;
 pub mod width_target;
 pub mod workspace_projection;
 

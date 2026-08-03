@@ -25,7 +25,7 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
         return Ok(());
     }
     if wrote {
-        let _ = rimz::store::wakeup::wake_run(ctx.store.runtime_paths(), &record);
+        let _ = rimz::harness::run_wake::wake_run(ctx.store.runtime_paths(), &record);
     }
     if retains_pane_after_timeout(&record) {
         if wrote && let Some((pid, process_start)) = provider_process {

@@ -37,7 +37,6 @@ Freshness is an extent, not a timestamp. A derived rollup records the `LogExtent
 | [`message_store.rs`](../../crates/rimz/src/store/message_store.rs), [`run_store.rs`](../../crates/rimz/src/store/run_store.rs) | The live message queue and the supervised-run records. |
 | [`sidecar.rs`](../../crates/rimz/src/store/sidecar.rs) | The shared latest-wins enrichment sidecar store behind `agent_context/` and `subagent_context/`. |
 | [`active_time.rs`](../../crates/rimz/src/store/active_time.rs) | The per-session estimated active-time accumulator, serialized by per-record flocks. |
-| [`wakeup.rs`](../../crates/rimz/src/store/wakeup.rs) | The best-effort datagrams a commit posts to live consumers. |
 | [`gc.rs`](../../crates/rimz/src/store/gc.rs) | Global maintenance: stale runtime hints, recursive orphan-write-temp collection, and dead workspaces. |
 | [`single_flight.rs`](../../crates/rimz/src/store/single_flight.rs) | Cross-process producer election, imported by the sidebar and so free of every writer module. |
 
@@ -199,7 +198,7 @@ Every fsync syscall funnels through [`atomic.rs`](../../crates/rimz/src/store/at
 
 ### Wakeups
 
-After a commit the writer walks the runtime heartbeat directory and sends a typed `store_delta` datagram to each sidebar whose heartbeat is fresh within about 5 seconds, re-stat-ing each file just before the send to close the window where a renderer exited between read and write. A completing supervised run additionally pings its waiter's [run socket](./harness/scripting.md#the-wake-socket).
+After a commit the writer calls the receiving subsystem's adapter: [`sidebar/wakeup.rs`](../../crates/rimz/src/sidebar/wakeup.rs) walks the runtime heartbeat directory and sends a typed `store_delta` datagram to each sidebar whose heartbeat is fresh within about 5 seconds, while [`harness/run_wake.rs`](../../crates/rimz/src/harness/run_wake.rs) pings a completing run's [waiter socket](./harness/scripting.md#the-wake-socket). The sidebar adapter re-stats each heartbeat just before send to close the window where a renderer exited between read and write.
 
 Sends are non-blocking, so a full receiver queue drops the datagram and the write moves on. Per-target failures are absorbed; only a failure to read the heartbeat directory propagates.
 

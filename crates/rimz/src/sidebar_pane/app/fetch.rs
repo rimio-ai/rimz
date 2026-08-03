@@ -793,7 +793,7 @@ fn deliver_notifications(
             crate::sidebar::notify::spawn_notify_handlers(prefs, &notification);
         }
         diag.trace_notify(notification_emitted_trace(&notification, &delivery.panes));
-        if let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
+        if let Err(err) = crate::sidebar::wakeup::broadcast(
             runtime,
             Some(&config.session_name),
             SidebarEvent::Notify {

@@ -1377,9 +1377,11 @@ fn publish_frame(
     stamp_publication(frame, publication);
     if let Err(err) = atomic::write_temp_then_rename_cache(cache_path, frame) {
         tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
-    } else if let Err(err) =
-        crate::store::wakeup::wake_sidebars_pane_frame_published(runtime, publication)
-    {
+    } else if let Err(err) = crate::sidebar::wakeup::broadcast(
+        runtime,
+        None,
+        crate::sidebar::events::SidebarEvent::PaneFramePublished { publication },
+    ) {
         tracing::debug!(error = %err, "sidebar pane-frame publication wakeup failed");
     }
 }

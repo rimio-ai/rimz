@@ -1,4 +1,4 @@
-//! Sidebar wakeup walk against real store writes — no subprocess.
+//! Sidebar wakeup fanout against real store writes — no subprocess.
 
 use std::time::Duration;
 
@@ -33,7 +33,8 @@ fn wake_sidebars_drops_datagrams_when_receiver_queue_is_full() {
     .expect("write full hb");
 
     for _ in 0..2_000 {
-        rimz::store::wakeup::wake_sidebars(&h.runtime_paths).expect("wake sidebars");
+        rimz::sidebar::wakeup::wake_store_delta(&h.runtime_paths, None, None)
+            .expect("wake sidebars");
     }
 
     let mut buf = [0u8; 4096];

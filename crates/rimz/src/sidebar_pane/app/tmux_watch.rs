@@ -74,11 +74,8 @@ fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerEle
                     let deadline = seed_deadline.get_or_insert(now + SEED_WINDOW);
                     let seeding = now < *deadline;
                     for event in project_presence(state.apply(line, seeding)) {
-                        let _ = crate::store::wakeup::broadcast_sidebar_event(
-                            runtime,
-                            Some(session_name),
-                            event,
-                        );
+                        let _ =
+                            crate::sidebar::wakeup::broadcast(runtime, Some(session_name), event);
                     }
                     crate::sidebar::cache::write_presence_stamp(
                         runtime,

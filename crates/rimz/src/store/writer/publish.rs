@@ -3,9 +3,9 @@ use std::time::{Duration, SystemTime};
 use tracing::warn;
 
 use crate::harness::run::RunRecord;
-use crate::store::event::EventEnvelope;
+use crate::store::event::{EventEnvelope, EventKind};
 
-use super::super::{Result, StatePaths, Store, StoreErr, event_log, lock, snapshot, wakeup};
+use super::super::{Result, StatePaths, Store, StoreErr, event_log, lock, snapshot};
 use super::debounce::sync_log_debounced;
 
 /// A publish failure caused by a corrupt event-log frame — the one failure
@@ -155,7 +155,7 @@ impl Store {
     }
 
     pub(super) fn wake_run_best_effort(&self, record: &RunRecord) {
-        if let Err(err) = wakeup::wake_run(&self.inner.runtime, record) {
+        if let Err(err) = crate::harness::run_wake::wake_run(&self.inner.runtime, record) {
             warn!(
                 run_id = %record.run_id,
                 error = %err,
@@ -165,7 +165,20 @@ impl Store {
     }
 
     pub(super) fn wake_sidebars_for_event_best_effort(&self, event: &EventEnvelope) {
-        if let Err(err) = wakeup::wake_sidebars_for_event(&self.inner.runtime, event) {
+        let agent_signal = match event.kind() {
+            EventKind::AgentLifecycle(payload) => Some(payload.observation.signal.tag().to_owned()),
+            EventKind::AgentAttach(_)
+            | EventKind::AgentLaunch(_)
+            | EventKind::Message { .. }
+            | EventKind::SessionRebirth
+            | EventKind::SessionDeath(_)
+            | EventKind::Other { .. } => None,
+        };
+        if let Err(err) = crate::sidebar::wakeup::wake_store_delta(
+            &self.inner.runtime,
+            Some(event.method.clone()),
+            agent_signal,
+        ) {
             warn!(
                 event_id = %event.event_id,
                 error = %err,

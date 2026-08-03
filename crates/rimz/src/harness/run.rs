@@ -143,7 +143,7 @@ pub enum CancelRunErr {
     #[error(transparent)]
     Store(#[from] RunStoreErr),
     #[error(transparent)]
-    Wake(#[from] crate::store::wakeup::WakeupErr),
+    Wake(#[from] crate::harness::run_wake::RunWakeErr),
 }
 
 /// Durably cancel a run and wake its waiter only for the newly-written
@@ -154,7 +154,7 @@ pub fn cancel_and_wake(
 ) -> std::result::Result<RunRecord, CancelRunErr> {
     let (record, wrote) = cancel(store.paths(), run_id)?;
     if wrote {
-        crate::store::wakeup::wake_run(store.runtime_paths(), &record)?;
+        crate::harness::run_wake::wake_run(store.runtime_paths(), &record)?;
     }
     Ok(record)
 }

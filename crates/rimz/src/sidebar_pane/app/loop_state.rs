@@ -1011,7 +1011,7 @@ impl LoopState {
             debug!(error = %err, "sidebar body filter write failed");
             return;
         }
-        if let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
+        if let Err(err) = crate::sidebar::wakeup::broadcast(
             self.read_marks.runtime(),
             Some(&self.session_name),
             SidebarEvent::BodyFilterChanged,
@@ -1903,7 +1903,7 @@ fn reload_or_refetch(
 /// Ping every sidebar in the room to refold after a mark read/unread — the
 /// elder prunes or keeps the episode and peer tabs converge on the new state.
 fn wake_room(runtime: &RuntimePaths) {
-    if let Err(err) = crate::store::wakeup::wake_sidebars(runtime) {
+    if let Err(err) = crate::sidebar::wakeup::wake_store_delta(runtime, None, None) {
         debug!(error = %err, "mark read/unread sidebar wake failed");
     }
 }

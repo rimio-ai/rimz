@@ -218,7 +218,7 @@ fn refresh_session_transcript_context_core(
         refresh,
         Timestamp::now(),
     )?;
-    let _ = crate::store::wakeup::wake_sidebars(runtime);
+    let _ = crate::sidebar::wakeup::wake_store_delta(runtime, None, None);
     Ok(true)
 }
 
@@ -322,7 +322,7 @@ fn retry_unconfirmed_codex_turn_death(
     }
     let changed = crate::store::agent_context::merge_turn_error(runtime, kind, session_id, marker)?;
     if changed {
-        let _ = crate::store::wakeup::wake_sidebars(runtime);
+        let _ = crate::sidebar::wakeup::wake_store_delta(runtime, None, None);
     }
     Ok(changed)
 }
