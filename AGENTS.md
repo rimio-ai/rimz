@@ -102,9 +102,9 @@ This indexes what lives where; runtime shape and the single-binary rationale liv
 - `room/` — private managed-room context, birth/reset lifecycle, sidebar/presence options, and health gating.
 - `harness/` — layout IR, teams, address grammar, launch argv, supervised runs and their wake socket, loop scheduling, resume planning, and rebirth recovery inspection/materialization.
 - `message/` — durable per-agent message queue: park-vs-live dispatch, live-pane send, scheduled wakeups.
-- `store/` — durable state engine: `Store` handle, canonical snapshot schema, writer mutation vocabulary/choreography, framed event log, message/run stores, wakeups, GC.
+- `store/` — durable state engine: `Store` handle, canonical snapshot schema, writer mutation vocabulary/choreography, framed event log, message/run stores, GC.
 - `mux/` — Zellij/tmux seam: `MuxBackend`, subprocess engine, reconcile planner, recovery.
-- `sidebar/` — data plane: Zellij presence ingestion, producer election, pulled-truth/event fusion, projection fold, heavy-lane refresh.
+- `sidebar/` — data plane: Zellij presence ingestion, producer election, pulled-truth/event fusion, projection fold, heavy-lane refresh, consumer wake fanout.
 - `sidebar_pane/` — native renderer process: serve loop, pets, and the ratatui theme/component edge.
 - `remote/` — SSH grammar, reconnect policy, link health, `remote.toml`.
 - `diag/` — diagnostic-only JSONL append surfaces.
