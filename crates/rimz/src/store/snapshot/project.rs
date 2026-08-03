@@ -15,8 +15,8 @@ use crate::ids::{AgentKind, AgentSessionId};
 use crate::message::{MessageBody, MessageStatus};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
-    AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, AgentLifecyclePayload, EventEnvelope,
-    EventKind, MessageEventPayload,
+    self, AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, AgentLifecyclePayload,
+    EventEnvelope, EventKind, MessageEventPayload,
 };
 
 mod identity;
@@ -508,25 +508,19 @@ fn carried_base(
     let mut state = AgentState::seed(kind.clone(), agent_id.clone(), AgentStatus::Idle, event_ts);
     if let Some(prior) = prior {
         state.launch_id = prior.launch_id.clone();
-        state.profile = prior.profile.clone();
         state.mode = prior.mode;
-        state.role = prior.role.clone();
-        state.team = prior.team.clone();
         state.launch_group = prior.launch_group.clone();
         state.launch_ordinal = prior.launch_ordinal;
-        state.channel = prior.channel.clone();
         state.pane = prior.pane.clone();
         state.runtime_owner = prior.runtime_owner.clone();
         state.parent_agent_id = prior.parent_agent_id.clone();
         state.parent_agent_kind = prior.parent_agent_kind.clone();
         state.launch_depth = prior.launch_depth;
-        state.worktree_path = prior.worktree_path.clone();
-        state.worktree_branch = prior.worktree_branch.clone();
         state.task = prior.task.clone();
         state.first_prompt = prior.first_prompt.clone();
         state.prompt = prior.prompt.clone();
         state.description = prior.description.clone();
-        state.transcript_path = prior.transcript_path.clone();
+        event::carry_lifetime_fields(&mut state, prior);
         state.origin = prior.origin;
         state.compacted_from = prior.compacted_from.clone();
         state.recent_prompts = prior.recent_prompts.clone();

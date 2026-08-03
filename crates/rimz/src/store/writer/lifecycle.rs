@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::agents::lifecycle::{self, LifecycleEvent, LifecycleSignal, Transition, TransitionKind};
 use crate::agents::{AgentLifecycleObservation, AgentState, AgentStatus, SpawnedSubagent};
 use crate::ids::{AgentKind, AgentSessionId, EventId, WorkspaceId};
-use crate::store::event::EventEnvelope;
+use crate::store::event::{self, EventEnvelope};
 use crate::store::snapshot;
 
 use super::{Store, debounce};
@@ -71,7 +71,7 @@ impl Store {
             );
             let mut staged = Vec::new();
             let primary_event_id = if append_primary {
-                let observation = event_lifecycle_observation(intent.observation);
+                let observation = event::observation_for_event(intent.observation);
                 let envelope = EventEnvelope::agent_lifecycle(
                     self.inner.paths.workspace_id.clone(),
                     intent.session_name,
@@ -458,25 +458,6 @@ fn append_lifecycle_event(
         })
 }
 
-fn event_lifecycle_observation(
-    observation: &AgentLifecycleObservation,
-) -> AgentLifecycleObservation {
-    let mut trimmed = observation.clone();
-    if observation.signal.establishes_identity() || observation.parent_agent_id.is_some() {
-        return trimmed;
-    }
-    if !matches!(observation.signal, LifecycleSignal::TurnEnded { .. }) {
-        trimmed.transcript_path = None;
-    }
-    trimmed.worktree_path = None;
-    trimmed.worktree_branch = None;
-    trimmed.launch.role = None;
-    trimmed.launch.team = None;
-    trimmed.launch.channel = None;
-    trimmed.launch.profile = None;
-    trimmed
-}
-
 #[cfg(test)]
 #[path = "lifecycle/rotation_tests.rs"]
 mod rotation_tests;
@@ -487,8 +468,8 @@ mod tests {
     use std::time::SystemTime;
 
     use super::*;
+    use crate::agents::AgentStatus;
     use crate::agents::lifecycle::{LifecycleState, TurnPhase};
-    use crate::agents::{AgentStatus, LaunchParams};
     use crate::ids::{AgentSessionId, MuxName, PaneId, WorkspaceId};
     use crate::store::event::EventKind;
     use crate::store::{RuntimePaths, StatePaths};
@@ -569,51 +550,6 @@ mod tests {
         let mut clears_waiting = transition(TransitionKind::Normal, false);
         clears_waiting.waiting_cleared = true;
         assert!(append_lifecycle_event(&proof, Some(clears_waiting), false));
-    }
-
-    #[test]
-    fn lifecycle_event_observation_trims_only_serialized_carry_forward_fields() {
-        let mut full = observation(LifecycleSignal::Registered);
-        full.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
-        full.worktree_path = Some("/tmp/project".to_owned());
-        full.worktree_branch = Some("feature".to_owned());
-        full.launch = LaunchParams {
-            role: Some("coder".to_owned()),
-            team: Some("forge".to_owned()),
-            channel: Some("event-log".to_owned()),
-            profile: Some("claude-coder".to_owned()),
-            ..LaunchParams::default()
-        };
-        full.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
-        let original = full.clone();
-
-        assert_eq!(event_lifecycle_observation(&full), full);
-        full.signal = LifecycleSignal::TurnStarted;
-        let trimmed = event_lifecycle_observation(&full);
-        assert!(trimmed.transcript_path.is_none());
-        assert!(trimmed.worktree_path.is_none());
-        assert!(trimmed.worktree_branch.is_none());
-        assert!(trimmed.launch.role.is_none());
-        assert!(trimmed.launch.team.is_none());
-        assert!(trimmed.launch.channel.is_none());
-        assert!(trimmed.launch.profile.is_none());
-        assert_eq!(trimmed.pane_id.as_ref().map(PaneId::raw), Some("%1"));
-        assert_eq!(
-            full.transcript_path.as_deref(),
-            Some("/tmp/transcript.jsonl")
-        );
-
-        full.signal = LifecycleSignal::TurnEnded {
-            errored: false,
-            parked_on_background: false,
-        };
-        assert_eq!(
-            event_lifecycle_observation(&full)
-                .transcript_path
-                .as_deref(),
-            Some("/tmp/transcript.jsonl")
-        );
-        assert_eq!(original.signal, LifecycleSignal::Registered);
     }
 
     #[test]
