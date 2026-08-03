@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::agents::AgentStatus;
+use crate::store::snapshot::{SidebarRow, SidebarWorktreeGroup, WorktreePrState};
 use crate::store::{RuntimePaths, atomic};
-use crate::{SidebarRow, SidebarWorktreeGroup, WorktreePrState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "kind", content = "status", rename_all = "snake_case")]

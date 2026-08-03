@@ -1090,8 +1090,8 @@ fn agent(id: &str, name: Option<&str>) -> AgentState {
     agent
 }
 
-fn condition_snapshot(agents: Vec<AgentState>) -> crate::SidebarSnapshot {
-    crate::SidebarSnapshot::build_with_agents(
+fn condition_snapshot(agents: Vec<AgentState>) -> crate::store::snapshot::SidebarSnapshot {
+    crate::store::snapshot::SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         agents,
         Timestamp::now(),

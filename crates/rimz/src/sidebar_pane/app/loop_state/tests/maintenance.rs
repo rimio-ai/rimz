@@ -199,19 +199,19 @@ fn frame_timing_keeps_unknown_or_detached_dirty_hot_but_holds_hidden_dirty() {
     rig.state.current.own_view = Some(own_view());
     rig.state.current.viewed_panes.clear();
     rig.state.dirty = true;
-    rig.state.current.presence = Some(crate::SidebarPresence::Active);
+    rig.state.current.presence = Some(crate::store::snapshot::SidebarPresence::Active);
     assert!(
         !rig.frame_active(),
         "hidden and attached holds the dirty frame"
     );
 
-    rig.state.current.presence = Some(crate::SidebarPresence::Detached);
+    rig.state.current.presence = Some(crate::store::snapshot::SidebarPresence::Detached);
     assert!(
         rig.frame_active(),
         "detached cannot prove hidden, so it stays hot"
     );
 
-    rig.state.current.presence = Some(crate::SidebarPresence::Active);
+    rig.state.current.presence = Some(crate::store::snapshot::SidebarPresence::Active);
     rig.state.current.viewed_panes = vec![own_pane];
     assert!(
         rig.frame_active(),

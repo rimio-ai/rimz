@@ -5,10 +5,10 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
-use crate::SidebarSnapshot;
 use crate::sidebar_pane::pets::PixelPainter;
 use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, detect_pixel_render_env};
 use crate::sidebar_pane::render::{self, UiState};
+use crate::store::snapshot::SidebarSnapshot;
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
 
 use super::paint::FramePainter;

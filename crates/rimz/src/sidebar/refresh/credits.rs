@@ -16,7 +16,7 @@ use crate::sidebar::timing::{
     ACCOUNT_USAGE_CLAIM_TTL, CREDITS_DISPLAY_MAX_AGE, OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL,
 };
 use crate::store::snapshot::format_plan_label;
-use crate::{RuntimePaths, SidebarSnapshot};
+use crate::{RuntimePaths, store::snapshot::SidebarSnapshot};
 
 /// Shared provider extra-credits cache, keyed by agent kind.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

@@ -5,7 +5,7 @@ use serde::Serialize;
 pub use crate::diag::record::{AggregateKey, EventPaneSig, EventsSig, StatusCountSig};
 use crate::sidebar::events::EventStore;
 use crate::sidebar::events::SidebarEvent;
-use crate::{SidebarSnapshot, SidebarWorktreeKind};
+use crate::{store::snapshot::SidebarSnapshot, store::snapshot::SidebarWorktreeKind};
 
 use super::WatchedField;
 

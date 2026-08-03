@@ -1,13 +1,17 @@
 use super::*;
+use rimz::store::snapshot::{
+    AgentCard, ProcessCard, ProcessState, RemoteControlBadge, RowCard, SNAPSHOT_VERSION,
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarRow, SidebarSnapshot,
+    SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrCi,
+    WorktreePrState, WorktreeTrunkSync,
+};
 use std::path::PathBuf;
 
-pub(super) fn sidebar_fixture_snapshot(
-    state: SidebarFixtureState,
-) -> Result<rimz::SidebarSnapshot> {
+pub(super) fn sidebar_fixture_snapshot(state: SidebarFixtureState) -> Result<SidebarSnapshot> {
     let now = fixture_now()?;
     let workspace_id = "ws_0123456789abcdef01234567".parse::<WorkspaceId>()?;
-    let mut snapshot = rimz::SidebarSnapshot {
-        snapshot_version: rimz::store::snapshot::SNAPSHOT_VERSION,
+    let mut snapshot = SidebarSnapshot {
+        snapshot_version: SNAPSHOT_VERSION,
         workspace_id,
         display_name: "query-engine".to_owned(),
         generated_at: now,
@@ -78,16 +82,16 @@ fn fixture_now() -> Result<jiff::Timestamp> {
 struct WorktreeGroupSpec {
     key: &'static str,
     label: &'static str,
-    rows: Vec<rimz::SidebarRow>,
+    rows: Vec<SidebarRow>,
     diff_added: Option<u32>,
     diff_removed: Option<u32>,
     commits_ahead: Option<u32>,
     commits_behind: Option<u32>,
     clean: Option<bool>,
     landed: Option<bool>,
-    trunk_sync: Option<rimz::WorktreeTrunkSync>,
-    pr_state: Option<rimz::WorktreePrState>,
-    pr_ci: Option<rimz::WorktreePrCi>,
+    trunk_sync: Option<WorktreeTrunkSync>,
+    pr_state: Option<WorktreePrState>,
+    pr_ci: Option<WorktreePrCi>,
     pr_number: Option<u64>,
 }
 
@@ -111,12 +115,12 @@ impl Default for WorktreeGroupSpec {
     }
 }
 
-fn worktree_group(spec: WorktreeGroupSpec) -> rimz::SidebarWorktreeGroup {
-    rimz::SidebarWorktreeGroup {
+fn worktree_group(spec: WorktreeGroupSpec) -> SidebarWorktreeGroup {
+    SidebarWorktreeGroup {
         key: spec.key.to_owned(),
         label: spec.label.to_owned(),
         label_qualifier: None,
-        kind: rimz::SidebarWorktreeKind::Worktree,
+        kind: SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
         status_counts: Vec::new(),
@@ -145,7 +149,7 @@ struct ProcessRowSpec {
     command: &'static str,
     cwd: &'static str,
     branch: &'static str,
-    state: rimz::ProcessState,
+    state: ProcessState,
     detail: Option<&'static str>,
     cpu_pct: Option<u16>,
     rss_kb: Option<u64>,
@@ -153,8 +157,8 @@ struct ProcessRowSpec {
     last_activity: jiff::Timestamp,
 }
 
-fn process_row(spec: ProcessRowSpec) -> rimz::SidebarRow {
-    rimz::SidebarRow {
+fn process_row(spec: ProcessRowSpec) -> SidebarRow {
+    SidebarRow {
         id: spec.id.to_owned(),
         name: spec.name.to_owned(),
         pane: Some(pane_ref(spec.pane, spec.command, spec.cwd, false)),
@@ -166,18 +170,18 @@ fn process_row(spec: ProcessRowSpec) -> rimz::SidebarRow {
         archived: false,
         attention_score: 0,
         last_activity: spec.last_activity,
-        card: rimz::RowCard::Process(rimz::ProcessCard {
+        card: RowCard::Process(ProcessCard {
             state: spec.state,
             command_detail: spec.detail.map(ToOwned::to_owned),
             cpu_pct: spec.cpu_pct,
             rss_kb: spec.rss_kb,
             io_bps: spec.io_bps,
-            ..rimz::ProcessCard::default()
+            ..ProcessCard::default()
         }),
     }
 }
 
-fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
+fn add_fleet_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     let claude = agent_row(
         AgentRowSpec {
             id: "agent:claude:auth",
@@ -233,7 +237,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         command: "cargo nextest run",
         cwd: "/srv/code/query-engine",
         branch: "main",
-        state: rimz::ProcessState::Busy,
+        state: ProcessState::Busy,
         detail: Some("integration::backend::zellij"),
         cpu_pct: Some(37),
         rss_kb: Some(412_000),
@@ -271,7 +275,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
     snapshot.today_spend_live_usd = Some(10.08);
 }
 
-fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
+fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     snapshot.display_name = "flightdeck".to_owned();
     snapshot.project_root = Some(PathBuf::from("/srv/code/flightdeck"));
     snapshot.worktree_roots = vec![PathBuf::from("/srv/code/flightdeck")];
@@ -357,7 +361,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         command: "cargo nextest run",
         cwd: "/srv/code/query-engine",
         branch: "main",
-        state: rimz::ProcessState::Busy,
+        state: ProcessState::Busy,
         detail: Some("integration::backend"),
         cpu_pct: Some(37),
         rss_kb: Some(412_000),
@@ -532,7 +536,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(620),
             commits_ahead: Some(3),
             commits_behind: Some(1),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
+            trunk_sync: Some(WorktreeTrunkSync::Diverged),
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -543,8 +547,8 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(430),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            pr_state: Some(rimz::WorktreePrState::Open),
-            pr_ci: Some(rimz::WorktreePrCi::Pending),
+            pr_state: Some(WorktreePrState::Open),
+            pr_ci: Some(WorktreePrCi::Pending),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -568,8 +572,8 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             commits_behind: Some(0),
             clean: Some(true),
             landed: Some(true),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Merged),
-            pr_state: Some(rimz::WorktreePrState::Merged),
+            trunk_sync: Some(WorktreeTrunkSync::Merged),
+            pr_state: Some(WorktreePrState::Merged),
             pr_ci: None,
             pr_number: Some(91),
         },
@@ -581,9 +585,9 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(540),
             commits_ahead: Some(2),
             commits_behind: Some(1),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Reconciling),
-            pr_state: Some(rimz::WorktreePrState::Open),
-            pr_ci: Some(rimz::WorktreePrCi::Failing),
+            trunk_sync: Some(WorktreeTrunkSync::Reconciling),
+            pr_state: Some(WorktreePrState::Open),
+            pr_ci: Some(WorktreePrCi::Failing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -601,7 +605,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(360),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
+            trunk_sync: Some(WorktreeTrunkSync::Diverged),
             ..WorktreeGroupSpec::default()
         },
     ]
@@ -661,7 +665,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
     snapshot.today_spend_live_usd = Some(392.0);
 }
 
-fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
+fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     snapshot.display_name = "huddle".to_owned();
     snapshot.project_root = Some(PathBuf::from("/srv/code/huddle"));
     snapshot.worktree_roots = vec![PathBuf::from("/srv/code/huddle")];
@@ -984,9 +988,9 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(390),
             commits_ahead: Some(2),
             commits_behind: Some(0),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
-            pr_state: Some(rimz::WorktreePrState::Open),
-            pr_ci: Some(rimz::WorktreePrCi::Passing),
+            trunk_sync: Some(WorktreeTrunkSync::Diverged),
+            pr_state: Some(WorktreePrState::Open),
+            pr_ci: Some(WorktreePrCi::Passing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -998,7 +1002,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(240),
             commits_ahead: Some(1),
             commits_behind: Some(1),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Reconciling),
+            trunk_sync: Some(WorktreeTrunkSync::Reconciling),
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -1009,8 +1013,8 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(520),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            pr_state: Some(rimz::WorktreePrState::Open),
-            pr_ci: Some(rimz::WorktreePrCi::Pending),
+            pr_state: Some(WorktreePrState::Open),
+            pr_ci: Some(WorktreePrCi::Pending),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1069,16 +1073,16 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
     snapshot.value_tally = Some(spend_tally(1_125.0, 76_200_000, 88));
     snapshot.workspace_value_tally = Some(spend_tally(1_125.0, 76_200_000, 88));
     snapshot.today_spend_live_usd = Some(268.0);
-    snapshot.link = Some(rimz::SidebarLinkHealth {
+    snapshot.link = Some(SidebarLinkHealth {
         rtt_ms: Some(48),
         miss_pct: 2,
         tier: rimz::remote::link::LinkTier::Good,
-        freshness: rimz::SidebarLinkFreshness::Fresh,
+        freshness: SidebarLinkFreshness::Fresh,
         sampled_at_ms: now.as_millisecond() as u64,
     });
 }
 
-fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
+fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     snapshot.display_name = "abacus".to_owned();
     snapshot.project_root = Some(PathBuf::from("/srv/code/abacus"));
     snapshot.worktree_roots = vec![PathBuf::from("/srv/code/abacus")];
@@ -1127,7 +1131,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         command: "pnpm serve",
         cwd: "/srv/code/query-engine",
         branch: "main",
-        state: rimz::ProcessState::Busy,
+        state: ProcessState::Busy,
         detail: Some("vite dev :5173"),
         cpu_pct: Some(12),
         rss_kb: Some(268_000),
@@ -1318,8 +1322,8 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(520),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            pr_state: Some(rimz::WorktreePrState::Open),
-            pr_ci: Some(rimz::WorktreePrCi::Passing),
+            pr_state: Some(WorktreePrState::Open),
+            pr_ci: Some(WorktreePrCi::Passing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1341,8 +1345,8 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(360),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            pr_state: Some(rimz::WorktreePrState::Open),
-            pr_ci: Some(rimz::WorktreePrCi::Pending),
+            pr_state: Some(WorktreePrState::Open),
+            pr_ci: Some(WorktreePrCi::Pending),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1354,7 +1358,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(740),
             commits_ahead: Some(2),
             commits_behind: Some(1),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
+            trunk_sync: Some(WorktreeTrunkSync::Diverged),
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -1367,8 +1371,8 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             commits_behind: Some(0),
             clean: Some(true),
             landed: Some(true),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Merged),
-            pr_state: Some(rimz::WorktreePrState::Merged),
+            trunk_sync: Some(WorktreeTrunkSync::Merged),
+            pr_state: Some(WorktreePrState::Merged),
             pr_ci: None,
             pr_number: Some(91),
         },
@@ -1429,7 +1433,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
     snapshot.today_spend_live_usd = Some(486.0);
 }
 
-fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
+fn add_reach_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     snapshot.display_name = "farlink".to_owned();
     snapshot.project_root = Some(PathBuf::from("/srv/code/farlink"));
     snapshot.worktree_roots = vec![PathBuf::from("/srv/code/farlink")];
@@ -1664,7 +1668,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(380),
             commits_ahead: Some(1),
             commits_behind: Some(1),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
+            trunk_sync: Some(WorktreeTrunkSync::Diverged),
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -1675,8 +1679,8 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(140),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            pr_state: Some(rimz::WorktreePrState::Open),
-            pr_ci: Some(rimz::WorktreePrCi::Passing),
+            pr_state: Some(WorktreePrState::Open),
+            pr_ci: Some(WorktreePrCi::Passing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1688,7 +1692,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(610),
             commits_ahead: Some(1),
             commits_behind: Some(1),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
+            trunk_sync: Some(WorktreeTrunkSync::Diverged),
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -1699,8 +1703,8 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(280),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
-            pr_state: Some(rimz::WorktreePrState::Closed),
+            trunk_sync: Some(WorktreeTrunkSync::Diverged),
+            pr_state: Some(WorktreePrState::Closed),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1713,7 +1717,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             commits_ahead: Some(0),
             commits_behind: Some(0),
             clean: Some(true),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Pristine),
+            trunk_sync: Some(WorktreeTrunkSync::Pristine),
             ..WorktreeGroupSpec::default()
         },
     ]
@@ -1783,7 +1787,7 @@ struct AgentRowSpec<'a> {
     handle: Option<String>,
     launch_group: Option<String>,
     launch_ordinal: Option<u32>,
-    sub_agents: Option<Vec<rimz::SidebarSubAgent>>,
+    sub_agents: Option<Vec<SidebarSubAgent>>,
     age_secs: Option<i64>,
     account_sub_provider: Option<&'static str>,
     turn_error_label: Option<String>,
@@ -1817,7 +1821,7 @@ impl Default for AgentRowSpec<'_> {
     }
 }
 
-fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> rimz::SidebarRow {
+fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> SidebarRow {
     let is_idle = spec.status == rimz::agents::AgentStatus::Idle;
     let (context_pct, context_window, total_tokens, cost_usd) = if is_idle {
         (None, None, None, None)
@@ -1852,7 +1856,7 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> rimz::SidebarRow {
         let output = tokens / 8;
         (cache_read, cache_write, fresh_input, output)
     });
-    let mut card = rimz::AgentCard {
+    let mut card = AgentCard {
         status: spec.status,
         phase: spec.phase,
         task: (!is_idle).then(|| spec.task.to_owned()),
@@ -1882,7 +1886,7 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> rimz::SidebarRow {
         registered_at: Some(activity_at),
         compacting: spec.compacting,
         compaction_count: spec.compaction_count,
-        ..rimz::AgentCard::default()
+        ..AgentCard::default()
     };
     if !is_idle && (cost_usd.is_some() || account_sub_provider.is_some()) {
         card.context = Some(agent_context(
@@ -1903,7 +1907,7 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> rimz::SidebarRow {
         None => {}
     }
 
-    rimz::SidebarRow {
+    SidebarRow {
         id: spec.id.to_owned(),
         name: spec.name.to_owned(),
         pane: Some(pane_ref(
@@ -1920,7 +1924,7 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> rimz::SidebarRow {
         archived: false,
         attention_score: 0,
         last_activity: activity_at,
-        card: rimz::RowCard::Agent(Box::new(card)),
+        card: RowCard::Agent(Box::new(card)),
     }
 }
 
@@ -1953,7 +1957,7 @@ fn agent_context(
     }
 }
 
-fn default_sub_agents(kind: &str, now: jiff::Timestamp) -> Vec<rimz::SidebarSubAgent> {
+fn default_sub_agents(kind: &str, now: jiff::Timestamp) -> Vec<SidebarSubAgent> {
     vec![
         sub_agent(
             SubAgentSpec {
@@ -2001,11 +2005,11 @@ struct SubAgentSpec<'a> {
     elapsed_secs: Option<i64>,
 }
 
-fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> rimz::SidebarSubAgent {
+fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
     let registered_at = spec.elapsed_secs.map_or(now, |secs| {
         now - std::time::Duration::from_secs(secs.max(0) as u64)
     });
-    rimz::SidebarSubAgent {
+    SidebarSubAgent {
         id: spec.id.to_owned(),
         name: spec.name.to_owned(),
         status: spec.status,
@@ -2048,10 +2052,10 @@ fn pane_ref(raw: &str, command: &str, cwd: &str, focused: bool) -> rimz::pane::P
 }
 
 fn with_overflow(
-    mut rows: Vec<rimz::SidebarRow>,
+    mut rows: Vec<SidebarRow>,
     hidden: usize,
     now: jiff::Timestamp,
-) -> Vec<rimz::SidebarRow> {
+) -> Vec<SidebarRow> {
     let visible = rimz::sidebar_pane::view::capped_visible_rows(&rows, None).len();
     let base_hidden = rows.len().saturating_sub(visible);
     let fillers_kept = rimz::sidebar_pane::view::WORKTREE_ROW_CAP.saturating_sub(visible);
@@ -2098,7 +2102,7 @@ fn with_overflow(
     rows
 }
 
-fn move_fixture_overflow_to_tail(rows: &mut Vec<rimz::SidebarRow>) {
+fn move_fixture_overflow_to_tail(rows: &mut Vec<SidebarRow>) {
     let mut overflow = Vec::new();
     let mut visible = Vec::new();
     for row in std::mem::take(rows) {
@@ -2112,7 +2116,7 @@ fn move_fixture_overflow_to_tail(rows: &mut Vec<rimz::SidebarRow>) {
     *rows = visible;
 }
 
-fn status_counts_from_rows(rows: &[rimz::SidebarRow]) -> Vec<rimz::SidebarStatusCount> {
+fn status_counts_from_rows(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
     [
         rimz::agents::AgentStatus::Waiting,
         rimz::agents::AgentStatus::Failed,
@@ -2127,12 +2131,12 @@ fn status_counts_from_rows(rows: &[rimz::SidebarRow]) -> Vec<rimz::SidebarStatus
             .iter()
             .filter(|row| row.status() == Some(status))
             .count();
-        (count > 0).then_some(rimz::SidebarStatusCount { status, count })
+        (count > 0).then_some(SidebarStatusCount { status, count })
     })
     .collect::<Vec<_>>()
 }
 
-fn add_provider_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
+fn add_provider_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
     snapshot.providers = vec![
         provider_panel(
@@ -2168,7 +2172,7 @@ fn provider_panel(
     windows: Vec<ProviderWindowFixture>,
     spending: rimz::SpendTally,
     now: jiff::Timestamp,
-) -> rimz::SidebarProviderPanel {
+) -> SidebarProviderPanel {
     let windows = windows
         .into_iter()
         .map(|window| rimz::agents::RateLimitWindow {
@@ -2189,7 +2193,7 @@ fn provider_panel(
         } else {
             (provider_title_case(kind), 244, None)
         };
-    rimz::SidebarProviderPanel {
+    SidebarProviderPanel {
         kind: kind.to_owned(),
         account_scope: Default::default(),
         product_name,
@@ -2202,9 +2206,9 @@ fn provider_panel(
         plan: plan.map(ToOwned::to_owned),
         metered,
         remote_control: if remote_control {
-            rimz::RemoteControlBadge::Healthy
+            RemoteControlBadge::Healthy
         } else {
-            rimz::RemoteControlBadge::Hidden
+            RemoteControlBadge::Hidden
         },
         active_sessions: spending.headline.sessions,
         spending: Some(spending),

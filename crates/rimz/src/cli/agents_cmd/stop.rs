@@ -99,7 +99,7 @@ fn stop_live_agent(
 pub(in crate::cli) fn stop_resolved(
     ctx: &Ctx,
     globals: &GlobalFlags,
-    snapshot: &rimz::SidebarSnapshot,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
     agent: &AgentState,
     tracker: &mut StopTracker,
 ) -> Result<bool> {
@@ -124,7 +124,7 @@ fn stop_live_agent_tree(
     workspace: &rimz::ResolvedWorkspace,
     store: &rimz::Store,
     globals: &GlobalFlags,
-    snapshot: &rimz::SidebarSnapshot,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
     peers: &[&AgentState],
     agent: &AgentState,
     tracker: &mut StopTracker,

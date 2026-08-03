@@ -1,7 +1,7 @@
 use super::*;
-use crate::SidebarWorktreeGroup;
 use crate::agents::ATTENTION_AGE_CEILING_SECS;
 use crate::ids::{MuxName, PaneId};
+use crate::store::snapshot::SidebarWorktreeGroup;
 use crate::store::snapshot::group_live_agents_by_worktree;
 
 #[test]
@@ -740,7 +740,9 @@ fn process_row(id: &str, worktree: &str) -> SidebarRow {
         archived: false,
         attention_score: 0,
         last_activity: epoch(),
-        card: crate::RowCard::Process(crate::ProcessCard::default()),
+        card: crate::store::snapshot::RowCard::Process(
+            crate::store::snapshot::ProcessCard::default(),
+        ),
     }
 }
 
@@ -757,10 +759,12 @@ fn idle_agent_row(id: &str, pane_raw: Option<&str>) -> SidebarRow {
         archived: false,
         attention_score: 0,
         last_activity: epoch(),
-        card: crate::RowCard::Agent(Box::new(crate::store::snapshot::row::AgentCard {
-            status: AgentStatus::Idle,
-            ..Default::default()
-        })),
+        card: crate::store::snapshot::RowCard::Agent(Box::new(
+            crate::store::snapshot::row::AgentCard {
+                status: AgentStatus::Idle,
+                ..Default::default()
+            },
+        )),
     }
 }
 

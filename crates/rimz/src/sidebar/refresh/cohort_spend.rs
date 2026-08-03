@@ -10,8 +10,9 @@ use crate::agents::spending::{EffortParseMemo, EffortSessionRef};
 use crate::store::active_time;
 use crate::store::snapshot::RollupCursor;
 use crate::{
-    RuntimePaths, SidebarCohortEffort, SidebarSeatEffort, SidebarSnapshot, SidebarWorktreeGroup,
-    StatePaths,
+    RuntimePaths, StatePaths, store::snapshot::SidebarCohortEffort,
+    store::snapshot::SidebarSeatEffort, store::snapshot::SidebarSnapshot,
+    store::snapshot::SidebarWorktreeGroup,
 };
 
 use super::super::timing::COHORT_SPEND_TTL;

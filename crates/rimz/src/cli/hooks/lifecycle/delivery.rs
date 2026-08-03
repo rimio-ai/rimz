@@ -9,7 +9,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
     session_name: &str,
 ) -> Vec<rimz::message::MessageRecord> {
     let ack = match recorded.observation.signal {
-        LifecycleSignal::TurnStarted => rimz::store::DeliveryAck::TurnStarted {
+        LifecycleSignal::TurnStarted => rimz::store::writer::DeliveryAck::TurnStarted {
             prompt: recorded
                 .observation
                 .prompt
@@ -17,7 +17,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
                 .map(str::trim)
                 .filter(|prompt| !prompt.is_empty()),
         },
-        LifecycleSignal::Compacting => rimz::store::DeliveryAck::Compaction,
+        LifecycleSignal::Compacting => rimz::store::writer::DeliveryAck::Compaction,
         _ => return Vec::new(),
     };
     let Some(agent_id) = recorded.observation.agent_id.as_ref() else {

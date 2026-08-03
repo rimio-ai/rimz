@@ -10,7 +10,7 @@ use crate::ids::MuxName;
 use crate::mux::MuxBackend;
 use crate::store::workspace_record;
 use crate::workspace::KnownWorkspace;
-use crate::{RuntimePaths, StatePaths, WorkspaceId, WorkspaceRecord};
+use crate::{RuntimePaths, StatePaths, WorkspaceId, store::workspace_record::WorkspaceRecord};
 use anyhow::{Context, Result, bail};
 
 const LIST_SESSIONS_ATTEMPTS: u8 = 3;

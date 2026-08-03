@@ -7,7 +7,10 @@ use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry};
 use crate::sidebar::test_support::{child_agent, pane, pane_in_tab, root_agent};
 use crate::sidebar::timing::unix_now_ms;
 use crate::store::atomic;
-use crate::{RuntimePaths, SidebarSnapshot, SidebarWorktreeKind, StatePaths};
+use crate::{
+    RuntimePaths, StatePaths, store::snapshot::SidebarSnapshot,
+    store::snapshot::SidebarWorktreeKind,
+};
 use jiff::Timestamp;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -495,7 +498,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
         crate::sidebar::refresh::pr::PrLink {
             branch: Some("feature".to_owned()),
             incarnation: None,
-            state: crate::WorktreePrState::Open,
+            state: crate::store::snapshot::WorktreePrState::Open,
             number: Some(91),
             url: None,
             ci: None,
@@ -535,12 +538,12 @@ fn read_published_snapshot_folds_caches_without_forking() {
     assert_eq!(group.landed, Some(false), "the landed verdict projects too");
     assert_eq!(
         group.trunk_sync,
-        Some(crate::WorktreeTrunkSync::Diverged),
+        Some(crate::store::snapshot::WorktreeTrunkSync::Diverged),
         "the trunk-sync classifier projects from cached git facts"
     );
     assert_eq!(
         group.pr_state,
-        Some(crate::WorktreePrState::Open),
+        Some(crate::store::snapshot::WorktreePrState::Open),
         "the PR state projects from cache with no forge CLI fork"
     );
     assert_eq!(group.pr_number, Some(91));
@@ -935,7 +938,7 @@ fn enrich_maps_carried_frame_to_truth_notice() {
 
     assert_eq!(
         snapshot.truth_degraded,
-        Some(crate::TruthNotice {
+        Some(crate::store::snapshot::TruthNotice {
             carried: 1,
             since_ms: 1_000,
             pane_ids: vec![carried_id],
@@ -1209,7 +1212,7 @@ fn presence_only_frame_publication_keeps_projection_match() {
         fixture.frame.topology_stamp_ms,
         fixture.frame.metrics_stamp_ms,
     );
-    fixture.frame.presence = Some(crate::PresenceSample {
+    fixture.frame.presence = Some(crate::store::snapshot::PresenceSample {
         human_clients: 0,
         last_input_ms: None,
         sampled_at_ms: unix_now_ms(),
@@ -1228,7 +1231,7 @@ fn presence_only_frame_publication_keeps_projection_match() {
     );
     assert_eq!(
         read.snapshot.presence,
-        Some(crate::SidebarPresence::Detached)
+        Some(crate::store::snapshot::SidebarPresence::Detached)
     );
 }
 

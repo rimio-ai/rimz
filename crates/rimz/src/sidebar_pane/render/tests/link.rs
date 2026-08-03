@@ -26,12 +26,12 @@ fn footer_spans(snapshot: &SidebarSnapshot, width: usize) -> Vec<ratatui::text::
 
 fn with_link(
     tier: LinkTier,
-    freshness: crate::SidebarLinkFreshness,
+    freshness: crate::store::snapshot::SidebarLinkFreshness,
     rtt_ms: Option<u32>,
     miss_pct: u16,
 ) -> SidebarSnapshot {
     let mut snapshot = snapshot_with(Vec::new());
-    snapshot.link = Some(crate::SidebarLinkHealth {
+    snapshot.link = Some(crate::store::snapshot::SidebarLinkHealth {
         rtt_ms,
         miss_pct,
         tier,
@@ -45,7 +45,7 @@ fn with_link(
 fn footer_left_pins_fresh_link_badge_and_keeps_help_when_it_fits() {
     let snapshot = with_link(
         LinkTier::Degraded,
-        crate::SidebarLinkFreshness::Fresh,
+        crate::store::snapshot::SidebarLinkFreshness::Fresh,
         Some(230),
         4,
     );
@@ -61,7 +61,7 @@ fn footer_left_pins_fresh_link_badge_and_keeps_help_when_it_fits() {
 fn footer_prints_right_help_when_remote_badge_would_collide() {
     let snapshot = with_link(
         LinkTier::Bad,
-        crate::SidebarLinkFreshness::Fresh,
+        crate::store::snapshot::SidebarLinkFreshness::Fresh,
         Some(612),
         18,
     );
@@ -74,7 +74,7 @@ fn footer_prints_right_help_when_remote_badge_would_collide() {
 fn stale_link_badge_is_unknown() {
     let snapshot = with_link(
         LinkTier::Good,
-        crate::SidebarLinkFreshness::Stale,
+        crate::store::snapshot::SidebarLinkFreshness::Stale,
         Some(42),
         0,
     );
@@ -92,7 +92,12 @@ fn stale_link_badge_is_unknown() {
 
 #[test]
 fn warming_link_badge_uses_remote_ellipsis() {
-    let snapshot = with_link(LinkTier::Good, crate::SidebarLinkFreshness::Fresh, None, 0);
+    let snapshot = with_link(
+        LinkTier::Good,
+        crate::store::snapshot::SidebarLinkFreshness::Fresh,
+        None,
+        0,
+    );
 
     assert!(footer_text(&snapshot, 40).starts_with("⇄ remote …"));
 }
@@ -103,7 +108,7 @@ fn fresh_link_badge_uses_full_health_ramp() {
 
     let healthy = with_link(
         LinkTier::Good,
-        crate::SidebarLinkFreshness::Fresh,
+        crate::store::snapshot::SidebarLinkFreshness::Fresh,
         Some(80),
         0,
     );
@@ -116,7 +121,7 @@ fn fresh_link_badge_uses_full_health_ramp() {
 
     let bad = with_link(
         LinkTier::Bad,
-        crate::SidebarLinkFreshness::Fresh,
+        crate::store::snapshot::SidebarLinkFreshness::Fresh,
         Some(450),
         0,
     );
@@ -166,7 +171,7 @@ fn footer_keeps_help_right_without_attention_hint() {
 fn remote_footer_keeps_left_badge_and_right_help_when_they_fit() {
     let mut snapshot = with_link(
         LinkTier::Degraded,
-        crate::SidebarLinkFreshness::Fresh,
+        crate::store::snapshot::SidebarLinkFreshness::Fresh,
         Some(210),
         0,
     );

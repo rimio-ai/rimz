@@ -7,8 +7,14 @@ use super::*;
 fn link_stats_freshness_ages_from_fresh_through_stale_to_expired() {
     // One sidecar sampled at 1_000, read back at three ages.
     for (now_ms, expected) in [
-        (1_500, Some(crate::SidebarLinkFreshness::Fresh)),
-        (12_000, Some(crate::SidebarLinkFreshness::Stale)),
+        (
+            1_500,
+            Some(crate::store::snapshot::SidebarLinkFreshness::Fresh),
+        ),
+        (
+            12_000,
+            Some(crate::store::snapshot::SidebarLinkFreshness::Stale),
+        ),
         (122_001, None),
     ] {
         let (_dir, runtime, mut snapshot) = runtime();
@@ -82,7 +88,7 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
 fn frame_fold_carries_presence_onto_snapshot() {
     let (_dir, runtime, snapshot) = runtime();
     let mut frame = crate::sidebar::frame::assemble_frame(Vec::new(), 1_000, "rimz-test");
-    frame.presence = Some(crate::PresenceSample {
+    frame.presence = Some(crate::store::snapshot::PresenceSample {
         human_clients: 0,
         last_input_ms: None,
         sampled_at_ms: 1_000,
@@ -90,7 +96,10 @@ fn frame_fold_carries_presence_onto_snapshot() {
 
     let snapshot = fold_cached(snapshot, Some(&frame), &runtime);
 
-    assert_eq!(snapshot.presence, Some(crate::SidebarPresence::Detached));
+    assert_eq!(
+        snapshot.presence,
+        Some(crate::store::snapshot::SidebarPresence::Detached)
+    );
 }
 
 #[test]
@@ -106,7 +115,7 @@ fn enrich_workspace_rejects_sidebar_chrome_and_defers_presence() {
     let working = pane("terminal_work", "zsh", "/repo");
     let mut frame =
         crate::sidebar::frame::assemble_frame(vec![own, working], 1_700_000_000_000, "rimz-test");
-    frame.presence = Some(crate::PresenceSample {
+    frame.presence = Some(crate::store::snapshot::PresenceSample {
         human_clients: 1,
         last_input_ms: Some(1_699_999_999_000),
         sampled_at_ms: 1_700_000_000_000,
@@ -169,7 +178,7 @@ fn presence_reads_idle_from_the_snapshot_clock_on_local_and_remote_rooms() {
         }
         let now_ms = snapshot_now_ms(&snapshot);
         let mut frame = crate::sidebar::frame::assemble_frame(Vec::new(), 1_000, "rimz-test");
-        frame.presence = Some(crate::PresenceSample {
+        frame.presence = Some(crate::store::snapshot::PresenceSample {
             human_clients: 1,
             last_input_ms: Some(now_ms - 999_000),
             sampled_at_ms: now_ms - sampled_ago_ms,
@@ -179,7 +188,7 @@ fn presence_reads_idle_from_the_snapshot_clock_on_local_and_remote_rooms() {
 
         assert_eq!(
             snapshot.presence,
-            Some(crate::SidebarPresence::Idle { idle_ms: 999_000 }),
+            Some(crate::store::snapshot::SidebarPresence::Idle { idle_ms: 999_000 }),
             "{label}"
         );
     }

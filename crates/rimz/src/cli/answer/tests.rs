@@ -132,7 +132,7 @@ fn ask_id_resolution_preserves_root_and_subagent_scopes() {
         native_key: Some("native-ask".to_owned()),
         since: now,
     });
-    let snapshot = rimz::SidebarSnapshot::build_with_agents(
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
         rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-ask")),
         vec![child],
         now,

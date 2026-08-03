@@ -471,7 +471,7 @@ impl Theme {
         }
     }
 
-    pub(crate) fn brand_tone(&self, panel: &crate::SidebarProviderPanel) -> Color {
+    pub(crate) fn brand_tone(&self, panel: &crate::store::snapshot::SidebarProviderPanel) -> Color {
         if let Some(role) = panel.color_role {
             return tone_color(self.palette.role_tone(role));
         }

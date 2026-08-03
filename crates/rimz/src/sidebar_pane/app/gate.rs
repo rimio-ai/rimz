@@ -6,9 +6,9 @@
 //! old producer's empty stamped frame over populated rows, and the transient
 //! Agent→Process demotion.
 
-use crate::SidebarSnapshot;
 use crate::diag::record::GateRule;
 use crate::ids::{AgentKind, PaneId};
+use crate::store::snapshot::SidebarSnapshot;
 use jiff::Timestamp;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;

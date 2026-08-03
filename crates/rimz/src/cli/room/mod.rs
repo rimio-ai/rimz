@@ -20,7 +20,7 @@ use rimz::room::{
     AttendedRecovery, BackgroundViewBirth, NormalBirth, NormalRebirth, RoomBirth, RoomContext,
     RoomSizing,
 };
-use rimz::{RuntimePaths, WorkspaceRecord};
+use rimz::{RuntimePaths, store::workspace_record::WorkspaceRecord};
 
 use crate::cli::hooks::ensure_detected_agent_hooks;
 use crate::cli::{

@@ -826,7 +826,7 @@ fn drop_reused_pid_bindings_matrix() {
         first_mut(&mut frame).previous = Some(previous);
         first_mut(&mut frame).children = vec![200];
         first_mut(&mut frame).metrics = PaneMetrics {
-            process_state: Some(crate::ProcessState::Stuck),
+            process_state: Some(crate::store::snapshot::ProcessState::Stuck),
             rss_kb: Some(1024),
             cpu_pct: Some(250),
             io_bps: Some(4096),
@@ -984,7 +984,7 @@ fn assert_active_command_case(
     if expect_metadata_clear {
         first_mut(&mut frame).children = vec![200];
         first_mut(&mut frame).metrics = PaneMetrics {
-            process_state: Some(crate::ProcessState::Stuck),
+            process_state: Some(crate::store::snapshot::ProcessState::Stuck),
             rss_kb: Some(1024),
             cpu_pct: Some(250),
             io_bps: Some(4096),

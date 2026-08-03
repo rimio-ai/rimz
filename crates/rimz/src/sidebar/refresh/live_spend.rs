@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::SidebarSnapshot;
 use crate::agents::find_definition;
 use crate::agents::spending::{
     NO_BURST_CUTOFF, SESSION_GAP_SECS, SpendScope, WorkspaceSpendingCache, live_session_keys,
     origin_path,
 };
+use crate::store::snapshot::SidebarSnapshot;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LiveCardSpend {
@@ -131,7 +131,11 @@ mod tests {
         }
     }
 
-    fn cost_row(id: &str, usd: Option<f64>, registered_at: Option<Timestamp>) -> crate::SidebarRow {
+    fn cost_row(
+        id: &str,
+        usd: Option<f64>,
+        registered_at: Option<Timestamp>,
+    ) -> crate::store::snapshot::SidebarRow {
         cost_row_at(id, usd, registered_at, Path::new("/repo/wt"), None)
     }
 
@@ -141,7 +145,7 @@ mod tests {
         registered_at: Option<Timestamp>,
         worktree_path: &Path,
         last_activity: Option<Timestamp>,
-    ) -> crate::SidebarRow {
+    ) -> crate::store::snapshot::SidebarRow {
         let now = Timestamp::from_second(1_750_000_000).unwrap();
         let mut row = activity_row(
             true,

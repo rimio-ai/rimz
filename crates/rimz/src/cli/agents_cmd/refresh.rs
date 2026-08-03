@@ -89,7 +89,7 @@ pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()
 }
 
 pub(super) fn refresh_targets<'a>(
-    snapshot: &'a rimz::SidebarSnapshot,
+    snapshot: &'a rimz::store::snapshot::SidebarSnapshot,
     channel: Option<&str>,
 ) -> Vec<&'a AgentState> {
     rimz::harness::target::addressable_agents(snapshot)

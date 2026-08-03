@@ -13,7 +13,9 @@ use crate::harness::run::PermissionMode;
 use crate::harness::spec::{AgentCell, Cell, LayoutSpec};
 use crate::ids::{AgentKind, AgentSessionId, EventId};
 use crate::mux::{LayoutColumn, LayoutPanes, PaneCmd};
-use crate::store::{AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
+use crate::store::{
+    writer::AgentLaunchIdentity, writer::AgentLaunchName, writer::AgentLaunchRequest,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct LaunchFinalizeOptions<'a> {

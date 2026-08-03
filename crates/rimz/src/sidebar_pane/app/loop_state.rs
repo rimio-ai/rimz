@@ -24,6 +24,7 @@ use crate::sidebar::read_marks::{ReadMarkStore, ReadMarks, write_manual_read_mar
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pixel::PixelRenderCaps;
 use crate::sidebar_pane::view::BodyFilter;
+use crate::store::snapshot::{ProcessState, RowCard, SidebarOwnView, SidebarPresence, SidebarRow};
 
 pub(super) struct MaintenanceContext<'a> {
     pub(super) config: &'a ServeConfig,
@@ -66,7 +67,7 @@ struct FetchApplication {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BackgroundRowStatusKey {
     Agent(crate::agents::AgentStatus),
-    Process(crate::ProcessState),
+    Process(ProcessState),
 }
 
 fn background_content_key(snapshot: &SidebarSnapshot) -> BackgroundContentKey {
@@ -91,16 +92,16 @@ fn background_content_key(snapshot: &SidebarSnapshot) -> BackgroundContentKey {
     }
 }
 
-fn row_status_key(row: &crate::SidebarRow) -> BackgroundRowStatusKey {
+fn row_status_key(row: &SidebarRow) -> BackgroundRowStatusKey {
     match &row.card {
-        crate::RowCard::Agent(card) => BackgroundRowStatusKey::Agent(card.status),
-        crate::RowCard::Process(card) => BackgroundRowStatusKey::Process(card.state),
+        RowCard::Agent(card) => BackgroundRowStatusKey::Agent(card.status),
+        RowCard::Process(card) => BackgroundRowStatusKey::Process(card.state),
     }
 }
 
 fn own_tab_viewed(
     snapshot: &SidebarSnapshot,
-    own_view: &crate::SidebarOwnView,
+    own_view: &SidebarOwnView,
     own_pane: &PaneId,
 ) -> bool {
     snapshot
@@ -348,7 +349,7 @@ impl LoopState {
         watched
             || !matches!(
                 self.current.presence,
-                Some(crate::SidebarPresence::Active | crate::SidebarPresence::Idle { .. })
+                Some(SidebarPresence::Active | SidebarPresence::Idle { .. })
             )
     }
 

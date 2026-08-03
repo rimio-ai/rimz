@@ -19,7 +19,7 @@ use ratatui::text::{Line, Span};
 
 use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
-use crate::{SidebarRow, SidebarWorktreeKind};
+use crate::{store::snapshot::SidebarRow, store::snapshot::SidebarWorktreeKind};
 
 use super::CostRolls;
 pub(super) use super::layout::{pin_right, spans_width, trim_spans_to_width};

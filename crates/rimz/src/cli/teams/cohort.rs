@@ -259,7 +259,7 @@ mod tests {
         ad_hoc.team = None;
         ad_hoc.role = Some("reviewer".to_owned());
         ad_hoc.kind_ordinal = Some(2);
-        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
             rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
             vec![team_member, ad_hoc],
             jiff::Timestamp::UNIX_EPOCH,

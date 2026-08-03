@@ -136,7 +136,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn resolve_current_agent<'a>(
-    snapshot: &'a rimz::SidebarSnapshot,
+    snapshot: &'a rimz::store::snapshot::SidebarSnapshot,
     target: &str,
     channel: Option<&str>,
 ) -> std::result::Result<&'a rimz::agents::AgentState, String> {

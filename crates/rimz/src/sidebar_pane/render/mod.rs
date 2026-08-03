@@ -57,7 +57,9 @@ use crate::agents::TurnPhase;
 use crate::config::{AnimationRole, CardDensityMode, GlyphRole};
 use crate::sidebar_pane::pets::PetAction;
 use crate::sidebar_pane::view::VisibleRoster;
-use crate::{ProcessState, SidebarRow, SidebarSnapshot};
+use crate::{
+    store::snapshot::ProcessState, store::snapshot::SidebarRow, store::snapshot::SidebarSnapshot,
+};
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend};
 use ratatui::buffer::CellDiffOption;
 use ratatui::layout::Rect;

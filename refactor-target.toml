@@ -367,6 +367,7 @@ allowed-imports = [
     "sidebar",
     "store::agent_context",
     "store::paths",
+    "store::snapshot",
     "theme",
     "tui",
 ]
@@ -399,7 +400,12 @@ allowed-imports = [
     "theme",
     "workspace",
 ]
-surface-budget = 412
+surface-budget = 383
+
+[[module]]
+path = "crates/rimz/src/store/mod.rs"
+allowed-imports = ["store"]
+surface-budget = 38
 
 [[module]]
 path = "crates/rimz/src/theme"

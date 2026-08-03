@@ -16,7 +16,7 @@ use crate::agents::spending::{
     read_provider_spending_cache, read_workspace_spending_cache,
 };
 use crate::config::MachineConfig;
-use crate::{RuntimePaths, SidebarSnapshot};
+use crate::{RuntimePaths, store::snapshot::SidebarSnapshot};
 
 pub mod accounts;
 pub mod cohort_spend;
@@ -69,7 +69,7 @@ pub struct RefreshedLanes {
     pub spending: SpendingCaches,
     pub accounts: BTreeMap<String, AgentAccount>,
     pub pr_states: BTreeMap<String, PrLink>,
-    pub branch_ci: BTreeMap<String, crate::WorktreePrCi>,
+    pub branch_ci: BTreeMap<String, crate::store::snapshot::WorktreePrCi>,
 }
 
 /// Process-local memo state owned by one long-lived cache producer.

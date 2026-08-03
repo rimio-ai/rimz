@@ -590,9 +590,9 @@ mod tests {
     use jiff::Timestamp;
 
     use super::*;
-    use crate::SidebarSnapshot;
     use crate::ids::WorkspaceId;
     use crate::sidebar::test_support::root_agent;
+    use crate::store::snapshot::SidebarSnapshot;
 
     fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
         ProviderRecord {

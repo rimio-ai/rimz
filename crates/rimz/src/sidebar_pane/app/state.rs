@@ -5,9 +5,9 @@
 
 use std::collections::HashMap;
 
-use crate::SidebarSnapshot;
 use crate::diag::record::{DiagEvent, GroupIdentity};
 use crate::ids::PaneId;
+use crate::store::snapshot::SidebarSnapshot;
 use jiff::Timestamp;
 
 use crate::sidebar::unread::{self, ClearedUnread, UnreadClearCause};
@@ -195,12 +195,12 @@ fn rows_by_pane(snapshot: &SidebarSnapshot) -> HashMap<PaneId, RowLocation> {
     rows
 }
 
-fn worktree_kind_name(kind: crate::SidebarWorktreeKind) -> &'static str {
+fn worktree_kind_name(kind: crate::store::snapshot::SidebarWorktreeKind) -> &'static str {
     match kind {
-        crate::SidebarWorktreeKind::Channel => "channel",
-        crate::SidebarWorktreeKind::Worktree => "worktree",
-        crate::SidebarWorktreeKind::Root => "root",
-        crate::SidebarWorktreeKind::External => "external",
+        crate::store::snapshot::SidebarWorktreeKind::Channel => "channel",
+        crate::store::snapshot::SidebarWorktreeKind::Worktree => "worktree",
+        crate::store::snapshot::SidebarWorktreeKind::Root => "root",
+        crate::store::snapshot::SidebarWorktreeKind::External => "external",
     }
 }
 
@@ -242,7 +242,7 @@ pub(super) fn row_id_of_pane(
 pub(super) fn row_of_pane<'a>(
     snapshot: &'a SidebarSnapshot,
     pane_id: &crate::ids::PaneId,
-) -> Option<&'a crate::SidebarRow> {
+) -> Option<&'a crate::store::snapshot::SidebarRow> {
     snapshot.rows().find(|row| {
         row.pane
             .as_ref()
@@ -288,7 +288,7 @@ pub(super) fn read_receipt_for_row(
 }
 
 fn read_receipt_for_row_ref(
-    row: &crate::SidebarRow,
+    row: &crate::store::snapshot::SidebarRow,
     cause: UnreadClearCause,
     marks: &crate::sidebar::read_marks::ReadMarks,
     now: Timestamp,

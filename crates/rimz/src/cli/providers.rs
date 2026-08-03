@@ -20,7 +20,7 @@ use rimz::sidebar::refresh::{
     AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts,
     refresh_account_usage_if_due, refresh_account_usage_now,
 };
-use rimz::{DailyBudgetView, RuntimePaths, SidebarProviderPanel};
+use rimz::{RuntimePaths, store::snapshot::DailyBudgetView, store::snapshot::SidebarProviderPanel};
 
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 

@@ -13,8 +13,11 @@ use crate::agents::RateLimitWindow;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::sidebar_pane::render::render_fixed;
 use crate::{
-    AgentCard, RowCard, SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarStatusCount,
-    SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, SpendTally, SpendWindow,
+    SpendTally, SpendWindow, store::snapshot::AgentCard, store::snapshot::RowCard,
+    store::snapshot::SidebarProviderPanel, store::snapshot::SidebarRow,
+    store::snapshot::SidebarSnapshot, store::snapshot::SidebarStatusCount,
+    store::snapshot::SidebarSubAgent, store::snapshot::SidebarWorktreeGroup,
+    store::snapshot::SidebarWorktreeKind,
 };
 
 fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {

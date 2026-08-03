@@ -1,5 +1,5 @@
 use super::*;
-use crate::DailyBudgetView;
+use crate::store::snapshot::DailyBudgetView;
 
 // ── Rate-limit window fusion: the live half (the dashboard bars) ─────────────
 

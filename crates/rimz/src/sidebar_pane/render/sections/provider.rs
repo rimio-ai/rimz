@@ -4,7 +4,10 @@
 use crate::agents::{AgentStatus, ExtraCredits, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
 use crate::sidebar_pane::pets::PetView;
-use crate::{RemoteControlBadge, SidebarProviderPanel, SpendTally, SpendWindow};
+use crate::{
+    SpendTally, SpendWindow, store::snapshot::RemoteControlBadge,
+    store::snapshot::SidebarProviderPanel,
+};
 use jiff::{SignedDuration, Timestamp};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

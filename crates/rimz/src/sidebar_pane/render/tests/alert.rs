@@ -40,7 +40,7 @@ fn render_no_alert_omits_banner() {
 #[test]
 fn render_truth_degraded_notice_keeps_room_chrome() {
     let mut snapshot = snapshot_with(Vec::new());
-    snapshot.truth_degraded = Some(crate::TruthNotice {
+    snapshot.truth_degraded = Some(crate::store::snapshot::TruthNotice {
         carried: 2,
         since_ms: (fixed_now() - Duration::from_secs(8)).as_millisecond() as u64,
         pane_ids: Vec::new(),
@@ -80,7 +80,7 @@ fn bottom_chrome_active_alert_suppresses_dashboard_store_and_footer() {
 #[test]
 fn active_alert_suppresses_truth_degraded_notice() {
     let mut snapshot = snapshot_with(Vec::new());
-    snapshot.truth_degraded = Some(crate::TruthNotice {
+    snapshot.truth_degraded = Some(crate::store::snapshot::TruthNotice {
         carried: 1,
         since_ms: snapshot.now.as_millisecond() as u64,
         pane_ids: Vec::new(),

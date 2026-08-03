@@ -78,7 +78,7 @@ pub(in crate::backend::zellij) fn publish_room_bin(state_root: &Path, opts: &Sid
     std::fs::copy(&opts.rimz_bin, &state.room_bin).expect("publish test room binary");
     rimz::store::workspace_record::write(
         &state,
-        &rimz::WorkspaceRecord {
+        &rimz::store::workspace_record::WorkspaceRecord {
             workspace_id: opts.workspace_id.clone(),
             project_root: opts.project_root.clone(),
             worktree_root: None,

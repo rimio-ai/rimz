@@ -1149,7 +1149,7 @@ mod tests {
         let workspace = crate::workspace::WorkspaceResolver::resolve(&project, None).unwrap();
         let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
         let runtime = RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
-        let mut record = crate::store::WorkspaceRecord::from_resolved(&workspace);
+        let mut record = crate::store::workspace_record::WorkspaceRecord::from_resolved(&workspace);
         record.rimz_bin = Some(first.path.clone());
         record.rimz_build = Some(first.build.clone());
         workspace_record::write(&paths, &record).unwrap();

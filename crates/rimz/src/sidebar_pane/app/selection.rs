@@ -4,7 +4,7 @@
 
 use crate::ids::PaneId;
 use crate::mux::WidthAdjust;
-use crate::{SidebarSnapshot, triage_key};
+use crate::{store::snapshot::SidebarSnapshot, store::snapshot::triage_key};
 
 use crate::sidebar_pane::render::HitTarget;
 use crate::sidebar_pane::render::{

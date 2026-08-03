@@ -65,7 +65,8 @@ use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, own_pane_i
 use rimz::room::{RoomContext, RoomSizing};
 use rimz::sidebar::refresh::usage::AccountUsageRefreshRequest;
 use rimz::store::{
-    AgentLaunchBatch, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest, AgentLaunchScope,
+    writer::AgentLaunchBatch, writer::AgentLaunchIdentity, writer::AgentLaunchName,
+    writer::AgentLaunchRequest, writer::AgentLaunchScope,
 };
 use rimz::workspace::WorkspaceResolver;
 

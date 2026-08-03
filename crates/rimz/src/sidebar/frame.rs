@@ -140,7 +140,7 @@ pub struct PaneMetrics {
     /// never carried here; the fold classifies it from the pane's program
     /// (`store::snapshot::process`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub process_state: Option<crate::ProcessState>,
+    pub process_state: Option<crate::store::snapshot::ProcessState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rss_kb: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

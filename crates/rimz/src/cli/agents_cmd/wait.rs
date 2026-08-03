@@ -69,7 +69,7 @@ struct WaitStreamOptions {
 
 fn wait_stream_request(
     store: &rimz::Store,
-    snapshot: rimz::SidebarSnapshot,
+    snapshot: rimz::store::snapshot::SidebarSnapshot,
     reference: &str,
     current_channel: Option<&str>,
     options: WaitStreamOptions,
@@ -92,7 +92,7 @@ fn wait_stream_request(
 
 fn wait_non_stream(
     store: &rimz::Store,
-    snapshot: &rimz::SidebarSnapshot,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
     references: Vec<String>,
     any: bool,
     timeout: Option<Duration>,
@@ -337,7 +337,7 @@ impl WaitEntryJson {
 
 fn resolve_wait_target(
     store: &rimz::Store,
-    snapshot: &rimz::SidebarSnapshot,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
     reference: &str,
     current_channel: Option<&str>,
 ) -> Result<WaitTarget> {
@@ -370,7 +370,7 @@ fn resolve_wait_target(
 
 fn poll_target(
     store: &rimz::Store,
-    agent_snapshot: Option<&rimz::SidebarSnapshot>,
+    agent_snapshot: Option<&rimz::store::snapshot::SidebarSnapshot>,
     target: &WaitTarget,
     current_channel: Option<&str>,
 ) -> Result<Option<TargetOutcome>> {
@@ -635,7 +635,7 @@ fn wait_interactive_agent_stream(
     store: &rimz::Store,
     reference: &str,
     kind: &rimz::ids::AgentKind,
-    mut snapshot: rimz::SidebarSnapshot,
+    mut snapshot: rimz::store::snapshot::SidebarSnapshot,
     current_channel: Option<&str>,
     options: WaitStreamOptions,
 ) -> Result<()> {

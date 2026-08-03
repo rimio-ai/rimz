@@ -1,9 +1,9 @@
 //! State-derived agent-card templates. Lifecycle facts choose an ordered line
 //! skeleton; provider enrichment only fills the chosen slots.
 
-use crate::SidebarRow;
 use crate::agents::AgentStatus;
 use crate::config::CardDensityMode;
+use crate::store::snapshot::SidebarRow;
 
 use super::description::awaiting_first_prompt;
 use super::gauge::gauge_percent;

@@ -16,7 +16,10 @@ use crate::config::{
 use crate::ids::{AgentKind, AgentSessionId, AskId, PaneId};
 use crate::remote::link::LinkTier;
 use crate::sidebar::unread::OpenedUnread;
-use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot, child_process};
+use crate::{
+    child_process, store::snapshot::SidebarLinkFreshness, store::snapshot::SidebarLinkHealth,
+    store::snapshot::SidebarSnapshot,
+};
 
 pub use crate::config::NotificationKind;
 

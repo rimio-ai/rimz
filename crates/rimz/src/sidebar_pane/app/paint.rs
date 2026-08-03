@@ -7,7 +7,6 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use crate::MuxName;
-use crate::SidebarSnapshot;
 use crate::config::{CellAspect, PixelMode};
 use crate::sidebar_pane::pets::{
     PetAssets, PetBody, PetViewFrame, PixelPainter, effective_render_tier, probe_cell_aspect,
@@ -15,6 +14,7 @@ use crate::sidebar_pane::pets::{
 use crate::sidebar_pane::pixel::meter::{MeterPainter, MeterPixels};
 use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, detect_pixel_render_caps};
 use crate::sidebar_pane::render::{self, UiState};
+use crate::store::snapshot::SidebarSnapshot;
 
 const CAPS_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 

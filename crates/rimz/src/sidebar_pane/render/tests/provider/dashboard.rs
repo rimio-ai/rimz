@@ -16,7 +16,7 @@ fn dashboard_mode_is_selected_once_from_display_and_pet_settings() {
     assert_eq!(dashboard_mode(&snapshot), DashboardMode::Pet);
 }
 
-fn copilot_panel() -> crate::SidebarProviderPanel {
+fn copilot_panel() -> crate::store::snapshot::SidebarProviderPanel {
     let definition = crate::agents::spec_by_kind("copilot").expect("copilot definition");
     let emblem = crate::agents::emblem_for("copilot");
     let mut panel = provider_panel(
@@ -162,7 +162,7 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
 fn render_provider_dashboard_marks_a_down_rc_host_in_alarm_color() {
     let theme = Theme::fixed(false);
     let mut panel = provider_panel("claude", "Claude", 173, false, true, None);
-    panel.remote_control = crate::RemoteControlBadge::Down;
+    panel.remote_control = crate::store::snapshot::RemoteControlBadge::Down;
 
     let lines = Dashboard::stacked(&theme, &[panel]).lines();
     let flag = lines
@@ -183,7 +183,7 @@ fn daily_cap_details_surface_only_while_parked() {
     for (spend_usd, parked, expected) in [(9.5, false, "$3.50"), (10.25, true, "$10.25 of $10/day")]
     {
         let mut panels = two_provider_panels();
-        panels[0].day_budget = Some(crate::DailyBudgetView {
+        panels[0].day_budget = Some(crate::store::snapshot::DailyBudgetView {
             cap_usd: 10.0,
             spend_usd,
             parked,
@@ -330,7 +330,7 @@ fn codex_reset_credit_header_shows_only_when_actionable() {
 #[test]
 fn codex_reset_marker_blinks_only_while_a_window_is_spent() {
     let theme = Theme::fixed(false);
-    let marker_style = |panel: &crate::SidebarProviderPanel, phase| {
+    let marker_style = |panel: &crate::store::snapshot::SidebarProviderPanel, phase| {
         Dashboard::stacked(&theme, std::slice::from_ref(panel))
             .phase(phase)
             .lines()
@@ -340,7 +340,7 @@ fn codex_reset_marker_blinks_only_while_a_window_is_spent() {
             .map(|span| span.style)
             .expect("reset marker")
     };
-    let styles = |panel: &crate::SidebarProviderPanel| {
+    let styles = |panel: &crate::store::snapshot::SidebarProviderPanel| {
         (0..32)
             .map(|phase| marker_style(panel, phase))
             .collect::<Vec<_>>()

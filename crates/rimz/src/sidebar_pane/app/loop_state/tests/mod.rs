@@ -208,16 +208,16 @@ fn terminal_with_width(cols: u16) -> Terminal<CrosstermBackend<io::Stdout>> {
     .expect("terminal")
 }
 
-fn own_view() -> crate::SidebarOwnView {
-    crate::SidebarOwnView {
+fn own_view() -> crate::store::snapshot::SidebarOwnView {
+    crate::store::snapshot::SidebarOwnView {
         sibling_count: 1,
         working_pane_ids: vec![pane("terminal_9", "tab_0", false).pane_id],
         own_view_is_daemon: false,
     }
 }
 
-fn empty_own_view() -> crate::SidebarOwnView {
-    crate::SidebarOwnView {
+fn empty_own_view() -> crate::store::snapshot::SidebarOwnView {
+    crate::store::snapshot::SidebarOwnView {
         sibling_count: 0,
         working_pane_ids: Vec::new(),
         own_view_is_daemon: false,
@@ -250,7 +250,7 @@ fn snapshot_with_focused_pane(ws: &WorkspaceId, active: PaneId) -> SidebarSnapsh
     let second = pane("terminal_2", "tab_0", false);
     let working_pane_ids = vec![first.pane_id.clone(), second.pane_id.clone()];
     let mut snapshot = snapshot_with_panes(ws, vec![first, second]);
-    snapshot.own_view = Some(crate::SidebarOwnView {
+    snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
         sibling_count: 2,
         working_pane_ids,
         own_view_is_daemon: false,
@@ -270,7 +270,7 @@ fn hidden_attached_agent_snapshot(
 
 fn hidden_attached_process_snapshot(
     ws: &WorkspaceId,
-    state: crate::ProcessState,
+    state: crate::store::snapshot::ProcessState,
 ) -> SidebarSnapshot {
     let mut snapshot = process_snapshot(ws, 1);
     snapshot.worktree_groups[0].rows[0]
@@ -283,7 +283,7 @@ fn hidden_attached_process_snapshot(
 fn hide(mut snapshot: SidebarSnapshot) -> SidebarSnapshot {
     snapshot.own_view = Some(own_view());
     snapshot.viewed_panes.clear();
-    snapshot.presence = Some(crate::SidebarPresence::Active);
+    snapshot.presence = Some(crate::store::snapshot::SidebarPresence::Active);
     snapshot
 }
 
@@ -359,7 +359,7 @@ fn tripped_budget_ratchet_observes_the_day_spend_epoch_it_displays() {
         snapshot.today_spend_live_usd = Some(1.0);
         snapshot.today_spend_epoch_secs = Some(10);
         snapshot.fleet_day_spend_epoch_secs = Some(20);
-        snapshot.fleet_budget = Some(crate::DailyBudgetView {
+        snapshot.fleet_budget = Some(crate::store::snapshot::DailyBudgetView {
             cap_usd: 10.0,
             spend_usd,
             parked: true,

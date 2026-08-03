@@ -11,7 +11,7 @@ use crate::message::{
 };
 use crate::mux::{NamedKey, paste_into_pane, press_pane_key, type_into_pane};
 use crate::workspace::ResolvedWorkspace;
-use crate::{PaneAgent, SidebarSnapshot, Store};
+use crate::{Store, store::snapshot::PaneAgent, store::snapshot::SidebarSnapshot};
 
 pub type Result<T> = std::result::Result<T, SendErr>;
 

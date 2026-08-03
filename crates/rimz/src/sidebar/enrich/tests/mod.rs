@@ -130,7 +130,7 @@ fn claude_host_serving_needs_a_pane_the_provider_still_stands_behind() {
 
 #[test]
 fn remote_control_badge_follows_enablement_and_probe_health() {
-    use crate::RemoteControlBadge::{Down, Healthy, Hidden};
+    use crate::store::snapshot::RemoteControlBadge::{Down, Healthy, Hidden};
 
     let cases = [
         (true, false, Some(true), Healthy, "configured and up"),
@@ -217,7 +217,7 @@ fn write_worktree_marker(path: &Path, name: &str) {
     atomic::write_temp_then_rename(&git_dir.join("rimz-worktree.json"), &marker).unwrap();
 }
 
-fn channel_group(label: &str, path: &Path) -> crate::SidebarWorktreeGroup {
+fn channel_group(label: &str, path: &Path) -> crate::store::snapshot::SidebarWorktreeGroup {
     let mut group = worktree_group(
         path,
         vec![activity_row(false, None, Timestamp::now(), path)],
@@ -398,7 +398,7 @@ fn cost_row_at(
     usd: Option<f64>,
     registered_at: Option<Timestamp>,
     worktree_path: &Path,
-) -> crate::SidebarRow {
+) -> crate::store::snapshot::SidebarRow {
     let mut row = activity_row(
         true,
         Some(AgentStatus::Running),

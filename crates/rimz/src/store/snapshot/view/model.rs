@@ -366,9 +366,11 @@ mod tests {
             attention_score: 0,
             last_activity: jiff::Timestamp::now(),
             card: if agent {
-                crate::RowCard::Agent(Box::default())
+                crate::store::snapshot::RowCard::Agent(Box::default())
             } else {
-                crate::RowCard::Process(crate::ProcessCard::default())
+                crate::store::snapshot::RowCard::Process(
+                    crate::store::snapshot::ProcessCard::default(),
+                )
             },
         }
     }

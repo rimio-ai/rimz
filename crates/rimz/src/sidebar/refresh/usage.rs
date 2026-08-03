@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::agents::{AccountUsageIdentity, AccountUsageSnapshot, ProviderAccountScope};
 use crate::ids::{AgentKind, WorkspaceId};
-use crate::{RuntimePaths, SidebarSnapshot};
+use crate::{RuntimePaths, store::snapshot::SidebarSnapshot};
 
 use super::accounts::cached_account_usage_hint;
 use super::credits::{

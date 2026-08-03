@@ -120,12 +120,12 @@ fn room_agents_count_only_pane_bound_root_sessions() {
     departed.status = rimz::agents::AgentStatus::Failed;
     departed.ended_at = Some(now);
     departed.turn_started_at = Some(now + jiff::SignedDuration::from_secs(1));
-    let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+    let mut snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
         rimz::WorkspaceId::from_project_root(Path::new("/repo")),
         vec![live.clone(), departed],
         now,
     );
-    snapshot.agent_panes.push(rimz::PaneAgent {
+    snapshot.agent_panes.push(rimz::store::snapshot::PaneAgent {
         kind: live.kind.clone(),
         kind_ordinal: None,
         name: None,

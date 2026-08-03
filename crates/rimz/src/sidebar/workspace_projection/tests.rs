@@ -79,7 +79,7 @@ fn publisher_suppresses_equal_bytes_and_republishes_changed_verdicts() {
 
     // A producer-time window crossing changes an already-derived field while
     // rollup/frame/config source identity remains fixed.
-    workspace.0.truth_degraded = Some(crate::TruthNotice {
+    workspace.0.truth_degraded = Some(crate::store::snapshot::TruthNotice {
         carried: 1,
         since_ms: 10,
         pane_ids: Vec::new(),
@@ -185,7 +185,7 @@ fn quiet_time_transition_republishes_and_reaches_a_cached_adopter() {
             .iter()
             .flat_map(|group| &group.rows)
             .find(|row| row.id == "quiet-agent")
-            .and_then(crate::SidebarRow::status)
+            .and_then(crate::store::snapshot::SidebarRow::status)
     };
 
     let before = fold_at(

@@ -3,8 +3,9 @@ use crate::config::ScrollbarMode;
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::{
-    SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, actionable_unread_count,
-    lead_unread_row,
+    store::snapshot::SidebarSnapshot, store::snapshot::SidebarWorktreeGroup,
+    store::snapshot::SidebarWorktreeKind, store::snapshot::actionable_unread_count,
+    store::snapshot::lead_unread_row,
 };
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};

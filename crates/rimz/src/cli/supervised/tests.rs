@@ -322,7 +322,7 @@ fn pane_resolution_uses_snapshot_when_record_has_no_pane() {
     pane.session_name = "live-session".to_owned();
     let mut agent = agent_state("claude", "sess-1", AgentStatus::Running);
     agent.pane = Some(pane);
-    let snapshot = rimz::SidebarSnapshot::build_with_agents(
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
         workspace_id,
         vec![agent],
         jiff::Timestamp::UNIX_EPOCH,

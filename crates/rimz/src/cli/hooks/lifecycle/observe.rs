@@ -305,7 +305,7 @@ fn normalize_correlated_subagent_signal(observation: &mut AgentLifecycleObservat
 fn log_lifecycle_receipt(
     kind: &str,
     observation: &AgentLifecycleObservation,
-    receipt: &rimz::store::AgentLifecycleReceipt,
+    receipt: &rimz::store::writer::AgentLifecycleReceipt,
 ) {
     let Some(agent_id) = observation.agent_id.as_deref() else {
         warn!(

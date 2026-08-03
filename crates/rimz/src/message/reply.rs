@@ -17,7 +17,7 @@ use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::message::{MessageRecord, MessageSender, MessageStatus};
 use crate::store::event::EventKind;
 use crate::store::event_log;
-use crate::{SidebarSnapshot, Store};
+use crate::{Store, store::snapshot::SidebarSnapshot};
 
 use super::dispatch::DispatchOutcome;
 

@@ -32,7 +32,7 @@ fn collect_show_report(
     store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,
     runtime: &rimz::RuntimePaths,
-    snapshot: &rimz::SidebarSnapshot,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
     reference: &str,
     capture: bool,
     ansi: bool,
@@ -220,7 +220,7 @@ pub(super) fn resolve_audit_agent(
     if audit.agents.is_empty() {
         return Ok(None);
     }
-    let snapshot = rimz::SidebarSnapshot::build_with_agents(
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
         workspace.workspace_id.clone(),
         audit.agents,
         jiff::Timestamp::now(),
@@ -504,18 +504,18 @@ pub(super) fn render_placement_section(
 
 pub(super) fn format_pr_info(pr: PrInfo) -> String {
     let state = match pr.state {
-        rimz::WorktreePrState::Open => "open",
-        rimz::WorktreePrState::Closed => "closed",
-        rimz::WorktreePrState::Merged => "merged",
+        rimz::store::snapshot::WorktreePrState::Open => "open",
+        rimz::store::snapshot::WorktreePrState::Closed => "closed",
+        rimz::store::snapshot::WorktreePrState::Merged => "merged",
     };
     let number = pr
         .number
         .map(|number| format!("#{number} "))
         .unwrap_or_default();
     let ci = pr.ci.map(|ci| match ci {
-        rimz::WorktreePrCi::Pending => " · ci pending",
-        rimz::WorktreePrCi::Passing => " · ci passing",
-        rimz::WorktreePrCi::Failing => " · ci failing",
+        rimz::store::snapshot::WorktreePrCi::Pending => " · ci pending",
+        rimz::store::snapshot::WorktreePrCi::Passing => " · ci passing",
+        rimz::store::snapshot::WorktreePrCi::Failing => " · ci failing",
     });
     format!("{number}{state}{}", ci.unwrap_or_default())
 }

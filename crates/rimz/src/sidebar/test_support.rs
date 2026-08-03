@@ -5,7 +5,10 @@ use jiff::Timestamp;
 use crate::agents::{AgentState, AgentStatus, RateLimitWindow, TurnPhase};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
-use crate::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
+use crate::{
+    store::snapshot::SidebarSnapshot, store::snapshot::SidebarWorktreeGroup,
+    store::snapshot::SidebarWorktreeKind,
+};
 
 pub(crate) fn pane(id: &str, command: &str, cwd: &str) -> PaneRef {
     PaneRef {
@@ -59,8 +62,8 @@ pub(crate) fn rl_window_mins(
 pub(crate) fn provider_panel(
     kind: &str,
     windows: Vec<RateLimitWindow>,
-) -> crate::SidebarProviderPanel {
-    crate::SidebarProviderPanel {
+) -> crate::store::snapshot::SidebarProviderPanel {
+    crate::store::snapshot::SidebarProviderPanel {
         kind: kind.to_owned(),
         account_scope: Default::default(),
         product_name: kind.to_owned(),
@@ -85,7 +88,7 @@ pub(crate) fn provider_panel(
 
 pub(crate) fn snapshot_with_panels(
     workspace: WorkspaceId,
-    panels: Vec<crate::SidebarProviderPanel>,
+    panels: Vec<crate::store::snapshot::SidebarProviderPanel>,
 ) -> SidebarSnapshot {
     let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
     snapshot.providers = panels;
@@ -134,8 +137,8 @@ pub(crate) fn activity_row(
     status: Option<AgentStatus>,
     last_activity: Timestamp,
     worktree_path: &Path,
-) -> crate::SidebarRow {
-    crate::SidebarRow {
+) -> crate::store::snapshot::SidebarRow {
+    crate::store::snapshot::SidebarRow {
         id: "row".to_owned(),
         name: "claude".to_owned(),
         pane: None,
@@ -148,18 +151,21 @@ pub(crate) fn activity_row(
         attention_score: 0,
         last_activity,
         card: if is_agent {
-            crate::RowCard::Agent(Box::new(crate::AgentCard {
+            crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
                 status: status.unwrap_or(AgentStatus::Idle),
                 phase: TurnPhase::Idle,
-                ..crate::AgentCard::default()
+                ..crate::store::snapshot::AgentCard::default()
             }))
         } else {
-            crate::RowCard::Process(crate::ProcessCard::default())
+            crate::store::snapshot::RowCard::Process(crate::store::snapshot::ProcessCard::default())
         },
     }
 }
 
-pub(crate) fn worktree_group(path: &Path, rows: Vec<crate::SidebarRow>) -> SidebarWorktreeGroup {
+pub(crate) fn worktree_group(
+    path: &Path,
+    rows: Vec<crate::store::snapshot::SidebarRow>,
+) -> SidebarWorktreeGroup {
     SidebarWorktreeGroup {
         key: path.display().to_string(),
         label: "wt".to_owned(),

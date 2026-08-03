@@ -38,8 +38,8 @@ fn provider(
     kind: &str,
     spending: Option<SpendTally>,
     used_percentage: u8,
-) -> crate::SidebarProviderPanel {
-    crate::SidebarProviderPanel {
+) -> crate::store::snapshot::SidebarProviderPanel {
+    crate::store::snapshot::SidebarProviderPanel {
         kind: kind.to_owned(),
         account_scope: Default::default(),
         product_name: kind.to_owned(),

@@ -56,12 +56,12 @@ impl BenchWorkspace {
 
 struct SnapshotFixture {
     _workspace: BenchWorkspace,
-    snapshot: rimz::SidebarSnapshot,
+    snapshot: rimz::store::snapshot::SidebarSnapshot,
 }
 
 struct FuseFixture {
     _workspace: BenchWorkspace,
-    snapshot: rimz::SidebarSnapshot,
+    snapshot: rimz::store::snapshot::SidebarSnapshot,
     events: rimz::sidebar::events::EventStore,
     now_ms: u64,
 }
@@ -69,7 +69,7 @@ struct FuseFixture {
 struct EnrichFixture {
     _workspace: BenchWorkspace,
     runtime: rimz::RuntimePaths,
-    snapshot: rimz::SidebarSnapshot,
+    snapshot: rimz::store::snapshot::SidebarSnapshot,
     frame: rimz::sidebar::frame::PaneFrame,
 }
 

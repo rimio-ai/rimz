@@ -225,7 +225,7 @@ fn collapsing_the_selected_group_pins_on_the_cleared_selection() {
         ],
     );
     for row in &mut snapshot.worktree_groups[0].rows {
-        row.card = crate::RowCard::Agent(Box::default());
+        row.card = crate::store::snapshot::RowCard::Agent(Box::default());
     }
     snapshot.worktree_groups[0].finished = true;
     let group_key = snapshot.worktree_groups[0].key.clone();
@@ -337,11 +337,12 @@ fn focus_keys_fire_without_mutating_selection() {
         ],
     );
     snapshot.worktree_groups[0].rows[1].name = "claude".to_owned();
-    snapshot.worktree_groups[0].rows[1].card = crate::RowCard::Agent(Box::new(crate::AgentCard {
-        status: crate::agents::AgentStatus::Waiting,
-        phase: crate::agents::TurnPhase::Idle,
-        ..crate::AgentCard::default()
-    }));
+    snapshot.worktree_groups[0].rows[1].card =
+        crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
+            status: crate::agents::AgentStatus::Waiting,
+            phase: crate::agents::TurnPhase::Idle,
+            ..crate::store::snapshot::AgentCard::default()
+        }));
     let mut ui = UiState::default();
     let outcome = handle_key(KeyAction::InboxNext, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
@@ -786,11 +787,11 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
             "/repo/main",
         ));
     }
-    snapshot.worktree_groups = vec![crate::SidebarWorktreeGroup {
+    snapshot.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,
-        kind: crate::SidebarWorktreeKind::Worktree,
+        kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
         status_counts: Vec::new(),

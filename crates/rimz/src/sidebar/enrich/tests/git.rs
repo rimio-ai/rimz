@@ -16,18 +16,20 @@ fn pr_state_projection_uses_the_given_map() {
     snapshot.worktree_groups = vec![worktree_group(&worktree, Vec::new())];
     snapshot.worktree_groups[0].pr_number = Some(69);
 
-    let branch_ci =
-        BTreeMap::from([(worktree.display().to_string(), crate::WorktreePrCi::Failing)]);
+    let branch_ci = BTreeMap::from([(
+        worktree.display().to_string(),
+        crate::store::snapshot::WorktreePrCi::Failing,
+    )]);
     let mut states = BTreeMap::new();
     states.insert(
         worktree.display().to_string(),
         PrLink {
             branch: None,
             incarnation: None,
-            state: crate::WorktreePrState::Closed,
+            state: crate::store::snapshot::WorktreePrState::Closed,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
-            ci: Some(crate::WorktreePrCi::Failing),
+            ci: Some(crate::store::snapshot::WorktreePrCi::Failing),
             merge_sha: None,
         },
     );
@@ -39,7 +41,7 @@ fn pr_state_projection_uses_the_given_map() {
     );
     assert_eq!(
         snapshot.worktree_groups[0].pr_state,
-        Some(crate::WorktreePrState::Closed)
+        Some(crate::store::snapshot::WorktreePrState::Closed)
     );
     assert_eq!(snapshot.worktree_groups[0].pr_number, Some(91));
     assert_eq!(
@@ -53,10 +55,10 @@ fn pr_state_projection_uses_the_given_map() {
         PrLink {
             branch: None,
             incarnation: None,
-            state: crate::WorktreePrState::Open,
+            state: crate::store::snapshot::WorktreePrState::Open,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
-            ci: Some(crate::WorktreePrCi::Passing),
+            ci: Some(crate::store::snapshot::WorktreePrCi::Passing),
             merge_sha: None,
         },
     );
@@ -68,7 +70,7 @@ fn pr_state_projection_uses_the_given_map() {
     );
     assert_eq!(
         snapshot.worktree_groups[0].pr_ci,
-        Some(crate::WorktreePrCi::Passing)
+        Some(crate::store::snapshot::WorktreePrCi::Passing)
     );
 
     states.insert(
@@ -76,10 +78,10 @@ fn pr_state_projection_uses_the_given_map() {
         PrLink {
             branch: None,
             incarnation: None,
-            state: crate::WorktreePrState::Merged,
+            state: crate::store::snapshot::WorktreePrState::Merged,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
-            ci: Some(crate::WorktreePrCi::Failing),
+            ci: Some(crate::store::snapshot::WorktreePrCi::Failing),
             merge_sha: Some("merged-sha".to_owned()),
         },
     );
@@ -91,7 +93,7 @@ fn pr_state_projection_uses_the_given_map() {
     );
     assert_eq!(
         snapshot.worktree_groups[0].pr_ci,
-        Some(crate::WorktreePrCi::Failing)
+        Some(crate::store::snapshot::WorktreePrCi::Failing)
     );
 
     snapshot.worktree_groups[0].pr_number = Some(69);
@@ -106,7 +108,7 @@ fn pr_state_projection_uses_the_given_map() {
     assert_eq!(snapshot.worktree_groups[0].pr_url, None);
     assert_eq!(
         snapshot.worktree_groups[0].pr_ci,
-        Some(crate::WorktreePrCi::Failing)
+        Some(crate::store::snapshot::WorktreePrCi::Failing)
     );
 }
 
@@ -122,7 +124,7 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
         PrLink {
             branch: None,
             incarnation: None,
-            state: crate::WorktreePrState::Merged,
+            state: crate::store::snapshot::WorktreePrState::Merged,
             number: Some(91),
             url: None,
             ci: None,
@@ -132,7 +134,7 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
     project_pr_state_map(&mut snapshot, &states, &BTreeMap::new(), &diff_cache);
     assert_eq!(
         snapshot.worktree_groups[0].pr_state,
-        Some(crate::WorktreePrState::Merged)
+        Some(crate::store::snapshot::WorktreePrState::Merged)
     );
 }
 
@@ -146,7 +148,7 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
         PrLink {
             branch: None,
             incarnation: None,
-            state: crate::WorktreePrState::Merged,
+            state: crate::store::snapshot::WorktreePrState::Merged,
             number: Some(91),
             url: None,
             ci: None,
@@ -185,10 +187,10 @@ fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
             PrLink {
                 branch: Some(branch.to_owned()),
                 incarnation: None,
-                state: crate::WorktreePrState::Merged,
+                state: crate::store::snapshot::WorktreePrState::Merged,
                 number: Some(number),
                 url: Some(format!("https://github.com/org/repo/pull/{number}")),
-                ci: Some(crate::WorktreePrCi::Passing),
+                ci: Some(crate::store::snapshot::WorktreePrCi::Passing),
                 merge_sha: Some(format!("sha-{number}")),
             },
         );
@@ -211,16 +213,25 @@ fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
         },
     );
 
-    let branch_ci = BTreeMap::from([(trunk.display().to_string(), crate::WorktreePrCi::Passing)]);
+    let branch_ci = BTreeMap::from([(
+        trunk.display().to_string(),
+        crate::store::snapshot::WorktreePrCi::Passing,
+    )]);
     project_pr_state_map(&mut snapshot, &states, &branch_ci, &diff_cache);
 
     let trunk = &snapshot.worktree_groups[0];
     assert_eq!(trunk.pr_state, None);
     assert_eq!(trunk.pr_number, None);
     assert_eq!(trunk.pr_url, None);
-    assert_eq!(trunk.pr_ci, Some(crate::WorktreePrCi::Passing));
+    assert_eq!(
+        trunk.pr_ci,
+        Some(crate::store::snapshot::WorktreePrCi::Passing)
+    );
     let feature = &snapshot.worktree_groups[1];
-    assert_eq!(feature.pr_state, Some(crate::WorktreePrState::Merged));
+    assert_eq!(
+        feature.pr_state,
+        Some(crate::store::snapshot::WorktreePrState::Merged)
+    );
     assert_eq!(feature.pr_number, Some(91));
     assert_eq!(
         feature.pr_url.as_deref(),

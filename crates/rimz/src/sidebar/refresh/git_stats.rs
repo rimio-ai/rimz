@@ -22,7 +22,10 @@ use crate::sidebar::timing::{
 use crate::store::atomic;
 use crate::store::single_flight::{self, Coalesced};
 use crate::worktree::{self, LandedVerdict};
-use crate::{PaneId, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
+use crate::{
+    PaneId, store::snapshot::SidebarSnapshot, store::snapshot::SidebarWorktreeGroup,
+    store::snapshot::SidebarWorktreeKind,
+};
 
 /// How a non-producing sidebar waits for the elected producer's diff-stats
 /// write before refreshing locally. ~1.5s total (75 × 20ms) — wide enough for
@@ -235,7 +238,7 @@ pub(crate) fn worktree_group_path(group: &SidebarWorktreeGroup) -> Option<&str> 
 
 pub(crate) fn worktree_group_path_fields<'a>(
     key: &'a str,
-    rows: &'a [crate::SidebarRow],
+    rows: &'a [crate::store::snapshot::SidebarRow],
 ) -> Option<&'a str> {
     key.split('\n')
         .next()

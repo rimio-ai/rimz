@@ -15,7 +15,7 @@ use crate::agents::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::sidebar::read_marks::ReadMarks;
 use crate::store::{RuntimePaths, atomic};
-use crate::{SidebarRow, SidebarSnapshot};
+use crate::{store::snapshot::SidebarRow, store::snapshot::SidebarSnapshot};
 
 pub const UNREAD_EPISODES_VERSION: &str = "rimz.unread.v1";
 
@@ -407,7 +407,10 @@ struct UnreadEpisodesFile {
 mod tests {
     use super::*;
     use crate::pane::PaneRef;
-    use crate::{AgentCard, MuxName, RowCard, SidebarStatusCount, SidebarWorktreeGroup};
+    use crate::{
+        MuxName, store::snapshot::AgentCard, store::snapshot::RowCard,
+        store::snapshot::SidebarStatusCount, store::snapshot::SidebarWorktreeGroup,
+    };
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -441,7 +444,7 @@ mod tests {
 
     fn process_row(id: &str, last_activity: i64) -> SidebarRow {
         SidebarRow {
-            card: RowCard::Process(crate::ProcessCard::default()),
+            card: RowCard::Process(crate::store::snapshot::ProcessCard::default()),
             name: "zsh".to_owned(),
             ..row(id, AgentStatus::Idle, last_activity)
         }
@@ -461,7 +464,7 @@ mod tests {
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
             label_qualifier: None,
-            kind: crate::SidebarWorktreeKind::Worktree,
+            kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,
             status_counts,

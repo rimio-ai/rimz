@@ -6,7 +6,9 @@
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::event::EventKind;
-use rimz::store::{AgentLaunchName, AgentLaunchRequest, AgentLaunchScope, snapshot};
+use rimz::store::{
+    snapshot, writer::AgentLaunchName, writer::AgentLaunchRequest, writer::AgentLaunchScope,
+};
 use rimz::{EventEnvelope, RuntimeScope};
 use serde_json::json;
 

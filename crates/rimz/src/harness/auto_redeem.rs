@@ -22,7 +22,7 @@ use crate::config::ResumeConfig;
 use crate::harness::assist_log::AssistWindowReset;
 use crate::ids::{AgentKind, WorkspaceId};
 use crate::store::atomic::write_temp_then_rename_cache;
-use crate::{RuntimePaths, SidebarProviderPanel};
+use crate::{RuntimePaths, store::snapshot::SidebarProviderPanel};
 
 const CODEX_KIND: &str = "codex";
 pub(crate) const EXPIRY_RESCUE_LEAD: Duration = Duration::from_secs(30 * 60);

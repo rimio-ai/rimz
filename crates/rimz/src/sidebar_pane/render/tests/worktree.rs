@@ -24,7 +24,7 @@ fn render_directory_room_root_pod_is_name_only() {
     let child = snapshot
         .worktree_groups
         .iter_mut()
-        .find(|group| group.kind == crate::SidebarWorktreeKind::Worktree)
+        .find(|group| group.kind == crate::store::snapshot::SidebarWorktreeKind::Worktree)
         .expect("the git-backed worktree pod");
     child.diff_added = Some(12);
     child.diff_removed = Some(3);
@@ -98,7 +98,7 @@ fn render_active_team_header_tolerates_strays_and_yields_to_git_facts() {
     group.diff_removed = Some(3);
     group.commits_ahead = Some(2);
     group.trunk = Some("main".to_owned());
-    group.trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
+    group.trunk_sync = Some(crate::store::snapshot::WorktreeTrunkSync::Diverged);
 
     let theme = Theme::fixed(false);
     let header = &group_lines_at_width(&snapshot, &theme, 0, 48)[0];
@@ -376,8 +376,9 @@ fn render_worktree_channel_leads_with_merge_glyph() {
     let mut snapshot = snapshot_with(vec![design]);
     snapshot.worktree_groups[0].worktree_backed = true;
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Pristine);
-    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Merged);
+    snapshot.worktree_groups[0].trunk_sync =
+        Some(crate::store::snapshot::WorktreeTrunkSync::Pristine);
+    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Merged);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
 
@@ -452,7 +453,8 @@ fn render_worktree_channel_leads_with_fork_glyph() {
     let mut snapshot = snapshot_with(vec![design]);
     snapshot.worktree_groups[0].worktree_backed = true;
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
+    snapshot.worktree_groups[0].trunk_sync =
+        Some(crate::store::snapshot::WorktreeTrunkSync::Diverged);
     snapshot.worktree_groups[0].pr_state = None;
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
@@ -464,7 +466,9 @@ fn render_worktree_channel_leads_with_fork_glyph() {
     assert!(rendered.contains("⑂ main"), "header:\n{rendered}");
 }
 
-fn pristine_worktree_with_pr_state(pr_state: Option<crate::WorktreePrState>) -> SidebarSnapshot {
+fn pristine_worktree_with_pr_state(
+    pr_state: Option<crate::store::snapshot::WorktreePrState>,
+) -> SidebarSnapshot {
     let mut codex = agent(
         "codex-1",
         "codex",
@@ -482,7 +486,8 @@ fn pristine_worktree_with_pr_state(pr_state: Option<crate::WorktreePrState>) -> 
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(true);
     snapshot.worktree_groups[0].landed = Some(true);
-    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Pristine);
+    snapshot.worktree_groups[0].trunk_sync =
+        Some(crate::store::snapshot::WorktreeTrunkSync::Pristine);
     snapshot.worktree_groups[0].pr_state = pr_state;
     snapshot
 }
@@ -492,9 +497,9 @@ fn render_pr_badge_keeps_identity_style_across_states() {
     let theme = Theme::fixed(false);
     for pr_state in [
         None,
-        Some(crate::WorktreePrState::Open),
-        Some(crate::WorktreePrState::Merged),
-        Some(crate::WorktreePrState::Closed),
+        Some(crate::store::snapshot::WorktreePrState::Open),
+        Some(crate::store::snapshot::WorktreePrState::Merged),
+        Some(crate::store::snapshot::WorktreePrState::Closed),
     ] {
         let mut snapshot = pristine_worktree_with_pr_state(pr_state);
         snapshot.worktree_groups[0].pr_number = Some(91);
@@ -523,11 +528,15 @@ fn render_pr_badge_keeps_identity_style_across_states() {
 #[test]
 fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
     let theme = Theme::fixed(false);
-    let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
+    let mut snapshot =
+        pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
     snapshot.worktree_groups[0].pr_number = Some(91);
-    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Failing);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Failing);
 
-    for state in [crate::WorktreePrState::Open, crate::WorktreePrState::Merged] {
+    for state in [
+        crate::store::snapshot::WorktreePrState::Open,
+        crate::store::snapshot::WorktreePrState::Merged,
+    ] {
         snapshot.worktree_groups[0].pr_state = Some(state);
         let lines = group_lines(&snapshot, &theme, 0);
         let ci = lines[0]
@@ -541,7 +550,7 @@ fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
         );
     }
 
-    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
+    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Closed);
     let lines = group_lines(&snapshot, &theme, 0);
     assert!(
         lines[0]
@@ -556,7 +565,7 @@ fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
 fn render_branch_ci_without_a_pr_badge() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(None);
-    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Passing);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Passing);
 
     let lines = group_lines(&snapshot, &theme, 0);
     let header = &lines[0];
@@ -578,9 +587,10 @@ fn render_branch_ci_without_a_pr_badge() {
 
 #[test]
 fn render_pr_badge_leads_with_ci_glyph() {
-    let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
+    let mut snapshot =
+        pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
     snapshot.worktree_groups[0].pr_number = Some(888);
-    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Passing);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Passing);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
 
@@ -596,9 +606,10 @@ fn render_pr_badge_leads_with_ci_glyph() {
 
 #[test]
 fn render_pr_badge_is_a_diff_safe_sanitized_hyperlink() {
-    let mut linked = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
+    let mut linked =
+        pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
     linked.worktree_groups[0].pr_number = Some(91);
-    linked.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Passing);
+    linked.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Passing);
     let unsafe_url = "https://github.com/org/repo/pull/91\x1b]8;;https://evil.test\u{7}";
     linked.worktree_groups[0].pr_url = Some(unsafe_url.to_owned());
     let mut plain = linked.clone();
@@ -639,7 +650,8 @@ fn render_pr_badge_is_a_diff_safe_sanitized_hyperlink() {
 #[test]
 fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
     let theme = Theme::fixed(false);
-    let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Merged));
+    let mut snapshot =
+        pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Merged));
     snapshot.worktree_groups[0].finished = true;
 
     let finished = group_lines(&snapshot, &theme, 0);
@@ -669,9 +681,10 @@ fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
 #[test]
 fn render_pr_badge_yields_to_the_name_at_extreme_width() {
     let theme = Theme::fixed(false);
-    let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
+    let mut snapshot =
+        pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
     snapshot.worktree_groups[0].pr_number = Some(91);
-    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Passing);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Passing);
 
     let header = &group_lines_at_width(&snapshot, &theme, 0, 7)[0];
     let text = header
@@ -692,7 +705,7 @@ fn render_pr_badge_yields_to_the_name_at_extreme_width() {
 fn render_bare_branch_ci_yields_to_the_name_at_extreme_width() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(None);
-    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Passing);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Passing);
 
     let header = &group_lines_at_width(&snapshot, &theme, 0, 7)[0];
     let text = header
@@ -730,7 +743,8 @@ fn render_worktree_equal_to_trunk() {
 
 #[test]
 fn render_pr_merged_pristine_worktree_uses_merge_glyphs() {
-    let snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Merged));
+    let snapshot =
+        pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Merged));
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -747,12 +761,13 @@ fn render_pr_merged_pristine_worktree_uses_merge_glyphs() {
 
 #[test]
 fn render_pristine_worktree_pr_state_outranks_equal_marker() {
-    let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
+    let mut snapshot =
+        pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
     assert!(rendered.contains("⑃ main"), "header:\n{rendered}");
     assert!(!rendered.contains("≡ main"), "header:\n{rendered}");
 
-    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
+    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Closed);
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
     assert!(rendered.contains("✕ main"), "header:\n{rendered}");
     assert!(!rendered.contains("≡ main"), "header:\n{rendered}");
@@ -780,7 +795,8 @@ fn render_worktree_clear_removable() {
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(true);
     snapshot.worktree_groups[0].landed = Some(true);
-    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Merged);
+    snapshot.worktree_groups[0].trunk_sync =
+        Some(crate::store::snapshot::WorktreeTrunkSync::Merged);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -810,8 +826,8 @@ fn render_merged_worktree_pr_open_or_closed_outranks_merge_marker() {
     group.trunk = Some("main".to_owned());
     group.clean = Some(true);
     group.landed = Some(true);
-    group.trunk_sync = Some(crate::WorktreeTrunkSync::Merged);
-    group.pr_state = Some(crate::WorktreePrState::Open);
+    group.trunk_sync = Some(crate::store::snapshot::WorktreeTrunkSync::Merged);
+    group.pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
     assert!(
@@ -823,7 +839,7 @@ fn render_merged_worktree_pr_open_or_closed_outranks_merge_marker() {
         "local merge marker is gone:\n{rendered}"
     );
 
-    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
+    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Closed);
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
     assert!(
         rendered.contains("✕ main"),
@@ -858,7 +874,8 @@ fn render_content_landed_worktree_uses_marker_over_ancestry_delta() {
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(true);
     snapshot.worktree_groups[0].landed = Some(true);
-    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Merged);
+    snapshot.worktree_groups[0].trunk_sync =
+        Some(crate::store::snapshot::WorktreeTrunkSync::Merged);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -892,7 +909,8 @@ fn render_worktree_dirty_tree_keeps_the_cluster() {
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(false);
     snapshot.worktree_groups[0].landed = Some(true);
-    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
+    snapshot.worktree_groups[0].trunk_sync =
+        Some(crate::store::snapshot::WorktreeTrunkSync::Diverged);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -954,7 +972,7 @@ fn render_trunk_worktree_pr_state_keeps_plain_cluster() {
     group.commits_ahead = Some(2);
     group.trunk = Some("main".to_owned());
     group.trunk_sync = None;
-    group.pr_state = Some(crate::WorktreePrState::Open);
+    group.pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
 
     let rendered = snapshot_to_screen(&snapshot, 42, 14);
 
@@ -978,7 +996,8 @@ fn render_merged_worktree_uses_merge_glyph_on_left() {
     );
     let mut snapshot = snapshot_with(vec![codex]);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Merged);
+    snapshot.worktree_groups[0].trunk_sync =
+        Some(crate::store::snapshot::WorktreeTrunkSync::Merged);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -1008,7 +1027,8 @@ fn render_reconciling_worktree_keeps_stats_and_merge_queue_marker() {
     snapshot.worktree_groups[0].commits_ahead = Some(1);
     snapshot.worktree_groups[0].commits_behind = Some(0);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Reconciling);
+    snapshot.worktree_groups[0].trunk_sync =
+        Some(crate::store::snapshot::WorktreeTrunkSync::Reconciling);
 
     let rendered = snapshot_to_screen(&snapshot, 48, 14);
 
@@ -1029,15 +1049,16 @@ fn render_diverged_worktree_uses_pr_state_marker() {
     );
     let mut snapshot = snapshot_with(vec![codex]);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
+    snapshot.worktree_groups[0].trunk_sync =
+        Some(crate::store::snapshot::WorktreeTrunkSync::Diverged);
     snapshot.worktree_groups[0].commits_ahead = Some(2);
-    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Open);
+    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
 
     let rendered = snapshot_to_screen(&snapshot, 42, 14);
     assert!(rendered.contains("⇡2"), "header:\n{rendered}");
     assert!(rendered.contains("⑃ main"), "header:\n{rendered}");
 
-    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
+    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Closed);
     let rendered = snapshot_to_screen(&snapshot, 42, 14);
     assert!(rendered.contains("✕ main"), "header:\n{rendered}");
 }
@@ -1055,12 +1076,12 @@ fn render_diverged_merged_pr_drops_spent_stats_but_closed_keeps_them() {
     let mut snapshot = snapshot_with(vec![codex]);
     let group = &mut snapshot.worktree_groups[0];
     group.trunk = Some("main".to_owned());
-    group.trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
+    group.trunk_sync = Some(crate::store::snapshot::WorktreeTrunkSync::Diverged);
     group.commits_ahead = Some(2);
     group.commits_behind = Some(1);
     group.diff_added = Some(12);
     group.diff_removed = Some(3);
-    group.pr_state = Some(crate::WorktreePrState::Merged);
+    group.pr_state = Some(crate::store::snapshot::WorktreePrState::Merged);
 
     let merged = snapshot_to_screen(&snapshot, 48, 14);
     assert!(merged.contains("✓ main"), "header:\n{merged}");
@@ -1069,7 +1090,7 @@ fn render_diverged_merged_pr_drops_spent_stats_but_closed_keeps_them() {
         "a merged verdict leaves only its marker:\n{merged}"
     );
 
-    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
+    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Closed);
     let closed = snapshot_to_screen(&snapshot, 48, 14);
     assert!(closed.contains("✕ main"), "header:\n{closed}");
     assert!(closed.contains("⇡2"), "header:\n{closed}");

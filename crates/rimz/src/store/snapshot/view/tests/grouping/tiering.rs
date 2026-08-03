@@ -1,6 +1,6 @@
 use super::*;
 use crate::agents::{ATTENTION_AGE_CEILING_SECS, DEFAULT_INACTIVE_AFTER_SECS};
-use crate::{RowCard, WorktreeTrunkSync};
+use crate::{store::snapshot::RowCard, store::snapshot::WorktreeTrunkSync};
 
 fn ranked_snapshot(mut agents: Vec<AgentState>) -> SidebarSnapshot {
     let mut panes = Vec::new();
@@ -230,7 +230,7 @@ fn process_only_group_tails_calm_agent_groups() {
         .iter_mut()
         .find(|group| group.label == "process")
         .expect("process group present");
-    process.rows[0].card = RowCard::Process(crate::ProcessCard::default());
+    process.rows[0].card = RowCard::Process(crate::store::snapshot::ProcessCard::default());
     process.status_counts.clear();
     snapshot.sort_groups_for_presentation();
 

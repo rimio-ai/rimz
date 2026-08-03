@@ -3,7 +3,7 @@ use uuid::Uuid;
 use super::*;
 use crate::agents::SpendTally;
 use crate::ids::WorkspaceId;
-use crate::{SidebarProviderPanel, SpendWindow};
+use crate::{SpendWindow, store::snapshot::SidebarProviderPanel};
 
 fn runtime() -> (tempfile::TempDir, RuntimePaths) {
     let dir = tempfile::tempdir().unwrap();
