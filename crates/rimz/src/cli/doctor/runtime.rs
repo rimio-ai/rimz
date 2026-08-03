@@ -7,7 +7,7 @@ use rimz::agents::runtime_control::{self, RuntimeControlLiveness, RuntimeControl
 use rimz::config::{ColorDepth, MachineConfig, ThemeMode};
 use rimz::ids::MuxName;
 use rimz::mux::{
-    MuxBackend, SessionHealth, binaries, logtail,
+    MuxBackend, SessionHealth, binaries,
     tmux::{self as tmux_mod, MIN_TMUX_VERSION},
     zellij::{self as zellij_mod, MIN_ZELLIJ_VERSION},
 };
@@ -16,10 +16,6 @@ use rimz::{RuntimePaths, StatePaths};
 
 use super::model;
 
-const MUX_LOG_WINDOW_BYTES: u64 = 256 * 1024;
-/// Issue groups to keep from the tail. Routine lifecycle groups share one
-/// rendered line, so the budget buys real findings rather than repetition.
-const MUX_LOG_ENTRY_CAP: usize = 24;
 const TOPOLOGY_CONFLICT_FRESH_MS: u64 = 10 * 60 * 1000;
 
 pub(super) fn collect_terminal() -> model::Terminal {
@@ -144,7 +140,7 @@ pub(super) fn collect_mux(
         MuxName::Tmux => model::Capabilities::Tmux(collect_tmux_capabilities()),
     };
     let binaries = collect_mux_binaries(mux);
-    let log = collect_mux_log(mux, history_cleared_at);
+    let log = super::mux_log::collect(mux, history_cleared_at);
     let mut report = model::Mux {
         name: mux,
         version,
@@ -266,99 +262,6 @@ fn binary_row(install: binaries::BinaryInstall) -> model::MuxBinaryRow {
     model::MuxBinaryRow {
         path: install.path.display().to_string(),
         version: install.version,
-    }
-}
-
-fn collect_mux_log(mux: MuxName, since: Option<jiff::Timestamp>) -> model::MuxLog {
-    let window = logtail::LogWindow {
-        bytes: MUX_LOG_WINDOW_BYTES,
-        issue_cap: MUX_LOG_ENTRY_CAP,
-        since,
-    };
-    match mux {
-        MuxName::Zellij => {
-            let path = zellij_mod::log_file();
-            match path.try_exists() {
-                Ok(true) => scan_mux_log(
-                    path,
-                    model::LogScope::HostUser {
-                        uid: nix::unistd::Uid::current().as_raw(),
-                    },
-                    window,
-                    zellij_mod::parse_log_line,
-                    zellij_mod::diagnose_log_record,
-                ),
-                Ok(false) => model::MuxLog::Missing {
-                    path: path.display().to_string(),
-                },
-                Err(err) => model::MuxLog::Unavailable {
-                    error: format!("{}: {err}", path.display()),
-                },
-            }
-        }
-        MuxName::Tmux => match tmux_mod::server_log_file() {
-            Some(path) => scan_mux_log(
-                path,
-                model::LogScope::Server,
-                window,
-                tmux_mod::parse_log_line,
-                tmux_mod::diagnose_log_record,
-            ),
-            None => model::MuxLog::Disabled {
-                hint: "server logging off (start tmux with `-v` to enable)".to_owned(),
-            },
-        },
-    }
-}
-
-fn scan_mux_log(
-    path: std::path::PathBuf,
-    scope: model::LogScope,
-    window: logtail::LogWindow,
-    parse_line: fn(&str) -> logtail::RecordLine,
-    diagnose: fn(
-        Option<&logtail::LogicalRecord>,
-        &logtail::LogicalRecord,
-        Option<&logtail::LogicalRecord>,
-    ) -> Option<logtail::LogDiagnosis>,
-) -> model::MuxLog {
-    match logtail::scan_tail(&path, window, parse_line, diagnose) {
-        Ok(scan) => model::MuxLog::Ready {
-            path: path.display().to_string(),
-            scope,
-            size_bytes: scan.size_bytes,
-            scanned_bytes: scan.scanned_bytes,
-            logical_records: scan.logical_records,
-            records_before_cutoff: scan.records_before_cutoff,
-            since: window.since,
-            problem_records: scan.problem_records,
-            omitted_issue_groups: scan.omitted_issue_groups,
-            issues: scan
-                .issues
-                .into_iter()
-                .map(|issue| model::MuxLogIssue {
-                    source_severity: severity_label(issue.severity).to_owned(),
-                    state: match issue.state {
-                        logtail::LogState::Investigate => model::DoctorState::Investigate,
-                        logtail::LogState::Expected => model::DoctorState::Expected,
-                    },
-                    impact: match issue.impact {
-                        logtail::LogImpact::Alarm => model::DoctorImpact::Alarm,
-                        logtail::LogImpact::Warn => model::DoctorImpact::Warn,
-                        logtail::LogImpact::Info => model::DoctorImpact::Info,
-                    },
-                    summary: issue.summary,
-                    occurrences: issue.occurrences,
-                    first_occurrence: issue.first_occurrence,
-                    last_occurrence: issue.last_occurrence,
-                    samples: issue.samples,
-                    evidence_truncated: issue.evidence_truncated,
-                })
-                .collect(),
-        },
-        Err(err) => model::MuxLog::Unavailable {
-            error: format!("{}: {err}", path.display()),
-        },
     }
 }
 
@@ -493,14 +396,6 @@ fn presence_plugins_view(
         rows,
         history,
     }))
-}
-
-fn severity_label(severity: logtail::LogSeverity) -> &'static str {
-    match severity {
-        logtail::LogSeverity::Warn => "warn",
-        logtail::LogSeverity::Error => "error",
-        logtail::LogSeverity::Panic => "panic",
-    }
 }
 
 fn collect_session_health(

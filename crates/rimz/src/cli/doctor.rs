@@ -19,6 +19,7 @@ use rimz::workspace::WorkspaceResolver;
 mod agents;
 mod messages;
 mod model;
+mod mux_log;
 mod protocol;
 mod render;
 mod runtime;

@@ -41,7 +41,6 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`keys.rs`](../../crates/rimz/src/mux/keys.rs) | Named key presses and bracketed-paste markers. |
 | [`capabilities.rs`](../../crates/rimz/src/mux/capabilities.rs) | Static backend facts, such as whether a view is a tab or a window. |
 | [`binaries.rs`](../../crates/rimz/src/mux/binaries.rs) | PATH and live-server binary probes for `rimz doctor`. |
-| [`logtail.rs`](../../crates/rimz/src/mux/logtail.rs) | The bounded server-log scanner behind `rimz doctor`. |
 
 Zellij, `crates/rimz/src/mux/zellij/` plus [`zellij.rs`](../../crates/rimz/src/mux/zellij.rs):
 
@@ -664,4 +663,4 @@ Zellij currently drops notification OSCs, so `[notifications].desktop = "auto"` 
 
 The selected backend, versions and floor compliance, PATH-visible backend binaries, backend server-log issues, feature availability, sidebar liveness, RimZ runtime socket headroom, the managed tmux server socket path, any same-named session stranded on the legacy default tmux server with the command that retires it, Zellij IPC socket headroom when Zellij is selected, and any degraded modes.
 
-The server-log scan in [`logtail.rs`](../../crates/rimz/src/mux/logtail.rs) reads a bounded tail, assembles logical multi-line records, stamps each from the backend's own line format, and drops everything at or before the `rimz doctor --clear` watermark. Each backend's classifier names an issue and places it: an ordinary lifecycle record (a client leaving, a closed pane's pty, a late action acknowledgement) is `expected` and folds into a counted line, and everything else stays `investigate` and earns its own. A record wrapped in a generic header is named by its `Caused by:` chain, so two unrelated failures under one wrapper stay two issues.
+Backend adapters own server-log locations. Private doctor collection in [`mux_log.rs`](../../crates/rimz/src/cli/doctor/mux_log.rs) reads a bounded tail, assembles logical multi-line records, stamps each from the backend's line format, and drops everything at or before the `rimz doctor --clear` watermark. Its classifier names and places each issue: ordinary lifecycle records (a client leaving, a closed pane's pty, a late action acknowledgement) are `expected` and fold into counted lines, while everything else stays `investigate`. A record wrapped in a generic header is named by its `Caused by:` chain, so two unrelated failures under one wrapper stay two issues.
