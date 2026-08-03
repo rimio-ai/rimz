@@ -417,7 +417,7 @@ allowed-imports = [
     "theme",
     "workspace",
 ]
-surface-budget = 363
+surface-budget = 362
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"
