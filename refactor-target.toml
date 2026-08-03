@@ -417,7 +417,7 @@ allowed-imports = [
     "theme",
     "workspace",
 ]
-surface-budget = 365
+surface-budget = 363
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"
@@ -515,4 +515,9 @@ baseline = 3
 [[strangler]]
 symbol = "message_store"
 path = "crates/rimz/src/harness"
+baseline = 0
+
+[[strangler]]
+symbol = "store::run_store"
+path = "crates/rimz/tests"
 baseline = 0

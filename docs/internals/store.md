@@ -22,7 +22,7 @@ Freshness is an extent, not a timestamp. A derived rollup records the `LogExtent
 
 ## Where the code lives
 
-`Store` is a cloneable handle around an `Arc`. [`mod.rs`](../../crates/rimz/src/store/mod.rs) holds the handle, core errors, and lock-free reads; every mutator and its intent/outcome vocabulary lives under [`writer.rs`](../../crates/rimz/src/store/writer.rs). Snapshot schema is consumed through [`store::snapshot`](../../crates/rimz/src/store/snapshot/mod.rs), and workspace metadata through [`store::workspace_record`](../../crates/rimz/src/store/workspace_record.rs). There is no in-process actor: cross-process serialization is the workspace lock's whole job.
+`Store` is a cloneable handle around an `Arc`. [`mod.rs`](../../crates/rimz/src/store/mod.rs) holds the handle, core errors, and lock-free reads; store mutations and their intent/outcome vocabulary live under [`writer.rs`](../../crates/rimz/src/store/writer.rs). Supervised runs are the exception: `harness::run` owns their schema, transitions, and workspace lock while the private run codec supplies durable temp-and-rename writes. Store reset crosses that boundary to cancel active runs before rotating room state. Snapshot schema is consumed through [`store::snapshot`](../../crates/rimz/src/store/snapshot/mod.rs), and workspace metadata through [`store::workspace_record`](../../crates/rimz/src/store/workspace_record.rs). There is no in-process actor: cross-process serialization is the workspace lock's whole job.
 
 | Module | What it owns |
 | --- | --- |
@@ -34,7 +34,7 @@ Freshness is an extent, not a timestamp. A derived rollup records the `LogExtent
 | [`writer.rs`](../../crates/rimz/src/store/writer.rs) | Public mutation intents/outcomes, the `commit` primitive, and the off-lock tail. `writer/` splits implementation into `debounce`, `lifecycle`, `publish`, `queue`, `reap`, and `reset`. |
 | [`snapshot/`](../../crates/rimz/src/store/snapshot/mod.rs) | Canonical snapshot schema and read side: `fold.rs` resumable rollup, `project.rs` lifecycle reducer, then pane binding and the view-model projection ([sidebar.md](./sidebar/sidebar.md#where-the-code-lives)). |
 | [`runtime.rs`](../../crates/rimz/src/store/runtime.rs) | The runtime-versus-audit read scope. |
-| [`message_store.rs`](../../crates/rimz/src/store/message_store.rs), [`run_store.rs`](../../crates/rimz/src/store/run_store.rs) | The live message queue and the supervised-run records. |
+| [`message_store.rs`](../../crates/rimz/src/store/message_store.rs), [`run_store.rs`](../../crates/rimz/src/store/run_store.rs) | Private durable codecs for the live message queue and supervised-run records; their public mutation intents live with their owning harness modules. |
 | [`sidecar.rs`](../../crates/rimz/src/store/sidecar.rs) | The shared latest-wins enrichment sidecar store behind `agent_context/` and `subagent_context/`. |
 | [`active_time.rs`](../../crates/rimz/src/store/active_time.rs) | The per-session estimated active-time accumulator, serialized by per-record flocks. |
 | [`gc.rs`](../../crates/rimz/src/store/gc.rs) | Global maintenance: stale runtime hints, recursive orphan-write-temp collection, and dead workspaces. |

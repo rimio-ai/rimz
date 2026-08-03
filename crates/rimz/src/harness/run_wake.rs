@@ -358,8 +358,7 @@ mod tests {
             let mut record = self.record.clone();
             record.status = RunStatus::Completed;
             record.last_message = Some(message.to_owned());
-            crate::store::run_store::write(&self.store.paths().runs_dir, &record)
-                .expect("complete run");
+            crate::harness::run::create(self.store.paths(), &record).expect("complete run");
         }
     }
 
@@ -502,7 +501,7 @@ mod tests {
         completed.last_message = Some("polled".to_owned());
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(300)).await;
-            crate::store::run_store::write(&paths.runs_dir, &completed).expect("complete run");
+            crate::harness::run::create(&paths, &completed).expect("complete run");
         });
 
         let record = waiter
