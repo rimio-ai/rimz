@@ -150,7 +150,7 @@ sentry = { version = "0.48", default-features = false, features = [
     "panic",
     "ureq",
 ] }
-sentry-tracing = "0.48"
+sentry-tracing = "0.49"
 
 # Filesystem and locking
 tempfile = "3"
