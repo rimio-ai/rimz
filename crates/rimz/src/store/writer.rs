@@ -169,10 +169,6 @@ fn remove_snapshot_file_if_exists(path: &Path) -> Result<()> {
 }
 
 fn invalidate_snapshot_caches(paths: &StatePaths, rollup: RollupInvalidation) -> Result<()> {
-    // A swapped or cut event log voids offset-stamped fold bases. Retract the
-    // published view before touching the rollup cache so a crash leaves readers
-    // folding for themselves, never trusting an extent that can alias into the
-    // fresh log after it regrows.
     remove_snapshot_file_if_exists(&paths.latest_snapshot)?;
     publish::retract_publish_stamp(paths);
     match rollup {
@@ -236,6 +232,27 @@ fn prune_old_dead_agents(
 }
 
 impl Store {
+    /// Run a mutation that may replace or cut the active event log.
+    ///
+    /// The publish lock fences checkpoint writers under the canonical
+    /// workspace → publish lock order. When the log changed, retract the
+    /// published view before touching the rollup cache so a crash leaves
+    /// readers folding for themselves, never trusting an offset that can alias
+    /// into the fresh log after it regrows.
+    fn commit_boundary<T, F>(&self, rollup: RollupInvalidation, mutation: F) -> Result<T>
+    where
+        F: FnOnce(&StatePaths) -> Result<(T, bool)>,
+    {
+        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+        let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
+        let (value, changed) = mutation(&self.inner.paths)?;
+        if changed {
+            invalidate_snapshot_caches(&self.inner.paths, rollup)?;
+            snapshot::rebuild(&self.inner.paths)?;
+        }
+        Ok(value)
+    }
+
     fn commit<T>(&self, f: impl FnOnce(&mut Txn<'_>) -> Result<T>) -> Result<T> {
         let (out, txn) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
@@ -328,37 +345,28 @@ impl Store {
         &self,
         workspace: &ResolvedWorkspace,
     ) -> Result<WorkspaceRewriteOutcome> {
-        let (messages_rewritten, events_rewritten) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            // Also fence the snapshot publishers: this rewrite replaces the
-            // caches in place, and a publisher mid-fold must not clobber
-            // them. Ordering is workspace → publish; publishers take only
-            // the publish lock, so the pair can never deadlock.
-            let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
+        let (messages_rewritten, events_rewritten) =
+            self.commit_boundary(RollupInvalidation::Reseed, |paths| {
+                let mut messages = message_store::list(&paths.messages_dir)?;
+                let messages_rewritten = messages.len();
+                for message in &mut messages {
+                    message.workspace_id = workspace.workspace_id.clone();
+                }
+                message_store::replace_all(&paths.messages_dir, &messages)?;
 
-            let mut messages = message_store::list(&self.inner.paths.messages_dir)?;
-            let messages_rewritten = messages.len();
-            for message in &mut messages {
-                message.workspace_id = workspace.workspace_id.clone();
-            }
-            message_store::replace_all(&self.inner.paths.messages_dir, &messages)?;
+                let mut events = event_log::read_all(&paths.events_log)?;
+                let events_rewritten = events.len();
+                for event in &mut events {
+                    event.workspace_id = workspace.workspace_id.clone();
+                }
+                event_log::replace_all(&paths.events_log, &events)?;
 
-            let mut events = event_log::read_all(&self.inner.paths.events_log)?;
-            let events_rewritten = events.len();
-            for event in &mut events {
-                event.workspace_id = workspace.workspace_id.clone();
-            }
-            event_log::replace_all(&self.inner.paths.events_log, &events)?;
-
-            let prior = workspace_record::read(&self.inner.paths.workspace_record).ok();
-            let record = workspace_record_preserving_rimz_target(prior.as_ref(), workspace, None);
-            workspace_record::write(&self.inner.paths, &record)?;
-            // The log was wholesale-replaced; reseed fold caches before rebuilding.
-            invalidate_snapshot_caches(&self.inner.paths, RollupInvalidation::Reseed)?;
-            snapshot::rebuild(&self.inner.paths)?;
-
-            (messages_rewritten, events_rewritten)
-        };
+                let prior = workspace_record::read(&paths.workspace_record).ok();
+                let record =
+                    workspace_record_preserving_rimz_target(prior.as_ref(), workspace, None);
+                workspace_record::write(paths, &record)?;
+                Ok(((messages_rewritten, events_rewritten), true))
+            })?;
 
         Ok(WorkspaceRewriteOutcome {
             workspace_id: workspace.workspace_id.clone(),
@@ -605,39 +613,26 @@ impl Store {
     where
         F: FnOnce(&Path, &Path, u64) -> event_log::Result<event_log::RotationOutcome>,
     {
-        let outcome = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            // Fence the snapshot publishers across the rename + reseed, same
-            // workspace → publish ordering as the identity rewrite.
-            let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
+        self.commit_boundary(RollupInvalidation::Reseed, |paths| {
+            let carryover_agents = stage_agent_carryover_for_rotation(paths, min_bytes)?;
 
-            let carryover_agents =
-                stage_agent_carryover_for_rotation(&self.inner.paths, min_bytes)?;
-
-            let rotation = rotate(
-                &self.inner.paths.events_log,
-                &self.inner.paths.events_archive_dir,
-                min_bytes,
-            )?;
-
-            if rotation.is_rotated() {
-                // The active log was swapped; reseed fold caches before rebuilding.
-                invalidate_snapshot_caches(&self.inner.paths, RollupInvalidation::Reseed)?;
-                snapshot::rebuild(&self.inner.paths)?;
-            }
+            let rotation = rotate(&paths.events_log, &paths.events_archive_dir, min_bytes)?;
+            let changed = rotation.is_rotated();
 
             let pruned = if let Some(older_than) = archive_older_than {
-                event_log::prune_archive(&self.inner.paths.events_archive_dir, older_than)?
+                event_log::prune_archive(&paths.events_archive_dir, older_than)?
             } else {
                 super::atomic::PruneOutcome::default()
             };
-            EventLogRotationOutcome {
-                rotation,
-                pruned,
-                carryover_agents,
-            }
-        };
-        Ok(outcome)
+            Ok((
+                EventLogRotationOutcome {
+                    rotation,
+                    pruned,
+                    carryover_agents,
+                },
+                changed,
+            ))
+        })
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -674,15 +669,11 @@ impl Store {
     /// frame CRC, and retries cold.
     #[must_use = "durability barrier; check the result"]
     pub fn repair_event_log(&self) -> Result<event_log::RepairOutcome> {
-        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-        let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
-        let outcome = event_log::repair(&self.inner.paths.events_log)?;
-        if outcome.truncated() {
-            // The active log was cut; drop fold caches before rebuilding.
-            invalidate_snapshot_caches(&self.inner.paths, RollupInvalidation::Drop)?;
-            snapshot::rebuild(&self.inner.paths)?;
-        }
-        Ok(outcome)
+        self.commit_boundary(RollupInvalidation::Drop, |paths| {
+            let outcome = event_log::repair(&paths.events_log)?;
+            let changed = outcome.truncated();
+            Ok((outcome, changed))
+        })
     }
 }
 

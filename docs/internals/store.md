@@ -161,7 +161,7 @@ Rotation preserves identity. Before the rename it merges every agent in the rota
 
 ## The write path
 
-Every mutation runs the same choreography, through `Store::commit` in [`writer.rs`](../../crates/rimz/src/store/writer.rs).
+Ordinary mutations run one choreography through `Store::commit` in [`writer.rs`](../../crates/rimz/src/store/writer.rs).
 
 Under the workspace lock:
 
@@ -181,6 +181,8 @@ Steps 5 through 7 are each gated by a stamp file beside the lock: `log-sync.stam
 Those stamps are what keep the write path O(1) over log history. A busy fleet appending hundreds of events a second still pays one fsync and one checkpoint per second between them, however long the log has grown.
 
 Wakeups fire *before* the publish, deliberately. Consumers fold the log tail from their own cursor, so checkpoint cadence tunes cold-start latency and never gates freshness.
+
+Mutations that replace or cut the active log use a separate log-boundary primitive. It holds the workspace and publish locks in that order, retracts stale snapshot caches, then rebuilds them after an identity rewrite, rotation, or repair. Reset remains its own room forget/rebirth choreography because hard reset deliberately skips rebuild; carryover pruning rebuilds without invalidating the log's extent.
 
 ### Write classes
 
