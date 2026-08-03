@@ -595,8 +595,8 @@ impl Store {
     ///    persisted snapshot (`latest.json`) from the merged rollup so
     ///    neither depends on the rotated log.
     ///
-    /// After the boundary completes and releases both locks, prune archives
-    /// older than `archive_older_than` when set.
+    /// After the boundary releases the publish lock, reacquire the workspace
+    /// lock and prune archives older than `archive_older_than` when set.
     #[must_use = "durability barrier; check the result"]
     pub fn rotate_event_log(
         &self,
@@ -623,6 +623,7 @@ impl Store {
                 let changed = rotation.is_rotated();
                 Ok(((rotation, carryover_agents), changed))
             })?;
+        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
         let pruned = if let Some(older_than) = archive_older_than {
             event_log::prune_archive(&self.inner.paths.events_archive_dir, older_than)?
         } else {
