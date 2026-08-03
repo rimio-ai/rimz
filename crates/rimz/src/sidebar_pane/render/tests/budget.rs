@@ -12,13 +12,11 @@ use std::time::{Duration, Instant};
 use crate::agents::RateLimitWindow;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::sidebar_pane::render::render_fixed;
-use crate::{
-    SpendTally, SpendWindow, store::snapshot::AgentCard, store::snapshot::RowCard,
-    store::snapshot::SidebarProviderPanel, store::snapshot::SidebarRow,
-    store::snapshot::SidebarSnapshot, store::snapshot::SidebarStatusCount,
-    store::snapshot::SidebarSubAgent, store::snapshot::SidebarWorktreeGroup,
-    store::snapshot::SidebarWorktreeKind,
+use crate::store::snapshot::{
+    AgentCard, RowCard, SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarStatusCount,
+    SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
+use crate::{SpendTally, SpendWindow};
 
 fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
     let now = super::fixed_now();

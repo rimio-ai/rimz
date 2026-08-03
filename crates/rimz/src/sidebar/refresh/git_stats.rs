@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime};
 use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
 
+use crate::PaneId;
 use crate::agents::AgentStatus;
 use crate::sidebar::timing::{
     DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_IDLE_TTL,
@@ -21,11 +22,8 @@ use crate::sidebar::timing::{
 };
 use crate::store::atomic;
 use crate::store::single_flight::{self, Coalesced};
+use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
 use crate::worktree::{self, LandedVerdict};
-use crate::{
-    PaneId, store::snapshot::SidebarSnapshot, store::snapshot::SidebarWorktreeGroup,
-    store::snapshot::SidebarWorktreeKind,
-};
 
 /// How a non-producing sidebar waits for the elected producer's diff-stats
 /// write before refreshing locally. ~1.5s total (75 × 20ms) — wide enough for

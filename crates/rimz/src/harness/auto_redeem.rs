@@ -14,6 +14,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
+use crate::RuntimePaths;
 use crate::agents::account::{
     ProviderCapacity, RedemptionCode, ResetCreditResult, prepare_reset_credit_redemption,
 };
@@ -22,7 +23,7 @@ use crate::config::ResumeConfig;
 use crate::harness::assist_log::AssistWindowReset;
 use crate::ids::{AgentKind, WorkspaceId};
 use crate::store::atomic::write_temp_then_rename_cache;
-use crate::{RuntimePaths, store::snapshot::SidebarProviderPanel};
+use crate::store::snapshot::SidebarProviderPanel;
 
 const CODEX_KIND: &str = "codex";
 pub(crate) const EXPIRY_RESCUE_LEAD: Duration = Duration::from_secs(30 * 60);

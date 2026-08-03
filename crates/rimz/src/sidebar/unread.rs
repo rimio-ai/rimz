@@ -14,8 +14,8 @@ use tracing::debug;
 use crate::agents::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::sidebar::read_marks::ReadMarks;
+use crate::store::snapshot::{SidebarRow, SidebarSnapshot};
 use crate::store::{RuntimePaths, atomic};
-use crate::{store::snapshot::SidebarRow, store::snapshot::SidebarSnapshot};
 
 pub const UNREAD_EPISODES_VERSION: &str = "rimz.unread.v1";
 
@@ -406,11 +406,9 @@ struct UnreadEpisodesFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MuxName;
     use crate::pane::PaneRef;
-    use crate::{
-        MuxName, store::snapshot::AgentCard, store::snapshot::RowCard,
-        store::snapshot::SidebarStatusCount, store::snapshot::SidebarWorktreeGroup,
-    };
+    use crate::store::snapshot::{AgentCard, RowCard, SidebarStatusCount, SidebarWorktreeGroup};
     use std::path::Path;
     use tempfile::TempDir;
 

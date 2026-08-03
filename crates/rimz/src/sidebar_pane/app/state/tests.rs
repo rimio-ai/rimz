@@ -11,11 +11,8 @@ use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::app::loop_state::LoopState;
 use crate::sidebar_pane::pixel::PixelRenderCaps;
 use crate::sidebar_pane::render::{Alert, GateNotice};
-use crate::{
-    PaneId, RuntimePaths, SidebarInstanceId, WorkspaceId, store::snapshot::AgentCard,
-    store::snapshot::RowCard, store::snapshot::SidebarStatusCount,
-    store::snapshot::SidebarWorktreeGroup,
-};
+use crate::store::snapshot::{AgentCard, RowCard, SidebarStatusCount, SidebarWorktreeGroup};
+use crate::{PaneId, RuntimePaths, SidebarInstanceId, WorkspaceId};
 
 fn degraded_health(reason: &str) -> Health {
     Health {

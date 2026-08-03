@@ -19,7 +19,7 @@ use ratatui::text::{Line, Span};
 
 use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
-use crate::{store::snapshot::SidebarRow, store::snapshot::SidebarWorktreeKind};
+use crate::store::snapshot::{SidebarRow, SidebarWorktreeKind};
 
 use super::CostRolls;
 pub(super) use super::layout::{pin_right, spans_width, trim_spans_to_width};
@@ -42,8 +42,9 @@ pub(super) use process::proc_stats_spans;
 pub(crate) use provider::DashboardMode;
 #[cfg(test)]
 pub(in crate::sidebar_pane::render) use provider::reset_expiry_heat_amount;
-pub(super) use provider::{DashboardContext, dashboard_block};
-pub(super) use provider::{fleet_store_lines, fleet_total_lines};
+pub(super) use provider::{
+    DashboardContext, dashboard_block, fleet_store_lines, fleet_total_lines,
+};
 pub(super) use worktree::{WorktreeRenderContext, worktree_group_lines_projected};
 
 /// Whether selection opens this row's full card shape. The selected row always

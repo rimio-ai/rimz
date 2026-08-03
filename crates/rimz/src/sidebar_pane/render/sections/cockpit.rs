@@ -1,8 +1,9 @@
 //! The cockpit's two summary lines: headline sessions + token breakdown, and
 //! the live-agent count with the animated count-up spend.
 
+use crate::SpendWindow;
 use crate::agents::AgentStatus;
-use crate::{SpendWindow, store::snapshot::DailyBudgetView};
+use crate::store::snapshot::DailyBudgetView;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 

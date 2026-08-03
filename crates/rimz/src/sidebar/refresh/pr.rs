@@ -18,10 +18,7 @@ use crate::sidebar::refresh::git_stats::{
     needed_worktree_paths, read_diff_stats_cache,
 };
 use crate::sidebar::timing::{PR_STATE_HOT_TTL, PR_STATE_RETRY_TTL, PR_STATE_TTL, unix_now_ms};
-use crate::{
-    store::snapshot::SidebarSnapshot, store::snapshot::WorktreePrCi,
-    store::snapshot::WorktreePrState,
-};
+use crate::store::snapshot::{SidebarSnapshot, WorktreePrCi, WorktreePrState};
 
 const PR_STATE_WAIT_STEP: Duration = Duration::from_millis(20);
 const PR_STATE_WAIT_STEPS: u32 = 15;

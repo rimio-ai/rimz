@@ -1,12 +1,12 @@
+use crate::WorkspaceId;
 use crate::agents::{
-    AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentSessionUsage,
-    AgentTokenUsage, AgentTurnError, RateLimitWindow, TurnErrorClass,
+    AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentSessionUsage, AgentState,
+    AgentStatus, AgentTokenUsage, AgentTurnError, RateLimitWindow, TurnErrorClass,
 };
-use crate::agents::{AgentState, AgentStatus};
 use crate::config::{AnimationSpec, ScrollbarMode};
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::pane::PaneRef;
-use crate::{WorkspaceId, store::snapshot::SidebarSnapshot};
+use crate::store::snapshot::{SidebarProviderPanel, SidebarSnapshot};
 use jiff::Timestamp;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
@@ -58,7 +58,7 @@ fn fixed_now() -> Timestamp {
 /// and `pets_provider_dashboard_folds_footer_left_of_pet` covers it there.
 struct Dashboard<'a> {
     theme: &'a Theme,
-    providers: &'a [crate::store::snapshot::SidebarProviderPanel],
+    providers: &'a [SidebarProviderPanel],
     active: Option<&'a str>,
     mode: DashboardMode,
     fleet: Option<&'a crate::SpendTally>,
@@ -68,11 +68,7 @@ struct Dashboard<'a> {
 }
 
 impl<'a> Dashboard<'a> {
-    fn new(
-        theme: &'a Theme,
-        providers: &'a [crate::store::snapshot::SidebarProviderPanel],
-        mode: DashboardMode,
-    ) -> Self {
+    fn new(theme: &'a Theme, providers: &'a [SidebarProviderPanel], mode: DashboardMode) -> Self {
         Self {
             theme,
             providers,
@@ -85,24 +81,15 @@ impl<'a> Dashboard<'a> {
         }
     }
 
-    fn stacked(
-        theme: &'a Theme,
-        providers: &'a [crate::store::snapshot::SidebarProviderPanel],
-    ) -> Self {
+    fn stacked(theme: &'a Theme, providers: &'a [SidebarProviderPanel]) -> Self {
         Self::new(theme, providers, DashboardMode::Stacked)
     }
 
-    fn tabbed(
-        theme: &'a Theme,
-        providers: &'a [crate::store::snapshot::SidebarProviderPanel],
-    ) -> Self {
+    fn tabbed(theme: &'a Theme, providers: &'a [SidebarProviderPanel]) -> Self {
         Self::new(theme, providers, DashboardMode::Tabbed)
     }
 
-    fn pets(
-        theme: &'a Theme,
-        providers: &'a [crate::store::snapshot::SidebarProviderPanel],
-    ) -> Self {
+    fn pets(theme: &'a Theme, providers: &'a [SidebarProviderPanel]) -> Self {
         Self::new(theme, providers, DashboardMode::Pet)
     }
 
@@ -646,7 +633,7 @@ fn provider_panel(
     metered: bool,
     remote_control: bool,
     windows: Option<(u8, u8)>,
-) -> crate::store::snapshot::SidebarProviderPanel {
+) -> SidebarProviderPanel {
     let now = fixed_now();
     let window = |used: u8, mins: u32, resets_in: Duration| RateLimitWindow {
         used_percentage: Some(used),
@@ -654,7 +641,7 @@ fn provider_panel(
         duration_mins: Some(mins),
         ..Default::default()
     };
-    crate::store::snapshot::SidebarProviderPanel {
+    SidebarProviderPanel {
         kind: kind.to_owned(),
         account_scope: Default::default(),
         product_name: product_name.to_owned(),
@@ -711,10 +698,7 @@ fn provider_panel(
 /// The metered bar rows of one panel (5h then 7d), rendered narrow so the art
 /// column drops and each row's first span is its label. Filters to the lines
 /// carrying bar glyphs.
-fn metered_bar_rows(
-    theme: &Theme,
-    panel: &crate::store::snapshot::SidebarProviderPanel,
-) -> Vec<Line<'static>> {
+fn metered_bar_rows(theme: &Theme, panel: &SidebarProviderPanel) -> Vec<Line<'static>> {
     Dashboard::stacked(theme, std::slice::from_ref(panel))
         .width(30)
         .lines()
@@ -766,7 +750,7 @@ fn reset_time_style(line: &Line<'static>) -> Option<Style> {
 }
 
 /// The full provider stats line (all spans joined) of one rendered panel.
-fn stats_line(theme: &Theme, panel: &crate::store::snapshot::SidebarProviderPanel) -> String {
+fn stats_line(theme: &Theme, panel: &SidebarProviderPanel) -> String {
     Dashboard::stacked(theme, std::slice::from_ref(panel))
         .width(52)
         .lines()
@@ -779,7 +763,7 @@ fn stats_line(theme: &Theme, panel: &crate::store::snapshot::SidebarProviderPane
 /// Two providers on the dashboard fixture: the metered Claude (rc flag on,
 /// 5h/7d windows) and the unmetered Codex with a plan, version, and today's
 /// spending. Shared by the tabbed-dashboard tests.
-fn two_provider_panels() -> Vec<crate::store::snapshot::SidebarProviderPanel> {
+fn two_provider_panels() -> Vec<SidebarProviderPanel> {
     vec![
         provider_panel("claude", "Claude", 173, true, true, Some((25, 40))),
         {

@@ -1,6 +1,6 @@
 use super::*;
 use crate::agents::{ATTENTION_AGE_CEILING_SECS, DEFAULT_INACTIVE_AFTER_SECS};
-use crate::{store::snapshot::RowCard, store::snapshot::WorktreeTrunkSync};
+use crate::store::snapshot::{RowCard, WorktreeTrunkSync};
 
 fn ranked_snapshot(mut agents: Vec<AgentState>) -> SidebarSnapshot {
     let mut panes = Vec::new();

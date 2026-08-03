@@ -1,7 +1,7 @@
 use proptest::prelude::*;
 
 use crate::agents::AgentStatus;
-use crate::{store::snapshot::SidebarSubAgent, store::snapshot::SidebarWorktreeKind};
+use crate::store::snapshot::{SidebarSubAgent, SidebarWorktreeKind};
 
 use super::*;
 

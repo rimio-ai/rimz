@@ -1,9 +1,7 @@
 use crate::agents::AgentStatus;
 use crate::config::{GlyphRole, SidebarKeys};
-use crate::{
-    store::snapshot::SidebarLinkFreshness, store::snapshot::SidebarLinkHealth,
-    store::snapshot::SidebarPresence, store::snapshot::SidebarSnapshot,
-    store::snapshot::TruthNotice,
+use crate::store::snapshot::{
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarSnapshot, TruthNotice,
 };
 use jiff::Timestamp;
 use ratatui::style::{Modifier, Style};
@@ -11,9 +9,8 @@ use ratatui::text::{Line, Span};
 
 use super::fmt::age_short;
 use super::labels::{status_glyph, status_rest_style};
-use super::layout;
 use super::theme::{Component, Theme};
-use super::{Alert, GateNotice};
+use super::{Alert, GateNotice, layout};
 use crate::remote::link::link_badge_heat;
 
 /// The borderless repo header (dashboard L1): the workspace name behind a `⌘`

@@ -5,10 +5,7 @@ use std::ops::Range;
 
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
-use crate::{
-    store::snapshot::SidebarRow, store::snapshot::SidebarSnapshot,
-    store::snapshot::SidebarWorktreeGroup, store::snapshot::WorktreePrState,
-};
+use crate::store::snapshot::{SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, WorktreePrState};
 
 pub(crate) use crate::sidebar::body_filter::BodyFilter;
 
@@ -317,9 +314,7 @@ mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
     use crate::sidebar::test_support::pane;
-    use crate::{
-        store::snapshot::AgentCard, store::snapshot::RowCard, store::snapshot::SidebarWorktreeKind,
-    };
+    use crate::store::snapshot::{AgentCard, RowCard, SidebarWorktreeKind};
     use jiff::Timestamp;
 
     #[test]

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use jiff::{SignedDuration, Timestamp};
 
+use crate::RuntimePaths;
 #[cfg(test)]
 use crate::agents::ProviderAccountScope;
 use crate::agents::account::{
@@ -12,7 +13,7 @@ use crate::agents::account::{
 use crate::agents::context::RateLimitWindowKey;
 use crate::agents::{AccountUsageIdentity, AgentRateLimits, RateLimitWindow};
 use crate::sidebar::timing::unix_now_ms;
-use crate::{RuntimePaths, store::snapshot::SidebarSnapshot};
+use crate::store::snapshot::SidebarSnapshot;
 
 #[cfg(test)]
 mod tests;

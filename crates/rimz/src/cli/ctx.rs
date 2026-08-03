@@ -9,9 +9,10 @@
 use anyhow::{Context, Result};
 
 use rimz::ids::{MuxName, WorkspaceId};
+use rimz::store::snapshot::SidebarSnapshot;
 use rimz::store::workspace_record;
 use rimz::workspace::WorkspaceResolver;
-use rimz::{ResolvedWorkspace, RuntimePaths, StatePaths, Store, store::snapshot::SidebarSnapshot};
+use rimz::{ResolvedWorkspace, RuntimePaths, StatePaths, Store};
 
 use super::GlobalFlags;
 

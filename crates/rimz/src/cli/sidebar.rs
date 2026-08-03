@@ -28,12 +28,10 @@ use rimz::sidebar::produce::{
     ProduceOptions, pane_fixture_active, produce_rollup_snapshot_with_refresh,
     produce_snapshot_with_refresh,
 };
+use rimz::store::snapshot::{PaneAgent, SidebarRow, SidebarSnapshot};
 use rimz::store::workspace_record;
 use rimz::workspace::WorkspaceResolver;
-use rimz::{
-    RuntimePaths, StatePaths, store::snapshot::PaneAgent, store::snapshot::SidebarRow,
-    store::snapshot::SidebarSnapshot,
-};
+use rimz::{RuntimePaths, StatePaths};
 
 #[cfg(feature = "testkit")]
 mod fixture;

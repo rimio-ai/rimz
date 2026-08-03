@@ -190,7 +190,7 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-surface-budget = 98
+surface-budget = 68
 
 [[module]]
 path = "crates/rimz/src/main.rs"
@@ -336,6 +336,7 @@ path = "crates/rimz/src/sidebar"
 allowed-imports = [
     "(crate)",
     "agents",
+    "child_process",
     "config",
     "diag",
     "forge",
@@ -347,6 +348,7 @@ allowed-imports = [
     "proc",
     "remote::link",
     "store",
+    "theme",
     "workspace",
     "worktree",
 ]

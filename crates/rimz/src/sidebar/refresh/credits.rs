@@ -6,17 +6,17 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::RuntimePaths;
 use crate::agents::{
     AccountUsageIdentity, AccountUsageProbe, AccountUsageSnapshot, ExtraCredits,
     ProviderAccountScope, ResetCredits,
 };
 use crate::config::AccountsConfig;
-use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{
     ACCOUNT_USAGE_CLAIM_TTL, CREDITS_DISPLAY_MAX_AGE, OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL,
+    unix_now_ms,
 };
-use crate::store::snapshot::format_plan_label;
-use crate::{RuntimePaths, store::snapshot::SidebarSnapshot};
+use crate::store::snapshot::{SidebarSnapshot, format_plan_label};
 
 /// Shared provider extra-credits cache, keyed by agent kind.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

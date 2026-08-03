@@ -11,9 +11,10 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::RuntimePaths;
 use crate::agents::{AccountUsageIdentity, AccountUsageSnapshot, ProviderAccountScope};
 use crate::ids::{AgentKind, WorkspaceId};
-use crate::{RuntimePaths, store::snapshot::SidebarSnapshot};
+use crate::store::snapshot::SidebarSnapshot;
 
 use super::accounts::cached_account_usage_hint;
 use super::credits::{
@@ -21,9 +22,8 @@ use super::credits::{
     complete_provider_account_usage, merge_provider_realtime_usage,
     renew_provider_account_usage_claim,
 };
-use super::trace;
 use super::trace::{TraceEvent, duration_ms};
-use super::{drop_kind_rate_limits, merge_account_rate_limits};
+use super::{drop_kind_rate_limits, merge_account_rate_limits, trace};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountUsageRefreshRequest {

@@ -3,7 +3,8 @@
 use crate::ids::PaneId;
 use crate::pane::PaneRef;
 use crate::sidebar_pane::app::ServeConfig;
-use crate::{MuxName, SidebarInstanceId, WorkspaceId, store::snapshot::SidebarSnapshot};
+use crate::store::snapshot::SidebarSnapshot;
+use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 use jiff::Timestamp;
 
 pub(crate) fn workspace() -> WorkspaceId {

@@ -1,7 +1,8 @@
 use super::*;
-use jiff::{SignedDuration, tz::TimeZone};
+use jiff::SignedDuration;
+use jiff::tz::TimeZone;
 use rimz::agents::{AgentAccount, SpendWindow};
-use rimz::{store::snapshot::RemoteControlBadge, store::snapshot::SidebarProviderPanel};
+use rimz::store::snapshot::{RemoteControlBadge, SidebarProviderPanel};
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
     ProviderRecord {

@@ -11,11 +11,12 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus};
 use crate::config::{HarnessConfig, IdleCompactMode};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::atomic::write_temp_then_rename_cache;
-use crate::{RuntimePaths, store::snapshot::SidebarSnapshot, store::snapshot::WorktreePrState};
+use crate::store::snapshot::{SidebarSnapshot, WorktreePrState};
 
 /// Below this fill, re-caching costs less than an extra compaction turn.
 pub const IDLE_COMPACT_MIN_TOKENS: u64 = 50_000;
