@@ -17,14 +17,17 @@
 //! record is unreadable but still holds history is kept and reported, never
 //! deleted — durable history stays the correctness source.
 
+use std::fs::ReadDir;
 use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::store::{atomic, paths};
+use crate::store::paths;
 
 mod collect;
 mod prune;
+mod temp_sweep;
 
 pub use prune::{PruneReason, RemovedWorkspace, WorkspacePruneReport};
 
@@ -45,6 +48,17 @@ pub enum GcErr {
 }
 
 pub type Result<T> = std::result::Result<T, GcErr>;
+
+fn read_dir_if_exists(path: &Path) -> Result<Option<ReadDir>> {
+    match std::fs::read_dir(path) {
+        Ok(entries) => Ok(Some(entries)),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(GcErr::ReadDir {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GcReport {
@@ -75,7 +89,7 @@ pub fn collect_orphan_temps(older_than: Duration, dry_run: bool) -> TempSweepRep
         paths::state_home().join("rimz"),
         paths::runtime_home().join("rimz"),
     ] {
-        let (files, bytes) = atomic::sweep_orphan_temps_under(&root, older_than, dry_run);
+        let (files, bytes) = temp_sweep::sweep_orphan_temps_under(&root, older_than, dry_run);
         report.files_removed += files;
         report.bytes_removed = report.bytes_removed.saturating_add(bytes);
     }

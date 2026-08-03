@@ -27,10 +27,10 @@ Freshness is an extent, not a timestamp. A derived rollup records the `LogExtent
 | Module | What it owns |
 | --- | --- |
 | [`paths.rs`](../../crates/rimz/src/store/paths.rs) | `StatePaths` and `RuntimePaths`: every filename in this doc, and the XDG resolution behind them. |
-| [`atomic.rs`](../../crates/rimz/src/store/atomic.rs) | The write primitives. Every fsync syscall in the project is in this file, enforced by a CI grep. |
+| [`atomic.rs`](../../crates/rimz/src/store/atomic.rs) | Whole-file publication and sync discipline, plus cache-local temp cleanup. Every fsync syscall in the project is in this file, enforced by a CI grep. |
 | [`lock.rs`](../../crates/rimz/src/store/lock.rs) | The workspace advisory lock, bounded at 30 seconds and naming the holder-hunting command on timeout. |
 | [`event.rs`](../../crates/rimz/src/store/event.rs) | `EventEnvelope`, the typed `EventKind` decode, and the schema version. |
-| [`event_log.rs`](../../crates/rimz/src/store/event_log.rs) | The framed append log: `frame.rs` codec, `recovery.rs` repair, `rotation.rs` archive and retention. |
+| [`event_log.rs`](../../crates/rimz/src/store/event_log.rs) | The framed append log: `frame.rs` codec, `recovery.rs` repair, `rotation.rs` archive publication and retention. |
 | [`writer.rs`](../../crates/rimz/src/store/writer.rs) | Public mutation intents/outcomes, the `commit` primitive, and the off-lock tail. `writer/` splits implementation into `debounce`, `lifecycle`, `publish`, `queue`, `reap`, and `reset`. |
 | [`snapshot/`](../../crates/rimz/src/store/snapshot/mod.rs) | Canonical snapshot schema and read side: `fold.rs` resumable rollup, `project.rs` lifecycle reducer, then pane binding and the view-model projection ([sidebar.md](./sidebar/sidebar.md#where-the-code-lives)). |
 | [`runtime.rs`](../../crates/rimz/src/store/runtime.rs) | The runtime-versus-audit read scope. |
@@ -38,7 +38,7 @@ Freshness is an extent, not a timestamp. A derived rollup records the `LogExtent
 | [`sidecar.rs`](../../crates/rimz/src/store/sidecar.rs) | The shared latest-wins enrichment sidecar store behind `agent_context/` and `subagent_context/`. |
 | [`active_time.rs`](../../crates/rimz/src/store/active_time.rs) | The per-session estimated active-time accumulator, serialized by per-record flocks. |
 | [`wakeup.rs`](../../crates/rimz/src/store/wakeup.rs) | The best-effort datagrams a commit posts to live consumers. |
-| [`gc.rs`](../../crates/rimz/src/store/gc.rs) | Maintenance: stale runtime hints, orphan write temps, dead workspaces. |
+| [`gc.rs`](../../crates/rimz/src/store/gc.rs) | Global maintenance: stale runtime hints, recursive orphan-write-temp collection, and dead workspaces. |
 | [`single_flight.rs`](../../crates/rimz/src/store/single_flight.rs) | Cross-process producer election, imported by the sidebar and so free of every writer module. |
 
 Start at `writer.rs` for how a fact gets in, at `snapshot/fold.rs` for how it comes back out, and at `atomic.rs` for what durability actually costs.
@@ -256,7 +256,7 @@ The recovery flow itself, from roster to repopulated panes, is [sidebar.md → R
 
 `rimz gc` is the global collector. Inside the runtime directory it removes expired heartbeats, the wakeup sockets those heartbeats named, stale context, activity, active-time, and telemetry sidecars, read receipts whose owning sidebar has expired, and stale provider probe markers. It leaves `run.*.sock` alone, because a live supervised-run waiter may still own one, and keeps `read-marks/manual.json` with the room runtime.
 
-Across the state tree it archives orphaned message records, prunes carryover agents past the retention window, sweeps orphaned atomic-write temp files, and prunes workspaces it can prove are dead: a recorded project root that no longer exists, or an abandoned `rimz start` scaffold with no history. A directory whose record is unreadable but which still holds history is kept and reported, never deleted ([`gc/collect.rs`](../../crates/rimz/src/store/gc/collect.rs), [`gc/prune.rs`](../../crates/rimz/src/store/gc/prune.rs)).
+Across the state tree it archives orphaned message records, prunes carryover agents past the retention window, recursively sweeps orphaned atomic-write temp files, and prunes workspaces it can prove are dead: a recorded project root that no longer exists, or an abandoned `rimz start` scaffold with no history. Archive-log age retention remains beside event-log rotation, while cache writers use atomic's local sibling cleanup. A directory whose record is unreadable but which still holds history is kept and reported, never deleted ([`gc/collect.rs`](../../crates/rimz/src/store/gc/collect.rs), [`gc/prune.rs`](../../crates/rimz/src/store/gc/prune.rs), [`gc/temp_sweep.rs`](../../crates/rimz/src/store/gc/temp_sweep.rs)).
 
 Path setup also sweeps pre-migration copies of the account-global data caches out of the runtime `shared/` directory, releasing tmpfs those files used to pin.
 

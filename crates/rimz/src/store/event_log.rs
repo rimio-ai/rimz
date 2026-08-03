@@ -21,7 +21,7 @@ mod rotation;
 
 pub use recovery::RepairOutcome;
 pub(crate) use recovery::repair;
-pub use rotation::{RotationOutcome, prune_archive, rotate};
+pub use rotation::{PruneOutcome, RotationOutcome, prune_archive, rotate};
 
 pub const DEFAULT_RETENTION_ARG: &str = "14d";
 pub const DEFAULT_RETENTION: Duration = Duration::from_secs(14 * 86_400);
