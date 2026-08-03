@@ -18,6 +18,16 @@ use super::super::{Result, Store, message_store};
 use super::Txn;
 use super::UnresolvedMessage;
 
+impl MessageRecord {
+    fn requeue(&mut self, now: Timestamp, error: impl Into<String>) {
+        self.status = MessageStatus::Queued;
+        self.pane_id = None;
+        self.batch_id = None;
+        self.last_error = Some(error.into());
+        self.updated_at = now;
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReconcileReport {
     pub requeued: usize,
@@ -647,17 +657,13 @@ impl Store {
                 {
                     return MessageUpdate::Keep;
                 }
-                message.status = MessageStatus::Queued;
                 message.attempts = message.attempts.saturating_sub(1);
                 message.last_attempt_at = None;
-                message.pane_id = None;
-                message.batch_id = None;
                 message.retry_after = None;
                 // This claim was released because its compact command already
                 // fired; the fresh-window delivery must not fire it again.
                 message.auto_compact = None;
-                message.last_error = Some(note.to_owned());
-                message.updated_at = now;
+                message.requeue(now, note);
                 MessageUpdate::Rewrite {
                     method: MessageEventMethod::Queued,
                     reason: Some(note.to_owned()),
@@ -858,15 +864,11 @@ impl Store {
                         reason: Some("reconcile".to_owned()),
                     }
                 } else if message.unconfirmed_sends < max_attempts {
-                    message.status = MessageStatus::Queued;
-                    message.pane_id = None;
-                    message.batch_id = None;
                     message.unconfirmed_sends = message.unconfirmed_sends.saturating_add(1);
                     message.last_attempt_at = None;
                     message.retry_after = None;
-                    message.last_error = Some("delivery unconfirmed; re-queued".to_owned());
+                    message.requeue(now, "delivery unconfirmed; re-queued");
                     report.requeued += 1;
-                    message.updated_at = now;
                     MessageUpdate::Rewrite {
                         method: MessageEventMethod::Queued,
                         reason: Some("reconcile".to_owned()),
@@ -968,10 +970,7 @@ impl Store {
                 ) {
                     return MessageUpdate::Keep;
                 }
-                message.last_error = Some(error.to_owned());
-                message.pane_id = None;
-                message.batch_id = None;
-                message.updated_at = now;
+                message.requeue(now, error);
                 if disposition == DeliveryFailureDisposition::Terminal {
                     MessageUpdate::Finalize {
                         status: MessageStatus::Errored,
@@ -983,7 +982,6 @@ impl Store {
                         reason: Some(error.to_owned()),
                     }
                 } else {
-                    message.status = MessageStatus::Queued;
                     MessageUpdate::SilentRewrite
                 }
             });

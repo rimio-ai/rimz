@@ -13,6 +13,7 @@ use crate::RuntimePaths;
 use crate::agents::spending::SpendingCaches;
 use crate::harness::auto_continue::{self, ResumeMessage};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+use crate::store::Store;
 use crate::store::snapshot::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, RemoteControlBadge, ResumeOutcome,
     RuntimeReapInputs, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence,
@@ -51,12 +52,12 @@ pub fn cached_worktree_roots(runtime: &RuntimePaths) -> Vec<PathBuf> {
 }
 
 pub(crate) fn read_auto_continue_resume_messages(
-    messages_dir: Option<&Path>,
+    store: Option<&Store>,
     config: &crate::config::ResumeConfig,
     outcomes: &[ResumeOutcome],
 ) -> Vec<ResumeMessage> {
     if config.auto_continue {
-        auto_continue::read_resume_messages(messages_dir, outcomes)
+        auto_continue::read_resume_messages(store, outcomes)
     } else {
         Vec::new()
     }
@@ -437,13 +438,13 @@ pub fn enrich(
     snapshot: SidebarSnapshot,
     frame: Option<&PaneFrame>,
     runtime: &RuntimePaths,
-    messages_dir: Option<&Path>,
+    store: Option<&Store>,
     exclude: Option<&PaneId>,
     opts: FoldOpts<'_>,
     diag: &crate::diag::DiagSink,
 ) -> SidebarSnapshot {
     project_local(
-        enrich_workspace(snapshot, frame, runtime, messages_dir, opts, diag),
+        enrich_workspace(snapshot, frame, runtime, store, opts, diag),
         frame,
         exclude,
     )
@@ -453,18 +454,11 @@ pub fn enrich_workspace(
     snapshot: SidebarSnapshot,
     frame: Option<&PaneFrame>,
     runtime: &RuntimePaths,
-    messages_dir: Option<&Path>,
+    store: Option<&Store>,
     opts: FoldOpts<'_>,
     diag: &crate::diag::DiagSink,
 ) -> WorkspaceSnapshot {
-    WorkspaceSnapshot(enrich_core(
-        snapshot,
-        frame,
-        runtime,
-        messages_dir,
-        opts,
-        diag,
-    ))
+    WorkspaceSnapshot(enrich_core(snapshot, frame, runtime, store, opts, diag))
 }
 
 /// Apply the renderer-owned pane exclusion, own-view, and presence verdict.
@@ -505,7 +499,7 @@ fn enrich_core(
     mut snapshot: SidebarSnapshot,
     frame: Option<&PaneFrame>,
     runtime: &RuntimePaths,
-    messages_dir: Option<&Path>,
+    store: Option<&Store>,
     mut opts: FoldOpts<'_>,
     diag: &crate::diag::DiagSink,
 ) -> SidebarSnapshot {
@@ -649,7 +643,7 @@ fn enrich_core(
 
     let provider_capacities = crate::agents::ProviderCapacity::read_all(runtime);
     let resume_messages = read_auto_continue_resume_messages(
-        messages_dir,
+        store,
         &machine_config.resume,
         snapshot.resume_outcomes.as_deref().unwrap_or_default(),
     );

@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::RuntimePaths;
 use crate::agents::spending::{
     ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
     read_provider_spending_cache, read_workspace_spending_cache,
@@ -17,6 +16,7 @@ use crate::agents::spending::{
 use crate::agents::{AgentAccount, AgentState};
 use crate::config::MachineConfig;
 use crate::store::snapshot::SidebarSnapshot;
+use crate::{RuntimePaths, Store};
 
 pub mod accounts;
 pub mod cohort_spend;
@@ -216,7 +216,7 @@ pub fn refresh_heavy_lanes(
     spending_startup: crate::agents::spending::service::SpendingServiceStartup,
     state: &mut ProducerRefreshState,
 ) -> RefreshedLanes {
-    let state_messages_dir = &state_paths.messages_dir;
+    let store = Store::open_existing(state_paths.clone(), runtime.clone());
     refresh_codex_daemon_reap_cache(
         daemon_probe_agents,
         runtime,
@@ -251,7 +251,7 @@ pub fn refresh_heavy_lanes(
     refresh_live_sessions(base, runtime);
     refresh_account_usage(&panels, runtime);
     let resume_messages = read_auto_continue_resume_messages(
-        Some(state_messages_dir),
+        store.as_ref(),
         &config.resume,
         base.resume_outcomes.as_deref().unwrap_or_default(),
     );
@@ -265,7 +265,7 @@ pub fn refresh_heavy_lanes(
     );
     let mut budget_snapshot = base.clone();
     apply_live_day_spend(&mut budget_snapshot, &spending.workspace);
-    crate::harness::budget::enforce(&budget_snapshot, runtime, state_messages_dir, config);
+    crate::harness::budget::enforce(&budget_snapshot, runtime, store.as_ref(), config);
     let runs = crate::harness::run_timeout::enforce(state_paths, runtime, base.now);
     let now_ms = base.now.as_millisecond().max(0) as u64;
     if let Some(runs) = runs

@@ -294,7 +294,6 @@ fn turn_budget_clears_midnight_auto_continue_parks() {
         },
     )
     .expect("scope state");
-    let messages_dir = dir.path().join("messages");
     let arm = |state: &AgentState| {
         crate::harness::auto_continue::arm_budget_park(
             &runtime,
@@ -322,7 +321,7 @@ fn turn_budget_clears_midnight_auto_continue_parks() {
         worktree_path: None,
         worktree_branch: None,
     }];
-    enforce(&snapshot, &runtime, &messages_dir, &config);
+    enforce(&snapshot, &runtime, None, &config);
     assert!(
         read_scope_state(&runtime)
             .turn
@@ -338,7 +337,7 @@ fn turn_budget_clears_midnight_auto_continue_parks() {
     state.turn_started_at = Some(second);
     arm(&state);
     let snapshot = SidebarSnapshot::build_with_agents(workspace_id, vec![state.clone()], second);
-    enforce(&snapshot, &runtime, &messages_dir, &config);
+    enforce(&snapshot, &runtime, None, &config);
     assert!(
         !crate::harness::auto_continue::budget_park_armed(&runtime, &state.kind, &state.agent_id,),
         "all-under includes a rebased turn verdict"
@@ -407,12 +406,7 @@ fn disabling_turn_budget_clears_turn_scope_state() {
     .expect("scope state");
     let snapshot = SidebarSnapshot::build_with_agents(workspace_id, Vec::new(), turn);
 
-    enforce(
-        &snapshot,
-        &runtime,
-        &dir.path().join("messages"),
-        &MachineConfig::default(),
-    );
+    enforce(&snapshot, &runtime, None, &MachineConfig::default());
 
     assert!(read_scope_state(&runtime).turn.is_empty());
 }
@@ -537,9 +531,8 @@ fn fleet_enforcement_arms_resume_after_interrupting_a_running_agent() {
         SidebarSnapshot::build_with_agents(workspace_id.clone(), vec![idle.clone()], now);
     snapshot.fleet_day_spend_usd = Some(6.0);
     snapshot.fleet_day_spend_epoch_secs = Some(cutoff);
-    let messages_dir = dir.path().join("messages");
 
-    enforce(&snapshot, &runtime, &messages_dir, &config);
+    enforce(&snapshot, &runtime, None, &config);
     assert!(!crate::harness::auto_continue::budget_park_armed(
         &runtime,
         &idle.kind,
@@ -569,7 +562,7 @@ fn fleet_enforcement_arms_resume_after_interrupting_a_running_agent() {
         worktree_branch: None,
     }];
 
-    enforce(&snapshot, &runtime, &messages_dir, &config);
+    enforce(&snapshot, &runtime, None, &config);
     assert!(scope_interrupted(&read_scope_state(&runtime), &running));
     assert!(crate::harness::auto_continue::budget_park_armed(
         &runtime,

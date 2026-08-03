@@ -28,7 +28,34 @@ fn reap_session_name(paths: &StatePaths) -> String {
         .unwrap_or_else(|_| "rimz-reap".to_owned())
 }
 
+type EndedSession = (
+    crate::ids::AgentKind,
+    crate::ids::AgentSessionId,
+    &'static str,
+);
+
 impl Store {
+    fn append_ended_sessions(&self, victims: &[EndedSession]) -> Result<usize> {
+        if victims.is_empty() {
+            return Ok(0);
+        }
+        let session_name = reap_session_name(&self.inner.paths);
+        self.commit(|txn| {
+            for (kind, agent_id, event_name) in victims {
+                let observation =
+                    AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::Ended);
+                txn.append(&EventEnvelope::agent_lifecycle(
+                    txn.paths.workspace_id.clone(),
+                    session_name.as_str(),
+                    kind.as_str(),
+                    *event_name,
+                    &observation,
+                ))?;
+            }
+            Ok(victims.len())
+        })
+    }
+
     pub fn retire_worktree_sessions(
         &self,
         worktree_path: &Path,
@@ -48,27 +75,15 @@ impl Store {
                     .is_some_and(|branch| agent.worktree_branch.as_deref() == Some(branch))
             })
             .filter(|agent| !matches!(runtime::agent_liveness(agent), AgentLiveness::Live { .. }))
-            .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
-            .collect::<Vec<_>>();
-        if victims.is_empty() {
-            return Ok(0);
-        }
-
-        let session_name = reap_session_name(&self.inner.paths);
-        self.commit(|txn| {
-            for (kind, agent_id) in &victims {
-                let observation =
-                    AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::Ended);
-                txn.append(&EventEnvelope::agent_lifecycle(
-                    txn.paths.workspace_id.clone(),
-                    session_name.as_str(),
-                    kind.as_str(),
+            .map(|agent| {
+                (
+                    agent.kind.clone(),
+                    agent.agent_id.clone(),
                     "WorktreeRemoved",
-                    &observation,
-                ))?;
-            }
-            Ok(victims.len())
-        })
+                )
+            })
+            .collect::<Vec<_>>();
+        self.append_ended_sessions(&victims)
     }
 
     fn reap_dead_sessions(&self) -> Result<usize> {
@@ -130,25 +145,7 @@ impl Store {
                 Some((agent.kind.clone(), agent.agent_id.clone(), event_name))
             })
             .collect::<Vec<_>>();
-        if victims.is_empty() {
-            return Ok(0);
-        }
-
-        let session_name = reap_session_name(&self.inner.paths);
-        self.commit(|txn| {
-            for (kind, agent_id, event_name) in &victims {
-                let observation =
-                    AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::Ended);
-                txn.append(&EventEnvelope::agent_lifecycle(
-                    txn.paths.workspace_id.clone(),
-                    session_name.as_str(),
-                    kind.as_str(),
-                    *event_name,
-                    &observation,
-                ))?;
-            }
-            Ok(victims.len())
-        })
+        self.append_ended_sessions(&victims)
     }
 
     pub(super) fn reap_dead_sessions_if_due(&self) {
