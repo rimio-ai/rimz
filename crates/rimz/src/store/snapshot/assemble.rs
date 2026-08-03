@@ -49,7 +49,7 @@ pub(crate) fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     assemble_snapshot(paths, rollup.extent, agents, resume_outcomes)
 }
 
-/// [`build_from`] for a long-lived reader: the same projection, but the
+/// Build the same projection for a long-lived reader, but with the
 /// rollup base rides in the caller's [`RollupCursor`] instead of being
 /// re-read from `rollup.json` per call — O(new log bytes) per delta.
 pub fn build_with_cursor(paths: &StatePaths, cursor: &mut RollupCursor) -> Result<SidebarSnapshot> {

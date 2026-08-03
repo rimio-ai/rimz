@@ -219,7 +219,7 @@ impl RuntimePaths {
     /// [`Self::for_workspace`] so a long runtime root fails before any session
     /// side effect. Shared data and lock paths both root under `runtime_root`
     /// here so tests stay isolated; [`Self::for_workspace`] and [`Self::shared`]
-    /// move shared data to [`persistent_shared_home`].
+    /// move shared data to its persistent home.
     pub fn under(workspace_id: WorkspaceId, runtime_root: &Path) -> Result<Self> {
         let root = runtime_root.join("rimz").join(workspace_id.as_str());
         let shared_root = runtime_root.join("rimz").join("shared");

@@ -5,7 +5,7 @@ use crate::store::atomic;
 
 use super::{EventLogErr, Result, frame};
 
-/// What [`repair`] found and cut.
+/// What a repair found and cut.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RepairOutcome {
     /// Valid frames surviving ahead of the cut (the whole log when intact).

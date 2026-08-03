@@ -53,7 +53,7 @@ pub enum EventLogErr {
 }
 
 impl EventLogErr {
-    /// A frame-level corruption a [`repair`] truncation heals — distinct from
+    /// A frame-level corruption a repair truncation heals — distinct from
     /// an environment failure (io, serialization) repair cannot help.
     pub fn is_corruption(&self) -> bool {
         matches!(
