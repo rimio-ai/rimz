@@ -240,7 +240,6 @@ mod tests {
         for path in [
             &runtime.root,
             &runtime.shared_root,
-            &runtime.persistent_shared_root,
             &runtime.sock_dir,
             &runtime.heartbeat_dir,
             &runtime.read_marks_dir,
