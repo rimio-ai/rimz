@@ -142,7 +142,7 @@ impl ReconcilePlan {
         self.verdicts.is_empty()
     }
 
-    pub(crate) fn remaining_from(&self, index: usize) -> usize {
+    fn remaining_from(&self, index: usize) -> usize {
         self.verdicts.len().saturating_sub(index)
     }
 
@@ -289,7 +289,7 @@ fn reconcile_failure(
 /// Wait until the newly-mounted pane publishes a fresh heartbeat for the
 /// expected executable generation. Executors call this before committing a
 /// replacement by closing its old pane.
-pub(crate) fn wait_for_sidebar_heartbeat(
+fn wait_for_sidebar_heartbeat(
     opts: &SidebarPaneOptions,
     mux: MuxName,
     pane: &PaneId,

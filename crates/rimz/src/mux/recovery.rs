@@ -148,7 +148,7 @@ fn is_sweep_target(
 /// over its inputs so the scoping rules are unit-tested without touching real
 /// processes.
 #[cfg(any(unix, test))]
-pub(crate) fn select_sweep_targets(
+fn select_sweep_targets(
     procs: &[ProcInfo],
     my_uid: u32,
     session_name: &str,
@@ -276,7 +276,7 @@ pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
 /// subcommand and excludes one-shot reports and unrelated commands mentioning
 /// those words.
 #[cfg(any(unix, test))]
-pub(crate) fn is_stats_refresh(cmdline: &str) -> bool {
+fn is_stats_refresh(cmdline: &str) -> bool {
     let Some(args) = cmdline
         .strip_prefix("rimz ")
         .or_else(|| cmdline.rsplit_once("/rimz ").map(|(_, args)| args))

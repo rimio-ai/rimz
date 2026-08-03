@@ -5,10 +5,8 @@
 //! 3. `[mux] default` config — errors if it names an uninstalled backend
 //! 4. installed binary (tmux preferred when both are present)
 
-use super::MuxErr;
+use super::{MuxErr, Result};
 use crate::ids::MuxName;
-
-pub type Result<T> = std::result::Result<T, MuxErr>;
 
 pub(crate) fn select_backend(
     explicit: Option<MuxName>,

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::mux::{MuxErr, Result};
 
-pub const ZELLIJ_SOCKET_PATH_LIMIT: usize = crate::sock::AF_UNIX_PATH_LIMIT;
+pub(crate) const ZELLIJ_SOCKET_PATH_LIMIT: usize = crate::sock::AF_UNIX_PATH_LIMIT;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZellijSocketHeadroom {
@@ -42,7 +42,7 @@ pub fn socket_preflight(session_name: &str) -> Result<()> {
     validate_headroom(socket_headroom(session_name))
 }
 
-pub fn stderr_reports_socket_overflow(stderr: &str) -> bool {
+pub(super) fn stderr_reports_socket_overflow(stderr: &str) -> bool {
     let lower = stderr.to_ascii_lowercase();
     lower.contains("session name must be less than")
         || (lower.contains("socket") && lower.contains("too long"))

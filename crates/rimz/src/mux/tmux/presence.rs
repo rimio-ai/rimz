@@ -145,7 +145,7 @@ impl Drop for PresenceWatch {
 /// identity-free focus noise are ignored; a window's active-pane notification
 /// is forwarded as a realtime focus overlay, and topology notifications that
 /// lack identity stay as a producer-verification nudge.
-pub(super) fn classify_control_line(line: &str) -> ControlLine {
+fn classify_control_line(line: &str) -> ControlLine {
     let verb = line.split_whitespace().next().unwrap_or_default();
     match verb {
         "%subscription-changed" => parse_subscription(line).unwrap_or(ControlLine::Ignore),

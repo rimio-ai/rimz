@@ -22,7 +22,7 @@ pub mod zellij;
 pub use capabilities::{drops_desktop_osc, lists_full_cmdline, view_kind, wraps_osc_passthrough};
 pub use command::CommandSpec;
 pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
-pub use focus_key::{FocusChord, FocusKeyBinding};
+pub use focus_key::FocusKeyBinding;
 pub(crate) use keys::paste_payload;
 pub use keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, UnknownKey};
 pub(crate) use reconcile::{

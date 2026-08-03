@@ -57,7 +57,7 @@ impl FocusChord {
 /// keeping one binding correct for every room sharing the server.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FocusKeyBinding {
-    pub chord: FocusChord,
+    pub(crate) chord: FocusChord,
     /// The rimz binary the keybind runs (absolute, so the keybind never depends
     /// on the pressing pane's `PATH`).
     program: PathBuf,
