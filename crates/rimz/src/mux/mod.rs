@@ -12,6 +12,7 @@ pub mod domain;
 mod focus_key;
 mod keys;
 pub mod logtail;
+mod mount_proof;
 mod reconcile;
 pub mod recovery;
 mod selection;
@@ -27,7 +28,7 @@ pub(crate) use keys::paste_payload;
 pub use keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, UnknownKey};
 pub(crate) use reconcile::{
     ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
-    group_reconcile_panes, plan_reconcile, prove_sidebar_mount, sidebar_build_identity,
+    group_reconcile_panes, plan_reconcile,
 };
 pub use reconcile::{SidebarLiveness, SidebarRecovery};
 pub use selection::auto_detect_backend;

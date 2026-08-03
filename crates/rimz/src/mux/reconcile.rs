@@ -3,11 +3,8 @@
 //! and provides native add and close effects; policy and accounting stay pure
 //! and backend-neutral.
 
+use crate::ids::PaneId;
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
-
-use crate::ids::{MuxName, PaneId};
-use crate::mux::SidebarPaneOptions;
 
 /// Tally of one in-place sidebar repair pass.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -55,6 +52,18 @@ pub(crate) enum ReconcilePaneRole {
     Sidebar,
     Working,
     DaemonHost,
+}
+
+impl ReconcilePaneRole {
+    pub(super) fn from_evidence(is_sidebar: bool, is_daemon_host: bool) -> Self {
+        if is_sidebar {
+            Self::Sidebar
+        } else if is_daemon_host {
+            Self::DaemonHost
+        } else {
+            Self::Working
+        }
+    }
 }
 
 /// Group participating panes by stable first-seen view order while preserving
@@ -286,75 +295,6 @@ fn reconcile_failure(
     })
 }
 
-/// Wait until the newly-mounted pane publishes a fresh heartbeat for the
-/// expected executable generation. Executors call this before committing a
-/// replacement by closing its old pane.
-fn wait_for_sidebar_heartbeat(
-    opts: &SidebarPaneOptions,
-    mux: MuxName,
-    pane: &PaneId,
-    build: &str,
-) -> bool {
-    #[cfg(feature = "testkit")]
-    if opts
-        .extra_env
-        .get("RIMZ_TEST_ASSUME_SIDEBAR_HEARTBEAT")
-        .is_some_and(|value| value == "1")
-    {
-        return true;
-    }
-    let Ok(runtime) = crate::store::RuntimePaths::for_workspace(opts.workspace_id.clone()) else {
-        return false;
-    };
-    let deadline = Instant::now() + Duration::from_secs(6);
-    loop {
-        if crate::sidebar::fresh_sidebar_heartbeats(&runtime)
-            .into_iter()
-            .any(|heartbeat| {
-                heartbeat.mux == mux
-                    && heartbeat.session_name == opts.session_name
-                    && heartbeat.pane_id.as_ref() == Some(pane)
-                    && heartbeat.build.as_deref() == Some(build)
-            })
-        {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-pub(crate) fn sidebar_build_identity(opts: &SidebarPaneOptions) -> crate::mux::Result<String> {
-    crate::build_id::of_file(&opts.rimz_bin).map_err(|err| crate::mux::MuxErr::Output {
-        program: opts.rimz_bin.display().to_string(),
-        reason: format!("cannot verify sidebar repair build: {err}"),
-    })
-}
-
-/// Prove a newly-added pane belongs to the current build. Failed proof invokes
-/// backend-native best-effort cleanup before the caller constructs its exact
-/// transport error.
-pub(crate) fn prove_sidebar_mount(
-    opts: &SidebarPaneOptions,
-    mux: MuxName,
-    pane: &PaneId,
-    build: &str,
-    cleanup: impl FnOnce(),
-) -> bool {
-    finish_mount_proof(wait_for_sidebar_heartbeat(opts, mux, pane, build), cleanup)
-}
-
-fn finish_mount_proof(verified: bool, cleanup: impl FnOnce()) -> bool {
-    if verified {
-        true
-    } else {
-        cleanup();
-        false
-    }
-}
-
 /// Plan repair one view at a time. Claimed renderers win, then young panes.
 /// An unlocated fresh heartbeat conservatively protects one physical pane per
 /// occupied view. A wholly unclaimed occupied view uses add-before-close;
@@ -519,12 +459,23 @@ mod tests {
     }
 
     #[test]
-    fn failed_mount_proof_cleans_up_only_after_failure() {
-        let cleaned = std::cell::Cell::new(0);
-        assert!(finish_mount_proof(true, || cleaned.set(cleaned.get() + 1)));
-        assert_eq!(cleaned.get(), 0);
-        assert!(!finish_mount_proof(false, || cleaned.set(cleaned.get() + 1)));
-        assert_eq!(cleaned.get(), 1);
+    fn pane_role_precedence_is_sidebar_then_daemon_host_then_working() {
+        assert_eq!(
+            ReconcilePaneRole::from_evidence(true, true),
+            ReconcilePaneRole::Sidebar
+        );
+        assert_eq!(
+            ReconcilePaneRole::from_evidence(true, false),
+            ReconcilePaneRole::Sidebar
+        );
+        assert_eq!(
+            ReconcilePaneRole::from_evidence(false, true),
+            ReconcilePaneRole::DaemonHost
+        );
+        assert_eq!(
+            ReconcilePaneRole::from_evidence(false, false),
+            ReconcilePaneRole::Working
+        );
     }
 
     #[test]

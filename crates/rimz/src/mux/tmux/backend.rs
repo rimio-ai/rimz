@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
+use super::super::mount_proof::{prove_sidebar_mount, sidebar_build_identity};
 use super::TmuxBackend;
 use super::options::{
     after_new_window_hook_set_cmd, birth_shell_cleanup_hook_set_cmd, birth_split_commands,
@@ -21,8 +22,7 @@ use crate::mux::{
     ReconcilePaneRole, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
     SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
     WidthStep, WidthSyncOptions, ensure_pane_backend, execute_reconcile_plan,
-    group_reconcile_panes, memoized_version, paste_payload, prove_sidebar_mount,
-    sidebar_build_identity,
+    group_reconcile_panes, memoized_version, paste_payload,
 };
 
 /// tmux per-keypress sidebar resize step, in columns. Zellij has no CLI
@@ -599,13 +599,10 @@ impl MuxBackend for TmuxBackend {
                 return None;
             }
             let view = pane.view_id.clone()?;
-            let role = if pane.is_rimz_sidebar() {
-                ReconcilePaneRole::Sidebar
-            } else if crate::daemon_view::pane_is_host(pane) {
-                ReconcilePaneRole::DaemonHost
-            } else {
-                ReconcilePaneRole::Working
-            };
+            let role = ReconcilePaneRole::from_evidence(
+                pane.is_rimz_sidebar(),
+                crate::daemon_view::pane_is_host(pane),
+            );
             Some(ReconcilePane {
                 view,
                 pane_id: pane.pane_id.clone(),

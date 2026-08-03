@@ -8,7 +8,7 @@ Local contract for `crates/rimz/src/mux/` — the Zellij/tmux seam. Extends [cra
 - Every tmux command addresses the RimZ-owned server through [`tmux::managed_cmd`](./tmux.rs) or the backend's own `cmd`, runs from `/`, and clears `$TMUX`; `cargo xtask invariants` rejects a bare `tmux` argv. The endpoint derives from the runtime domain alone, so it never takes a workspace or `RuntimePaths` argument.
 - Every control command runs through [`CommandSpec`](./command.rs) under its deadline; on the bound the child is killed and the caller gets `MuxErr::Timeout` — callers degrade, never block, because a wedged mux client otherwise hangs them forever.
 - Feature work lands on both backends in the same change. A backend-only channel — the tmux control-mode presence watch, the Zellij presence plugin push — is a latency hint layered over the poll/socket truth.
-- Cross-backend policy stays pure and above the backends: the one-sidebar-per-view rule and its execution accounting live in [`reconcile.rs`](./reconcile.rs) as a deterministic planner and sizing math in [`width.rs`](./width.rs); each backend collects inputs and executes the plan.
+- Cross-backend structural policy stays pure and above the backends: the one-sidebar-per-view rule and structural execution accounting live in [`reconcile.rs`](./reconcile.rs) as a deterministic planner, current-build heartbeat proof lives in [`mount_proof.rs`](./mount_proof.rs), and sizing math lives in [`width.rs`](./width.rs). Each backend collects inputs and executes the structural plan; native geometry convergence stays adapter-side because ordering and accounting differ.
 
 ## Tests
 
