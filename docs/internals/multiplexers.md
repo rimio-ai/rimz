@@ -19,7 +19,7 @@ Three rules follow from that split, and they are the ones to internalize before 
 
 **Parity is the rule; fast paths are the exception.** A backend-only capability is always a latency hint layered over shared truth. The Zellij presence plugin and the tmux control-mode watch both push topology, and both are optional: with either channel dead, its backend falls back to polling and passes the same test matrix. Correctness never reads from a push channel.
 
-**Cross-backend policy stays pure and above the backends.** [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) owns the one-sidebar-per-view planner and its accounting, [`width.rs`](../../crates/rimz/src/mux/width.rs) owns sizing arithmetic, and [`sidebar/presence/projector.rs`](../../crates/rimz/src/sidebar/presence/projector.rs) owns the event taxonomy. Each backend collects native facts and executes native effects; neither decides policy. These modules unit-test with no multiplexer installed.
+**Cross-backend policy stays pure and above the backends.** [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) owns the one-sidebar-per-view structural planner and its execution accounting, [`width.rs`](../../crates/rimz/src/mux/width.rs) owns sizing arithmetic, and [`sidebar/presence/projector.rs`](../../crates/rimz/src/sidebar/presence/projector.rs) owns the event taxonomy. Each backend collects native facts and executes native effects. Geometry convergence remains adapter-side because Zellij repairs before structural execution and tmux repairs only after structural success. These policy modules unit-test with no multiplexer installed.
 
 **Backends stay ignorant of agents.** The CLI hands `open_tab` backend-neutral pane argv and layout geometry. Agent resolution, prompts, and worktree cleanup are already compiled into that argv (`rimz agents exec …`), so no backend knows what an agent kind or a worktree is. The layout IR is in [fleet.md](./harness/fleet.md#the-layout-ir); worktree cleanup is in [worktrees.md](./harness/worktrees.md#who-triggers-removal).
 
@@ -32,7 +32,8 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`mod.rs`](../../crates/rimz/src/mux/mod.rs) | The `MuxBackend` trait, its option and result types, `MuxErr`, and the one env→`PaneId` mapping. |
 | [`selection.rs`](../../crates/rimz/src/mux/selection.rs) | Backend selection precedence. |
 | [`command.rs`](../../crates/rimz/src/mux/command.rs) | `CommandSpec`: the bounded subprocess engine every control command runs through. |
-| [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) | The sidebar repair planner and its transaction executor. |
+| [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) | The structural sidebar repair planner, pane-role precedence, and transaction executor. |
+| [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) | Current-build heartbeat proof for panes mounted during repair. |
 | [`width.rs`](../../crates/rimz/src/mux/width.rs) | Sidebar sizing: share resolution, native steps, and target spellings. |
 | [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | Destructive teardown shared by `rimz reset` and attended auto-reset. |
 | [`domain.rs`](../../crates/rimz/src/mux/domain.rs) | `ProcessDomain`: the guard every heuristic process kill passes. |
@@ -237,7 +238,7 @@ The planner in [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) is pure.
 
 `SidebarLiveness` carries the claims: `claimed_panes` from fresh renderer heartbeats, plus `young_panes` inside the first-heartbeat grace window so a pane that just started is never reaped. `has_unlocated` marks a live renderer whose pane could not be placed, which keeps the planner conservative.
 
-Replacement is add-before-close on purpose. `wait_for_sidebar_heartbeat` blocks up to six seconds for the new pane to publish a heartbeat naming the expected build before the old pane is closed, so a failed add leaves the user with the sidebar they had. `prove_sidebar_mount` requires the current build, so a stale binary's pane never counts as the repair.
+Replacement is add-before-close on purpose. [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) blocks up to six seconds for the new pane to publish a heartbeat naming the expected build before the old pane is closed. A failed add leaves the user with the sidebar they had, and a stale binary's pane never counts as the repair.
 
 `SidebarRecovery` tallies the pass (`recovered`, `closed`, `failed`, `deferred`, `redocked`, `misdocked`) and the executor stops at the first failure, counting the remaining verdicts as failed. One best-effort pass: a view whose add fails is logged and skipped, never retried, never escalated to a session rebirth.
 

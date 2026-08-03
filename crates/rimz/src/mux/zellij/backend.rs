@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use super::super::mount_proof::{prove_sidebar_mount, sidebar_build_identity};
 use super::ZellijBackend;
 use super::layout::{TempLayoutFile, render_background_view_layout, render_tab_layout};
 use super::pane_topology::{PaneTopologyCache, PaneTopologyPane, ZellijPaneId};
@@ -24,8 +25,7 @@ use crate::mux::{
     ReconcilePaneRole, Result, SessionHealth, SessionLiveness, SessionOptions, SidebarLiveness,
     SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement,
     SplitTarget, TabOptions, WidthStep, ensure_pane_backend, execute_reconcile_plan,
-    group_reconcile_panes, memoized_version, paste_payload, prove_sidebar_mount,
-    sidebar_build_identity,
+    group_reconcile_panes, memoized_version, paste_payload,
 };
 use crate::store::RuntimePaths;
 use serde::Deserialize;
@@ -1224,13 +1224,7 @@ pub(super) fn reconcile_pane(pane: &PaneTopologyPane) -> Option<ReconcilePane> {
     if !pane.is_terminal() {
         return None;
     }
-    let role = if is_sidebar_pane(pane) {
-        ReconcilePaneRole::Sidebar
-    } else if is_daemon_host_pane(pane) {
-        ReconcilePaneRole::DaemonHost
-    } else {
-        ReconcilePaneRole::Working
-    };
+    let role = ReconcilePaneRole::from_evidence(is_sidebar_pane(pane), is_daemon_host_pane(pane));
     Some(ReconcilePane {
         view: pane.tab_position.to_string(),
         pane_id: PaneId::from(pane.native_id()),

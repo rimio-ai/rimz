@@ -231,7 +231,20 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-surface-budget = 266
+surface-budget = 264
+
+[[module]]
+path = "crates/rimz/src/mux/mount_proof.rs"
+allowed-imports = [
+    "ids",
+    "mux",
+]
+surface-budget = 2
+
+[[module]]
+path = "crates/rimz/src/mux/reconcile.rs"
+allowed-imports = ["ids"]
+surface-budget = 19
 
 [[module]]
 path = "crates/rimz/src/observability"
