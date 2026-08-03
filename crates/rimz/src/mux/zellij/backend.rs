@@ -931,17 +931,11 @@ impl MuxBackend for ZellijBackend {
         // `delete-session --force` already drops the serialized session, but a
         // crashed server can leave the cache behind with no live session to
         // delete, so reset removes it directly as well.
-        super::super::recovery::purge_zellij_session_cache_in(
-            &crate::store::paths::cache_home(),
-            name,
-        )
+        super::session::purge_zellij_session_cache_in(&crate::store::paths::cache_home(), name)
     }
 
     fn resurrection_cache_paths(&self, name: &str) -> Vec<PathBuf> {
-        super::super::recovery::zellij_session_cache_paths_in(
-            &crate::store::paths::cache_home(),
-            name,
-        )
+        super::session::zellij_session_cache_paths_in(&crate::store::paths::cache_home(), name)
     }
 
     fn reconcile_sidebars(
