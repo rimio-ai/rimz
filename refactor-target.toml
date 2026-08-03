@@ -521,3 +521,8 @@ baseline = 0
 symbol = "store::run_store"
 path = "crates/rimz/tests"
 baseline = 0
+
+[[strangler]]
+symbol = "rank_windows"
+path = "crates/rimz/src/store/snapshot"
+baseline = 0

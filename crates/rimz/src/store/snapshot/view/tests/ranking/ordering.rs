@@ -619,6 +619,12 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         cohort_second,
         agent_in("paneless", "/repo/main", AgentStatus::Idle, 7_000),
         cohort_first,
+        agent_in("warm", "/repo/main", AgentStatus::Idle, 8_000)
+            .in_pane("%6")
+            .active_ago(101),
+        agent_in("archived", "/repo/main", AgentStatus::Idle, 9_000)
+            .in_pane("%7")
+            .active_ago(102),
     ];
 
     let mut row_snapshot = room(Vec::new());
@@ -634,7 +640,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
             .iter()
             .map(|agent| {
                 let mut row = row_from_agent(agent, epoch());
-                stamp_default_attention(&mut row);
+                stamp_lifted_attention(&mut row);
                 row
             })
             .collect(),
@@ -660,7 +666,9 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         .map(|row| row.id.as_str())
         .collect::<Vec<_>>();
 
-    let listing_snapshot = room(agents);
+    let mut listing_snapshot = room(agents);
+    listing_snapshot.attention.inactive_after_secs = std::num::NonZeroU32::new(100).unwrap();
+    listing_snapshot.attention.archive_after_secs = std::num::NonZeroU32::new(50).unwrap();
     let refs = listing_snapshot.agents.iter().collect::<Vec<_>>();
     let groups = group_live_agents_by_worktree(&refs, &listing_snapshot);
     let listing_order = groups
@@ -670,6 +678,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         .collect::<Vec<_>>();
 
     assert_eq!(row_order, listing_order);
+    assert_eq!(&row_order[row_order.len() - 2..], ["warm", "archived"]);
 }
 
 #[test]
@@ -692,16 +701,12 @@ fn listing_roster_uses_the_same_group_activity_rung() {
     );
 }
 
-fn stamp_default_attention(row: &mut SidebarRow) {
+fn stamp_lifted_attention(row: &mut SidebarRow) {
     let age_secs = super::super::super::score::age_secs(epoch(), row.last_activity);
-    row.inactive = !row.is_process() && age_secs > crate::agents::DEFAULT_INACTIVE_AFTER_SECS;
-    row.archived = !row.is_process() && age_secs > crate::agents::DEFAULT_ARCHIVE_AFTER_SECS;
-    row.attention_score = super::super::super::score::attention_score(
-        row.status(),
-        age_secs,
-        crate::agents::DEFAULT_INACTIVE_AFTER_SECS,
-        crate::agents::DEFAULT_ARCHIVE_AFTER_SECS,
-    );
+    row.inactive = !row.is_process() && age_secs > 100;
+    row.archived = !row.is_process() && age_secs > 101;
+    row.attention_score =
+        super::super::super::score::attention_score(row.status(), age_secs, 100, 101);
 }
 
 fn row_mut<'a>(snapshot: &'a mut SidebarSnapshot, id: &str) -> &'a mut SidebarRow {
