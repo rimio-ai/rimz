@@ -594,6 +594,7 @@ impl Store {
     /// 4. Reseed the rollup fold base as a new generation and rebuild the
     ///    persisted snapshot (`latest.json`) from the merged rollup so
     ///    neither depends on the rotated log.
+    ///
     /// After the boundary completes and releases both locks, prune archives
     /// older than `archive_older_than` when set.
     #[must_use = "durability barrier; check the result"]
