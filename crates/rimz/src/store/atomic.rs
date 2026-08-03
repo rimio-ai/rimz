@@ -1,4 +1,4 @@
-//! Disk-write primitives and disk hygiene sweeps.
+//! Disk-write primitives and local temp-file hygiene.
 //!
 //! Two write shapes cover every disk write in the project:
 //!
@@ -21,10 +21,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 #[cfg(unix)]
-use std::{
-    collections::HashMap,
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
-};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AtomicErr {
@@ -39,12 +36,6 @@ pub enum AtomicErr {
 }
 
 pub type Result<T> = std::result::Result<T, AtomicErr>;
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct PruneOutcome {
-    pub files_removed: usize,
-    pub bytes_removed: u64,
-}
 
 /// Write raw bytes to `path` via a same-directory temp file followed by an
 /// atomic rename. fsync is applied to the temp file before the rename.
@@ -89,45 +80,21 @@ pub fn write_executable_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()
 /// Filesystems that reject the link fall back to an executable byte copy.
 #[must_use = "durability barrier; check the result"]
 pub(crate) fn link_executable_atomically(src: &Path, dst: &Path) -> Result<()> {
-    if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| AtomicErr::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
-    let tmp = temp_sibling(dst);
-    let mut temp_guard = TempFileGuard::new(tmp.clone());
-    match std::fs::hard_link(src, &tmp) {
-        Ok(()) => {
-            std::fs::rename(&tmp, dst).map_err(|source| AtomicErr::Io {
-                path: dst.to_path_buf(),
-                source,
-            })?;
-            // POSIX rename is a successful no-op when `tmp` and `dst` are
-            // hardlinks to the same inode. Remove the still-named temp in
-            // that idempotent publish case; after a replacement rename it is
-            // already absent.
-            match std::fs::remove_file(&tmp) {
-                Ok(()) => {}
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(source) => {
-                    return Err(AtomicErr::Io {
-                        path: tmp.clone(),
-                        source,
-                    });
-                }
-            }
-            temp_guard.disarm();
-            sync_parent_dir(dst)
-        }
-        Err(_) => {
+    publish_temp(dst, Fsync::Durable, |tmp| {
+        if std::fs::hard_link(src, tmp).is_err() {
             let bytes = std::fs::read(src).map_err(|source| AtomicErr::Io {
                 path: src.to_path_buf(),
                 source,
             })?;
-            write_executable_bytes_atomically(dst, &bytes)
+            write_temp_file(tmp, Fsync::Durable, Some(0o755), |writer| {
+                writer.write_all(&bytes).map_err(|source| AtomicErr::Io {
+                    path: tmp.to_path_buf(),
+                    source,
+                })
+            })?;
         }
-    }
+        Ok(())
+    })
 }
 
 /// Whether a temp+rename write fsyncs before it becomes observable.
@@ -231,37 +198,64 @@ fn replace_whole_file(
     mode: Option<u32>,
     encode: impl FnOnce(&mut BufWriter<File>, &Path) -> Result<()>,
 ) -> Result<()> {
+    publish_temp(path, fsync, |tmp| {
+        write_temp_file(tmp, fsync, mode, |writer| encode(writer, tmp))
+    })
+}
+
+fn write_temp_file(
+    tmp: &Path,
+    fsync: Fsync,
+    mode: Option<u32>,
+    encode: impl FnOnce(&mut BufWriter<File>) -> Result<()>,
+) -> Result<()> {
+    let file = create_temp_file(tmp, mode).map_err(|source| AtomicErr::Io {
+        path: tmp.to_path_buf(),
+        source,
+    })?;
+    let mut writer = BufWriter::new(file);
+    encode(&mut writer)?;
+    let file = writer.into_inner().map_err(|source| AtomicErr::Io {
+        path: tmp.to_path_buf(),
+        source: source.into_error(),
+    })?;
+    if fsync == Fsync::Durable {
+        testkit::count_fsync();
+        file.sync_all().map_err(|source| AtomicErr::Io {
+            path: tmp.to_path_buf(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+fn publish_temp(
+    path: &Path,
+    fsync: Fsync,
+    materialize: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| AtomicErr::Io {
+        std::fs::create_dir_all(parent).map_err(|source| AtomicErr::Io {
             path: parent.to_path_buf(),
-            source: e,
+            source,
         })?;
     }
     let tmp = temp_sibling(path);
     let mut temp_guard = TempFileGuard::new(tmp.clone());
-    {
-        let file = create_temp_file(&tmp, mode).map_err(|e| AtomicErr::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
-        let mut writer = BufWriter::new(file);
-        encode(&mut writer, &tmp)?;
-        let file = writer.into_inner().map_err(|e| AtomicErr::Io {
-            path: tmp.clone(),
-            source: e.into_error(),
-        })?;
-        if fsync == Fsync::Durable {
-            testkit::count_fsync();
-            file.sync_all().map_err(|e| AtomicErr::Io {
-                path: tmp.clone(),
-                source: e,
-            })?;
+    materialize(&tmp)?;
+    std::fs::rename(&tmp, path).map_err(|source| AtomicErr::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    // POSIX rename is a successful no-op when temp and destination are
+    // hardlinks to the same inode. In the replacement case temp is absent.
+    match std::fs::remove_file(&tmp) {
+        Ok(()) => {}
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(AtomicErr::Io { path: tmp, source });
         }
     }
-    std::fs::rename(&tmp, path).map_err(|e| AtomicErr::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
     temp_guard.disarm();
     if fsync == Fsync::Durable {
         sync_parent_dir(path)?;
@@ -412,7 +406,7 @@ pub fn sweep_stale_temp_siblings(path: &Path, min_age: Duration) -> usize {
     removed
 }
 
-fn is_orphan_temp_name(name: &str) -> bool {
+pub(crate) fn is_orphan_temp_name(name: &str) -> bool {
     let Some(idx) = name.rfind(".tmp.") else {
         return false;
     };
@@ -427,162 +421,6 @@ fn is_orphan_temp_name(name: &str) -> bool {
         && pid.bytes().all(|b| b.is_ascii_digit())
         && nonce.len() == 32
         && nonce.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-/// Recursively remove orphaned whole-file-write temps under `root`.
-///
-/// These are same-directory siblings created by [`temp_sibling`] before a
-/// rename. A hard kill can leave them behind. Only files older than `min_age`
-/// are removed, so an in-flight write stays intact. Reclaimed bytes count a
-/// hardlinked payload only when the sweep removes its final name.
-pub(crate) fn sweep_orphan_temps_under(
-    root: &Path,
-    min_age: Duration,
-    dry_run: bool,
-) -> (usize, u64) {
-    let mut stack = vec![root.to_path_buf()];
-    let now = SystemTime::now();
-    let mut candidates = Vec::new();
-
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.filter_map(std::result::Result::ok) {
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            let path = entry.path();
-            if file_type.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-            let file_name = entry.file_name();
-            let Some(name) = file_name.to_str() else {
-                continue;
-            };
-            if !is_orphan_temp_name(name) {
-                continue;
-            }
-            let Some(metadata) = std::fs::symlink_metadata(&path).ok() else {
-                continue;
-            };
-            let old_enough = metadata
-                .modified()
-                .ok()
-                .and_then(|modified| now.duration_since(modified).ok())
-                .is_some_and(|age| age >= min_age);
-            if old_enough {
-                candidates.push((path, metadata));
-            }
-        }
-    }
-
-    let removed: Vec<_> = if dry_run {
-        candidates
-    } else {
-        candidates
-            .into_iter()
-            .filter(|(path, _)| std::fs::remove_file(path).is_ok())
-            .collect()
-    };
-    (removed.len(), removed_payload_bytes(&removed))
-}
-
-#[cfg(unix)]
-fn removed_payload_bytes(files: &[(PathBuf, std::fs::Metadata)]) -> u64 {
-    #[derive(Clone, Copy)]
-    struct Links {
-        removed: u64,
-        total: u64,
-        len: u64,
-    }
-
-    let mut links_by_file = HashMap::new();
-    for (_, metadata) in files {
-        let links = links_by_file
-            .entry((metadata.dev(), metadata.ino()))
-            .or_insert(Links {
-                removed: 0,
-                total: metadata.nlink(),
-                len: metadata.len(),
-            });
-        links.removed = links.removed.saturating_add(1);
-        links.total = links.total.max(metadata.nlink());
-    }
-    links_by_file.values().fold(0_u64, |bytes, links| {
-        if links.removed >= links.total {
-            bytes.saturating_add(links.len)
-        } else {
-            bytes
-        }
-    })
-}
-
-#[cfg(not(unix))]
-fn removed_payload_bytes(files: &[(PathBuf, std::fs::Metadata)]) -> u64 {
-    files.iter().fold(0_u64, |bytes, (_, metadata)| {
-        bytes.saturating_add(metadata.len())
-    })
-}
-
-/// Remove old files under `dir` when `keep` selects them for this sweep.
-#[must_use = "maintenance report; surface it to the caller"]
-pub(crate) fn prune_old_files(
-    dir: &Path,
-    older_than: Duration,
-    keep: impl Fn(&Path) -> bool,
-) -> Result<PruneOutcome> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => {
-            return Ok(PruneOutcome::default());
-        }
-        Err(source) => {
-            return Err(AtomicErr::Io {
-                path: dir.to_path_buf(),
-                source,
-            });
-        }
-    };
-
-    let now = SystemTime::now();
-    let mut report = PruneOutcome::default();
-    for entry in entries {
-        let entry = entry.map_err(|source| AtomicErr::Io {
-            path: dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        if !keep(&path) {
-            continue;
-        }
-        let metadata = std::fs::symlink_metadata(&path).map_err(|source| AtomicErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let modified = metadata.modified().map_err(|source| AtomicErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let Ok(age) = now.duration_since(modified) else {
-            continue;
-        };
-        if age < older_than {
-            continue;
-        }
-        let bytes = metadata.len();
-        std::fs::remove_file(&path).map_err(|source| AtomicErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        report.files_removed += 1;
-        report.bytes_removed = report.bytes_removed.saturating_add(bytes);
-    }
-    Ok(report)
 }
 
 /// fsync a directory so its rename/unlink operations are durable.
@@ -800,122 +638,6 @@ mod tests {
         assert_eq!(removed, 1);
         assert!(!stale.exists());
         assert!(other.exists());
-    }
-
-    #[test]
-    fn sweep_orphan_temps_removes_matching_recursively() {
-        let dir = tempdir().unwrap();
-        let nonce = "00000000000000000000000000000000";
-        let stale_root = dir.path().join(format!("spending.json.tmp.1.{nonce}"));
-        let subdir = dir.path().join("nested");
-        std::fs::create_dir_all(&subdir).unwrap();
-        let stale_nested = subdir.join(format!("rollup.json.tmp.2.{nonce}"));
-        let fresh = subdir.join(format!("workspace.json.tmp.3.{nonce}"));
-        let keep = subdir.join("workspace.json");
-        for path in [&stale_root, &stale_nested, &fresh, &keep] {
-            std::fs::write(path, b"temp").unwrap();
-        }
-        let old = SystemTime::now() - Duration::from_secs(7200);
-        for path in [&stale_root, &stale_nested] {
-            std::fs::File::open(path)
-                .unwrap()
-                .set_modified(old)
-                .unwrap();
-        }
-
-        let (files, bytes) = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), false);
-
-        assert_eq!(files, 2);
-        assert_eq!(bytes, 8);
-        assert!(!stale_root.exists());
-        assert!(!stale_nested.exists());
-        assert!(fresh.exists());
-        assert!(keep.exists());
-    }
-
-    #[test]
-    fn sweep_orphan_temps_dry_run_counts_without_removing() {
-        let dir = tempdir().unwrap();
-        let nonce = "00000000000000000000000000000000";
-        let stale = dir.path().join(format!("spending.json.tmp.1.{nonce}"));
-        std::fs::write(&stale, b"temp").unwrap();
-        std::fs::File::open(&stale)
-            .unwrap()
-            .set_modified(SystemTime::now() - Duration::from_secs(7200))
-            .unwrap();
-
-        let (files, bytes) = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), true);
-
-        assert_eq!((files, bytes), (1, 4));
-        assert!(stale.exists(), "dry-run leaves temp file in place");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn sweep_orphan_temps_counts_hardlinked_payload_once() {
-        let dir = tempdir().unwrap();
-        let first = dir
-            .path()
-            .join("rimz.tmp.1.00000000000000000000000000000000");
-        let second = dir
-            .path()
-            .join("rimz.tmp.2.11111111111111111111111111111111");
-        std::fs::write(&first, b"stable build").unwrap();
-        std::fs::hard_link(&first, &second).unwrap();
-        let old = SystemTime::now() - Duration::from_secs(7200);
-        std::fs::File::open(&first)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
-
-        let preview = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), true);
-        let removed = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), false);
-
-        assert_eq!(preview, (2, 12));
-        assert_eq!(removed, preview);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn sweep_orphan_temps_does_not_charge_retained_hardlink() {
-        let dir = tempdir().unwrap();
-        let stable = dir.path().join("rimz");
-        let temp = dir
-            .path()
-            .join("rimz.tmp.1.00000000000000000000000000000000");
-        std::fs::write(&stable, b"stable build").unwrap();
-        std::fs::hard_link(&stable, &temp).unwrap();
-        std::fs::File::open(&temp)
-            .unwrap()
-            .set_modified(SystemTime::now() - Duration::from_secs(7200))
-            .unwrap();
-
-        let preview = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), true);
-        let removed = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), false);
-
-        assert_eq!(preview, (1, 0));
-        assert_eq!(removed, preview);
-        assert_eq!(std::fs::read(stable).unwrap(), b"stable build");
-    }
-
-    #[test]
-    fn sweep_orphan_temps_rejects_near_misses() {
-        let dir = tempdir().unwrap();
-        let hex_31 = "0000000000000000000000000000000";
-        let hex_32 = "00000000000000000000000000000000";
-        let no_nonce = dir.path().join("foo.json.tmp.12");
-        let non_digit_pid = dir.path().join(format!("foo.json.tmp.ab.{hex_32}"));
-        let short_nonce = dir.path().join(format!("foo.json.tmp.1.{hex_31}"));
-        for path in [&no_nonce, &non_digit_pid, &short_nonce] {
-            std::fs::write(path, b"keep").unwrap();
-        }
-
-        let (files, bytes) = sweep_orphan_temps_under(dir.path(), Duration::ZERO, false);
-
-        assert_eq!((files, bytes), (0, 0));
-        assert!(no_nonce.exists());
-        assert!(non_digit_pid.exists());
-        assert!(short_nonce.exists());
     }
 
     #[test]

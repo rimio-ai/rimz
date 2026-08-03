@@ -55,7 +55,7 @@ pub struct WorkspaceRewriteOutcome {
 #[derive(Clone, Debug)]
 pub struct EventLogRotationOutcome {
     pub rotation: event_log::RotationOutcome,
-    pub pruned: crate::store::atomic::PruneOutcome,
+    pub pruned: event_log::PruneOutcome,
     pub carryover_agents: usize,
 }
 
@@ -627,7 +627,7 @@ impl Store {
         let pruned = if let Some(older_than) = archive_older_than {
             event_log::prune_archive(&self.inner.paths.events_archive_dir, older_than)?
         } else {
-            super::atomic::PruneOutcome::default()
+            event_log::PruneOutcome::default()
         };
         Ok(EventLogRotationOutcome {
             rotation,

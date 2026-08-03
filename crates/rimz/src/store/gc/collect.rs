@@ -8,7 +8,7 @@ use crate::ids::{SidebarInstanceId, WorkspaceId};
 use crate::sidebar::heartbeat::SidebarHeartbeat;
 use crate::sidebar::timing::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
 
-use super::{GcErr, GcReport, Result};
+use super::{GcErr, GcReport, Result, read_dir_if_exists};
 
 #[must_use = "maintenance report; surface it to the caller"]
 pub(crate) fn collect_runtime_under(
@@ -16,15 +16,8 @@ pub(crate) fn collect_runtime_under(
     older_than: Duration,
     dry_run: bool,
 ) -> Result<GcReport> {
-    let entries = match fs::read_dir(runtime_root) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(GcReport::default()),
-        Err(source) => {
-            return Err(GcErr::ReadDir {
-                path: runtime_root.to_path_buf(),
-                source,
-            });
-        }
+    let Some(entries) = read_dir_if_exists(runtime_root)? else {
+        return Ok(GcReport::default());
     };
 
     let mut report = GcReport::default();
@@ -134,15 +127,8 @@ fn collect_stale_sidecars(
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(GcErr::ReadDir {
-                path: dir.to_path_buf(),
-                source,
-            });
-        }
+    let Some(entries) = read_dir_if_exists(dir)? else {
+        return Ok(());
     };
 
     for entry in entries {
@@ -181,15 +167,8 @@ fn collect_stale_probe_markers(
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
-    let entries = match fs::read_dir(shared_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(GcErr::ReadDir {
-                path: shared_dir.to_path_buf(),
-                source,
-            });
-        }
+    let Some(entries) = read_dir_if_exists(shared_dir)? else {
+        return Ok(());
     };
 
     for entry in entries {
@@ -242,15 +221,8 @@ fn collect_stale_read_marks(
     report: &mut GcReport,
 ) -> Result<()> {
     let live_instances = fresh_sidebar_instance_ids(heartbeat_dir, older_than)?;
-    let entries = match fs::read_dir(read_marks_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(GcErr::ReadDir {
-                path: read_marks_dir.to_path_buf(),
-                source,
-            });
-        }
+    let Some(entries) = read_dir_if_exists(read_marks_dir)? else {
+        return Ok(());
     };
 
     for entry in entries {
@@ -280,15 +252,8 @@ fn fresh_sidebar_instance_ids(
     heartbeat_dir: &Path,
     older_than: Duration,
 ) -> Result<HashSet<String>> {
-    let entries = match fs::read_dir(heartbeat_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(HashSet::new()),
-        Err(source) => {
-            return Err(GcErr::ReadDir {
-                path: heartbeat_dir.to_path_buf(),
-                source,
-            });
-        }
+    let Some(entries) = read_dir_if_exists(heartbeat_dir)? else {
+        return Ok(HashSet::new());
     };
 
     let mut live_instances = HashSet::new();
@@ -315,15 +280,8 @@ fn collect_heartbeats(
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
-    let entries = match fs::read_dir(heartbeat_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(GcErr::ReadDir {
-                path: heartbeat_dir.to_path_buf(),
-                source,
-            });
-        }
+    let Some(entries) = read_dir_if_exists(heartbeat_dir)? else {
+        return Ok(());
     };
 
     for entry in entries {
@@ -456,15 +414,8 @@ impl Sweep {
     }
 
     fn remove_dir_if_empty(&mut self, path: &Path, report: &mut GcReport) -> Result<()> {
-        let entries = match fs::read_dir(path) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(source) => {
-                return Err(GcErr::ReadDir {
-                    path: path.to_path_buf(),
-                    source,
-                });
-            }
+        let Some(entries) = read_dir_if_exists(path)? else {
+            return Ok(());
         };
         for entry in entries {
             let entry = entry.map_err(|source| GcErr::ReadDir {

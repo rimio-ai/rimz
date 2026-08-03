@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::ids::WorkspaceId;
 use crate::store::workspace_record;
 
-use super::{GcErr, Result};
+use super::{GcErr, Result, read_dir_if_exists};
 
 /// Why a workspace directory was reaped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,17 +58,8 @@ pub(crate) fn prune_dead_workspaces_under(
     runtime_rimz_root: &Path,
     dry_run: bool,
 ) -> Result<WorkspacePruneReport> {
-    let entries = match fs::read_dir(workspaces_root) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return Ok(WorkspacePruneReport::default());
-        }
-        Err(source) => {
-            return Err(GcErr::ReadDir {
-                path: workspaces_root.to_path_buf(),
-                source,
-            });
-        }
+    let Some(entries) = read_dir_if_exists(workspaces_root)? else {
+        return Ok(WorkspacePruneReport::default());
     };
 
     let mut report = WorkspacePruneReport::default();

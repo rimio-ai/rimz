@@ -380,6 +380,22 @@ allowed-imports = []
 surface-budget = 14
 
 [[module]]
+path = "crates/rimz/src/store/atomic.rs"
+allowed-imports = []
+surface-budget = 18
+
+[[module]]
+path = "crates/rimz/src/store/gc"
+allowed-imports = [
+    "(crate)",
+    "ids",
+    "sidebar::heartbeat",
+    "sidebar::timing",
+    "store",
+]
+surface-budget = 0
+
+[[module]]
 path = "crates/rimz/src/store"
 allowed-imports = [
     "agent_activity",
