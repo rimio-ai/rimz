@@ -10,6 +10,29 @@ use crate::store::event::MessageEventMethod;
 use crate::store::paths::{RuntimePaths, StatePaths};
 use crate::workspace::WorkspaceResolver;
 
+#[derive(Default, serde::Deserialize, serde::Serialize)]
+struct CarryoverJson {
+    #[serde(default)]
+    agents: Vec<AgentState>,
+    #[serde(default)]
+    resume_outcomes: Vec<serde_json::Value>,
+}
+
+fn read_test_carryover(path: &Path) -> CarryoverJson {
+    serde_json::from_slice(&std::fs::read(path).expect("read carryover")).expect("parse carryover")
+}
+
+fn write_test_carryover(path: &Path, agents: Vec<AgentState>) {
+    crate::store::atomic::write_temp_then_rename(
+        path,
+        &CarryoverJson {
+            agents,
+            ..Default::default()
+        },
+    )
+    .expect("write carryover");
+}
+
 #[test]
 fn launch_event_builder_preserves_serialized_state_shapes() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -529,8 +552,7 @@ fn rotate_event_log_writes_carryover_before_archiving_active_log() {
                 paths.agents_carryover.exists(),
                 "rotation must persist carryover before archiving the only active-log copy"
             );
-            let carryover =
-                snapshot::read_carryover(&paths.agents_carryover).expect("read carryover");
+            let carryover = read_test_carryover(&paths.agents_carryover);
             assert_eq!(
                 carryover.resume_outcomes.len(),
                 1,
@@ -651,7 +673,7 @@ fn rotation_carryover_keeps_live_and_recently_ended_agents() {
 
     store.rotate_event_log(1, None).expect("rotate event log");
 
-    let carryover = snapshot::read_carryover(&paths.agents_carryover).expect("read carryover");
+    let carryover = read_test_carryover(&paths.agents_carryover);
     let ids: Vec<&str> = carryover
         .agents
         .iter()
@@ -685,22 +707,14 @@ fn prune_carryover_drops_old_agents_without_live_owner() {
     old.last_activity = old.last_seen;
     old.ended_at = Some(old.last_seen);
     let fresh = agent_state("claude", "fresh", Some("solid-lumen"));
-    snapshot::write_carryover(
-        &paths.agents_carryover,
-        &snapshot::EventCarryover {
-            agents: vec![old, fresh],
-            agent_identity: Default::default(),
-            resume_outcomes: Vec::new(),
-        },
-    )
-    .expect("write carryover");
+    write_test_carryover(&paths.agents_carryover, vec![old, fresh]);
 
     let removed = store
         .prune_carryover(Duration::from_secs(14 * 86_400))
         .expect("prune carryover");
 
     assert_eq!(removed, 1);
-    let carryover = snapshot::read_carryover(&paths.agents_carryover).expect("read carryover");
+    let carryover = read_test_carryover(&paths.agents_carryover);
     let ids: Vec<&str> = carryover
         .agents
         .iter()

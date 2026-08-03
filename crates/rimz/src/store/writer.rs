@@ -178,59 +178,6 @@ fn invalidate_snapshot_caches(paths: &StatePaths, rollup: RollupInvalidation) ->
     Ok(())
 }
 
-/// Preserve every agent within retention across log rotation, including ended rows.
-///
-/// Rotation and soft reset are storage boundaries, so they keep the audit
-/// rollup's resumable identity even when an agent's runtime owner has exited.
-/// A hard reset remains the explicit forget boundary.
-fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Result<usize> {
-    let current_bytes = match std::fs::metadata(&paths.events_log) {
-        Ok(meta) => meta.len(),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => 0,
-        Err(source) => {
-            return Err(event_log::EventLogErr::Io {
-                path: paths.events_log.clone(),
-                source,
-            }
-            .into());
-        }
-    };
-    if current_bytes == 0 || current_bytes < min_bytes {
-        let existing = snapshot::read_carryover(&paths.agents_carryover)?;
-        return Ok(existing.agents.len());
-    }
-
-    let (cache, merged_agents, resume_outcomes) = snapshot::catch_up_rollup(paths)?;
-    let retained_agents = prune_old_dead_agents(merged_agents, event_log::DEFAULT_RETENTION);
-    let carryover_agents = retained_agents.len();
-    snapshot::write_carryover(
-        &paths.agents_carryover,
-        &snapshot::EventCarryover {
-            agents: retained_agents,
-            agent_identity: cache.agent_identity.without_consumed_launches(),
-            resume_outcomes,
-        },
-    )?;
-    Ok(carryover_agents)
-}
-
-fn prune_old_dead_agents(
-    agents: Vec<crate::agents::AgentState>,
-    older_than: Duration,
-) -> Vec<crate::agents::AgentState> {
-    let cutoff = jiff::Timestamp::now() - older_than;
-    agents
-        .into_iter()
-        .filter(|agent| {
-            agent.last_seen >= cutoff
-                || agent
-                    .runtime_owner
-                    .as_ref()
-                    .is_some_and(runtime::owner_is_live)
-        })
-        .collect()
-}
-
 impl Store {
     /// Run a mutation that may replace or cut the active event log.
     ///
@@ -617,7 +564,7 @@ impl Store {
     {
         let (rotation, carryover_agents) =
             self.commit_boundary(RollupInvalidation::Reseed, |paths| {
-                let carryover_agents = stage_agent_carryover_for_rotation(paths, min_bytes)?;
+                let carryover_agents = snapshot::stage_carryover_for_rotation(paths, min_bytes)?;
 
                 let rotation = rotate(&paths.events_log, &paths.events_archive_dir, min_bytes)?;
                 let changed = rotation.is_rotated();
@@ -641,12 +588,8 @@ impl Store {
         let removed = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
-            let mut carryover = snapshot::read_carryover(&self.inner.paths.agents_carryover)?;
-            let before = carryover.agents.len();
-            carryover.agents = prune_old_dead_agents(carryover.agents, older_than);
-            let removed = before.saturating_sub(carryover.agents.len());
+            let removed = snapshot::prune_carryover(&self.inner.paths, older_than)?;
             if removed > 0 {
-                snapshot::write_carryover(&self.inner.paths.agents_carryover, &carryover)?;
                 snapshot::rebuild(&self.inner.paths)?;
             }
             removed
