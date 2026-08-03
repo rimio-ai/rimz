@@ -1,5 +1,8 @@
 version = 2
-strangler = []
+[[strangler]]
+path = "crates/rimz/src/store"
+symbol = "invalidate_snapshot_caches"
+baseline = 3
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
