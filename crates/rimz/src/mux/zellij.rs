@@ -23,9 +23,7 @@ pub(crate) mod socket;
 
 #[doc(hidden)]
 pub use pane_pid::ZellijPaneResolver;
-pub(crate) use presence::{
-    PresencePluginCleanup, presence_plugin_config_hash, presence_plugin_configuration,
-};
+pub(crate) use presence::{PresencePluginCleanup, presence_plugin_config_hash_for};
 pub use presence::{ensure_presence_plugin_artifact, presence_plugin_build, presence_plugin_path};
 pub use reap::{ReapOutcome, reap_lineage_clients};
 pub use socket::{ZellijSocketHeadroom, socket_headroom, socket_preflight};
@@ -43,15 +41,6 @@ use crate::ids::PaneId;
 /// Minimum Zellij version RimZ supports overall and reports as the doctor
 /// floor.
 pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 44, 0);
-
-/// Minimum Zellij version that ships the `mouse_click_through` option. Below
-/// this the flag is unknown, so we omit it — a single click then focuses the
-/// sidebar without reaching the renderer (degrade, never error).
-const MIN_MOUSE_CLICK_THROUGH_VERSION: (u32, u32, u32) = (0, 44, 0);
-
-/// Minimum Zellij version that ships `mouse_hover_effects`, the narrower
-/// switch that suppresses hover chrome while leaving other mouse handling alone.
-const MIN_MOUSE_HOVER_EFFECTS_VERSION: (u32, u32, u32) = (0, 44, 0);
 
 /// Per-attempt bound for the pre-attach health probe.
 const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -489,27 +478,18 @@ pub(super) fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
 }
 
 /// `options` flags that forward a single click through the sidebar pane to the
-/// renderer, gated on `parsed >= MIN_MOUSE_CLICK_THROUGH_VERSION`.
+/// renderer. Below the required Zellij version the flag is unknown, so omit it
+/// and degrade to a click that only focuses the sidebar.
 fn mouse_click_through_args(enabled: bool, parsed: Option<(u32, u32, u32)>) -> Vec<String> {
     if enabled {
-        versioned_bool_arg(
-            "--mouse-click-through",
-            true,
-            parsed,
-            MIN_MOUSE_CLICK_THROUGH_VERSION,
-        )
+        versioned_bool_arg("--mouse-click-through", true, parsed)
     } else {
         Vec::new()
     }
 }
 
-fn versioned_bool_arg(
-    flag: &str,
-    value: bool,
-    parsed: Option<(u32, u32, u32)>,
-    min_version: (u32, u32, u32),
-) -> Vec<String> {
-    if parsed.is_some_and(|v| v >= min_version) {
+fn versioned_bool_arg(flag: &str, value: bool, parsed: Option<(u32, u32, u32)>) -> Vec<String> {
+    if parsed.is_some_and(|v| v >= MIN_ZELLIJ_VERSION) {
         vec![flag.to_owned(), bool_value(value)]
     } else {
         Vec::new()
@@ -552,11 +532,11 @@ fn zellij_options_args(
         args.extend(["--advanced-mouse-actions".to_owned(), bool_value(value)]);
     }
     if let Some(value) = config.mouse_hover_effects {
+        // Older versions reject this narrower hover-only option as unknown.
         args.extend(versioned_bool_arg(
             "--mouse-hover-effects",
             value,
             parsed_version,
-            MIN_MOUSE_HOVER_EFFECTS_VERSION,
         ));
     }
     if let Some(value) = config.on_force_close {

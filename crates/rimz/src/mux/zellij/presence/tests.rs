@@ -256,12 +256,9 @@ fn owner_launch_records_the_desired_writer_identity() {
         .expect("ensure presence plugin");
 
     let desired = read_presence_desired(&runtime).expect("desired writer record");
-    let configuration = presence_plugin_configuration(&opts);
+    let identity = presence_plugin_identity(&opts);
     assert_eq!(desired.build, presence_plugin_build());
-    assert_eq!(
-        Some(desired.config.as_str()),
-        presence_plugin_config_hash(&configuration)
-    );
+    assert_eq!(desired.config, identity.config_hash);
     assert!(desired.recorded_at_ms > 0);
 }
 
@@ -363,7 +360,7 @@ fn presence_force_sweep_listing_failure_keeps_retire_best_effort() {
 }
 
 #[test]
-fn presence_plugin_configuration_renders_expressible_fields() {
+fn presence_plugin_identity_renders_expressible_fields() {
     type PresenceOpts = crate::mux::PresencePluginOptions;
     type MutatePresence = fn(&mut PresenceOpts);
     struct Case {
@@ -439,12 +436,20 @@ fn presence_plugin_configuration_renders_expressible_fields() {
             "{without_config},plugin_config={}",
             crate::build_id::of_bytes(without_config.as_bytes())
         );
-        let configuration = presence_plugin_configuration(&opts);
-        assert_eq!(configuration, expected);
-        let launch_scope = configuration
+        let identity = presence_plugin_identity(&opts);
+        assert_eq!(identity.configuration, expected);
+        assert_eq!(
+            identity.config_hash,
+            crate::build_id::of_bytes(without_config.as_bytes())
+        );
+        let launch_scope = identity
+            .configuration
             .find("launch_scope=background")
             .expect("background launch scope");
-        let plugin_build = configuration.find("plugin_build=").expect("plugin build");
+        let plugin_build = identity
+            .configuration
+            .find("plugin_build=")
+            .expect("plugin build");
         assert!(
             launch_scope < plugin_build,
             "the lifecycle marker participates in the hashed identity before the build"

@@ -12,9 +12,7 @@ use tempfile::TempDir;
 use crate::ids::WorkspaceId;
 use crate::mux::PresencePluginOptions;
 use crate::mux::zellij::pane_topology::TopologyWriter;
-use crate::mux::zellij::{
-    presence_plugin_build, presence_plugin_config_hash, presence_plugin_configuration,
-};
+use crate::mux::zellij::{presence_plugin_build, presence_plugin_config_hash_for};
 
 /// Write `script` as an executable `zellij` beside a fresh temp dir.
 #[cfg(unix)]
@@ -94,11 +92,10 @@ pub(crate) fn presence_opts(session_name: &str, rimz_bin: &str) -> PresencePlugi
 /// presence retire path accepts as proof that a replacement plugin is live.
 pub(crate) fn current_writer(plugin_id: u32, loaded_at_ms: u64) -> TopologyWriter {
     let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
-    let configuration = presence_plugin_configuration(&opts);
     TopologyWriter {
         plugin_id,
         loaded_at_ms,
         build: Some(presence_plugin_build().to_owned()),
-        config: presence_plugin_config_hash(&configuration).map(str::to_owned),
+        config: Some(presence_plugin_config_hash_for(&opts)),
     }
 }
