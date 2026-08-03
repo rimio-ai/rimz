@@ -27,19 +27,20 @@ use crate::store::event::EventKind;
 use crate::store::event_log::{self};
 use crate::store::parse_cache::ParseCache;
 use crate::store::paths::StatePaths;
+use crate::store::runtime;
 
 const RESUME_OUTCOME_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
 
 /// Carryover state preserved across event-log rotation. Today this is the
 /// agent rollup and terminal resume-message outcomes.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub(crate) struct EventCarryover {
+struct EventCarryover {
     #[serde(default)]
-    pub agents: Vec<AgentState>,
+    agents: Vec<AgentState>,
     #[serde(default)]
-    pub agent_identity: AgentIdentityState,
+    agent_identity: AgentIdentityState,
     #[serde(default)]
-    pub resume_outcomes: Vec<ResumeOutcome>,
+    resume_outcomes: Vec<ResumeOutcome>,
 }
 
 /// Latest terminal resume-gated prompt outcome for one agent card.
@@ -54,7 +55,7 @@ pub struct ResumeOutcome {
     pub updated_at: Timestamp,
 }
 
-pub(crate) fn read_carryover(path: &Path) -> Result<EventCarryover> {
+fn read_carryover(path: &Path) -> Result<EventCarryover> {
     match fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| SnapshotErr::Json {
             path: path.to_path_buf(),
@@ -69,7 +70,7 @@ pub(crate) fn read_carryover(path: &Path) -> Result<EventCarryover> {
 }
 
 #[must_use = "durability barrier; check the result"]
-pub(crate) fn write_carryover(path: &Path, carryover: &EventCarryover) -> Result<()> {
+fn write_carryover(path: &Path, carryover: &EventCarryover) -> Result<()> {
     write_temp_then_rename(path, carryover)?;
     Ok(())
 }
@@ -92,7 +93,7 @@ pub(crate) fn agent_rollup_with_carryover(
     .merged
 }
 
-pub(super) fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> Vec<AgentState> {
+fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> Vec<AgentState> {
     let mut map: BTreeMap<(AgentKind, AgentSessionId), AgentState> = BTreeMap::new();
     for entry in base {
         let key = (entry.kind.clone(), entry.agent_id.clone());
@@ -443,6 +444,63 @@ fn events_have_rebirth(events: &[FoldEvent<'_>]) -> bool {
         .any(|event| matches!(event.kind, EventKind::SessionRebirth))
 }
 
+/// Preserve retained audit identity before the active event log rotates.
+pub(crate) fn stage_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Result<usize> {
+    let current_bytes = match fs::metadata(&paths.events_log) {
+        Ok(meta) => meta.len(),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => 0,
+        Err(source) => {
+            return Err(event_log::EventLogErr::Io {
+                path: paths.events_log.clone(),
+                source,
+            }
+            .into());
+        }
+    };
+    if current_bytes == 0 || current_bytes < min_bytes {
+        return Ok(read_carryover(&paths.agents_carryover)?.agents.len());
+    }
+
+    let (cache, agents, resume_outcomes) = catch_up_rollup(paths)?;
+    let agents = retain_carryover_agents(agents, event_log::DEFAULT_RETENTION);
+    let carryover_agents = agents.len();
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents,
+            agent_identity: cache.agent_identity.without_consumed_launches(),
+            resume_outcomes,
+        },
+    )?;
+    Ok(carryover_agents)
+}
+
+/// Prune expired carryover rows without changing the active-log fold extent.
+pub(crate) fn prune_carryover(paths: &StatePaths, older_than: Duration) -> Result<usize> {
+    let mut carryover = read_carryover(&paths.agents_carryover)?;
+    let before = carryover.agents.len();
+    carryover.agents = retain_carryover_agents(carryover.agents, older_than);
+    let removed = before.saturating_sub(carryover.agents.len());
+    if removed > 0 {
+        write_carryover(&paths.agents_carryover, &carryover)?;
+    }
+    Ok(removed)
+}
+
+fn retain_carryover_agents(agents: Vec<AgentState>, older_than: Duration) -> Vec<AgentState> {
+    let cutoff = Timestamp::now() - older_than;
+    agents
+        .into_iter()
+        .filter(|agent| {
+            agent.last_seen >= cutoff
+                || agent
+                    .runtime_owner
+                    .as_ref()
+                    .is_some_and(runtime::owner_is_live)
+        })
+        .collect()
+}
+
 /// Reseed `snapshots/rollup.json` for the next log generation. Called by
 /// rotation under the workspace lock, right after the old log's rollup is
 /// merged into the carryover: the new generation starts with an empty fold
@@ -464,7 +522,7 @@ pub(crate) fn reseed_rollup_cache_for_rotation(paths: &StatePaths) -> Result<()>
             },
             raw_agents: Vec::new(),
             resume_outcomes: Vec::new(),
-            agent_identity: carryover.agent_identity.without_consumed_launches(),
+            agent_identity: carryover.agent_identity,
             saw_session_rebirth: false,
         },
     )

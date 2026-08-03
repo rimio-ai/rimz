@@ -152,7 +152,7 @@ impl Store {
                 remove_file_if_exists(&self.inner.paths.agents_carryover)?;
                 0
             } else {
-                super::stage_agent_carryover_for_rotation(&self.inner.paths, 0)?
+                snapshot::stage_carryover_for_rotation(&self.inner.paths, 0)?
             };
 
             let rotation = rotate(

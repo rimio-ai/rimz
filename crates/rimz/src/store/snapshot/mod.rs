@@ -27,11 +27,11 @@ use crate::store::event_log::EventLogErr;
 
 pub(crate) use assemble::{build_from, rebuild};
 pub use assemble::{build_with_cursor, read_fresh_latest};
-pub(crate) use fold::{
-    EventCarryover, catch_up_rollup, read_carryover, reseed_rollup_cache_for_rotation,
-    write_carryover,
-};
 pub use fold::{ResumeOutcome, RollupCursor};
+pub(crate) use fold::{
+    catch_up_rollup, prune_carryover, reseed_rollup_cache_for_rotation,
+    stage_carryover_for_rotation,
+};
 pub(crate) use fold::{lifecycle_follow_seed, lifecycle_log_generation};
 pub use panes::{
     HookPaneRecoveryCandidate, HookPaneRecoveryContext, HookPaneRecoveryMethod,
