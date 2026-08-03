@@ -19,6 +19,12 @@ fn rotation_due_touches_stamp_and_fresh_stamp_debounces() {
     };
 
     assert!(
+        !second
+            .append_agent_lifecycle_with_threshold(intent(), u64::MAX)
+            .expect("below rotation threshold")
+            .rotation_due
+    );
+    assert!(
         second
             .append_agent_lifecycle_with_threshold(intent(), 0)
             .expect("rotation due")
