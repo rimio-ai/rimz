@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::{RawValue, to_raw_value};
 use serde_json::{Value, json};
 
-use crate::agents::{AgentLifecycleObservation, LaunchParams};
+use crate::agents::{AgentLifecycleObservation, AgentState, LaunchParams, LifecycleSignal};
 use crate::ids::{
     AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, RunId, WorkspaceId,
 };
@@ -17,6 +17,31 @@ use crate::pane::RuntimeOwner;
 // `status` + `compacting`; signal-less lifecycle frames fold to nothing.
 pub const EVENT_SCHEMA_VERSION: &str = "rimz.event.v2";
 pub const AGENT_LIFECYCLE_METHOD: &str = "agent.lifecycle";
+
+macro_rules! lifetime_fields {
+    ($transcript:ident; $($observation:ident),*; $($launch:ident),*) => {
+        pub(super) fn observation_for_event(obs: &AgentLifecycleObservation) -> AgentLifecycleObservation {
+            let mut projected = obs.clone();
+            if obs.signal.establishes_identity() || obs.parent_agent_id.is_some() {
+                return projected;
+            }
+            if !matches!(obs.signal, LifecycleSignal::TurnEnded { .. }) {
+                projected.$transcript = None;
+            }
+            $(projected.$observation = None;)*
+            $(projected.launch.$launch = None;)*
+            projected
+        }
+
+        pub(super) fn carry_lifetime_fields(state: &mut AgentState, prior: &AgentState) {
+            state.$transcript.clone_from(&prior.$transcript);
+            $(state.$observation.clone_from(&prior.$observation);)*
+            $(state.$launch.clone_from(&prior.$launch);)*
+        }
+    };
+}
+
+lifetime_fields!(transcript_path; worktree_path, worktree_branch; role, team, channel, profile);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentLifecyclePayload {

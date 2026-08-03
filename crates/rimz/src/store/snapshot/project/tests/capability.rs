@@ -1,5 +1,50 @@
 use super::*;
+use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
+
+#[test]
+fn projected_lifecycle_events_preserve_schema_owned_lifetime_fields() {
+    let mut identity = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-1")),
+        LifecycleSignal::Registered,
+    );
+    identity.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
+    identity.worktree_path = Some("/repo/main".to_owned());
+    identity.worktree_branch = Some("main".to_owned());
+    identity.launch = LaunchParams {
+        role: Some("coder".to_owned()),
+        team: Some("forge".to_owned()),
+        channel: Some("store".to_owned()),
+        profile: Some("codex-coder".to_owned()),
+        ..LaunchParams::default()
+    };
+    let start =
+        EventEnvelope::agent_lifecycle(workspace(), "session", "codex", "SessionStart", &identity);
+
+    let mut progress = identity;
+    progress.signal = LifecycleSignal::TurnStarted;
+    let progress = crate::store::event::observation_for_event(&progress);
+    let progress = EventEnvelope::agent_lifecycle(
+        workspace(),
+        "session",
+        "codex",
+        "UserPromptSubmit",
+        &progress,
+    );
+
+    let agents = reduce_agent_states(&[start, progress]);
+    let agent = agents.first().expect("lifecycle events produce agent");
+    assert_eq!(
+        agent.transcript_path.as_deref(),
+        Some("/tmp/transcript.jsonl")
+    );
+    assert_eq!(agent.worktree_path.as_deref(), Some("/repo/main"));
+    assert_eq!(agent.worktree_branch.as_deref(), Some("main"));
+    assert_eq!(agent.role.as_deref(), Some("coder"));
+    assert_eq!(agent.team.as_deref(), Some("forge"));
+    assert_eq!(agent.channel.as_deref(), Some("store"));
+    assert_eq!(agent.profile.as_deref(), Some("codex-coder"));
+}
 
 #[test]
 fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {

@@ -114,6 +114,68 @@ fn lifecycle_event_uses_flat_compact_wire_shape() {
 }
 
 #[test]
+fn lifecycle_event_projection_owns_carry_forward_wire_fields() {
+    let mut full = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-1")),
+        LifecycleSignal::Registered,
+    );
+    full.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
+    full.worktree_path = Some("/tmp/project".to_owned());
+    full.worktree_branch = Some("feature".to_owned());
+    full.launch = LaunchParams {
+        role: Some("coder".to_owned()),
+        team: Some("forge".to_owned()),
+        channel: Some("event-log".to_owned()),
+        profile: Some("claude-coder".to_owned()),
+        ..LaunchParams::default()
+    };
+    full.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
+
+    assert_eq!(observation_for_event(&full), full);
+    full.signal = LifecycleSignal::TurnStarted;
+    let projected = observation_for_event(&full);
+    let full_keys = serde_json::to_value(&full)
+        .expect("full observation serializes")
+        .as_object()
+        .expect("observation is an object")
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let projected_keys = serde_json::to_value(&projected)
+        .expect("projected observation serializes")
+        .as_object()
+        .expect("observation is an object")
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        full_keys
+            .difference(&projected_keys)
+            .cloned()
+            .collect::<Vec<_>>(),
+        [
+            "channel",
+            "profile",
+            "role",
+            "team",
+            "transcript_path",
+            "worktree_branch",
+            "worktree_path",
+        ]
+    );
+    assert_eq!(projected.pane_id.as_ref().map(PaneId::raw), Some("%1"));
+
+    full.signal = LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+    };
+    assert_eq!(
+        observation_for_event(&full).transcript_path.as_deref(),
+        Some("/tmp/transcript.jsonl")
+    );
+}
+
+#[test]
 fn lifecycle_decoder_handles_durable_compatibility_boundaries() {
     enum Expected {
         Legacy,
