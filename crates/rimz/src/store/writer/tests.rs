@@ -543,6 +543,51 @@ fn rotate_event_log_writes_carryover_before_archiving_active_log() {
     assert!(rotate_called.get(), "test rotate hook should run");
 }
 
+#[test]
+fn rotation_reseeds_before_archive_prune_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
+    let store = Store::open(paths.clone(), runtime).expect("open store");
+    event_log::append(
+        &paths.events_log,
+        &EventEnvelope::new(
+            workspace_id,
+            "rimz-test",
+            "test",
+            "test",
+            "test.event",
+            json!({}),
+        ),
+    )
+    .expect("seed event");
+    snapshot::rebuild(&paths).expect("seed pre-rotation cache");
+
+    let error = store
+        .rotate_event_log_with(
+            1,
+            Some(Duration::ZERO),
+            |events_log, archive_dir, min_bytes| {
+                let outcome = event_log::rotate(events_log, archive_dir, min_bytes)?;
+                std::fs::create_dir(archive_dir.join("events.prune-trap.jsonl"))
+                    .expect("create archive prune trap");
+                Ok(outcome)
+            },
+        )
+        .expect_err("archive prune trap fails after rotation");
+    assert!(error.to_string().contains("events.prune-trap.jsonl"));
+
+    let cache: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&paths.rollup_cache).expect("reseeded rollup cache survives prune error"),
+    )
+    .expect("parse rollup cache");
+    assert_eq!(
+        cache["extent"]["offset"], 0,
+        "cache describes fresh active log"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn rotation_carryover_keeps_live_and_recently_ended_agents() {

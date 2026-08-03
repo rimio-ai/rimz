@@ -581,7 +581,7 @@ impl Store {
     /// Rotate the active event log when it exceeds `min_bytes`, preserving
     /// the agent rollup across the archive boundary.
     ///
-    /// Steps under the workspace and publish locks:
+    /// Boundary steps under the workspace and publish locks:
     /// 1. Project the current event log's agent rollup, merge it with the
     ///    existing carryover, and persist before the rename so a rotation
     ///    crash leaves both files coherent.
@@ -594,7 +594,8 @@ impl Store {
     /// 4. Reseed the rollup fold base as a new generation and rebuild the
     ///    persisted snapshot (`latest.json`) from the merged rollup so
     ///    neither depends on the rotated log.
-    /// 5. Prune archives older than `archive_older_than` when set.
+    /// After the boundary completes and releases both locks, prune archives
+    /// older than `archive_older_than` when set.
     #[must_use = "durability barrier; check the result"]
     pub fn rotate_event_log(
         &self,
@@ -613,25 +614,23 @@ impl Store {
     where
         F: FnOnce(&Path, &Path, u64) -> event_log::Result<event_log::RotationOutcome>,
     {
-        self.commit_boundary(RollupInvalidation::Reseed, |paths| {
-            let carryover_agents = stage_agent_carryover_for_rotation(paths, min_bytes)?;
+        let (rotation, carryover_agents) =
+            self.commit_boundary(RollupInvalidation::Reseed, |paths| {
+                let carryover_agents = stage_agent_carryover_for_rotation(paths, min_bytes)?;
 
-            let rotation = rotate(&paths.events_log, &paths.events_archive_dir, min_bytes)?;
-            let changed = rotation.is_rotated();
-
-            let pruned = if let Some(older_than) = archive_older_than {
-                event_log::prune_archive(&paths.events_archive_dir, older_than)?
-            } else {
-                super::atomic::PruneOutcome::default()
-            };
-            Ok((
-                EventLogRotationOutcome {
-                    rotation,
-                    pruned,
-                    carryover_agents,
-                },
-                changed,
-            ))
+                let rotation = rotate(&paths.events_log, &paths.events_archive_dir, min_bytes)?;
+                let changed = rotation.is_rotated();
+                Ok(((rotation, carryover_agents), changed))
+            })?;
+        let pruned = if let Some(older_than) = archive_older_than {
+            event_log::prune_archive(&self.inner.paths.events_archive_dir, older_than)?
+        } else {
+            super::atomic::PruneOutcome::default()
+        };
+        Ok(EventLogRotationOutcome {
+            rotation,
+            pruned,
+            carryover_agents,
         })
     }
 
