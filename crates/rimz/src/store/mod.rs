@@ -53,7 +53,6 @@ pub(crate) mod sidecar;
 pub mod single_flight;
 pub mod snapshot;
 pub mod subagent_context;
-pub mod wakeup;
 pub mod workspace_record;
 
 pub mod writer;
@@ -99,8 +98,6 @@ pub enum StoreErr {
     Lock(#[from] lock::LockErr),
     #[error(transparent)]
     Snapshot(#[from] snapshot::SnapshotErr),
-    #[error(transparent)]
-    Wakeup(#[from] wakeup::WakeupErr),
     #[error(transparent)]
     WorkspaceRecord(#[from] workspace_record::WorkspaceRecordErr),
     #[error("{0}")]

@@ -1096,7 +1096,7 @@ fn wake(globals: &GlobalFlags, workspace_id: Option<String>, wake: ZellijWake) -
 }
 
 fn broadcast_wake_event(runtime: &RuntimePaths, session_name: Option<&str>, event: SidebarEvent) {
-    if let Err(err) = rimz::store::wakeup::broadcast_sidebar_event(runtime, session_name, event) {
+    if let Err(err) = rimz::sidebar::wakeup::broadcast(runtime, session_name, event) {
         tracing::debug!(error = %err, "presence poke: event datagram failed");
     }
 }
@@ -1320,7 +1320,7 @@ fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> 
         .iter()
         .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.clone()))
         .collect::<Vec<_>>();
-    rimz::store::wakeup::broadcast_sidebar_event(
+    rimz::sidebar::wakeup::broadcast(
         &resolved.runtime,
         Some(&resolved.workspace.session_name),
         SidebarEvent::Notify {
@@ -1429,7 +1429,7 @@ fn diag_for_workspace(workspace: &rimz::ResolvedWorkspace) -> rimz::diag::DiagSi
 }
 
 fn wake_sidebars(runtime: &RuntimePaths) {
-    if let Err(err) = rimz::store::wakeup::wake_sidebars(runtime) {
+    if let Err(err) = rimz::sidebar::wakeup::wake_store_delta(runtime, None, None) {
         tracing::debug!(error = %err, "sidebar unread wake failed");
     }
 }

@@ -24,9 +24,9 @@ pub struct SidebarHeartbeat {
     pub workspace_id: WorkspaceId,
     pub instance_id: SidebarInstanceId,
     pub mux: MuxName,
-    /// Multiplexer session this sidebar is pinned to. The store wakeup walk
-    /// uses it to address backend-specific fast paths (e.g. the broadcast
-    /// `zellij pipe` on the Zellij backend).
+    /// Multiplexer session this sidebar is pinned to. Reload and reconcile
+    /// consumers use it to match the renderer to its live mux session; wakeup
+    /// fanout is workspace-wide and does not inspect it.
     pub session_name: String,
     pub wakeup_socket: PathBuf,
     /// Normalized pane this renderer paints into (`<mux>:<raw>`). `rimz reload`

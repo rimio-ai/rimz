@@ -1370,7 +1370,7 @@ fn finish_run(store: &rimz::Store, record: &mut RunRecord) {
     record.updated_at = Timestamp::now();
     record.completed_at = Some(record.updated_at);
     rimz::store::run_store::write(&store.paths().runs_dir, record).expect("write terminal run");
-    rimz::store::wakeup::wake_run(store.runtime_paths(), record).expect("wake run waiter");
+    rimz::harness::run_wake::wake_run(store.runtime_paths(), record).expect("wake run waiter");
 }
 
 #[cfg(unix)]

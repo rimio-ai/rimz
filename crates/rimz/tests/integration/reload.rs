@@ -14,8 +14,8 @@ use jiff::Timestamp;
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::sidebar::events::RELOAD_CONTROL_WORD;
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
+use rimz::sidebar::wakeup::reload_all;
 use rimz::store::RuntimePaths;
-use rimz::store::wakeup::reload_sidebars;
 
 use crate::common::Env;
 
@@ -166,7 +166,7 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
     stale.last_seen = Timestamp::now() - Duration::from_secs(60);
     write_heartbeat(&runtime, "sidebar.stale.json", stale);
 
-    let signaled = reload_sidebars(&runtime).expect("reload_sidebars");
+    let signaled = reload_all(&runtime).expect("reload_sidebars");
     assert_eq!(signaled, 1, "only the fresh sidebar should be signaled");
 
     recv.set_read_timeout(Some(Duration::from_secs(2)))

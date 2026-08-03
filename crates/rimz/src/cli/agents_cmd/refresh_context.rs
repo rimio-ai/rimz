@@ -78,7 +78,7 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     }
 
     if wrote {
-        let _ = rimz::store::wakeup::wake_sidebars(&runtime);
+        let _ = rimz::sidebar::wakeup::wake_store_delta(&runtime, None, None);
     }
     Ok(())
 }

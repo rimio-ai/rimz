@@ -922,7 +922,7 @@ fn request_worker_handoff(
     target: Option<&crate::reload::StagedBuild>,
 ) {
     if let Some(runtime) = runtime
-        && let Err(err) = crate::store::wakeup::reload_sidebar(runtime, &config.instance_id)
+        && let Err(err) = crate::sidebar::wakeup::reload_one(runtime, &config.instance_id)
     {
         debug!(error = %err, "sidebar supervisor worker handoff nudge failed");
     }

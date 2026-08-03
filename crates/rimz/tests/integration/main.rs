@@ -50,6 +50,7 @@ mod sessions;
 mod sidebar_snapshot;
 mod sidebar_supervisor;
 mod sidebar_unread;
+mod sidebar_wakeup;
 mod start;
 mod store;
 mod transcript;

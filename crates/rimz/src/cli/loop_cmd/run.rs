@@ -219,7 +219,7 @@ fn notify_loop_disabled(name: &str, entry: &TaskEntry, count: u32) {
         }
     };
     let notification_kind = notification.kind_env().to_owned();
-    if let Err(err) = rimz::store::wakeup::broadcast_sidebar_event(
+    if let Err(err) = rimz::sidebar::wakeup::broadcast(
         &runtime,
         None,
         rimz::sidebar::events::SidebarEvent::Notify {

@@ -26,7 +26,7 @@ pub(super) fn run_refresh_usage(request: AccountUsageRefreshRequest) -> Result<(
 
     let wrote = refresh_claimed_account_usage(&runtime, request.kind.as_str(), request.claim_id);
     if wrote {
-        let _ = rimz::store::wakeup::wake_sidebars(&runtime);
+        let _ = rimz::sidebar::wakeup::wake_store_delta(&runtime, None, None);
     }
     Ok(())
 }

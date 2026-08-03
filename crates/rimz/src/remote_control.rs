@@ -195,7 +195,7 @@ pub fn apply_runtime_toggle(
         let Ok(runtime) = crate::store::RuntimePaths::for_workspace(workspace.workspace_id) else {
             continue;
         };
-        if let Err(err) = crate::store::wakeup::wake_sidebars(&runtime) {
+        if let Err(err) = crate::sidebar::wakeup::wake_store_delta(&runtime, None, None) {
             tracing::debug!(
                 workspace = %runtime.workspace_id,
                 error = &err as &dyn std::error::Error,
