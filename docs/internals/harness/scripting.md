@@ -20,7 +20,7 @@ A `RunRecord` is written under `~/.local/state/rimz/workspaces/<id>/runs/<run_id
 
 | File | Owns |
 | --- | --- |
-| [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs) | The vocabulary and the durable transitions: `SupervisedRunRequest`, `RunRecord`, `RunStatus` and its exit codes, `RunVerify`, the locked update seam, the lifecycle fold, cancellation, and the retry and verify prompt builders. |
+| [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs) | The vocabulary and durable record interface: `SupervisedRunRequest`, `RunRecord`, `RunStatus` and its exit codes, `RunVerify`, locked create/read/update intents, the lifecycle fold, cancellation, and the retry and verify prompt builders. |
 | [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs) | Producer-side deadline detection and detached timeout-helper spawning. |
 | [`harness/run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs) | The blocking wait: the per-run datagram socket, frame validation, the poll loop, and timeout and cancellation transitions. |
 | [`cli/supervised/run.rs`](../../../crates/rimz/src/cli/supervised/run.rs) | The driver both `agents -p` and loop fires call: preparation, placement, the attempt loop, the verify loop, and the retry loop. |
@@ -45,7 +45,7 @@ A `RunRecord` is written under `~/.local/state/rimz/workspaces/<id>/runs/<run_id
 
 Two fields are worth calling out. `transcript_path` points at the *provider's own* session file, not the RimZ transcript log that `rimz transcript` renders; streaming reads that file directly. `agent_id` starts empty and is filled by the first matching lifecycle observation, which is how the record binds to a session it did not know the id of when it was written.
 
-Records are cold-path durable state, written with temp-file-plus-rename through the store atomic helpers, and retained until an operator removes state. Live fields deliberately stay out of the record: `rimz agents show <run-id>` reads the retained record and attaches live card context from the snapshot at read time, so agent drift creates no extra locked writes.
+Records are cold-path durable state. `harness::run` owns their schema, transitions, and workspace-lock placement; its private store codec performs temp-file-plus-rename through the store atomic helpers. Store reset alone writes through that codec directly, under the same workspace lock, so it can cancel active runs before rotating room state. Records remain until an operator removes state. Live fields deliberately stay out of the record: `rimz agents show <run-id>` reads the retained record and attaches live card context from the snapshot at read time, so agent drift creates no extra locked writes.
 
 ## Status and exit codes
 

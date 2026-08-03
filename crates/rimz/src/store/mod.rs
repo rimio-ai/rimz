@@ -46,7 +46,7 @@ pub mod lock;
 mod message_store;
 pub(crate) mod parse_cache;
 pub mod paths;
-pub mod run_store;
+pub(crate) mod run_store;
 pub mod runtime;
 pub(crate) mod session_death;
 pub(crate) mod sidecar;
@@ -93,7 +93,7 @@ pub enum StoreErr {
     #[error(transparent)]
     MessageStore(#[from] MessageStoreErr),
     #[error(transparent)]
-    RunStore(#[from] run_store::RunStoreErr),
+    RunStore(#[from] crate::harness::run::RunStoreErr),
     #[error(transparent)]
     Lock(#[from] lock::LockErr),
     #[error(transparent)]

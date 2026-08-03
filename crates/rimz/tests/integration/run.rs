@@ -27,10 +27,10 @@ fn hidden_timeout_helper_settles_only_an_overdue_run() {
 
     let mut overdue = create_running_named_run(&env, &store, "overdue");
     overdue.deadline_at = Some(now - Duration::from_secs(1));
-    rimz::store::run_store::write(&store.paths().runs_dir, &overdue).expect("write overdue run");
+    rimz::harness::run::create(store.paths(), &overdue).expect("write overdue run");
     let mut future = create_running_named_run(&env, &store, "future");
     future.deadline_at = Some(now + Duration::from_secs(60));
-    rimz::store::run_store::write(&store.paths().runs_dir, &future).expect("write future run");
+    rimz::harness::run::create(store.paths(), &future).expect("write future run");
 
     for run in [&overdue, &future] {
         let request = rimz::harness::run_timeout::RunTimeoutRequest {
@@ -88,7 +88,7 @@ fn hidden_timeout_helper_signals_pre_hook_provider_without_killing_wrapper() {
     let mut run = create_running_named_run(&env, &store, "pre-hook-timeout");
     run.subagent = true;
     run.deadline_at = Some(Timestamp::now() - Duration::from_secs(1));
-    rimz::store::run_store::write(&store.paths().runs_dir, &run).expect("write overdue subagent");
+    rimz::harness::run::create(store.paths(), &run).expect("write overdue subagent");
     rimz::harness::run::record_provider_process(
         store.paths(),
         &run.run_id,
@@ -1369,7 +1369,7 @@ fn wait_for_message_count(
 fn finish_run(store: &rimz::Store, record: &mut RunRecord) {
     record.updated_at = Timestamp::now();
     record.completed_at = Some(record.updated_at);
-    rimz::store::run_store::write(&store.paths().runs_dir, record).expect("write terminal run");
+    rimz::harness::run::create(store.paths(), record).expect("write terminal run");
     rimz::harness::run_wake::wake_run(store.runtime_paths(), record).expect("wake run waiter");
 }
 
@@ -1887,8 +1887,7 @@ fn run_stream_prints_codex_and_copilot_text_until_terminal_record() {
         terminal.last_message = Some("hello".to_owned());
         terminal.updated_at = Timestamp::now();
         terminal.completed_at = Some(terminal.updated_at);
-        rimz::store::run_store::write(&store.paths().runs_dir, &terminal)
-            .expect("write terminal");
+        rimz::harness::run::create(store.paths(), &terminal).expect("write terminal");
 
         let out = child.wait_with_output().expect("wait agents stream");
         assert!(
@@ -1947,7 +1946,7 @@ fn run_stream_json_polls_transcript_until_terminal_record() {
     terminal.last_message = Some("hello".to_owned());
     terminal.updated_at = Timestamp::now();
     terminal.completed_at = Some(terminal.updated_at);
-    rimz::store::run_store::write(&store.paths().runs_dir, &terminal).expect("write terminal");
+    rimz::harness::run::create(store.paths(), &terminal).expect("write terminal");
 
     let out = child.wait_with_output().expect("wait agents stream");
     assert!(
@@ -2023,7 +2022,7 @@ fn write_run_status(store: &rimz::Store, record: &mut RunRecord, status: RunStat
     record.status = status;
     record.updated_at = Timestamp::now();
     record.completed_at = status.is_terminal().then_some(record.updated_at);
-    rimz::store::run_store::write(&store.paths().runs_dir, record).expect("write run status");
+    rimz::harness::run::create(store.paths(), record).expect("write run status");
 }
 
 fn register_running_wait_agent(env: &Env, store: &rimz::Store, name: &str, session_id: &str) {

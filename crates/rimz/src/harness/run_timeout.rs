@@ -23,7 +23,7 @@ pub fn enforce(
     runtime: &RuntimePaths,
     now: Timestamp,
 ) -> Option<Vec<RunRecord>> {
-    let records = match crate::store::run_store::list(&paths.runs_dir) {
+    let records = match crate::harness::run::list(paths) {
         Ok(records) => records,
         Err(err) => {
             tracing::debug!(

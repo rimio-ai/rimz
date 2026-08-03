@@ -38,7 +38,7 @@ pub enum OrphanSweepErr {
     #[error(transparent)]
     Snapshot(#[from] crate::store::snapshot::SnapshotErr),
     #[error(transparent)]
-    RunStore(#[from] crate::store::run_store::RunStoreErr),
+    RunStore(#[from] crate::harness::run::RunStoreErr),
 }
 
 /// Detect durable parent orphans and delegate each repair to a hidden helper.
@@ -65,7 +65,7 @@ pub fn resolve(
     request: &OrphanSubagentRequest,
     now: Timestamp,
 ) -> Result<Option<OrphanedSubagent>, OrphanSweepErr> {
-    let runs = crate::store::run_store::list(&paths.runs_dir)?;
+    let runs = crate::harness::run::list(paths)?;
     Ok(find_with_runs(paths, &runs, now)?
         .into_iter()
         .find(|orphan| {

@@ -465,7 +465,7 @@ impl RunFixture {
         let mut record = self.record.clone();
         record.status = RunStatus::Completed;
         record.last_message = Some(message.to_owned());
-        rimz::store::run_store::write(&self.paths.runs_dir, &record).unwrap();
+        rimz::harness::run::create(&self.paths, &record).unwrap();
     }
 }
 

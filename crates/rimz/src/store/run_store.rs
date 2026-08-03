@@ -6,54 +6,25 @@
 //! unlike cache sidecars whose correctness rides the event log.
 
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::harness::run::RunRecord;
+use crate::harness::run::{RunRecord, RunStoreErr};
 use crate::ids::RunId;
-use crate::store::atomic::{self, write_temp_then_rename};
+use crate::store::atomic::write_temp_then_rename;
 
-#[derive(Debug, thiserror::Error)]
-pub enum RunStoreErr {
-    #[error("run {0} not found")]
-    NotFound(RunId),
-    #[error(transparent)]
-    Atomic(#[from] atomic::AtomicErr),
-    #[error(transparent)]
-    Lock(#[from] crate::store::lock::LockErr),
-    #[error("cannot access {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error("json parse error on {path}: {source}")]
-    Json {
-        path: PathBuf,
-        #[source]
-        source: serde_json::Error,
-    },
-    #[error("run {run_id} is {actual}; expected {expected}")]
-    InvalidStatus {
-        run_id: RunId,
-        actual: &'static str,
-        expected: &'static str,
-    },
-}
-
-pub type Result<T> = std::result::Result<T, RunStoreErr>;
+type Result<T> = std::result::Result<T, RunStoreErr>;
 
 fn run_path(runs_dir: &Path, run_id: &RunId) -> PathBuf {
     runs_dir.join(format!("{run_id}.json"))
 }
 
 #[must_use = "durability barrier; check the result"]
-pub fn write(runs_dir: &Path, record: &RunRecord) -> Result<()> {
+pub(crate) fn write(runs_dir: &Path, record: &RunRecord) -> Result<()> {
     write_temp_then_rename(&run_path(runs_dir, &record.run_id), record)?;
     Ok(())
 }
 
-pub fn load(runs_dir: &Path, run_id: &RunId) -> Result<RunRecord> {
+pub(crate) fn load(runs_dir: &Path, run_id: &RunId) -> Result<RunRecord> {
     let path = run_path(runs_dir, run_id);
     if !path.exists() {
         return Err(RunStoreErr::NotFound(run_id.clone()));
@@ -65,7 +36,7 @@ pub fn load(runs_dir: &Path, run_id: &RunId) -> Result<RunRecord> {
     serde_json::from_slice(&bytes).map_err(|source| RunStoreErr::Json { path, source })
 }
 
-pub fn list(runs_dir: &Path) -> Result<Vec<RunRecord>> {
+pub(crate) fn list(runs_dir: &Path) -> Result<Vec<RunRecord>> {
     if !runs_dir.exists() {
         return Ok(Vec::new());
     }

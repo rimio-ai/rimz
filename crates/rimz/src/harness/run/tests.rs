@@ -41,7 +41,7 @@ fn durable_deadline_defaults_for_old_records_and_times_out_once_due() {
     let deadline = record.started_at + std::time::Duration::from_secs(30);
     let mut timed = record.clone();
     timed.deadline_at = Some(deadline);
-    crate::store::run_store::write(&paths.runs_dir, &timed).expect("write deadline");
+    create(&paths, &timed).expect("write deadline");
 
     let (_, wrote) = timeout_if_due(
         &paths,

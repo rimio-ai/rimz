@@ -1,6 +1,7 @@
 //! Supervised-run requests, records, transitions, and cancellation.
 
 use std::fmt;
+use std::io;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -13,7 +14,7 @@ use crate::agents::{AgentLifecycleObservation, LifecycleSignal, TurnPhase};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
 use crate::store::lock::WorkspaceLock;
-use crate::store::run_store::{self, RunStoreErr};
+use crate::store::run_store;
 use crate::store::{StatePaths, Store, snapshot::SidebarSnapshot};
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
@@ -58,8 +59,38 @@ pub const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
 /// The configured `[harness] rtk` mode (`auto`/`on`/`off`), exported to every
 /// agent launch so `cargo xtask` can route recognized cargo commands through
 /// `rtk`. Read by xtask, never by rimz itself.
-pub const ENV_RTK: &str = "RIMZ_RTK";
+pub(super) const ENV_RTK: &str = "RIMZ_RTK";
 const FAILURE_TAIL_CAP: usize = 4 * 1024;
+
+#[derive(Debug, thiserror::Error)]
+pub enum RunStoreErr {
+    #[error("run {0} not found")]
+    NotFound(RunId),
+    #[error(transparent)]
+    Atomic(#[from] crate::store::atomic::AtomicErr),
+    #[error(transparent)]
+    Lock(#[from] crate::store::lock::LockErr),
+    #[error("cannot access {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("json parse error on {path}: {source}")]
+    Json {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("run {run_id} is {actual}; expected {expected}")]
+    InvalidStatus {
+        run_id: RunId,
+        actual: &'static str,
+        expected: &'static str,
+    },
+}
+
+pub type Result<T> = std::result::Result<T, RunStoreErr>;
 
 /// Typed cancellation signal shared between CLI signal handlers and the
 /// supervised-run waiter.
@@ -776,8 +807,6 @@ pub fn terminal_status_for_signal(signal: &LifecycleSignal) -> Option<RunStatus>
         _ => None,
     }
 }
-
-pub type Result<T> = std::result::Result<T, RunStoreErr>;
 
 #[cfg(test)]
 mod tests;
