@@ -3,9 +3,9 @@ use super::super::sig::{
     WatchedValues, extract_sig,
 };
 use super::*;
-use crate::SidebarWorktreeKind;
 use crate::sidebar::events::EventStore;
 use crate::sidebar::timing::OBSERVE_WARMUP;
+use crate::store::snapshot::SidebarWorktreeKind;
 use crate::{SpendTally, SpendWindow, WorkspaceId};
 
 fn sig(at_ms: u64, rows: Vec<RowSig>) -> FrameSig {
@@ -159,8 +159,8 @@ fn spend_tally(year_usd: f64) -> SpendTally {
     }
 }
 
-fn snapshot_with_spend(year_usd: Option<f64>) -> crate::SidebarSnapshot {
-    let mut snapshot = crate::SidebarSnapshot::build(
+fn snapshot_with_spend(year_usd: Option<f64>) -> crate::store::snapshot::SidebarSnapshot {
+    let mut snapshot = crate::store::snapshot::SidebarSnapshot::build(
         WorkspaceId::from_project_root(std::path::Path::new("/repo")),
         Vec::new(),
         jiff::Timestamp::now(),

@@ -11,7 +11,7 @@ use rimz::mux::{
     LayoutPanes, MuxBackend, SidebarPaneOptions, SplitPaneOptions, SplitPlacement, SplitTarget,
     TabOptions, own_pane_id,
 };
-use rimz::store::AgentLaunchBatch;
+use rimz::store::writer::AgentLaunchBatch;
 
 pub(super) struct PlacementRequest {
     pub placement: Placement,

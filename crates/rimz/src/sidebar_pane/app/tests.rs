@@ -36,12 +36,12 @@ fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
             pane("terminal_12", "tab_1", false),
         ],
     );
-    snapshot.own_view = Some(crate::SidebarOwnView {
+    snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
         sibling_count: 3,
         working_pane_ids: vec![first_work.clone(), second_work.clone()],
         own_view_is_daemon: false,
     });
-    snapshot.presence = Some(crate::SidebarPresence::Active);
+    snapshot.presence = Some(crate::store::snapshot::SidebarPresence::Active);
     snapshot.client_views = vec![crate::mux::ClientPaneView {
         client_id: crate::mux::MuxClientId::Zellij(1),
         pane_id: sidebar.clone(),
@@ -70,15 +70,15 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     let mut slow = snapshot(&ws);
     slow.theme.animations.waiting =
         Some(toml::from_str("effect = \"breathe\"\n").expect("animation spec"));
-    slow.worktree_groups = vec![crate::SidebarWorktreeGroup {
+    slow.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,
-        kind: crate::SidebarWorktreeKind::Worktree,
+        kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
         status_counts: Vec::new(),
-        rows: vec![crate::SidebarRow {
+        rows: vec![crate::store::snapshot::SidebarRow {
             id: "claude-1".to_owned(),
             name: "claude".to_owned(),
             pane: None,
@@ -90,12 +90,14 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
             archived: false,
             attention_score: 0,
             last_activity: Timestamp::now(),
-            card: crate::RowCard::Agent(Box::new(crate::AgentCard {
-                status: crate::agents::AgentStatus::Waiting,
-                phase: crate::agents::TurnPhase::Idle,
-                task: Some("allow cargo fmt".to_owned()),
-                ..crate::AgentCard::default()
-            })),
+            card: crate::store::snapshot::RowCard::Agent(Box::new(
+                crate::store::snapshot::AgentCard {
+                    status: crate::agents::AgentStatus::Waiting,
+                    phase: crate::agents::TurnPhase::Idle,
+                    task: Some("allow cargo fmt".to_owned()),
+                    ..crate::store::snapshot::AgentCard::default()
+                },
+            )),
         }],
         diff_added: None,
         diff_removed: None,
@@ -716,20 +718,20 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
     let scene = |unread: bool, status: AgentStatus, daemon: bool| {
         let mut snap = snapshot(&ws);
         snap.panes_produced_at_ms = Some(1);
-        snap.own_view = Some(crate::SidebarOwnView {
+        snap.own_view = Some(crate::store::snapshot::SidebarOwnView {
             sibling_count: 2,
             working_pane_ids: vec![work.clone()],
             own_view_is_daemon: daemon,
         });
-        snap.worktree_groups = vec![crate::SidebarWorktreeGroup {
+        snap.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
             label_qualifier: None,
-            kind: crate::SidebarWorktreeKind::Worktree,
+            kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,
             status_counts: Vec::new(),
-            rows: vec![crate::SidebarRow {
+            rows: vec![crate::store::snapshot::SidebarRow {
                 id: "agent-1".to_owned(),
                 name: "claude".to_owned(),
                 pane: Some(pane("terminal_11", "tab_1", false)),
@@ -741,11 +743,13 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
                 archived: false,
                 attention_score: 0,
                 last_activity: Timestamp::now(),
-                card: crate::RowCard::Agent(Box::new(crate::AgentCard {
-                    status,
-                    phase: crate::agents::TurnPhase::Idle,
-                    ..crate::AgentCard::default()
-                })),
+                card: crate::store::snapshot::RowCard::Agent(Box::new(
+                    crate::store::snapshot::AgentCard {
+                        status,
+                        phase: crate::agents::TurnPhase::Idle,
+                        ..crate::store::snapshot::AgentCard::default()
+                    },
+                )),
             }],
             diff_added: None,
             diff_removed: None,

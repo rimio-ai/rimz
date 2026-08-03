@@ -392,8 +392,8 @@ fn external_overflowing_fleet() -> SidebarSnapshot {
     let beta = snapshot.worktree_groups.remove(0);
     group.key = "external".to_owned();
     group.label = "external".to_owned();
-    group.kind = crate::SidebarWorktreeKind::External;
-    group.status_counts = vec![crate::SidebarStatusCount {
+    group.kind = crate::store::snapshot::SidebarWorktreeKind::External;
+    group.status_counts = vec![crate::store::snapshot::SidebarStatusCount {
         status: AgentStatus::Running,
         count: group.rows.len() + beta.rows.len(),
     }];

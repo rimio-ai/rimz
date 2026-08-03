@@ -5,11 +5,11 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tracing::debug;
 
-use crate::SidebarSnapshot;
 use crate::agents::AgentStatus;
 use crate::config::NotificationsPrefs;
 use crate::ids::PaneId;
 use crate::sidebar::notify::{Notification, NotificationKind, spawn_notify_handlers};
+use crate::store::snapshot::SidebarSnapshot;
 
 use super::ServeConfig;
 use super::notify::{BellNotice, emit_terminal_notification};
@@ -219,7 +219,9 @@ mod tests {
     use super::*;
     use crate::sidebar_pane::app::fixtures::{pane, snapshot, workspace};
     use crate::{
-        AgentCard, RowCard, SidebarOwnView, SidebarRow, SidebarWorktreeGroup, SidebarWorktreeKind,
+        store::snapshot::AgentCard, store::snapshot::RowCard, store::snapshot::SidebarOwnView,
+        store::snapshot::SidebarRow, store::snapshot::SidebarWorktreeGroup,
+        store::snapshot::SidebarWorktreeKind,
     };
     use jiff::Timestamp;
 

@@ -29,7 +29,7 @@ fn hidden_paint_follows_the_glanceable_content_key() {
         snapshot
     };
     let mut detached = agent(crate::agents::AgentStatus::Waiting);
-    detached.presence = Some(crate::SidebarPresence::Detached);
+    detached.presence = Some(crate::store::snapshot::SidebarPresence::Detached);
 
     let cases = [
         HiddenPaintCase {
@@ -58,8 +58,8 @@ fn hidden_paint_follows_the_glanceable_content_key() {
         },
         HiddenPaintCase {
             label: "idle-to-stuck process state paints",
-            prior: process(crate::ProcessState::Idle),
-            current: process(crate::ProcessState::Stuck),
+            prior: process(crate::store::snapshot::ProcessState::Idle),
+            current: process(crate::store::snapshot::ProcessState::Stuck),
             last_paint_age: None,
             paints: true,
             stamps_background: true,

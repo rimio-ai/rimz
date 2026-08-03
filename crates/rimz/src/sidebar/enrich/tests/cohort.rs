@@ -10,11 +10,11 @@ fn cohort_effort_projects_by_group_key_and_clears_misses() {
         worktree_group(&first, Vec::new()),
         worktree_group(&second, Vec::new()),
     ];
-    snapshot.worktree_groups[1].cohort_effort = Some(crate::SidebarCohortEffort {
+    snapshot.worktree_groups[1].cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(99.0),
-        ..crate::SidebarCohortEffort::default()
+        ..crate::store::snapshot::SidebarCohortEffort::default()
     });
-    let expected = crate::SidebarCohortEffort {
+    let expected = crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(1.25),
         tokens: crate::agents::spending::EffortTokens {
             input: 10,
@@ -23,7 +23,7 @@ fn cohort_effort_projects_by_group_key_and_clears_misses() {
             cache_read: 4,
         },
         active_secs: Some(60),
-        ..crate::SidebarCohortEffort::default()
+        ..crate::store::snapshot::SidebarCohortEffort::default()
     };
     let cache = CohortSpendCache {
         version: COHORT_SPEND_CACHE_VERSION,

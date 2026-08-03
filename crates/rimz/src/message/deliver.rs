@@ -16,7 +16,7 @@ use crate::message::{
     max_delivery_attempts_from_env, message_interval_from_env, older_ready_blocker, queue_head,
 };
 use crate::workspace::ResolvedWorkspace;
-use crate::{PaneAgent, RuntimePaths, SidebarSnapshot, Store};
+use crate::{RuntimePaths, Store, store::snapshot::PaneAgent, store::snapshot::SidebarSnapshot};
 
 use super::send;
 
@@ -300,7 +300,7 @@ pub(crate) fn execute_attempt(
             store.record_message_delivery_failures(
                 &ids,
                 records.first(),
-                crate::store::DeliveryFailureDisposition::Retry,
+                crate::store::writer::DeliveryFailureDisposition::Retry,
                 WAITING,
                 &workspace.session_name,
             )?;
@@ -326,9 +326,9 @@ pub(crate) fn execute_attempt(
                 &ids,
                 durable_receiver.then_some(head),
                 if durable_receiver {
-                    crate::store::DeliveryFailureDisposition::Retry
+                    crate::store::writer::DeliveryFailureDisposition::Retry
                 } else {
-                    crate::store::DeliveryFailureDisposition::Terminal
+                    crate::store::writer::DeliveryFailureDisposition::Terminal
                 },
                 &err.to_string(),
                 &workspace.session_name,
@@ -429,7 +429,7 @@ fn evaluate_delivery_conditions(
         .filter(|message| message.status == MessageStatus::Queued && !message.conditions_met())
     {
         let evaluation = evaluate_delivery(message, pending, snapshot, now, delivery_window);
-        updates.push(crate::store::DeliverySweepUpdate {
+        updates.push(crate::store::writer::DeliverySweepUpdate {
             message_id: message.message_id.clone(),
             after_indices: evaluation.after_stamps,
             when_indices: evaluation.when_stamps,

@@ -513,8 +513,8 @@ fn gallery_fixtures_build_with_coherent_context() {
     assert!(states[1].link.is_some());
     assert!(cockpit.worktree_groups.iter().any(|group| {
         group.landed == Some(true)
-            && group.trunk_sync == Some(rimz::WorktreeTrunkSync::Merged)
-            && group.pr_state == Some(rimz::WorktreePrState::Merged)
+            && group.trunk_sync == Some(rimz::store::snapshot::WorktreeTrunkSync::Merged)
+            && group.pr_state == Some(rimz::store::snapshot::WorktreePrState::Merged)
     }));
     let reach = &states[3];
     assert_eq!(reach.presence, None);
@@ -665,7 +665,7 @@ fn gallery_shimmer_leads_are_waiting_asks() {
 
     for (state, expected) in cases {
         let snapshot = sidebar_fixture_snapshot(state).unwrap();
-        let lead = rimz::lead_unread_row(&snapshot.worktree_groups);
+        let lead = rimz::store::snapshot::lead_unread_row(&snapshot.worktree_groups);
         match (lead, expected) {
             (Some(row), Some((expected_id, expected_status))) => {
                 assert_eq!(row.id, expected_id, "{state:?}");
@@ -742,20 +742,25 @@ fn gallery_fixture_frames_render_decisive_markers() {
 }
 
 #[cfg(feature = "testkit")]
-fn agent_card_by_id<'a>(snapshot: &'a rimz::SidebarSnapshot, id: &str) -> &'a rimz::AgentCard {
+fn agent_card_by_id<'a>(
+    snapshot: &'a rimz::store::snapshot::SidebarSnapshot,
+    id: &str,
+) -> &'a rimz::store::snapshot::AgentCard {
     snapshot
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
         .find_map(|row| match &row.card {
-            rimz::RowCard::Agent(card) if row.id == id => Some(card.as_ref()),
+            rimz::store::snapshot::RowCard::Agent(card) if row.id == id => Some(card.as_ref()),
             _ => None,
         })
         .unwrap_or_else(|| panic!("agent card {id}"))
 }
 
 #[cfg(feature = "testkit")]
-fn agent_cards(snapshot: &rimz::SidebarSnapshot) -> Vec<&rimz::AgentCard> {
+fn agent_cards(
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+) -> Vec<&rimz::store::snapshot::AgentCard> {
     snapshot
         .worktree_groups
         .iter()

@@ -8,12 +8,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::SidebarSnapshot;
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::sidebar::timing::REORDER_HOLD;
 use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, OrderHold, UiState};
 use crate::sidebar_pane::view::VisibleRoster;
+use crate::store::snapshot::SidebarSnapshot;
 
 /// The focused row leaving the attention class or entering `Running` is the
 /// user acting on that agent in its own pane -- answering its ask or submitting

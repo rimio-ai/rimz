@@ -828,13 +828,13 @@ fn refresh_targets_honor_channel_filter() {
     child.parent_agent_id = Some(AgentSessionId::from("auth"));
     let mut unknown = rimz::testkit::agent_state("ghost", "unknown", now);
     unknown.channel = auth.channel.clone();
-    let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+    let mut snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/repo/main")),
         vec![auth, auth_shadow, docs, child, unknown],
         now,
     );
     let owner = &snapshot.agents[0];
-    let owner_pane = rimz::PaneAgent {
+    let owner_pane = rimz::store::snapshot::PaneAgent {
         kind: owner.kind.clone(),
         kind_ordinal: owner.kind_ordinal,
         name: owner.name.clone(),
@@ -1324,7 +1324,7 @@ mod render {
             TurnPhase::Reasoning,
             1_000,
         );
-        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
             vec![failed, paused, running],
             now,
@@ -1353,7 +1353,7 @@ mod render {
             "this description starts\nwith pasted\tcontent and keeps going across enough words to fill the first line, then the second line, then the third line, and finally more preview text that must be truncated because agent cards only show a bounded activity summary instead of the entire prompt or attached reference content"
                 .to_owned(),
         );
-        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
             vec![agent],
             now,
@@ -1386,7 +1386,7 @@ mod render {
         let mut second = agent_with_status("second", AgentStatus::Idle, TurnPhase::Idle, 1_000);
         second.name = Some("beta".to_owned());
         second.name_explicit = true;
-        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
             vec![first, second],
             now,
@@ -1415,7 +1415,7 @@ mod render {
         let auth_path = Some("/repo/worktrees/auth-refresh");
         let mut external = agent_in_lane("external", None, None, None);
         external.status = AgentStatus::Failed;
-        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let mut snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/repo/main")),
             vec![
                 agent_in_lane("planner", Some("auth-refresh"), auth_path, Some("forge")),
@@ -1508,8 +1508,8 @@ mod render {
             None,
             Some(super::report::PrInfo {
                 number: Some(91),
-                state: rimz::WorktreePrState::Open,
-                ci: Some(rimz::WorktreePrCi::Failing),
+                state: rimz::store::snapshot::WorktreePrState::Open,
+                ci: Some(rimz::store::snapshot::WorktreePrCi::Failing),
             }),
             &peers,
             None,
@@ -1760,7 +1760,7 @@ fn bare_exec_args() -> ExecRequest {
 }
 
 fn render_agents_text(
-    snapshot: &rimz::SidebarSnapshot,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
     now: Timestamp,
     max_width: usize,
 ) -> String {
@@ -1768,7 +1768,7 @@ fn render_agents_text(
 }
 
 fn render_agents_text_with_theme(
-    snapshot: &rimz::SidebarSnapshot,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
     now: Timestamp,
     max_width: usize,
     theme: &ThemeConfig,

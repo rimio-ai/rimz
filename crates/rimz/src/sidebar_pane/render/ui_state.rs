@@ -1,10 +1,10 @@
-use crate::SidebarSnapshot;
 use crate::config::ThemeConfig;
 use crate::diag::record::GateRule;
 use crate::ids::PaneId;
 use crate::sidebar_pane::pets::PetView;
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::view::BodyFilter;
+use crate::store::snapshot::SidebarSnapshot;
 use jiff::Timestamp;
 use std::collections::{BTreeSet, HashSet};
 use std::rc::Rc;

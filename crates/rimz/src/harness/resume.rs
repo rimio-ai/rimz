@@ -28,8 +28,8 @@ use crate::harness::run::PermissionMode;
 use crate::harness::spec::LayoutSpec;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::mux::ResumeTab;
-use crate::store::AgentLaunchScope;
 use crate::store::runtime::AgentLiveness;
+use crate::store::writer::AgentLaunchScope;
 
 /// The default ceiling on agents auto-resumed into one reborn session, so a
 /// long-lived workspace cannot fork-bomb a fleet of agent processes on birth.

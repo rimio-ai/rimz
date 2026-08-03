@@ -22,7 +22,7 @@ use rimz::agents::{
     HookIngressDecision, HookOutput, definition_by_kind,
 };
 use rimz::ids::{MuxName, PaneId};
-use rimz::store::AgentLifecycleIntent;
+use rimz::store::writer::AgentLifecycleIntent;
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
 
 mod binding;

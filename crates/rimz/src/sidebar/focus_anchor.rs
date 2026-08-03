@@ -93,7 +93,7 @@ pub(crate) struct FocusObservation {
 }
 
 impl FocusObservation {
-    pub(crate) fn from_snapshot(snapshot: &crate::SidebarSnapshot) -> Self {
+    pub(crate) fn from_snapshot(snapshot: &crate::store::snapshot::SidebarSnapshot) -> Self {
         Self {
             panes_observed_at_ms: snapshot.panes_observed_at_ms,
             pane_session_name: snapshot.pane_session_name.clone(),
@@ -401,7 +401,7 @@ pub fn execute_action_retried(
 
 pub fn observation_outcome(
     anchor: &FocusAnchor,
-    snapshot: &crate::SidebarSnapshot,
+    snapshot: &crate::store::snapshot::SidebarSnapshot,
     now_ms: u64,
 ) -> FocusObservationOutcome {
     observation_outcome_from(anchor, &FocusObservation::from_snapshot(snapshot), now_ms)
@@ -539,10 +539,13 @@ mod tests {
         session_name: &str,
         live_panes: &[PaneId],
         client_views: Vec<ClientPaneView>,
-    ) -> crate::SidebarSnapshot {
+    ) -> crate::store::snapshot::SidebarSnapshot {
         let workspace = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("workspace");
-        let mut snapshot =
-            crate::SidebarSnapshot::build_with_agents(workspace, Vec::new(), Timestamp::now());
+        let mut snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
+            workspace,
+            Vec::new(),
+            Timestamp::now(),
+        );
         let rows = live_panes
             .iter()
             .map(|pane_id| {
@@ -565,9 +568,9 @@ mod tests {
         )];
         snapshot.pane_session_name = Some(session_name.to_owned());
         snapshot.presence = Some(if client_views.is_empty() {
-            crate::SidebarPresence::Detached
+            crate::store::snapshot::SidebarPresence::Detached
         } else {
-            crate::SidebarPresence::Active
+            crate::store::snapshot::SidebarPresence::Active
         });
         snapshot.client_views = client_views;
         snapshot

@@ -60,6 +60,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use rimz::agents::AgentState;
 use rimz::ids::{AskId, MuxName, WorkspaceId};
+use rimz::store::snapshot::{PaneAgent, SidebarSnapshot};
 use rimz::{RuntimePaths, StatePaths, Store};
 
 pub(crate) use ctx::Ctx;
@@ -287,7 +288,7 @@ pub(crate) fn ambiguous_fanout(verb: &str, target: &str, labels: &[String]) -> a
 /// Resolve a ref to exactly one agent (`show`/`focus`/`wait`/`stop`,
 /// `message clear`/`list`). `@all` or a fan-out kind is an explicit ambiguity.
 pub(crate) fn resolve_agent_one<'a>(
-    snapshot: &'a rimz::SidebarSnapshot,
+    snapshot: &'a SidebarSnapshot,
     raw: &str,
     worktree_flag: Option<&str>,
     current_channel: Option<&str>,
@@ -304,7 +305,7 @@ pub(crate) fn resolve_agent_one<'a>(
 /// state into ask-id lookup; `answer` may target a sub-agent and reports a
 /// matched-but-stale ask as "not asking" instead.
 pub(crate) fn resolve_open_ask<'a>(
-    snapshot: &'a rimz::SidebarSnapshot,
+    snapshot: &'a SidebarSnapshot,
     raw: &str,
     current_channel: Option<&str>,
     root_awaiting_only: bool,
@@ -324,11 +325,11 @@ pub(crate) fn resolve_open_ask<'a>(
 /// panes the producer saw — bound sessions (at their live pane) and lazy panes
 /// with no session yet.
 pub(crate) fn resolve_pane_targets<'a>(
-    snapshot: &'a rimz::SidebarSnapshot,
+    snapshot: &'a SidebarSnapshot,
     raw: &str,
     worktree_flag: Option<&str>,
     current_channel: Option<&str>,
-) -> Result<Vec<&'a rimz::PaneAgent>> {
+) -> Result<Vec<&'a PaneAgent>> {
     map_resolve(
         raw,
         rimz::harness::target::resolve_targets(snapshot, raw, worktree_flag, current_channel),
@@ -767,7 +768,7 @@ pub(crate) fn runtime_paths_for(workspace_id: WorkspaceId) -> Result<RuntimePath
 /// exactly as `rimz agents list` and the sidebar drop them. Best-effort and
 /// fail-safe — an absent daemon-reap cache keeps every session
 /// (see `SidebarSnapshot::reap_runtime`).
-pub(crate) fn alive_snapshot(store: &Store, session: &str) -> Result<rimz::SidebarSnapshot> {
+pub(crate) fn alive_snapshot(store: &Store, session: &str) -> Result<SidebarSnapshot> {
     let base = store.snapshot_cached().context("reading agent snapshot")?;
     Ok(rimz::sidebar::consumer::cached_alive_snapshot(
         base,

@@ -32,7 +32,9 @@ use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL,
 use crate::sidebar_pane::pixel::probe::escalate_own_pane_passthrough;
 use crate::sidebar_pane::pixel::{PixelRenderCaps, detect_pixel_render_caps};
 use crate::store::paths::PathErr;
-use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
+use crate::{
+    MuxName, RuntimePaths, SidebarInstanceId, WorkspaceId, store::snapshot::SidebarSnapshot,
+};
 use ratatui::Terminal;
 use ratatui::backend::{ClearType, CrosstermBackend};
 use ratatui::crossterm::event::{self, Event, KeyEventKind};

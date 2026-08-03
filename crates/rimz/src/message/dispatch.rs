@@ -17,7 +17,7 @@ use crate::message::{
     WhenCondition, command_submit_delay_from_env, message_interval_from_env, queue_head,
 };
 use crate::workspace::ResolvedWorkspace;
-use crate::{PaneAgent, SidebarSnapshot, Store, TargetErr};
+use crate::{Store, TargetErr, store::snapshot::PaneAgent, store::snapshot::SidebarSnapshot};
 
 use super::reply::{PreparationTarget, ReplyJoin, ReplyPreparation, ReplyPrepareErr, ReplyWait};
 use super::{deliver, send};

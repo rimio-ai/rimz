@@ -215,12 +215,12 @@ fn finished_group_collapses_unread_success_until_revealed() {
         .expect("agent row")
         .usage
         .total_tokens = Some(1_000);
-    group.cohort_effort = Some(crate::SidebarCohortEffort {
+    group.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         tokens: crate::agents::spending::EffortTokens {
             input: 1_000,
             ..crate::agents::spending::EffortTokens::default()
         },
-        ..crate::SidebarCohortEffort::default()
+        ..crate::store::snapshot::SidebarCohortEffort::default()
     });
 
     let snapshot = snapshot_with(Vec::new());
@@ -428,9 +428,9 @@ fn finished_roster_pins_the_member_cost() {
         agent_row_with_cost("second", 0.58),
     ]);
     finished.finished = true;
-    finished.cohort_effort = Some(crate::SidebarCohortEffort {
+    finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(total),
-        ..crate::SidebarCohortEffort::default()
+        ..crate::store::snapshot::SidebarCohortEffort::default()
     });
     for row in &mut finished.rows {
         row.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);
@@ -478,16 +478,16 @@ fn expanded_finished_group_cards_show_seat_lifetime_cost() {
     let seats = BTreeMap::from([
         (
             "planner".to_owned(),
-            crate::SidebarSeatEffort {
+            crate::store::snapshot::SidebarSeatEffort {
                 cost_usd: Some(1.5),
-                ..crate::SidebarSeatEffort::default()
+                ..crate::store::snapshot::SidebarSeatEffort::default()
             },
         ),
         (
             "coder".to_owned(),
-            crate::SidebarSeatEffort {
+            crate::store::snapshot::SidebarSeatEffort {
                 cost_usd: Some(2.5),
-                ..crate::SidebarSeatEffort::default()
+                ..crate::store::snapshot::SidebarSeatEffort::default()
             },
         ),
     ]);
@@ -495,10 +495,10 @@ fn expanded_finished_group_cards_show_seat_lifetime_cost() {
         agent_row_with_cost("planner", 0.42),
         agent_row_with_cost("coder", 0.58),
     ]);
-    live.cohort_effort = Some(crate::SidebarCohortEffort {
+    live.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(4.0),
         seats: seats.clone(),
-        ..crate::SidebarCohortEffort::default()
+        ..crate::store::snapshot::SidebarCohortEffort::default()
     });
     let (live_texts, _, _) = render_group(&live, false);
     assert!(
@@ -519,10 +519,10 @@ fn expanded_finished_group_cards_show_seat_lifetime_cost() {
         agent_row_with_cost("coder", 0.58),
     ]);
     finished.finished = true;
-    finished.cohort_effort = Some(crate::SidebarCohortEffort {
+    finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(4.0),
         seats,
-        ..crate::SidebarCohortEffort::default()
+        ..crate::store::snapshot::SidebarCohortEffort::default()
     });
 
     let (receipt, _, _) = render_group(&finished, false);
@@ -735,7 +735,7 @@ fn finished_receipt_pins_cost_then_tokens_and_muted_age() {
 
     let mut finished = group(vec![first, second]);
     finished.finished = true;
-    finished.cohort_effort = Some(crate::SidebarCohortEffort {
+    finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(1.0),
         tokens: crate::agents::spending::EffortTokens {
             input: 300_000,
@@ -744,7 +744,7 @@ fn finished_receipt_pins_cost_then_tokens_and_muted_age() {
             cache_read: 700_000,
         },
         active_secs: Some(2 * 60 * 60),
-        ..crate::SidebarCohortEffort::default()
+        ..crate::store::snapshot::SidebarCohortEffort::default()
     });
     let mut snapshot = snapshot_with(Vec::new());
     snapshot.worktree_groups = vec![finished];
@@ -793,13 +793,13 @@ fn finished_receipt_aggregates_session_cache_hit_percent() {
         agent_row("coder", AgentStatus::Success),
     ]);
     finished.finished = true;
-    finished.cohort_effort = Some(crate::SidebarCohortEffort {
+    finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         tokens: crate::agents::spending::EffortTokens {
             input: 100,
             cache_read: 100,
             ..crate::agents::spending::EffortTokens::default()
         },
-        ..crate::SidebarCohortEffort::default()
+        ..crate::store::snapshot::SidebarCohortEffort::default()
     });
     let (texts, _, _) = render_group(&finished, false);
     let totals = texts.last().expect("finished totals receipt");
@@ -817,12 +817,12 @@ fn finished_receipt_aggregates_session_cache_hit_percent() {
         agent_row("coder", AgentStatus::Success),
     ]);
     no_counters.finished = true;
-    no_counters.cohort_effort = Some(crate::SidebarCohortEffort {
+    no_counters.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         tokens: crate::agents::spending::EffortTokens {
             output: 200,
             ..crate::agents::spending::EffortTokens::default()
         },
-        ..crate::SidebarCohortEffort::default()
+        ..crate::store::snapshot::SidebarCohortEffort::default()
     });
     let (texts, _, _) = render_group(&no_counters, false);
     let totals = texts.last().expect("finished totals receipt");
@@ -846,7 +846,7 @@ fn finished_totals_degrade_tokens_before_the_right_pin() {
     witness.last_activity = row.last_activity;
     let mut finished = group(vec![row, witness]);
     finished.finished = true;
-    finished.cohort_effort = Some(crate::SidebarCohortEffort {
+    finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
         cost_usd: Some(1.0),
         tokens: crate::agents::spending::EffortTokens {
             input: 300_000,
@@ -855,7 +855,7 @@ fn finished_totals_degrade_tokens_before_the_right_pin() {
             cache_read: 700_000,
         },
         active_secs: Some(2 * 60 * 60),
-        ..crate::SidebarCohortEffort::default()
+        ..crate::store::snapshot::SidebarCohortEffort::default()
     });
 
     let (texts, _, _) = render_group_at_width(&finished, false, 30);
@@ -883,14 +883,14 @@ fn finished_totals_degrade_tokens_before_the_right_pin() {
 }
 
 fn render_group(
-    group: &crate::SidebarWorktreeGroup,
+    group: &crate::store::snapshot::SidebarWorktreeGroup,
     expanded: bool,
 ) -> (Vec<String>, Vec<Option<usize>>, Vec<HitRegion>) {
     render_group_at_width(group, expanded, 54)
 }
 
 fn render_group_with_focus(
-    group: &crate::SidebarWorktreeGroup,
+    group: &crate::store::snapshot::SidebarWorktreeGroup,
     expanded: bool,
     focused_pane: &crate::PaneId,
 ) -> (Vec<String>, Vec<Option<usize>>, Vec<HitRegion>) {
@@ -929,7 +929,7 @@ fn render_group_with_focus(
 }
 
 fn render_group_at_width(
-    group: &crate::SidebarWorktreeGroup,
+    group: &crate::store::snapshot::SidebarWorktreeGroup,
     expanded: bool,
     width: usize,
 ) -> (Vec<String>, Vec<Option<usize>>, Vec<HitRegion>) {
@@ -964,7 +964,7 @@ fn roster_receipt(texts: &[String]) -> &str {
 }
 
 fn assert_visible(
-    rows: &[crate::SidebarRow],
+    rows: &[crate::store::snapshot::SidebarRow],
     filter: Option<BodyFilter>,
     expanded: bool,
     id: &str,
@@ -977,7 +977,7 @@ fn assert_visible(
 }
 
 fn visible_ids(
-    group: &crate::SidebarWorktreeGroup,
+    group: &crate::store::snapshot::SidebarWorktreeGroup,
     filter: Option<BodyFilter>,
     expanded: bool,
 ) -> Vec<&str> {
@@ -985,7 +985,7 @@ fn visible_ids(
 }
 
 fn visible_ids_with_held<'a>(
-    group: &'a crate::SidebarWorktreeGroup,
+    group: &'a crate::store::snapshot::SidebarWorktreeGroup,
     filter: Option<BodyFilter>,
     expanded: bool,
     held: Option<&HashSet<String>>,
@@ -994,7 +994,7 @@ fn visible_ids_with_held<'a>(
 }
 
 fn visible_ids_with_context<'a>(
-    group: &'a crate::SidebarWorktreeGroup,
+    group: &'a crate::store::snapshot::SidebarWorktreeGroup,
     filter: Option<BodyFilter>,
     expanded: bool,
     held: Option<&HashSet<String>>,
@@ -1008,12 +1008,14 @@ fn visible_ids_with_context<'a>(
         .collect()
 }
 
-fn group(rows: Vec<crate::SidebarRow>) -> crate::SidebarWorktreeGroup {
-    crate::SidebarWorktreeGroup {
+fn group(
+    rows: Vec<crate::store::snapshot::SidebarRow>,
+) -> crate::store::snapshot::SidebarWorktreeGroup {
+    crate::store::snapshot::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,
-        kind: crate::SidebarWorktreeKind::Worktree,
+        kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
         status_counts: Vec::new(),
@@ -1035,14 +1037,14 @@ fn group(rows: Vec<crate::SidebarRow>) -> crate::SidebarWorktreeGroup {
     }
 }
 
-fn idle_rows(count: usize) -> Vec<crate::SidebarRow> {
+fn idle_rows(count: usize) -> Vec<crate::store::snapshot::SidebarRow> {
     (0..count)
         .map(|index| agent_row(&format!("idle-{index}"), AgentStatus::Idle))
         .collect()
 }
 
-fn agent_row(id: &str, status: AgentStatus) -> crate::SidebarRow {
-    crate::SidebarRow {
+fn agent_row(id: &str, status: AgentStatus) -> crate::store::snapshot::SidebarRow {
+    crate::store::snapshot::SidebarRow {
         id: id.to_owned(),
         name: id.to_owned(),
         pane: Some(pane(&format!("%{id}"), "codex", "/repo/main")),
@@ -1054,14 +1056,14 @@ fn agent_row(id: &str, status: AgentStatus) -> crate::SidebarRow {
         archived: false,
         attention_score: 0,
         last_activity: fixed_now(),
-        card: crate::RowCard::Agent(Box::new(crate::AgentCard {
+        card: crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
             status,
-            ..crate::AgentCard::default()
+            ..crate::store::snapshot::AgentCard::default()
         })),
     }
 }
 
-fn agent_row_with_cost(id: &str, cost: f64) -> crate::SidebarRow {
+fn agent_row_with_cost(id: &str, cost: f64) -> crate::store::snapshot::SidebarRow {
     let mut row = agent_row(id, AgentStatus::Success);
     let mut context = claude_context(fixed_now());
     context.cost = Some(AgentCost {
@@ -1072,8 +1074,8 @@ fn agent_row_with_cost(id: &str, cost: f64) -> crate::SidebarRow {
     row
 }
 
-fn process_row(id: &str) -> crate::SidebarRow {
-    crate::SidebarRow {
+fn process_row(id: &str) -> crate::store::snapshot::SidebarRow {
+    crate::store::snapshot::SidebarRow {
         id: id.to_owned(),
         name: "zsh".to_owned(),
         pane: Some(pane(&format!("%{id}"), "zsh", "/repo/main")),
@@ -1085,6 +1087,8 @@ fn process_row(id: &str) -> crate::SidebarRow {
         archived: false,
         attention_score: 0,
         last_activity: fixed_now(),
-        card: crate::RowCard::Process(crate::ProcessCard::default()),
+        card: crate::store::snapshot::RowCard::Process(
+            crate::store::snapshot::ProcessCard::default(),
+        ),
     }
 }

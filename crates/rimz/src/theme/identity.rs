@@ -5,7 +5,7 @@
 //! downstream.
 //!
 //! Per-agent provider brand colors live with each agent's definition
-//! ([`SidebarProviderPanel::color_rgb`](crate::SidebarProviderPanel)), not
+//! ([`SidebarProviderPanel::color_rgb`](crate::store::snapshot::SidebarProviderPanel)), not
 //! here — identity holds only the tones the sidebar itself owns.
 
 use super::oklab::Rgb;

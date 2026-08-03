@@ -12,8 +12,9 @@ use crate::sidebar_pane::app::loop_state::LoopState;
 use crate::sidebar_pane::pixel::PixelRenderCaps;
 use crate::sidebar_pane::render::{Alert, GateNotice};
 use crate::{
-    AgentCard, PaneId, RowCard, RuntimePaths, SidebarInstanceId, SidebarStatusCount,
-    SidebarWorktreeGroup, WorkspaceId,
+    PaneId, RuntimePaths, SidebarInstanceId, WorkspaceId, store::snapshot::AgentCard,
+    store::snapshot::RowCard, store::snapshot::SidebarStatusCount,
+    store::snapshot::SidebarWorktreeGroup,
 };
 
 fn degraded_health(reason: &str) -> Health {
@@ -85,11 +86,11 @@ fn row_snapshot_at(
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,
-        kind: crate::SidebarWorktreeKind::Worktree,
+        kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
         status_counts: vec![SidebarStatusCount { status, count: 1 }],
-        rows: vec![crate::SidebarRow {
+        rows: vec![crate::store::snapshot::SidebarRow {
             id: "sess-1".to_owned(),
             name: "claude".to_owned(),
             pane: Some(crate::pane::PaneRef::from_id(pane_id.clone())),
@@ -123,7 +124,7 @@ fn row_snapshot_at(
         pr_url: None,
     }];
     if focused {
-        snap.own_view = Some(crate::SidebarOwnView {
+        snap.own_view = Some(crate::store::snapshot::SidebarOwnView {
             sibling_count: 2,
             working_pane_ids: vec![pane_id.clone()],
             own_view_is_daemon: false,
@@ -135,7 +136,7 @@ fn row_snapshot_at(
 }
 
 fn snapshot_in_group(
-    kind: crate::SidebarWorktreeKind,
+    kind: crate::store::snapshot::SidebarWorktreeKind,
     key: &str,
     pane: &str,
     cwd: Option<&str>,
@@ -143,7 +144,7 @@ fn snapshot_in_group(
     let mut pane_ref =
         crate::pane::PaneRef::from_id(PaneId::from_parts(crate::MuxName::Zellij, pane));
     pane_ref.cwd = cwd.map(ToOwned::to_owned);
-    let row = crate::SidebarRow {
+    let row = crate::store::snapshot::SidebarRow {
         id: pane.to_owned(),
         name: pane.to_owned(),
         pane: Some(pane_ref),
@@ -155,7 +156,9 @@ fn snapshot_in_group(
         archived: false,
         attention_score: 0,
         last_activity: jiff::Timestamp::from_second(1_000).unwrap(),
-        card: crate::RowCard::Process(crate::ProcessCard::default()),
+        card: crate::store::snapshot::RowCard::Process(
+            crate::store::snapshot::ProcessCard::default(),
+        ),
     };
     let group = SidebarWorktreeGroup {
         key: key.to_owned(),
@@ -383,7 +386,7 @@ fn two_pane_snapshot(ws: &WorkspaceId, active: PaneId) -> (SidebarSnapshot, Pane
     second_row.pane = Some(crate::pane::PaneRef::from_id(second.clone()));
     snap.worktree_groups[0].rows.push(second_row);
     snap.worktree_groups[0].status_counts[0].count = 2;
-    snap.own_view = Some(crate::SidebarOwnView {
+    snap.own_view = Some(crate::store::snapshot::SidebarOwnView {
         sibling_count: 2,
         working_pane_ids: vec![first.clone(), second.clone()],
         own_view_is_daemon: false,
@@ -395,7 +398,7 @@ fn two_pane_snapshot(ws: &WorkspaceId, active: PaneId) -> (SidebarSnapshot, Pane
 
 #[test]
 fn cwd_flap_within_one_group_is_not_a_migration() {
-    use crate::SidebarWorktreeKind::External;
+    use crate::store::snapshot::SidebarWorktreeKind::External;
     // The pane stays in the `external` group while its cwd flaps between two
     // out-of-project paths — a cwd change, not a row moving between groups.
     let prev = snapshot_in_group(External, "external", "terminal_1", Some("/tmp/a"));
@@ -406,7 +409,7 @@ fn cwd_flap_within_one_group_is_not_a_migration() {
 
 #[test]
 fn newborn_worktree_settle_with_stable_cwd_is_not_a_migration() {
-    use crate::SidebarWorktreeKind::{External, Worktree};
+    use crate::store::snapshot::SidebarWorktreeKind::{External, Worktree};
     // The pane is born in `external` before the worktree backing resolves, then
     // reclassifies to `worktree` while its cwd was the worktree dir all along.
     let prev = snapshot_in_group(External, "external", "terminal_1", Some("/repo/feature"));
@@ -423,13 +426,13 @@ fn newborn_worktree_settle_with_stable_cwd_is_not_a_migration() {
 #[test]
 fn moving_between_groups_records_one_migration() {
     let prev = snapshot_in_group(
-        crate::SidebarWorktreeKind::External,
+        crate::store::snapshot::SidebarWorktreeKind::External,
         "external",
         "terminal_1",
         Some("/tmp/a"),
     );
     let next = snapshot_in_group(
-        crate::SidebarWorktreeKind::Worktree,
+        crate::store::snapshot::SidebarWorktreeKind::Worktree,
         "/repo/feature",
         "terminal_1",
         Some("/repo/feature"),
@@ -445,13 +448,13 @@ fn moving_between_groups_records_one_migration() {
 fn diagnostics_scope_group_migrations_to_elder_only() {
     let ws = workspace();
     let prev = snapshot_in_group(
-        crate::SidebarWorktreeKind::External,
+        crate::store::snapshot::SidebarWorktreeKind::External,
         "external",
         "terminal_1",
         Some("/tmp/a"),
     );
     let next = snapshot_in_group(
-        crate::SidebarWorktreeKind::Worktree,
+        crate::store::snapshot::SidebarWorktreeKind::Worktree,
         "/repo/feature",
         "terminal_1",
         Some("/repo/feature"),

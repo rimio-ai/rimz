@@ -1,15 +1,16 @@
-//! The store write path: every mutation's lock → event-append
-//! critical section, and the off-lock wakeup + publish tail that follows a
-//! commit. The read side (snapshots, projections) stays in `mod.rs`; nothing
-//! here is imported outside the store module.
+//! Store mutation vocabulary and write path: every mutation's lock →
+//! event-append critical section, and the off-lock wakeup + publish tail that
+//! follows a commit. Public intent and outcome types are consumed outside the
+//! store; implementation submodules stay private. The read side (snapshots,
+//! projections) stays in `mod.rs`.
 
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[cfg(test)]
 use crate::agents::LaunchParams;
+use crate::ids::{AgentKind, AgentSessionId, RunId, WorkspaceId};
 use crate::pane::RuntimeOwnerKind;
 use crate::store::event::{
     AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, EventEnvelope,
@@ -17,9 +18,8 @@ use crate::store::event::{
 use crate::workspace::ResolvedWorkspace;
 
 use super::{
-    AgentLaunchBatch, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest, AgentLaunchScope,
-    EventLogRotationOutcome, Result, StatePaths, Store, StoreErr, WorkspaceRewriteOutcome,
-    event_log, lock, message_store, runtime, snapshot, workspace_record,
+    Result, StatePaths, Store, StoreErr, event_log, lock, message_store, runtime, snapshot,
+    workspace_record,
 };
 
 mod debounce;
@@ -32,6 +32,101 @@ mod reset;
 pub use lifecycle::{AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES};
 pub(crate) use queue::DeliverySweepUpdate;
 pub use queue::{DeliveryAck, DeliveryFailureDisposition, EditOutcome, MessageEdit};
+
+/// Terminal audit-only message outcome for a target that never resolved to a
+/// durable receiver card.
+pub struct UnresolvedMessage<'a> {
+    pub workspace_id: WorkspaceId,
+    pub session_name: &'a str,
+    pub address: &'a str,
+    pub channel: Option<&'a str>,
+    pub sender: &'a crate::message::MessageSender,
+    pub text_len: usize,
+    pub reason: &'a str,
+}
+
+#[derive(Clone, Debug)]
+pub struct WorkspaceRewriteOutcome {
+    pub workspace_id: WorkspaceId,
+    pub messages_rewritten: usize,
+    pub events_rewritten: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct EventLogRotationOutcome {
+    pub rotation: event_log::RotationOutcome,
+    pub pruned: crate::store::atomic::PruneOutcome,
+    pub carryover_agents: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AgentLaunchName {
+    Mint,
+    Soft(String),
+    Explicit(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentLaunchRequest {
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    pub name: AgentLaunchName,
+    pub launch: LaunchParams,
+    pub run_id: Option<RunId>,
+    pub prompt: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentLaunchIdentity {
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    pub name: String,
+    pub name_explicit: bool,
+    pub launch: LaunchParams,
+    pub run_id: Option<RunId>,
+    pub prompt: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentLaunchScope {
+    pub session_name: String,
+    pub cwd: PathBuf,
+    pub worktree_name: Option<String>,
+    pub channel: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentLaunchBatch {
+    identities: Vec<AgentLaunchIdentity>,
+    scope: AgentLaunchScope,
+}
+
+impl AgentLaunchBatch {
+    pub fn identities(&self) -> &[AgentLaunchIdentity] {
+        &self.identities
+    }
+
+    pub fn single_identity(&self) -> Result<&AgentLaunchIdentity> {
+        match self.identities.as_slice() {
+            [identity] => Ok(identity),
+            identities => Err(StoreErr::AgentLaunchIdentity(format!(
+                "expected one agent launch identity, got {}",
+                identities.len()
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ResetRecordsOutcome {
+    pub runs_canceled: usize,
+    pub state_entries_removed: usize,
+    pub runtime_removed: bool,
+    pub rotation: event_log::RotationOutcome,
+    pub carryover_agents: usize,
+    pub hard: bool,
+}
 
 pub(super) struct Txn<'a> {
     pub(super) paths: &'a StatePaths,

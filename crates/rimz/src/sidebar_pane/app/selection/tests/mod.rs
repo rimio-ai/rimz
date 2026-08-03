@@ -43,7 +43,7 @@ fn roster_len(
 /// regression guard.
 fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     let mut snapshot = snapshot(ws);
-    let agent = crate::SidebarRow {
+    let agent = crate::store::snapshot::SidebarRow {
         id: "agent-1".to_owned(),
         name: "claude".to_owned(),
         pane: Some(pane("terminal_9", "tab_0", false)),
@@ -55,7 +55,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         archived: false,
         attention_score: 0,
         last_activity: Timestamp::now(),
-        card: crate::RowCard::Agent(Box::new(crate::AgentCard {
+        card: crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
             status: crate::agents::AgentStatus::Running,
             phase: crate::agents::TurnPhase::Idle,
             task: Some("inspect auth".to_owned()),
@@ -66,10 +66,10 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
                 total_tokens: Some(12_400),
                 ..crate::agents::AgentUsageSummary::default()
             },
-            ..crate::AgentCard::default()
+            ..crate::store::snapshot::AgentCard::default()
         })),
     };
-    let process = crate::SidebarRow {
+    let process = crate::store::snapshot::SidebarRow {
         id: "terminal_10".to_owned(),
         name: "zsh".to_owned(),
         pane: Some(pane("terminal_10", "tab_0", false)),
@@ -81,16 +81,18 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         archived: false,
         attention_score: 0,
         last_activity: Timestamp::now(),
-        card: crate::RowCard::Process(crate::ProcessCard::default()),
+        card: crate::store::snapshot::RowCard::Process(
+            crate::store::snapshot::ProcessCard::default(),
+        ),
     };
-    snapshot.worktree_groups = vec![crate::SidebarWorktreeGroup {
+    snapshot.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,
-        kind: crate::SidebarWorktreeKind::Worktree,
+        kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
-        status_counts: vec![crate::SidebarStatusCount {
+        status_counts: vec![crate::store::snapshot::SidebarStatusCount {
             status: crate::agents::AgentStatus::Running,
             count: 1,
         }],
@@ -143,8 +145,8 @@ fn row_index_at_screen_position(ui: &UiState, row: u16) -> Option<usize> {
 // ── The dashboard tab model ──────────────────────────────────────────────────
 
 /// A minimal provider panel — only `kind` matters to the tab model.
-fn provider(kind: &str) -> crate::SidebarProviderPanel {
-    crate::SidebarProviderPanel {
+fn provider(kind: &str) -> crate::store::snapshot::SidebarProviderPanel {
+    crate::store::snapshot::SidebarProviderPanel {
         kind: kind.to_owned(),
         account_scope: Default::default(),
         product_name: kind.to_owned(),
@@ -184,8 +186,8 @@ fn filter_row(
     status: Option<crate::agents::AgentStatus>,
     pane_name: &str,
     worktree: &str,
-) -> crate::SidebarRow {
-    crate::SidebarRow {
+) -> crate::store::snapshot::SidebarRow {
+    crate::store::snapshot::SidebarRow {
         id: id.to_owned(),
         name: name.to_owned(),
         pane: Some(pane(pane_name, "tab_0", false)),
@@ -198,13 +200,13 @@ fn filter_row(
         attention_score: 0,
         last_activity: Timestamp::now(),
         card: if is_agent {
-            crate::RowCard::Agent(Box::new(crate::AgentCard {
+            crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
                 status: status.unwrap_or(crate::agents::AgentStatus::Idle),
                 phase: crate::agents::TurnPhase::Idle,
-                ..crate::AgentCard::default()
+                ..crate::store::snapshot::AgentCard::default()
             }))
         } else {
-            crate::RowCard::Process(crate::ProcessCard::default())
+            crate::store::snapshot::RowCard::Process(crate::store::snapshot::ProcessCard::default())
         },
     }
 }
@@ -217,14 +219,14 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     use crate::agents::AgentStatus;
     let mut snapshot = snapshot(ws);
     snapshot.worktree_groups = vec![
-        crate::SidebarWorktreeGroup {
+        crate::store::snapshot::SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
             label_qualifier: None,
-            kind: crate::SidebarWorktreeKind::Worktree,
+            kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,
-            status_counts: vec![crate::SidebarStatusCount {
+            status_counts: vec![crate::store::snapshot::SidebarStatusCount {
                 status: AgentStatus::Running,
                 count: 1,
             }],
@@ -254,14 +256,14 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             pr_number: None,
             pr_url: None,
         },
-        crate::SidebarWorktreeGroup {
+        crate::store::snapshot::SidebarWorktreeGroup {
             key: "/repo/feature".to_owned(),
             label: "feature".to_owned(),
             label_qualifier: None,
-            kind: crate::SidebarWorktreeKind::Worktree,
+            kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,
-            status_counts: vec![crate::SidebarStatusCount {
+            status_counts: vec![crate::store::snapshot::SidebarStatusCount {
                 status: AgentStatus::Failed,
                 count: 1,
             }],

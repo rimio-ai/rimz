@@ -66,7 +66,7 @@ pub enum RoomBirth {
 #[derive(Debug)]
 pub struct RoomResetReport {
     pub teardown: crate::mux::recovery::TeardownReport,
-    pub records: crate::store::ResetRecordsOutcome,
+    pub records: crate::store::writer::ResetRecordsOutcome,
 }
 
 /// Health retry failed after an attended reset already changed room state.

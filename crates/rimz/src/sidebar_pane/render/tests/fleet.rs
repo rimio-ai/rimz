@@ -131,7 +131,7 @@ fn cockpit_healthy_daily_cap_stays_quiet_on_headline_spend() {
     snapshot.today_spend_epoch_secs = Some(10);
     snapshot.fleet_day_spend_usd = Some(41.20);
     snapshot.fleet_day_spend_epoch_secs = Some(20);
-    snapshot.fleet_budget = Some(crate::DailyBudgetView {
+    snapshot.fleet_budget = Some(crate::store::snapshot::DailyBudgetView {
         cap_usd: 50.0,
         spend_usd: 41.20,
         parked: false,
@@ -153,7 +153,7 @@ fn cockpit_tripped_daily_cap_uses_day_spend_and_names_the_cap() {
     snapshot.today_spend_epoch_secs = Some(10);
     snapshot.fleet_day_spend_usd = Some(41.20);
     snapshot.fleet_day_spend_epoch_secs = Some(20);
-    snapshot.fleet_budget = Some(crate::DailyBudgetView {
+    snapshot.fleet_budget = Some(crate::store::snapshot::DailyBudgetView {
         cap_usd: 50.0,
         spend_usd: 41.20,
         parked: true,
@@ -618,7 +618,7 @@ fn make_up_buckets_pulse_only_while_unread() {
 #[test]
 fn render_cockpit_unread_count() {
     let mut snapshot = make_up_snapshot();
-    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Open);
+    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
     snapshot
         .worktree_groups
         .iter_mut()
@@ -640,12 +640,12 @@ fn render_cockpit_counts_open_prs_including_finished_lanes() {
     let mut merged = snapshot.worktree_groups[0].clone();
     merged.key.push_str("-merged");
     merged.label.push_str("-merged");
-    merged.pr_state = Some(crate::WorktreePrState::Merged);
+    merged.pr_state = Some(crate::store::snapshot::WorktreePrState::Merged);
     merged.pr_number = Some(303);
-    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Open);
+    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
     snapshot.worktree_groups[0].pr_number = Some(101);
     snapshot.worktree_groups[0].finished = true;
-    snapshot.worktree_groups[1].pr_state = Some(crate::WorktreePrState::Open);
+    snapshot.worktree_groups[1].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
     snapshot.worktree_groups[1].pr_number = Some(202);
     snapshot.worktree_groups.push(merged);
 
@@ -664,34 +664,34 @@ fn render_cockpit_counts_open_prs_including_finished_lanes() {
 #[test]
 fn cockpit_pr_ci_uses_worst_known_open_verdict() {
     let mut snapshot = make_up_snapshot();
-    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Open);
-    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Passing);
-    snapshot.worktree_groups[1].pr_state = Some(crate::WorktreePrState::Open);
-    snapshot.worktree_groups[1].pr_ci = Some(crate::WorktreePrCi::Passing);
+    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Passing);
+    snapshot.worktree_groups[1].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
+    snapshot.worktree_groups[1].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Passing);
     assert_eq!(
         open_pr_worst_ci(&snapshot.worktree_groups),
-        Some(crate::WorktreePrCi::Passing)
+        Some(crate::store::snapshot::WorktreePrCi::Passing)
     );
 
     snapshot.worktree_groups[1].pr_ci = None;
     assert_eq!(open_pr_worst_ci(&snapshot.worktree_groups), None);
 
-    snapshot.worktree_groups[1].pr_ci = Some(crate::WorktreePrCi::Pending);
+    snapshot.worktree_groups[1].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Pending);
     assert_eq!(
         open_pr_worst_ci(&snapshot.worktree_groups),
-        Some(crate::WorktreePrCi::Pending)
+        Some(crate::store::snapshot::WorktreePrCi::Pending)
     );
-    snapshot.worktree_groups[0].pr_ci = Some(crate::WorktreePrCi::Failing);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Failing);
     assert_eq!(
         open_pr_worst_ci(&snapshot.worktree_groups),
-        Some(crate::WorktreePrCi::Failing)
+        Some(crate::store::snapshot::WorktreePrCi::Failing)
     );
 }
 
 #[test]
 fn render_cockpit_uses_dedicated_nerd_font_pr_glyph() {
     let mut snapshot = make_up_snapshot();
-    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Open);
+    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
     snapshot.theme.glyphs.set = Some("nerd_font".to_owned());
 
     let screen = snapshot_to_screen(&snapshot, 38, 20);
@@ -756,7 +756,7 @@ fn render_make_up_filter_narrows_the_body() {
         .iter_mut()
         .find(|group| group.label == "main")
         .expect("the fixture groups by worktree");
-    main_group.rows.push(crate::SidebarRow {
+    main_group.rows.push(crate::store::snapshot::SidebarRow {
         id: "%9".to_owned(),
         name: "zsh".to_owned(),
         pane: Some(pane("%9", "zsh", "/home/me/query-engine")),
@@ -768,7 +768,9 @@ fn render_make_up_filter_narrows_the_body() {
         archived: false,
         attention_score: 0,
         last_activity: fixed_now(),
-        card: crate::RowCard::Process(crate::ProcessCard::default()),
+        card: crate::store::snapshot::RowCard::Process(
+            crate::store::snapshot::ProcessCard::default(),
+        ),
     });
     let ui = UiState {
         make_up_filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Failed)),

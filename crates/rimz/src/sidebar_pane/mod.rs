@@ -3,7 +3,7 @@
 //!
 //! `app` owns the fixed-timestep serve loop, two-speed fetch, last-known-good
 //! gate, health/give-up, selection, input codec, reload-in-place, and producer
-//! election. `render` projects [`crate::SidebarSnapshot`] into the terminal
+//! election. `render` projects [`crate::store::snapshot::SidebarSnapshot`] into the terminal
 //! frame. Neither owns store decisions; those stay in [`crate::sidebar`] and
 //! [`crate::store`].
 

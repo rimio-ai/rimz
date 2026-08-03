@@ -85,7 +85,7 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
                     &external_kind,
                 )],
             );
-            group.kind = crate::SidebarWorktreeKind::External;
+            group.kind = crate::store::snapshot::SidebarWorktreeKind::External;
             group
         },
         // A running agent in a since-removed dir: hot <= needed, so excluded.
@@ -169,7 +169,7 @@ fn focused_worktree_paths_keys_on_viewed_row_panes() {
         worktree_group(&background, vec![row("terminal_2", &background)]),
         {
             let mut group = worktree_group(&external_kind, vec![row("terminal_3", &external_kind)]);
-            group.kind = crate::SidebarWorktreeKind::External;
+            group.kind = crate::store::snapshot::SidebarWorktreeKind::External;
             group
         },
         worktree_group(&dead, vec![row("terminal_4", &dead)]),

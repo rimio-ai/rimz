@@ -356,7 +356,7 @@ fn list(
 fn load_agent_overlay(
     workspace: &ResolvedWorkspace,
     panes: &[PaneRef],
-) -> Option<rimz::SidebarSnapshot> {
+) -> Option<rimz::store::snapshot::SidebarSnapshot> {
     let store = crate::cli::open_store(workspace).ok()?;
     let mut snapshot = store.snapshot_cached().ok()?;
     let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone()).ok()?;
@@ -773,7 +773,7 @@ mod tests {
             rimz::testkit::agent_state("codex", "sess-historical", Timestamp::now());
         historical.role = Some("coder".to_owned());
         let pane = pane("terminal_1", "tab_0", "#main", "codex", "/repo/main");
-        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
             rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-pane-test")),
             vec![live, historical],
             Timestamp::now(),
@@ -795,7 +795,7 @@ mod tests {
         second.kind_ordinal = Some(2);
         let first_pane = pane("terminal_1", "tab_0", "#main", "codex", "/repo/main");
         let second_pane = pane("terminal_2", "tab_0", "#main", "codex", "/repo/main");
-        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
             rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-pane-test")),
             vec![first, second],
             Timestamp::now(),
@@ -894,7 +894,7 @@ mod tests {
         let t2: Timestamp = "2026-06-01T01:00:00Z".parse().unwrap();
         let mut agent = agent_on("terminal_1", "codex", "main");
         agent.last_activity = t1;
-        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
             rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-pane-test")),
             vec![agent],
             t2,

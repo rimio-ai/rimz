@@ -14,7 +14,7 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
 use crate::store::lock::WorkspaceLock;
 use crate::store::run_store::{self, RunStoreErr};
-use crate::store::{SidebarSnapshot, StatePaths, Store};
+use crate::store::{StatePaths, Store, snapshot::SidebarSnapshot};
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
 /// Stable RimZ launch identity. The provider may replace the provisional

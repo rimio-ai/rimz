@@ -226,7 +226,7 @@ fn auto_continue_tick(
     cursor: &mut RollupCursor,
     state: &rimz::StatePaths,
     runtime: &rimz::RuntimePaths,
-) -> rimz::SidebarSnapshot {
+) -> rimz::store::snapshot::SidebarSnapshot {
     let base = rimz::store::snapshot::build_with_cursor(state, cursor).expect("rollup");
     let mut config = rimz::config::MachineConfig::default();
     config.resume.auto_continue = true;

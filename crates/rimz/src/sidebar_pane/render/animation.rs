@@ -9,7 +9,7 @@ use super::compose::lead_unread;
 use crate::theme::{GlyphSet, Palette};
 
 use super::theme::{Theme, tone_color};
-use crate::SidebarSnapshot;
+use crate::store::snapshot::SidebarSnapshot;
 
 const THINKING_FRAMES: &[&str] = &[
     "⠁", "⠂", "⠄", "⡀", "⡈", "⡐", "⡠", "⣀", "⣁", "⣂", "⣄", "⣌", "⣔", "⣤", "⣥", "⣦", "⣮", "⣶", "⣷",

@@ -33,7 +33,6 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
-use crate::SidebarSnapshot;
 use crate::agents::{
     AgentCardRef, AgentState, ProviderCapacity, TurnErrorClass, display_turn_error,
     effective_turn_error_class,
@@ -45,6 +44,7 @@ use crate::store::atomic::write_temp_then_rename_cache;
 #[cfg(test)]
 use crate::store::snapshot::PaneAgent;
 use crate::store::snapshot::ResumeOutcome;
+use crate::store::snapshot::SidebarSnapshot;
 
 /// Minimum gap between auto-continue nudges to one rate-limit-parked agent. One
 /// nudge resumes the turn within a frame, so this mostly bounds the brief window

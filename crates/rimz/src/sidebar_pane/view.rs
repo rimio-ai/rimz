@@ -5,7 +5,10 @@ use std::ops::Range;
 
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
-use crate::{SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, WorktreePrState};
+use crate::{
+    store::snapshot::SidebarRow, store::snapshot::SidebarSnapshot,
+    store::snapshot::SidebarWorktreeGroup, store::snapshot::WorktreePrState,
+};
 
 pub(crate) use crate::sidebar::body_filter::BodyFilter;
 
@@ -314,7 +317,9 @@ mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
     use crate::sidebar::test_support::pane;
-    use crate::{AgentCard, RowCard, SidebarWorktreeKind};
+    use crate::{
+        store::snapshot::AgentCard, store::snapshot::RowCard, store::snapshot::SidebarWorktreeKind,
+    };
     use jiff::Timestamp;
 
     #[test]
@@ -513,7 +518,7 @@ mod tests {
     fn process_row(id: &str) -> SidebarRow {
         let mut row = agent_row(id, AgentStatus::Idle);
         row.name = "zsh".to_owned();
-        row.card = RowCard::Process(crate::ProcessCard::default());
+        row.card = RowCard::Process(crate::store::snapshot::ProcessCard::default());
         row
     }
 

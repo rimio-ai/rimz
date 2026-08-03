@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::store::workspace_record;
 use rimz::workspace::WorkspaceResolver;
-use rimz::{ResolvedWorkspace, RuntimePaths, SidebarSnapshot, StatePaths, Store};
+use rimz::{ResolvedWorkspace, RuntimePaths, StatePaths, Store, store::snapshot::SidebarSnapshot};
 
 use super::GlobalFlags;
 

@@ -224,7 +224,7 @@ fn resolve_fork_source(
     store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,
     runtime: &rimz::RuntimePaths,
-    snapshot: &rimz::SidebarSnapshot,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
     reference: &str,
 ) -> Result<AgentState> {
     let current_channel = crate::cli::current_channel(workspace);

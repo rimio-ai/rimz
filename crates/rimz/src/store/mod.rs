@@ -1,5 +1,6 @@
-//! Durable workspace state — store paths, atomic helpers, event log, and
-//! snapshots.
+//! Durable workspace state — the [`Store`] handle, core errors, paths, and
+//! lock-free reads. Snapshot schema lives under [`snapshot`]; mutation
+//! vocabulary and write choreography live under [`writer`].
 //!
 //! Module split (the local contract lives in `AGENTS.md` beside this file):
 //!
@@ -14,7 +15,7 @@
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
 //!   active_time.rs   grace-capped per-session working-time accumulator
 //!   session_death.rs shared store-provable session death rules
-//!   writer.rs       write choreography façade: lock → write → append → wake → publish
+//!   writer.rs       mutation vocabulary + choreography: lock → write → append → wake → publish
 //!   writer/         debounce, lifecycle policy, publish, queue, reap, reset
 //!   gc.rs           maintenance façade
 //!   gc/             runtime collection and dead-workspace pruning
@@ -55,44 +56,17 @@ pub mod subagent_context;
 pub mod wakeup;
 pub mod workspace_record;
 
-mod writer;
+pub mod writer;
 
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::agents::LaunchParams;
-use crate::ids::{AgentKind, AgentSessionId, RunId, WorkspaceId};
 use crate::store::event::EventEnvelope;
+use crate::store::snapshot::SidebarSnapshot;
 
 pub use crate::store::paths::{RuntimePaths, StatePaths};
 pub use crate::store::runtime::{RuntimeProjection, RuntimeScope};
-pub use crate::store::snapshot::{
-    AgentCard, DailyBudgetView, PaneAgent, PresenceSample, ProcessCard, ProcessState,
-    RemoteControlBadge, RowCallSplit, RowCard, SidebarCohortEffort, SidebarLinkFreshness,
-    SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel, SidebarRow,
-    SidebarSeatEffort, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
-    SidebarWorktreeKind, TruthNotice, WorktreePrCi, WorktreePrState, WorktreeTrunkSync,
-    actionable_unread_count, lead_unread_row, triage_key,
-};
-pub use crate::store::workspace_record::WorkspaceRecord;
-pub(crate) use crate::store::writer::DeliverySweepUpdate;
-pub use crate::store::writer::{
-    AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES, DeliveryAck,
-    DeliveryFailureDisposition, EditOutcome, MessageEdit,
-};
-
-/// Terminal audit-only message outcome for a target that never resolved to a
-/// durable receiver card.
-pub struct UnresolvedMessage<'a> {
-    pub workspace_id: WorkspaceId,
-    pub session_name: &'a str,
-    pub address: &'a str,
-    pub channel: Option<&'a str>,
-    pub sender: &'a crate::message::MessageSender,
-    pub text_len: usize,
-    pub reason: &'a str,
-}
 
 /// High-level handle to a workspace's durable state. Cheap to clone — the
 /// inner state lives behind an `Arc`. Reads here are lock-free; every
@@ -139,89 +113,6 @@ pub enum StoreErr {
 }
 
 pub type Result<T> = std::result::Result<T, StoreErr>;
-
-#[derive(Clone, Debug)]
-pub struct WorkspaceRewriteOutcome {
-    pub workspace_id: WorkspaceId,
-    pub messages_rewritten: usize,
-    pub events_rewritten: usize,
-}
-
-#[derive(Clone, Debug)]
-pub struct EventLogRotationOutcome {
-    pub rotation: event_log::RotationOutcome,
-    pub pruned: atomic::PruneOutcome,
-    pub carryover_agents: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AgentLaunchName {
-    Mint,
-    Soft(String),
-    Explicit(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentLaunchRequest {
-    pub kind: AgentKind,
-    pub agent_id: AgentSessionId,
-    pub name: AgentLaunchName,
-    pub launch: LaunchParams,
-    pub run_id: Option<RunId>,
-    pub prompt: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentLaunchIdentity {
-    pub kind: AgentKind,
-    pub agent_id: AgentSessionId,
-    pub name: String,
-    pub name_explicit: bool,
-    pub launch: LaunchParams,
-    pub run_id: Option<RunId>,
-    pub prompt: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentLaunchScope {
-    pub session_name: String,
-    pub cwd: PathBuf,
-    pub worktree_name: Option<String>,
-    pub channel: Option<String>,
-    pub description: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentLaunchBatch {
-    identities: Vec<AgentLaunchIdentity>,
-    scope: AgentLaunchScope,
-}
-
-impl AgentLaunchBatch {
-    pub fn identities(&self) -> &[AgentLaunchIdentity] {
-        &self.identities
-    }
-
-    pub fn single_identity(&self) -> Result<&AgentLaunchIdentity> {
-        match self.identities.as_slice() {
-            [identity] => Ok(identity),
-            identities => Err(StoreErr::AgentLaunchIdentity(format!(
-                "expected one agent launch identity, got {}",
-                identities.len()
-            ))),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ResetRecordsOutcome {
-    pub runs_canceled: usize,
-    pub state_entries_removed: usize,
-    pub runtime_removed: bool,
-    pub rotation: event_log::RotationOutcome,
-    pub carryover_agents: usize,
-    pub hard: bool,
-}
 
 impl Store {
     pub fn open(paths: StatePaths, runtime: RuntimePaths) -> Result<Self> {
@@ -317,6 +208,7 @@ mod tests {
     use super::*;
     use crate::agents::AgentLifecycleObservation;
     use crate::agents::lifecycle::LifecycleSignal;
+    use crate::ids::{AgentSessionId, WorkspaceId};
 
     #[test]
     fn open_existing_missing_root_creates_nothing() {

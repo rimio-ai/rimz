@@ -362,7 +362,7 @@ fn seed_subagent_candidate(store: &rimz::Store, agent_id: &str, parent_id: &str)
     candidate.worktree_path = Some("/tmp/hooks-test".to_owned());
     candidate.transcript_path = Some(format!("/tmp/{agent_id}.jsonl"));
     store
-        .append_agent_lifecycle(rimz::store::AgentLifecycleIntent {
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
             session_name: "hooks-test",
             agent_kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
             event_name: "seed-candidate",
@@ -945,7 +945,7 @@ fn pi_bridge_adoption_preserves_parented_and_foreign_pane_roots() {
     parented.task = Some("existing child".to_owned());
     parented.pane_id = Some(id("terminal_parent"));
     parented_store
-        .append_agent_lifecycle(rimz::store::AgentLifecycleIntent {
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
             session_name: "hooks-test",
             agent_kind: rimz::ids::AgentKind::new_unchecked("pi"),
             event_name: "seed-parented",
@@ -1093,7 +1093,7 @@ fn antigravity_parent_stop_rematerializes_a_reaped_child() {
         LifecycleSignal::Ended,
     );
     store
-        .append_agent_lifecycle(rimz::store::AgentLifecycleIntent {
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
             session_name: "hooks-test",
             agent_kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
             event_name: "ReapedSuperseded",

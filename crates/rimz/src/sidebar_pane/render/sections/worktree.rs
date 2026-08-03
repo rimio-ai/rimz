@@ -9,8 +9,9 @@ use std::collections::HashSet;
 
 use crate::config::GlyphRole;
 use crate::{
-    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrCi, WorktreePrState,
-    WorktreeTrunkSync,
+    store::snapshot::SidebarStatusCount, store::snapshot::SidebarWorktreeGroup,
+    store::snapshot::SidebarWorktreeKind, store::snapshot::WorktreePrCi,
+    store::snapshot::WorktreePrState, store::snapshot::WorktreeTrunkSync,
 };
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};

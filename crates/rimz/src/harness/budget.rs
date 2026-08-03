@@ -23,8 +23,8 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::config::MachineConfig;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
-use crate::store::SidebarSnapshot;
 use crate::store::atomic::write_temp_then_rename_cache;
+use crate::store::snapshot::SidebarSnapshot;
 
 pub use crate::harness::auto_continue::clear_budget_park;
 
@@ -1399,7 +1399,7 @@ pub fn project_budget_views(
         .effective_cap_usd(&fleet, config)
         .map(|cap_usd| {
             let spend_usd = snapshot.fleet_day_spend_usd.unwrap_or_default();
-            crate::DailyBudgetView {
+            crate::store::snapshot::DailyBudgetView {
                 cap_usd,
                 spend_usd,
                 parked: fleet.parked.is_some() && spend_usd >= cap_usd,
@@ -1411,7 +1411,7 @@ pub fn project_budget_views(
         let ledger = scope.read_ledger(runtime);
         panel.day_budget = scope.effective_cap_usd(&ledger, config).map(|cap_usd| {
             let spend_usd = provider_day_usd(provider, cutoff, &panel.kind).unwrap_or_default();
-            crate::DailyBudgetView {
+            crate::store::snapshot::DailyBudgetView {
                 cap_usd,
                 spend_usd,
                 parked: ledger.parked.is_some() && spend_usd >= cap_usd,

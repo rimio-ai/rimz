@@ -388,7 +388,7 @@ fn provider_reset_marker_greens_only_mature_underspend() {
 #[test]
 fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent() {
     let theme = Theme::fixed(false);
-    let labels = |panel: &crate::SidebarProviderPanel| -> Vec<String> {
+    let labels = |panel: &crate::store::snapshot::SidebarProviderPanel| -> Vec<String> {
         metered_bar_rows(&theme, panel)
             .into_iter()
             .map(|line| {

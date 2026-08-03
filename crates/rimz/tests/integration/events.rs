@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::common::Env;
 use rimz::agents::{AgentLifecycleObservation, LifecycleEvent, LifecycleSignal};
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::store::AgentLifecycleIntent;
+use rimz::store::writer::AgentLifecycleIntent;
 
 fn append(env: &Env, signal: LifecycleSignal) {
     let store = env.store();

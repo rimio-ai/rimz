@@ -30,7 +30,10 @@ use rimz::sidebar::produce::{
 };
 use rimz::store::workspace_record;
 use rimz::workspace::WorkspaceResolver;
-use rimz::{PaneAgent, RuntimePaths, SidebarRow, SidebarSnapshot, StatePaths};
+use rimz::{
+    RuntimePaths, StatePaths, store::snapshot::PaneAgent, store::snapshot::SidebarRow,
+    store::snapshot::SidebarSnapshot,
+};
 
 #[cfg(feature = "testkit")]
 mod fixture;
@@ -818,7 +821,7 @@ fn rollup_snapshot_fallback(
     .map_err(Into::into)
 }
 
-fn emit_snapshot(snapshot: &rimz::SidebarSnapshot, json: bool) -> Result<()> {
+fn emit_snapshot(snapshot: &SidebarSnapshot, json: bool) -> Result<()> {
     if json {
         render::json_pretty(snapshot)
     } else {
@@ -852,7 +855,7 @@ fn emit_snapshot(snapshot: &rimz::SidebarSnapshot, json: bool) -> Result<()> {
     }
 }
 
-fn status_tally(snapshot: &rimz::SidebarSnapshot, status: rimz::agents::AgentStatus) -> usize {
+fn status_tally(snapshot: &SidebarSnapshot, status: rimz::agents::AgentStatus) -> usize {
     snapshot
         .worktree_groups
         .iter()
@@ -1031,10 +1034,7 @@ fn gallery_render_columns(
 }
 
 #[cfg(feature = "testkit")]
-fn gallery_selected_index(
-    snapshot: &rimz::SidebarSnapshot,
-    selector: fn(&rimz::SidebarRow) -> bool,
-) -> usize {
+fn gallery_selected_index(snapshot: &SidebarSnapshot, selector: fn(&SidebarRow) -> bool) -> usize {
     snapshot
         .worktree_groups
         .iter()
@@ -1044,23 +1044,23 @@ fn gallery_selected_index(
 }
 
 #[cfg(feature = "testkit")]
-type GallerySelector = fn(&rimz::SidebarRow) -> bool;
+type GallerySelector = fn(&SidebarRow) -> bool;
 
 #[cfg(feature = "testkit")]
 fn gallery_fixture_columns() -> [(SidebarFixtureState, GallerySelector); 4] {
     [
         (
             SidebarFixtureState::Focus,
-            (|row: &rimz::SidebarRow| row.id == "agent:claude:planner") as GallerySelector,
+            (|row: &SidebarRow| row.id == "agent:claude:planner") as GallerySelector,
         ),
         (
             SidebarFixtureState::Cockpit,
-            (|row: &rimz::SidebarRow| row.id == "agent:codex:pricing") as GallerySelector,
+            (|row: &SidebarRow| row.id == "agent:codex:pricing") as GallerySelector,
         ),
-        (SidebarFixtureState::Reach, |row: &rimz::SidebarRow| {
+        (SidebarFixtureState::Reach, |row: &SidebarRow| {
             row.id == "agent:pi:reach"
         }),
-        (SidebarFixtureState::Economy, |row: &rimz::SidebarRow| {
+        (SidebarFixtureState::Economy, |row: &SidebarRow| {
             row.id == "agent:opencode:credits"
         }),
     ]

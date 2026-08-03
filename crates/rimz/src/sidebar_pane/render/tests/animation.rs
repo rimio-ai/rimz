@@ -306,7 +306,7 @@ fn selected_pet_action_follows_the_focused_card() {
         .as_agent_mut()
         .expect("agent row")
         .sub_agents
-        .push(crate::SidebarSubAgent {
+        .push(crate::store::snapshot::SidebarSubAgent {
             id: "child-1".to_owned(),
             name: "Explore".to_owned(),
             status: AgentStatus::Running,
@@ -344,7 +344,7 @@ fn selected_pet_action_follows_process_cards() {
         Some("main"),
         None,
     )]);
-    snapshot.worktree_groups[0].rows = vec![crate::SidebarRow {
+    snapshot.worktree_groups[0].rows = vec![crate::store::snapshot::SidebarRow {
         id: "process-1".to_owned(),
         name: "cargo".to_owned(),
         pane: None,
@@ -356,9 +356,9 @@ fn selected_pet_action_follows_process_cards() {
         archived: false,
         attention_score: 0,
         last_activity: fixed_now(),
-        card: crate::RowCard::Process(crate::ProcessCard {
-            state: crate::ProcessState::Busy,
-            ..crate::ProcessCard::default()
+        card: crate::store::snapshot::RowCard::Process(crate::store::snapshot::ProcessCard {
+            state: crate::store::snapshot::ProcessState::Busy,
+            ..crate::store::snapshot::ProcessCard::default()
         }),
     }];
 
@@ -369,7 +369,7 @@ fn selected_pet_action_follows_process_cards() {
     snapshot.worktree_groups[0].rows[0]
         .as_process_mut()
         .expect("process row")
-        .state = crate::ProcessState::Stuck;
+        .state = crate::store::snapshot::ProcessState::Stuck;
     assert_eq!(
         selected_pet_action(&snapshot, &UiState::default()),
         crate::sidebar_pane::pets::PetAction::Failed

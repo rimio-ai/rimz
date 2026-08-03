@@ -1,6 +1,10 @@
 use crate::agents::AgentStatus;
 use crate::config::{GlyphRole, SidebarKeys};
-use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarSnapshot};
+use crate::{
+    store::snapshot::SidebarLinkFreshness, store::snapshot::SidebarLinkHealth,
+    store::snapshot::SidebarPresence, store::snapshot::SidebarSnapshot,
+    store::snapshot::TruthNotice,
+};
 use jiff::Timestamp;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -113,7 +117,7 @@ pub(super) fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<L
 
 pub(super) fn truth_notice_lines(
     theme: &Theme,
-    notice: &crate::TruthNotice,
+    notice: &TruthNotice,
     now: Timestamp,
 ) -> Vec<Line<'static>> {
     let since_ms = notice.since_ms.min(i64::MAX as u64) as i64;

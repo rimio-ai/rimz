@@ -650,7 +650,7 @@ fn resolve_run_pane_from_snapshot(
 }
 
 pub(super) fn resolve_run_pane_in_snapshot(
-    snapshot: &rimz::SidebarSnapshot,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
     session_name: &str,
     record: &RunRecord,
 ) -> Option<ResolvedRunPane> {

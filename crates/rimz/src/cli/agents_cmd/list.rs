@@ -6,6 +6,12 @@ use super::report::{
 };
 use crate::cli::render;
 use rimz::config::{GlyphRole, ThemeConfig};
+#[cfg(test)]
+use rimz::store::snapshot::{AgentCard, PaneAgent, RowCard, SidebarRow};
+use rimz::store::snapshot::{
+    AgentWorktreeGroup, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrCi,
+    WorktreePrState, group_live_agents_by_worktree,
+};
 use rimz::theme::theme_glyphs;
 
 pub(super) fn list_agents(
@@ -55,7 +61,7 @@ pub(super) fn list_agents(
     Ok(())
 }
 
-pub(super) fn agent_pr(snapshot: &rimz::SidebarSnapshot, agent: &AgentState) -> Option<PrInfo> {
+pub(super) fn agent_pr(snapshot: &SidebarSnapshot, agent: &AgentState) -> Option<PrInfo> {
     snapshot
         .worktree_groups
         .iter()
@@ -69,21 +75,21 @@ pub(super) fn agent_pr(snapshot: &rimz::SidebarSnapshot, agent: &AgentState) -> 
 }
 
 pub(super) fn group_pr<'a>(
-    snapshot: &'a rimz::SidebarSnapshot,
+    snapshot: &'a SidebarSnapshot,
     key: &str,
-) -> Option<&'a rimz::SidebarWorktreeGroup> {
+) -> Option<&'a SidebarWorktreeGroup> {
     snapshot
         .worktree_groups
         .iter()
         .find(|group| group.key == key)
 }
 
-pub(super) fn pr_info(group: &rimz::SidebarWorktreeGroup) -> Option<PrInfo> {
+pub(super) fn pr_info(group: &SidebarWorktreeGroup) -> Option<PrInfo> {
     let state = group.pr_state?;
     Some(PrInfo {
         number: group.pr_number,
         state,
-        ci: (state == rimz::WorktreePrState::Open)
+        ci: (state == WorktreePrState::Open)
             .then_some(group.pr_ci)
             .flatten(),
     })
@@ -91,13 +97,13 @@ pub(super) fn pr_info(group: &rimz::SidebarWorktreeGroup) -> Option<PrInfo> {
 
 pub(crate) fn render_agents_table(
     w: &mut impl std::io::Write,
-    snapshot: &rimz::SidebarSnapshot,
+    snapshot: &SidebarSnapshot,
     agents: &[&AgentState],
     now: jiff::Timestamp,
     max_width: usize,
     theme: &ThemeConfig,
 ) -> std::io::Result<()> {
-    let groups = rimz::store::snapshot::group_live_agents_by_worktree(agents, snapshot);
+    let groups = group_live_agents_by_worktree(agents, snapshot);
     let ordered_agents: Vec<&AgentState> = groups
         .iter()
         .flat_map(|group| group.agents.iter().copied())
@@ -132,26 +138,28 @@ pub(crate) fn render_agents_table(
 }
 
 fn group_header_cells(
-    group: &rimz::store::snapshot::AgentWorktreeGroup<'_>,
-    snapshot: &rimz::SidebarSnapshot,
+    group: &AgentWorktreeGroup<'_>,
+    snapshot: &SidebarSnapshot,
     glyph: &impl Fn(GlyphRole) -> String,
 ) -> Vec<render::Cell> {
-    if group.kind == rimz::SidebarWorktreeKind::External {
+    if group.kind == SidebarWorktreeKind::External {
         return vec![render::cell("external").fg(render::palette::faint())];
     }
 
     let label = match group.kind {
-        rimz::SidebarWorktreeKind::Worktree => {
+        SidebarWorktreeKind::Worktree => {
             format!("{} {}", glyph(GlyphRole::WorktreeBranch), group.label)
         }
-        rimz::SidebarWorktreeKind::Channel if channel_group_is_worktree_backed(group, snapshot) => {
+        SidebarWorktreeKind::Channel if channel_group_is_worktree_backed(group, snapshot) => {
             format!("{} {}", glyph(GlyphRole::WorktreeBranch), group.label)
         }
-        rimz::SidebarWorktreeKind::Channel => {
+        SidebarWorktreeKind::Channel => {
             format!("{} {}", glyph(GlyphRole::ChannelHash), group.label)
         }
-        rimz::SidebarWorktreeKind::Root => group.label.clone(),
-        rimz::SidebarWorktreeKind::External => unreachable!("external returned above"),
+        SidebarWorktreeKind::Root => group.label.clone(),
+        SidebarWorktreeKind::External => {
+            unreachable!("external returned above")
+        }
     };
     let mut cells = vec![render::cell(label).fg(render::palette::header())];
     if let Some(team) = group.team()
@@ -166,20 +174,14 @@ fn group_header_cells(
         if (pr.pr_state.is_none()
             || matches!(
                 pr.pr_state,
-                Some(rimz::WorktreePrState::Open | rimz::WorktreePrState::Merged)
+                Some(WorktreePrState::Open | WorktreePrState::Merged)
             ))
             && let Some(ci) = pr.pr_ci
         {
             let (role, style) = match ci {
-                rimz::WorktreePrCi::Passing => {
-                    (GlyphRole::WorktreeCiPassing, render::palette::good())
-                }
-                rimz::WorktreePrCi::Pending => {
-                    (GlyphRole::WorktreeCiPending, render::palette::warn())
-                }
-                rimz::WorktreePrCi::Failing => {
-                    (GlyphRole::WorktreeCiFailing, render::palette::alarm())
-                }
+                WorktreePrCi::Passing => (GlyphRole::WorktreeCiPassing, render::palette::good()),
+                WorktreePrCi::Pending => (GlyphRole::WorktreeCiPending, render::palette::warn()),
+                WorktreePrCi::Failing => (GlyphRole::WorktreeCiFailing, render::palette::alarm()),
             };
             cells.push(render::cell(glyph(role)).fg(style));
         }
@@ -188,8 +190,8 @@ fn group_header_cells(
 }
 
 fn channel_group_is_worktree_backed(
-    group: &rimz::store::snapshot::AgentWorktreeGroup<'_>,
-    snapshot: &rimz::SidebarSnapshot,
+    group: &AgentWorktreeGroup<'_>,
+    snapshot: &SidebarSnapshot,
 ) -> bool {
     let Some(project_root) = snapshot.project_root.as_deref() else {
         return false;
@@ -280,7 +282,7 @@ mod tests {
 
     #[test]
     fn pane_bound_roots_keeps_only_live_handle_peers() {
-        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let mut snapshot = SidebarSnapshot::build_with_agents(
             rimz::WorkspaceId::parse("ws_000000000000000000000000").expect("workspace id"),
             vec![
                 test_agent("sess-one"),
@@ -292,7 +294,7 @@ mod tests {
         snapshot.agent_panes = vec![
             test_pane_agent("sess-one", "terminal_1"),
             test_pane_agent("sess-two", "terminal_2"),
-            rimz::PaneAgent {
+            PaneAgent {
                 kind: AgentKind::new_unchecked("codex"),
                 kind_ordinal: None,
                 name: None,
@@ -322,7 +324,7 @@ mod tests {
         live.role = Some("coder".to_owned());
         let mut historical = test_agent("sess-historical");
         historical.role = Some("coder".to_owned());
-        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let mut snapshot = SidebarSnapshot::build_with_agents(
             rimz::WorkspaceId::parse("ws_000000000000000000000000").expect("workspace id"),
             vec![live, historical],
             jiff::Timestamp::UNIX_EPOCH,
@@ -385,7 +387,7 @@ mod tests {
         plain.channel = Some("docs".to_owned());
         plain.worktree_path = Some("/repo/main".to_owned());
         plain.worktree_branch = Some("main".to_owned());
-        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let mut snapshot = SidebarSnapshot::build_with_agents(
             rimz::WorkspaceId::from_project_root(Path::new("/repo/main")),
             vec![linked, plain],
             now,
@@ -393,7 +395,7 @@ mod tests {
         .with_project_root(Some(PathBuf::from("/repo/main")));
         let refs = snapshot.agents.iter().collect::<Vec<_>>();
         let (linked_key, linked_label, linked_kind) = {
-            let group = rimz::store::snapshot::group_live_agents_by_worktree(&refs, &snapshot)
+            let group = group_live_agents_by_worktree(&refs, &snapshot)
                 .into_iter()
                 .find(|group| group.label == "feature")
                 .unwrap();
@@ -444,12 +446,12 @@ mod tests {
         let mut stale = test_agent("stale");
         stale.worktree_path = Some("/repo/worktree".to_owned());
         stale.worktree_branch = Some("other".to_owned());
-        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let mut snapshot = SidebarSnapshot::build_with_agents(
             rimz::WorkspaceId::from_project_root(Path::new("/repo/main")),
             vec![linked, stale],
             jiff::Timestamp::UNIX_EPOCH,
         );
-        let mut group: rimz::SidebarWorktreeGroup = serde_json::from_value(serde_json::json!({
+        let mut group: SidebarWorktreeGroup = serde_json::from_value(serde_json::json!({
             "key": "/repo/worktree",
             "label": "feature",
             "kind": "worktree",
@@ -460,7 +462,7 @@ mod tests {
             "pr_ci": "passing"
         }))
         .unwrap();
-        group.rows.push(rimz::SidebarRow {
+        group.rows.push(SidebarRow {
             id: "linked".to_owned(),
             name: "codex".to_owned(),
             pane: None,
@@ -472,9 +474,9 @@ mod tests {
             archived: false,
             attention_score: 0,
             last_activity: jiff::Timestamp::UNIX_EPOCH,
-            card: rimz::RowCard::Agent(Box::new(rimz::AgentCard {
+            card: RowCard::Agent(Box::new(AgentCard {
                 status: rimz::agents::AgentStatus::Idle,
-                ..rimz::AgentCard::default()
+                ..AgentCard::default()
             })),
         });
         snapshot.worktree_groups.push(group);
@@ -483,8 +485,8 @@ mod tests {
             agent_pr(&snapshot, &snapshot.agents[0]),
             Some(PrInfo {
                 number: Some(91),
-                state: rimz::WorktreePrState::Open,
-                ci: Some(rimz::WorktreePrCi::Passing),
+                state: WorktreePrState::Open,
+                ci: Some(WorktreePrCi::Passing),
             })
         );
         assert_eq!(agent_pr(&snapshot, &snapshot.agents[1]), None);
@@ -494,8 +496,8 @@ mod tests {
         rimz::testkit::agent_state("codex", id, jiff::Timestamp::UNIX_EPOCH)
     }
 
-    fn test_pane_agent(agent_id: &str, pane: &str) -> rimz::PaneAgent {
-        rimz::PaneAgent {
+    fn test_pane_agent(agent_id: &str, pane: &str) -> PaneAgent {
+        PaneAgent {
             kind: AgentKind::new_unchecked("codex"),
             kind_ordinal: None,
             name: None,

@@ -78,7 +78,7 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
             .record_message_delivery_failures(
                 std::slice::from_ref(&message_id),
                 None,
-                rimz::store::DeliveryFailureDisposition::Retry,
+                rimz::store::writer::DeliveryFailureDisposition::Retry,
                 &failure_reason,
                 &workspace.session_name,
             )

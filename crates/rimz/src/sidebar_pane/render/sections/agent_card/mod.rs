@@ -7,7 +7,7 @@
 use crate::agents::{AgentContext, AgentCurrentUsage, CacheHealth, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::{AnimationRole, ContextMeterConfig, GlyphRole};
-use crate::{AgentCard, SidebarRow, SidebarSubAgent, SidebarWorktreeGroup};
+use crate::store::snapshot::{AgentCard, SidebarRow, SidebarSubAgent, SidebarWorktreeGroup};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 

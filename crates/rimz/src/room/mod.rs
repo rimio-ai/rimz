@@ -19,7 +19,7 @@ use crate::mux::{
 use crate::remote_control::ReadinessSnapshot;
 use crate::store::workspace_record;
 use crate::workspace::ResolvedWorkspace;
-use crate::{RuntimePaths, StatePaths, Store, WorkspaceRecord};
+use crate::{RuntimePaths, StatePaths, Store, store::workspace_record::WorkspaceRecord};
 
 pub use birth::{
     AttendedRecovery, BackgroundViewBirth, BirthOutcome, NormalBirth, NormalRebirth,

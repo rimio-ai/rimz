@@ -1,7 +1,7 @@
 use proptest::prelude::*;
 
 use crate::agents::AgentStatus;
-use crate::{SidebarSubAgent, SidebarWorktreeKind};
+use crate::{store::snapshot::SidebarSubAgent, store::snapshot::SidebarWorktreeKind};
 
 use super::*;
 
@@ -57,7 +57,7 @@ fn build_adversarial_snapshot(
     display_name: String,
     rows: Vec<RowSpec>,
     provider: Option<ProviderSpec>,
-) -> crate::SidebarSnapshot {
+) -> crate::store::snapshot::SidebarSnapshot {
     let agents = rows
         .iter()
         .enumerate()

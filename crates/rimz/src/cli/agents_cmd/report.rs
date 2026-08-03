@@ -10,6 +10,12 @@ use rimz::agents::{
 };
 use rimz::harness::run::PermissionMode;
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
+use rimz::store::snapshot::{
+    AgentCard, SidebarRow, SidebarSnapshot, WorktreePrCi, WorktreePrState,
+    group_live_agents_by_worktree,
+};
+#[cfg(test)]
+use rimz::store::snapshot::{PaneAgent, RowCard, SidebarSubAgent};
 
 pub(super) const AGENT_REPORT_SCHEMA: u8 = 1;
 
@@ -124,8 +130,8 @@ pub(super) struct PlacementReport {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub(super) struct PrInfo {
     pub number: Option<u64>,
-    pub state: rimz::WorktreePrState,
-    pub ci: Option<rimz::WorktreePrCi>,
+    pub state: WorktreePrState,
+    pub ci: Option<WorktreePrCi>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -175,7 +181,7 @@ impl SelfIdentity {
         }
     }
 
-    pub fn resolve(&self, snapshot: &rimz::SidebarSnapshot) -> Option<AgentSessionId> {
+    pub fn resolve(&self, snapshot: &SidebarSnapshot) -> Option<AgentSessionId> {
         if let Some(pane) = self.pane.as_ref()
             && let Some(agent_id) = snapshot
                 .agent_panes
@@ -205,14 +211,14 @@ impl SelfIdentity {
 }
 
 pub(super) fn build_list_report(
-    snapshot: &rimz::SidebarSnapshot,
+    snapshot: &SidebarSnapshot,
     agents: &[&AgentState],
     now: Timestamp,
     runtime: Option<&rimz::RuntimePaths>,
 ) -> AgentListReport {
     let identity = SelfIdentity::from_env();
     let me = identity.resolve(snapshot);
-    let groups = rimz::store::snapshot::group_live_agents_by_worktree(agents, snapshot);
+    let groups = group_live_agents_by_worktree(agents, snapshot);
     let peers: Vec<&AgentState> = groups
         .iter()
         .flat_map(|group| group.agents.iter().copied())
@@ -247,14 +253,14 @@ pub(super) fn build_list_report(
 
 pub(super) fn build_entry(
     agent: &AgentState,
-    row: Option<&rimz::SidebarRow>,
+    row: Option<&SidebarRow>,
     pr: Option<PrInfo>,
     peers: &[&AgentState],
     me: Option<&AgentSessionId>,
     now: Timestamp,
     overrides: ReportOverrides<'_>,
 ) -> AgentReportEntry {
-    let card = row.and_then(rimz::SidebarRow::as_agent);
+    let card = row.and_then(SidebarRow::as_agent);
     let (status, phase) = card
         .map(|card| (card.status, card.phase))
         .unwrap_or_else(|| fallback_status_projection(agent));
@@ -262,12 +268,12 @@ pub(super) fn build_entry(
     let turn_error = displayed_error.map(|(class, state_label)| TurnErrorReport {
         class,
         label: row
-            .and_then(rimz::SidebarRow::turn_error_label)
+            .and_then(SidebarRow::turn_error_label)
             .or(state_label)
             .map(ToOwned::to_owned),
     });
     let description = card
-        .and_then(rimz::AgentCard::activity_description)
+        .and_then(AgentCard::activity_description)
         .and_then(single_line_description)
         .or_else(|| agent.activity_line());
     let model = model_report(agent);
@@ -420,9 +426,9 @@ fn budget_report(
 }
 
 pub(super) fn row_for_agent<'a>(
-    snapshot: &'a rimz::SidebarSnapshot,
+    snapshot: &'a SidebarSnapshot,
     agent: &AgentState,
-) -> Option<&'a rimz::SidebarRow> {
+) -> Option<&'a SidebarRow> {
     snapshot
         .rows()
         .find(|row| row.is_agent() && row.id == agent.agent_id.as_str())
@@ -526,8 +532,8 @@ mod tests {
         rimz::testkit::agent_state("codex", id, Timestamp::UNIX_EPOCH)
     }
 
-    fn pane_agent(id: &str, pane: &str) -> rimz::PaneAgent {
-        rimz::PaneAgent {
+    fn pane_agent(id: &str, pane: &str) -> PaneAgent {
+        PaneAgent {
             kind: AgentKind::new_unchecked("codex"),
             kind_ordinal: None,
             name: Some(format!("{id}-name")),
@@ -547,7 +553,7 @@ mod tests {
     fn pane_identity_wins_over_launch_identity() {
         let first = agent("first");
         let second = agent("second");
-        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let mut snapshot = SidebarSnapshot::build_with_agents(
             rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
             vec![first, second],
             Timestamp::UNIX_EPOCH,
@@ -576,7 +582,7 @@ mod tests {
         first.profile = Some("planner".to_owned());
         first.role = Some("lead".to_owned());
         let second = agent("second");
-        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let snapshot = SidebarSnapshot::build_with_agents(
             rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
             vec![first, second],
             Timestamp::UNIX_EPOCH,
@@ -612,7 +618,7 @@ mod tests {
             label: Some("boom".to_owned()),
         });
         state.context = Some(context);
-        let row = rimz::SidebarRow {
+        let row = SidebarRow {
             id: "status".to_owned(),
             name: "codex".to_owned(),
             pane: None,
@@ -624,10 +630,10 @@ mod tests {
             archived: false,
             attention_score: 0,
             last_activity: now,
-            card: rimz::RowCard::Agent(Box::new(rimz::AgentCard {
+            card: RowCard::Agent(Box::new(AgentCard {
                 status: AgentStatus::Paused,
                 phase: TurnPhase::Idle,
-                ..rimz::AgentCard::default()
+                ..AgentCard::default()
             })),
         };
         let peers = [&state];
@@ -695,7 +701,7 @@ mod tests {
             ..rimz::agents::AgentCost::default()
         });
         state.context = Some(context.clone());
-        let row = rimz::SidebarRow {
+        let row = SidebarRow {
             id: "full".to_owned(),
             name: "codex".to_owned(),
             pane: None,
@@ -707,13 +713,13 @@ mod tests {
             archived: false,
             attention_score: 42,
             last_activity: now,
-            card: rimz::RowCard::Agent(Box::new(rimz::AgentCard {
+            card: RowCard::Agent(Box::new(AgentCard {
                 status: AgentStatus::Running,
                 phase: TurnPhase::Acting,
                 context: Some(context),
                 context_severity: Some(ContextSeverity::Yellow),
                 estimated_active_secs: Some(754),
-                sub_agents: vec![rimz::SidebarSubAgent {
+                sub_agents: vec![SidebarSubAgent {
                     id: "child".to_owned(),
                     name: "review".to_owned(),
                     status: AgentStatus::Running,
@@ -729,7 +735,7 @@ mod tests {
                     last_activity: now,
                     registered_at: None,
                 }],
-                ..rimz::AgentCard::default()
+                ..AgentCard::default()
             })),
         };
         let peers = [&state];
@@ -738,8 +744,8 @@ mod tests {
             Some(&row),
             Some(PrInfo {
                 number: Some(91),
-                state: rimz::WorktreePrState::Open,
-                ci: Some(rimz::WorktreePrCi::Passing),
+                state: WorktreePrState::Open,
+                ci: Some(WorktreePrCi::Passing),
             }),
             &peers,
             Some(&state.agent_id),
@@ -853,7 +859,7 @@ mod tests {
         assert_eq!(entry.budget.cap.as_deref(), Some("$6.00/day"));
         assert_eq!(entry.budget.spent_usd, Some(5.25));
 
-        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        let snapshot = SidebarSnapshot::build_with_agents(
             rimz::WorkspaceId::from_project_root(dir.path()),
             vec![state.clone()],
             now,

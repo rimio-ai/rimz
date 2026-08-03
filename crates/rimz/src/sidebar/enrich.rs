@@ -14,11 +14,14 @@ use crate::harness::auto_continue::{self, ResumeMessage};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, ResumeOutcome, RuntimeReapInputs,
-    SidebarPresence,
+    SidebarPresence, SidebarProviderPanel, SidebarRow, SidebarWorktreeGroup, TruthNotice,
+    WorktreePrCi, WorktreePrState, compute_lazy_agent_pairings,
 };
 use crate::{
-    RemoteControlBadge, RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView,
-    SidebarSnapshot, SidebarWorktreeKind, WorktreeTrunkSync,
+    RuntimePaths, store::snapshot::RemoteControlBadge, store::snapshot::SidebarLinkFreshness,
+    store::snapshot::SidebarLinkHealth, store::snapshot::SidebarOwnView,
+    store::snapshot::SidebarSnapshot, store::snapshot::SidebarWorktreeKind,
+    store::snapshot::WorktreeTrunkSync,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -253,7 +256,7 @@ fn cached_git_backed_worktree_path<'a>(
     kind: SidebarWorktreeKind,
     label: &str,
     key: &'a str,
-    rows: &'a [crate::SidebarRow],
+    rows: &'a [SidebarRow],
     cache: &DiffStatsCache,
 ) -> Option<&'a str> {
     let path = worktree_group_path_fields(key, rows)?;
@@ -274,7 +277,7 @@ fn cached_git_backed_worktree_path<'a>(
 pub fn project_pr_state_map(
     snapshot: &mut SidebarSnapshot,
     states: &BTreeMap<String, PrLink>,
-    branch_ci: &BTreeMap<String, crate::WorktreePrCi>,
+    branch_ci: &BTreeMap<String, WorktreePrCi>,
     diff_cache: &DiffStatsCache,
 ) {
     for group in &mut snapshot.worktree_groups {
@@ -303,12 +306,7 @@ pub fn project_pr_state_map(
         let link = states.get(path);
         group.pr_state = link.map(|link| link.state);
         group.pr_ci = match link {
-            Some(link)
-                if matches!(
-                    link.state,
-                    crate::WorktreePrState::Open | crate::WorktreePrState::Merged
-                ) =>
-            {
+            Some(link) if matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged) => {
                 link.ci
             }
             Some(_) => None,
@@ -678,8 +676,7 @@ fn enrich_core(
         let metrics = frame.pane_metrics().collect::<Vec<_>>();
         let panes = frame.to_pane_refs();
         let admitted_panes = SidebarSnapshot::card_admitted_live_panes(panes.clone(), None);
-        let lazy_pairings =
-            crate::store::snapshot::compute_lazy_agent_pairings(&admitted_panes, &snapshot.agents);
+        let lazy_pairings = compute_lazy_agent_pairings(&admitted_panes, &snapshot.agents);
         if producing {
             log_lazy_pairing_ambiguities(&snapshot, runtime, &lazy_pairings);
         }
@@ -753,13 +750,13 @@ fn enrich_core(
     snapshot
 }
 
-fn truth_notice_for_frame(frame: &crate::sidebar::frame::PaneFrame) -> Option<crate::TruthNotice> {
+fn truth_notice_for_frame(frame: &crate::sidebar::frame::PaneFrame) -> Option<TruthNotice> {
     let since_ms = frame
         .carried_panes
         .iter()
         .map(|pane| pane.carried_since_ms)
         .min()?;
-    Some(crate::TruthNotice {
+    Some(TruthNotice {
         carried: frame.carried_panes.len(),
         since_ms,
         pane_ids: frame
@@ -906,7 +903,7 @@ pub fn provider_panels_from_caches(
     config: &crate::config::MachineConfig,
     accounts: BTreeMap<String, crate::agents::AgentAccount>,
     provider_spending: &crate::agents::spending::ProviderSpendingCache,
-) -> Vec<crate::SidebarProviderPanel> {
+) -> Vec<SidebarProviderPanel> {
     let now = Timestamp::now();
     let mut snapshot =
         SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), Vec::new(), now);
@@ -998,7 +995,7 @@ fn remote_control_badge(
 /// the row's gauge inputs, the one verdict the renderer's color ramp and any
 /// future signal emitter read. Process rows carry no context and stay `None`.
 pub(crate) fn stamp_context_severity(
-    groups: &mut [crate::SidebarWorktreeGroup],
+    groups: &mut [SidebarWorktreeGroup],
     bands: &crate::config::ContextMeterConfig,
 ) {
     for group in groups {

@@ -15,7 +15,6 @@ use super::GlobalFlags;
 use super::address;
 use super::send::{self, SendFlags, resolve_message};
 use crate::cli::render;
-use rimz::SidebarSnapshot;
 use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use rimz::message::deliver;
@@ -25,7 +24,8 @@ use rimz::message::{
     MessageStatus, WhenCondition, parse_schedule_at,
 };
 use rimz::store::event::{EventEnvelope, EventKind, MessageEventPayload};
-use rimz::store::{EditOutcome, MessageEdit};
+use rimz::store::snapshot::SidebarSnapshot;
+use rimz::store::{writer::EditOutcome, writer::MessageEdit};
 
 #[derive(Debug, Args)]
 pub struct MessageArgs {

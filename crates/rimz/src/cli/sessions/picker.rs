@@ -269,7 +269,7 @@ struct RoomStats {
 }
 
 impl RoomStats {
-    fn from_snapshot(snapshot: &rimz::SidebarSnapshot) -> Self {
+    fn from_snapshot(snapshot: &rimz::store::snapshot::SidebarSnapshot) -> Self {
         Self {
             agents: RoomAgents::from_snapshot(snapshot),
             headline: snapshot
@@ -287,7 +287,7 @@ impl RoomStats {
 }
 
 impl RoomAgents {
-    fn from_snapshot(snapshot: &rimz::SidebarSnapshot) -> Self {
+    fn from_snapshot(snapshot: &rimz::store::snapshot::SidebarSnapshot) -> Self {
         let live_agent_ids = snapshot
             .agent_panes
             .iter()

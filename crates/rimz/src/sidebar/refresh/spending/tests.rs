@@ -1,7 +1,7 @@
 use jiff::Timestamp;
 
 use super::codex_origin_overrides;
-use crate::SidebarSnapshot;
+use crate::store::snapshot::SidebarSnapshot;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::WorkspaceId;
 

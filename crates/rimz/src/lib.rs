@@ -72,13 +72,5 @@ pub use crate::ids::{
 };
 pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind};
 pub use crate::store::event::EventEnvelope;
-pub use crate::store::{
-    AgentCard, DailyBudgetView, PaneAgent, PresenceSample, ProcessCard, ProcessState,
-    RemoteControlBadge, RowCallSplit, RowCard, RuntimePaths, RuntimeProjection, RuntimeScope,
-    SidebarCohortEffort, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence,
-    SidebarProviderPanel, SidebarRow, SidebarSeatEffort, SidebarSnapshot, SidebarStatusCount,
-    SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths, Store, TruthNotice,
-    WorkspaceRecord, WorktreePrCi, WorktreePrState, WorktreeTrunkSync, actionable_unread_count,
-    lead_unread_row, triage_key,
-};
+pub use crate::store::{RuntimePaths, RuntimeProjection, RuntimeScope, StatePaths, Store};
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

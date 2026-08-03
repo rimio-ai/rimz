@@ -378,7 +378,7 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         .iter()
         .find(|pane| pane.pane_id == attached_pane)
         .expect("attached live pane");
-    let snapshot = rimz::SidebarSnapshot::build_with_agents(
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
         workspace.workspace_id.clone(),
         projection.agents.clone(),
         jiff::Timestamp::now(),

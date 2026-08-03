@@ -7,7 +7,7 @@
 
 use crate::ids::PaneId;
 use crate::store::parse_cache::StampedPath;
-use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
+use crate::{RuntimePaths, StatePaths, store::snapshot::SidebarSnapshot};
 
 use super::cache::read_snapshot_cache;
 use super::enrich::{FoldOpts, WorkspaceSnapshot, enrich_workspace, project_local};

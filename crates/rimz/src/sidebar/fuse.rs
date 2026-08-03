@@ -7,10 +7,10 @@
 
 use std::collections::HashSet;
 
-use crate::SidebarSnapshot;
 use crate::sidebar::events::EventStore;
 use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::focus_anchor::{FocusAnchor, FocusObservation, FocusPresentation};
+use crate::store::snapshot::SidebarSnapshot;
 
 pub fn fuse(
     pulled: &SidebarSnapshot,
@@ -231,8 +231,8 @@ mod tests {
 
     /// An own view whose working set is `working`, mirroring what
     /// `SidebarOwnView::from_frame` derives from the live pane frame.
-    fn own_view(working: &[&PaneId]) -> crate::SidebarOwnView {
-        crate::SidebarOwnView {
+    fn own_view(working: &[&PaneId]) -> crate::store::snapshot::SidebarOwnView {
+        crate::store::snapshot::SidebarOwnView {
             sibling_count: working.len(),
             working_pane_ids: working.iter().map(|&pane_id| pane_id.clone()).collect(),
             own_view_is_daemon: false,
@@ -371,7 +371,7 @@ mod tests {
     fn carried_pane_close_older_than_pull_deletes_the_card() {
         let carried = PaneId::from_parts(MuxName::Zellij, "terminal_1");
         let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 20);
-        snapshot.truth_degraded = Some(crate::TruthNotice {
+        snapshot.truth_degraded = Some(crate::store::snapshot::TruthNotice {
             carried: 1,
             since_ms: 10,
             pane_ids: vec![carried.clone()],

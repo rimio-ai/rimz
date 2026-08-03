@@ -222,7 +222,7 @@ mod tests {
     use super::*;
     use crate::agents::LifecycleSignal;
     use crate::ids::WorkspaceId;
-    use crate::store::{AgentLifecycleIntent, RuntimePaths, Store};
+    use crate::store::{RuntimePaths, Store, writer::AgentLifecycleIntent};
 
     fn fixture() -> (tempfile::TempDir, Store, StatePaths) {
         let dir = tempfile::tempdir().unwrap();

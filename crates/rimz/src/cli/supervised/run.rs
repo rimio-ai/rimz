@@ -14,7 +14,7 @@ use rimz::mux::{
     LayoutColumn, LayoutPanes, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
     own_pane_id,
 };
-use rimz::store::{AgentLaunchBatch, AgentLaunchName, AgentLaunchScope};
+use rimz::store::{writer::AgentLaunchBatch, writer::AgentLaunchName, writer::AgentLaunchScope};
 use std::borrow::Cow;
 use std::io::{IsTerminal as _, Write as _};
 use std::sync::Arc;

@@ -3,7 +3,7 @@
 use crate::ids::PaneId;
 use crate::pane::PaneRef;
 use crate::sidebar_pane::app::ServeConfig;
-use crate::{MuxName, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
+use crate::{MuxName, SidebarInstanceId, WorkspaceId, store::snapshot::SidebarSnapshot};
 use jiff::Timestamp;
 
 pub(crate) fn workspace() -> WorkspaceId {
@@ -58,17 +58,17 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
     let mut snapshot = snapshot(ws);
     snapshot.panes_produced_at_ms = Some(1);
     snapshot.pane_session_name = Some("rimz-test".to_owned());
-    snapshot.worktree_groups = vec![crate::SidebarWorktreeGroup {
+    snapshot.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,
-        kind: crate::SidebarWorktreeKind::Worktree,
+        kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
         status_counts: Vec::new(),
         rows: panes
             .into_iter()
-            .map(|pane| crate::SidebarRow {
+            .map(|pane| crate::store::snapshot::SidebarRow {
                 id: pane.pane_id.to_string(),
                 name: pane.command.clone().unwrap_or_else(|| "process".to_owned()),
                 pane: Some(pane),
@@ -80,7 +80,9 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
                 archived: false,
                 attention_score: 0,
                 last_activity: Timestamp::now(),
-                card: crate::RowCard::Process(crate::ProcessCard::default()),
+                card: crate::store::snapshot::RowCard::Process(
+                    crate::store::snapshot::ProcessCard::default(),
+                ),
             })
             .collect(),
         diff_added: None,
@@ -104,7 +106,7 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
 pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     let mut snapshot = snapshot(ws);
     snapshot.panes_produced_at_ms = Some(1);
-    let row = crate::SidebarRow {
+    let row = crate::store::snapshot::SidebarRow {
         id: "agent-1".to_owned(),
         name: "claude".to_owned(),
         pane: Some(pane("terminal_9", "tab_0", false)),
@@ -116,22 +118,22 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         archived: false,
         attention_score: 0,
         last_activity: Timestamp::now(),
-        card: crate::RowCard::Agent(Box::new(crate::AgentCard {
+        card: crate::store::snapshot::RowCard::Agent(Box::new(crate::store::snapshot::AgentCard {
             status: crate::agents::AgentStatus::Idle,
             phase: crate::agents::TurnPhase::Idle,
             task: Some("inspect auth".to_owned()),
             model: Some("Opus".to_owned()),
-            ..crate::AgentCard::default()
+            ..crate::store::snapshot::AgentCard::default()
         })),
     };
-    snapshot.worktree_groups = vec![crate::SidebarWorktreeGroup {
+    snapshot.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,
-        kind: crate::SidebarWorktreeKind::Worktree,
+        kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
-        status_counts: vec![crate::SidebarStatusCount {
+        status_counts: vec![crate::store::snapshot::SidebarStatusCount {
             status: crate::agents::AgentStatus::Idle,
             count: 1,
         }],

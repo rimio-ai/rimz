@@ -14,8 +14,9 @@ use crate::message::{
 };
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 
-use super::super::{Result, Store, UnresolvedMessage, message_store};
+use super::super::{Result, Store, message_store};
 use super::Txn;
+use super::UnresolvedMessage;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReconcileReport {

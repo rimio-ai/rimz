@@ -192,7 +192,7 @@ fn superseding_client_observation_leaves_scroll_untouched() {
     rig.state.ui.scroll_offset = 3;
 
     let mut snapshot = snapshot_with_focused_pane(&rig.ws, selected.clone());
-    snapshot.presence = Some(crate::SidebarPresence::Active);
+    snapshot.presence = Some(crate::store::snapshot::SidebarPresence::Active);
     snapshot.client_views = vec![crate::mux::ClientPaneView {
         client_id: crate::mux::MuxClientId::Zellij(7),
         pane_id: selected.clone(),

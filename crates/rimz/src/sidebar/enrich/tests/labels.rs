@@ -2,7 +2,7 @@
 
 use super::*;
 
-fn group(path: &str, label: &str) -> crate::SidebarWorktreeGroup {
+fn group(path: &str, label: &str) -> crate::store::snapshot::SidebarWorktreeGroup {
     let mut group = worktree_group(Path::new(path), Vec::new());
     group.label = label.to_owned();
     group

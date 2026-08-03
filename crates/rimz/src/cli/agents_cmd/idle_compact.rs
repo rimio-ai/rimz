@@ -154,7 +154,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         match store.record_message_delivery_failures(
             std::slice::from_ref(&message_id),
             None,
-            rimz::store::DeliveryFailureDisposition::Retry,
+            rimz::store::writer::DeliveryFailureDisposition::Retry,
             &reason,
             &workspace.session_name,
         ) {

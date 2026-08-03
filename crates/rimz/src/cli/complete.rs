@@ -11,7 +11,7 @@ use rimz::{RuntimePaths, StatePaths, Store};
 struct RoomContext {
     workspace: ResolvedWorkspace,
     store: Store,
-    snapshot: rimz::SidebarSnapshot,
+    snapshot: rimz::store::snapshot::SidebarSnapshot,
 }
 
 fn candidate(value: impl Into<std::ffi::OsString>, help: impl Into<String>) -> CompletionCandidate {

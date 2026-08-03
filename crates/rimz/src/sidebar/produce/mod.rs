@@ -37,7 +37,11 @@ use crate::sidebar::enrich::{
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::sidebar::refresh::refresh_heavy_lanes;
 use crate::sidebar::timing::unix_now_ms;
-use crate::{ResolvedWorkspace, RowCard, RuntimePaths, SidebarSnapshot, StatePaths, Store};
+use crate::store::snapshot::{PaneAgent, SnapshotErr};
+use crate::{
+    ResolvedWorkspace, RuntimePaths, StatePaths, Store, store::snapshot::RowCard,
+    store::snapshot::SidebarSnapshot,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProduceErr {
@@ -54,7 +58,7 @@ pub enum ProduceErr {
     FrameRejected(crate::diag::record::FrameRejectReason),
     /// The store rollup could not be read or projected.
     #[error(transparent)]
-    Rollup(#[from] crate::store::snapshot::SnapshotErr),
+    Rollup(#[from] SnapshotErr),
     /// State or runtime paths could not be prepared for the workspace.
     #[error(transparent)]
     Path(#[from] crate::store::paths::PathErr),
@@ -280,7 +284,7 @@ fn rollup_resolution_snapshot(store: &Store) -> Result<SidebarSnapshot> {
         .filter(|agent| !agent.agent_id.is_provisional())
         .filter_map(|agent| {
             let pane = agent.pane.as_ref()?;
-            Some(crate::PaneAgent {
+            Some(PaneAgent {
                 kind: agent.kind.clone(),
                 kind_ordinal: agent.kind_ordinal,
                 name: agent.name.clone(),

@@ -6,9 +6,8 @@ use jiff::Timestamp;
 
 use crate::harness::run::{RunRecord, RunStatus};
 
-use super::super::{
-    ResetRecordsOutcome, Result, Store, StoreErr, event_log, lock, run_store, snapshot,
-};
+use super::super::{Result, Store, StoreErr, event_log, lock, run_store, snapshot};
+use super::ResetRecordsOutcome;
 
 fn remove_file_if_exists(path: &Path) -> Result<bool> {
     match fs::remove_file(path) {

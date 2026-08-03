@@ -215,7 +215,7 @@ fn recipient_miss(
             | TargetErr::NoMatchInChannel { .. }
             | TargetErr::PaneUnbound { .. }
     ) {
-        store.record_unresolved_message(rimz::store::UnresolvedMessage {
+        store.record_unresolved_message(rimz::store::writer::UnresolvedMessage {
             workspace_id: workspace.workspace_id.clone(),
             session_name: &workspace.session_name,
             address: miss.target,

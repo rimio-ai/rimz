@@ -303,11 +303,11 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
     snapshot.providers = two_provider_panels();
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     snapshot.theme.pets.enabled = true;
-    snapshot.link = Some(crate::SidebarLinkHealth {
+    snapshot.link = Some(crate::store::snapshot::SidebarLinkHealth {
         rtt_ms: Some(210),
         miss_pct: 0,
         tier: crate::remote::link::LinkTier::Good,
-        freshness: crate::SidebarLinkFreshness::Fresh,
+        freshness: crate::store::snapshot::SidebarLinkFreshness::Fresh,
         sampled_at_ms: 1_700_000_000_000,
     });
     let cell = crate::sidebar_pane::pets::PetCell {

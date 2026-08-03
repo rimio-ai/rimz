@@ -3,7 +3,7 @@
 
 use crate::agents::AgentStatus;
 use crate::config::{AnimationRole, GlyphRole};
-use crate::{ProcessState, SidebarRow};
+use crate::{store::snapshot::ProcessState, store::snapshot::SidebarRow};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
