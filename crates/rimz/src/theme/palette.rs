@@ -7,7 +7,7 @@
 use crate::config::{AnimationColor, ColorDepth, PaletteRole, ThemeColor, ThemeConfig, xterm_rgb};
 
 use super::raw::RawPalette;
-use super::{Identity, Tone, oklab, scheme};
+use super::{Identity, Tone, oklab};
 
 /// Stops on the context **health** ramp, ordered calm → alarm:
 /// `[good, warn, caution, alarm]` — green → gold → orange → rose-red. Prepending
@@ -161,9 +161,6 @@ impl Palette {
     pub fn warn(&self) -> Tone {
         self.warn
     }
-    pub fn caution(&self) -> Tone {
-        self.caution
-    }
     pub fn alarm(&self) -> Tone {
         self.alarm
     }
@@ -194,23 +191,25 @@ impl Palette {
     pub fn selection_bg(&self) -> Tone {
         self.selection_bg
     }
-    pub fn expense(&self) -> Tone {
-        self.expense
-    }
 }
 
 fn raw_palette_for_theme(theme: &ThemeConfig) -> RawPalette {
     theme
         .colors
         .as_ref()
-        .and_then(|colors| scheme::inline_raw_palette(colors).ok())
+        .and_then(|colors| crate::config::parsed_inline_palette(colors).ok())
+        .map(RawPalette::from)
         .or_else(|| {
             theme
                 .scheme
                 .as_deref()
-                .and_then(scheme::explicit_raw_palette)
+                .and_then(crate::config::explicit_scheme)
+                .map(RawPalette::from)
         })
-        .unwrap_or_else(scheme::default_raw_palette)
+        .or_else(|| {
+            crate::config::explicit_scheme(crate::config::DEFAULT_SCHEME).map(RawPalette::from)
+        })
+        .unwrap_or(RawPalette::DEFAULT)
 }
 
 fn theme_color(color: ThemeColor, depth: ColorDepth, raw: &RawPalette) -> Tone {
@@ -242,7 +241,7 @@ fn rgb_color(rgb: (u8, u8, u8), depth: ColorDepth) -> Tone {
 /// across the `N - 1` segments, blending within the active one. Endpoints clamp,
 /// so `0.0` is the first stop and `1.0` the last. One blend regardless of stop
 /// count — the ramp can grow or shrink without touching the math.
-pub fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
+pub(crate) fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
     match ramp {
         [] => (0, 0, 0),
         [only] => *only,

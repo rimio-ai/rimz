@@ -12,23 +12,23 @@ pub(crate) mod oklab;
 mod palette;
 mod provider;
 mod raw;
-pub mod scheme;
 mod tone;
 
 pub mod fmt;
 
+pub(crate) use glyphs::agent_status_glyph_role;
 #[cfg(test)]
 pub(crate) use glyphs::unicode_glyph;
 pub(crate) use glyphs::{GlyphSet, GlyphSetKind};
 pub use glyphs::{
-    agent_status_glyph_role, nerd_font_probe_glyphs, nerd_font_probe_gradient,
-    strip_status_glyph_suffix, theme_glyphs,
+    nerd_font_probe_glyphs, nerd_font_probe_gradient, strip_status_glyph_suffix, theme_glyphs,
 };
 pub use identity::Identity;
 pub(crate) use palette::HEAT_RAMP_WARM_START;
-pub use palette::{Palette, ramp_tone};
+pub use palette::Palette;
+pub(crate) use palette::ramp_tone;
+pub(crate) use provider::provider_title_case;
 pub use provider::{
-    BrandColor, ResolvedProviderIdentity, provider_title_case, resolve_provider_brand,
-    resolve_provider_identity,
+    BrandColor, ResolvedProviderIdentity, resolve_provider_brand, resolve_provider_identity,
 };
 pub use tone::Tone;

@@ -37,14 +37,13 @@ The payoff: a scheme switch retunes Layer 1, a slot override retunes Layer 2, an
 | [`raw.rs`](../../crates/rimz/src/theme/raw.rs) | `RawPalette` — the imported scheme colors, plus `derive_tones`, the one place raw hues become semantic meaning. |
 | [`palette.rs`](../../crates/rimz/src/theme/palette.rs) | `Palette::resolve` — slot overrides, depth quantization, the heat and calm ramps, the derived expense tone, and `ramp_tone`. |
 | [`tone.rs`](../../crates/rimz/src/theme/tone.rs) | `Tone` — a resolved `Rgb` or `Indexed` color awaiting a carrier. |
-| [`scheme.rs`](../../crates/rimz/src/theme/scheme.rs) | Bundled-catalog and file-path scheme loading into a `RawPalette`, plus the `rimz list-themes` swatch. |
 | [`oklab.rs`](../../crates/rimz/src/theme/oklab.rs) | Perceptual color math: `blend`, `lift_lightness`, `warm_toward`, and the gamut fit. |
 | [`glyphs.rs`](../../crates/rimz/src/theme/glyphs.rs) | The glyph catalog (one row per `GlyphRole`), preset selection, configured overrides, and the first-run Nerd Font probes. |
 | [`provider.rs`](../../crates/rimz/src/theme/provider.rs) | Provider display identity: name, emblem, emblem tints, brand color. |
 | [`identity.rs`](../../crates/rimz/src/theme/identity.rs) | The two scheme-independent tones: Claude clay and dollar green. |
 | [`fmt.rs`](../../crates/rimz/src/theme/fmt.rs) | Renderer-independent value formats: countdowns, window labels, dollars, compact counts. |
 
-Two neighbors complete the picture. [`config/`](../../crates/rimz/src/config/) owns the serialized shape — `ThemeConfig`, `ColorDepth`, `GlyphRole` and its stable wire names, `Semantic`, and the Alacritty parser — so the theme core resolves config it does not define. The renderer edges are [`cli/render/palette.rs`](../../crates/rimz/src/cli/render/palette.rs) and [`sidebar_pane/render/theme.rs`](../../crates/rimz/src/sidebar_pane/render/theme.rs).
+Two neighbors complete the picture. [`config/`](../../crates/rimz/src/config/) owns the serialized shape — `ThemeConfig`, `ColorDepth`, `GlyphRole` and its stable wire names, `Semantic`, the Alacritty parser, and ordered catalog swatches — so the theme core resolves config it does not define. `RawPalette` converts the config parser's validated value directly. The renderer edges are [`cli/render/palette.rs`](../../crates/rimz/src/cli/render/palette.rs) and [`sidebar_pane/render/theme.rs`](../../crates/rimz/src/sidebar_pane/render/theme.rs).
 
 ## Resolving a palette
 

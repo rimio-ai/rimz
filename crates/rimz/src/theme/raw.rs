@@ -3,7 +3,7 @@
 //! scheme-supplied color; every downstream tone derives from these.
 
 use super::oklab::{self, Rgb};
-use crate::config::{PaletteRole, Semantic};
+use crate::config::{PaletteRole, ParsedScheme, Semantic};
 
 /// The imported terminal colors, verbatim: background, foreground, the six
 /// ANSI normal hues the renderer maps to meaning, and the selection accent.
@@ -93,5 +93,95 @@ impl RawPalette {
             selection,
             selection_bg,
         }
+    }
+}
+
+impl From<ParsedScheme> for RawPalette {
+    fn from(parsed: ParsedScheme) -> Self {
+        Self {
+            background: parsed.background,
+            foreground: parsed.foreground,
+            red: parsed.red,
+            green: parsed.green,
+            yellow: parsed.yellow,
+            blue: parsed.blue,
+            magenta: parsed.magenta,
+            cyan: parsed.cyan,
+            bright_blue: parsed.bright_blue,
+            selection_background: parsed.selection_background,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::parse_scheme_text;
+
+    #[test]
+    fn bundled_scheme_derives_semantic_tones() {
+        let tones =
+            RawPalette::from(crate::config::explicit_scheme("Afterglow").expect("bundled scheme"))
+                .derive_tones();
+        assert_eq!(tones.good, (0x7e, 0x8e, 0x50));
+        assert_eq!(tones.warn, (0xe5, 0xb5, 0x67));
+        assert_eq!(tones.alarm, (0xac, 0x41, 0x42));
+        assert_eq!(tones.accent, (0x7d, 0xd6, 0xcf));
+        assert_eq!(tones.cool, (0x6c, 0x99, 0xbb));
+        assert_eq!(tones.meta, (0x9f, 0x4e, 0x85));
+        assert_ne!(tones.selection, tones.cool);
+        assert_ne!(tones.caution, tones.warn);
+        assert_ne!(tones.caution, tones.alarm);
+    }
+
+    fn parse_palette_tones(text: &str) -> Result<Semantic, String> {
+        Ok(RawPalette::from(parse_scheme_text(text)?).derive_tones())
+    }
+
+    #[test]
+    fn selection_background_feeds_the_selected_band() {
+        let tones = parse_palette_tones(
+            r#"
+[colors.selection]
+background = '#283457'
+
+[colors.normal]
+red = '#f7768e'
+green = '#9ece6a'
+yellow = '#e0af68'
+blue = '#7aa2f7'
+magenta = '#bb9af7'
+cyan = '#7dcfff'
+
+[colors.primary]
+background = '#1a1b26'
+foreground = '#c0caf5'
+"#,
+        )
+        .expect("parse scheme");
+        assert_ne!(tones.selection_bg, (0x28, 0x34, 0x57));
+        assert_ne!(tones.selection_bg, (0x1a, 0x1b, 0x26));
+        assert!(tones.selection_bg.2 > 0x26 && tones.selection_bg.2 < 0x57);
+    }
+
+    #[test]
+    fn light_scheme_ladder_darkens_toward_foreground() {
+        let tones = parse_palette_tones(
+            r#"
+[colors.normal]
+red = '#dc322f'
+green = '#859900'
+yellow = '#b58900'
+blue = '#268bd2'
+magenta = '#d33682'
+cyan = '#2aa198'
+
+[colors.primary]
+background = '#fdf6e3'
+foreground = '#657b83'
+"#,
+        )
+        .expect("parse scheme");
+        assert!(tones.body.0 < tones.muted.0 && tones.muted.0 < tones.faint.0);
     }
 }

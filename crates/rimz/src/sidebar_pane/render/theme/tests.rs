@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::config::{DEFAULT_SCHEME, Semantic, ThemeColor, ThemeMode, nearest_xterm_index};
-use crate::theme::scheme;
 
 /// A theme at the config's own depth, with `NO_COLOR` off — the shape almost
 /// every test wants.
@@ -42,9 +41,32 @@ fn indices(palette: Palette) -> [Tone; 13] {
 
 #[test]
 fn default_const_matches_bundled_default() {
+    let palette = Palette::resolve(
+        &ThemeConfig {
+            scheme: Some(DEFAULT_SCHEME.to_owned()),
+            ..ThemeConfig::default()
+        },
+        ColorDepth::Truecolor,
+    );
+    let semantic = Semantic::DEFAULT;
     assert_eq!(
-        Semantic::DEFAULT,
-        scheme::explicit_palette_tones(DEFAULT_SCHEME).expect("bundled default scheme resolves"),
+        indices(palette),
+        [
+            semantic.good,
+            semantic.warn,
+            semantic.caution,
+            semantic.alarm,
+            semantic.accent,
+            semantic.cool,
+            semantic.meta,
+            semantic.body,
+            semantic.muted,
+            semantic.faint,
+            semantic.rule,
+            semantic.selection,
+            semantic.selection_bg,
+        ]
+        .map(|(red, green, blue)| Tone::Rgb(red, green, blue)),
         "Semantic::DEFAULT must mirror the bundled `{DEFAULT_SCHEME}` tones"
     );
 }

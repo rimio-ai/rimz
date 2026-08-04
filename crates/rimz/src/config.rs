@@ -102,7 +102,7 @@ pub use resume::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, DEFAULT_AUTO_REDEEM_MIN_GAI
 #[cfg(test)]
 pub(crate) use scheme::parse_scheme_text;
 pub(crate) use scheme::{DEFAULT_SCHEME, ParsedScheme, explicit_scheme, parsed_inline_palette};
-pub use scheme::{available_scheme_names, resolve_inline_palette, theme_lookup_hint};
+pub use scheme::{SchemeSwatch, resolve_inline_palette, scheme_swatches, theme_lookup_hint};
 pub use sentry::SentryConfig;
 pub use sidebar::{DEFAULT_AFK_AFTER_SECS, SidebarConfig, SidebarKeys};
 pub use theme::{

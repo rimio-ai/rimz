@@ -220,7 +220,7 @@ pub fn theme_glyphs(theme: &ThemeConfig) -> impl Fn(GlyphRole) -> String {
 
 /// The still glyph role carrying an agent lifecycle state across every
 /// human-facing surface.
-pub fn agent_status_glyph_role(status: AgentStatus) -> GlyphRole {
+pub(crate) fn agent_status_glyph_role(status: AgentStatus) -> GlyphRole {
     match status {
         AgentStatus::Waiting => GlyphRole::StatusWaiting,
         AgentStatus::Failed => GlyphRole::StatusAttention,

@@ -34,15 +34,44 @@ pub(crate) struct ParsedScheme {
     pub(crate) selection_background: Option<(u8, u8, u8)>,
 }
 
+/// One bundled scheme's display name and terminal swatch colors.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct SchemeSwatch {
+    pub name: String,
+    pub background: (u8, u8, u8),
+    pub foreground: (u8, u8, u8),
+    pub red: (u8, u8, u8),
+    pub green: (u8, u8, u8),
+    pub yellow: (u8, u8, u8),
+    pub blue: (u8, u8, u8),
+    pub magenta: (u8, u8, u8),
+    pub cyan: (u8, u8, u8),
+}
+
 #[derive(Debug)]
 struct LoadedScheme {
     colors: InlinePalette,
     parsed: ParsedScheme,
 }
 
-/// Every bundled scheme name, sorted by the embedded catalog.
-pub fn available_scheme_names() -> Vec<String> {
-    theme_names().map(str::to_owned).collect()
+/// Every resolvable bundled scheme and its raw swatch, sorted by name.
+pub fn scheme_swatches() -> Vec<SchemeSwatch> {
+    theme_names()
+        .filter_map(|name| {
+            let parsed = parse_scheme(theme_toml(name)?).ok()?.parsed;
+            Some(SchemeSwatch {
+                name: name.to_owned(),
+                background: parsed.background,
+                foreground: parsed.foreground,
+                red: parsed.red,
+                green: parsed.green,
+                yellow: parsed.yellow,
+                blue: parsed.blue,
+                magenta: parsed.magenta,
+                cyan: parsed.cyan,
+            })
+        })
+        .collect()
 }
 
 /// Resolve the active scheme as a full Alacritty palette. Inline colors win;
@@ -255,11 +284,29 @@ foreground = '#d0d0d0'
     }
 
     #[test]
-    fn catalog_names_are_sorted_and_include_known_schemes() {
-        let names = available_scheme_names();
-        assert!(names.iter().any(|name| name == "TokyoNight Night"));
-        assert!(names.iter().any(|name| name == "Catppuccin Mocha"));
-        assert!(names.windows(2).all(|pair| pair[0] <= pair[1]));
+    fn catalog_swatches_are_sorted_and_include_known_schemes() {
+        let swatches = scheme_swatches();
+        assert!(
+            swatches
+                .iter()
+                .any(|swatch| swatch.name == "TokyoNight Night")
+        );
+        assert!(
+            swatches
+                .iter()
+                .any(|swatch| swatch.name == "Catppuccin Mocha")
+        );
+        assert!(swatches.windows(2).all(|pair| pair[0].name <= pair[1].name));
+    }
+
+    #[test]
+    fn scheme_swatch_exposes_raw_palette() {
+        let swatch = scheme_swatches()
+            .into_iter()
+            .find(|swatch| swatch.name == "TokyoNight Night")
+            .expect("bundled scheme");
+        assert_eq!(swatch.background, (0x1a, 0x1b, 0x26));
+        assert_eq!(swatch.green, (0x9e, 0xce, 0x6a));
     }
 
     #[test]
