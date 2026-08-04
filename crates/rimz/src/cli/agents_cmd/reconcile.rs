@@ -16,7 +16,7 @@ pub(super) fn reconcile_cohort_launch(
     name: &str,
     spec_display: &str,
     team: Option<&str>,
-    cells: &[rimz::harness::resume::CohortCell],
+    cells: &[rimz::harness::plan::CohortCell],
 ) -> Result<Reconciled> {
     let path = cohort_worktree_path(workspace, &machine_config.agents.worktree, name)?;
     if !path.exists() {

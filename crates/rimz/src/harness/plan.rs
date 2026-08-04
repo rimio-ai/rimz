@@ -10,7 +10,6 @@ use crate::agents::PermissionMode;
 use crate::config::RoleBinding;
 use crate::harness::ancestry::LaunchAncestry;
 use crate::harness::budget::BudgetSpec;
-use crate::harness::resume::{CohortCell, CohortResumePlan, CohortSeed};
 use crate::harness::spec::{AgentCell, Cell, LayoutSpec};
 use crate::ids::{AgentSessionId, EventId};
 use crate::mux::{LayoutColumn, LayoutPanes, PaneCmd};
@@ -34,12 +33,163 @@ pub struct ResolvedLaunch {
     pub team_name: Option<String>,
 }
 
+/// One cell in an explicit cohort resume spec, reduced to matching fields.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CohortCell {
+    pub kind: crate::ids::AgentKind,
+    pub role: Option<String>,
+}
+
+/// One agent cell's explicit-resume seed.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CohortSeed {
+    Resume(Box<crate::agents::AgentState>),
+    Fresh,
+}
+
+/// Explicit cohort resume state parallel to layout agent cells.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CohortResumePlan {
+    pub seeds: Vec<CohortSeed>,
+    pub cwd: Option<PathBuf>,
+    pub channel: Option<String>,
+    pub fresh: Vec<String>,
+    pub launch_group: Option<String>,
+}
+
+/// Durable identity projected by resume planning for argv compilation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResumeLaunchIdentity {
+    pub kind: crate::ids::AgentKind,
+    pub session_id: AgentSessionId,
+    pub launch_id: Option<AgentSessionId>,
+    pub name: Option<String>,
+    pub name_explicit: bool,
+    pub profile: Option<String>,
+    pub role: Option<String>,
+    pub team: Option<String>,
+    pub launch_group: Option<String>,
+    pub launch_ordinal: Option<u32>,
+    pub channel: Option<String>,
+    pub parent_agent_id: Option<AgentSessionId>,
+    pub parent_agent_kind: Option<crate::ids::AgentKind>,
+    pub launch_depth: Option<u8>,
+}
+
+impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
+    fn from(agent: &crate::agents::AgentState) -> Self {
+        Self {
+            kind: agent.kind.clone(),
+            session_id: agent.agent_id.clone(),
+            launch_id: agent.launch_id.clone(),
+            name: agent.name.clone(),
+            name_explicit: agent.name_explicit,
+            profile: agent.profile.clone(),
+            role: agent.role.clone(),
+            team: agent.team.clone(),
+            launch_group: agent.launch_group.clone(),
+            launch_ordinal: agent.launch_ordinal,
+            channel: agent.channel.clone(),
+            parent_agent_id: agent.parent_agent_id.clone(),
+            parent_agent_kind: agent.parent_agent_kind.clone(),
+            launch_depth: agent.launch_depth,
+        }
+    }
+}
+
+/// Profile-declared values replayed by a resume launch.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResumeLaunchPosture {
+    pub args: Vec<String>,
+    pub system_prompt_file: Option<PathBuf>,
+    pub append_system_prompt_files: Vec<PathBuf>,
+    pub mode: Option<PermissionMode>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub budget: Option<String>,
+}
+
+impl From<&AgentCell> for ResumeLaunchPosture {
+    fn from(cell: &AgentCell) -> Self {
+        Self {
+            args: cell.args.clone(),
+            system_prompt_file: cell.system_prompt_file.clone(),
+            append_system_prompt_files: cell.append_system_prompt_files.clone(),
+            mode: cell.launch.mode,
+            model: cell.launch.model.clone(),
+            effort: cell.launch.effort.clone(),
+            budget: cell.launch.budget.clone(),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveLaunchError {
     #[error(transparent)]
     Layout(#[from] crate::harness::spec::LayoutErr),
     #[error(transparent)]
     Effective(#[from] crate::config::effective::EffectiveConfigErr),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedSingleAgentLaunch {
+    pub kind: String,
+    pub args: Vec<String>,
+    pub model: Option<String>,
+}
+
+impl ResolvedSingleAgentLaunch {
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+}
+
+/// Resolve one loop launch while keeping effective-config and trust policy in
+/// the launch planner.
+pub fn resolve_single_agent_launch(
+    spec: &str,
+    workspace: &crate::workspace::ResolvedWorkspace,
+) -> Result<ResolvedSingleAgentLaunch> {
+    let machine_config = crate::config::MachineConfig::load_lenient();
+    if let Some(message) = machine_config.agents_fragment_failure() {
+        bail!("{message}");
+    }
+    let launch = crate::config::effective::load(
+        &machine_config.agents,
+        &machine_config.subagents.profiles,
+        &workspace.project_root,
+        &crate::store::paths::config_home(),
+    )?;
+    let layout = match crate::harness::spec::resolve_spec(
+        Some(spec),
+        &launch.profiles,
+        &machine_config.agents.commands,
+        &launch.teams,
+    ) {
+        Ok(layout) => layout,
+        Err(err @ crate::harness::spec::LayoutErr::UnknownTeam { .. })
+        | Err(err @ crate::harness::spec::LayoutErr::UnknownCell { .. }) => {
+            launch.block_untrusted_reference(
+                crate::config::effective::ProfileScope::Agents,
+                Some(spec),
+                &machine_config.agents.commands,
+            )?;
+            return Err(err.into());
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let cell_count: usize = layout.columns.iter().map(|column| column.rows.len()).sum();
+    if cell_count != 1 {
+        bail!("loop task `{spec}` must resolve to one agent; use a kind, profile, or virtual cell");
+    }
+    let Cell::Agent(cell) = &layout.columns[0].rows[0] else {
+        bail!("loop task `{spec}` must resolve to one agent; command cells are not supported");
+    };
+    Ok(ResolvedSingleAgentLaunch {
+        kind: cell.kind.as_str().to_owned(),
+        args: cell.args.clone(),
+        model: cell.launch.model.clone(),
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -130,7 +280,8 @@ fn wrong_doorway(
 }
 
 /// Require the prompt files carried by finalized launch cells.
-pub fn validate_profile_prompt_files(
+#[cfg(test)]
+fn validate_profile_prompt_files(
     layout: &LayoutSpec,
 ) -> std::result::Result<(), ProfilePromptFileError> {
     for cell in layout.agent_cells() {
@@ -377,9 +528,7 @@ fn finalize_agent_cell(
             overridden.push(crate::agents::PresetField::Effort);
         }
     }
-    validate_system_prompt_support(cell, adapter)?;
-    validate_agent_prompt_files(cell)?;
-    validate_system_prompt_text(cell)?;
+    validate_finalized_cell(cell, adapter)?;
     cell.args.extend(options.passthrough.iter().cloned());
     if let Some(budget) = options.budget {
         cell.launch.budget = Some(budget.to_string());
@@ -497,7 +646,7 @@ fn reconcile_preset_args(
     Ok(())
 }
 
-pub fn validate_system_prompt_support(
+fn validate_system_prompt_support(
     cell: &AgentCell,
     adapter: Option<&crate::agents::AgentDefinition>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
@@ -525,9 +674,7 @@ pub fn validate_system_prompt_support(
     Ok(())
 }
 
-pub fn validate_system_prompt_text(
-    cell: &AgentCell,
-) -> std::result::Result<(), LaunchFinalizeError> {
+fn validate_system_prompt_text(cell: &AgentCell) -> std::result::Result<(), LaunchFinalizeError> {
     if cell.system_prompt_file.is_none() && cell.append_system_prompt_files.is_empty() {
         return Ok(());
     }
@@ -539,6 +686,15 @@ pub fn validate_system_prompt_text(
         reason: err.to_string(),
     })?;
     Ok(())
+}
+
+pub(crate) fn validate_finalized_cell(
+    cell: &AgentCell,
+    adapter: Option<&crate::agents::AgentDefinition>,
+) -> std::result::Result<(), LaunchFinalizeError> {
+    validate_system_prompt_support(cell, adapter)?;
+    validate_agent_prompt_files(cell)?;
+    validate_system_prompt_text(cell)
 }
 
 fn remove_occurrences(args: &mut Vec<String>, occurrences: &[crate::agents::PresetArgOccurrence]) {
@@ -681,6 +837,67 @@ fn index_to_launch_ordinal(index: usize) -> u32 {
     u32::try_from(index).unwrap_or(u32::MAX)
 }
 
+/// Compile one provider-native resume launch from planner-owned data.
+pub fn resume_command(
+    rimz_bin: &Path,
+    identity: &ResumeLaunchIdentity,
+    fallback_channel: Option<&str>,
+    posture: &ResumeLaunchPosture,
+) -> Vec<String> {
+    let channel = identity
+        .channel
+        .as_deref()
+        .filter(|channel| !channel.is_empty())
+        .or_else(|| fallback_channel.filter(|channel| !channel.is_empty()));
+    let params = crate::agents::LaunchParams {
+        parent_agent_id: identity.parent_agent_id.clone(),
+        parent_agent_kind: identity.parent_agent_kind.clone(),
+        launch_depth: identity.launch_depth,
+        profile: identity.profile.clone(),
+        role: identity.role.clone(),
+        team: identity.team.clone(),
+        launch_group: identity.launch_group.clone(),
+        launch_ordinal: identity.launch_ordinal,
+        channel: channel.map(ToOwned::to_owned),
+        mode: posture.mode,
+        model: posture.model.clone(),
+        effort: posture.effort.clone(),
+        budget: posture.budget.clone(),
+        ..Default::default()
+    };
+    let result = crate::harness::launch::exec_argv(
+        rimz_bin,
+        &crate::harness::launch::ExecRequest {
+            kind: identity.kind.clone(),
+            action: crate::harness::launch::ExecAction::Resume {
+                session_id: identity.session_id.to_string(),
+                extra_args: posture.args.clone(),
+            },
+            system_prompt_file: posture.system_prompt_file.clone(),
+            append_system_prompt_files: posture.append_system_prompt_files.clone(),
+            provider_account: crate::harness::launch::ProviderAccountState::Unbound,
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: true,
+            exit_on_run_completion: false,
+            subagent: false,
+            identity: crate::harness::launch::ExecIdentity {
+                name: identity.name.clone(),
+                name_explicit: identity.name_explicit,
+                launch_id: Some(
+                    identity
+                        .launch_id
+                        .as_ref()
+                        .unwrap_or(&identity.session_id)
+                        .to_string(),
+                ),
+                params,
+            },
+        },
+    );
+    result.unwrap_or_else(|err| unreachable!("serializing canonical exec request: {err}"))
+}
+
 #[derive(Clone, Copy)]
 pub struct LayoutPaneParams<'a> {
     pub cwd: &'a Path,
@@ -701,11 +918,7 @@ pub fn compile_layout_panes(
     params: LayoutPaneParams<'_>,
 ) -> Result<LayoutPanes> {
     for cell in layout.agent_cells() {
-        validate_system_prompt_support(cell, crate::agents::find_definition(cell.kind.as_str()))?;
-    }
-    validate_profile_prompt_files(layout)?;
-    for cell in layout.agent_cells() {
-        validate_system_prompt_text(cell)?;
+        validate_finalized_cell(cell, crate::agents::find_definition(cell.kind.as_str()))?;
     }
     let agent_count = layout.agent_cells().count();
     if let Some(seeds) = params.resume_seeds
@@ -738,11 +951,11 @@ pub fn compile_layout_panes(
                                 Some(CohortSeed::Resume(agent)) => PaneCmd {
                                     // The layout already resolved this cell from its profile or
                                     // role binding, so the posture to replay is right here.
-                                    argv: crate::harness::resume::resume_command(
+                                    argv: resume_command(
                                         &rimz_bin,
-                                        agent,
+                                        &ResumeLaunchIdentity::from(agent.as_ref()),
                                         params.fallback_channel,
-                                        &crate::harness::resume::ResumePosture::from_cell(cell),
+                                        &ResumeLaunchPosture::from(cell),
                                     ),
                                 },
                                 Some(CohortSeed::Fresh) | None => {

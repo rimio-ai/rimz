@@ -26,6 +26,7 @@ use crate::agents::{
     find_definition, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
+use crate::harness::plan::ResolvedSingleAgentLaunch;
 use crate::harness::run::{RunRecord, SupervisedRunOutcome, SupervisedRunRequest};
 use crate::harness::schedule::TaskAction;
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
@@ -33,9 +34,8 @@ use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
     RunTransition,
 };
-use crate::harness::spec::{self as agents_spec, Cell, LayoutSpec};
 use crate::ids::WorkspaceId;
-use crate::store::paths::{RuntimePaths, StatePaths, config_home, state_home};
+use crate::store::paths::{RuntimePaths, StatePaths, state_home};
 use crate::workspace::WorkspaceResolver;
 
 pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -124,7 +124,7 @@ struct FireContext {
 struct FireScope {
     kind: crate::ids::AgentKind,
     scope_runtime: RuntimePaths,
-    resolved: Option<ResolvedTaskSpec>,
+    resolved: Option<ResolvedSingleAgentLaunch>,
     managed_launch: ManagedLaunchState,
     capacity: OnceCell<Option<ProviderCapacity>>,
 }
@@ -133,7 +133,7 @@ impl FireScope {
     fn new(
         kind: crate::ids::AgentKind,
         scope_runtime: RuntimePaths,
-        resolved: Option<ResolvedTaskSpec>,
+        resolved: Option<ResolvedSingleAgentLaunch>,
     ) -> Self {
         Self {
             kind,
@@ -180,7 +180,7 @@ impl FireContext {
         let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
         let scope = match &action {
             TaskAction::Spawn(spec) => {
-                let resolved = resolve_task_spec(spec, &workspace)?;
+                let resolved = crate::harness::plan::resolve_single_agent_launch(spec, &workspace)?;
                 let managed_launch =
                     resolve_managed_spawn_state(entry, &workspace, &resolved, config)?;
                 let mut scope = FireScope::new(
@@ -819,75 +819,10 @@ fn relative_age(ts: Timestamp, now: Timestamp) -> String {
     format!("{label} ago")
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResolvedTaskSpec {
-    kind: String,
-    args: Vec<String>,
-    model: Option<String>,
-}
-
-impl ResolvedTaskSpec {
-    pub fn kind(&self) -> &str {
-        &self.kind
-    }
-}
-
-pub fn resolve_task_spec(
-    spec: &str,
-    workspace: &crate::workspace::ResolvedWorkspace,
-) -> Result<ResolvedTaskSpec> {
-    let machine_config = MachineConfig::load_lenient();
-    if let Some(message) = machine_config.agents_fragment_failure() {
-        anyhow::bail!("{message}");
-    }
-    let launch = crate::config::effective::load(
-        &machine_config.agents,
-        &machine_config.subagents.profiles,
-        &workspace.project_root,
-        &config_home(),
-    )?;
-    let layout = match agents_spec::resolve_spec(
-        Some(spec),
-        &launch.profiles,
-        &machine_config.agents.commands,
-        &launch.teams,
-    ) {
-        Ok(layout) => layout,
-        Err(err @ agents_spec::LayoutErr::UnknownTeam { .. })
-        | Err(err @ agents_spec::LayoutErr::UnknownCell { .. }) => {
-            launch.block_untrusted_reference(
-                crate::config::effective::ProfileScope::Agents,
-                Some(spec),
-                &machine_config.agents.commands,
-            )?;
-            return Err(err.into());
-        }
-        Err(err) => return Err(err.into()),
-    };
-    single_agent_cell(spec, &layout)
-}
-
-fn single_agent_cell(spec: &str, layout: &LayoutSpec) -> Result<ResolvedTaskSpec> {
-    let cell_count: usize = layout.columns.iter().map(|column| column.rows.len()).sum();
-    if cell_count != 1 {
-        anyhow::bail!(
-            "loop task `{spec}` must resolve to one agent; use a kind, profile, or virtual cell"
-        );
-    }
-    let cell = &layout.columns[0].rows[0];
-    let Cell::Agent(cell) = cell else {
-        anyhow::bail!(
-            "loop task `{spec}` must resolve to one agent; command cells are not supported"
-        );
-    };
-    Ok(ResolvedTaskSpec {
-        kind: cell.kind.as_str().to_owned(),
-        args: cell.args.clone(),
-        model: cell.launch.model.clone(),
-    })
-}
-
-pub fn preflight_entry(action: &TaskAction, resolved: Option<&ResolvedTaskSpec>) -> Result<()> {
+pub fn preflight_entry(
+    action: &TaskAction,
+    resolved: Option<&ResolvedSingleAgentLaunch>,
+) -> Result<()> {
     match action {
         TaskAction::Spawn(spec) => {
             let resolved = resolved
@@ -900,7 +835,7 @@ pub fn preflight_entry(action: &TaskAction, resolved: Option<&ResolvedTaskSpec>)
     Ok(())
 }
 
-fn preflight_resolved_task(resolved: &ResolvedTaskSpec) -> Result<()> {
+fn preflight_resolved_task(resolved: &ResolvedSingleAgentLaunch) -> Result<()> {
     preflight_kind(&resolved.kind)
 }
 
@@ -1000,7 +935,7 @@ fn home_dir() -> PathBuf {
 fn resolve_managed_spawn_state(
     entry: &TaskEntry,
     workspace: &crate::workspace::ResolvedWorkspace,
-    resolved: &ResolvedTaskSpec,
+    resolved: &ResolvedSingleAgentLaunch,
     config: &MachineConfig,
 ) -> Result<ManagedLaunchState> {
     let adapter = find_definition(&resolved.kind)

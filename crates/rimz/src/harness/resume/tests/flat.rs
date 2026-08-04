@@ -344,11 +344,11 @@ fn resume_command_replays_launch_identity() {
         launch_ordinal: Some(2),
         ..agent("claude", "a1", "/code/qe", 1)
     };
-    let argv = resume_command(
+    let argv = crate::harness::plan::resume_command(
         Path::new(RIMZ_BIN),
-        &agent,
+        &crate::harness::plan::ResumeLaunchIdentity::from(&agent),
         agent.channel.as_deref(),
-        &ResumePosture::default(),
+        &crate::harness::plan::ResumeLaunchPosture::default(),
     );
     assert_eq!(&argv[..4], [RIMZ_BIN, "agents", "exec", "claude"]);
     let request = decode_exec_request(&argv);
