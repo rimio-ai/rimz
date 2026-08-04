@@ -238,6 +238,19 @@ allowed-imports = [
 surface-budget = 89
 
 [[module]]
+path = "crates/rimz/src/message/send.rs"
+allowed-imports = [
+    "(crate)",
+    "agents",
+    "ids",
+    "message",
+    "mux",
+    "store::snapshot",
+    "workspace",
+]
+surface-budget = 9
+
+[[module]]
 path = "crates/rimz/src/mux"
 allowed-imports = [
     "(crate)",
