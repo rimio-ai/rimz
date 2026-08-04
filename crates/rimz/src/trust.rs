@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::agents::PermissionMode;
 use crate::config::{CheckOn, ConfigFileDiagnosis, Team};
-use crate::harness::run::PermissionMode;
 use crate::ids::WorkspaceId;
 use crate::store::atomic::{self, write_bytes_atomically};
 use crate::store::paths::config_home;

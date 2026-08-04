@@ -76,9 +76,9 @@ pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCr
 pub use definition::{
     AgentDefinition, AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage,
     DefinitionValidationError, HookCoverage, IntegrationConcern, LaunchPermissionArgs, LaunchSpec,
-    PlanLabel, PresetMatchers, PromptStyle, RemoteControlCapability, SamePaneSessionPolicy,
-    SessionCommand, StaticPresetMatcher, ThreadKey, ToolClassification, UserCapability,
-    UserCoverage, program_names_kind,
+    PermissionMode, PlanLabel, PresetMatchers, PromptStyle, RemoteControlCapability,
+    SamePaneSessionPolicy, SessionCommand, StaticPresetMatcher, ThreadKey, ToolClassification,
+    UserCapability, UserCoverage, program_names_kind,
 };
 pub use emblems::{Emblem, EmblemTint, emblem_for};
 pub use hook_types::{

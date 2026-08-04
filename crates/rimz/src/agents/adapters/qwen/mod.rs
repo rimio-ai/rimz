@@ -37,7 +37,7 @@ use super::{
     resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 #[cfg(test)]
-use crate::harness::run::PermissionMode;
+use crate::agents::PermissionMode;
 
 static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
     kind: "qwen",

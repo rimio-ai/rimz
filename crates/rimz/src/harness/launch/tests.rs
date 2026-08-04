@@ -375,7 +375,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
     let extra_args = argv(&["--dangerously-skip-permissions"]);
     let params = crate::agents::LaunchParams {
         profile: Some("planner".to_owned()),
-        mode: Some(crate::harness::run::PermissionMode::Yolo),
+        mode: Some(crate::agents::PermissionMode::Yolo),
         role: Some("coder".to_owned()),
         team: Some("forge".to_owned()),
         launch_group: Some("launch_group_1".to_owned()),

@@ -4,11 +4,11 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::cli::render;
+use rimz::agents::PermissionMode;
 use rimz::agents::{
     AgentCardRef, AgentState, AgentStatus, ContextSeverity, OpenAsk, TurnErrorClass, TurnPhase,
     single_line_description,
 };
-use rimz::harness::run::PermissionMode;
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::store::snapshot::{
     AgentCard, SidebarRow, SidebarSnapshot, WorktreePrCi, WorktreePrState,

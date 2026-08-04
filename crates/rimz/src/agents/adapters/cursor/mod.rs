@@ -36,7 +36,7 @@ use super::{
     non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
-use crate::harness::run::PermissionMode;
+use crate::agents::PermissionMode;
 use crate::ids::AgentSessionId;
 
 const UNAMBIGUOUS_FALLBACK_BIN: &str = "cursor-agent";

@@ -509,7 +509,7 @@ fn run_record(paths: &rimz::StatePaths, agent_id: Option<&str>) -> rimz::RunId {
     let mut record = rimz::harness::run::RunRecord::new(
         paths.workspace_id.clone(),
         AgentKind::new_unchecked("codex"),
-        rimz::harness::run::PermissionMode::Auto,
+        rimz::agents::PermissionMode::Auto,
         "prompt".to_owned(),
         std::path::Path::new("/tmp/rimz-run").to_path_buf(),
     );

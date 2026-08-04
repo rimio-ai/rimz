@@ -1,16 +1,14 @@
 //! Supervised-run requests, records, transitions, and cancellation.
 
-use std::fmt;
 use std::io;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{AgentLifecycleObservation, LifecycleSignal, TurnPhase};
+use crate::agents::{AgentLifecycleObservation, LifecycleSignal, PermissionMode, TurnPhase};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
 use crate::store::lock::WorkspaceLock;
@@ -95,6 +93,46 @@ pub struct SupervisedRunRequest {
     pub managed_launch: crate::agents::ManagedLaunchState,
 }
 
+impl SupervisedRunRequest {
+    pub fn new(
+        spec: String,
+        prompt: String,
+        permission_mode: PermissionMode,
+        managed_launch: crate::agents::ManagedLaunchState,
+    ) -> Self {
+        Self {
+            spec,
+            prompt,
+            description: None,
+            worktree: None,
+            from_pr: None,
+            channel: None,
+            name: None,
+            background: false,
+            self_cleanup_on_completion: false,
+            subagent: false,
+            force_new_tab: false,
+            permission_mode,
+            agent: None,
+            model: None,
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+            effort: None,
+            budget: None,
+            max_turns: None,
+            timeout: None,
+            keep: false,
+            retries: 0,
+            verify: None,
+            max_attempts: None,
+            loop_zone: false,
+            loop_task: None,
+            passthrough: Vec::new(),
+            managed_launch,
+        }
+    }
+}
+
 /// Command-neutral result of attempting one supervised turn.
 #[derive(Debug)]
 pub enum SupervisedRunOutcome {
@@ -145,42 +183,6 @@ pub fn cancel_and_wake(
         crate::harness::run_wake::wake_run(store.runtime_paths(), &record)?;
     }
     Ok(record)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionMode {
-    Auto,
-    Ask,
-    Yolo,
-    Plan,
-}
-
-impl FromStr for PermissionMode {
-    type Err = String;
-
-    fn from_str(raw: &str) -> std::result::Result<Self, Self::Err> {
-        match raw {
-            "auto" => Ok(Self::Auto),
-            "ask" => Ok(Self::Ask),
-            "yolo" => Ok(Self::Yolo),
-            "plan" => Ok(Self::Plan),
-            _ => Err(format!(
-                "unknown permission mode `{raw}`; expected auto, ask, plan, or yolo"
-            )),
-        }
-    }
-}
-
-impl fmt::Display for PermissionMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Auto => "auto",
-            Self::Ask => "ask",
-            Self::Yolo => "yolo",
-            Self::Plan => "plan",
-        })
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,26 +351,6 @@ impl RunRecord {
 
 fn is_false(value: &bool) -> bool {
     !*value
-}
-
-pub fn retry_prompt(base: &str, failure_tail: Option<&str>) -> String {
-    let failure = failure_tail.map_or_else(
-        || "A previous attempt at this task failed (exit 1), but no terminal output was captured."
-            .to_owned(),
-        |tail| {
-            format!(
-                "A previous attempt at this task failed (exit 1). The tail of its terminal output:\n{tail}"
-            )
-        },
-    );
-    format!("{base}\n\n<previous-attempt-failure>\n{failure}\n</previous-attempt-failure>")
-}
-
-pub fn verify_reprompt(cmd: &str, code_label: &str, output: &str) -> String {
-    let tail = crate::proc::tail_output(output.as_bytes(), FAILURE_TAIL_CAP);
-    format!(
-        "Verification failed — the task is not done yet. Fix the underlying problem in this same session until the verify command passes.\n\n--- verify `{cmd}` exited {code_label} ---\n{tail}"
-    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
+use crate::agents::PermissionMode;
 use crate::config::RoleBinding;
 use crate::harness::ancestry::LaunchAncestry;
 use crate::harness::budget::BudgetSpec;
 use crate::harness::resume::{CohortCell, CohortResumePlan, CohortSeed};
-use crate::harness::run::PermissionMode;
 use crate::harness::spec::{AgentCell, Cell, LayoutSpec};
 use crate::ids::{AgentSessionId, EventId};
 use crate::mux::{LayoutColumn, LayoutPanes, PaneCmd};

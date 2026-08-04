@@ -39,7 +39,7 @@ use serde_json::{Value, json};
 
 use super::app_server::{AppServerErr, codex_bin, recv_response, spawn_frame_reader, write_frame};
 use super::oauth_usage;
-use crate::harness::run_wake::SocketGuard;
+use crate::sock::SocketGuard;
 
 /// Wall-clock for the startup (and respawn) handshake — generous like the client
 /// cold-spawn budget, since it spawns a process and waits for `initialize`.

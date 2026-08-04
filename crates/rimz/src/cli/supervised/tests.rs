@@ -1,6 +1,7 @@
 use super::*;
+use rimz::agents::PermissionMode;
 use rimz::agents::{AgentState, AgentStatus, LaunchParams};
-use rimz::harness::run::{PermissionMode, RunCancellation, RunStatus, SupervisedRunRequest};
+use rimz::harness::run::{RunCancellation, RunStatus, SupervisedRunRequest};
 use rimz::harness::run_wake::{self, ExpectedRunFrame, WakeupFrame};
 use rimz::harness::spec::Cell;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};

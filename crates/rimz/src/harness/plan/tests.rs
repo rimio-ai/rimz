@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 
 use super::*;
+use crate::agents::PermissionMode;
 use crate::agents::{AgentStatus, LaunchParams};
 use crate::config::{MachineConfig, Profile, Team};
 use crate::harness::ancestry::LaunchAncestry;
-use crate::harness::run::PermissionMode;
 use crate::harness::spec::Column;
 use crate::ids::{AgentKind, AgentSessionId};
 

@@ -131,39 +131,13 @@ fn bind_path(path: PathBuf) -> Result<(StdUnixDatagram, PathBuf)> {
     Ok((sock, path))
 }
 
-/// Remove the socket file. Best-effort; missing file is fine.
-pub fn cleanup_socket(path: &Path) {
-    let _ = std::fs::remove_file(path);
-}
-
-/// RAII guard that cleans up the socket on drop. The bind path is derived from
-/// a UUIDv7 run id so a missing file is benign.
-#[must_use = "drop the guard at the end of the run wake wait to clean up the socket"]
-pub struct SocketGuard {
-    path: Option<PathBuf>,
-}
-
-impl SocketGuard {
-    pub fn new(path: PathBuf) -> Self {
-        Self { path: Some(path) }
-    }
-}
-
-impl Drop for SocketGuard {
-    fn drop(&mut self) {
-        if let Some(path) = self.path.take() {
-            cleanup_socket(&path);
-        }
-    }
-}
-
 /// Persistent supervised-run waiter. Durable run records are truth; the
 /// socket only shortens the polling interval.
 pub struct RunWaiter {
     sock: StdUnixDatagram,
     expected: ExpectedRunFrame,
     cancellation: RunCancellation,
-    socket_guard: SocketGuard,
+    socket_guard: sock::SocketGuard,
 }
 
 pub type RunObserver<'a> = dyn FnMut(&RunRecord) -> anyhow::Result<()> + 'a;
@@ -179,7 +153,7 @@ impl RunWaiter {
             sock,
             expected,
             cancellation,
-            socket_guard: SocketGuard::new(path),
+            socket_guard: sock::SocketGuard::new(path),
         })
     }
 
@@ -188,10 +162,7 @@ impl RunWaiter {
     }
 
     pub fn socket_path(&self) -> &Path {
-        self.socket_guard
-            .path
-            .as_deref()
-            .expect("run waiter owns its socket until drop")
+        self.socket_guard.path()
     }
 
     /// Wait until durable state reaches a terminal status. The observer may
@@ -299,7 +270,8 @@ pub async fn wait_for_run_completion_owning(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::run::{PermissionMode, RunCancellation, RunRecord};
+    use crate::agents::PermissionMode;
+    use crate::harness::run::{RunCancellation, RunRecord};
     use crate::ids::{AgentKind, WorkspaceId};
     use crate::store::{StatePaths, Store};
     use tokio::net::UnixDatagram;

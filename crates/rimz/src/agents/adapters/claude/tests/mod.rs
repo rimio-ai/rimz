@@ -1,7 +1,7 @@
 use super::*;
+use crate::agents::PermissionMode;
 use crate::agents::TurnErrorClass;
 use crate::agents::{HookIngressAcceptance, HookIngressDecision, HookIngressIgnoreReason};
-use crate::harness::run::PermissionMode;
 use serde_json::json;
 use std::path::Path;
 

@@ -18,13 +18,13 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 
 use crate::Store;
+use crate::agents::PermissionMode;
 use crate::agents::find_definition;
 use crate::agents::{AgentState, LocalSessionObservation};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::plan::{
     LayoutPaneParams, cohort_cells, compile_layout_panes, launch_identity_requests,
 };
-use crate::harness::run::PermissionMode;
 use crate::harness::spec::LayoutSpec;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::mux::ResumeTab;

@@ -39,7 +39,7 @@ use super::{
     sanitize_user_prompt,
 };
 #[cfg(test)]
-use crate::harness::run::PermissionMode;
+use crate::agents::PermissionMode;
 
 const HOOK_TIMEOUT_SECS: u64 = 5;
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source antigravity";

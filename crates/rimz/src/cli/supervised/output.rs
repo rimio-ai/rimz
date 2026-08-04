@@ -247,7 +247,7 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    use rimz::harness::run::PermissionMode;
+    use rimz::agents::PermissionMode;
     use rimz::ids::{AgentKind, WorkspaceId};
 
     fn record(status: RunStatus) -> RunRecord {

@@ -229,6 +229,26 @@ fn render_config_key(
     Ok(vec![flag, format!("{key}={value}")])
 }
 
+pub fn retry_prompt(base: &str, failure_tail: Option<&str>) -> String {
+    let failure = failure_tail.map_or_else(
+        || "A previous attempt at this task failed (exit 1), but no terminal output was captured."
+            .to_owned(),
+        |tail| {
+            format!(
+                "A previous attempt at this task failed (exit 1). The tail of its terminal output:\n{tail}"
+            )
+        },
+    );
+    format!("{base}\n\n<previous-attempt-failure>\n{failure}\n</previous-attempt-failure>")
+}
+
+pub fn verify_reprompt(cmd: &str, code_label: &str, output: &str) -> String {
+    let tail = crate::proc::tail_output(output.as_bytes(), 4 * 1024);
+    format!(
+        "Verification failed — the task is not done yet. Fix the underlying problem in this same session until the verify command passes.\n\n--- verify `{cmd}` exited {code_label} ---\n{tail}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,5 +372,32 @@ mod tests {
             err,
             PromptComposeErr::MissingBase { agent: "claude" }
         ));
+    }
+
+    #[test]
+    fn retry_prompt_includes_latest_failure_without_nesting() {
+        let first = retry_prompt("fix it", Some("first failure"));
+        let second = retry_prompt("fix it", Some("error: broken\nlast line"));
+
+        assert!(first.contains("first failure"));
+        assert!(!second.contains("first failure"));
+        assert!(second.contains("The tail of its terminal output:\nerror: broken\nlast line"));
+        assert_eq!(second.matches("<previous-attempt-failure>").count(), 1);
+    }
+
+    #[test]
+    fn retry_prompt_explains_missing_output() {
+        assert!(retry_prompt("fix it", None).contains("no terminal output was captured"));
+    }
+
+    #[test]
+    fn verify_reprompt_formats_status_and_caps_output_tail() {
+        let output = format!("old{}latest", "x".repeat(4 * 1024));
+        let prompt = verify_reprompt("cargo xtask test auth", "1", &output);
+
+        assert!(prompt.starts_with("Verification failed — the task is not done yet."));
+        assert!(prompt.contains("--- verify `cargo xtask test auth` exited 1 ---"));
+        assert!(!prompt.contains("old"));
+        assert!(prompt.ends_with("latest"));
     }
 }

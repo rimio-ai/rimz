@@ -3,13 +3,14 @@ use super::launch::*;
 use super::*;
 use clap::{CommandFactory, Parser};
 use jiff::Timestamp;
+use rimz::agents::PermissionMode;
 use rimz::agents::{
     AgentState, AgentStatus, AgentTurnError, LaunchParams, LaunchPreset, TurnErrorClass, TurnPhase,
 };
 use rimz::config::{MachineConfig, Profile, ProfilesConfig, ThemeConfig, ThemeGlyphsConfig};
 use rimz::forge::Forge;
 use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
-use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
+use rimz::harness::run::{RunRecord, RunStatus};
 use rimz::harness::run_wake::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId, RunId, WorkspaceId};
 use std::collections::BTreeSet;

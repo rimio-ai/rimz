@@ -69,6 +69,28 @@ pub fn validate_socket_path(path: &Path) -> Result<(), SocketPathTooLong> {
     Ok(())
 }
 
+/// Removes an owned socket path when its server stops.
+#[must_use = "keep the guard alive while the socket is bound"]
+pub(crate) struct SocketGuard {
+    path: PathBuf,
+}
+
+impl SocketGuard {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 #[cfg(unix)]
 pub fn path_len(path: &Path) -> usize {
     use std::os::unix::ffi::OsStrExt as _;

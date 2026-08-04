@@ -462,7 +462,7 @@ fn default_wait_keeps_finished_supervised_children() {
     let mut finished_run = rimz::harness::run::RunRecord::new(
         rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-wait")),
         rimz::ids::AgentKind::new_unchecked("codex"),
-        rimz::harness::run::PermissionMode::Auto,
+        rimz::agents::PermissionMode::Auto,
         "review".to_owned(),
         PathBuf::from("/tmp/subagent-wait"),
     );
@@ -472,7 +472,7 @@ fn default_wait_keeps_finished_supervised_children() {
     let mut running_run = rimz::harness::run::RunRecord::new(
         rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-wait")),
         rimz::ids::AgentKind::new_unchecked("codex"),
-        rimz::harness::run::PermissionMode::Auto,
+        rimz::agents::PermissionMode::Auto,
         "implement".to_owned(),
         PathBuf::from("/tmp/subagent-wait"),
     );

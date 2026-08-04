@@ -1,5 +1,5 @@
 use super::*;
-use crate::harness::run::PermissionMode;
+use crate::agents::PermissionMode;
 use crate::ids::MuxName;
 use std::num::NonZeroU16;
 use tempfile::tempdir;

@@ -4,11 +4,12 @@ use crate::common::{
     CommandTimeoutExt, path_with_front, write_failing_agent_shim, write_fake_login_shell,
 };
 use jiff::Timestamp;
+use rimz::agents::PermissionMode;
 use rimz::agents::{
     AgentLifecycleObservation, AgentRateLimits, LaunchParams, LifecycleSignal, RateLimitCacheEntry,
     RateLimitWindow, RateLimitsCache,
 };
-use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
+use rimz::harness::run::{RunRecord, RunStatus};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, ViewKind};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use serde_json::json;

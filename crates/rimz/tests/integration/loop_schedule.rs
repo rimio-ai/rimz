@@ -10,10 +10,11 @@ use jiff::{SignedDuration, Timestamp};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
 
+use rimz::agents::PermissionMode;
 use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
 use rimz::config::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
 use rimz::harness::budget::{BudgetLedger, DayBaseline, write_ledger};
-use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
+use rimz::harness::run::{RunRecord, RunStatus};
 use rimz::harness::schedule::arming::{self, Arming};
 use rimz::harness::schedule::run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult};
 use rimz::harness::schedule::runner::RunLockInfo;

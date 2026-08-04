@@ -59,7 +59,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
             agent_name_explicit: false,
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
-                mode: Some(crate::harness::run::PermissionMode::Yolo),
+                mode: Some(crate::agents::PermissionMode::Yolo),
 
                 role: Some("coder".to_owned()),
 
@@ -138,7 +138,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
     assert_eq!(agent.usage.fresh_input_tokens, Some(1_200));
     assert_eq!(agent.usage.output_tokens, Some(800));
     assert_eq!(agent.profile.as_deref(), Some("codex-coder"));
-    assert_eq!(agent.mode, Some(crate::harness::run::PermissionMode::Yolo));
+    assert_eq!(agent.mode, Some(crate::agents::PermissionMode::Yolo));
     assert_eq!(agent.role.as_deref(), Some("coder"));
     assert_eq!(agent.team.as_deref(), Some("forge"));
     assert_eq!(agent.worktree_branch.as_deref(), Some("main"));

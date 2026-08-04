@@ -409,7 +409,7 @@ pub struct AgentState {
     /// The permission posture selected for this launch, carried forward so an
     /// explicit restart can reproduce it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<crate::harness::run::PermissionMode>,
+    pub mode: Option<crate::agents::PermissionMode>,
     /// The `[agents.teams]` role this agent launched as (`planner`, `coder`),
     /// stamped by the launch event and carried forward like `profile`. The
     /// agent answers to `@<role>` when that role uniquely names it in scope.
@@ -619,7 +619,7 @@ struct AgentStateWire {
     kind_ordinal: Option<u32>,
     profile: Option<String>,
     #[serde(default)]
-    mode: Option<crate::harness::run::PermissionMode>,
+    mode: Option<crate::agents::PermissionMode>,
     role: Option<String>,
     team: Option<String>,
     launch_group: Option<String>,
