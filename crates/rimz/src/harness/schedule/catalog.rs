@@ -21,6 +21,10 @@ pub fn instances_path(state_root: &Path) -> PathBuf {
     instances::path(state_root)
 }
 
+pub fn project_config_path(project_root: &Path) -> PathBuf {
+    config_edit::TaskStore::Project(project_root).path()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskSource {
     Config,

@@ -596,21 +596,6 @@ pub fn agent_budget_spend(
     }
 }
 
-/// Current spend and effective cap for one agent's inspection surface.
-pub fn spend_summary(
-    runtime: &RuntimePaths,
-    agent: &AgentState,
-    session_cost: Option<f64>,
-) -> Option<String> {
-    let spend = agent_budget_spend(runtime, agent, session_cost);
-    let cap = spend.cap?;
-    Some(fmt_spend(
-        spend.spent_usd.unwrap_or(0.0),
-        cap.cap_usd,
-        cap.window,
-    ))
-}
-
 fn fmt_spend(spend_usd: f64, cap_usd: f64, window: BudgetWindow) -> String {
     let suffix = match window {
         BudgetWindow::Session => "",

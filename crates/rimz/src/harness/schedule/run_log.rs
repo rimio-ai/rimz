@@ -222,7 +222,7 @@ pub fn log_path(state_root: &Path) -> PathBuf {
     state_root.join("rimz").join(NAME)
 }
 
-pub fn append(record: &LoopRunRecord) {
+fn append(record: &LoopRunRecord) {
     let state_root = state_home();
     append_to(&state_root, record);
 }
@@ -250,7 +250,7 @@ pub fn task_records(state_root: &Path, task: &str) -> Vec<LoopRunRecord> {
     records
 }
 
-pub fn task_spend_today(state_root: &Path, task: &str, now: &Zoned) -> f64 {
+fn task_spend_today(state_root: &Path, task: &str, now: &Zoned) -> f64 {
     spend_on_local_day(&task_records(state_root, task), now)
 }
 
@@ -320,7 +320,7 @@ impl DailyBudgetGate {
     }
 }
 
-pub fn daily_budget_gate(
+pub(super) fn daily_budget_gate(
     state_root: &Path,
     task: &str,
     entry: &crate::config::TaskEntry,

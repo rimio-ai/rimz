@@ -17,7 +17,7 @@ use jiff::{SignedDuration, Timestamp, Zoned};
 
 pub mod arming;
 pub mod catalog;
-pub mod config_edit;
+mod config_edit;
 pub(crate) mod fire;
 pub mod instances;
 mod overlay_store;

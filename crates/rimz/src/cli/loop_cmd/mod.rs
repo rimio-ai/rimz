@@ -300,7 +300,7 @@ fn task_subject(task: &LoadedTask) -> String {
 }
 
 fn project_config_path(project_root: &Path) -> PathBuf {
-    schedule::config_edit::TaskStore::Project(project_root).path()
+    schedule::catalog::project_config_path(project_root)
 }
 
 fn project_root_for_globals(globals: &GlobalFlags) -> Option<PathBuf> {

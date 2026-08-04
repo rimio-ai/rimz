@@ -56,7 +56,8 @@ Inside `harness/` itself, start here when you are looking for where a behaviour 
 | File | Owns |
 | --- | --- |
 | [`spec.rs`](../../../crates/rimz/src/harness/spec.rs) | The layout IR: the inline grammar, team and profile resolution, virtual `<kind>-<mode>` cells, prompt-file path rooting, the prompt leader, and the name-collision rules that keep profile names addressable. |
-| [`plan.rs`](../../../crates/rimz/src/harness/plan.rs) | Turning a spec into a launch: effective-config resolution, launch finalization, placement resolution, per-cell launch identities, and compilation to backend-neutral pane commands. |
+| [`plan.rs`](../../../crates/rimz/src/harness/plan.rs) | Turning a spec into a launch: effective-config resolution, launch finalization, per-cell launch identities, and fresh or resumed compilation to backend-neutral pane commands. |
+| [`ancestry.rs`](../../../crates/rimz/src/harness/ancestry.rs) | Durable caller resolution and launch-chain policy. |
 | [`prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | Ordered system-prompt composition, content-addressed runtime artifacts, and adapter replacement argv or environment. |
 | [`launch.rs`](../../../crates/rimz/src/harness/launch.rs) | The provider process: adapter argv for launch, resume, and fork; the hidden `ExecRequest` wire; launch environment composition; the login-shell wrapper; and preflight. |
 | [`target.rs`](../../../crates/rimz/src/harness/target.rs) | The address: parsing `@handle#channel`, resolving it against a snapshot, binding a match to a live pane, and rendering the canonical handle back. |
@@ -68,7 +69,7 @@ Inside `harness/` itself, start here when you are looking for where a behaviour 
 | [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs), [`schedule/`](../../../crates/rimz/src/harness/schedule) | Loop tasks and their runner. See [loops.md](./loops.md). |
 | [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs), [`assist_log.rs`](../../../crates/rimz/src/harness/assist_log.rs) | Unattended recovery and its audit trail. See [loops.md § Recovery the elder runs](./loops.md#recovery-the-elder-runs). |
 
-The CLI side lives in [`cli/agents_cmd/`](../../../crates/rimz/src/cli/agents_cmd) (launch, restart, resume, fork, stop, and the hidden `exec` wrapper), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) (the run driver both `agents -p` and loop fires call), and [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd). Those handlers parse flags, execute effects, and render; the rules live here.
+The CLI side lives in [`cli/agents_cmd/`](../../../crates/rimz/src/cli/agents_cmd) (launch placement, restart, resume, fork, stop, and the hidden `exec` wrapper), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) (the run driver both `agents -p` and loop fires call), and [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd). Those handlers parse flags, execute effects, and render; harness keeps provider and durable-state rules.
 
 ### Where to start reading
 
@@ -172,7 +173,7 @@ Each backend renders the same compiled layout into a tab, and a single non-workt
 
 **Placement resolves before the launch touches the store or creates a worktree**, so a rejected placement leaves no provisional rows or orphan worktree behind.
 
-`plan::resolve_placement` takes the explicit flags first, then falls back to the per-machine [`[agents] placement`](../../guide/configuration.md#agent-profiles-commands-and-teams) policy.
+The CLI placement resolver takes explicit flags first, then falls back to the per-machine [`[agents] placement`](../../guide/configuration.md#agent-profiles-commands-and-teams) policy.
 
 | Situation | Where the layout lands |
 | --- | --- |

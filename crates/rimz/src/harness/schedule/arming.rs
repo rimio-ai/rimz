@@ -148,7 +148,7 @@ pub fn pause(key: &str, source: TaskSource, until: Timestamp) -> Result<()> {
     pause_in(&state_home(), key, source, until)
 }
 
-pub fn disable_if_live(
+pub(super) fn disable_if_live(
     key: &str,
     source: TaskSource,
     strikes: Option<u32>,
@@ -157,23 +157,27 @@ pub fn disable_if_live(
     disable_if_live_in(&state_home(), key, source, strikes, now)
 }
 
-pub fn remove(key: &str) -> Result<bool> {
+pub(super) fn remove(key: &str) -> Result<bool> {
     remove_from(&state_home(), key)
 }
 
-pub fn rename(old: &str, new: &str) -> Result<bool> {
+pub(super) fn rename(old: &str, new: &str) -> Result<bool> {
     rename_in(&state_home(), old, new)
 }
 
-pub fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Result<usize> {
+pub(super) fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Result<usize> {
     prune_orphans_in(&state_home(), known, scopes)
 }
 
-pub fn remove_legacy_pauses() -> Result<usize> {
+pub(super) fn remove_legacy_pauses() -> Result<usize> {
     remove_legacy_pauses_in(&state_home())
 }
 
-pub fn effective_last_fire(stamp: Timestamp, record: Option<&Arming>, now: Timestamp) -> Timestamp {
+pub(super) fn effective_last_fire(
+    stamp: Timestamp,
+    record: Option<&Arming>,
+    now: Timestamp,
+) -> Timestamp {
     let Some(record) = record else {
         return stamp;
     };

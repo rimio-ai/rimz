@@ -13,10 +13,10 @@ use crate::harness::schedule::run_log::{LoopRunRecord, LoopRunResult};
 use crate::store::paths::state_home;
 
 const STORE: OverlayStore = OverlayStore::new("loop-strikes.json", "loop-strikes.lock");
-pub const DEFAULT_MAX_STRIKES: u32 = 3;
+pub(super) const DEFAULT_MAX_STRIKES: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Signal {
+pub(super) enum Signal {
     Strike,
     Reset,
     Neutral,
@@ -28,7 +28,7 @@ pub struct StrikesError(#[from] OverlayError);
 
 type Result<T> = std::result::Result<T, StrikesError>;
 
-pub fn classify(record: &LoopRunRecord) -> Signal {
+pub(super) fn classify(record: &LoopRunRecord) -> Signal {
     match record.result {
         LoopRunResult::Failed
         | LoopRunResult::VerifyFailed
@@ -78,7 +78,7 @@ pub fn load() -> BTreeMap<String, u32> {
     load_from(&state_home())
 }
 
-pub fn note(key: &str, signal: Signal) -> Result<u32> {
+pub(super) fn note(key: &str, signal: Signal) -> Result<u32> {
     note_in(&state_home(), key, signal)
 }
 
@@ -86,11 +86,11 @@ pub fn clear(key: &str) -> Result<bool> {
     clear_from(&state_home(), key)
 }
 
-pub fn rename(old: &str, new: &str) -> Result<bool> {
+pub(super) fn rename(old: &str, new: &str) -> Result<bool> {
     rename_in(&state_home(), old, new)
 }
 
-pub fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Result<usize> {
+pub(super) fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Result<usize> {
     prune_orphans_in(&state_home(), known, scopes)
 }
 

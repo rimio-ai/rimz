@@ -111,9 +111,11 @@ fn spend_summary_uses_ledger_cap_window_and_park_projection() {
     });
     write_ledger(&runtime, &state.kind, &state.agent_id, &ledger).expect("write ledger");
 
+    let spend = agent_budget_spend(&runtime, &state, Some(100.0));
+    let cap = spend.cap.expect("ledger cap");
     assert_eq!(
-        spend_summary(&runtime, &state, Some(100.0)).as_deref(),
-        Some("$5.25 of $6.00/day"),
+        fmt_spend(spend.spent_usd.unwrap_or(0.0), cap.cap_usd, cap.window),
+        "$5.25 of $6.00/day",
         "ledger spec and observed agent cost take precedence"
     );
 
@@ -126,9 +128,11 @@ fn spend_summary_uses_ledger_cap_window_and_park_projection() {
         account_kind: None,
         resets_at: None,
     });
+    let spend = agent_budget_spend(&runtime, &state, None);
+    let cap = spend.cap.expect("park cap");
     assert_eq!(
-        spend_summary(&runtime, &state, None).as_deref(),
-        Some("$4.50 of $4.00/day")
+        fmt_spend(spend.spent_usd.unwrap_or(0.0), cap.cap_usd, cap.window),
+        "$4.50 of $4.00/day"
     );
 }
 
