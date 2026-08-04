@@ -105,8 +105,24 @@ fn project_group_roots_publishes_exact_marker_names() {
         worktree_path: external.clone(),
         created_at: jiff::Timestamp::now(),
     };
-    atomic::write_temp_then_rename(&crate::worktree::marker_path(&external).unwrap(), &marker)
-        .unwrap();
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&external)
+        .args(["rev-parse", "--git-dir"])
+        .output()
+        .expect("git dir");
+    assert!(output.status.success(), "resolve git dir");
+    let git_dir = PathBuf::from(
+        String::from_utf8(output.stdout)
+            .expect("utf8 git dir")
+            .trim(),
+    );
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        external.join(git_dir)
+    };
+    atomic::write_temp_then_rename(&git_dir.join("rimz-worktree.json"), &marker).unwrap();
     let runtime_dir = tempfile::tempdir().unwrap();
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(&main), runtime_dir.path()).unwrap();

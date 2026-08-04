@@ -153,7 +153,7 @@ The sidebar also resolves its own trunk, trying the per-machine `[sidebar] trunk
 
 Git safety is not enough on its own: a tree can be clean and landed while a human still has a shell open in it. `ProtectionSet` folds the room's live state into the answer.
 
-The CLI gathers the facts once (pane cwds from the mux, agent rows and liveness from the store) and `ProtectionSet::from_facts` normalizes them:
+The CLI gathers the facts once (pane cwds from the mux, agent rows and liveness from the store) and `protection_set_from_runtime` normalizes them:
 
 - Panes contribute their cwd, except the sidebar's own chrome and the caller's own pane.
 - A **live** agent contributes both its recorded launch path and its real process cwd.

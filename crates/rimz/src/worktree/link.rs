@@ -195,7 +195,15 @@ mod tests {
                 .expect("src canonical")
         );
 
-        let exclude = super::super::exclude::exclude_path(&worktree).expect("exclude path");
+        let exclude =
+            super::super::git_stdout(&worktree, ["rev-parse", "--git-path", "info/exclude"])
+                .map(std::path::PathBuf::from)
+                .expect("exclude path");
+        let exclude = if exclude.is_absolute() {
+            exclude
+        } else {
+            worktree.join(exclude)
+        };
         let text = std::fs::read_to_string(&exclude).expect("exclude text");
         assert_eq!(
             text.lines().filter(|line| *line == "/node_modules").count(),

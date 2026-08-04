@@ -83,11 +83,11 @@ fn write_rimz_worktree_marker_with_pr(
         worktree_path: repo.path().to_path_buf(),
         created_at: jiff::Timestamp::now(),
     };
-    crate::store::atomic::write_temp_then_rename(
-        &crate::worktree::marker_path(repo.path()).unwrap(),
-        &marker,
-    )
-    .unwrap();
+    let git_dir = crate::worktree::git_admin_dir_from_checkout_metadata(repo.path())
+        .unwrap()
+        .expect("git admin dir");
+    crate::store::atomic::write_temp_then_rename(&git_dir.join("rimz-worktree.json"), &marker)
+        .unwrap();
 }
 
 #[test]

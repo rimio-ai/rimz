@@ -321,12 +321,6 @@ pub enum LandedVerdict {
     Unknown,
 }
 
-impl LandedVerdict {
-    pub const fn is_landed(self) -> bool {
-        matches!(self, Self::Landed)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BranchDeletion {
     Deleted,
@@ -335,19 +329,19 @@ pub enum BranchDeletion {
 
 /// One live mux pane fact gathered before worktree removal assessment.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PaneProtectionFact {
-    pub pane_id: PaneId,
-    pub cwd: Option<PathBuf>,
-    pub sidebar: bool,
+struct PaneProtectionFact {
+    pane_id: PaneId,
+    cwd: Option<PathBuf>,
+    sidebar: bool,
 }
 
 /// One durable agent fact with process state already probed by CLI.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentProtectionFact {
-    pub pane_id: Option<PaneId>,
-    pub liveness: AgentLiveness,
-    pub stored_path: Option<PathBuf>,
-    pub process_cwd: Option<PathBuf>,
+struct AgentProtectionFact {
+    pane_id: Option<PaneId>,
+    liveness: AgentLiveness,
+    stored_path: Option<PathBuf>,
+    process_cwd: Option<PathBuf>,
 }
 
 /// Normalized paths whose live panes or agents prevent checkout removal.
@@ -412,7 +406,7 @@ pub enum RemovalAssessment {
 
 impl ProtectionSet {
     /// Fold already-probed pane and agent facts into one normalized set.
-    pub fn from_facts(
+    fn from_facts(
         panes: &[PaneProtectionFact],
         agents: &[AgentProtectionFact],
         own_pane: Option<&PaneId>,
@@ -448,7 +442,9 @@ impl ProtectionSet {
     /// Whether a candidate checkout contains any protected path.
     pub fn protects(&self, candidate: &Path) -> bool {
         let candidate = normalize_path_lexical(candidate);
-        self.paths.iter().any(|path| path_inside(path, &candidate))
+        self.paths
+            .iter()
+            .any(|path| path == &candidate || path.starts_with(&candidate))
     }
 
     /// Classify one checkout with in-use taking precedence over work state.
@@ -457,7 +453,7 @@ impl ProtectionSet {
             RemovalAssessment::InUse
         } else if status.dirty {
             RemovalAssessment::Dirty
-        } else if !status.landed.is_landed() {
+        } else if status.landed != LandedVerdict::Landed {
             RemovalAssessment::NotLanded
         } else {
             RemovalAssessment::Removable
@@ -479,7 +475,6 @@ impl ProtectionSet {
 pub struct RemovalOutcome {
     worktree_name: String,
     branch: String,
-    repo_root: PathBuf,
     removed_path: PathBuf,
     branch_deletion: BranchDeletion,
 }
@@ -492,20 +487,8 @@ pub struct RemovalRetirement {
 }
 
 impl RemovalOutcome {
-    pub fn worktree_name(&self) -> &str {
-        &self.worktree_name
-    }
-
     pub fn branch(&self) -> &str {
         &self.branch
-    }
-
-    pub fn repo_root(&self) -> &Path {
-        &self.repo_root
-    }
-
-    pub fn removed_path(&self) -> &Path {
-        &self.removed_path
     }
 
     pub const fn branch_deletion(&self) -> BranchDeletion {
@@ -524,9 +507,9 @@ pub fn retire_removal(
     session_name: &str,
 ) -> RemovalRetirement {
     let session_retirement =
-        store.retire_worktree_sessions(removed.removed_path(), Some(removed.branch()));
+        store.retire_worktree_sessions(&removed.removed_path, Some(removed.branch()));
     let message_archival =
-        store.archive_channel_messages(removed.worktree_name(), archive_reason, session_name);
+        store.archive_channel_messages(&removed.worktree_name, archive_reason, session_name);
     RemovalRetirement {
         session_retirement,
         message_archival,
@@ -823,18 +806,18 @@ pub fn sweep_owned(
                 );
                 if let Err(err) = retirement.session_retirement {
                     tracing::warn!(
-                        worktree = %removed.worktree_name(),
+                        worktree = %removed.worktree_name,
                         error = %err,
                         "could not retire sessions for removed worktree",
                     );
                 }
                 let archive_error = retirement.message_archival.err().map(|err| err.to_string());
                 sweep.removed.push(SweptWorktree {
-                    name: removed.worktree_name().to_owned(),
-                    branch: removed.branch().to_owned(),
-                    path: removed.removed_path().to_owned(),
+                    name: removed.worktree_name,
+                    branch: removed.branch,
+                    path: removed.removed_path,
                     bytes,
-                    branch_deletion: Some(removed.branch_deletion()),
+                    branch_deletion: Some(removed.branch_deletion),
                     archive_error,
                 });
             }
@@ -846,7 +829,7 @@ pub fn sweep_owned(
     }
     if !sweep.removed.is_empty()
         && !dry_run
-        && let Err(err) = prune(repo_root)
+        && let Err(err) = git_run(repo_root, ["worktree", "prune"])
     {
         tracing::debug!(error = %err, "could not prune worktree metadata after sweep");
     }
@@ -898,7 +881,6 @@ pub fn remove_marked_worktree(
     Ok(RemovalOutcome {
         worktree_name: marker.name.clone(),
         branch: marker.branch.clone(),
-        repo_root: repo_root.to_owned(),
         removed_path: path.to_owned(),
         branch_deletion,
     })
@@ -952,11 +934,6 @@ pub fn discover_owned(repo_root: &Path) -> Result<Vec<ManagedWorktree>> {
     Ok(entries)
 }
 
-pub fn prune(repo_root: &Path) -> Result<()> {
-    ensure_repo(repo_root)?;
-    git_run(repo_root, ["worktree", "prune"])
-}
-
 pub fn status(worktree: &Path, marker: &WorktreeMarker) -> Result<WorktreeStatus> {
     let porcelain = git_stdout(worktree, ["status", "--porcelain"])?;
     let landed = comparison_ref(worktree, marker)
@@ -970,7 +947,9 @@ pub fn status(worktree: &Path, marker: &WorktreeMarker) -> Result<WorktreeStatus
 
 fn leave_worktree_before_removal(repo_root: &Path, path: &Path) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    if path_inside(&normalize_path_lexical(&cwd), &normalize_path_lexical(path)) {
+    let cwd = normalize_path_lexical(&cwd);
+    let path = normalize_path_lexical(path);
+    if cwd == path || cwd.starts_with(path) {
         std::env::set_current_dir(repo_root)?;
     }
     Ok(())
@@ -1091,7 +1070,7 @@ pub(crate) fn git_admin_dir_from_checkout_metadata(worktree: &Path) -> Result<Op
     Ok(Some(git_dir))
 }
 
-pub fn marker_path(worktree: &Path) -> Result<PathBuf> {
+fn marker_path(worktree: &Path) -> Result<PathBuf> {
     let git_dir = git_stdout(worktree, ["rev-parse", "--git-dir"])?;
     let path = PathBuf::from(git_dir.trim());
     Ok(if path.is_absolute() {
@@ -1100,10 +1079,6 @@ pub fn marker_path(worktree: &Path) -> Result<PathBuf> {
         worktree.join(path)
     }
     .join(MARKER_FILE))
-}
-
-pub fn path_inside(path: &Path, parent: &Path) -> bool {
-    path == parent || path.starts_with(parent)
 }
 
 /// Fold `.` and `..` components without touching the filesystem.

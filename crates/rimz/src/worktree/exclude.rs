@@ -51,7 +51,7 @@ fn ensure_excluded_patterns<'a>(checkout: &Path, patterns: impl IntoIterator<Ite
     }
 }
 
-pub(super) fn exclude_path(checkout: &Path) -> Option<PathBuf> {
+fn exclude_path(checkout: &Path) -> Option<PathBuf> {
     let raw = match git_stdout(checkout, ["rev-parse", "--git-path", "info/exclude"]) {
         Ok(raw) => raw,
         Err(err) => {

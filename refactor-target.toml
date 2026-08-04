@@ -711,7 +711,7 @@ allowed-imports = [
     "store::runtime",
     "workspace",
 ]
-surface-budget = 65
+surface-budget = 55
 
 [[strangler]]
 symbol = "purge_zellij_session_cache_in"

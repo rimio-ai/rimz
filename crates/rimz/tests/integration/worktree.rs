@@ -67,12 +67,6 @@ fn worktree_new_list_and_remove_round_trip() {
         git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"]),
         "demo"
     );
-    assert!(
-        rimz::worktree::marker_path(&path)
-            .expect("marker path")
-            .is_file(),
-        "marker lives in git admin dir"
-    );
     let marker = rimz::worktree::read_marker_for_worktree(&path)
         .expect("read marker")
         .expect("marker");
