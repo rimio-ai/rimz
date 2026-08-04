@@ -233,7 +233,9 @@ surface-budget = 68
 path = "crates/rimz/src/message.rs"
 allowed-imports = [
     "agents",
+    "harness::target",
     "ids",
+    "store::snapshot",
 ]
 surface-budget = 89
 
