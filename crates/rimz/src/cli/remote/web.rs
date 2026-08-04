@@ -5,19 +5,15 @@
 
 use std::io::{IsTerminal, Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::path::Path;
 use std::process::Stdio;
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use rimz::remote::recovery::{ConnectStage, HandoffStage};
 
 use super::RemoteConnect;
-use super::outage_ui::{OutageUi, release_handoff_screen};
-use super::supervisor::{OutageState, WaitOutcome};
+use super::supervisor::LinkSupervisor;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct RemoteWebOptions {
@@ -114,26 +110,6 @@ impl RemoteTunnel {
     }
 }
 
-struct HeldAlternateScreen(bool);
-
-impl HeldAlternateScreen {
-    fn new(held: bool) -> Self {
-        Self(held)
-    }
-
-    fn release(&mut self) {
-        if std::mem::take(&mut self.0) {
-            release_handoff_screen();
-        }
-    }
-}
-
-impl Drop for HeldAlternateScreen {
-    fn drop(&mut self) {
-        self.release();
-    }
-}
-
 pub(super) fn run_remote_web(
     remote: &RemoteConnect,
     client_size: Option<(u16, u16)>,
@@ -159,16 +135,18 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
     let WebPrepOutcome::Ready(prep) = prep else {
         bail!("preparing remote web access failed with status 255");
     };
-    let (payload, credential) = parse_web_payload(&prep)?;
+    let (payload, tunnel_port, credential) = parse_web_payload(&prep)?;
     let relay_listener = rimz::remote::web::bind_local_relay(&payload.session, remote.web.port)
         .context("binding local web tunnel relay")?;
     let local_port = relay_listener.local_addr()?.port();
     let forward_port = rimz::remote::web::reserve_forward_port()
         .context("reserving local SSH web forward port")?;
-    let relay_target = Arc::new(Mutex::new(make_relay_target(forward_port, &credential)));
+    let relay_target = Arc::new(Mutex::new(rimz::web::RelayTarget {
+        upstream: SocketAddr::from(([127, 0, 0, 1], forward_port)),
+        authorization: credential.authorization(),
+    }));
     spawn_tunnel_relay(relay_listener, relay_target)?;
-    let spec =
-        rimz::remote::web::web_tunnel_spec(&remote.target, forward_port, tunnel_port(&payload));
+    let spec = rimz::remote::web::web_tunnel_spec(&remote.target, forward_port, tunnel_port);
     let mut tunnel = RemoteTunnel::start(&spec, remote.target.host_display())?;
     match tunnel.wait_until_ready(forward_port)? {
         PortWait::Ready => {}
@@ -176,7 +154,7 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
             bail!("web tunnel exited before local port accepted connections");
         }
     }
-    let url = rimz::remote::web::local_url(&payload, local_port);
+    let url = payload.local_url(local_port);
     writeln!(std::io::stdout().lock(), "{url}")?;
     super::super::open_browser_best_effort(&url);
     report_web_tunnel_up(remote.target.host_display(), false);
@@ -194,48 +172,24 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
     let control = rimz::remote::link::validated_control_path()
         .context("checking SSH ControlMaster socket path")?;
     let plan = remote.attach_plan(client_size)?;
-    let policy = rimz::remote::ReconnectPolicy::from_env();
     let mut reconnect = rimz::remote::ReconnectState::new();
-    let dial_plan = super::supervisor::resolve_dial_plan(remote.target.ssh_destination().as_str());
-    let stop = AtomicBool::new(false);
     let host = remote.target.host_display();
-    let mut initial_ui = OutageUi::auto(ConnectStage::Initial, host);
-    initial_ui.report_connecting();
-    let mut initial_outage = OutageState::new(
-        ConnectStage::Initial,
-        HandoffStage::WebTunnel,
-        host,
-        super::supervisor::internet_probe_for_wait(&initial_ui),
-        dial_plan.as_ref(),
-    );
-    let (mut master, initial_held_alt) = match super::supervisor::wait_for_master(
-        &plan,
-        &control,
-        dial_plan.as_ref(),
-        &policy,
-        &mut initial_outage,
-        &mut initial_ui,
-        Some(&stop),
-    )? {
-        WaitOutcome::Connected { master, held_alt } => (Some(master), held_alt),
-        WaitOutcome::NeedsInteractive => (None, false),
-        WaitOutcome::Interrupted => return Ok(()),
+    let Some(mut supervisor) = LinkSupervisor::connect(plan, control)? else {
+        return Ok(());
     };
-    let mut held_alt = HeldAlternateScreen::new(initial_held_alt);
     let mut first_prep = true;
     let mut first_round = true;
     let mut local_port = None;
     let mut relay_state = None;
-    let mut outage = None;
 
     loop {
-        let master_confirmed = master.is_some();
-        let round_control = master_confirmed.then_some(control.as_path());
+        let round_control = supervisor.control().map(ToOwned::to_owned);
+        let master_confirmed = round_control.is_some();
         let prep = run_web_prep(
             &rimz::remote::web::web_prep_spec(
                 &remote.target,
                 web_prep_options(remote, client_size, first_prep),
-                round_control,
+                round_control.as_deref(),
             ),
             "preparing remote web access",
             host,
@@ -258,31 +212,21 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
                 )? {
                     WebExitAction::Done => return Ok(()),
                     WebExitAction::Retry => {
-                        held_alt.release();
-                        drop(master.take());
-                        let Some((next_master, next_held_alt)) = wait_for_web_recovery(
-                            &plan,
-                            &control,
-                            dial_plan.as_ref(),
-                            &policy,
-                            &stop,
-                            host,
-                            &mut outage,
-                        )?
-                        else {
+                        if !supervisor.recover()? {
                             return Ok(());
-                        };
-                        master = Some(next_master);
-                        held_alt = HeldAlternateScreen::new(next_held_alt);
+                        }
                         continue;
                     }
                 }
             }
         };
-        let (payload, credential) = parse_web_payload(&prep)?;
+        let (payload, tunnel_port, credential) = parse_web_payload(&prep)?;
         let forward_port = rimz::remote::web::reserve_forward_port()
             .context("reserving local SSH web forward port")?;
-        let round_target = make_relay_target(forward_port, &credential);
+        let round_target = rimz::web::RelayTarget {
+            upstream: SocketAddr::from(([127, 0, 0, 1], forward_port)),
+            authorization: credential.authorization(),
+        };
         let local_port = match local_port {
             Some(port) => port,
             None => {
@@ -300,19 +244,16 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         let mut tunnel = if round_control.is_some() {
             None
         } else {
-            let spec = rimz::remote::web::web_tunnel_spec(
-                &remote.target,
-                forward_port,
-                tunnel_port(&payload),
-            );
+            let spec =
+                rimz::remote::web::web_tunnel_spec(&remote.target, forward_port, tunnel_port);
             Some(RemoteTunnel::start(&spec, host)?)
         };
-        let readiness = match (round_control, tunnel.as_mut()) {
+        let readiness = match (round_control.as_deref(), tunnel.as_mut()) {
             (Some(control), None) => establish_control_forward(
                 &rimz::remote::web::web_control_forward_spec(
                     &remote.target,
                     forward_port,
-                    tunnel_port(&payload),
+                    tunnel_port,
                     control,
                 ),
                 host,
@@ -332,37 +273,23 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
                 )? {
                     WebExitAction::Done => return Ok(()),
                     WebExitAction::Retry => {
-                        held_alt.release();
-                        drop(master.take());
-                        let Some((next_master, next_held_alt)) = wait_for_web_recovery(
-                            &plan,
-                            &control,
-                            dial_plan.as_ref(),
-                            &policy,
-                            &stop,
-                            host,
-                            &mut outage,
-                        )?
-                        else {
+                        if !supervisor.recover()? {
                             return Ok(());
-                        };
-                        master = Some(next_master);
-                        held_alt = HeldAlternateScreen::new(next_held_alt);
+                        }
                         continue;
                     }
                 }
             }
         };
 
-        held_alt.release();
-        replace_relay_target(
-            relay_state
-                .as_ref()
-                .context("local web tunnel relay is not running")?,
-            round_target,
-        );
+        supervisor.round_ready();
+        *relay_state
+            .as_ref()
+            .context("local web tunnel relay is not running")?
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = round_target;
         if first_round {
-            let url = rimz::remote::web::local_url(&payload, local_port);
+            let url = payload.local_url(local_port);
             writeln!(std::io::stdout().lock(), "{url}")?;
             super::super::open_browser_best_effort(&url);
             report_web_tunnel_up(host, true);
@@ -370,14 +297,9 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         } else {
             let _ = writeln!(std::io::stderr().lock(), "rimz: tunnel to {host} restored");
         }
-        outage = None;
-
         let exit_code = match tunnel.as_mut() {
             Some(tunnel) => tunnel.wait_for_exit()?,
-            None => master
-                .as_mut()
-                .context("remote web ControlMaster is not running")?
-                .wait_for_exit()?,
+            None => supervisor.wait_for_exit()?,
         };
         match web_exit_action(
             settle_web_exit(&mut reconnect, exit_code, master_confirmed, port_ready),
@@ -385,67 +307,10 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         )? {
             WebExitAction::Done => return Ok(()),
             WebExitAction::Retry => {
-                drop(master.take());
-                let Some((next_master, next_held_alt)) = wait_for_web_recovery(
-                    &plan,
-                    &control,
-                    dial_plan.as_ref(),
-                    &policy,
-                    &stop,
-                    host,
-                    &mut outage,
-                )?
-                else {
+                if !supervisor.recover()? {
                     return Ok(());
-                };
-                master = Some(next_master);
-                held_alt = HeldAlternateScreen::new(next_held_alt);
+                }
             }
-        }
-    }
-}
-
-fn wait_for_web_recovery(
-    plan: &rimz::remote::SshAttachPlan,
-    control: &Path,
-    dial_plan: Option<&rimz::remote::reachability::DialPlan>,
-    policy: &rimz::remote::ReconnectPolicy,
-    stop: &AtomicBool,
-    host: &str,
-    outage: &mut Option<OutageState>,
-) -> Result<Option<(super::supervisor::MasterGuard, bool)>> {
-    let mut ui = OutageUi::auto(ConnectStage::Recovery, host);
-    let outage = outage.get_or_insert_with(|| {
-        if ui.is_plain() {
-            let _ = writeln!(
-                std::io::stderr().lock(),
-                "rimz: web tunnel to {host} lost — reconnecting in the background; Ctrl-C stops",
-            );
-        }
-        OutageState::new(
-            ConnectStage::Recovery,
-            HandoffStage::WebTunnel,
-            host,
-            super::supervisor::internet_probe_for_wait(&ui),
-            dial_plan,
-        )
-    });
-    match super::supervisor::wait_for_master(
-        plan,
-        control,
-        dial_plan,
-        policy,
-        outage,
-        &mut ui,
-        Some(stop),
-    )? {
-        WaitOutcome::Connected { master, held_alt } => Ok(Some((master, held_alt))),
-        WaitOutcome::Interrupted => {
-            let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped");
-            Ok(None)
-        }
-        WaitOutcome::NeedsInteractive => {
-            unreachable!("web recovery stays in batch mode")
         }
     }
 }
@@ -465,7 +330,7 @@ fn web_prep_options(
 
 fn parse_web_payload(
     bytes: &[u8],
-) -> Result<(rimz::web::WebOpenPayload, rimz::web::WebCredential)> {
+) -> Result<(rimz::web::WebOpenPayload, u16, rimz::web::WebCredential)> {
     let payload: rimz::web::WebOpenPayload = serde_json::from_slice(bytes)
         .with_context(|| remote_output_context("parsing remote `rimz web open --json`", bytes))?;
     if !payload.version_ok() {
@@ -474,33 +339,9 @@ fn parse_web_payload(
             payload.version
         );
     }
-    if matches!(&payload.auth, rimz::web::WebAuth::TrustedHeader { .. })
-        && payload.credential.is_none()
-    {
-        bail!(
-            "the remote serves browser access behind a reverse proxy (trusted-header auth) — open `{}` directly; no SSH tunnel applies",
-            payload.url
-        );
-    }
-    let credential = payload
-        .credential
-        .clone()
-        .context("remote `rimz web open --json` omitted the ttyd credential")?;
-    Ok((payload, credential))
-}
-
-fn tunnel_port(payload: &rimz::web::WebOpenPayload) -> u16 {
-    payload.tunnel_port.unwrap_or(payload.port)
-}
-
-fn make_relay_target(
-    forward_port: u16,
-    credential: &rimz::web::WebCredential,
-) -> rimz::web::RelayTarget {
-    rimz::web::RelayTarget {
-        upstream: SocketAddr::from(([127, 0, 0, 1], forward_port)),
-        authorization: credential.authorization(),
-    }
+    let (tunnel_port, credential) = payload.tunnel()?;
+    let credential = credential.clone();
+    Ok((payload, tunnel_port, credential))
 }
 
 fn spawn_tunnel_relay(
@@ -516,13 +357,6 @@ fn spawn_tunnel_relay(
         })
         .context("starting local web tunnel relay")?;
     Ok(())
-}
-
-fn replace_relay_target(
-    target: &Mutex<rimz::web::RelayTarget>,
-    replacement: rimz::web::RelayTarget,
-) {
-    *target.lock().unwrap_or_else(PoisonError::into_inner) = replacement;
 }
 
 enum WebPrepOutcome {
@@ -643,50 +477,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_trusted_header_payload_refuses_an_ssh_tunnel() {
+    fn wrong_web_payload_schema_keeps_upgrade_diagnosis() {
         let bytes = br#"{
-            "version":"rimz.web.v2",
-            "url":"https://devbox.example/rimz/?arg=room",
-            "session":"room",
-            "port":8200,
-            "auth":{"mode":"trusted_header","header":"X-Forwarded-User"}
-        }"#;
-        let err = parse_web_payload(bytes).expect_err("trusted-header tunnel refusal");
-        let message = err.to_string();
-        assert!(message.contains("behind a reverse proxy"), "{message}");
-        assert!(
-            message.contains("open `https://devbox.example/rimz/?arg=room` directly"),
-            "{message}"
-        );
-    }
-
-    #[test]
-    fn trusted_header_payload_with_a_credential_tunnels_to_its_upstream_port() {
-        let bytes = br#"{
-            "version":"rimz.web.v2",
-            "url":"https://devbox.example/rimz/?arg=room",
-            "session":"room",
-            "port":8200,
-            "tunnel_port":41820,
-            "auth":{"mode":"trusted_header","header":"X-Forwarded-User"},
-            "credential":{"username":"rimz","secret":"secret"}
-        }"#;
-        let (payload, credential) = parse_web_payload(bytes).expect("trusted-header tunnel");
-        assert_eq!(credential.username, "rimz");
-        assert_eq!(tunnel_port(&payload), 41820);
-    }
-
-    #[test]
-    fn legacy_basic_payload_tunnels_to_its_public_port() {
-        let bytes = br#"{
-            "version":"rimz.web.v2",
+            "version":"rimz.web.v1",
             "url":"http://127.0.0.1:8200/?arg=room",
             "session":"room",
             "port":8200,
             "credential":{"username":"rimz","secret":"secret"}
         }"#;
-        let (payload, _) = parse_web_payload(bytes).expect("legacy Basic tunnel");
-        assert_eq!(tunnel_port(&payload), 8200);
+        assert_eq!(
+            parse_web_payload(bytes)
+                .expect_err("schema refusal")
+                .to_string(),
+            "remote `rimz web open --json` returned schema `rimz.web.v1`; upgrade the remote rimz binary"
+        );
     }
 
     #[test]

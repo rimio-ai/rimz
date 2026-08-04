@@ -35,7 +35,7 @@ const PROBE_RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(30);
 const SSH_CONFIG_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTO_FORWARD_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 
-pub(super) struct OutageState {
+struct OutageState {
     connect_stage: ConnectStage,
     started: Instant,
     internet_probe: Option<InternetProbe>,
@@ -44,7 +44,7 @@ pub(super) struct OutageState {
 }
 
 impl OutageState {
-    pub(super) fn new(
+    fn new(
         connect_stage: ConnectStage,
         handoff_stage: HandoffStage,
         host: &str,
@@ -79,6 +79,135 @@ impl OutageState {
 
     fn note_next_attempt(&mut self) {
         self.panel.note_attempt(self.attempts.saturating_add(1));
+    }
+}
+
+pub(super) struct LinkSupervisor {
+    plan: SshAttachPlan,
+    control_path: PathBuf,
+    policy: rimz::remote::ReconnectPolicy,
+    dial_plan: Option<DialPlan>,
+    stop: AtomicBool,
+    outage: Option<OutageState>,
+    master: Option<MasterGuard>,
+    held_alt: bool,
+    host: String,
+}
+
+impl LinkSupervisor {
+    /// Establish the initial batch-mode master. `None` means the user
+    /// interrupted the recovery panel; a supervisor without a control path
+    /// requests the initial interactive fallback.
+    pub(super) fn connect(plan: SshAttachPlan, control_path: PathBuf) -> Result<Option<Self>> {
+        let dial_plan = resolve_dial_plan(plan.target().ssh_destination().as_str());
+        let host = plan.target().host_display().to_owned();
+        let mut supervisor = Self {
+            plan,
+            control_path,
+            policy: rimz::remote::ReconnectPolicy::from_env(),
+            dial_plan,
+            stop: AtomicBool::new(false),
+            outage: None,
+            master: None,
+            held_alt: false,
+            host,
+        };
+        let mut ui = OutageUi::auto(ConnectStage::Initial, &supervisor.host);
+        ui.report_connecting();
+        let mut outage = OutageState::new(
+            ConnectStage::Initial,
+            HandoffStage::WebTunnel,
+            &supervisor.host,
+            internet_probe_for_wait(&ui),
+            supervisor.dial_plan.as_ref(),
+        );
+        match wait_for_master(
+            &supervisor.plan,
+            &supervisor.control_path,
+            supervisor.dial_plan.as_ref(),
+            &supervisor.policy,
+            &mut outage,
+            &mut ui,
+            Some(&supervisor.stop),
+        )? {
+            WaitOutcome::Connected { master, held_alt } => {
+                supervisor.master = Some(master);
+                supervisor.held_alt = held_alt;
+                Ok(Some(supervisor))
+            }
+            WaitOutcome::NeedsInteractive => Ok(Some(supervisor)),
+            WaitOutcome::Interrupted => Ok(None),
+        }
+    }
+
+    pub(super) fn recover(&mut self) -> Result<bool> {
+        self.release_screen();
+        drop(self.master.take());
+        let mut ui = OutageUi::auto(ConnectStage::Recovery, &self.host);
+        let outage = self.outage.get_or_insert_with(|| {
+            if ui.is_plain() {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "rimz: web tunnel to {} lost — reconnecting in the background; Ctrl-C stops",
+                    self.host,
+                );
+            }
+            OutageState::new(
+                ConnectStage::Recovery,
+                HandoffStage::WebTunnel,
+                &self.host,
+                internet_probe_for_wait(&ui),
+                self.dial_plan.as_ref(),
+            )
+        });
+        match wait_for_master(
+            &self.plan,
+            &self.control_path,
+            self.dial_plan.as_ref(),
+            &self.policy,
+            outage,
+            &mut ui,
+            Some(&self.stop),
+        )? {
+            WaitOutcome::Connected { master, held_alt } => {
+                self.master = Some(master);
+                self.held_alt = held_alt;
+                Ok(true)
+            }
+            WaitOutcome::Interrupted => {
+                let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped");
+                Ok(false)
+            }
+            WaitOutcome::NeedsInteractive => unreachable!("web recovery stays in batch mode"),
+        }
+    }
+
+    pub(super) fn control(&self) -> Option<&Path> {
+        self.master.as_ref().map(|_| self.control_path.as_path())
+    }
+
+    pub(super) fn round_ready(&mut self) {
+        self.release_screen();
+        self.outage = None;
+    }
+
+    pub(super) fn wait_for_exit(&mut self) -> Result<Option<i32>> {
+        self.master
+            .as_mut()
+            .context("remote web ControlMaster is not running")?
+            .wait_for_exit()
+    }
+
+    fn release_screen(&mut self) {
+        if std::mem::take(&mut self.held_alt) {
+            release_handoff_screen();
+        }
+    }
+}
+
+impl Drop for LinkSupervisor {
+    fn drop(&mut self) {
+        self.release_screen();
     }
 }
 
@@ -416,7 +545,7 @@ struct SessionOutcome {
     stderr: Option<String>,
 }
 
-pub(super) fn resolve_dial_plan(destination: &str) -> Option<DialPlan> {
+fn resolve_dial_plan(destination: &str) -> Option<DialPlan> {
     dial_interval_from_env()?;
     let output = match ssh_config_query_spec(destination).run_with_timeout(SSH_CONFIG_QUERY_TIMEOUT)
     {
@@ -458,13 +587,13 @@ fn dial_with_timeout(plan: &DialPlan, timeout: Duration) -> bool {
     false
 }
 
-pub(super) enum WaitOutcome {
+enum WaitOutcome {
     Connected { master: MasterGuard, held_alt: bool },
     NeedsInteractive,
     Interrupted,
 }
 
-pub(super) fn internet_probe_for_wait(ui: &OutageUi) -> Option<InternetProbe> {
+fn internet_probe_for_wait(ui: &OutageUi) -> Option<InternetProbe> {
     if ui.is_plain() {
         None
     } else {
@@ -472,7 +601,7 @@ pub(super) fn internet_probe_for_wait(ui: &OutageUi) -> Option<InternetProbe> {
     }
 }
 
-pub(super) fn wait_for_master(
+fn wait_for_master(
     plan: &SshAttachPlan,
     control_path: &Path,
     dial_plan: Option<&DialPlan>,
@@ -1077,7 +1206,7 @@ impl Drop for MasterAttempt {
     }
 }
 
-pub(super) struct MasterGuard {
+struct MasterGuard {
     child: Option<Child>,
     stderr: Option<std::thread::JoinHandle<String>>,
     control_path: PathBuf,
@@ -1086,7 +1215,7 @@ pub(super) struct MasterGuard {
 impl MasterGuard {
     /// Wait for the owning ControlMaster. Master-owned forwards remain live
     /// until this child exits, so remote web uses this as its foreground wait.
-    pub(super) fn wait_for_exit(&mut self) -> Result<Option<i32>> {
+    fn wait_for_exit(&mut self) -> Result<Option<i32>> {
         let mut child = self
             .child
             .take()
