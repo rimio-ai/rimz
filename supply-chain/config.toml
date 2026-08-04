@@ -165,7 +165,7 @@ version = "3.2.5"
 criteria = "safe-to-run"
 
 [[exemptions.clap_complete]]
-version = "4.6.7"
+version = "4.6.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_derive]]
@@ -912,6 +912,10 @@ criteria = "safe-to-run"
 version = "0.2.21"
 criteria = "safe-to-deploy"
 
+[[exemptions.proc-macro2]]
+version = "1.0.107"
+criteria = "safe-to-deploy"
+
 [[exemptions.proptest]]
 version = "1.11.0"
 criteria = "safe-to-run"
@@ -1085,27 +1089,27 @@ version = "1.0.28"
 criteria = "safe-to-deploy"
 
 [[exemptions.sentry]]
-version = "0.48.5"
+version = "0.49.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.sentry-backtrace]]
-version = "0.48.5"
+version = "0.49.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.sentry-core]]
-version = "0.48.5"
+version = "0.49.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.sentry-panic]]
-version = "0.48.5"
+version = "0.49.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.sentry-tracing]]
-version = "0.48.5"
+version = "0.49.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.sentry-types]]
-version = "0.48.5"
+version = "0.49.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.serde_ignored]]
