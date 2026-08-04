@@ -13,7 +13,7 @@ use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::harness::rebirth::RebirthPlan;
 use crate::ids::{MuxName, WorkspaceId};
 use crate::mux::{
-    BackgroundViewOptions, CommandSpec, MuxBackend, MuxErr, PresencePluginOptions, SessionHealth,
+    BackgroundViewOptions, CommandSpec, MuxBackend, MuxErr, PresencePluginOptions, SessionLiveness,
     SessionOptions, SidebarPaneOptions, SidebarWidth,
 };
 use crate::remote_control::ReadinessSnapshot;
@@ -58,13 +58,11 @@ pub fn require_live_mux(
 
 /// Require one managed room session on an already-selected backend.
 pub fn require_live_session(backend: &dyn MuxBackend, session_name: &str) -> LiveRoomResult<()> {
-    let sessions = backend.list_sessions()?;
-    if sessions.iter().any(|session| session == session_name) {
-        Ok(())
-    } else {
-        Err(LiveRoomErr::Unavailable {
+    match backend.session_liveness(session_name)? {
+        SessionLiveness::Live => Ok(()),
+        SessionLiveness::Exited | SessionLiveness::Absent => Err(LiveRoomErr::Unavailable {
             session_name: session_name.to_owned(),
-        })
+        }),
     }
 }
 
@@ -242,19 +240,10 @@ impl RoomContext {
     /// Probe a selected backend before first-run config can construct final context.
     pub fn session_is_healthy_live(mux: MuxName, session_name: &str) -> bool {
         let backend = crate::mux::backend_for(mux);
-        Self::probe_healthy_live(backend.as_ref(), session_name)
-    }
-
-    fn probe_healthy_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
-        let exists = backend
-            .list_sessions()
-            .map(|sessions| sessions.iter().any(|name| name == session_name))
-            .unwrap_or(false);
-        exists
-            && matches!(
-                backend.probe_session_health(session_name),
-                Ok(SessionHealth::Healthy)
-            )
+        matches!(
+            backend.session_liveness(session_name),
+            Ok(SessionLiveness::Live)
+        )
     }
 
     /// Inspect previous incarnation state without mutating it.
