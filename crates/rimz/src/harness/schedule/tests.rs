@@ -3,9 +3,6 @@ use jiff::civil::date;
 
 use Weekday::{Fri, Mon, Wed};
 
-const DURATION_SMHD: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)];
-const DURATION_SMH: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600)];
-
 pub(super) fn zdt(year: i16, month: i8, day: i8, hour: i8, minute: i8, second: i8) -> Zoned {
     date(year, month, day)
         .at(hour, minute, second, 0)
@@ -57,26 +54,6 @@ fn wake_target() -> TaskTarget {
 
 fn schedule_of(entry: &TaskEntry) -> Schedule {
     parse_schedule("m", entry).expect("parse").schedule
-}
-
-#[test]
-fn duration_units_parse_and_reject_by_allowed_set() {
-    for (raw, allowed, expected) in [
-        ("30s", DURATION_SMH, Duration::from_secs(30)),
-        ("5m", DURATION_SMH, Duration::from_secs(300)),
-        ("1h", DURATION_SMH, Duration::from_secs(3600)),
-        ("7d", DURATION_SMHD, Duration::from_secs(7 * 86_400)),
-    ] {
-        assert_eq!(parse_duration_units(raw, allowed), Ok(expected), "{raw}");
-    }
-    for (raw, allowed) in [
-        ("30d", DURATION_SMH),
-        ("30y", DURATION_SMHD),
-        ("30", DURATION_SMH),
-        ("", DURATION_SMH),
-    ] {
-        assert!(parse_duration_units(raw, allowed).is_err(), "{raw}");
-    }
 }
 
 #[test]

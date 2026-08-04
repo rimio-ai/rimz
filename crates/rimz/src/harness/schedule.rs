@@ -13,6 +13,7 @@
 use std::time::Duration;
 
 use crate::config::{TaskEntry, TaskTarget};
+use crate::utils::time::{ClockTime, DurationUnit, parse_duration_units};
 use jiff::{SignedDuration, Timestamp, Zoned};
 
 pub mod arming;
@@ -442,33 +443,6 @@ pub fn validate_name(name: &str) -> Result<(), ScheduleErr> {
     }
 }
 
-/// Parse `<n><unit>` against an allowed-units slice. Each entry is
-/// `(unit_str, multiplier_in_seconds)`.
-pub fn parse_duration_units(raw: &str, allowed: &[(&str, u64)]) -> Result<Duration, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err("duration is empty".to_owned());
-    }
-    let (digits, unit) = trimmed
-        .split_at_checked(trimmed.len() - 1)
-        .ok_or_else(|| format!("unrecognised duration `{raw}`"))?;
-    let factor = allowed
-        .iter()
-        .find_map(|(name, mult)| (*name == unit).then_some(*mult))
-        .ok_or_else(|| {
-            let units = allowed
-                .iter()
-                .map(|(n, _)| *n)
-                .collect::<Vec<_>>()
-                .join("/");
-            format!("unknown duration unit `{unit}`; use {units}")
-        })?;
-    let n: u64 = digits
-        .parse()
-        .map_err(|e| format!("duration `{raw}` is not an integer: {e}"))?;
-    Ok(Duration::from_secs(n.saturating_mul(factor)))
-}
-
 /// Parse a positive forward-headroom ratio such as `1.5x`.
 pub fn parse_surplus(raw: &str) -> Result<f64, String> {
     let trimmed = raw.trim();
@@ -486,7 +460,11 @@ pub fn parse_surplus(raw: &str) -> Result<f64, String> {
 
 /// Parse the elapsed floor for a provider budget-window surplus gate.
 pub fn parse_surplus_after(raw: &str) -> Result<Duration, String> {
-    parse_duration_units(raw, &[("m", 60), ("h", 3_600), ("d", 86_400)])
+    parse_duration_units(
+        raw,
+        &[DurationUnit::Minute, DurationUnit::Hour, DurationUnit::Day],
+    )
+    .map_err(|err| err.to_string())
 }
 
 /// Parse and validate an entry's firing time into a [`ParsedSchedule`]. Full
@@ -591,14 +569,10 @@ fn parse_task_hhmm(name: &str, value: &str) -> Result<(u8, u8), ScheduleErr> {
         name: name.to_owned(),
         value: value.to_owned(),
     };
-    parse_hhmm(value).ok_or_else(bad)
-}
-
-pub fn parse_hhmm(value: &str) -> Option<(u8, u8)> {
-    let (hh, mm) = value.trim().split_once(':')?;
-    let hour: u8 = hh.parse().ok()?;
-    let minute: u8 = mm.parse().ok()?;
-    (hour <= 23 && minute <= 59).then_some((hour, minute))
+    value
+        .parse::<ClockTime>()
+        .map(|time| (time.hour(), time.minute()))
+        .map_err(|_| bad())
 }
 
 fn parse_days(days: &str) -> Option<Vec<Weekday>> {

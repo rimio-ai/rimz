@@ -9,6 +9,7 @@ use clap::Args;
 use rimz::ids::AgentKind;
 use rimz::message::dispatch::{DispatchOutcome, ParkReason};
 use rimz::message::{AutoCompact, MessageSender};
+use rimz::utils::time::{DurationUnit, parse_duration_units};
 
 const AGENT_WAIT_DEADLINE: Duration = Duration::from_secs(3600);
 
@@ -406,7 +407,15 @@ fn print_compacted_if_needed(label: &str, compacted: &[String]) {
 }
 
 fn parse_wait_duration(raw: &str) -> std::result::Result<Duration, String> {
-    rimz::harness::schedule::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600)])
+    parse_duration_units(
+        raw,
+        &[
+            DurationUnit::Second,
+            DurationUnit::Minute,
+            DurationUnit::Hour,
+        ],
+    )
+    .map_err(|err| err.to_string())
 }
 
 fn env_string(key: &str) -> Option<String> {

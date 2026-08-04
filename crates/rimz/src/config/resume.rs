@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+use crate::utils::time::{DurationUnit, parse_duration_units};
+
 /// The default nudge an enabled auto-continue sends a parked agent — the text a
 /// human would type to pick the turn back up.
 const DEFAULT_AUTO_CONTINUE_TEXT: &str = "continue";
@@ -19,8 +21,12 @@ const DEFAULT_AUTO_CONTINUE_MAX_RETRIES: u32 = 12;
 /// Minimum blocked time an automatic reset-credit redemption buys by default.
 pub const DEFAULT_AUTO_REDEEM_MIN_GAIN: &str = "12h";
 
-const AUTO_REDEEM_DURATION_UNITS: &[(&str, u64)] =
-    &[("s", 1), ("m", 60), ("h", 60 * 60), ("d", 24 * 60 * 60)];
+const AUTO_REDEEM_DURATION_UNITS: &[DurationUnit] = &[
+    DurationUnit::Second,
+    DurationUnit::Minute,
+    DurationUnit::Hour,
+    DurationUnit::Day,
+];
 
 /// Resume behavior, in two tenses. On session *rebirth* after a machine reboot
 /// — detected by boot id, or by boot time where the boot id is unreadable — or
@@ -109,7 +115,7 @@ where
 }
 
 pub(crate) fn parse_auto_redeem_min_gain(value: &str) -> Result<Duration, String> {
-    crate::harness::schedule::parse_duration_units(value, AUTO_REDEEM_DURATION_UNITS)
+    parse_duration_units(value, AUTO_REDEEM_DURATION_UNITS).map_err(|err| err.to_string())
 }
 
 #[cfg(test)]

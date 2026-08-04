@@ -14,6 +14,7 @@ use rimz::ids::AgentSessionId;
 use rimz::pane::PaneRef;
 use rimz::proc::TreeTotals;
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
+use rimz::utils::time::{DurationUnit, parse_duration_units};
 use rimz::workspace::WorkspaceResolver;
 
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(2);
@@ -338,18 +339,27 @@ fn fmt_cpu(value: Option<f64>) -> String {
 }
 
 fn parse_interval(raw: &str) -> std::result::Result<Duration, String> {
-    if let Some(ms) = raw.strip_suffix("ms") {
-        let ms: u64 = ms
-            .parse()
-            .map_err(|_| format!("invalid interval `{raw}`"))?;
-        return Ok(Duration::from_millis(ms));
-    }
-    rimz::harness::schedule::parse_duration_units(raw, &[("s", 1), ("m", 60), ("", 1)])
+    parse_duration_units(
+        raw,
+        &[
+            DurationUnit::Millisecond,
+            DurationUnit::Second,
+            DurationUnit::Minute,
+            DurationUnit::UnitlessSecond,
+        ],
+    )
+    .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interval_accepts_documented_units() {
+        assert_eq!(parse_interval("5").unwrap(), Duration::from_secs(5));
+        assert_eq!(parse_interval("500ms").unwrap(), Duration::from_millis(500));
+    }
 
     fn totals(cpu_ticks: u64, rss_kb: u64, io_bytes: Option<u64>) -> TreeTotals {
         TreeTotals {

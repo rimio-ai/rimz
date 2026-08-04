@@ -5,6 +5,7 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::harness::budget::{BudgetSpec, BudgetWindow};
+use crate::utils::time::{DurationUnit, parse_duration_units};
 
 /// A local-calendar-day dollar cap stored as cents so machine config keeps
 /// exact equality while reusing the public budget grammar.
@@ -172,8 +173,12 @@ use crate::message::AutoCompact;
 /// Default idle span before RimZ compacts a warm provider cache.
 pub const DEFAULT_IDLE_COMPACT_AFTER: Duration = Duration::from_secs(59 * 60);
 
-const IDLE_COMPACT_DURATION_UNITS: &[(&str, u64)] =
-    &[("s", 1), ("m", 60), ("h", 60 * 60), ("d", 24 * 60 * 60)];
+const IDLE_COMPACT_DURATION_UNITS: &[DurationUnit] = &[
+    DurationUnit::Second,
+    DurationUnit::Minute,
+    DurationUnit::Hour,
+    DurationUnit::Day,
+];
 
 /// Automatic idle-compaction policy.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -266,7 +271,7 @@ impl HarnessConfig {
 }
 
 pub(crate) fn parse_idle_compact_after(raw: &str) -> Result<Duration, String> {
-    crate::harness::schedule::parse_duration_units(raw, IDLE_COMPACT_DURATION_UNITS)
+    parse_duration_units(raw, IDLE_COMPACT_DURATION_UNITS).map_err(|err| err.to_string())
 }
 
 fn format_idle_compact_after(duration: Duration) -> String {
