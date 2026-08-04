@@ -53,7 +53,7 @@ impl WorktreeBase {
         }
     }
 
-    pub fn as_config_value(&self) -> &str {
+    fn as_config_value(&self) -> &str {
         match self {
             Self::Head => "head",
             Self::Fresh => "fresh",

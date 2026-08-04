@@ -3,7 +3,7 @@ use std::time::Duration;
 
 /// The default nudge an enabled auto-continue sends a parked agent — the text a
 /// human would type to pick the turn back up.
-pub const DEFAULT_AUTO_CONTINUE_TEXT: &str = "continue";
+const DEFAULT_AUTO_CONTINUE_TEXT: &str = "continue";
 
 /// The default backoff ramp, in seconds, between non-clocked auto-continue
 /// nudges. The first retry lands 3 minutes after the marker, then the 5-minute
@@ -14,7 +14,7 @@ pub const DEFAULT_AUTO_CONTINUE_BACKOFF_SECS: &[u64] = &[180, 300];
 /// The default ceiling on backoff auto-continue attempts. At the [default ramp][`DEFAULT_AUTO_CONTINUE_BACKOFF_SECS`]
 /// this spans ~58min (180 + 300x11) before the producer stops attempting
 /// and leaves the row parked.
-pub const DEFAULT_AUTO_CONTINUE_MAX_RETRIES: u32 = 12;
+const DEFAULT_AUTO_CONTINUE_MAX_RETRIES: u32 = 12;
 
 /// Minimum blocked time an automatic reset-credit redemption buys by default.
 pub const DEFAULT_AUTO_REDEEM_MIN_GAIN: &str = "12h";

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::AgentStatus;
 
-pub const KNOWN_TEMPLATE_VARS: &[&str] = &[
+const KNOWN_TEMPLATE_VARS: &[&str] = &[
     "kind", "agent", "handle", "status", "worktree", "task", "count", "unread", "pane", "root",
     "title", "body",
 ];
@@ -206,7 +206,7 @@ pub fn render_template(
     Ok(out)
 }
 
-pub fn referenced_vars(template: &str) -> Vec<String> {
+fn referenced_vars(template: &str) -> Vec<String> {
     let mut vars = Vec::new();
     let mut rest = template;
     while let Some(start) = rest.find("{{") {

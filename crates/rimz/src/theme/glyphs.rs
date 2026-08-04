@@ -497,8 +497,8 @@ mod tests {
             theme: crate::config::ThemeConfig,
         }
 
-        let parsed: ThemeFile = toml::from_str(crate::config::MachineConfig::template_theme())
-            .expect("theme template parses");
+        let files = crate::config::MachineConfigFiles::machine().ordered();
+        let parsed: ThemeFile = toml::from_str(files[1].template()).expect("theme template parses");
         let mut unicode_theme = parsed.theme.clone();
         unicode_theme.glyphs.set = Some("unicode".to_owned());
         let from_template = GlyphSet::resolve(&unicode_theme);

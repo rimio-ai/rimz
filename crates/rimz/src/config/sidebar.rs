@@ -71,7 +71,7 @@ impl SidebarConfig {
 /// The shipped default focus-sidebar chord: `Alt+p`, a toggle that reaches the
 /// sidebar and returns to the last pane. `Alt` survives the terminal and
 /// Zellij's locked mode; the user can rebind or disable it.
-pub fn default_focus_key() -> String {
+fn default_focus_key() -> String {
     "Alt+p".to_owned()
 }
 

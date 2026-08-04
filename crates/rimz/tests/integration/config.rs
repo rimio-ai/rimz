@@ -1267,7 +1267,7 @@ fn setup_yes_preserves_template_comments_for_untouched_config() {
     let env = Env::new();
     write_machine_file(
         &machine_config_path(&env),
-        rimz::config::MachineConfig::template_core(),
+        rimz::config::MachineConfigFiles::machine().ordered()[0].template(),
     );
 
     env.rimz().args(["setup", "--yes"]).assert().success();
