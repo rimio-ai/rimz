@@ -35,7 +35,7 @@ pub(crate) struct ParsedScheme {
 }
 
 /// One bundled scheme's display name and terminal swatch colors.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SchemeSwatch {
     pub name: String,
     pub background: (u8, u8, u8),
