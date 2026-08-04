@@ -41,7 +41,7 @@ pub fn room_inventory() -> LiveRoomResult<RoomInventory> {
 }
 
 /// Inventory every known workspace against an existing mux-session probe.
-pub fn room_inventory_with(live: &LiveSessions) -> LiveRoomResult<RoomInventory> {
+pub(crate) fn room_inventory_with(live: &LiveSessions) -> LiveRoomResult<RoomInventory> {
     let known = crate::workspace::known_workspaces()
         .map_err(|source| LiveRoomErr::WorkspaceRecords { source })?;
     Ok(room_inventory_from(known, |session| live.mux_of(session)))
@@ -92,7 +92,7 @@ pub struct MuxPickErr {
 
 /// Both backends' live session names, probed once for batch operations.
 /// Missing backends and transient list failures contribute an empty set.
-pub struct LiveSessions {
+pub(crate) struct LiveSessions {
     zellij: HashSet<String>,
     tmux: HashSet<String>,
 }
@@ -107,7 +107,7 @@ pub enum BackendRoomState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoomOwnership {
-    pub selected: MuxName,
+    selected: MuxName,
     pub zellij: BackendRoomState,
     pub tmux: BackendRoomState,
 }
@@ -165,7 +165,7 @@ pub fn probe_room_ownership(selected: MuxName, session_name: &str) -> RoomOwners
 }
 
 impl LiveSessions {
-    pub fn probe() -> Self {
+    pub(crate) fn probe() -> Self {
         let names = |mux| -> HashSet<String> {
             crate::mux::backend_for(mux)
                 .list_sessions()
@@ -181,7 +181,7 @@ impl LiveSessions {
 
     /// Resolve a live session with Zellij-first precedence. An absent session
     /// maps to `None`, preserving best-effort empty-set fallback.
-    pub fn mux_of(&self, session: &str) -> Option<MuxName> {
+    pub(crate) fn mux_of(&self, session: &str) -> Option<MuxName> {
         if self.zellij.contains(session) {
             Some(MuxName::Zellij)
         } else if self.tmux.contains(session) {
