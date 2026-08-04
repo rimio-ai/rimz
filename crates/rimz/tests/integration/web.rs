@@ -819,6 +819,64 @@ fn read_only_broadcast_allowlist_reuses_restarts_and_stops_its_daemon() {
 
 #[cfg(unix)]
 #[test]
+fn broadcast_revocation_stops_old_daemon_before_replacement_validation() {
+    let _guard = daemon_test_guard();
+    let fixture = WebFixture::new("ttyd-broadcast-revocation.log");
+    let second_root = fixture.env.project_root.join("broadcast-revocation-second");
+    std::fs::create_dir_all(&second_root).expect("mkdir second room");
+    fixture.env.record(&second_root);
+    let second = rimz::WorkspaceResolver::resolve(&second_root, None).expect("resolve second room");
+    let sessions = format!(
+        "{}\\n{}",
+        fixture.workspace.session_name, second.session_name
+    );
+    for session in [&fixture.workspace.session_name, &second.session_name] {
+        let share = fixture
+            .command_with_sessions(&sessions)
+            .args(["--mux", "tmux", "web", "share", "--session"])
+            .arg(session)
+            .bounded_output()
+            .expect("share room");
+        assert_success(&share, "share room");
+    }
+
+    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd-share.json");
+    let daemon: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&daemon_path).expect("broadcast daemon record"))
+            .expect("broadcast daemon JSON");
+    let old_pid = daemon["pid"].as_u64().expect("broadcast daemon pid") as u32;
+    write_machine_config(&fixture.env, "[web]\ninterface = \"invalid\"\n");
+
+    let unshare = fixture
+        .command_with_sessions(&sessions)
+        .args(["web", "unshare", "--session"])
+        .arg(&fixture.workspace.session_name)
+        .bounded_output()
+        .expect("unshare room with invalid replacement config");
+    assert!(!unshare.status.success());
+    assert!(
+        !daemon_path.exists(),
+        "old broadcast daemon record survived"
+    );
+    assert!(
+        !rimz::proc::list_processes()
+            .iter()
+            .any(|process| process.pid == old_pid),
+        "old broadcast daemon survived failed replacement"
+    );
+    let allowlist: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixture.env.state_root().join("rimz/web-share.json"))
+            .expect("broadcast allowlist"),
+    )
+    .expect("broadcast allowlist JSON");
+    assert_eq!(
+        allowlist["sessions"],
+        serde_json::json!([second.session_name])
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn web_stop_stops_writable_and_broadcast_daemons() {
     let _guard = daemon_test_guard();
     let fixture = WebFixture::new("ttyd-stop-both.log");
