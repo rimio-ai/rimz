@@ -682,7 +682,12 @@ allowed-imports = [
     "sidebar_pane::pixel",
     "store",
 ]
-surface-budget = 52
+surface-budget = 48
+
+[[strangler]]
+symbol = "mod share;"
+path = "crates/rimz/src/web"
+baseline = 0
 
 [[module]]
 path = "crates/rimz/src/workspace.rs"

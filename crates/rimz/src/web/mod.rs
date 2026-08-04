@@ -19,7 +19,6 @@ use crate::room::session::{
 use crate::store::atomic;
 
 mod gate;
-mod share;
 mod ttyd;
 
 pub use gate::{GateAuth, RelayTarget};
@@ -61,11 +60,11 @@ fn without_ttyd_launch_context(spec: CommandSpec) -> CommandSpec {
 }
 
 const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
-pub const TTYD_SESSION_OSC: u16 = 7717;
+const TTYD_SESSION_OSC: u16 = 7717;
 pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 3;
 
 /// Build the private ttyd OSC sequence that synchronizes browser room state.
-pub fn session_sync_osc(target: Option<(&str, &str)>) -> String {
+fn session_sync_osc(target: Option<(&str, &str)>) -> String {
     let (session, display_name) = target.unwrap_or_default();
     format!(
         "\x1b]{};rimz-session={}\x07\x1b]{};rimz-name={}\x07",
@@ -84,7 +83,7 @@ pub fn write_session_sync(target: Option<(&str, &str)>) -> io::Result<()> {
 }
 
 pub(crate) fn pixel_daemon_records() -> Vec<(u32, u32)> {
-    [ttyd::pixel_daemon_record(), share::pixel_daemon_record()]
+    [ttyd::pixel_daemon_record(), ttyd::pixel_broadcast_record()]
         .into_iter()
         .flatten()
         .collect()
@@ -385,64 +384,44 @@ pub fn open_session(
     may_start: bool,
 ) -> Result<WebAccessOutcome> {
     let daemon = ttyd::open_daemon(config, may_start)?;
-    let base_url = normalized_base_url(config.web.base_url.as_deref(), daemon.port);
+    let base_url = normalized_base_url(config.web.base_url.as_deref(), daemon.outcome.port);
     Ok(WebAccessOutcome {
         payload: WebOpenPayload::for_session(
             session,
             base_url,
-            daemon.port,
+            daemon.outcome.port,
             Some(daemon.tunnel_port),
             daemon.auth,
             Some(daemon.credential),
         ),
-        warnings: daemon.warnings,
+        warnings: daemon.outcome.warnings,
     })
 }
 
 pub fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebOpenPayload> {
-    let daemon = ttyd::inspect_daemon(config)?;
-    let base_url = normalized_base_url(config.web.base_url.as_deref(), daemon.port);
-    Ok(WebOpenPayload::for_session(
-        session,
-        base_url,
-        daemon.port,
-        daemon.tunnel_port,
-        daemon.auth,
-        daemon.credential,
-    ))
+    ttyd::inspect_session(session, config)
 }
 
 pub fn ensure_daemon(config: &MachineConfig) -> Result<WebDaemonOutcome> {
-    let daemon = ttyd::ensure_daemon(config)?;
-    Ok(WebDaemonOutcome {
-        pid: daemon.pid,
-        interface: daemon.interface,
-        port: daemon.port,
-        warnings: daemon.warnings,
-    })
+    Ok(ttyd::ensure_daemon(config)?.outcome)
 }
 
 pub fn restart_daemon(config: &MachineConfig) -> Result<WebRestartOutcome> {
     let (daemon, was_online) = ttyd::restart_daemon(config)?;
-    let share = share::restart_if_shared(config)?.map(share_daemon_outcome);
+    let share = ttyd::restart_broadcast_if_shared(config)?;
     Ok(WebRestartOutcome {
-        pid: daemon.pid,
-        interface: daemon.interface,
-        port: daemon.port,
+        pid: daemon.outcome.pid,
+        port: daemon.outcome.port,
         was_online,
-        warnings: daemon.warnings,
+        warnings: daemon.outcome.warnings,
         share,
+        interface: daemon.outcome.interface,
     })
 }
 
 pub fn restart_if_online(config: &MachineConfig) -> Result<WebReloadOutcome> {
-    let writable = ttyd::restart_if_online(config)?.map(|daemon| WebDaemonOutcome {
-        pid: daemon.pid,
-        interface: daemon.interface,
-        port: daemon.port,
-        warnings: daemon.warnings,
-    });
-    let share = share::restart_if_online(config)?.map(share_daemon_outcome);
+    let writable = ttyd::restart_if_online(config)?.map(|daemon| daemon.outcome);
+    let share = ttyd::restart_broadcast_if_online(config)?;
     Ok(WebReloadOutcome { writable, share })
 }
 
@@ -454,12 +433,7 @@ pub fn rotate_credential(config: &MachineConfig, read_only: bool) -> Result<Cred
     if read_only {
         return Err(WebErr::TtydReadOnlyCredential);
     }
-    let rotation = ttyd::rotate_credential(config)?;
-    Ok(CredentialRotation {
-        credential: rotation.credential,
-        restarted: rotation.restarted,
-        warnings: rotation.warnings,
-    })
+    ttyd::rotate_credential(config)
 }
 
 pub fn gate_authorization() -> Result<String> {
@@ -496,17 +470,17 @@ pub fn revoke_credential(name: Option<&str>) -> Result<bool> {
 
 pub fn status(config: &MachineConfig) -> Result<WebStatusPayload> {
     let daemon = ttyd::daemon_status()?;
-    let share_daemon = share::daemon_status()?;
-    let shared_sessions = share::sessions()?;
+    let share_daemon = ttyd::broadcast_status()?;
+    let shared_sessions = ttyd::shared_sessions()?;
     Ok(WebStatusPayload {
         version: WEB_SCHEMA_VERSION.to_owned(),
         online: daemon.is_some(),
-        pid: daemon.as_ref().map(|record| record.pid),
+        pid: daemon.as_ref().map(|record| record.process.pid),
         interface: daemon.as_ref().map_or_else(
             || config.web.interface.clone(),
-            |record| record.interface.clone(),
+            |record| record.process.interface.clone(),
         ),
-        port: daemon.map_or(config.web.port, |record| record.port),
+        port: daemon.map_or(config.web.port, |record| record.process.port),
         share: WebShareStatus {
             online: share_daemon.is_some(),
             pid: share_daemon.as_ref().map(|record| record.pid),
@@ -521,69 +495,38 @@ pub fn status(config: &MachineConfig) -> Result<WebStatusPayload> {
 }
 
 pub fn stop_daemons() -> Result<usize> {
-    Ok(usize::from(ttyd::stop_daemon()?) + usize::from(share::stop_daemon()?))
+    Ok(usize::from(ttyd::stop_daemon()?) + usize::from(ttyd::stop_broadcast()?))
 }
 
 pub fn share_session(session: &str, config: &MachineConfig) -> Result<WebShareOutcome> {
     if live_session_target(Some(session)).is_none() {
         return Err(WebErr::InvalidSession("this room is not shared".to_owned()));
     }
-    let (daemon, changed) = share::add_session(session, config)?;
-    let base_url = normalized_base_url(config.web.share_base_url.as_deref(), daemon.record.port);
-    Ok(WebShareOutcome {
-        payload: WebSharePayload {
-            version: "rimz.web.share.v1".to_owned(),
-            url: join_session_url(&base_url, session),
-            session: session.to_owned(),
-            port: daemon.record.port,
-        },
-        changed,
-        warnings: daemon.warnings,
-    })
+    ttyd::add_shared_session(session, config)
 }
 
 pub fn unshare_session(session: &str, config: &MachineConfig) -> Result<WebUnshareOutcome> {
-    let mutation = share::remove_session(session, config)?;
-    Ok(WebUnshareOutcome {
-        changed: mutation.changed,
-        sessions: mutation.sessions,
-        daemon: mutation.daemon.map(share_daemon_outcome),
-    })
+    ttyd::remove_shared_session(session, config)
 }
 
-pub fn unshare_all(config: &MachineConfig) -> Result<WebUnshareOutcome> {
-    let mutation = share::remove_all(config)?;
-    Ok(WebUnshareOutcome {
-        changed: mutation.changed,
-        sessions: mutation.sessions,
-        daemon: mutation.daemon.map(share_daemon_outcome),
-    })
-}
-
-pub fn shared_sessions() -> Result<Vec<String>> {
-    share::sessions()
+pub fn unshare_all(_config: &MachineConfig) -> Result<WebUnshareOutcome> {
+    ttyd::remove_all_shared_sessions()
 }
 
 pub fn share_attach_command(session: Option<&str>) -> Result<CommandSpec> {
     let Some(session) = session.filter(|session| !session.is_empty()) else {
         return Err(WebErr::InvalidSession("this room is not shared".to_owned()));
     };
-    if !share::contains(session)? {
+    if !ttyd::shared_sessions()?
+        .iter()
+        .any(|shared| shared == session)
+    {
         return Err(WebErr::InvalidSession("this room is not shared".to_owned()));
     }
     let Some((session, mux)) = live_session_target(Some(session)) else {
         return Err(WebErr::InvalidSession("this room is not shared".to_owned()));
     };
     Ok(crate::mux::backend_for(mux).attach_readonly_command(session))
-}
-
-fn share_daemon_outcome(daemon: share::RunningDaemon) -> WebDaemonOutcome {
-    WebDaemonOutcome {
-        pid: daemon.record.pid,
-        interface: daemon.record.interface,
-        port: daemon.record.port,
-        warnings: daemon.warnings,
-    }
 }
 
 const WEB_ADDRESSABLE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -692,8 +635,7 @@ fn normalized_base_url(configured: Option<&str>, port: u16) -> String {
         .unwrap_or_else(|| format!("http://127.0.0.1:{port}"))
 }
 
-#[doc(hidden)]
-pub fn encode_query_value(value: &str) -> String {
+fn encode_query_value(value: &str) -> String {
     let mut out = String::new();
     for byte in value.bytes() {
         match byte {
