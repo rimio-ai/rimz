@@ -1415,8 +1415,15 @@ fn run_stop_marks_canceled_and_wakes_waiter() {
     record.status = RunStatus::Running;
     let run_id = record.run_id.clone();
     rimz::harness::run::create(store.paths(), &record).expect("create run");
-    let (sock, _sock_path) =
-        rimz::harness::run_wake::bind_run(store.runtime_paths(), &run_id).expect("bind run socket");
+    let waiter = rimz::harness::run_wake::RunWaiter::bind(
+        store.runtime_paths(),
+        rimz::harness::run_wake::ExpectedRunFrame {
+            workspace_id: env.workspace_id.clone(),
+            run_id: run_id.clone(),
+        },
+        rimz::harness::run::RunCancellation::new(),
+    )
+    .expect("bind run socket");
 
     let out = env
         .rimz()
@@ -1437,20 +1444,10 @@ fn run_stop_marks_canceled_and_wakes_waiter() {
         .enable_time()
         .build()
         .expect("runtime");
-    let outcome = runtime
-        .block_on(rimz::harness::run_wake::wait_for_run_completion_owning(
-            sock,
-            rimz::harness::run_wake::ExpectedRunFrame {
-                workspace_id: env.workspace_id.clone(),
-                run_id,
-            },
-            Some(Duration::from_secs(1)),
-        ))
+    let terminal = runtime
+        .block_on(waiter.wait_terminal(&store, Some(Duration::from_secs(1)), None))
         .expect("wait for wake");
-    assert_eq!(
-        outcome,
-        rimz::harness::run_wake::RunWakeOutcome::Completed(RunStatus::Canceled)
-    );
+    assert_eq!(terminal.status, RunStatus::Canceled);
 }
 
 #[test]

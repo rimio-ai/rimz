@@ -506,7 +506,7 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
     );
     wait_for_agent_end_observation(&env, agent_id);
     assert!(
-        plan_from_env(&env).is_empty(),
+        plan_from_env(&env).tabs.is_empty(),
         "closed agent is removed from resume plan",
     );
     wait_for_path_absent(

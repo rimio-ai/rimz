@@ -11,7 +11,7 @@ use rimz::config::{MachineConfig, Profile, ProfilesConfig, ThemeConfig, ThemeGly
 use rimz::forge::Forge;
 use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 use rimz::harness::run::{RunRecord, RunStatus};
-use rimz::harness::run_wake::{ExpectedRunFrame, RunWakeOutcome};
+use rimz::harness::run_wake::ExpectedRunFrame;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId, RunId, WorkspaceId};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -1254,13 +1254,20 @@ mod runs {
         );
         let run_id = record.run_id.clone();
         rimz::harness::run::create(&paths, &record).expect("create run");
-        let (sock, _sock_path) =
-            rimz::harness::run_wake::bind_run(&runtime, &run_id).expect("bind run");
         let context = RunExecContext {
             run_id: run_id.clone(),
             store: rimz::Store::open(paths.clone(), runtime).expect("store"),
             session_name: "rimz-test".to_owned(),
         };
+        let waiter = rimz::harness::run_wake::RunWaiter::bind(
+            context.store.runtime_paths(),
+            ExpectedRunFrame {
+                workspace_id,
+                run_id: run_id.clone(),
+            },
+            rimz::harness::run::RunCancellation::new(),
+        )
+        .expect("bind run");
 
         let globals = GlobalFlags {
             mux: None,
@@ -1274,17 +1281,11 @@ mod runs {
 
         let failed = rimz::harness::run::load(&paths, &run_id).expect("load failed run");
         assert_eq!(failed.status, RunStatus::Failed);
-        let outcome = rimz::harness::run_wake::wait_for_run_completion_owning(
-            sock,
-            ExpectedRunFrame {
-                workspace_id,
-                run_id,
-            },
-            Some(Duration::from_secs(1)),
-        )
-        .await
-        .expect("run wait");
-        assert_eq!(outcome, RunWakeOutcome::Completed(RunStatus::Failed));
+        let terminal = waiter
+            .wait_terminal(&context.store, Some(Duration::from_secs(1)), None)
+            .await
+            .expect("run wait");
+        assert_eq!(terminal.status, RunStatus::Failed);
     }
 }
 

@@ -807,14 +807,6 @@ fn resume_launch_posture(posture: &ResumePosture) -> crate::harness::plan::Resum
     }
 }
 
-impl ResumePlan {
-    /// Whether there is nothing to seed — the birth is exactly the bare working
-    /// room.
-    pub fn is_empty(&self) -> bool {
-        self.tabs.is_empty()
-    }
-}
-
 /// Select the transitive overlap cluster containing the newest native session.
 ///
 /// Provider sessions are intervals from creation through last activity. The
