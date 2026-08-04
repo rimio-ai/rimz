@@ -31,7 +31,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }
 # Atlas reports source locations from parsed syntax. `span-locations` adds
 # compile work to proc-macro2 but is required to expose those locations.
 proc-macro2 = { version = "1", features = ["span-locations"] }
@@ -78,7 +78,7 @@ jiff = { version = "0.2", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env", "unstable-ext", "wrap_help"] }
 # Dynamic completion is still feature-gated as unstable, so pin its API until
 # clap stabilizes the environment-driven engine.
-clap_complete = { version = "=4.6.7", features = ["unstable-dynamic"] }
+clap_complete = { version = "=4.6.8", features = ["unstable-dynamic"] }
 # Layout launch flags are authored as shell-like strings in TOML but launched as
 # direct argv, so RimZ needs quote removal without invoking a shell. `shlex` is a
 # tiny POSIX-compatible splitter already present through the build graph and
@@ -145,12 +145,12 @@ tungstenite = "0.30"
 # Sentry event without a parallel API. Its transitive tree (sentry-*,
 # `url`/`idna`/`icu`, `rand`) is covered by the imported cargo-vet audit sets in
 # `supply-chain/config.toml`.
-sentry = { version = "0.48", default-features = false, features = [
+sentry = { version = "0.49", default-features = false, features = [
     "backtrace",
     "panic",
     "ureq",
 ] }
-sentry-tracing = "0.48"
+sentry-tracing = "0.49"
 
 # Filesystem and locking
 tempfile = "3"

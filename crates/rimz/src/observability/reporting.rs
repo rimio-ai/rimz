@@ -119,25 +119,25 @@ pub fn init() -> Reporting {
 /// tag, stable fingerprinting, and the per-fingerprint rate limit — is covered
 /// by tests driving a recording transport.
 fn client_options(dsn: Dsn, environment: String) -> sentry::ClientOptions {
-    sentry::ClientOptions {
-        dsn: Some(dsn),
-        release: release(),
-        environment: Some(environment.into()),
+    let callback = before_send();
+    let mut options = sentry::ClientOptions::new()
+        .maybe_release(release())
+        .environment(environment)
         // External reporting withholds personal data by default; strip the
         // hostname the contexts integration would otherwise attach.
-        send_default_pii: false,
+        .send_default_pii(false)
         // Attach a stacktrace to error/warning events that carry an exception
         // (a callsite's `error = &err as &dyn Error`) so a report names where it
         // came from, not just what failed. Free with the `backtrace` feature.
-        attach_stacktrace: true,
+        .attach_stacktrace(true)
         // Mark RimZ frames in-app and the Sentry crates out-of-app so Sentry
         // picks the RimZ callsite as the culprit instead of a `tracing`/`sentry`
         // internal. The payoff lands once debug files are uploaded per release.
-        in_app_include: vec!["rimz"],
-        in_app_exclude: vec!["sentry", "tracing"],
-        before_send: Some(before_send()),
-        ..Default::default()
-    }
+        .in_app_include(["rimz"])
+        .in_app_exclude(["sentry", "tracing"])
+        .before_send(move |event| callback(event));
+    options.dsn = Some(dsn);
+    options
 }
 
 /// The Sentry release for this process: `rimz@<build id>`, the digest of the
@@ -547,7 +547,7 @@ mod tests {
                     self.events
                         .lock()
                         .expect("recorder lock")
-                        .push(event.clone());
+                        .push(*event.clone());
                 }
             }
         }
@@ -561,15 +561,11 @@ mod tests {
         let recorder: Arc<Recorder> = Arc::new(Recorder {
             events: events.clone(),
         });
-        let _guard = sentry::init(sentry::ClientOptions {
-            dsn: Some(
-                "https://public@example.com/1"
-                    .parse()
-                    .expect("test dsn parses"),
-            ),
-            transport: Some(Arc::new(recorder)),
-            ..Default::default()
-        });
+        let _guard = sentry::init(
+            sentry::ClientOptions::new()
+                .dsn("https://public@example.com/1")
+                .transport(recorder),
+        );
 
         let subscriber = tracing_subscriber::registry().with(sentry_tracing_layer());
         tracing::subscriber::with_default(subscriber, || {
@@ -616,16 +612,12 @@ mod tests {
         let recorder: Arc<Recorder> = Arc::new(Recorder {
             events: events.clone(),
         });
-        let _guard = sentry::init(sentry::ClientOptions {
-            dsn: Some(
-                "https://public@example.com/1"
-                    .parse()
-                    .expect("test dsn parses"),
-            ),
-            transport: Some(Arc::new(recorder)),
-            attach_stacktrace: true,
-            ..Default::default()
-        });
+        let _guard = sentry::init(
+            sentry::ClientOptions::new()
+                .dsn("https://public@example.com/1")
+                .transport(recorder)
+                .attach_stacktrace(true),
+        );
 
         set_command_scope(ScopeFacts {
             command: "agents refresh-context",
@@ -697,13 +689,13 @@ mod tests {
         });
         // Drive the real before_send (fault tag, fingerprint, rate limit)
         // through a recording transport.
-        let mut options = client_options(
+        let options = client_options(
             "https://public@example.com/1"
                 .parse()
                 .expect("test dsn parses"),
             "test".to_owned(),
-        );
-        options.transport = Some(Arc::new(recorder));
+        )
+        .transport(recorder);
         let _guard = sentry::init(options);
 
         let subscriber = tracing_subscriber::registry().with(sentry_tracing_layer());
