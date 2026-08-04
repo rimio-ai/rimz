@@ -60,7 +60,7 @@ fn without_ttyd_launch_context(spec: CommandSpec) -> CommandSpec {
         .fold(spec, |spec, key| spec.env_remove(key))
 }
 
-pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
+const WEB_SCHEMA_VERSION: &str = "rimz.web.v2";
 pub const TTYD_SESSION_OSC: u16 = 7717;
 pub(crate) const TTYD_PIXEL_PROTOCOL: u32 = 3;
 
@@ -178,6 +178,12 @@ pub enum WebErr {
     },
     #[error("{0}")]
     InvalidSession(String),
+    #[error(
+        "the remote serves browser access behind a reverse proxy (trusted-header auth) — open `{url}` directly; no SSH tunnel applies"
+    )]
+    TrustedHeaderTunnel { url: String },
+    #[error("remote `rimz web open --json` omitted the ttyd credential")]
+    TunnelCredentialMissing,
     #[error(transparent)]
     LiveRoom(#[from] crate::room::LiveRoomErr),
 }
@@ -224,7 +230,7 @@ pub struct WebOpenPayload {
 }
 
 impl WebOpenPayload {
-    pub fn for_session(
+    fn for_session(
         session: impl Into<String>,
         base_url: impl Into<String>,
         port: u16,
@@ -248,6 +254,23 @@ impl WebOpenPayload {
 
     pub fn version_ok(&self) -> bool {
         self.version == WEB_SCHEMA_VERSION
+    }
+
+    pub fn tunnel(&self) -> Result<(u16, &WebCredential)> {
+        if matches!(self.auth, WebAuth::TrustedHeader { .. }) && self.credential.is_none() {
+            return Err(WebErr::TrustedHeaderTunnel {
+                url: self.url.clone(),
+            });
+        }
+        let credential = self
+            .credential
+            .as_ref()
+            .ok_or(WebErr::TunnelCredentialMissing)?;
+        Ok((self.tunnel_port.unwrap_or(self.port), credential))
+    }
+
+    pub fn local_url(&self, port: u16) -> String {
+        join_session_url(&format!("http://127.0.0.1:{port}"), &self.session)
     }
 }
 
@@ -779,6 +802,54 @@ mod tests {
         .expect("old v2 payload");
         assert_eq!(basic.auth, WebAuth::Basic);
         assert_eq!(basic.tunnel_port, None);
+    }
+
+    #[test]
+    fn trusted_header_payload_without_credential_refuses_tunnel() {
+        let payload: WebOpenPayload = serde_json::from_str(
+            r#"{"version":"rimz.web.v2","url":"https://devbox.example/rimz/?arg=room","session":"room","port":8200,"auth":{"mode":"trusted_header","header":"X-Forwarded-User"}}"#,
+        )
+        .expect("trusted-header payload");
+
+        assert_eq!(
+            payload.tunnel().expect_err("tunnel refusal").to_string(),
+            "the remote serves browser access behind a reverse proxy (trusted-header auth) — open `https://devbox.example/rimz/?arg=room` directly; no SSH tunnel applies"
+        );
+    }
+
+    #[test]
+    fn trusted_header_payload_with_credential_uses_tunnel_port() {
+        let payload: WebOpenPayload = serde_json::from_str(
+            r#"{"version":"rimz.web.v2","url":"https://devbox.example/rimz/?arg=room","session":"room","port":8200,"tunnel_port":41820,"auth":{"mode":"trusted_header","header":"X-Forwarded-User"},"credential":{"username":"rimz","secret":"secret"}}"#,
+        )
+        .expect("trusted-header payload");
+
+        let (port, credential) = payload.tunnel().expect("tunnel");
+        assert_eq!(port, 41820);
+        assert_eq!(credential.username, "rimz");
+    }
+
+    #[test]
+    fn legacy_basic_payload_uses_public_port() {
+        let payload: WebOpenPayload = serde_json::from_str(
+            r#"{"version":"rimz.web.v2","url":"http://127.0.0.1:8200/?arg=room","session":"room","port":8200,"credential":{"username":"rimz","secret":"secret"}}"#,
+        )
+        .expect("legacy Basic payload");
+
+        assert_eq!(payload.tunnel().expect("tunnel").0, 8200);
+    }
+
+    #[test]
+    fn payload_local_url_percent_encodes_session() {
+        let payload: WebOpenPayload = serde_json::from_str(
+            r#"{"version":"rimz.web.v2","url":"https://remote","session":"rimz/a b","port":8200}"#,
+        )
+        .expect("payload");
+
+        assert_eq!(
+            payload.local_url(8301),
+            "http://127.0.0.1:8301/?room=rimz%2Fa%20b"
+        );
     }
 
     #[test]

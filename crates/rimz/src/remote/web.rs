@@ -8,13 +8,11 @@ use std::net::TcpListener;
 use std::ops::RangeInclusive;
 use std::path::Path;
 
-use crate::mux::CommandSpec;
-use crate::web::WebOpenPayload;
-
 use super::{
     REMOTE_CLIENT_VERSION_ENV, REMOTE_FORCE_VERSION_ENV, RemoteSpec, RemoteTarget,
     client_size_env_setup, quote_remote_path, remote_exec_snippet, sh_quote, ssh_program,
 };
+use crate::mux::CommandSpec;
 
 const LOCAL_PORT_RANGE: RangeInclusive<u16> = 8300..=8399;
 
@@ -41,13 +39,6 @@ fn bind_first_local_port(ports: impl IntoIterator<Item = u16>) -> Option<TcpList
 pub fn reserve_forward_port() -> io::Result<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     Ok(listener.local_addr()?.port())
-}
-
-pub fn local_url(remote: &WebOpenPayload, local_port: u16) -> String {
-    format!(
-        "http://127.0.0.1:{local_port}/?room={}",
-        crate::web::encode_query_value(&remote.session)
-    )
 }
 
 fn derive_port(session: &str, range: &RangeInclusive<u16>) -> u16 {
@@ -158,7 +149,7 @@ fn one_shot_spec(
 ) -> CommandSpec {
     CommandSpec::new(ssh_program())
         .args(["-o", "ConnectTimeout=10"])
-        .args(control.into_iter().flat_map(super::link::control_options))
+        .args(control.into_iter().flat_map(super::control_options))
         .args(["--"])
         .arg(target.ssh_destination().as_str())
         .arg(web_snippet(target, rimz, client_size, force_version))
@@ -247,22 +238,6 @@ mod tests {
     fn forward_port_reservation_returns_a_reusable_loopback_port() {
         let port = reserve_forward_port().expect("reserve forward port");
         TcpListener::bind(("127.0.0.1", port)).expect("reserved port is released");
-    }
-
-    #[test]
-    fn local_url_percent_encodes_the_browser_room() {
-        let payload = WebOpenPayload::for_session(
-            "rimz/a b",
-            "https://remote",
-            8200,
-            Some(8200),
-            crate::web::WebAuth::Basic,
-            None,
-        );
-        assert_eq!(
-            local_url(&payload, 8301),
-            "http://127.0.0.1:8301/?room=rimz%2Fa%20b"
-        );
     }
 
     #[test]
