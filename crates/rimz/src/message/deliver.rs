@@ -8,7 +8,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde::Serialize;
 
-use crate::agents::AgentStatus;
+use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{
     AfterCondition, DeliveryGate, MessageRecord, MessageStatus, WhenCondition,
@@ -246,15 +246,13 @@ fn attempt_delivery(
         .cloned()
         .map(|message| message.with_pane_id(candidate.target.pane_id.clone()))
         .collect();
-    let bound = crate::harness::target::pane_binding(candidate.snapshot, candidate.target, None)
-        .and_then(|binding| binding.exact_agent);
     let outcome = execute_attempt(
         Attempt {
             workspace,
             store,
             snapshot: candidate.snapshot,
             target: candidate.target,
-            bound,
+            bound: candidate.bound,
             records: &send_messages,
             source: AttemptSource::Claimed,
             policy,
@@ -478,6 +476,7 @@ struct DeliveryCandidate<'a> {
     status: AgentStatus,
     snapshot: &'a SidebarSnapshot,
     target: &'a PaneAgent,
+    bound: Option<&'a AgentState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -888,11 +887,14 @@ fn delivery_candidate<'a>(
     let agent = evaluation.agent?;
     let status = agent.effective_status();
     let target = evaluation.binding.map(|binding| binding.pane)?;
+    let bound = crate::harness::target::pane_binding(snapshot, target, None)
+        .and_then(|binding| binding.exact_agent);
     Some(DeliveryCandidate {
         message,
         status,
         snapshot,
         target,
+        bound,
     })
 }
 
