@@ -282,14 +282,14 @@ pub fn dispatch(
     }
 
     let durable_agents = durable_target_agents(store)?;
-    let mut targets = resolve_targets(
-        &snapshot,
-        Some(&durable_agents),
-        &request.target,
-        request.target_scope.as_deref(),
-        request.current_channel.as_deref(),
+    let resolution = ResolutionView {
+        snapshot: &snapshot,
+        durable_agents: &durable_agents,
+        scope: request.target_scope.as_deref(),
+        channel: request.current_channel.as_deref(),
         rollup_only,
-    )?;
+    };
+    let mut targets = resolution.resolve(&request.target)?;
     exclude_broadcast_caller(
         &request.target,
         &mut targets,
@@ -314,16 +314,9 @@ pub fn dispatch(
         });
     }
 
-    let resolution = ResolutionView {
-        snapshot: &snapshot,
-        durable_agents: &durable_agents,
-        scope: request.target_scope.as_deref(),
-        channel: request.current_channel.as_deref(),
-        rollup_only,
-    };
     let mode = prepare_mode(
         request.mode,
-        resolution,
+        &resolution,
         &targets,
         &pending,
         &request.sender,
@@ -442,30 +435,6 @@ fn exclude_broadcast_caller(
     Ok(())
 }
 
-fn resolve_targets(
-    snapshot: &SidebarSnapshot,
-    durable_agents: Option<&[AgentState]>,
-    raw: &str,
-    scope: Option<&str>,
-    channel: Option<&str>,
-    rollup_only: bool,
-) -> std::result::Result<Vec<ResolvedTarget>, TargetErr> {
-    if rollup_only {
-        let agents = crate::harness::target::resolve_many(snapshot, raw, scope, channel)
-            .or_else(|err| durable_targets(snapshot, durable_agents, raw, scope, channel, err))?;
-        return Ok(combine_targets(snapshot, agents, Vec::new()));
-    }
-    let agent_result = crate::harness::target::resolve_many(snapshot, raw, scope, channel);
-    let pane_result = crate::harness::target::resolve_targets(snapshot, raw, scope, channel);
-    match (agent_result, pane_result) {
-        (Ok(agents), Ok(panes)) => Ok(combine_targets(snapshot, agents, panes)),
-        (Ok(agents), Err(_)) => Ok(combine_targets(snapshot, agents, Vec::new())),
-        (Err(_), Ok(panes)) => Ok(combine_targets(snapshot, Vec::new(), panes)),
-        (Err(err), Err(_)) => durable_targets(snapshot, durable_agents, raw, scope, channel, err)
-            .map(|agents| combine_targets(snapshot, agents, Vec::new())),
-    }
-}
-
 fn durable_target_agents(store: &Store) -> Result<Vec<AgentState>> {
     Ok(store
         .runtime_projection(crate::RuntimeScope::Audit)?
@@ -473,63 +442,6 @@ fn durable_target_agents(store: &Store) -> Result<Vec<AgentState>> {
         .into_iter()
         .filter(|agent| !agent.is_provider_subagent() && agent.ended_at.is_none())
         .collect())
-}
-
-fn durable_targets<'a>(
-    snapshot: &SidebarSnapshot,
-    durable_agents: Option<&'a [AgentState]>,
-    raw: &str,
-    scope: Option<&str>,
-    channel: Option<&str>,
-    live_err: TargetErr,
-) -> std::result::Result<Vec<&'a AgentState>, TargetErr> {
-    let Some(durable_agents) = durable_agents else {
-        return Err(live_err);
-    };
-    let candidates = durable_agents
-        .iter()
-        .filter(|agent| !crate::harness::target::shadowed_by_pane_owner(snapshot, agent))
-        .collect::<Vec<_>>();
-    crate::harness::target::resolve_agents(raw, scope, channel, &candidates)
-}
-
-fn combine_targets(
-    snapshot: &SidebarSnapshot,
-    agents: Vec<&AgentState>,
-    panes: Vec<&PaneAgent>,
-) -> Vec<ResolvedTarget> {
-    let mut used_panes = vec![false; panes.len()];
-    let mut targets = Vec::new();
-    for agent in agents {
-        let pane_index = panes
-            .iter()
-            .enumerate()
-            .find(|(index, pane)| {
-                !used_panes[*index]
-                    && crate::harness::target::pane_binding(snapshot, pane, None)
-                        .is_some_and(|binding| binding.matches_agent(agent))
-            })
-            .map(|(index, _)| index);
-        let pane = pane_index.map(|index| {
-            used_panes[index] = true;
-            panes[index].clone()
-        });
-        targets.push(ResolvedTarget {
-            pane,
-            agent: Some(agent.clone()),
-        });
-    }
-    for (index, pane) in panes.into_iter().enumerate() {
-        if used_panes[index] {
-            continue;
-        }
-        let binding = crate::harness::target::pane_binding(snapshot, pane, None);
-        targets.push(ResolvedTarget {
-            pane: Some(pane.clone()),
-            agent: binding.and_then(|binding| binding.agent).cloned(),
-        });
-    }
-    targets
 }
 
 fn targets_all_park_without_live(
@@ -588,9 +500,127 @@ struct ResolutionView<'a> {
     rollup_only: bool,
 }
 
+impl ResolutionView<'_> {
+    fn resolve(&self, raw: &str) -> std::result::Result<Vec<ResolvedTarget>, TargetErr> {
+        if self.rollup_only {
+            let agents =
+                crate::harness::target::resolve_many(self.snapshot, raw, self.scope, self.channel)
+                    .or_else(|_| self.durable_targets(raw))?;
+            return Ok(self.combine_targets(agents, Vec::new()));
+        }
+        let agent_result =
+            crate::harness::target::resolve_many(self.snapshot, raw, self.scope, self.channel);
+        let pane_result =
+            crate::harness::target::resolve_targets(self.snapshot, raw, self.scope, self.channel);
+        match (agent_result, pane_result) {
+            (Ok(agents), Ok(panes)) => Ok(self.combine_targets(agents, panes)),
+            (Ok(agents), Err(_)) => Ok(self.combine_targets(agents, Vec::new())),
+            (Err(_), Ok(panes)) => Ok(self.combine_targets(Vec::new(), panes)),
+            (Err(_), Err(_)) => self
+                .durable_targets(raw)
+                .map(|agents| self.combine_targets(agents, Vec::new())),
+        }
+    }
+
+    fn durable_targets<'a>(
+        &'a self,
+        raw: &str,
+    ) -> std::result::Result<Vec<&'a AgentState>, TargetErr> {
+        let candidates = self
+            .durable_agents
+            .iter()
+            .filter(|agent| !crate::harness::target::shadowed_by_pane_owner(self.snapshot, agent))
+            .collect::<Vec<_>>();
+        crate::harness::target::resolve_agents(raw, self.scope, self.channel, &candidates)
+    }
+
+    fn combine_targets(
+        &self,
+        agents: Vec<&AgentState>,
+        panes: Vec<&PaneAgent>,
+    ) -> Vec<ResolvedTarget> {
+        let mut used_panes = vec![false; panes.len()];
+        let mut targets = Vec::new();
+        for agent in agents {
+            let pane_index = panes
+                .iter()
+                .enumerate()
+                .find(|(index, pane)| {
+                    !used_panes[*index]
+                        && crate::harness::target::pane_binding(self.snapshot, pane, None)
+                            .is_some_and(|binding| binding.matches_agent(agent))
+                })
+                .map(|(index, _)| index);
+            let pane = pane_index.map(|index| {
+                used_panes[index] = true;
+                panes[index].clone()
+            });
+            targets.push(ResolvedTarget {
+                pane,
+                agent: Some(agent.clone()),
+            });
+        }
+        for (index, pane) in panes.into_iter().enumerate() {
+            if used_panes[index] {
+                continue;
+            }
+            let binding = crate::harness::target::pane_binding(self.snapshot, pane, None);
+            targets.push(ResolvedTarget {
+                pane: Some(pane.clone()),
+                agent: binding.and_then(|binding| binding.agent).cloned(),
+            });
+        }
+        targets
+    }
+
+    fn condition_target(
+        &self,
+        kind: ConditionKind,
+        address: &str,
+        expression: &str,
+    ) -> Result<ResolvedTarget> {
+        if crate::harness::target::is_broadcast(address) {
+            return Err(ConditionErr::Broadcast {
+                kind,
+                address: address.to_owned(),
+                expression: expression.to_owned(),
+            }
+            .into());
+        }
+        let targets = self
+            .resolve(address)
+            .map_err(|source| ConditionErr::Target {
+                kind,
+                address: address.to_owned(),
+                expression: expression.to_owned(),
+                source: Box::new(source),
+            })?;
+        if targets.len() != 1 {
+            return Err(ConditionErr::Arity {
+                kind,
+                address: address.to_owned(),
+                expression: expression.to_owned(),
+                matched: targets.len(),
+            }
+            .into());
+        }
+        // Arity was checked immediately above.
+        let target = targets.into_iter().next().expect("one condition target");
+        if target.agent.is_none() {
+            return Err(ConditionErr::NoLifecycle {
+                kind,
+                address: address.to_owned(),
+                expression: expression.to_owned(),
+            }
+            .into());
+        }
+        Ok(target)
+    }
+}
+
 fn prepare_mode(
     mode: DispatchMode,
-    resolution: ResolutionView<'_>,
+    resolution: &ResolutionView<'_>,
     recipients: &[ResolvedTarget],
     pending: &[MessageRecord],
     sender: &MessageSender,
@@ -643,7 +673,7 @@ fn prepare_mode(
 }
 
 fn resolve_after(
-    resolution: ResolutionView<'_>,
+    resolution: &ResolutionView<'_>,
     recipients: &[ResolvedTarget],
     addresses: &[String],
     gate: DeliveryGate,
@@ -653,8 +683,7 @@ fn resolve_after(
     addresses
         .iter()
         .map(|address| {
-            let target =
-                resolve_condition_target(resolution, ConditionKind::After, address, address)?;
+            let target = resolution.condition_target(ConditionKind::After, address, address)?;
             // Condition target resolution rejects pane-only targets.
             let agent = target.agent.as_ref().expect("condition target validated");
             if recipients.iter().any(|recipient| {
@@ -693,7 +722,7 @@ fn resolve_after(
 }
 
 fn resolve_when(
-    resolution: ResolutionView<'_>,
+    resolution: &ResolutionView<'_>,
     requests: &[WhenRequest],
 ) -> Result<Vec<WhenCondition>> {
     let now = Timestamp::now();
@@ -701,8 +730,7 @@ fn resolve_when(
     requests
         .iter()
         .map(|request| {
-            let target = resolve_condition_target(
-                resolution,
+            let target = resolution.condition_target(
                 ConditionKind::When,
                 &request.address,
                 &request.expression,
@@ -732,56 +760,6 @@ fn resolve_when(
             Ok(condition)
         })
         .collect()
-}
-
-fn resolve_condition_target(
-    resolution: ResolutionView<'_>,
-    kind: ConditionKind,
-    address: &str,
-    expression: &str,
-) -> Result<ResolvedTarget> {
-    if crate::harness::target::is_broadcast(address) {
-        return Err(ConditionErr::Broadcast {
-            kind,
-            address: address.to_owned(),
-            expression: expression.to_owned(),
-        }
-        .into());
-    }
-    let targets = resolve_targets(
-        resolution.snapshot,
-        Some(resolution.durable_agents),
-        address,
-        resolution.scope,
-        resolution.channel,
-        resolution.rollup_only,
-    )
-    .map_err(|source| ConditionErr::Target {
-        kind,
-        address: address.to_owned(),
-        expression: expression.to_owned(),
-        source: Box::new(source),
-    })?;
-    if targets.len() != 1 {
-        return Err(ConditionErr::Arity {
-            kind,
-            address: address.to_owned(),
-            expression: expression.to_owned(),
-            matched: targets.len(),
-        }
-        .into());
-    }
-    // Arity was checked immediately above.
-    let target = targets.into_iter().next().expect("one condition target");
-    if target.agent.is_none() {
-        return Err(ConditionErr::NoLifecycle {
-            kind,
-            address: address.to_owned(),
-            expression: expression.to_owned(),
-        }
-        .into());
-    }
-    Ok(target)
 }
 
 struct DispatchState<'a> {
@@ -1101,19 +1079,9 @@ mod tests {
     #[test]
     fn condition_broadcast_is_typed_before_resolution() {
         let snapshot = snapshot_with_panes(Vec::new(), Vec::new());
-        let err = resolve_condition_target(
-            ResolutionView {
-                snapshot: &snapshot,
-                durable_agents: &[],
-                scope: None,
-                channel: None,
-                rollup_only: false,
-            },
-            ConditionKind::When,
-            "@all",
-            "@all idle 1m",
-        )
-        .expect_err("broadcast condition must fail");
+        let err = resolution(&snapshot, &[], None, false)
+            .condition_target(ConditionKind::When, "@all", "@all idle 1m")
+            .expect_err("broadcast condition must fail");
         assert!(matches!(
             err,
             DispatchErr::Condition(ConditionErr::Broadcast {
@@ -1188,15 +1156,9 @@ mod tests {
         let pane = owner_pane("sess-owner", Some("coder"));
         let snapshot = snapshot_with_panes(vec![older, owner], vec![pane]);
 
-        let targets = resolve_targets(
-            &snapshot,
-            Some(&durable),
-            "@coder",
-            None,
-            Some("project"),
-            false,
-        )
-        .unwrap();
+        let targets = resolution(&snapshot, &durable, Some("project"), false)
+            .resolve("@coder")
+            .unwrap();
 
         assert_eq!(targets.len(), 1);
         assert_eq!(
@@ -1220,15 +1182,9 @@ mod tests {
         let snapshot = snapshot_with_panes(Vec::new(), vec![owner_pane("sess-owner", None)]);
 
         for rollup_only in [false, true] {
-            let targets = resolve_targets(
-                &snapshot,
-                Some(&durable),
-                "@coder",
-                None,
-                Some("project"),
-                rollup_only,
-            )
-            .unwrap();
+            let targets = resolution(&snapshot, &durable, Some("project"), rollup_only)
+                .resolve("@coder")
+                .unwrap();
             assert_eq!(targets.len(), 1);
             assert_eq!(
                 targets[0]
@@ -1240,7 +1196,7 @@ mod tests {
         }
 
         assert!(matches!(
-            resolve_targets(&snapshot, Some(&durable), "@sess-older", None, None, false,),
+            resolution(&snapshot, &durable, None, false).resolve("@sess-older"),
             Err(TargetErr::NoMatch { .. })
         ));
     }
@@ -1259,8 +1215,9 @@ mod tests {
             other_channel,
         ];
         let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
-        let mut targets =
-            resolve_targets(&snapshot, Some(&durable), "@all#project", None, None, false).unwrap();
+        let mut targets = resolution(&snapshot, &durable, None, false)
+            .resolve("@all#project")
+            .unwrap();
 
         exclude_broadcast_caller(
             "@all#project",
@@ -1285,15 +1242,9 @@ mod tests {
         caller.launch_id = Some(AgentSessionId::from("launch-planner"));
         let durable = vec![caller];
         let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
-        let mut targets = resolve_targets(
-            &snapshot,
-            Some(&durable),
-            "@planner",
-            None,
-            Some("project"),
-            false,
-        )
-        .unwrap();
+        let mut targets = resolution(&snapshot, &durable, Some("project"), false)
+            .resolve("@planner")
+            .unwrap();
 
         exclude_broadcast_caller(
             "@planner",
@@ -1321,15 +1272,9 @@ mod tests {
         let peer = named_agent("peer", "coder", "project");
         let durable = vec![caller, peer];
         let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
-        let mut targets = resolve_targets(
-            &snapshot,
-            Some(&durable),
-            "@claude",
-            None,
-            Some("project"),
-            false,
-        )
-        .unwrap();
+        let mut targets = resolution(&snapshot, &durable, Some("project"), false)
+            .resolve("@claude")
+            .unwrap();
 
         exclude_broadcast_caller(
             "@claude",
@@ -1361,15 +1306,9 @@ mod tests {
             launch_id: None,
             pane_id: Some(caller_pane),
         };
-        let mut targets = resolve_targets(
-            &snapshot,
-            Some(&durable),
-            "@all",
-            None,
-            Some("project"),
-            false,
-        )
-        .unwrap();
+        let mut targets = resolution(&snapshot, &durable, Some("project"), false)
+            .resolve("@all")
+            .unwrap();
 
         exclude_broadcast_caller("@all", &mut targets, &durable, Some(&legacy), None).unwrap();
 
@@ -1386,15 +1325,9 @@ mod tests {
         caller.launch_id = Some(AgentSessionId::from("launch-planner"));
         let durable = vec![caller];
         let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
-        let mut targets = resolve_targets(
-            &snapshot,
-            Some(&durable),
-            "@all",
-            None,
-            Some("project"),
-            false,
-        )
-        .unwrap();
+        let mut targets = resolution(&snapshot, &durable, Some("project"), false)
+            .resolve("@all")
+            .unwrap();
         let channel = "project".to_owned();
 
         let err = exclude_broadcast_caller(
@@ -1420,6 +1353,21 @@ mod tests {
 
     fn workspace_id() -> WorkspaceId {
         WorkspaceId::parse("ws_000000000000000000000000").unwrap()
+    }
+
+    fn resolution<'a>(
+        snapshot: &'a SidebarSnapshot,
+        durable_agents: &'a [AgentState],
+        channel: Option<&'a str>,
+        rollup_only: bool,
+    ) -> ResolutionView<'a> {
+        ResolutionView {
+            snapshot,
+            durable_agents,
+            scope: None,
+            channel,
+            rollup_only,
+        }
     }
 
     fn snapshot_with_panes(agents: Vec<AgentState>, panes: Vec<PaneAgent>) -> SidebarSnapshot {
