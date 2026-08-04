@@ -39,6 +39,7 @@ pub enum RoomBirth {
     Normal {
         cwd: PathBuf,
         rebirth: NormalRebirth,
+        /// `None` requests no configured background-view launch.
         background_view: Option<ReadinessSnapshot>,
         refresh_ms: Option<u16>,
         recovery: AttendedRecovery,
