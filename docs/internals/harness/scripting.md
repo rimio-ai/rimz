@@ -20,7 +20,8 @@ A `RunRecord` is written under `~/.local/state/rimz/workspaces/<id>/runs/<run_id
 
 | File | Owns |
 | --- | --- |
-| [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs) | The vocabulary and durable record interface: `SupervisedRunRequest`, `RunRecord`, `RunStatus` and its exit codes, `RunVerify`, locked create/read/update intents, the lifecycle fold, cancellation, and the retry and verify prompt builders. |
+| [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs) | The vocabulary and durable record interface: `SupervisedRunRequest`, `RunRecord`, `RunStatus` and its exit codes, `RunVerify`, locked create/read/update intents, the lifecycle fold, and cancellation. |
+| [`harness/prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | System-prompt materialization plus retry and verification prompt construction. |
 | [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs) | Producer-side deadline detection and detached timeout-helper spawning. |
 | [`harness/run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs) | The blocking wait: the per-run datagram socket, frame validation, the poll loop, and timeout and cancellation transitions. |
 | [`cli/supervised/run.rs`](../../../crates/rimz/src/cli/supervised/run.rs) | The driver both `agents -p` and loop fires call: preparation, placement, the attempt loop, the verify loop, and the retry loop. |

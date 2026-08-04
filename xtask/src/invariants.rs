@@ -46,6 +46,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_spending_walker_ownership(root, &files)?;
     ensure_agents_do_not_depend_on_sidebar(root, &files)?;
     ensure_sidebar_library_boundaries(root, &files)?;
+    ensure_plan_owns_resume_argv(root, &files)?;
     ensure_sidebar_enrich_projection_only(root, &files)?;
     ensure_no_zellij_runtime_list_panes(root, &files)?;
     ensure_sidebar_event_log_reads_through_rollup(root, &files)?;
@@ -68,6 +69,16 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_stable_release_dispatches_docs(root)?;
     ensure_inline_tests_stay_small(&files)?;
     Ok(())
+}
+
+fn ensure_plan_owns_resume_argv(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let plan = root.join("crates/rimz/src/harness/plan.rs");
+    ensure_no_match(
+        files,
+        concat!("harness", "::", "resume"),
+        |path| path != plan,
+        "launch planner must not import resume planning",
+    )
 }
 
 fn ensure_stable_release_dispatches_docs(root: &Path) -> Result<()> {
@@ -420,6 +431,16 @@ fn ensure_spend_parser_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> 
 
 fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> {
     let sidebar_root = root.join("crates/rimz/src/sidebar");
+    let harness_root = root.join("crates/rimz/src/harness");
+    let sidebar_graph_harness = [
+        "auto_continue.rs",
+        "auto_redeem.rs",
+        "budget.rs",
+        "idle_compact.rs",
+        "orphan_sweep.rs",
+        "run_timeout.rs",
+    ]
+    .map(|name| harness_root.join(name));
     for needle in [
         concat!("store", "::", "writer"),
         concat!("::", "run_wake"),
@@ -430,8 +451,13 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         ensure_no_match(
             files,
             needle,
-            |path| !path.starts_with(&sidebar_root),
-            "crates/rimz/src/sidebar is read-only on the store: no writer, run-wake, or broker imports",
+            |path| {
+                !path.starts_with(&sidebar_root)
+                    && !sidebar_graph_harness
+                        .iter()
+                        .any(|candidate| candidate == path)
+            },
+            "sidebar graph is read-only on the store: no writer, run-wake, or broker imports",
         )?;
     }
     Ok(())

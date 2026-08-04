@@ -616,23 +616,6 @@ pub fn compile_managed_agent_process(
 /// Compile the serialized wrapper stage for a proven managed provider binding.
 /// Pending stages re-enter through the login shell once; finalized stages
 /// execute raw provider argv after the adapter verifies the effective binding.
-pub fn compile_agent_process_stage(
-    project_root: &Path,
-    rtk: crate::config::RtkMode,
-    request: &ExecRequest,
-    cwd: &Path,
-    rimz_bin: &Path,
-) -> Result<AgentProcessStage, AgentProcessStageErr> {
-    compile_agent_process_stage_with_extra_env(
-        project_root,
-        rtk,
-        request,
-        cwd,
-        rimz_bin,
-        &BTreeMap::new(),
-    )
-}
-
 pub fn compile_agent_process_stage_with_extra_env(
     project_root: &Path,
     rtk: crate::config::RtkMode,

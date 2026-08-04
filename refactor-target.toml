@@ -15,14 +15,14 @@ allowed-imports = [
     "agent_activity",
     "daemon_view",
     "harness::run",
-    "harness::run_wake",
     "ids",
     "mux",
     "pane",
+    "sock",
     "store",
     "transcript",
 ]
-surface-budget = 991
+surface-budget = 993
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -166,7 +166,7 @@ allowed-imports = [
     "trust",
     "workspace",
 ]
-surface-budget = 613
+surface-budget = 586
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -423,7 +423,7 @@ surface-budget = 189
 [[module]]
 path = "crates/rimz/src/sock.rs"
 allowed-imports = []
-surface-budget = 14
+surface-budget = 17
 
 [[module]]
 path = "crates/rimz/src/store/atomic.rs"
@@ -489,13 +489,97 @@ surface-budget = 15
 [[module]]
 path = "crates/rimz/src/trust.rs"
 allowed-imports = [
+    "agents",
     "config",
-    "harness::run",
     "ids",
     "store::atomic",
     "store::paths",
 ]
 surface-budget = 37
+
+[[module]]
+path = "crates/rimz/src/harness/ancestry.rs"
+allowed-imports = ["ids"]
+surface-budget = 9
+
+[[module]]
+path = "crates/rimz/src/harness/plan.rs"
+allowed-imports = [
+    "agents",
+    "config",
+    "harness::ancestry",
+    "harness::budget",
+    "harness::spec",
+    "ids",
+    "mux",
+    "store::writer",
+]
+surface-budget = 27
+
+[[module]]
+path = "crates/rimz/src/harness/resume.rs"
+allowed-imports = [
+    "(crate)",
+    "agents",
+    "config",
+    "harness::plan",
+    "harness::spec",
+    "ids",
+    "mux",
+    "store::runtime",
+    "store::writer",
+]
+surface-budget = 61
+
+[[module]]
+path = "crates/rimz/src/harness/launch.rs"
+allowed-imports = [
+    "ids",
+    "trust",
+]
+surface-budget = 48
+
+[[module]]
+path = "crates/rimz/src/harness/run.rs"
+allowed-imports = [
+    "agents",
+    "ids",
+    "store",
+]
+surface-budget = 42
+
+[[module]]
+path = "crates/rimz/src/harness/run_wake.rs"
+allowed-imports = [
+    "harness::run",
+    "ids",
+    "sock",
+    "store",
+]
+surface-budget = 16
+
+[[module]]
+path = "crates/rimz/src/harness/prompt_compose.rs"
+allowed-imports = [
+    "agents",
+    "ids",
+    "store",
+]
+surface-budget = 9
+
+[[module]]
+path = "crates/rimz/src/harness/schedule/runner.rs"
+allowed-imports = [
+    "agents",
+    "config",
+    "harness::plan",
+    "harness::run",
+    "harness::schedule",
+    "ids",
+    "store::paths",
+    "workspace",
+]
+surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/tui.rs"
@@ -571,4 +655,19 @@ baseline = 0
 [[strangler]]
 symbol = "rank_windows"
 path = "crates/rimz/src/store/snapshot"
+baseline = 0
+
+[[strangler]]
+symbol = "resolve_task_spec"
+path = "crates/rimz/src/harness/schedule/runner.rs"
+baseline = 0
+
+[[strangler]]
+symbol = "candidate_resume_command"
+path = "crates/rimz/src/harness/resume.rs"
+baseline = 0
+
+[[strangler]]
+symbol = "run::PermissionMode"
+path = "crates/rimz/src"
 baseline = 0

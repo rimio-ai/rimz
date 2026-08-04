@@ -683,12 +683,13 @@ fn provider_account_stage_validates_and_reenters_once() {
         input.provider_account = ProviderAccountState::Pending {
             binding: binding.clone(),
         };
-        let err = compile_agent_process_stage(
+        let err = compile_agent_process_stage_with_extra_env(
             project.path(),
             crate::config::RtkMode::Auto,
             &input,
             project.path(),
             Path::new("/bin/rimz"),
+            &BTreeMap::new(),
         )
         .expect_err("binding scope");
         assert_eq!(
@@ -707,12 +708,13 @@ fn provider_account_stage_validates_and_reenters_once() {
     pending.provider_account = ProviderAccountState::Pending {
         binding: binding.clone(),
     };
-    let stage = compile_agent_process_stage(
+    let stage = compile_agent_process_stage_with_extra_env(
         project.path(),
         crate::config::RtkMode::Auto,
         &pending,
         project.path(),
         Path::new("/bin/rimz"),
+        &BTreeMap::new(),
     )
     .expect("pending stage");
     let AgentProcessStage::LoginShellReentry { argv, .. } = stage else {
@@ -728,12 +730,13 @@ fn provider_account_stage_validates_and_reenters_once() {
         ProviderAccountState::Finalized { .. }
     ));
 
-    let err = compile_agent_process_stage(
+    let err = compile_agent_process_stage_with_extra_env(
         project.path(),
         crate::config::RtkMode::Auto,
         &finalized,
         project.path(),
         Path::new("/bin/rimz"),
+        &BTreeMap::new(),
     )
     .expect_err("unresolved account mismatches");
     assert!(err.is_finalized_provider_mismatch());
@@ -753,12 +756,13 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
     )
     .expect("ordinary process");
-    let AgentProcessStage::Ready(ordinary) = compile_agent_process_stage(
+    let AgentProcessStage::Ready(ordinary) = compile_agent_process_stage_with_extra_env(
         project.path(),
         crate::config::RtkMode::Auto,
         &unbound,
         project.path(),
         Path::new("/bin/rimz"),
+        &BTreeMap::new(),
     )
     .expect("ordinary stage") else {
         panic!("unbound launch is ready");

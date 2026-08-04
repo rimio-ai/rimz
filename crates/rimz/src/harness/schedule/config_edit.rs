@@ -13,13 +13,13 @@ use crate::trust::TrustState;
 const PROJECT_CONFIG_REL: &str = ".rimz/config.toml";
 
 #[derive(Clone, Copy, Debug)]
-pub enum TaskStore<'a> {
+pub(super) enum TaskStore<'a> {
     Machine,
     Project(&'a Path),
 }
 
 impl TaskStore<'_> {
-    pub fn path(self) -> PathBuf {
+    pub(super) fn path(self) -> PathBuf {
         match self {
             Self::Machine => MachineConfig::loop_path(),
             Self::Project(project_root) => project_root.join(PROJECT_CONFIG_REL),
@@ -61,7 +61,7 @@ impl TaskStore<'_> {
     }
 }
 
-pub fn set_entry(store: TaskStore<'_>, name: &str, entry: &TaskEntry) -> Result<()> {
+pub(super) fn set_entry(store: TaskStore<'_>, name: &str, entry: &TaskEntry) -> Result<()> {
     let path = store.path();
     let mut doc = store
         .read_text()?
@@ -82,7 +82,7 @@ pub fn set_entry(store: TaskStore<'_>, name: &str, entry: &TaskEntry) -> Result<
     Ok(())
 }
 
-pub fn remove(store: TaskStore<'_>, name: &str) -> Result<bool> {
+pub(super) fn remove(store: TaskStore<'_>, name: &str) -> Result<bool> {
     let path = store.path();
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(false);
@@ -106,7 +106,7 @@ pub fn remove(store: TaskStore<'_>, name: &str) -> Result<bool> {
     Ok(removed)
 }
 
-pub fn rename(store: TaskStore<'_>, name: &str, new_name: &str) -> Result<bool> {
+pub(super) fn rename(store: TaskStore<'_>, name: &str, new_name: &str) -> Result<bool> {
     let path = store.path();
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(false);
