@@ -8,6 +8,25 @@ fn env(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
 }
 
 #[test]
+fn launch_environment_key_literals_are_stable() {
+    assert_eq!(ENV_RUN_ID, "RIMZ_RUN_ID");
+    assert_eq!(ENV_AGENT_ID, "RIMZ_AGENT_ID");
+    assert_eq!(ENV_AGENT_KIND, "RIMZ_AGENT_KIND");
+    assert_eq!(ENV_AGENT_NAME, "RIMZ_AGENT_NAME");
+    assert_eq!(ENV_AGENT_PROFILE, "RIMZ_AGENT_PROFILE");
+    assert_eq!(ENV_AGENT_ROLE, "RIMZ_AGENT_ROLE");
+    assert_eq!(ENV_TEAM, "RIMZ_TEAM");
+    assert_eq!(ENV_LAUNCH_GROUP, "RIMZ_LAUNCH_GROUP");
+    assert_eq!(ENV_LAUNCH_ORDINAL, "RIMZ_LAUNCH_ORDINAL");
+    assert_eq!(ENV_CHANNEL, "RIMZ_CHANNEL");
+    assert_eq!(ENV_WORKTREE_PATH, "RIMZ_WORKTREE_PATH");
+    assert_eq!(ENV_AGENT_MODEL, "RIMZ_AGENT_MODEL");
+    assert_eq!(ENV_AGENT_EFFORT, "RIMZ_AGENT_EFFORT");
+    assert_eq!(ENV_AGENT_BUDGET, "RIMZ_AGENT_BUDGET");
+    assert_eq!(ENV_RTK, "RIMZ_RTK");
+}
+
+#[test]
 fn provider_compiler_preserves_action_and_trailing_argument_order() {
     let adapter = crate::agents::find_definition("codex").expect("codex adapter");
     let trailing = vec!["--model".to_owned(), "o3".to_owned()];

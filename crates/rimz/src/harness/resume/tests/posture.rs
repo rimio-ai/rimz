@@ -2,6 +2,46 @@
 //! with, and how a broken profile degrades instead of stranding the session.
 
 use super::*;
+use crate::agents::LaunchParams;
+use crate::harness::spec::AgentCell;
+
+#[test]
+fn cell_posture_projection_covers_every_agent_cell_field() {
+    let cell = AgentCell {
+        kind: AgentKind::new_unchecked("codex"),
+        args: vec!["--model".to_owned(), "o3".to_owned()],
+        system_prompt_file: Some(PathBuf::from("system.md")),
+        append_system_prompt_files: vec![PathBuf::from("append.md")],
+        launch: LaunchParams {
+            mode: Some(PermissionMode::Yolo),
+            model: Some("o3".to_owned()),
+            effort: Some("high".to_owned()),
+            budget: Some("$10".to_owned()),
+            ..Default::default()
+        },
+    };
+    let AgentCell {
+        kind: _,
+        args,
+        system_prompt_file,
+        append_system_prompt_files,
+        launch,
+    } = cell.clone();
+
+    assert_eq!(
+        ResumePosture::from_cell(&cell),
+        ResumePosture {
+            args,
+            system_prompt_file,
+            append_system_prompt_files,
+            mode: launch.mode,
+            model: launch.model,
+            effort: launch.effort,
+            budget: launch.budget,
+            degraded: None,
+        }
+    );
+}
 
 #[test]
 fn resume_replays_the_profile_declared_posture() {

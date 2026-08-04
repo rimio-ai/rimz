@@ -380,4 +380,13 @@ fn untrusted_agent_env_refuses_an_agents_launch_before_side_effects() {
         .assert()
         .failure()
         .stderr(contains("rimz trust grant"));
+
+    assert!(
+        !env.home_root.join("project-worktrees/wt-a").exists(),
+        "final launch validation must precede worktree creation"
+    );
+    assert!(
+        !env.state_path_for(&env.project_root).events_log.exists(),
+        "final launch validation must precede identity allocation"
+    );
 }
