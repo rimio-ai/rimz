@@ -24,19 +24,47 @@ const ENV_PROBE_POLL: Duration = Duration::from_millis(25);
 static ENV_PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
+/// Stable RimZ launch identity. The provider may replace the provisional
+/// session key after startup, so launch ancestry resolves this value through
+/// the durable `AgentState::launch_id` stamp.
 pub const ENV_AGENT_ID: &str = "RIMZ_AGENT_ID";
+/// The launched adapter kind (`claude`, `codex`, ...). Its presence marks the
+/// process as a RimZ-launched agent for peer-message attribution.
 pub const ENV_AGENT_KIND: &str = "RIMZ_AGENT_KIND";
 pub const ENV_AGENT_NAME: &str = "RIMZ_AGENT_NAME";
+/// The `[agents.profiles]` profile name an agent launched as, so it answers to
+/// `@<profile>`. Set by the launch wrapper; read into the lifecycle observation.
 pub const ENV_AGENT_PROFILE: &str = "RIMZ_AGENT_PROFILE";
+/// The `[agents.teams]` role name an agent launched as, so it answers to
+/// `@<role>`. Set by the launch wrapper; read into the lifecycle observation.
 pub const ENV_AGENT_ROLE: &str = "RIMZ_AGENT_ROLE";
+/// The `[agents.teams]` team name an agent launched under. Set by the launch
+/// wrapper; read by member CLI calls so in-place teams scope to their channel.
 pub const ENV_TEAM: &str = "RIMZ_TEAM";
+/// The inline multi-agent launch cohort this agent belongs to. Team launches
+/// use [`ENV_TEAM`] as their cohort key; inline layouts use this generated id.
 pub const ENV_LAUNCH_GROUP: &str = "RIMZ_LAUNCH_GROUP";
+/// The agent's order inside its launch cohort: team role-list index or inline
+/// agent-cell index. Set by the wrapper; read into lifecycle observations.
 pub const ENV_LAUNCH_ORDINAL: &str = "RIMZ_LAUNCH_ORDINAL";
+/// Named cooperation lane an agent launched under. Set by the launch wrapper;
+/// read by lifecycle hooks and peer-message commands as the routing channel.
 pub const ENV_CHANNEL: &str = "RIMZ_CHANNEL";
+/// The cwd backing a launched pane. Set with the room pin so split panes can
+/// still report the worktree path they were opened for.
 pub const ENV_WORKTREE_PATH: &str = "RIMZ_WORKTREE_PATH";
+/// The model selected by launch flags or profile presets. Set by the launch
+/// wrapper; read into the lifecycle observation as card identity fallback.
 pub const ENV_AGENT_MODEL: &str = "RIMZ_AGENT_MODEL";
+/// The reasoning effort selected by launch flags or profile presets. Set by
+/// the launch wrapper; read into the lifecycle observation as card identity fallback.
 pub const ENV_AGENT_EFFORT: &str = "RIMZ_AGENT_EFFORT";
+/// The canonical dollar cap selected by launch flags, profiles, or roles.
+/// Set by the launch wrapper and read into lifecycle observations.
 pub const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
+/// The configured `[harness] rtk` mode (`auto`/`on`/`off`), exported to every
+/// agent launch so `cargo xtask` can route recognized cargo commands through
+/// `rtk`. Read by xtask, never by rimz itself.
 pub(super) const ENV_RTK: &str = "RIMZ_RTK";
 
 pub const SUBAGENT_REMINDER: &str = concat!(

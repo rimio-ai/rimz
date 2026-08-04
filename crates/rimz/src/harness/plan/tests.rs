@@ -393,7 +393,12 @@ fn profile_prompt_validation_requires_declared_files() {
     let launch = effective_launch(&machine, dir.path());
     let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
         .expect("resolve profile");
-    validate_profile_prompt_files(&resolved.layout).expect("present prompt files pass");
+    let validate = |layout: &LayoutSpec| {
+        layout
+            .agent_cells()
+            .try_for_each(validate_agent_prompt_files)
+    };
+    validate(&resolved.layout).expect("present prompt files pass");
 
     machine.agents.profiles.0.insert(
         "planner".to_owned(),
@@ -409,7 +414,7 @@ fn profile_prompt_validation_requires_declared_files() {
     let launch = effective_launch(&machine, dir.path());
     let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
         .expect("resolve missing prompt profile");
-    let err = validate_profile_prompt_files(&resolved.layout).expect_err("missing prompt fails");
+    let err = validate(&resolved.layout).expect_err("missing prompt fails");
     assert!(err.to_string().contains("system-prompt-file"), "{err}");
 
     let invalid = dir.path().join("invalid.md");
@@ -421,8 +426,46 @@ fn profile_prompt_validation_requires_declared_files() {
     let launch = effective_launch(&machine, dir.path());
     let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"), None)
         .expect("resolve invalid prompt profile");
-    validate_profile_prompt_files(&resolved.layout)
-        .expect("RimZ passes prompt paths without reading their contents");
+    validate(&resolved.layout).expect("RimZ passes prompt paths without reading their contents");
+}
+
+#[test]
+fn pane_compilation_checks_support_across_layout_before_prompt_files() {
+    let missing = PathBuf::from("missing-prompt.md");
+    let mut missing_file = preset_cell("codex", &[], None, None);
+    let Cell::Agent(cell) = &mut missing_file else {
+        unreachable!()
+    };
+    cell.system_prompt_file = Some(missing);
+    let mut unsupported = preset_cell("amp", &[], None, None);
+    let Cell::Agent(cell) = &mut unsupported else {
+        unreachable!()
+    };
+    cell.system_prompt_file = Some(PathBuf::from("unsupported.md"));
+    let layout = LayoutSpec {
+        columns: vec![Column {
+            rows: vec![missing_file, unsupported],
+            stacked: false,
+        }],
+    };
+
+    let err = compile_layout_panes(
+        &layout,
+        LayoutPaneParams {
+            cwd: Path::new("/repo"),
+            cleanup_worktree: false,
+            in_place: false,
+            resume_seeds: None,
+            launch_identities: &[],
+            fallback_channel: None,
+        },
+    )
+    .expect_err("later unsupported prompt wins before file checks");
+
+    assert!(matches!(
+        err.downcast_ref::<LaunchFinalizeError>(),
+        Some(LaunchFinalizeError::UnsupportedSystemPrompt { agent: "amp" })
+    ));
 }
 
 #[test]

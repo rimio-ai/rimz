@@ -133,9 +133,9 @@ pub enum ResolveLaunchError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedSingleAgentLaunch {
-    pub kind: String,
-    pub args: Vec<String>,
-    pub model: Option<String>,
+    pub(crate) kind: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) model: Option<String>,
 }
 
 impl ResolvedSingleAgentLaunch {
@@ -277,17 +277,6 @@ fn wrong_doorway(
         command,
         expected_in,
     }
-}
-
-/// Require the prompt files carried by finalized launch cells.
-#[cfg(test)]
-fn validate_profile_prompt_files(
-    layout: &LayoutSpec,
-) -> std::result::Result<(), ProfilePromptFileError> {
-    for cell in layout.agent_cells() {
-        validate_agent_prompt_files(cell)?;
-    }
-    Ok(())
 }
 
 fn validate_agent_prompt_files(
@@ -918,7 +907,13 @@ pub fn compile_layout_panes(
     params: LayoutPaneParams<'_>,
 ) -> Result<LayoutPanes> {
     for cell in layout.agent_cells() {
-        validate_finalized_cell(cell, crate::agents::find_definition(cell.kind.as_str()))?;
+        validate_system_prompt_support(cell, crate::agents::find_definition(cell.kind.as_str()))?;
+    }
+    for cell in layout.agent_cells() {
+        validate_agent_prompt_files(cell)?;
+    }
+    for cell in layout.agent_cells() {
+        validate_system_prompt_text(cell)?;
     }
     let agent_count = layout.agent_cells().count();
     if let Some(seeds) = params.resume_seeds
