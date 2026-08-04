@@ -22,8 +22,7 @@ use crate::workspace::ResolvedWorkspace;
 use crate::{RuntimePaths, StatePaths, Store, store::workspace_record::WorkspaceRecord};
 
 pub use birth::{
-    AttendedRecovery, BackgroundViewBirth, BirthOutcome, NormalBirth, NormalRebirth,
-    ResetRecoveryError, RoomBirth, RoomResetReport, SupervisedBirth,
+    AttendedRecovery, BirthOutcome, NormalRebirth, ResetRecoveryError, RoomBirth, RoomResetReport,
 };
 
 #[derive(Debug, thiserror::Error)]

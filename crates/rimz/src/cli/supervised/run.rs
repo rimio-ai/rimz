@@ -785,16 +785,14 @@ pub(in crate::cli) fn run_supervised(
         rimz::room::RoomSizing::Birth,
     )?;
     render::room::present_birth_outcome(
-        room.birth(rimz::room::RoomBirth::Supervised(
-            rimz::room::SupervisedBirth {
-                cwd: prepared.launch.cwd.clone(),
-                recovery: if std::io::stdin().is_terminal() {
-                    rimz::room::AttendedRecovery::Reset
-                } else {
-                    rimz::room::AttendedRecovery::RequireExplicitReset
-                },
+        room.birth(rimz::room::RoomBirth::Supervised {
+            cwd: prepared.launch.cwd.clone(),
+            recovery: if std::io::stdin().is_terminal() {
+                rimz::room::AttendedRecovery::Reset
+            } else {
+                rimz::room::AttendedRecovery::RequireExplicitReset
             },
-        )),
+        }),
         room.session_name(),
     )?;
     let retries = request.retries;

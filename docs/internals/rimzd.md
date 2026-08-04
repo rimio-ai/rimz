@@ -40,7 +40,7 @@ Two similarly named predicates answer different questions, and the difference ma
 
 Conditionality lives entirely in the inputs. `codex_present` decides the broker. `claude_host_argv` arrives already resolved from `ReadinessSnapshot::probe`, which is `Some` only when remote control is enabled for Claude and the probe reports ready, so the spec never re-derives the policy. Host order is broker first, then Claude.
 
-`rimz start` is the only entry point that births the view. `rimz attach` and web-session entry pass `BackgroundViewBirth::Skip` and inherit whatever is already there. Repair holds the same line: it restores missing panes into a view that exists, and creates nothing when the view is gone.
+`rimz start` is the only entry point that births the view: start carries remote-control readiness into room birth, while attach and web-session entry carry no background-view request and inherit whatever is already there. Repair holds the same line: it restores missing panes into a view that exists, and creates nothing when the view is gone.
 
 ## The content column and its supervisor
 

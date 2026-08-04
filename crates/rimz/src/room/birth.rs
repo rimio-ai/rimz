@@ -34,32 +34,19 @@ pub enum AttendedRecovery {
     RequireExplicitReset,
 }
 
-/// Whether normal room birth carries the configured daemon view.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum BackgroundViewBirth {
-    Launch(ReadinessSnapshot),
-    Skip,
-}
-
-/// Normal start/attach birth inputs.
-pub struct NormalBirth {
-    pub cwd: PathBuf,
-    pub rebirth: NormalRebirth,
-    pub background_view: BackgroundViewBirth,
-    pub refresh_ms: Option<u16>,
-    pub recovery: AttendedRecovery,
-}
-
-/// Supervised-run birth inputs.
-pub struct SupervisedBirth {
-    pub cwd: PathBuf,
-    pub recovery: AttendedRecovery,
-}
-
 /// Two real room birth policies.
 pub enum RoomBirth {
-    Normal(NormalBirth),
-    Supervised(SupervisedBirth),
+    Normal {
+        cwd: PathBuf,
+        rebirth: NormalRebirth,
+        background_view: Option<ReadinessSnapshot>,
+        refresh_ms: Option<u16>,
+        recovery: AttendedRecovery,
+    },
+    Supervised {
+        cwd: PathBuf,
+        recovery: AttendedRecovery,
+    },
 }
 
 /// Reset details returned for CLI presentation.
@@ -70,19 +57,12 @@ pub struct RoomResetReport {
 }
 
 /// Health retry failed after an attended reset already changed room state.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
 pub struct ResetRecoveryError {
     pub report: RoomResetReport,
     message: String,
 }
-
-impl std::fmt::Display for ResetRecoveryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for ResetRecoveryError {}
 
 /// Birth results rendered by the command boundary.
 #[derive(Default)]
@@ -126,34 +106,30 @@ impl RoomContext {
         }
 
         let (cwd, refresh_ms, rebirth, background_view, recovery, supervised) = match birth {
-            RoomBirth::Normal(normal) => (
-                normal.cwd,
-                normal.refresh_ms,
-                Some(normal.rebirth),
-                normal.background_view,
-                normal.recovery,
+            RoomBirth::Normal {
+                cwd,
+                rebirth,
+                background_view,
+                refresh_ms,
+                recovery,
+            } => (
+                cwd,
+                refresh_ms,
+                Some(rebirth),
+                background_view,
+                recovery,
                 false,
             ),
-            RoomBirth::Supervised(supervised) => (
-                supervised.cwd,
-                None,
-                None,
-                BackgroundViewBirth::Skip,
-                supervised.recovery,
-                true,
-            ),
+            RoomBirth::Supervised { cwd, recovery } => (cwd, None, None, None, recovery, true),
         };
         self.backend.ensure_session(&self.session_options(&cwd))?;
         if supervised && pre_existed {
             self.detected_size = None;
         }
 
-        let background_view = match background_view {
-            BackgroundViewBirth::Launch(readiness) => {
-                Some(self.background_view(&readiness, refresh_ms))
-            }
-            BackgroundViewBirth::Skip => None,
-        };
+        let background_view = background_view
+            .as_ref()
+            .map(|readiness| self.background_view(readiness, refresh_ms));
 
         let resume = match rebirth {
             Some(rebirth) => match rebirth {
@@ -188,7 +164,14 @@ impl RoomContext {
 
         let background_view = background_view.as_ref();
         let daemon = background_view.map(|options| &options.view);
-        self.launch_sidebar(&sidebar, !pre_existed, daemon);
+        let mut birth_sidebar = sidebar.clone();
+        birth_sidebar.pristine_birth = !pre_existed;
+        let _ = crate::sidebar::launch_sidebar_if_needed(
+            self.backend.as_ref(),
+            &self.runtime,
+            &birth_sidebar,
+            daemon,
+        );
 
         if let Some(options) = background_view {
             self.launch_background_view(options);
@@ -197,22 +180,6 @@ impl RoomContext {
         let reset = self.ensure_healthy(&sidebar, daemon, recovery)?;
         self.load_presence();
         Ok(BirthOutcome { resume, reset })
-    }
-
-    fn launch_sidebar(
-        &self,
-        options: &SidebarPaneOptions,
-        pristine_birth: bool,
-        daemon: Option<&DaemonView>,
-    ) {
-        let mut opts = options.clone();
-        opts.pristine_birth = pristine_birth;
-        let _ = crate::sidebar::launch_sidebar_if_needed(
-            self.backend.as_ref(),
-            &self.runtime,
-            &opts,
-            daemon,
-        );
     }
 
     fn launch_background_view(&self, options: &BackgroundViewOptions) {
@@ -260,10 +227,12 @@ impl RoomContext {
             return Ok(None);
         }
         if recovery == AttendedRecovery::RequireExplicitReset {
-            return Err(ResetRequired {
-                session: self.workspace.session_name.clone(),
-            }
-            .into());
+            anyhow::bail!(
+                "The '{}' Zellij room is stuck or cannot be inspected safely enough to self-heal \
+                 without a destructive reset.\n\
+                 No terminal is available to confirm one. Run `rimz reset` to rebuild it cleanly.",
+                self.workspace.session_name,
+            );
         }
         let reset = self.reset(false)?;
         match self.clean_session(sidebar, daemon) {
@@ -320,23 +289,3 @@ impl RoomContext {
         Ok(RoomResetReport { teardown, records })
     }
 }
-
-/// No terminal is available to confirm destructive reset of a stuck room.
-#[derive(Debug)]
-struct ResetRequired {
-    session: String,
-}
-
-impl std::fmt::Display for ResetRequired {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "The '{}' Zellij room is stuck or cannot be inspected safely enough to self-heal \
-             without a destructive reset.\n\
-             No terminal is available to confirm one. Run `rimz reset` to rebuild it cleanly.",
-            self.session,
-        )
-    }
-}
-
-impl std::error::Error for ResetRequired {}
