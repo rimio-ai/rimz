@@ -46,7 +46,7 @@ pub enum RunWakeErr {
 pub type Result<T> = std::result::Result<T, RunWakeErr>;
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum RunWakeOutcome {
+enum RunWakeOutcome {
     Completed(RunStatus),
     Neutral,
 }
@@ -113,7 +113,7 @@ pub fn wake_run(rt: &RuntimePaths, record: &RunRecord) -> Result<()> {
 /// The runtime sock dir is expected to exist already (the `Store` ensures
 /// it during `open`); we re-check defensively here only by removing a stale
 /// file at the derived path before binding.
-pub fn bind_run(rt: &RuntimePaths, run_id: &RunId) -> Result<(StdUnixDatagram, PathBuf)> {
+fn bind_run(rt: &RuntimePaths, run_id: &RunId) -> Result<(StdUnixDatagram, PathBuf)> {
     bind_path(run_socket_path(rt, run_id))
 }
 
@@ -212,12 +212,12 @@ fn next_wait(deadline: Option<std::time::Instant>) -> Option<Duration> {
 }
 
 /// Adopt a freshly-bound std `UnixDatagram` into a tokio one.
-pub fn adopt(sock: StdUnixDatagram) -> Result<tokio::net::UnixDatagram> {
+fn adopt(sock: StdUnixDatagram) -> Result<tokio::net::UnixDatagram> {
     sock.set_nonblocking(true).map_err(RunWakeErr::Recv)?;
     tokio::net::UnixDatagram::from_std(sock).map_err(RunWakeErr::Recv)
 }
 
-pub async fn wait_for_run_completion(
+async fn wait_for_run_completion(
     sock: &tokio::net::UnixDatagram,
     expected: &ExpectedRunFrame,
     cap: Option<Duration>,
@@ -256,15 +256,6 @@ pub async fn wait_for_run_completion(
         },
         None => recv_valid.await,
     }
-}
-
-pub async fn wait_for_run_completion_owning(
-    sock: StdUnixDatagram,
-    expected: ExpectedRunFrame,
-    cap: Option<Duration>,
-) -> Result<RunWakeOutcome> {
-    let sock = adopt(sock)?;
-    wait_for_run_completion(&sock, &expected, cap).await
 }
 
 #[cfg(test)]
@@ -387,9 +378,10 @@ mod tests {
             .await
             .expect("send right");
 
-        let outcome = wait_for_run_completion_owning(
-            sock,
-            ExpectedRunFrame {
+        let sock = adopt(sock).expect("adopt run socket");
+        let outcome = wait_for_run_completion(
+            &sock,
+            &ExpectedRunFrame {
                 workspace_id,
                 run_id,
             },
@@ -409,9 +401,10 @@ mod tests {
         let run_id = RunId::new();
         let (sock, _sock_path) = bind_run(&rt, &run_id).expect("bind run");
 
-        let outcome = wait_for_run_completion_owning(
-            sock,
-            ExpectedRunFrame {
+        let sock = adopt(sock).expect("adopt run socket");
+        let outcome = wait_for_run_completion(
+            &sock,
+            &ExpectedRunFrame {
                 workspace_id,
                 run_id,
             },

@@ -102,7 +102,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
 
     let after = plan_from_env(&env);
     assert!(
-        after.is_empty(),
+        after.tabs.is_empty(),
         "a closed-pane end trace removes the agent from resume candidates",
     );
 }

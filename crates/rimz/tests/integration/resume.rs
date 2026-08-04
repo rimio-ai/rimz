@@ -398,7 +398,10 @@ fn an_agent_ended_trace_is_not_resumed() {
         .expect("append ended");
 
     let plan = plan_from_rollup(&h);
-    assert!(plan.is_empty(), "rebirth auto-resume excludes ended agents");
+    assert!(
+        plan.tabs.is_empty(),
+        "rebirth auto-resume excludes ended agents"
+    );
 }
 
 #[test]
@@ -445,7 +448,7 @@ fn missing_worktree_candidate_is_stamped_ended_not_reported() {
         .append_event(&lifecycle(&h, "claude", "rimz.worktree-gone", &ended))
         .expect("append end observation");
     assert!(
-        plan_from_rollup(&h).is_empty(),
+        plan_from_rollup(&h).tabs.is_empty(),
         "a follow-up rebirth plan sees the durable end stamp"
     );
 }

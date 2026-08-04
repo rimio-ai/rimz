@@ -10,7 +10,7 @@ use rimz::agents::PermissionMode;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::harness::run::{RunRecord, RunStatus};
-use rimz::harness::run_wake::{ExpectedRunFrame, RunWakeOutcome};
+use rimz::harness::run_wake::{ExpectedRunFrame, RunWaiter};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::store::event::EventEnvelope;
 use rimz::workspace::WorkspaceResolver;
@@ -155,8 +155,15 @@ fn reset_cancels_active_runs_and_wakes_waiters() {
     record.status = RunStatus::Running;
     let run_id = record.run_id.clone();
     rimz::harness::run::create(store.paths(), &record).expect("create run");
-    let (sock, _sock_path) =
-        rimz::harness::run_wake::bind_run(store.runtime_paths(), &run_id).expect("bind run socket");
+    let waiter = RunWaiter::bind(
+        store.runtime_paths(),
+        ExpectedRunFrame {
+            workspace_id: env.workspace_id.clone(),
+            run_id: run_id.clone(),
+        },
+        rimz::harness::run::RunCancellation::new(),
+    )
+    .expect("bind run socket");
 
     env.rimz()
         .args(["--mux", "zellij", "reset", "--no-start", "--yes"])
@@ -168,17 +175,10 @@ fn reset_cancels_active_runs_and_wakes_waiters() {
         .enable_all()
         .build()
         .expect("tokio runtime");
-    let outcome = runtime
-        .block_on(rimz::harness::run_wake::wait_for_run_completion_owning(
-            sock,
-            ExpectedRunFrame {
-                workspace_id: env.workspace_id.clone(),
-                run_id: run_id.clone(),
-            },
-            Some(Duration::from_secs(1)),
-        ))
+    let terminal = runtime
+        .block_on(waiter.wait_terminal(&store, Some(Duration::from_secs(1)), None))
         .expect("wait for run wakeup");
-    assert_eq!(outcome, RunWakeOutcome::Completed(RunStatus::Canceled));
+    assert_eq!(terminal.status, RunStatus::Canceled);
 
     let after = rimz::harness::run::load(store.paths(), &run_id).expect("load run");
     assert_eq!(after.status, RunStatus::Canceled);
