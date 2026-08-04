@@ -12,7 +12,9 @@ pub mod reply;
 pub mod send;
 
 use crate::agents::{AgentCardRef, AgentState, AgentStatus};
+use crate::harness::target::{agent_channel, recipient_channel};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
+use crate::store::snapshot::PaneAgent;
 
 pub const DEFAULT_SETTLE: Duration = Duration::from_millis(400);
 pub const SETTLE_ENV: &str = "RIMZ_MESSAGE_SETTLE_MS";
@@ -719,10 +721,10 @@ struct MessageDraft {
 enum Recipient<'a> {
     Agent {
         agent: &'a AgentState,
-        pane: Option<&'a crate::store::snapshot::PaneAgent>,
+        pane: Option<&'a PaneAgent>,
     },
     Pane {
-        pane: &'a crate::store::snapshot::PaneAgent,
+        pane: &'a PaneAgent,
         bound: Option<&'a AgentState>,
     },
 }
@@ -742,10 +744,8 @@ impl Recipient<'_> {
                 kind: agent.kind.clone(),
                 agent_id: agent.agent_id.clone(),
                 agent_name: agent.name.clone(),
-                channel: crate::harness::target::agent_channel(agent).or_else(|| {
-                    pane.and_then(|pane| {
-                        crate::harness::target::recipient_channel(pane, Some(agent), scope_channel)
-                    })
+                channel: agent_channel(agent).or_else(|| {
+                    pane.and_then(|pane| recipient_channel(pane, Some(agent), scope_channel))
                 }),
                 pane_id: pane.map(|pane| pane.pane_id.clone()),
             },
@@ -758,7 +758,7 @@ impl Recipient<'_> {
                 agent_name: bound
                     .and_then(|agent| agent.name.clone())
                     .or_else(|| pane.name.clone()),
-                channel: crate::harness::target::recipient_channel(pane, bound, scope_channel),
+                channel: recipient_channel(pane, bound, scope_channel),
                 pane_id: Some(pane.pane_id.clone()),
             },
         }
