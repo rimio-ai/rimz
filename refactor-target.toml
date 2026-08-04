@@ -394,7 +394,22 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-surface-budget = 51
+surface-budget = 48
+
+[[strangler]]
+symbol = "NormalBirth"
+path = "crates/rimz/src"
+baseline = 0
+
+[[strangler]]
+symbol = "SupervisedBirth"
+path = "crates/rimz/src"
+baseline = 0
+
+[[strangler]]
+symbol = "BackgroundViewBirth"
+path = "crates/rimz/src"
+baseline = 0
 
 [[module]]
 path = "crates/rimz/src/sidebar"

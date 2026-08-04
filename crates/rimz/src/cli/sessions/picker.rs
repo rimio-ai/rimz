@@ -18,7 +18,7 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
 use ratatui::{Frame, Terminal};
 use rimz::config::{GlyphRole, MachineConfig, ThemeConfig, ThemeProviderStyle};
 use rimz::ids::{AgentKind, MuxName};
-use rimz::room::session::{LiveRoom, LiveSessions};
+use rimz::room::session::LiveRoom;
 use rimz::sidebar::consumer::PublishedSnapshotReader;
 use rimz::theme::{Identity, Palette, Tone, resolve_provider_brand, theme_glyphs};
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
@@ -221,8 +221,7 @@ fn exit_status_label(status: std::process::ExitStatus) -> String {
 fn probe_inventory(
     readers: &mut BTreeMap<String, PublishedSnapshotReader>,
 ) -> rimz::room::LiveRoomResult<(Vec<RoomRow>, Vec<KnownWorkspace>)> {
-    let live = LiveSessions::probe();
-    let inventory = rimz::room::session::room_inventory_with(&live)?;
+    let inventory = rimz::room::session::room_inventory()?;
     let rooms = inventory.live;
     let live_names = rooms
         .iter()
