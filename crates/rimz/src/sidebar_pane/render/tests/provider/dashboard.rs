@@ -507,7 +507,12 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
     let theme = Theme::fixed(false);
     let providers = two_provider_panels();
     let pet = cell_pet(
-        usize::from(crate::sidebar_pane::pets::DASHBOARD_CELL_PET.rows),
+        usize::from(
+            crate::sidebar_pane::pets::dashboard_pet_size(
+                crate::sidebar_pane::pets::PetRenderTier::Cell,
+            )
+            .rows,
+        ),
         2,
         "all caught up",
     );

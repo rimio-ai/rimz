@@ -125,7 +125,7 @@ allowed-imports = [
     "store::parse_cache",
     "store::paths",
 ]
-surface-budget = 168
+surface-budget = 169
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -443,7 +443,7 @@ allowed-imports = [
     "theme",
     "tui",
 ]
-surface-budget = 189
+surface-budget = 187
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/pets"
