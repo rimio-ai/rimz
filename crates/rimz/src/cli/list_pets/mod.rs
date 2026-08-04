@@ -160,6 +160,7 @@ pub(crate) fn write_pixel_pet_row_with_pacer<P: PixelPacer>(
     wrap: bool,
     mut pacer: Option<&mut P>,
 ) -> std::io::Result<()> {
+    let slot = pets::dashboard_pet_size(pets::PetRenderTier::Pixel);
     for (image_id, preview) in chunk {
         let Ok(frame) = &preview.frame else {
             continue;
@@ -170,12 +171,7 @@ pub(crate) fn write_pixel_pet_row_with_pacer<P: PixelPacer>(
         }
         let pacing = pacer.as_ref().is_some_and(|pacer| pacer.active());
         out.write_all(&wrap_pixel_payload(
-            &virtual_place(
-                *image_id,
-                pets::DASHBOARD_PIXEL_PET.cols,
-                pets::DASHBOARD_PIXEL_PET.rows,
-                if pacing { 0 } else { 2 },
-            ),
+            &virtual_place(*image_id, slot.cols, slot.rows, if pacing { 0 } else { 2 }),
             wrap,
         ))?;
         if pacing {
@@ -186,24 +182,15 @@ pub(crate) fn write_pixel_pet_row_with_pacer<P: PixelPacer>(
         }
     }
     write_synchronized_pixel_output(out, |out| {
-        for row in 0..pets::DASHBOARD_PIXEL_PET.rows {
+        for row in 0..slot.rows {
             for (index, (image_id, preview)) in chunk.iter().enumerate() {
                 if index > 0 {
                     write!(out, "{:gap$}", "", gap = usize::from(GAP))?;
                 }
                 if preview.frame.is_ok() {
-                    out.write_all(&inline_placeholder_row(
-                        *image_id,
-                        row,
-                        pets::DASHBOARD_PIXEL_PET.cols,
-                    ))?;
+                    out.write_all(&inline_placeholder_row(*image_id, row, slot.cols))?;
                 } else {
-                    write!(
-                        out,
-                        "{:width$}",
-                        "",
-                        width = usize::from(pets::DASHBOARD_PIXEL_PET.cols)
-                    )?;
+                    write!(out, "{:width$}", "", width = usize::from(slot.cols))?;
                 }
             }
             writeln!(out)?;
@@ -212,7 +199,7 @@ pub(crate) fn write_pixel_pet_row_with_pacer<P: PixelPacer>(
             if index > 0 {
                 write!(out, "{:gap$}", "", gap = usize::from(GAP))?;
             }
-            let centered = center(&preview.id, usize::from(pets::DASHBOARD_PIXEL_PET.cols));
+            let centered = center(&preview.id, usize::from(slot.cols));
             write!(
                 out,
                 "{}",
@@ -282,7 +269,7 @@ mod tests {
 
     #[test]
     fn sprite_row_pads_short_or_failed_grid() {
-        let slot = pets::DASHBOARD_CELL_PET;
+        let slot = pets::dashboard_pet_size(pets::PetRenderTier::Cell);
         let short = PetPreview {
             id: "codex".to_owned(),
             grid: Ok(vec![vec![PreviewCell {
@@ -309,7 +296,10 @@ mod tests {
     #[test]
     fn center_places_id_inside_preview_width() {
         assert_eq!(
-            center("codex", usize::from(pets::DASHBOARD_CELL_PET.cols)),
+            center(
+                "codex",
+                usize::from(pets::dashboard_pet_size(pets::PetRenderTier::Cell).cols),
+            ),
             "      codex       "
         );
     }
@@ -327,16 +317,11 @@ mod tests {
             write_pixel_pet_row_with_pacer(w, &failed, false, None::<&mut FakePixelPacer>)
         });
         let lines = rendered.lines().collect::<Vec<_>>();
+        let slot = pets::dashboard_pet_size(pets::PetRenderTier::Pixel);
 
-        assert_eq!(lines.len(), usize::from(pets::DASHBOARD_PIXEL_PET.rows) + 1);
-        assert_eq!(
-            lines[0],
-            " ".repeat(usize::from(pets::DASHBOARD_PIXEL_PET.cols))
-        );
-        assert_eq!(
-            lines[usize::from(pets::DASHBOARD_PIXEL_PET.rows)],
-            "     codex     "
-        );
+        assert_eq!(lines.len(), usize::from(slot.rows) + 1);
+        assert_eq!(lines[0], " ".repeat(usize::from(slot.cols)));
+        assert_eq!(lines[usize::from(slot.rows)], "     codex     ");
     }
 
     #[test]
