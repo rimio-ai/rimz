@@ -84,6 +84,19 @@ allowed-imports = [
 surface-budget = 26
 
 [[module]]
+path = "crates/rimz/src/cli/remote/supervisor.rs"
+allowed-imports = [
+    "cli::remote::outage_ui",
+    "remote",
+]
+surface-budget = 9
+
+[[module]]
+path = "crates/rimz/src/cli/remote/web.rs"
+allowed-imports = ["cli::remote"]
+surface-budget = 2
+
+[[module]]
 path = "crates/rimz/src/config"
 allowed-imports = [
     "agents",
@@ -367,9 +380,8 @@ allowed-imports = [
     "sock",
     "store",
     "update",
-    "web",
 ]
-surface-budget = 217
+surface-budget = 172
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
@@ -705,4 +717,9 @@ baseline = 0
 [[strangler]]
 symbol = "run::PermissionMode"
 path = "crates/rimz/src"
+baseline = 0
+
+[[strangler]]
+symbol = "wait_for_web_recovery"
+path = "crates/rimz/src/cli/remote/web.rs"
 baseline = 0

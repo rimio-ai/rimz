@@ -2,7 +2,7 @@
 
 /// The numeric components RimZ uses to judge remote compatibility.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Version {
+struct Version {
     major: u64,
     minor: u64,
     patch: u64,

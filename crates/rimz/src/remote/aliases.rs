@@ -22,8 +22,8 @@ use crate::remote::{RemoteTarget, RemoteTargetError};
 use crate::store::atomic;
 use crate::store::paths::config_home;
 
-pub const REMOTE_FILE: &str = "remote.toml";
-pub const REMOTE_TEMPLATE: &str = include_str!("../config/templates/remote.template.toml");
+const REMOTE_FILE: &str = "remote.toml";
+const REMOTE_TEMPLATE: &str = include_str!("../config/templates/remote.template.toml");
 const RIMZ_CONFIG_SUBDIR: &str = "rimz";
 const ALIAS_NAME_MAX_LEN: usize = 64;
 
@@ -116,7 +116,7 @@ impl RemoteAliases {
     }
 
     /// Test-only loader. Production callers go through [`Self::load`].
-    pub fn load_from(path: &Path) -> Result<Self> {
+    fn load_from(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
             Ok(text) => {
                 let parsed: Self = toml::from_str(&text).map_err(|source| AliasErr::Parse {
@@ -134,7 +134,7 @@ impl RemoteAliases {
     }
 
     /// Test-only writer. Production callers go through [`Self::save`].
-    pub fn save_to(&self, path: &Path) -> Result<()> {
+    fn save_to(&self, path: &Path) -> Result<()> {
         let sorted = self.clone().validated()?.sorted();
         let text = toml::to_string_pretty(&sorted)?;
         atomic::write_bytes_atomically(path, text.as_bytes())?;
