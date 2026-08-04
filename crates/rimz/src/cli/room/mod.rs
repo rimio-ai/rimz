@@ -16,10 +16,7 @@ use rimz::room::session::{
     MissingSessionReport, ensure_single_backend_room, pick_mux_for_session, retire_renamed_session,
     session_probe_retry_timeout, session_probe_timeout, workspace_record_for_session,
 };
-use rimz::room::{
-    AttendedRecovery, BackgroundViewBirth, NormalBirth, NormalRebirth, RoomBirth, RoomContext,
-    RoomSizing,
-};
+use rimz::room::{AttendedRecovery, NormalRebirth, RoomBirth, RoomContext, RoomSizing};
 use rimz::{RuntimePaths, store::workspace_record::WorkspaceRecord};
 
 use crate::cli::hooks::ensure_detected_agent_hooks;
@@ -422,9 +419,9 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         let readiness =
             rimz::remote_control::ReadinessSnapshot::probe(&machine_config.remote_control);
         readiness.start_gate()?;
-        BackgroundViewBirth::Launch(readiness)
+        Some(readiness)
     } else {
-        BackgroundViewBirth::Skip
+        None
     };
 
     let mux = match &entry {
@@ -550,7 +547,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 entry.no_resume(),
                 entry.resume_prompt_mode(),
                 entry.refresh_ms(),
-                BackgroundViewBirth::Skip,
+                None,
                 workspace.worktree_root.clone(),
             )?;
             ReadyRoom::Managed(Box::new(context))
@@ -564,7 +561,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 entry.no_resume(),
                 entry.resume_prompt_mode(),
                 entry.refresh_ms(),
-                BackgroundViewBirth::Skip,
+                None,
                 record.project_root.clone(),
             )?;
             ReadyRoom::Managed(Box::new(context))
@@ -587,7 +584,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                     entry.no_resume(),
                     entry.resume_prompt_mode(),
                     entry.refresh_ms(),
-                    BackgroundViewBirth::Skip,
+                    None,
                     record.project_root.clone(),
                 )?;
                 ReadyRoom::Managed(Box::new(context))
@@ -639,7 +636,7 @@ fn birth_managed_room(
     no_resume: bool,
     resume_prompt: ResumePromptMode,
     refresh_ms: Option<u16>,
-    background_view: BackgroundViewBirth,
+    background_view: Option<rimz::remote_control::ReadinessSnapshot>,
     cwd: std::path::PathBuf,
 ) -> Result<()> {
     let rebirth = if was_live {
@@ -666,7 +663,7 @@ fn birth_managed_room(
         }
     };
     let outcome = render::room::present_birth_outcome(
-        context.birth(RoomBirth::Normal(NormalBirth {
+        context.birth(RoomBirth::Normal {
             cwd,
             rebirth,
             background_view,
@@ -676,7 +673,7 @@ fn birth_managed_room(
             } else {
                 AttendedRecovery::RequireExplicitReset
             },
-        })),
+        }),
         context.session_name(),
     )?;
     report_resume(&outcome.resume);
