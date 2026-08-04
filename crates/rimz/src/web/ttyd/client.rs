@@ -15,7 +15,7 @@ use crate::mux::CommandSpec;
 use crate::store::{atomic, paths};
 
 use super::{
-    DaemonRecord, START_TIMEOUT, choose_ephemeral_port, random_secret, spawn_detached,
+    START_TIMEOUT, WritableDaemonRecord, choose_ephemeral_port, random_secret, spawn_detached,
     terminate_record, wait_for_port,
 };
 use crate::sidebar_pane::pixel::{PLACEHOLDER, ROW_COLUMN_DIACRITICS};
@@ -158,7 +158,7 @@ fn fetch_stock_index(program: &Path) -> Result<String, String> {
         .arg(port.to_string())
         .arg("sh");
     let pid = spawn_detached(spec).map_err(|err| err.to_string())?;
-    let record = DaemonRecord::basic_loopback(pid, port);
+    let record = WritableDaemonRecord::basic_loopback(pid, port);
     if !wait_for_port(port, START_TIMEOUT) {
         terminate_record(&record);
         return Err(format!(
