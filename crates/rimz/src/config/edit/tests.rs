@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::{
-    AGENT_FRAGMENT_FILE, AGENTS_HOME_PROFILES_SUBDIR, AGENTS_HOME_TEAMS_SUBDIR, TEAM_FRAGMENT_FILE,
+    AGENT_FRAGMENT_FILE, AGENTS_HOME_PROFILES_SUBDIR, AGENTS_HOME_TEAMS_SUBDIR,
+    MachineConfigFileKind as Kind, TEAM_FRAGMENT_FILE,
 };
 
 fn test_files() -> MachineConfigFiles {
@@ -17,9 +18,9 @@ fn explicit_file_registry_preserves_path_and_template_order() {
             .map(|file| file.path().file_name().unwrap().to_owned()),
         ["config.toml", "theme.toml", "agents.toml", "loop.toml"].map(std::ffi::OsString::from)
     );
-    assert_eq!(ordered[0].template(), MachineConfig::template_core());
-    assert_eq!(ordered[1].template(), MachineConfig::template_theme());
-    assert_eq!(ordered[2].template(), MachineConfig::template_agents());
+    assert_eq!(ordered[0].template(), Kind::Core.template());
+    assert_eq!(ordered[1].template(), Kind::Theme.template());
+    assert_eq!(ordered[2].template(), Kind::Agents.template());
     assert_eq!(ordered[3].template(), MachineConfig::template_loop());
 }
 
@@ -408,7 +409,8 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
 
 #[test]
 fn set_top_level_timezone_keeps_core_config_valid() {
-    let mut doc = MachineConfig::template_core()
+    let mut doc = Kind::Core
+        .template()
         .parse::<DocumentMut>()
         .expect("template parses");
     let agents_home = std::path::Path::new("missing-agents-home");
@@ -437,7 +439,8 @@ fn set_top_level_timezone_keeps_core_config_valid() {
 
 #[test]
 fn set_context_meter_log_scale_round_trips_through_scalar_path() {
-    let mut doc = MachineConfig::template_theme()
+    let mut doc = Kind::Theme
+        .template()
         .parse::<DocumentMut>()
         .expect("template parses");
     let agents_home = std::path::Path::new("missing-agents-home");
@@ -463,7 +466,8 @@ fn set_context_meter_log_scale_round_trips_through_scalar_path() {
 
 #[test]
 fn round_trip_validation_reports_the_logical_key_value_and_message() {
-    let mut doc = MachineConfig::template_core()
+    let mut doc = Kind::Core
+        .template()
         .parse::<DocumentMut>()
         .expect("template parses");
     let key = parse_key("remote_control.claude").expect("key");
@@ -533,7 +537,8 @@ nope = "surprise"
 #[test]
 fn merge_key_oracle_accepts_sentry_and_rejects_bogus_keys() {
     let agents_home = std::path::Path::new("missing-agents-home");
-    let mut doc = MachineConfig::template_core()
+    let mut doc = Kind::Core
+        .template()
         .parse::<DocumentMut>()
         .expect("template parses");
     let mut skipped = Vec::new();
@@ -569,7 +574,8 @@ fn merge_key_oracle_accepts_sentry_and_rejects_bogus_keys() {
 
 #[test]
 fn merge_uncomments_section_key_on_its_template_line() {
-    let mut doc = MachineConfig::template_core()
+    let mut doc = Kind::Core
+        .template()
         .parse::<DocumentMut>()
         .expect("template parses");
     let mut skipped = Vec::new();
@@ -607,7 +613,7 @@ fn merge_uncomments_section_key_on_its_template_line() {
 
 #[test]
 fn merge_uncomments_root_scalar_at_its_template_position() {
-    let template = MachineConfig::template_core();
+    let template = Kind::Core.template();
     let mut doc = template.parse::<DocumentMut>().expect("template parses");
     let mut skipped = Vec::new();
     let kept = apply_merge_keys(
@@ -648,7 +654,8 @@ fn merge_uncomments_root_scalar_at_its_template_position() {
 
 #[test]
 fn merge_uncomments_optional_example_under_its_section() {
-    let mut doc = MachineConfig::template_core()
+    let mut doc = Kind::Core
+        .template()
         .parse::<DocumentMut>()
         .expect("template parses");
     let mut skipped = Vec::new();
@@ -675,7 +682,8 @@ fn merge_uncomments_optional_example_under_its_section() {
 
 #[test]
 fn merge_skips_keys_inside_commented_table_examples() {
-    let mut doc = MachineConfig::template_agents()
+    let mut doc = Kind::Agents
+        .template()
         .parse::<DocumentMut>()
         .expect("template parses");
     let mut skipped = Vec::new();
@@ -721,7 +729,8 @@ fn uncomment_accepts_active_header_with_trailing_comment() {
 
 #[test]
 fn failed_merge_keeps_template_default_commented() {
-    let mut doc = MachineConfig::template_core()
+    let mut doc = Kind::Core
+        .template()
         .parse::<DocumentMut>()
         .expect("template parses");
     let mut skipped = Vec::new();
@@ -749,7 +758,8 @@ fn failed_merge_keeps_template_default_commented() {
 
 #[test]
 fn merge_preserves_trailing_comment_on_existing_scalar() {
-    let mut doc = MachineConfig::template_core()
+    let mut doc = Kind::Core
+        .template()
         .parse::<DocumentMut>()
         .expect("template parses");
     let mut skipped = Vec::new();

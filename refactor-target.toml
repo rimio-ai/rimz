@@ -100,12 +100,32 @@ allowed-imports = [
 surface-budget = 12
 
 [[module]]
+path = "crates/rimz/src/config/notifications.rs"
+allowed-imports = ["agents"]
+surface-budget = 23
+
+[[module]]
+path = "crates/rimz/src/config/resume.rs"
+allowed-imports = []
+surface-budget = 5
+
+[[module]]
+path = "crates/rimz/src/config/sidebar.rs"
+allowed-imports = []
+surface-budget = 5
+
+[[module]]
+path = "crates/rimz/src/config/worktree.rs"
+allowed-imports = []
+surface-budget = 4
+
+[[module]]
 path = "crates/rimz/src/config.rs"
 allowed-imports = [
     "store::parse_cache",
     "store::paths",
 ]
-surface-budget = 176
+surface-budget = 168
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"

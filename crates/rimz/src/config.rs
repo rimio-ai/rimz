@@ -121,10 +121,10 @@ const AGENTS_HOME_PROFILES_SUBDIR: &str = "profiles";
 const AGENTS_HOME_TEAMS_SUBDIR: &str = "teams";
 const AGENT_FRAGMENT_FILE: &str = "agent.toml";
 const TEAM_FRAGMENT_FILE: &str = "team.toml";
-pub const MACHINE_CONFIG_TEMPLATE: &str = include_str!("config/templates/config.template.toml");
-pub const MACHINE_THEME_TEMPLATE: &str = include_str!("config/templates/theme.template.toml");
-pub const MACHINE_AGENTS_TEMPLATE: &str = include_str!("config/templates/agents.template.toml");
-pub const MACHINE_LOOP_TEMPLATE: &str = include_str!("config/templates/loop.template.toml");
+const MACHINE_CONFIG_TEMPLATE: &str = include_str!("config/templates/config.template.toml");
+const MACHINE_THEME_TEMPLATE: &str = include_str!("config/templates/theme.template.toml");
+const MACHINE_AGENTS_TEMPLATE: &str = include_str!("config/templates/agents.template.toml");
+const MACHINE_LOOP_TEMPLATE: &str = include_str!("config/templates/loop.template.toml");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MachineConfigFileKind {
@@ -211,10 +211,6 @@ impl MachineConfigFiles {
             path: self.path(kind),
             template: kind.template(),
         })
-    }
-
-    pub fn ordered_paths(&self) -> [PathBuf; 4] {
-        MachineConfigFileKind::ALL.map(|kind| self.path(kind))
     }
 
     fn path(&self, kind: MachineConfigFileKind) -> PathBuf {
@@ -485,21 +481,6 @@ pub struct MachineConfig {
 }
 
 impl MachineConfig {
-    /// The generated core per-machine config reference.
-    pub fn template_core() -> &'static str {
-        MachineConfigFileKind::Core.template()
-    }
-
-    /// The generated theme per-machine config reference.
-    pub fn template_theme() -> &'static str {
-        MachineConfigFileKind::Theme.template()
-    }
-
-    /// The generated agents per-machine config reference.
-    pub fn template_agents() -> &'static str {
-        MachineConfigFileKind::Agents.template()
-    }
-
     /// The generated loop per-machine config reference.
     pub fn template_loop() -> &'static str {
         MachineConfigFileKind::Loop.template()

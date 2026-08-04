@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use super::*;
+use MachineConfigFileKind as Kind;
 
 const ACTIVE_ZELLIJ_DEFAULTS: &[&str] = &[
     "mouse_click_through",
@@ -27,17 +28,17 @@ fn template_defaults_deserialize_to_machine_defaults() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         dir.path().join("config.toml"),
-        uncomment_default_lines(MachineConfig::template_core()),
+        uncomment_default_lines(Kind::Core.template()),
     )
     .expect("write config template");
     std::fs::write(
         dir.path().join("theme.toml"),
-        uncomment_default_lines(MachineConfig::template_theme()),
+        uncomment_default_lines(Kind::Theme.template()),
     )
     .expect("write theme template");
     std::fs::write(
         dir.path().join("agents.toml"),
-        uncomment_default_lines(MachineConfig::template_agents()),
+        uncomment_default_lines(Kind::Agents.template()),
     )
     .expect("write agents template");
     std::fs::write(
@@ -99,7 +100,7 @@ fn template_comparison_defaults(mut config: MachineConfig) -> MachineConfig {
 
 #[test]
 fn template_lists_optional_sidebar_theme_slots() {
-    let template = MachineConfig::template_theme();
+    let template = Kind::Theme.template();
     for setting in ["mode", "scheme"] {
         assert!(
             template.contains(&format!("## {setting} = ")),
@@ -133,9 +134,9 @@ fn template_lists_optional_sidebar_theme_slots() {
 }
 
 fn all_template_default_paths() -> BTreeSet<String> {
-    let mut out = template_default_paths(MachineConfig::template_core());
+    let mut out = template_default_paths(Kind::Core.template());
     out.extend(
-        template_default_paths(MachineConfig::template_theme())
+        template_default_paths(Kind::Theme.template())
             .into_iter()
             .map(|path| {
                 path.strip_prefix("colors.")
@@ -143,7 +144,7 @@ fn all_template_default_paths() -> BTreeSet<String> {
                     .unwrap_or(path)
             }),
     );
-    out.extend(template_default_paths(MachineConfig::template_agents()));
+    out.extend(template_default_paths(Kind::Agents.template()));
     out.extend(
         template_default_paths(MachineConfig::template_loop())
             .into_iter()
