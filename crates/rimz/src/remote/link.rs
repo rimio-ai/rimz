@@ -15,12 +15,12 @@ use crate::sock;
 
 use super::{RemoteSpec, RemoteTarget, env_ms, quote_remote_path, remote_path_prefix, sh_quote};
 
-pub const LINK_SCHEMA_VERSION: &str = "rimz.link.v1";
-pub const LINK_STATS_FILE: &str = "link-stats.json";
-pub const LINK_PROBE_INTERVAL: Duration = Duration::from_secs(2);
-pub const LINK_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-pub const LINK_BLACKOUT_AFTER: Duration = Duration::from_secs(8);
-pub const LINK_WINDOW: usize = 30;
+const LINK_SCHEMA_VERSION: &str = "rimz.link.v1";
+const LINK_STATS_FILE: &str = "link-stats.json";
+const LINK_PROBE_INTERVAL: Duration = Duration::from_secs(2);
+const LINK_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const LINK_BLACKOUT_AFTER: Duration = Duration::from_secs(8);
+const LINK_WINDOW: usize = 30;
 
 const PROBE_INTERVAL_ENV: &str = "RIMZ_REMOTE_PROBE_MS";
 const PROBE_TIMEOUT_ENV: &str = "RIMZ_REMOTE_PROBE_TIMEOUT_MS";
@@ -57,7 +57,7 @@ pub struct LinkProbe {
 }
 
 impl LinkProbe {
-    pub fn new(seq: u64, sent_at_ms: u64, stats: LinkStats) -> Self {
+    fn new(seq: u64, sent_at_ms: u64, stats: LinkStats) -> Self {
         Self {
             v: LINK_SCHEMA_VERSION.to_owned(),
             seq,
@@ -243,7 +243,7 @@ impl SessionLinkState {
         }
     }
 
-    pub fn established(&self, elapsed: Duration) -> bool {
+    fn established(&self, elapsed: Duration) -> bool {
         self.established || elapsed >= self.gatetime
     }
 
@@ -384,14 +384,6 @@ pub fn stats_path(runtime: &crate::RuntimePaths) -> PathBuf {
     runtime.root.join(LINK_STATS_FILE)
 }
 
-/// PID-scoped SSH ControlMaster socket path. Concurrent `rimz remote connect`
-/// invocations never share a master. This socket is independent of the workspace
-/// runtime budget, so callers that hand it to OpenSSH use
-/// [`validated_control_path`] to fail with RimZ's AF_UNIX remedy first.
-pub fn control_path() -> PathBuf {
-    control_path_under(&crate::store::paths::runtime_home(), std::process::id())
-}
-
 pub fn validated_control_path() -> std::result::Result<PathBuf, sock::SocketPathTooLong> {
     validated_control_path_under(&crate::store::paths::runtime_home(), std::process::id())
 }
@@ -410,20 +402,6 @@ fn control_path_under(runtime_root: &Path, pid: u32) -> PathBuf {
         .join("rimz")
         .join("link")
         .join(format!("link-{pid}.sock"))
-}
-
-/// Compile the interactive attach's control options. The attach can create the
-/// master, so its lifetime stays tied to the supervised child rather than an
-/// inherited `ControlPersist` background process holding RimZ's socket.
-pub fn control_options(path: &Path) -> Vec<String> {
-    vec![
-        "-o".to_owned(),
-        "ControlMaster=auto".to_owned(),
-        "-o".to_owned(),
-        format!("ControlPath={}", path.display()),
-        "-o".to_owned(),
-        "ControlPersist=no".to_owned(),
-    ]
 }
 
 /// Check that the interactive attach's ControlMaster socket is already live.
@@ -496,7 +474,7 @@ enum ProbeOutcome {
 /// Rolling probe accounting: late acks are ignored, pending probes expire into
 /// misses, and settled outcomes are capped to the latest [`LINK_WINDOW`].
 #[derive(Clone, Debug)]
-pub struct ProbeWindow {
+struct ProbeWindow {
     outcomes: VecDeque<ProbeOutcome>,
     ewma_ms: Option<f64>,
     reported_ms: Option<u32>,
@@ -512,7 +490,7 @@ impl Default for ProbeWindow {
 }
 
 impl ProbeWindow {
-    pub fn with_timeout(timeout: Duration) -> Self {
+    fn with_timeout(timeout: Duration) -> Self {
         Self {
             outcomes: VecDeque::new(),
             ewma_ms: None,
@@ -529,11 +507,11 @@ impl ProbeWindow {
     /// cold spawn cost. Re-arm the single-sample discard without clearing the
     /// EWMA or displayed RTT; a reconnect keeps showing the last steady value
     /// until real samples arrive.
-    pub fn begin_stream(&mut self) {
+    fn begin_stream(&mut self) {
         self.discard_next_ack_sample = true;
     }
 
-    pub fn record_sent(&mut self, seq: u64, at_ms: u64) {
+    fn record_sent(&mut self, seq: u64, at_ms: u64) {
         self.outcomes.push_back(ProbeOutcome::Pending {
             seq,
             sent_at_ms: at_ms,
@@ -541,7 +519,7 @@ impl ProbeWindow {
         self.trim();
     }
 
-    pub fn record_ack(&mut self, seq: u64, at_ms: u64) -> bool {
+    fn record_ack(&mut self, seq: u64, at_ms: u64) -> bool {
         let Some(index) = self
             .outcomes
             .iter()
@@ -560,7 +538,7 @@ impl ProbeWindow {
         true
     }
 
-    pub fn expire(&mut self, now_ms: u64) {
+    fn expire(&mut self, now_ms: u64) {
         let timeout_ms = self.timeout.as_millis() as u64;
         for outcome in &mut self.outcomes {
             if let ProbeOutcome::Pending { sent_at_ms, .. } = *outcome
@@ -571,7 +549,7 @@ impl ProbeWindow {
         }
     }
 
-    pub fn stats(&self) -> LinkStats {
+    fn stats(&self) -> LinkStats {
         let mut settled: u16 = 0;
         let mut misses: u16 = 0;
         for outcome in &self.outcomes {
@@ -596,11 +574,11 @@ impl ProbeWindow {
         }
     }
 
-    pub fn reported_rtt_ms(&self) -> Option<u32> {
+    fn reported_rtt_ms(&self) -> Option<u32> {
         self.reported_ms
     }
 
-    pub fn blackout_ms(&self, now_ms: u64) -> u64 {
+    fn blackout_ms(&self, now_ms: u64) -> u64 {
         if let Some(last_ack) = self.last_ack_at_ms {
             return now_ms.saturating_sub(last_ack);
         }
@@ -734,10 +712,6 @@ impl LinkMonitor {
             return Some(LinkEvent::Blackout(Duration::from_millis(blackout_ms)));
         }
         None
-    }
-
-    pub fn stats(&self) -> LinkStats {
-        self.window.stats()
     }
 
     fn next_seq(&mut self) -> u64 {
@@ -1028,7 +1002,7 @@ mod tests {
             "the first ack is accounted but keeps the badge warming"
         );
         assert_eq!(first.events, vec![LinkEvent::FirstAck]);
-        assert_eq!(monitor.stats().rtt_ms, None);
+        assert_eq!(monitor.window.stats().rtt_ms, None);
 
         let second = monitor.record_ack(second_probe.seq, 1_040);
         assert!(second.accepted);
@@ -1037,8 +1011,8 @@ mod tests {
             "the second ack seeds the displayed RTT and should publish immediately"
         );
         assert!(second.events.is_empty());
-        assert!(monitor.stats().rtt_ms.is_some());
-        let stats = monitor.stats();
+        assert!(monitor.window.stats().rtt_ms.is_some());
+        let stats = monitor.window.stats();
         assert_eq!(stats.window, 2);
         assert_eq!(stats.miss_pct, 0);
 
@@ -1109,7 +1083,7 @@ mod tests {
 
         let control = PathBuf::from("/tmp/rimz.sock");
         assert_eq!(
-            control_options(&control),
+            super::super::control_options(&control),
             vec![
                 "-o",
                 "ControlMaster=auto",

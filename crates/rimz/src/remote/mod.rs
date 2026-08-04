@@ -30,7 +30,7 @@ use crate::mux::{CLIENT_SIZE_ENV, CommandSpec};
 /// Binary override for tests (`tests/fixtures/ssh-trace`), mirroring
 /// `RIMZ_ZELLIJ_BIN` — the single chokepoint every ssh invocation resolves
 /// through.
-pub const SSH_BIN_ENV: &str = "RIMZ_SSH_BIN";
+const SSH_BIN_ENV: &str = "RIMZ_SSH_BIN";
 
 /// Marks an SSH attach started by the local reconnect supervisor's retry
 /// loop, so the remote room start uses its unattended posture.
@@ -55,7 +55,7 @@ pub const REMOTE_CLIENT_VERSION_ENV: &str = "RIMZ_REMOTE_CLIENT_VERSION";
 pub const REMOTE_FORCE_VERSION_ENV: &str = "RIMZ_REMOTE_FORCE_VERSION";
 
 /// Binary override for tests, mirroring `RIMZ_SSH_BIN`.
-pub const INFOCMP_BIN_ENV: &str = "RIMZ_INFOCMP_BIN";
+const INFOCMP_BIN_ENV: &str = "RIMZ_INFOCMP_BIN";
 
 /// The exit code OpenSSH reserves for its own transport and usage errors —
 /// the "link died" signal the reconnect loop watches for.
@@ -455,7 +455,7 @@ impl SshAttachAttempt<'_> {
                 "-o",
                 "Compression=yes",
             ])
-            .args(control_path.into_iter().flat_map(link::control_options))
+            .args(control_path.into_iter().flat_map(control_options))
             .args(["-t", "--"])
             .arg(options.target.ssh_destination().as_str())
             .arg(guarded_snippet(
@@ -465,6 +465,20 @@ impl SshAttachAttempt<'_> {
                 self.outer_scroll_bracket,
             ))
     }
+}
+
+/// Compile the interactive attach's control options. The attach can create the
+/// master, so its lifetime stays tied to the supervised child rather than an
+/// inherited `ControlPersist` background process holding RimZ's socket.
+fn control_options(path: &Path) -> Vec<String> {
+    vec![
+        "-o".to_owned(),
+        "ControlMaster=auto".to_owned(),
+        "-o".to_owned(),
+        format!("ControlPath={}", path.display()),
+        "-o".to_owned(),
+        "ControlPersist=no".to_owned(),
+    ]
 }
 
 /// How the remote session resolves the local terminal. `-t` carries the local
@@ -499,7 +513,7 @@ impl TermPlan {
 
 /// Names the remote host can be trusted to resolve; everything else needs
 /// provisioning.
-pub fn term_needs_terminfo_copy(name: &str) -> bool {
+fn term_needs_terminfo_copy(name: &str) -> bool {
     const UNIVERSAL: &[&str] = &[
         "xterm",
         "xterm-color",
@@ -593,17 +607,13 @@ fn guarded_snippet(
     )
 }
 
-pub(crate) fn client_size_env_setup(client_size: Option<(u16, u16)>) -> String {
+fn client_size_env_setup(client_size: Option<(u16, u16)>) -> String {
     client_size.map_or_else(String::new, |(cols, rows)| {
         format!("export {CLIENT_SIZE_ENV}={cols}x{rows}; ")
     })
 }
 
-pub(crate) fn remote_exec_snippet(
-    host_display: &str,
-    env_setup: &str,
-    rimz_command: &str,
-) -> String {
+fn remote_exec_snippet(host_display: &str, env_setup: &str, rimz_command: &str) -> String {
     let not_found = sh_quote(&format!(
         "rimz not found on {host_display} — run `rimz remote setup <alias-or-host>` locally, or install rimz manually",
     ));
@@ -616,13 +626,13 @@ pub(crate) fn remote_exec_snippet(
     )
 }
 
-pub(crate) fn remote_path_prefix() -> &'static str {
+fn remote_path_prefix() -> &'static str {
     "PATH=\"$HOME/.cargo/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\""
 }
 
 /// POSIX single-quote: wrap in `'…'`, escaping each embedded `'` with the
 /// classic `'\''` close-reopen. Safe for any string a shell word can hold.
-pub(crate) fn sh_quote(s: &str) -> String {
+fn sh_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
     for ch in s.chars() {
@@ -652,7 +662,7 @@ fn normalize_tilde(target: &str) -> String {
 /// Quote a normalized remote path, keeping a leading `$HOME` outside the
 /// single quotes (double-quoted) so the remote shell expands it while the
 /// tail stays literal.
-pub(crate) fn quote_remote_path(path: &str) -> String {
+fn quote_remote_path(path: &str) -> String {
     match path.strip_prefix("$HOME") {
         Some("") => "\"$HOME\"".to_owned(),
         Some(rest) => format!("\"$HOME\"{}", sh_quote(rest)),
@@ -752,7 +762,7 @@ impl ReconnectPolicy {
 
     /// Pace SSH retries from outage age when direct TCP dials prove the
     /// endpoint remains reachable.
-    pub fn reachable_delay(&self, outage_age: Duration) -> Duration {
+    fn reachable_delay(&self, outage_age: Duration) -> Duration {
         if outage_age < self.flat_window {
             return self.reachable_retry.min(self.backoff_cap);
         }
@@ -765,7 +775,7 @@ impl ReconnectPolicy {
 
     /// Pace hidden safety attempts while every configured network checkpoint
     /// is down: 1s through 10s, then 20s, then the 30s ceiling.
-    pub fn unreachable_delay(&self, failures: u32) -> Duration {
+    fn unreachable_delay(&self, failures: u32) -> Duration {
         let seconds = match failures {
             0..=9 => u64::from(failures) + 1,
             10 => 20,
@@ -860,7 +870,7 @@ fn summarize_ssh_line(line: &str) -> String {
     summary
 }
 
-pub(crate) fn env_ms(key: &str) -> Option<Duration> {
+fn env_ms(key: &str) -> Option<Duration> {
     std::env::var(key)
         .ok()?
         .parse::<u64>()
@@ -883,18 +893,6 @@ pub enum Verdict {
     Retry,
 }
 
-/// Classify a finished ssh session. Pure: the caller measures `established`
-/// from a confirmed transport or the gatetime fallback.
-pub fn verdict(exit_code: Option<i32>, established: bool) -> Verdict {
-    match exit_code {
-        Some(0) => Verdict::CleanExit,
-        Some(SSH_TRANSPORT_EXIT) if established => Verdict::Retry,
-        Some(code) => Verdict::Fatal { code },
-        // Signal-death: something killed ssh deliberately; don't fight it.
-        None => Verdict::Fatal { code: 1 },
-    }
-}
-
 #[derive(Default)]
 pub struct ReconnectState {
     established: bool,
@@ -914,15 +912,17 @@ impl ReconnectState {
             self.established = true;
             self.consecutive_failures = 0;
         }
-        let verdict = verdict(exit_code, self.established);
+        let verdict = match exit_code {
+            Some(0) => Verdict::CleanExit,
+            Some(SSH_TRANSPORT_EXIT) if self.established => Verdict::Retry,
+            Some(code) => Verdict::Fatal { code },
+            // Signal-death: something killed ssh deliberately; don't fight it.
+            None => Verdict::Fatal { code: 1 },
+        };
         if matches!(verdict, Verdict::Retry) {
             self.consecutive_failures = self.consecutive_failures.saturating_add(1);
         }
         verdict
-    }
-
-    pub fn consecutive_failures(&self) -> u32 {
-        self.consecutive_failures
     }
 
     /// Settle an intentional zombie-transport kill without classifying its

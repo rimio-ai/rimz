@@ -7,7 +7,7 @@ use crate::mux::CommandSpec;
 
 use super::{ReconnectPolicy, env_ms};
 
-pub const DIAL_INTERVAL: Duration = Duration::from_secs(1);
+const DIAL_INTERVAL: Duration = Duration::from_secs(1);
 pub const DIAL_TIMEOUT: Duration = Duration::from_secs(2);
 
 const DIAL_INTERVAL_ENV: &str = "RIMZ_REMOTE_DIAL_MS";

@@ -7,8 +7,8 @@ use super::{
     reachability::{DialPlan, FooterPhase},
 };
 
-pub const RECOVERY_GRACE: Duration = Duration::from_millis(500);
-pub const RECOVERY_MIN_DISPLAY: Duration = Duration::from_millis(1_500);
+const RECOVERY_GRACE: Duration = Duration::from_millis(500);
+const RECOVERY_MIN_DISPLAY: Duration = Duration::from_millis(1_500);
 pub const INTERNET_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
 const INTERNET_PROBE: &str = "http://cp.cloudflare.com/generate_204";
@@ -25,7 +25,7 @@ impl InternetProbe {
         &self.url
     }
 
-    pub fn host(&self) -> &str {
+    fn host(&self) -> &str {
         &self.host
     }
 }
@@ -136,8 +136,8 @@ impl RecoveryPanel {
             host,
             internet,
             server,
-            recovery_grace_from_env(),
-            recovery_min_display_from_env(),
+            env_ms("RIMZ_REMOTE_GRACE_MS").unwrap_or(RECOVERY_GRACE),
+            env_ms("RIMZ_REMOTE_MIN_DISPLAY_MS").unwrap_or(RECOVERY_MIN_DISPLAY),
         )
     }
 
@@ -319,14 +319,6 @@ impl RecoveryPanel {
             rows,
         }
     }
-}
-
-pub fn recovery_grace_from_env() -> Duration {
-    env_ms("RIMZ_REMOTE_GRACE_MS").unwrap_or(RECOVERY_GRACE)
-}
-
-pub fn recovery_min_display_from_env() -> Duration {
-    env_ms("RIMZ_REMOTE_MIN_DISPLAY_MS").unwrap_or(RECOVERY_MIN_DISPLAY)
 }
 
 /// Internet checkpoint URL. Empty, `0`, or an invalid HTTP URL disables the

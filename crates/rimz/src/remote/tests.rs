@@ -760,21 +760,22 @@ fn verdict_and_backoff_classify_reconnects() {
         ]
     );
 
-    assert_eq!(verdict(Some(0), true), Verdict::CleanExit);
-    assert_eq!(verdict(Some(SSH_TRANSPORT_EXIT), true), Verdict::Retry);
+    let settle = |exit_code, established| ReconnectState::new().settle(exit_code, established);
+    assert_eq!(settle(Some(0), true), Verdict::CleanExit);
+    assert_eq!(settle(Some(SSH_TRANSPORT_EXIT), true), Verdict::Retry);
     assert_eq!(
-        verdict(Some(SSH_TRANSPORT_EXIT), false),
+        settle(Some(SSH_TRANSPORT_EXIT), false),
         Verdict::Fatal {
             code: SSH_TRANSPORT_EXIT
         }
     );
     assert_eq!(
-        verdict(Some(REMOTE_RIMZ_MISSING_EXIT), true),
+        settle(Some(REMOTE_RIMZ_MISSING_EXIT), true),
         Verdict::Fatal {
             code: REMOTE_RIMZ_MISSING_EXIT
         }
     );
-    assert_eq!(verdict(None, true), Verdict::Fatal { code: 1 });
+    assert_eq!(settle(None, true), Verdict::Fatal { code: 1 });
 }
 
 #[test]
@@ -845,19 +846,19 @@ fn reconnect_state_settles_established_sessions_and_failures() {
             code: SSH_TRANSPORT_EXIT
         }
     );
-    assert_eq!(state.consecutive_failures(), 0);
+    assert_eq!(state.consecutive_failures, 0);
 
     assert_eq!(state.settle(Some(SSH_TRANSPORT_EXIT), true), Verdict::Retry);
-    assert_eq!(state.consecutive_failures(), 1);
+    assert_eq!(state.consecutive_failures, 1);
 
     assert_eq!(
         state.settle(Some(SSH_TRANSPORT_EXIT), false),
         Verdict::Retry
     );
-    assert_eq!(state.consecutive_failures(), 2);
+    assert_eq!(state.consecutive_failures, 2);
 
     state.settle_zombie_kill();
-    assert_eq!(state.consecutive_failures(), 0);
+    assert_eq!(state.consecutive_failures, 0);
 
     assert_eq!(
         state.settle(Some(REMOTE_RIMZ_MISSING_EXIT), true),
@@ -865,5 +866,5 @@ fn reconnect_state_settles_established_sessions_and_failures() {
             code: REMOTE_RIMZ_MISSING_EXIT
         }
     );
-    assert_eq!(state.consecutive_failures(), 0);
+    assert_eq!(state.consecutive_failures, 0);
 }
