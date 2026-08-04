@@ -96,9 +96,7 @@ where
 
 pub fn load_cell_previews(size: PetGridSize, aspect: CellAspect) -> Vec<PetPreview> {
     load_preview_results(listable_sources(), move |source| {
-        load_frames(source)
-            .map_err(|err| err.to_string())
-            .map(|frames| render_sprite(&frames, size, aspect))
+        load_cell_grid(source, size, aspect)
     })
     .into_iter()
     .map(|(id, grid)| PetPreview { id, grid })
@@ -112,40 +110,43 @@ pub fn load_cell_preview(
 ) -> Option<PetPreview> {
     let source = asset::resolve_pet_source(selector)?;
     let id = source.id().into_owned();
-    let grid = load_frames(source)
-        .map_err(|err| err.to_string())
-        .map(|frames| render_sprite(&frames, size, aspect));
+    let grid = load_cell_grid(source, size, aspect);
     Some(PetPreview { id, grid })
 }
 
+fn load_cell_grid(
+    source: PetSource,
+    size: PetGridSize,
+    aspect: CellAspect,
+) -> Result<Vec<Vec<PreviewCell>>, String> {
+    load_frames(source)
+        .map_err(|err| err.to_string())
+        .map(|frames| render_sprite(&frames, size, aspect))
+}
+
 pub fn load_pixel_previews() -> Vec<PetPixelPreview> {
-    load_preview_results(listable_sources(), |source| {
-        load_frames(source)
-            .map_err(|err| err.to_string())
-            .and_then(|frames| {
-                idle_sprite(&frames)
-                    .cloned()
-                    .map(PixelPreviewFrame::from)
-                    .ok_or_else(|| "pet sheet has no frames".to_owned())
-            })
-    })
-    .into_iter()
-    .map(|(id, frame)| PetPixelPreview { id, frame })
-    .collect()
+    load_preview_results(listable_sources(), load_pixel_frame)
+        .into_iter()
+        .map(|(id, frame)| PetPixelPreview { id, frame })
+        .collect()
 }
 
 pub fn load_pixel_preview(selector: &str) -> Option<PetPixelPreview> {
     let source = asset::resolve_pet_source(selector)?;
     let id = source.id().into_owned();
-    let frame = load_frames(source)
+    let frame = load_pixel_frame(source);
+    Some(PetPixelPreview { id, frame })
+}
+
+fn load_pixel_frame(source: PetSource) -> Result<PixelPreviewFrame, String> {
+    load_frames(source)
         .map_err(|err| err.to_string())
         .and_then(|frames| {
             idle_sprite(&frames)
                 .cloned()
                 .map(PixelPreviewFrame::from)
                 .ok_or_else(|| "pet sheet has no frames".to_owned())
-        });
-    Some(PetPixelPreview { id, frame })
+        })
 }
 
 fn render_sprite(

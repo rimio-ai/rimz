@@ -105,8 +105,8 @@ pub(crate) fn effective_render_tier(
     }
 }
 
-pub const DASHBOARD_PIXEL_PET: PetGridSize = PetGridSize { cols: 15, rows: 9 };
-pub const DASHBOARD_CELL_PET: PetGridSize = PetGridSize { cols: 18, rows: 9 };
+pub(crate) const DASHBOARD_PIXEL_PET: PetGridSize = PetGridSize { cols: 15, rows: 9 };
+pub(crate) const DASHBOARD_CELL_PET: PetGridSize = PetGridSize { cols: 18, rows: 9 };
 
 pub fn dashboard_pet_size(tier: PetRenderTier) -> PetGridSize {
     match tier {
