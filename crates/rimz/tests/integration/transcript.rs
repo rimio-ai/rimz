@@ -924,7 +924,7 @@ fn run_hook_for_owner(env: &Env, source: &str, payload: serde_json::Value, owner
     let mut cmd = env.hook_command(source);
     scrub_launch_identity(&mut cmd);
     cmd.env("RIMZ_AGENT_PID", owner_pid.to_string());
-    cmd.env(rimz::harness::run::ENV_AGENT_ROLE, source);
+    cmd.env(rimz::harness::launch::ENV_AGENT_ROLE, source);
     let output = env
         .spawn_payload(cmd, &payload)
         .wait_with_output()
@@ -945,15 +945,15 @@ fn dummy_agent_process() -> std::process::Child {
 
 fn scrub_launch_identity(cmd: &mut std::process::Command) {
     for key in [
-        rimz::harness::run::ENV_AGENT_NAME,
-        rimz::harness::run::ENV_AGENT_PROFILE,
-        rimz::harness::run::ENV_AGENT_ROLE,
-        rimz::harness::run::ENV_TEAM,
-        rimz::harness::run::ENV_LAUNCH_GROUP,
-        rimz::harness::run::ENV_LAUNCH_ORDINAL,
-        rimz::harness::run::ENV_CHANNEL,
-        rimz::harness::run::ENV_AGENT_MODEL,
-        rimz::harness::run::ENV_AGENT_EFFORT,
+        rimz::harness::launch::ENV_AGENT_NAME,
+        rimz::harness::launch::ENV_AGENT_PROFILE,
+        rimz::harness::launch::ENV_AGENT_ROLE,
+        rimz::harness::launch::ENV_TEAM,
+        rimz::harness::launch::ENV_LAUNCH_GROUP,
+        rimz::harness::launch::ENV_LAUNCH_ORDINAL,
+        rimz::harness::launch::ENV_CHANNEL,
+        rimz::harness::launch::ENV_AGENT_MODEL,
+        rimz::harness::launch::ENV_AGENT_EFFORT,
     ] {
         cmd.env(key, "");
     }

@@ -203,26 +203,26 @@ pub(crate) fn sender_from_env(channel: Option<&str>, no_from: bool) -> MessageSe
     if no_from {
         return MessageSender::System;
     }
-    let Some(kind) = env_string(rimz::harness::run::ENV_AGENT_KIND) else {
+    let Some(kind) = env_string(rimz::harness::launch::ENV_AGENT_KIND) else {
         return MessageSender::Human;
     };
     MessageSender::Agent {
         kind: AgentKind::new_unchecked(kind),
-        name: env_string(rimz::harness::run::ENV_AGENT_NAME),
-        profile: env_string(rimz::harness::run::ENV_AGENT_PROFILE),
-        role: env_string(rimz::harness::run::ENV_AGENT_ROLE),
+        name: env_string(rimz::harness::launch::ENV_AGENT_NAME),
+        profile: env_string(rimz::harness::launch::ENV_AGENT_PROFILE),
+        role: env_string(rimz::harness::launch::ENV_AGENT_ROLE),
         channel: channel.map(ToOwned::to_owned),
     }
 }
 
 pub(crate) fn agent_caller() -> bool {
-    env_string(rimz::harness::run::ENV_AGENT_KIND).is_some()
+    env_string(rimz::harness::launch::ENV_AGENT_KIND).is_some()
 }
 
 pub(crate) fn agent_caller_identity() -> Option<(AgentKind, String)> {
     Some((
-        AgentKind::new_unchecked(env_string(rimz::harness::run::ENV_AGENT_KIND)?),
-        env_string(rimz::harness::run::ENV_AGENT_NAME)?,
+        AgentKind::new_unchecked(env_string(rimz::harness::launch::ENV_AGENT_KIND)?),
+        env_string(rimz::harness::launch::ENV_AGENT_NAME)?,
     ))
 }
 

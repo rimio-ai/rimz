@@ -112,21 +112,21 @@ fn process_compiler_composes_adapter_identity_and_rtk_environment() {
     assert_eq!(
         process
             .env
-            .get(crate::harness::run::ENV_AGENT_KIND)
+            .get(crate::harness::launch::ENV_AGENT_KIND)
             .map(String::as_str),
         Some("copilot")
     );
     assert_eq!(
         process
             .env
-            .get(crate::harness::run::ENV_CHANNEL)
+            .get(crate::harness::launch::ENV_CHANNEL)
             .map(String::as_str),
         Some("design")
     );
     assert_eq!(
         process
             .env
-            .get(crate::harness::run::ENV_RTK)
+            .get(crate::harness::launch::ENV_RTK)
             .map(String::as_str),
         Some("on")
     );
@@ -319,8 +319,8 @@ fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
             "project",
         ),
-        (crate::harness::run::ENV_CHANNEL, "project"),
-        (crate::harness::run::ENV_RTK, "project"),
+        (crate::harness::launch::ENV_CHANNEL, "project"),
+        (crate::harness::launch::ENV_RTK, "project"),
     ]);
 
     let composed = compose_agent_env(
@@ -336,8 +336,8 @@ fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
         composed["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"],
         "false"
     );
-    assert_eq!(composed[crate::harness::run::ENV_CHANNEL], "identity");
-    assert_eq!(composed[crate::harness::run::ENV_RTK], "off");
+    assert_eq!(composed[crate::harness::launch::ENV_CHANNEL], "identity");
+    assert_eq!(composed[crate::harness::launch::ENV_RTK], "off");
 }
 
 #[test]
@@ -507,52 +507,55 @@ fn exec_identity_env_maps_identity_fields() {
         exec_identity_env(&invocation),
         BTreeMap::from([
             (
-                crate::harness::run::ENV_AGENT_KIND.to_owned(),
+                crate::harness::launch::ENV_AGENT_KIND.to_owned(),
                 "claude".to_owned()
             ),
             (
-                crate::harness::run::ENV_AGENT_ID.to_owned(),
+                crate::harness::launch::ENV_AGENT_ID.to_owned(),
                 "launch_swift_otter".to_owned()
             ),
             (
-                crate::harness::run::ENV_RUN_ID.to_owned(),
+                crate::harness::launch::ENV_RUN_ID.to_owned(),
                 "run_0123456789abcdef0123456789abcdef".to_owned()
             ),
             (
-                crate::harness::run::ENV_AGENT_NAME.to_owned(),
+                crate::harness::launch::ENV_AGENT_NAME.to_owned(),
                 "swift-otter".to_owned(),
             ),
             (
-                crate::harness::run::ENV_AGENT_PROFILE.to_owned(),
+                crate::harness::launch::ENV_AGENT_PROFILE.to_owned(),
                 "planner".to_owned(),
             ),
             (
-                crate::harness::run::ENV_AGENT_ROLE.to_owned(),
+                crate::harness::launch::ENV_AGENT_ROLE.to_owned(),
                 "coder".to_owned()
             ),
-            (crate::harness::run::ENV_TEAM.to_owned(), "forge".to_owned()),
             (
-                crate::harness::run::ENV_LAUNCH_GROUP.to_owned(),
+                crate::harness::launch::ENV_TEAM.to_owned(),
+                "forge".to_owned()
+            ),
+            (
+                crate::harness::launch::ENV_LAUNCH_GROUP.to_owned(),
                 "launch_group_1".to_owned(),
             ),
             (
-                crate::harness::run::ENV_LAUNCH_ORDINAL.to_owned(),
+                crate::harness::launch::ENV_LAUNCH_ORDINAL.to_owned(),
                 "2".to_owned()
             ),
             (
-                crate::harness::run::ENV_CHANNEL.to_owned(),
+                crate::harness::launch::ENV_CHANNEL.to_owned(),
                 "design".to_owned()
             ),
             (
-                crate::harness::run::ENV_AGENT_MODEL.to_owned(),
+                crate::harness::launch::ENV_AGENT_MODEL.to_owned(),
                 "opus".to_owned()
             ),
             (
-                crate::harness::run::ENV_AGENT_EFFORT.to_owned(),
+                crate::harness::launch::ENV_AGENT_EFFORT.to_owned(),
                 "high".to_owned()
             ),
             (
-                crate::harness::run::ENV_AGENT_BUDGET.to_owned(),
+                crate::harness::launch::ENV_AGENT_BUDGET.to_owned(),
                 "$12.50/day".to_owned()
             ),
         ])
@@ -562,7 +565,7 @@ fn exec_identity_env_maps_identity_fields() {
     invocation.identity.launch_id = None;
     assert_eq!(
         exec_identity_env(&invocation)
-            .get(crate::harness::run::ENV_AGENT_ID)
+            .get(crate::harness::launch::ENV_AGENT_ID)
             .map(String::as_str),
         Some(""),
         "missing ids overwrite rather than inherit an ambient caller id"

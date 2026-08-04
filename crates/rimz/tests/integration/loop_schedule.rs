@@ -1898,7 +1898,7 @@ fn run_hook(env: &Env, payload: serde_json::Value, cwd: &Path) {
     if let Some(channel) =
         rimz::harness::target::resolve_room_channel(&env.project_root, cwd, None, None)
     {
-        cmd.env(rimz::harness::run::ENV_CHANNEL, channel);
+        cmd.env(rimz::harness::launch::ENV_CHANNEL, channel);
     }
     let output = env
         .spawn_payload(cmd, &payload)

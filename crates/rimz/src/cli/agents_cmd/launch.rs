@@ -93,9 +93,9 @@ pub(super) fn launch_layout(
         layout,
         team_name,
     } = resolved;
-    let ancestry = if rimz::harness::plan::launch_ancestry_required() {
+    let ancestry = if rimz::harness::ancestry::launch_ancestry_required() {
         let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-        rimz::harness::plan::resolve_launch_ancestry_from_env(
+        rimz::harness::ancestry::resolve_launch_ancestry_from_env(
             &projection.agents,
             false,
             machine_config.agents.max_chain_length,
@@ -348,7 +348,7 @@ fn launch_resume_layout(
     team_name: Option<String>,
     single_cell: bool,
     worktree_filter: Option<&Path>,
-    ancestry: Option<&rimz::harness::plan::LaunchAncestry>,
+    ancestry: Option<&rimz::harness::ancestry::LaunchAncestry>,
 ) -> Result<()> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;

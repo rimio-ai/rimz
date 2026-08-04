@@ -43,7 +43,7 @@ impl OutageUi {
         let panel = panel_allowed(
             std::io::stdout().is_terminal(),
             std::env::var("RIMZ_NO_PROGRESS").ok().as_deref(),
-            std::env::var(rimz::harness::run::ENV_AGENT_KIND)
+            std::env::var(rimz::harness::launch::ENV_AGENT_KIND)
                 .ok()
                 .as_deref(),
             std::env::var("TERM").ok().as_deref(),

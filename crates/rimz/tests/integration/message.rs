@@ -75,7 +75,7 @@ fn message_cancel_and_clear_respect_ids_targets_and_channel_lanes() {
     let ops = queue_direct_channel_message(&env, "ops", "ops");
     let cleared = run_success(
         env.rimz()
-            .env(rimz::harness::run::ENV_CHANNEL, "docs")
+            .env(rimz::harness::launch::ENV_CHANNEL, "docs")
             .args(["message", "clear"]),
         "clear lane",
     );
@@ -1113,9 +1113,9 @@ fn agent_broadcast_waits_for_peers_without_waiting_on_itself() {
     caller.stamp_launch_identity(&env, "launch-agent-gather", "planner");
 
     let child = traced_rimz(&env, "zellij-agent-wait-gather-trace.log")
-        .env(rimz::harness::run::ENV_AGENT_KIND, "claude")
-        .env(rimz::harness::run::ENV_AGENT_ID, "launch-agent-gather")
-        .env(rimz::harness::run::ENV_AGENT_NAME, "planner")
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "launch-agent-gather")
+        .env(rimz::harness::launch::ENV_AGENT_NAME, "planner")
         .args(["message", "@all", "--wait=5s", "status?"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1565,9 +1565,9 @@ fn agent_broadcast_steer_with_no_from_writes_only_to_the_peer() {
 
     let out = run_success(
         traced_rimz(&env, "zellij-agent-steer-trace.log")
-            .env(rimz::harness::run::ENV_AGENT_KIND, "claude")
-            .env(rimz::harness::run::ENV_AGENT_ID, "launch-agent-steer")
-            .env(rimz::harness::run::ENV_AGENT_NAME, "planner")
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::launch::ENV_AGENT_ID, "launch-agent-steer")
+            .env(rimz::harness::launch::ENV_AGENT_NAME, "planner")
             .args(["message", "--steer", "@all", "--no-from", "--", "peer only"]),
         "agent broadcast steer",
     );
@@ -1597,9 +1597,9 @@ fn solo_agent_broadcast_errors_but_an_exact_self_handle_still_delivers() {
     caller.stamp_launch_identity(&env, "launch-agent-solo", "planner");
 
     let broadcast = traced_rimz(&env, "zellij-agent-solo-broadcast-trace.log")
-        .env(rimz::harness::run::ENV_AGENT_KIND, "claude")
-        .env(rimz::harness::run::ENV_AGENT_ID, "launch-agent-solo")
-        .env(rimz::harness::run::ENV_AGENT_NAME, "planner")
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "launch-agent-solo")
+        .env(rimz::harness::launch::ENV_AGENT_NAME, "planner")
         .args(["message", "@all", "anyone?"])
         .output()
         .expect("solo broadcast");
@@ -1613,9 +1613,9 @@ fn solo_agent_broadcast_errors_but_an_exact_self_handle_still_delivers() {
 
     run_success(
         env.rimz()
-            .env(rimz::harness::run::ENV_AGENT_KIND, "claude")
-            .env(rimz::harness::run::ENV_AGENT_ID, "launch-agent-solo")
-            .env(rimz::harness::run::ENV_AGENT_NAME, "planner")
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::launch::ENV_AGENT_ID, "launch-agent-solo")
+            .env(rimz::harness::launch::ENV_AGENT_NAME, "planner")
             .args(["message", "@planner", "deliberate self-send"]),
         "exact self send",
     );
@@ -3411,15 +3411,15 @@ fn reap_later(mut child: std::process::Child) {
 
 fn scrub_launch_identity(cmd: &mut std::process::Command) {
     for key in [
-        rimz::harness::run::ENV_AGENT_NAME,
-        rimz::harness::run::ENV_AGENT_PROFILE,
-        rimz::harness::run::ENV_AGENT_ROLE,
-        rimz::harness::run::ENV_TEAM,
-        rimz::harness::run::ENV_LAUNCH_GROUP,
-        rimz::harness::run::ENV_LAUNCH_ORDINAL,
-        rimz::harness::run::ENV_CHANNEL,
-        rimz::harness::run::ENV_AGENT_MODEL,
-        rimz::harness::run::ENV_AGENT_EFFORT,
+        rimz::harness::launch::ENV_AGENT_NAME,
+        rimz::harness::launch::ENV_AGENT_PROFILE,
+        rimz::harness::launch::ENV_AGENT_ROLE,
+        rimz::harness::launch::ENV_TEAM,
+        rimz::harness::launch::ENV_LAUNCH_GROUP,
+        rimz::harness::launch::ENV_LAUNCH_ORDINAL,
+        rimz::harness::launch::ENV_CHANNEL,
+        rimz::harness::launch::ENV_AGENT_MODEL,
+        rimz::harness::launch::ENV_AGENT_EFFORT,
     ] {
         cmd.env(key, "");
     }
@@ -3569,7 +3569,7 @@ fn list_message_ids(env: &Env, args: &[&str], channel: Option<&str>) -> Vec<Stri
     let mut cmd = env.rimz();
     cmd.args(args);
     if let Some(channel) = channel {
-        cmd.env(rimz::harness::run::ENV_CHANNEL, channel);
+        cmd.env(rimz::harness::launch::ENV_CHANNEL, channel);
     }
     let output = run_success(&mut cmd, "message list");
     serde_json::from_slice::<serde_json::Value>(&output.stdout)

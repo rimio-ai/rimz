@@ -175,7 +175,7 @@ struct PreparedRun {
     output_format: OutputFormat,
     stream_text: bool,
     managed_launch: rimz::agents::ManagedLaunchState,
-    ancestry: Option<rimz::harness::plan::LaunchAncestry>,
+    ancestry: Option<rimz::harness::ancestry::LaunchAncestry>,
 }
 
 struct PresentationWaiter {
@@ -442,9 +442,9 @@ fn prepare_supervised(
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
     let prompt = supervised_prompt(request, adapter);
-    let ancestry = if rimz::harness::plan::launch_ancestry_required() {
+    let ancestry = if rimz::harness::ancestry::launch_ancestry_required() {
         let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-        rimz::harness::plan::resolve_launch_ancestry_from_env(
+        rimz::harness::ancestry::resolve_launch_ancestry_from_env(
             &projection.agents,
             request.subagent,
             machine_config.agents.max_chain_length,

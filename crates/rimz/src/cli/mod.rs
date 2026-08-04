@@ -249,7 +249,7 @@ fn scope_facts<'a>(
 /// yields `None` for humans; RimZ-launched team members carry `RIMZ_CHANNEL`,
 /// so their calls scope to the stamped team lane.
 pub(crate) fn current_channel(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
-    if let Ok(channel) = std::env::var(rimz::harness::run::ENV_CHANNEL)
+    if let Ok(channel) = std::env::var(rimz::harness::launch::ENV_CHANNEL)
         && !channel.is_empty()
     {
         return Some(channel);

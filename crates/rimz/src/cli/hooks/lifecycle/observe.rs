@@ -61,7 +61,7 @@ fn record_mapped_lifecycle_observation(
     if observation.parent_agent_id.is_none() && observation.agent_name.is_none() {
         observation.agent_name = agent_identity_env(
             &observation,
-            rimz::harness::run::ENV_AGENT_NAME,
+            rimz::harness::launch::ENV_AGENT_NAME,
             validate_agent_name_env,
         );
     }

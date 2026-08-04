@@ -140,7 +140,7 @@ pub(in crate::cli) fn restart_resolved(
     let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), &invocation)?;
     let mut env = rimz::room::pane_identity_env(workspace, agent.channel.as_deref(), false);
     env.insert(
-        rimz::harness::run::ENV_WORKTREE_PATH.to_owned(),
+        rimz::harness::launch::ENV_WORKTREE_PATH.to_owned(),
         cwd.display().to_string(),
     );
     let backend = rimz::mux::backend_for(old_pane.mux());

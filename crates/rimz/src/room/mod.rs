@@ -75,7 +75,7 @@ pub fn pane_identity_env(
     inherit_channel: bool,
 ) -> BTreeMap<String, String> {
     let ambient_channel = inherit_channel
-        .then(|| std::env::var(crate::harness::run::ENV_CHANNEL).ok())
+        .then(|| std::env::var(crate::harness::launch::ENV_CHANNEL).ok())
         .flatten();
     pane_identity_env_with_ambient(workspace, channel, ambient_channel.as_deref())
 }
@@ -88,7 +88,7 @@ fn pane_identity_env_with_ambient(
     let mut env = crate::workspace::pin_env(&workspace.workspace_id, &workspace.project_root);
     env.insert("RIMZ".to_owned(), "1".to_owned());
     env.insert(
-        crate::harness::run::ENV_WORKTREE_PATH.to_owned(),
+        crate::harness::launch::ENV_WORKTREE_PATH.to_owned(),
         workspace.worktree_root.display().to_string(),
     );
     if let Some(channel) = channel
@@ -96,7 +96,7 @@ fn pane_identity_env_with_ambient(
         .filter(|value| !value.is_empty())
     {
         env.insert(
-            crate::harness::run::ENV_CHANNEL.to_owned(),
+            crate::harness::launch::ENV_CHANNEL.to_owned(),
             channel.to_owned(),
         );
     }
