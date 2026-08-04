@@ -15,6 +15,14 @@ use crate::agents::{AgentCardRef, AgentState, AgentStatus};
 use crate::harness::target::{agent_channel, recipient_channel};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use crate::store::snapshot::PaneAgent;
+use crate::utils::time::{ClockTime, DurationUnit, parse_duration_units};
+
+const MESSAGE_DURATION_UNITS: &[DurationUnit] = &[
+    DurationUnit::Second,
+    DurationUnit::Minute,
+    DurationUnit::Hour,
+    DurationUnit::Day,
+];
 
 pub const DEFAULT_SETTLE: Duration = Duration::from_millis(400);
 pub const SETTLE_ENV: &str = "RIMZ_MESSAGE_SETTLE_MS";
@@ -836,8 +844,7 @@ pub fn parse_when_status(raw: &str) -> Result<AgentStatus, String> {
 }
 
 pub fn parse_when_duration(raw: &str) -> Result<u64, String> {
-    const UNITS: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)];
-    let duration = crate::harness::schedule::parse_duration_units(raw, UNITS).map_err(|_| {
+    let duration = parse_duration_units(raw, MESSAGE_DURATION_UNITS).map_err(|_| {
         format!("invalid --when duration `{raw}`; use a duration like `58m` or `2h`")
     })?;
     if duration.is_zero() {
@@ -978,8 +985,7 @@ fn batch_compatible(head: &MessageRecord, candidate: &MessageRecord, status: Age
 }
 
 pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, String> {
-    const UNITS: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)];
-    if let Ok(duration) = crate::harness::schedule::parse_duration_units(raw, UNITS) {
+    if let Ok(duration) = parse_duration_units(raw, MESSAGE_DURATION_UNITS) {
         if duration.is_zero() {
             return Err("schedule duration must be greater than zero".to_owned());
         }
@@ -988,14 +994,14 @@ pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, Stri
             .map(|target| target.timestamp())
             .map_err(|err| format!("schedule `{raw}` cannot be resolved: {err}"));
     }
-    let (hour, minute) = crate::harness::schedule::parse_hhmm(raw).ok_or_else(|| {
+    let time = raw.parse::<ClockTime>().map_err(|_| {
         format!(
             "invalid schedule `{raw}`; use a duration like `60m` or a 24-hour time like `14:30`"
         )
     })?;
     let candidate = now
         .date()
-        .at(hour as i8, minute as i8, 0, 0)
+        .at(time.hour() as i8, time.minute() as i8, 0, 0)
         .to_zoned(now.time_zone().clone())
         .map_err(|err| format!("schedule `{raw}` cannot be resolved today: {err}"))?;
     if candidate.timestamp() > now.timestamp() {
@@ -1004,7 +1010,7 @@ pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, Stri
     now.date()
         .tomorrow()
         .map_err(|err| format!("schedule `{raw}` cannot be resolved tomorrow: {err}"))?
-        .at(hour as i8, minute as i8, 0, 0)
+        .at(time.hour() as i8, time.minute() as i8, 0, 0)
         .to_zoned(now.time_zone().clone())
         .map(|target| target.timestamp())
         .map_err(|err| format!("schedule `{raw}` cannot be resolved tomorrow: {err}"))

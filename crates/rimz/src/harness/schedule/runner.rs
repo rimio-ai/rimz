@@ -36,6 +36,7 @@ use crate::harness::schedule::run_log::{
 };
 use crate::ids::WorkspaceId;
 use crate::store::paths::{RuntimePaths, StatePaths, state_home};
+use crate::utils::time::{DurationUnit, parse_duration_units};
 use crate::workspace::WorkspaceResolver;
 
 pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -44,7 +45,12 @@ pub const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
 const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const RUN_LOCK_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const CHECK_OUTPUT_CAP: usize = 16 * 1024;
-const TASK_TIMEOUT_UNITS: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)];
+const TASK_TIMEOUT_UNITS: &[DurationUnit] = &[
+    DurationUnit::Second,
+    DurationUnit::Minute,
+    DurationUnit::Hour,
+    DurationUnit::Day,
+];
 
 #[derive(Clone, Debug)]
 pub enum TaskFireNotice {
@@ -882,7 +888,7 @@ fn mode_name(mode: PermissionMode) -> &'static str {
 }
 
 pub fn parse_task_timeout(raw: &str) -> std::result::Result<Duration, String> {
-    super::parse_duration_units(raw, TASK_TIMEOUT_UNITS)
+    parse_duration_units(raw, TASK_TIMEOUT_UNITS).map_err(|err| err.to_string())
 }
 
 pub fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {
@@ -1211,7 +1217,7 @@ pub fn check_timeout(entry: &TaskEntry) -> Result<Option<Duration>> {
     entry
         .timeout
         .as_deref()
-        .map(|raw| super::parse_duration_units(raw, TASK_TIMEOUT_UNITS))
+        .map(|raw| parse_duration_units(raw, TASK_TIMEOUT_UNITS))
         .transpose()
         .map_err(|err| anyhow::anyhow!("{err}"))
 }

@@ -15,6 +15,7 @@ use rimz::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
 use rimz::ids::AskId;
 use rimz::mux::{paste_into_pane, press_pane_key, type_into_pane};
 use rimz::transcript::{AskAnswer, AskQuestion, TranscriptEntry, TranscriptKind};
+use rimz::utils::time::{DurationUnit, parse_duration_units};
 
 const DEFAULT_ANSWER_WAIT: Duration = Duration::from_secs(30);
 const CONFIRM_POLL: Duration = Duration::from_millis(100);
@@ -456,7 +457,15 @@ fn transcript_has_answer(paths: &rimz::StatePaths, ask_id: &AskId) -> Result<boo
 }
 
 fn parse_wait(raw: &str) -> std::result::Result<Duration, String> {
-    rimz::harness::schedule::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600)])
+    parse_duration_units(
+        raw,
+        &[
+            DurationUnit::Second,
+            DurationUnit::Minute,
+            DurationUnit::Hour,
+        ],
+    )
+    .map_err(|err| err.to_string())
 }
 
 fn answer_exit(code: i32, message: &str) -> ! {

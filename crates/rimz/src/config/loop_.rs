@@ -4,6 +4,15 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
+use crate::utils::time::{DurationUnit, parse_duration_units};
+
+const DEFAULT_TIMEOUT_UNITS: &[DurationUnit] = &[
+    DurationUnit::Second,
+    DurationUnit::Minute,
+    DurationUnit::Hour,
+    DurationUnit::Day,
+];
+
 /// `loop.toml`: scheduled and automated agent-loop helpers.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
@@ -37,11 +46,7 @@ where
 {
     let raw = Option::<String>::deserialize(deserializer)?;
     if let Some(value) = raw.as_deref() {
-        crate::harness::schedule::parse_duration_units(
-            value,
-            &[("s", 1), ("m", 60), ("h", 3_600), ("d", 86_400)],
-        )
-        .map_err(D::Error::custom)?;
+        parse_duration_units(value, DEFAULT_TIMEOUT_UNITS).map_err(D::Error::custom)?;
     }
     Ok(raw)
 }

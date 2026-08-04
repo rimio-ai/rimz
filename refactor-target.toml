@@ -72,6 +72,7 @@ allowed-imports = [
     "sidebar_pane",
     "store",
     "theme",
+    "utils::time",
     "transcript",
     "trust",
     "tui",
@@ -95,6 +96,7 @@ allowed-imports = [
     "message",
     "sidebar::timing",
     "store::atomic",
+    "utils::time",
     "trust",
 ]
 surface-budget = 12
@@ -106,7 +108,7 @@ surface-budget = 23
 
 [[module]]
 path = "crates/rimz/src/config/resume.rs"
-allowed-imports = []
+allowed-imports = ["utils::time"]
 surface-budget = 5
 
 [[module]]
@@ -183,10 +185,11 @@ allowed-imports = [
     "mux",
     "sock",
     "store",
+    "utils::time",
     "trust",
     "workspace",
 ]
-surface-budget = 586
+surface-budget = 578
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -209,7 +212,7 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-surface-budget = 68
+surface-budget = 69
 
 [[module]]
 path = "crates/rimz/src/main.rs"
@@ -236,6 +239,7 @@ allowed-imports = [
     "harness::target",
     "ids",
     "store::snapshot",
+    "utils::time",
 ]
 surface-budget = 89
 
@@ -504,6 +508,16 @@ allowed-imports = [
 surface-budget = 40
 
 [[module]]
+path = "crates/rimz/src/utils.rs"
+allowed-imports = []
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/utils/time.rs"
+allowed-imports = []
+surface-budget = 7
+
+[[module]]
 path = "crates/rimz/src/transcript.rs"
 allowed-imports = [
     "ids",
@@ -602,6 +616,7 @@ allowed-imports = [
     "harness::schedule",
     "ids",
     "store::paths",
+    "utils::time",
     "workspace",
 ]
 surface-budget = 48
