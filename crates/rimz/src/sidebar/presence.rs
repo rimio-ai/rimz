@@ -525,23 +525,26 @@ fn write_plugin_presence_sample(
     session_name: Option<String>,
     telemetry: &ZellijPluginTelemetry,
 ) {
-    crate::diag::plugin_presence::log(&state.root).append(&PluginPresenceSample {
-        at_ms: unix_now_ms(),
-        session_name,
-        plugin_id: telemetry.plugin_id,
-        build: telemetry.build.clone(),
-        loaded_at_ms: telemetry.loaded_at_ms,
-        pages: telemetry.pages,
-        bytes: telemetry.pages.saturating_mul(WASM_PAGE_BYTES),
-        uptime_ms: telemetry.uptime_ms,
-        commands: telemetry.commands,
-        commands_succeeded: telemetry.commands_succeeded,
-        stale_writer_rejections: telemetry.stale_writer_rejections,
-        topology_failures: telemetry.topology_failures,
-        other_failures: telemetry.other_failures,
-        zellij_version: telemetry.zellij_version.clone(),
-        last_failure: telemetry.last_failure.clone(),
-    });
+    crate::diag::plugin_presence::append(
+        &state.root,
+        &PluginPresenceSample {
+            at_ms: unix_now_ms(),
+            session_name,
+            plugin_id: telemetry.plugin_id,
+            build: telemetry.build.clone(),
+            loaded_at_ms: telemetry.loaded_at_ms,
+            pages: telemetry.pages,
+            bytes: telemetry.pages.saturating_mul(WASM_PAGE_BYTES),
+            uptime_ms: telemetry.uptime_ms,
+            commands: telemetry.commands,
+            commands_succeeded: telemetry.commands_succeeded,
+            stale_writer_rejections: telemetry.stale_writer_rejections,
+            topology_failures: telemetry.topology_failures,
+            other_failures: telemetry.other_failures,
+            zellij_version: telemetry.zellij_version.clone(),
+            last_failure: telemetry.last_failure.clone(),
+        },
+    );
 }
 
 pub(super) fn command_is_launch_chrome(command: &str) -> bool {

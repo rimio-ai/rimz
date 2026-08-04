@@ -7,7 +7,6 @@
 
 use std::path::PathBuf;
 
-use super::JsonlLog;
 use crate::store::paths::RuntimePaths;
 
 const BINDING_LOG_NAME: &str = "binding.log.jsonl";
@@ -17,6 +16,6 @@ fn path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join(BINDING_LOG_NAME)
 }
 
-pub fn log(runtime: &RuntimePaths) -> JsonlLog {
-    JsonlLog::new(path(runtime), BINDING_LOG_MAX_BYTES)
+pub fn append(runtime: &RuntimePaths, record: &impl serde::Serialize) {
+    super::rotating::append(&path(runtime), BINDING_LOG_MAX_BYTES, record);
 }

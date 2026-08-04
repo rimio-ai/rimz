@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, SidebarInstanceId, WorkspaceId};
 use crate::remote::link::LinkTier;
 
-pub const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
+const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiagEnvelope {
@@ -53,12 +53,7 @@ impl DiagEnvelope {
         }
     }
 
-    pub fn with_suppressed(mut self, suppressed_since_last: u32) -> Self {
-        self.suppressed_since_last = suppressed_since_last;
-        self
-    }
-
-    pub fn is_current_version(&self) -> bool {
+    pub(super) fn is_current_version(&self) -> bool {
         self.v == DIAG_SCHEMA_VERSION
     }
 }
@@ -121,7 +116,7 @@ pub enum SidebarWidthIntentTrigger {
 }
 
 impl SidebarWidthIntentTrigger {
-    pub fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Narrower => "narrower",
             Self::Wider => "wider",
@@ -139,7 +134,7 @@ pub enum SidebarWidthIntentVerdict {
 }
 
 impl SidebarWidthIntentVerdict {
-    pub fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Accepted => "accepted",
             Self::RejectedFloor => "rejected-floor",
@@ -160,7 +155,7 @@ pub enum SidebarWidthControlTrigger {
 }
 
 impl SidebarWidthControlTrigger {
-    pub fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Retarget => "retarget",
             Self::ResizeFeedback => "resize-feedback",
@@ -183,7 +178,7 @@ pub enum SidebarWidthSettleOutcome {
 }
 
 impl SidebarWidthSettleOutcome {
-    pub fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::FeedbackLearned => "feedback-learned",
             Self::ReachedTolerance => "reached-tolerance",
@@ -195,7 +190,7 @@ impl SidebarWidthSettleOutcome {
 }
 
 impl RendererExitCause {
-    pub fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::SelfCloseEmptyTab => "self_close_empty_tab",
             Self::DegradedGaveUp => "degraded_gave_up",
@@ -213,7 +208,7 @@ pub enum HostedCarryDropReason {
 }
 
 impl HostedCarryDropReason {
-    pub fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::ProbeReportsAbsent => "probe_reports_absent",
             Self::StartRegressed => "start_regressed",
@@ -232,7 +227,7 @@ pub enum LocalSessionBindRejectReason {
 }
 
 impl LocalSessionBindRejectReason {
-    pub fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::StaleLaunchClock => "stale_launch_clock",
             Self::PaneReserved => "pane_reserved",
@@ -1449,7 +1444,7 @@ pub enum AggregateKey {
 }
 
 impl AggregateKey {
-    pub fn identity(&self) -> String {
+    pub(crate) fn identity(&self) -> String {
         match self {
             Self::CockpitTally => "cockpit_tally".to_owned(),
             Self::WorkspaceTally => "workspace_tally".to_owned(),
@@ -1472,7 +1467,7 @@ impl AggregateKey {
 
     /// True for monetary spend tallies, whose trailing-year figure never
     /// drops to zero in place. Provider mana windows roll to zero normally.
-    pub fn is_spend_tally(&self) -> bool {
+    pub(crate) fn is_spend_tally(&self) -> bool {
         matches!(
             self,
             Self::CockpitTally | Self::WorkspaceTally | Self::ProviderSpend { .. }
@@ -1577,7 +1572,7 @@ pub enum AnomalyKind {
 }
 
 impl AnomalyKind {
-    pub fn key(&self) -> &'static str {
+    pub(crate) fn key(&self) -> &'static str {
         match self {
             Self::RosterFlap { .. } => "roster_flap",
             Self::RowPresenceFlap { .. } => "row_presence_flap",
@@ -1603,7 +1598,7 @@ impl AnomalyKind {
     /// [`DiagEvent::identity_key`], which the sink rate limit and Doctor's
     /// incident fold both key on; detectors with whole-frame scope have no
     /// subject.
-    pub fn subject(&self) -> Option<Cow<'_, str>> {
+    pub(crate) fn subject(&self) -> Option<Cow<'_, str>> {
         match self {
             Self::RowPresenceFlap { row_id, .. }
             | Self::ShortLivedRow { row_id, .. }

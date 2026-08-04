@@ -66,10 +66,14 @@ pub(super) fn record<'a>(runtime: &RuntimePaths, event: impl FnOnce() -> TraceEv
     let Some(path) = trace_path(runtime) else {
         return;
     };
-    crate::diag::JsonlLog::new(path, TRACE_MAX_BYTES).append(&TraceRecord {
-        at_ms: super::super::timing::unix_now_ms(),
-        event: event(),
-    });
+    crate::diag::rotating::append(
+        &path,
+        TRACE_MAX_BYTES,
+        &TraceRecord {
+            at_ms: super::super::timing::unix_now_ms(),
+            event: event(),
+        },
+    );
 }
 
 fn trace_path(runtime: &RuntimePaths) -> Option<PathBuf> {

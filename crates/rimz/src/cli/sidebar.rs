@@ -515,9 +515,8 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             toggle,
         } => focus(globals, session_name, toggle),
         SidebarSubcmd::RecordFocusRepair { record_json } => {
-            let record = rimz::diag::focus_repair::parse(&record_json)
+            rimz::diag::focus_repair::append_raw(&record_json)
                 .context("parsing focus-repair diagnostic record")?;
-            rimz::diag::focus_repair::append(&record);
             Ok(())
         }
         SidebarSubcmd::NotifyTest {

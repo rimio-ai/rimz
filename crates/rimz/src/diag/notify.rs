@@ -10,15 +10,14 @@
 
 use std::path::Path;
 
-use super::JsonlLog;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{AgentKind, AgentSessionId, PaneId, SidebarInstanceId, WorkspaceId};
 
-pub const NOTIFY_TRACE_SCHEMA_VERSION: &str = "rimz.notify_trace.v1";
+const NOTIFY_TRACE_SCHEMA_VERSION: &str = "rimz.notify_trace.v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NotifyTraceEnvelope {
+pub(crate) struct NotifyTraceEnvelope {
     pub v: String,
     /// Build id of the writing process, so overlapping old/new builds stay
     /// distinguishable in the evidence.
@@ -35,7 +34,7 @@ pub struct NotifyTraceEnvelope {
 }
 
 impl NotifyTraceEnvelope {
-    pub fn new(
+    pub(crate) fn new(
         workspace_id: WorkspaceId,
         session_name: String,
         instance_id: Option<SidebarInstanceId>,
@@ -51,10 +50,6 @@ impl NotifyTraceEnvelope {
             at_ms,
             event,
         }
-    }
-
-    pub fn is_current_version(&self) -> bool {
-        self.v == NOTIFY_TRACE_SCHEMA_VERSION
     }
 }
 
@@ -140,8 +135,12 @@ pub struct TraceAgent {
 const NOTIFY_LOG_NAME: &str = "notify.log.jsonl";
 const NOTIFY_LOG_MAX_BYTES: u64 = 1_048_576;
 
-pub fn log(state_root: &Path) -> JsonlLog {
-    JsonlLog::new(state_root.join(NOTIFY_LOG_NAME), NOTIFY_LOG_MAX_BYTES)
+pub(crate) fn append(state_root: &Path, record: &NotifyTraceEnvelope) {
+    super::rotating::append(
+        &state_root.join(NOTIFY_LOG_NAME),
+        NOTIFY_LOG_MAX_BYTES,
+        record,
+    );
 }
 
 #[cfg(test)]

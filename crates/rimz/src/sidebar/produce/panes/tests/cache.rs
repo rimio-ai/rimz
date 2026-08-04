@@ -343,7 +343,8 @@ fn missing_own_rejection_captures_prior_and_offending_frames() {
     let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
     let cache_path = runtime.pane_frame_path();
-    let sink = crate::diag::DiagSink::under(dir.path().join("state"), workspace_id, "s", None);
+    let state_root = dir.path().join("state");
+    let sink = crate::diag::DiagSink::under(state_root.clone(), workspace_id, "s", None);
     let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
     let now = unix_now_ms();
     let prior = crate::sidebar::frame::assemble_frame(
@@ -379,7 +380,9 @@ fn missing_own_rejection_captures_prior_and_offending_frames() {
         panic!("expected missing-own frame rejection with frame capture");
     };
     assert!(
-        sink.frame_capture_path(&frames_ref).unwrap().exists(),
+        crate::diag::frames_dir_under(&state_root)
+            .join(frames_ref)
+            .exists(),
         "the frame reference points at a captured prior/offending pair"
     );
 }
