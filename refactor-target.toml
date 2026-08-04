@@ -289,16 +289,6 @@ allowed-imports = [
 ]
 surface-budget = 15
 
-[[strangler]]
-symbol = "purge_zellij_session_cache_in"
-path = "crates/rimz/src/mux/recovery.rs"
-baseline = 0
-
-[[strangler]]
-symbol = "logtail"
-path = "crates/rimz/src/mux"
-baseline = 0
-
 [[module]]
 path = "crates/rimz/src/observability"
 allowed-imports = [
@@ -456,6 +446,15 @@ allowed-imports = [
 surface-budget = 189
 
 [[module]]
+path = "crates/rimz/src/sidebar_pane/pets"
+allowed-imports = [
+    "config",
+    "sidebar",
+    "sidebar_pane",
+]
+surface-budget = 28
+
+[[module]]
 path = "crates/rimz/src/sock.rs"
 allowed-imports = []
 surface-budget = 17
@@ -511,7 +510,7 @@ allowed-imports = [
     "agents",
     "config",
 ]
-surface-budget = 40
+surface-budget = 33
 
 [[module]]
 path = "crates/rimz/src/transcript.rs"
@@ -671,6 +670,16 @@ allowed-imports = [
     "workspace",
 ]
 surface-budget = 65
+
+[[strangler]]
+symbol = "purge_zellij_session_cache_in"
+path = "crates/rimz/src/mux/recovery.rs"
+baseline = 0
+
+[[strangler]]
+symbol = "logtail"
+path = "crates/rimz/src/mux"
+baseline = 0
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"
