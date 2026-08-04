@@ -70,7 +70,7 @@ fn reset_archives_records_and_clears_room_state() {
         None,
     );
     let diag_log = diag.log_path().unwrap();
-    let diag_frames = diag.frames_dir().unwrap();
+    let diag_frames = rimz::diag::frames_dir_under(&paths.root);
     fs::write(&diag_log, b"diag\n").expect("write diag");
     fs::create_dir_all(&diag_frames).expect("mkdir diag frames");
     fs::write(diag_frames.join("frame.1.0.test.json"), b"{}").expect("write frame");

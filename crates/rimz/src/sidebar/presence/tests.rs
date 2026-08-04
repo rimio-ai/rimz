@@ -460,11 +460,7 @@ fn topology_write_failure_returns_error_before_accepted_side_effects() {
         Err(ZellijWakeError::TopologyWrite(_))
     ));
     assert!(!crate::sidebar::cache::presence_stamp_path(&runtime).exists());
-    assert!(
-        !crate::diag::plugin_presence::log(&state.root)
-            .path()
-            .exists()
-    );
+    assert!(crate::diag::plugin_presence::history_paths(&state.root).is_empty());
 }
 
 #[test]

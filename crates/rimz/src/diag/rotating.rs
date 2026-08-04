@@ -15,41 +15,26 @@ use crate::store::atomic;
 
 const ROTATE_LOCK_STALE: Duration = Duration::from_secs(60);
 
-pub struct JsonlLog {
-    path: PathBuf,
-    max_bytes: u64,
+/// Appends best-effort; failures log at debug with the path.
+pub(crate) fn append<T: Serialize>(path: &Path, max_bytes: u64, record: &T) {
+    if let Err(err) = append_rotating_jsonl(path, max_bytes, record) {
+        tracing::debug!(path = %path.display(), error = %err, "diagnostic log append failed");
+    }
 }
 
-impl JsonlLog {
-    pub fn new(path: PathBuf, max_bytes: u64) -> Self {
-        Self { path, max_bytes }
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// Appends best-effort; failures log at debug with the path.
-    pub fn append<T: Serialize>(&self, record: &T) {
-        if let Err(err) = append_rotating_jsonl(&self.path, self.max_bytes, record) {
-            tracing::debug!(path = %self.path.display(), error = %err, "diagnostic log append failed");
-        }
-    }
-
-    /// Visit decodable records oldest generation first, best-effort per file and line.
-    pub fn visit_records<T: DeserializeOwned>(&self, mut visit: impl FnMut(T)) {
-        let rotated = rotated_path(&self.path);
-        for path in [rotated.as_path(), self.path.as_path()] {
-            let Ok(file) = std::fs::File::open(path) else {
-                continue;
+/// Visit decodable records oldest generation first, best-effort per file and line.
+pub(crate) fn visit_records<T: DeserializeOwned>(path: &Path, mut visit: impl FnMut(T)) {
+    let rotated = rotated_path(path);
+    for path in [rotated.as_path(), path] {
+        let Ok(file) = std::fs::File::open(path) else {
+            continue;
+        };
+        for line in std::io::BufReader::new(file).lines() {
+            let Ok(line) = line else {
+                break;
             };
-            for line in std::io::BufReader::new(file).lines() {
-                let Ok(line) = line else {
-                    break;
-                };
-                if let Ok(record) = serde_json::from_str(&line) {
-                    visit(record);
-                }
+            if let Ok(record) = serde_json::from_str(&line) {
+                visit(record);
             }
         }
     }
@@ -91,7 +76,7 @@ fn rotate_if_needed(path: &Path, max_bytes: u64) -> std::io::Result<()> {
     std::fs::rename(path, rotated)
 }
 
-fn rotated_path(path: &Path) -> PathBuf {
+pub(crate) fn rotated_path(path: &Path) -> PathBuf {
     path.with_file_name(rotated_file_name(path))
 }
 
@@ -200,10 +185,9 @@ mod tests {
     fn visitor_streams_rotated_then_active_and_skips_bad_lines() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("binding.log.jsonl");
-        let log = JsonlLog::new(path.clone(), 16);
-        log.append(&serde_json::json!({ "n": 1 }));
-        log.append(&serde_json::json!({ "n": 2 }));
-        log.append(&serde_json::json!({ "n": 3 }));
+        append(&path, 16, &serde_json::json!({ "n": 1 }));
+        append(&path, 16, &serde_json::json!({ "n": 2 }));
+        append(&path, 16, &serde_json::json!({ "n": 3 }));
         std::fs::OpenOptions::new()
             .append(true)
             .open(&path)
@@ -212,7 +196,9 @@ mod tests {
             .unwrap();
 
         let mut seen = Vec::new();
-        log.visit_records::<serde_json::Value>(|record| seen.push(record["n"].as_u64().unwrap()));
+        visit_records::<serde_json::Value>(&path, |record| {
+            seen.push(record["n"].as_u64().unwrap());
+        });
 
         assert_eq!(seen, vec![1, 2, 3, 4]);
     }
@@ -220,11 +206,13 @@ mod tests {
     #[test]
     fn visitor_skips_missing_rotated_generation() {
         let dir = tempfile::tempdir().unwrap();
-        let log = JsonlLog::new(dir.path().join("binding.log.jsonl"), 1024);
-        log.append(&serde_json::json!({ "n": 1 }));
+        let path = dir.path().join("binding.log.jsonl");
+        append(&path, 1024, &serde_json::json!({ "n": 1 }));
 
         let mut seen = Vec::new();
-        log.visit_records::<serde_json::Value>(|record| seen.push(record["n"].as_u64().unwrap()));
+        visit_records::<serde_json::Value>(&path, |record| {
+            seen.push(record["n"].as_u64().unwrap());
+        });
 
         assert_eq!(seen, vec![1]);
     }

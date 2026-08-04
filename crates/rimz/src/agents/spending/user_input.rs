@@ -7,7 +7,6 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -40,7 +39,7 @@ pub fn append_in(state_root: &Path, record: &UserInputRecord) {
         let origin = crate::worktree::normalize_path_lexical(origin);
         origin.is_absolute().then_some(origin)
     });
-    crate::diag::rotating::JsonlLog::new(log_path(state_root), MAX_BYTES).append(&record);
+    crate::diag::rotating::append(&log_path(state_root), MAX_BYTES, &record);
 }
 
 pub fn load() -> Vec<UserInputRecord> {
@@ -50,8 +49,9 @@ pub fn load() -> Vec<UserInputRecord> {
 pub fn load_in(state_root: &Path) -> Vec<UserInputRecord> {
     let path = log_path(state_root);
     let mut records = Vec::new();
-    append_records(&rotated_path(&path), &mut records);
-    append_records(&path, &mut records);
+    crate::diag::rotating::visit_records(&path, |record: UserInputRecord| {
+        records.push(record);
+    });
     records
 }
 
@@ -62,28 +62,13 @@ pub fn signature() -> u64 {
 pub fn signature_in(state_root: &Path) -> u64 {
     let path = log_path(state_root);
     let mut hasher = DefaultHasher::new();
-    FileStamp::of(&rotated_path(&path)).hash(&mut hasher);
+    FileStamp::of(&crate::diag::rotating::rotated_path(&path)).hash(&mut hasher);
     FileStamp::of(&path).hash(&mut hasher);
     hasher.finish()
 }
 
 fn log_path(state_root: &Path) -> PathBuf {
     state_root.join("rimz").join(NAME)
-}
-
-fn rotated_path(path: &Path) -> PathBuf {
-    path.with_file_name("user-inputs.log.1.jsonl")
-}
-
-fn append_records(path: &Path, records: &mut Vec<UserInputRecord>) {
-    let Ok(file) = std::fs::File::open(path) else {
-        return;
-    };
-    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
-        if let Ok(record) = serde_json::from_str(&line) {
-            records.push(record);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -117,7 +102,7 @@ mod tests {
         let path = log_path(dir.path());
         std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
         std::fs::write(
-            rotated_path(&path),
+            crate::diag::rotating::rotated_path(&path),
             serde_json::to_string(&record(10, Some("/tmp/one"))).expect("json") + "\n",
         )
         .expect("write rotated");

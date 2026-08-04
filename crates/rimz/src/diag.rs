@@ -22,8 +22,6 @@ pub mod plugin_presence;
 pub mod record;
 pub(crate) mod rotating;
 
-pub use rotating::JsonlLog;
-
 const DIAG_LOG_NAME: &str = "diag.log.jsonl";
 const DIAG_LOG_MAX_BYTES: u64 = 1_048_576;
 const DIAG_FRAMES_DIR: &str = "diag-frames";
@@ -180,7 +178,7 @@ impl DiagSink {
         Self { inner: None }
     }
 
-    pub fn is_enabled(&self) -> bool {
+    pub(crate) fn is_enabled(&self) -> bool {
         self.inner.is_some()
     }
 
@@ -188,26 +186,17 @@ impl DiagSink {
         Some(self.inner.as_ref()?.log_path())
     }
 
-    pub fn frames_dir(&self) -> Option<PathBuf> {
-        Some(self.inner.as_ref()?.frames_dir())
-    }
-
-    pub fn session_name(&self) -> &str {
+    pub(crate) fn session_name(&self) -> &str {
         self.inner
             .as_ref()
             .map_or("", |inner| inner.session_name.as_str())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn frame_capture_path(&self, frames_ref: &str) -> Option<PathBuf> {
-        Some(self.inner.as_ref()?.frames_dir().join(frames_ref))
     }
 
     pub fn emit(&self, event: DiagEvent) {
         self.emit_at_ms(event, crate::sidebar::timing::unix_now_ms());
     }
 
-    pub fn emit_at_ms(&self, event: DiagEvent, at_ms: u64) {
+    pub(crate) fn emit_at_ms(&self, event: DiagEvent, at_ms: u64) {
         let Some(inner) = self.inner.as_ref() else {
             return;
         };
@@ -242,7 +231,7 @@ impl DiagSink {
         self.trace_notify_at_ms(event, crate::sidebar::timing::unix_now_ms());
     }
 
-    pub fn trace_notify_at_ms(&self, event: NotifyTraceEvent, at_ms: u64) {
+    fn trace_notify_at_ms(&self, event: NotifyTraceEvent, at_ms: u64) {
         let Some(inner) = self.inner.as_ref() else {
             return;
         };
@@ -253,10 +242,10 @@ impl DiagSink {
             at_ms,
             event,
         );
-        notify::log(&inner.state_root).append(&envelope);
+        notify::append(&inner.state_root, &envelope);
     }
 
-    pub fn capture_frame_pair<T: Serialize>(
+    pub(crate) fn capture_frame_pair<T: Serialize>(
         &self,
         kind: &str,
         prior: &T,
@@ -295,15 +284,15 @@ impl Inner {
     }
 
     fn append(&self, event: DiagEvent, at_ms: u64, suppressed_since_last: u32) {
-        let envelope = DiagEnvelope::new(
+        let mut envelope = DiagEnvelope::new(
             self.workspace_id.clone(),
             self.session_name.clone(),
             self.instance_id.clone(),
             at_ms,
             event,
-        )
-        .with_suppressed(suppressed_since_last);
-        rotating::JsonlLog::new(self.log_path(), DIAG_LOG_MAX_BYTES).append(&envelope);
+        );
+        envelope.suppressed_since_last = suppressed_since_last;
+        rotating::append(&self.log_path(), DIAG_LOG_MAX_BYTES, &envelope);
     }
 
     fn suppression(&self, event: &DiagEvent, at_ms: u64) -> Option<u32> {
@@ -316,12 +305,6 @@ impl Inner {
     }
 }
 
-pub fn path_for_workspace(workspace_id: WorkspaceId) -> Option<PathBuf> {
-    crate::StatePaths::for_workspace(workspace_id)
-        .ok()
-        .map(|state| state.root.join(DIAG_LOG_NAME))
-}
-
 pub fn frames_dir_under(state_root: &Path) -> PathBuf {
     state_root.join(DIAG_FRAMES_DIR)
 }
@@ -330,9 +313,12 @@ pub fn recent_records(
     workspace_id: WorkspaceId,
     limit: usize,
 ) -> Option<(PathBuf, Vec<DiagEnvelope>)> {
-    let path = path_for_workspace(workspace_id)?;
+    let path = crate::StatePaths::for_workspace(workspace_id)
+        .ok()?
+        .root
+        .join(DIAG_LOG_NAME);
     let mut records = Vec::new();
-    for candidate in [rotated_path(&path), path.clone()] {
+    for candidate in [rotating::rotated_path(&path), path.clone()] {
         let Ok(text) = std::fs::read_to_string(&candidate) else {
             continue;
         };
@@ -408,10 +394,6 @@ fn frame_capture_sort_key(path: &Path) -> (u64, u64, String) {
     (at_ms, sequence, tail)
 }
 
-fn rotated_path(path: &Path) -> PathBuf {
-    path.with_file_name("diag.log.1.jsonl")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,7 +427,7 @@ mod tests {
             .collect()
     }
     fn notify_records(dir: &Path) -> Vec<NotifyTraceEnvelope> {
-        std::fs::read_to_string(notify::log(dir).path())
+        std::fs::read_to_string(dir.join("notify.log.jsonl"))
             .unwrap()
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
@@ -537,7 +519,7 @@ mod tests {
         let records = notify_records(dir.path());
         assert_eq!(records.len(), 2);
         for (index, record) in records.iter().enumerate() {
-            assert_eq!(record.v, notify::NOTIFY_TRACE_SCHEMA_VERSION);
+            assert_eq!(record.v, "rimz.notify_trace.v1");
             assert_eq!(record.build.as_deref(), crate::build_id::current());
             assert!(record.build.is_some());
             assert_eq!(record.workspace_id, workspace_id());
@@ -569,7 +551,7 @@ mod tests {
         let encode = |record: DiagEnvelope| serde_json::to_string(&record).unwrap();
 
         std::fs::write(
-            rotated_path(&live_path),
+            rotating::rotated_path(&live_path),
             [
                 encode(record(40)),
                 "not-json".to_owned(),

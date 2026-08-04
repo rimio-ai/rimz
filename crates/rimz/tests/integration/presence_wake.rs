@@ -153,12 +153,10 @@ impl WakeEnv {
         serde_json::from_slice(&bytes).ok()
     }
 
-    fn plugin_presence_log(&self) -> PathBuf {
+    fn plugin_presence_logs(&self) -> Vec<PathBuf> {
         let state = rimz::StatePaths::under(self.workspace_id.clone(), &self.state_root)
             .expect("state paths");
-        rimz::diag::plugin_presence::log(&state.root)
-            .path()
-            .to_owned()
+        rimz::diag::plugin_presence::history_paths(&state.root)
     }
 
     fn topology_diag_log(&self) -> PathBuf {
@@ -641,7 +639,8 @@ fn wake_alive_with_plugin_telemetry_records_a_sample() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let bytes = std::fs::read_to_string(env.plugin_presence_log()).expect("presence log exists");
+    let logs = env.plugin_presence_logs();
+    let bytes = std::fs::read_to_string(&logs[0]).expect("presence log exists");
     let lines = bytes.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 1);
     let sample: serde_json::Value = serde_json::from_str(lines[0]).expect("sample is JSON");
@@ -669,7 +668,7 @@ fn wake_alive_without_telemetry_writes_no_sample() {
     );
 
     assert!(
-        !env.plugin_presence_log().exists(),
+        env.plugin_presence_logs().is_empty(),
         "older plugins that omit telemetry args must not create a presence log"
     );
     env.assert_no_mux_fork();
@@ -724,7 +723,7 @@ fn stale_topology_writer_rejects_the_whole_poke_and_throttles_diagnostics() {
     );
     assert!(env.read_stamp().is_none(), "stale writer must not stamp");
     assert!(
-        !env.plugin_presence_log().exists(),
+        env.plugin_presence_logs().is_empty(),
         "stale writer must not append plugin telemetry",
     );
     assert_no_datagram(&recv, "a stale writer poke");

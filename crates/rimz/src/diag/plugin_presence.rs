@@ -10,15 +10,14 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::JsonlLog;
 use crate::sidebar::presence::PluginCommandFailure;
 
 const PLUGIN_PRESENCE_LOG_NAME: &str = "plugin-presence.log.jsonl";
 const PLUGIN_PRESENCE_LOG_MAX_BYTES: u64 = 1_048_576;
-pub const WASM_PAGE_BYTES: u64 = 65_536;
+pub(crate) const WASM_PAGE_BYTES: u64 = 65_536;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct PluginPresenceSample {
+pub(crate) struct PluginPresenceSample {
     pub at_ms: u64,
     pub session_name: Option<String>,
     #[serde(default)]
@@ -45,17 +44,18 @@ pub struct PluginPresenceSample {
     pub last_failure: Option<PluginCommandFailure>,
 }
 
-pub fn log(state_root: &Path) -> JsonlLog {
-    JsonlLog::new(
-        state_root.join(PLUGIN_PRESENCE_LOG_NAME),
-        PLUGIN_PRESENCE_LOG_MAX_BYTES,
-    )
+fn log_path(state_root: &Path) -> PathBuf {
+    state_root.join(PLUGIN_PRESENCE_LOG_NAME)
+}
+
+pub(crate) fn append(state_root: &Path, sample: &PluginPresenceSample) {
+    super::rotating::append(&log_path(state_root), PLUGIN_PRESENCE_LOG_MAX_BYTES, sample);
 }
 
 /// Existing current and rotated telemetry logs, in display order.
 pub fn history_paths(state_root: &Path) -> Vec<PathBuf> {
-    let current = log(state_root).path().to_owned();
-    let rotated = current.with_file_name("plugin-presence.log.1.jsonl");
+    let current = log_path(state_root);
+    let rotated = super::rotating::rotated_path(&current);
     [current, rotated]
         .into_iter()
         .filter(|path| path.is_file())
@@ -81,19 +81,6 @@ pub struct PluginPresenceSpan {
     pub last_failure: Option<PluginCommandFailure>,
 }
 
-pub fn generation_span(
-    state_root: &Path,
-    session_name: &str,
-    plugin_id: u32,
-    loaded_at_ms: u64,
-) -> Option<PluginPresenceSpan> {
-    let samples = recent_samples(state_root, session_name)
-        .into_iter()
-        .filter(|sample| sample.plugin_id == Some(plugin_id) && sample.loaded_at_ms == loaded_at_ms)
-        .collect::<Vec<_>>();
-    span_from_samples(plugin_id, loaded_at_ms, samples)
-}
-
 pub fn recent_generations(state_root: &Path, session_name: &str) -> Vec<PluginPresenceSpan> {
     let mut grouped = BTreeMap::<(u32, u64), Vec<PluginPresenceSample>>::new();
     for sample in recent_samples(state_root, session_name) {
@@ -114,12 +101,13 @@ pub fn recent_generations(state_root: &Path, session_name: &str) -> Vec<PluginPr
 }
 
 fn recent_samples(state_root: &Path, session_name: &str) -> Vec<PluginPresenceSample> {
-    history_paths(state_root)
-        .into_iter()
-        .rev()
-        .flat_map(read_samples)
-        .filter(|sample| sample.session_name.as_deref() == Some(session_name))
-        .collect()
+    let mut samples = Vec::new();
+    super::rotating::visit_records(&log_path(state_root), |sample: PluginPresenceSample| {
+        if sample.session_name.as_deref() == Some(session_name) {
+            samples.push(sample);
+        }
+    });
+    samples
 }
 
 fn span_from_samples(
@@ -163,17 +151,6 @@ fn span_from_samples(
     })
 }
 
-fn read_samples(path: std::path::PathBuf) -> Vec<PluginPresenceSample> {
-    let Ok(bytes) = std::fs::read(path) else {
-        return Vec::new();
-    };
-    bytes
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-        .filter_map(|line| serde_json::from_slice(line).ok())
-        .collect()
-}
-
 fn signed_delta(last: u64, first: u64) -> i64 {
     let delta = i128::from(last) - i128::from(first);
     delta.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
@@ -187,11 +164,22 @@ fn option_delta(last: Option<u64>, first: Option<u64>) -> Option<u64> {
 mod tests {
     use super::*;
 
+    fn generation_span(
+        state_root: &Path,
+        session_name: &str,
+        plugin_id: u32,
+        loaded_at_ms: u64,
+    ) -> Option<PluginPresenceSpan> {
+        recent_generations(state_root, session_name)
+            .into_iter()
+            .find(|span| span.plugin_id == plugin_id && span.loaded_at_ms == loaded_at_ms)
+    }
+
     #[test]
     fn generation_span_reads_rotated_and_current_and_ignores_malformed_tail() {
         let dir = tempfile::tempdir().unwrap();
-        let current = log(dir.path()).path().to_owned();
-        let rotated = current.with_file_name("plugin-presence.log.1.jsonl");
+        let current = log_path(dir.path());
+        let rotated = super::super::rotating::rotated_path(&current);
         let sample = |at_ms, pages, failures| {
             serde_json::to_string(&PluginPresenceSample {
                 at_ms,
@@ -235,7 +223,7 @@ mod tests {
     #[test]
     fn generation_span_takes_its_cause_from_the_window_its_counters_measure() {
         let dir = tempfile::tempdir().unwrap();
-        let current = log(dir.path()).path().to_owned();
+        let current = log_path(dir.path());
         let sample = |at_ms: u64, failure: Option<PluginCommandFailure>| {
             serde_json::to_string(&PluginPresenceSample {
                 at_ms,
@@ -334,7 +322,7 @@ mod tests {
     #[test]
     fn recent_generations_groups_mixed_writers_and_accepts_buildless_samples() {
         let dir = tempfile::tempdir().unwrap();
-        let current = log(dir.path()).path().to_owned();
+        let current = log_path(dir.path());
         std::fs::write(
             current,
             concat!(

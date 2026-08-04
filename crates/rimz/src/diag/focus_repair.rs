@@ -38,17 +38,17 @@ pub enum FocusRepairOutcome {
     Invalidated,
 }
 
-pub fn log_path(state_root: &Path) -> PathBuf {
+fn log_path(state_root: &Path) -> PathBuf {
     state_root.join("rimz").join(NAME)
 }
 
-pub fn append(record: &FocusRepairRecord) {
-    log(&state_home()).append(record);
+fn append_to(state_root: &Path, record: &FocusRepairRecord) {
+    crate::diag::rotating::append(&log_path(state_root), MAX_BYTES, record);
 }
 
 /// Hand focus-repair evidence to a detached CLI writer so the renderer stays
 /// read-only on user-global diagnostic history.
-pub fn spawn_append(runtime: &RuntimePaths, record: &FocusRepairRecord) {
+pub(crate) fn spawn_append(runtime: &RuntimePaths, record: &FocusRepairRecord) {
     let Ok(record_json) = serde_json::to_string(record) else {
         tracing::debug!("sidebar: failed to serialize focus-repair diagnostic");
         return;
@@ -71,8 +71,13 @@ pub fn spawn_append(runtime: &RuntimePaths, record: &FocusRepairRecord) {
     }
 }
 
-pub fn parse(raw: &str) -> Result<FocusRepairRecord, FocusRepairParseError> {
+fn parse(raw: &str) -> Result<FocusRepairRecord, FocusRepairParseError> {
     Ok(serde_json::from_str(raw)?)
+}
+
+pub fn append_raw(raw: &str) -> Result<(), FocusRepairParseError> {
+    append_to(&state_home(), &parse(raw)?);
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -83,13 +88,11 @@ pub enum FocusRepairParseError {
 
 pub fn recent(state_root: &Path) -> Vec<FocusRepairRecord> {
     let mut records = Vec::new();
-    log(state_root).visit_records(|record: FocusRepairRecord| records.push(record));
+    crate::diag::rotating::visit_records(&log_path(state_root), |record: FocusRepairRecord| {
+        records.push(record);
+    });
     records.sort_by_key(|record| record.at);
     records
-}
-
-fn log(state_root: &Path) -> crate::diag::rotating::JsonlLog {
-    crate::diag::rotating::JsonlLog::new(log_path(state_root), MAX_BYTES)
 }
 
 #[cfg(test)]
@@ -121,13 +124,13 @@ mod tests {
         assert_eq!(parse(&raw).expect("parse"), record);
 
         let dir = tempfile::tempdir().expect("tempdir");
-        log(dir.path()).append(&record);
+        append_to(dir.path(), &record);
         assert_eq!(recent(dir.path()), vec![record]);
     }
 
     #[test]
     fn parser_rejects_an_assist_record() {
         let raw = r#"{"at":"1970-01-01T00:00:20Z","assist":"auto_continue"}"#;
-        assert!(parse(raw).is_err());
+        assert!(append_raw(raw).is_err());
     }
 }

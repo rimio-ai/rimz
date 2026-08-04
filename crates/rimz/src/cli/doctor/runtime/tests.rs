@@ -84,7 +84,7 @@ fn plugin_span(
         last_at_ms,
         zellij_version: Some("0.44.3".to_owned()),
         page_growth: 1,
-        byte_growth: rimz::diag::plugin_presence::WASM_PAGE_BYTES as i64,
+        byte_growth: 65_536,
         commands_completed_delta: 2,
         commands_succeeded_delta: Some(1),
         stale_writer_rejections_delta: Some(0),

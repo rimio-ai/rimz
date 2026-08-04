@@ -112,7 +112,7 @@ fn envelope_keeps_current_and_legacy_wire_contract() {
         frame_rejected(None),
     );
 
-    assert_eq!(envelope.v, DIAG_SCHEMA_VERSION);
+    assert_eq!(envelope.v, "rimz.diag.v1");
     assert_eq!(envelope.build.as_deref(), crate::build_id::current());
     assert!(envelope.build.is_some());
     assert_eq!(envelope.severity, DiagSeverity::Warn);
@@ -123,7 +123,9 @@ fn envelope_keeps_current_and_legacy_wire_contract() {
     assert_eq!(value["severity"], "warn");
     assert!(value.get("suppressed_since_last").is_none());
 
-    let suppressed = serde_json::to_value(envelope.clone().with_suppressed(2)).expect("encode");
+    let mut suppressed_envelope = envelope.clone();
+    suppressed_envelope.suppressed_since_last = 2;
+    let suppressed = serde_json::to_value(suppressed_envelope).expect("encode");
     assert_eq!(suppressed["suppressed_since_last"], 2);
 
     let mut legacy = value;

@@ -170,12 +170,12 @@ allowed-imports = [
     "sidebar::presence",
     "store",
 ]
-surface-budget = 79
+surface-budget = 63
 
 [[module]]
 path = "crates/rimz/src/diag.rs"
 allowed-imports = ["ids"]
-surface-budget = 25
+surface-budget = 20
 
 [[module]]
 path = "crates/rimz/src/disk_usage.rs"

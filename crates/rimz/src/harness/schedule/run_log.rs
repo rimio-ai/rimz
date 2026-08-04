@@ -229,12 +229,12 @@ fn append(record: &LoopRunRecord) {
 
 fn append_to(state_root: &Path, record: &LoopRunRecord) {
     let capped = capped_record(record);
-    log(state_root, MAX_BYTES).append(&capped);
+    crate::diag::rotating::append(&log_path(state_root), MAX_BYTES, &capped);
 }
 
 pub fn stats(state_root: &Path, now: &Zoned) -> BTreeMap<String, LoopRunStats> {
     let mut stats = BTreeMap::new();
-    log(state_root, MAX_BYTES).visit_records(|record: LoopRunRecord| {
+    crate::diag::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
         fold_record(record, now, &mut stats);
     });
     stats
@@ -242,7 +242,7 @@ pub fn stats(state_root: &Path, now: &Zoned) -> BTreeMap<String, LoopRunStats> {
 
 pub fn task_records(state_root: &Path, task: &str) -> Vec<LoopRunRecord> {
     let mut records = Vec::new();
-    log(state_root, MAX_BYTES).visit_records(|record: LoopRunRecord| {
+    crate::diag::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
         if record.task == task {
             records.push(record);
         }
@@ -400,10 +400,6 @@ fn tail_string(value: &str, cap: usize) -> String {
     value[start..].to_owned()
 }
 
-fn log(state_root: &Path, max_bytes: u64) -> crate::diag::rotating::JsonlLog {
-    crate::diag::rotating::JsonlLog::new(log_path(state_root), max_bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,9 +537,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let old = record("morning", 10, LoopRunResult::Completed);
         let new = record("other", 30, LoopRunResult::Completed);
-        let log = log(dir.path(), 1);
-        log.append(&old);
-        log.append(&new);
+        crate::diag::rotating::append(&log_path(dir.path()), 1, &old);
+        crate::diag::rotating::append(&log_path(dir.path()), 1, &new);
 
         assert_eq!(task_records(dir.path(), "morning"), vec![old]);
         assert_eq!(task_records(dir.path(), "other"), vec![new]);
@@ -644,9 +639,16 @@ mod tests {
     #[test]
     fn stats_folds_rotated_sibling_and_keeps_newest_last() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let log = log(dir.path(), 1);
-        log.append(&record("wake", 20, LoopRunResult::Completed));
-        log.append(&record("wake", 10, LoopRunResult::Failed));
+        crate::diag::rotating::append(
+            &log_path(dir.path()),
+            1,
+            &record("wake", 20, LoopRunResult::Completed),
+        );
+        crate::diag::rotating::append(
+            &log_path(dir.path()),
+            1,
+            &record("wake", 10, LoopRunResult::Failed),
+        );
         std::fs::OpenOptions::new()
             .append(true)
             .open(log_path(dir.path()))
@@ -667,9 +669,16 @@ mod tests {
     #[test]
     fn stats_tracks_matching_result_streak_across_rotated_and_current_files() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let log = log(dir.path(), 1);
-        log.append(&record("wake", 10, LoopRunResult::Failed));
-        log.append(&record("wake", 20, LoopRunResult::Failed));
+        crate::diag::rotating::append(
+            &log_path(dir.path()),
+            1,
+            &record("wake", 10, LoopRunResult::Failed),
+        );
+        crate::diag::rotating::append(
+            &log_path(dir.path()),
+            1,
+            &record("wake", 20, LoopRunResult::Failed),
+        );
 
         let now = Timestamp::from_second(30)
             .expect("timestamp")

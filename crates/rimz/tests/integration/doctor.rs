@@ -921,7 +921,10 @@ fn write_diag_record(env: &Env, at_ms: u64, build: Option<&str>) {
         },
     );
     record.build = build.map(ToOwned::to_owned);
-    rimz::diag::JsonlLog::new(diag_log_path(env), 1_048_576).append(&record);
+    let mut line = serde_json::to_vec(&record).expect("encode diagnostic record");
+    line.push(b'\n');
+    rimz::store::atomic::append_record_bytes(&diag_log_path(env), &line)
+        .expect("append diagnostic record");
 }
 
 fn diag_log_path(env: &Env) -> PathBuf {
