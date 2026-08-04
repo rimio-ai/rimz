@@ -12,7 +12,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::harness::run::PermissionMode;
+use crate::agents::PermissionMode;
 use crate::ids::{AgentSessionId, PaneId};
 use crate::pane::{PaneRef, RuntimeOwner};
 

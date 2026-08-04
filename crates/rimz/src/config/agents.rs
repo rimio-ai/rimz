@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::{AttentionConfig, WorktreeConfig};
-use crate::harness::run::PermissionMode;
+use crate::agents::PermissionMode;
 
 /// Agent-launch preferences. Machine-team entries bind role names to profiles
 /// or registered agent kinds; inline launch specs resolve through the same

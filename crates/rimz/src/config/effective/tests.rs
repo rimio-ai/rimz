@@ -1,8 +1,8 @@
 use super::*;
+use crate::agents::PermissionMode;
 use crate::config::{
     AgentsConfig, CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig,
 };
-use crate::harness::run::PermissionMode;
 use std::collections::BTreeMap;
 use tempfile::tempdir;
 

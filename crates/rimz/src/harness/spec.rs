@@ -14,9 +14,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use crate::agents::PermissionMode;
 use crate::config::{CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig};
 use crate::harness::petname;
-use crate::harness::run::PermissionMode;
 use crate::ids::AgentKind;
 
 const BUILTIN_PEER: &str = "claude,codex";

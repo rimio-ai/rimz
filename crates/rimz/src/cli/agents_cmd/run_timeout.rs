@@ -56,7 +56,7 @@ mod tests {
         let mut record = rimz::harness::run::RunRecord::new(
             rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-run")),
             rimz::ids::AgentKind::new_unchecked("codex"),
-            rimz::harness::run::PermissionMode::Auto,
+            rimz::agents::PermissionMode::Auto,
             "test".to_owned(),
             std::path::PathBuf::from("/tmp/rimz-run"),
         );
@@ -71,7 +71,7 @@ mod tests {
         let mut record = rimz::harness::run::RunRecord::new(
             rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-run")),
             rimz::ids::AgentKind::new_unchecked("codex"),
-            rimz::harness::run::PermissionMode::Auto,
+            rimz::agents::PermissionMode::Auto,
             "test".to_owned(),
             std::path::PathBuf::from("/tmp/rimz-run"),
         );

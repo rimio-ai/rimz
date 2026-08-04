@@ -176,7 +176,7 @@ fn orphan_grace() -> Duration {
 mod tests {
     use super::*;
     use crate::agents::AgentStatus;
-    use crate::harness::run::PermissionMode;
+    use crate::agents::PermissionMode;
     use std::path::{Path, PathBuf};
 
     fn run(name: &str, at: Timestamp) -> RunRecord {

@@ -32,7 +32,7 @@ use super::{
     sanitize_user_prompt,
 };
 #[cfg(test)]
-use crate::harness::run::PermissionMode;
+use crate::agents::PermissionMode;
 use crate::ids::AgentSessionId;
 use crate::transcript::AskQuestion;
 

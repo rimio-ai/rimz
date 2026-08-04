@@ -515,7 +515,7 @@ fn serve(
         WORKSPACE_SPENDING_VERSION,
         namespace.as_str(),
     );
-    let _socket_guard = crate::harness::run_wake::SocketGuard::new(socket);
+    let _socket_guard = crate::sock::SocketGuard::new(socket);
     let walker = Arc::new(Mutex::new(SpendingWalker::new()));
     for connection in listener.incoming() {
         let Ok(stream) = connection else {

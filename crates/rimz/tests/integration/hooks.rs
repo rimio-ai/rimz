@@ -1616,7 +1616,7 @@ fn duplicate_cursor_session_end_is_idempotent_beyond_audit_end_stamps() {
     let run = rimz::harness::run::RunRecord::new(
         env.workspace_id.clone(),
         rimz::ids::AgentKind::new_unchecked("cursor"),
-        rimz::harness::run::PermissionMode::Auto,
+        rimz::agents::PermissionMode::Auto,
         "go".to_owned(),
         env.project_root.clone(),
     );

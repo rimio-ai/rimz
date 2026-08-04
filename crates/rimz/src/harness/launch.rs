@@ -238,7 +238,7 @@ pub struct ExecIdentity {
 #[derive(Clone, Copy)]
 enum LaunchFieldValue<'a> {
     Text(Option<&'a str>),
-    Mode(Option<crate::harness::run::PermissionMode>),
+    Mode(Option<crate::agents::PermissionMode>),
     Ordinal(Option<u32>),
 }
 
@@ -418,6 +418,27 @@ pub struct ExecRequest {
     pub subagent: bool,
     #[serde(default)]
     pub identity: ExecIdentity,
+}
+
+impl ExecRequest {
+    pub fn bare_launch(kind: AgentKind, extra_args: Vec<String>) -> Self {
+        Self {
+            kind,
+            action: ExecAction::Launch {
+                prompt: None,
+                extra_args,
+            },
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+            provider_account: ProviderAccountState::Unbound,
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: false,
+            exit_on_run_completion: false,
+            subagent: false,
+            identity: ExecIdentity::default(),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -747,22 +768,7 @@ pub fn preflight_agent_kind(
     preflight_agent_process(
         project_root,
         rtk,
-        &ExecRequest {
-            kind: AgentKind::new_unchecked(kind),
-            action: ExecAction::Launch {
-                prompt: None,
-                extra_args: Vec::new(),
-            },
-            system_prompt_file: None,
-            append_system_prompt_files: Vec::new(),
-            provider_account: ProviderAccountState::Unbound,
-            run_id: None,
-            worktree_path: None,
-            close_pane_on_exit: false,
-            exit_on_run_completion: false,
-            subagent: false,
-            identity: ExecIdentity::default(),
-        },
+        &ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new()),
         cwd,
     )
 }

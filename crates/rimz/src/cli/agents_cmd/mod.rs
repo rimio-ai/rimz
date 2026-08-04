@@ -45,6 +45,7 @@ use super::GlobalFlags;
 pub(super) use crate::cli::Ctx;
 use crate::cli::supervised;
 use placement::{Placement, apply_in_place_downgrade, resolve_fork_placement, resolve_placement};
+use rimz::agents::PermissionMode;
 use rimz::agents::{AgentState, LifecycleRefreshRequest};
 use rimz::harness::AutoContinueRequest;
 use rimz::harness::auto_redeem::AutoRedeemRequest;
@@ -56,7 +57,7 @@ use rimz::harness::plan::{
     launch_identity_requests, mint_launch_id, validate_agent_name,
 };
 use rimz::harness::resume::{PostureDegrade, ResumePosture};
-use rimz::harness::run::{PermissionMode, RunRecord, RunStatus, SupervisedRunOutcome};
+use rimz::harness::run::{RunRecord, RunStatus, SupervisedRunOutcome};
 use rimz::harness::run_timeout::RunTimeoutRequest;
 use rimz::harness::spec::{AgentCell, Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId};
@@ -762,39 +763,39 @@ fn into_supervised_request(
     )?;
     let append_system_prompt_files =
         resolve_launch_prompt_files(&args.launch.append_system_prompt_files)?;
-    let request = rimz::harness::run::SupervisedRunRequest {
-        spec: args
-            .launch
-            .spec
-            .context("supervised run requires an agent spec")?,
+    let spec = args
+        .launch
+        .spec
+        .context("supervised run requires an agent spec")?;
+    let mut request = rimz::harness::run::SupervisedRunRequest::new(
+        spec,
         prompt,
-        description: args.launch.cohort.description,
-        worktree: args.launch.cohort.worktree,
-        from_pr: args.launch.cohort.from_pr,
-        channel: args.launch.cohort.channel,
-        name: args.launch.name,
-        background: args.launch.cohort.bg,
-        self_cleanup_on_completion: args.launch.cohort.bg || args.launch.self_cleanup_on_completion,
-        subagent: args.launch.subagent,
-        force_new_tab: args.launch.cohort.new_tab,
         permission_mode,
-        agent: rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()),
-        model: args.launch.model,
-        system_prompt_file,
-        append_system_prompt_files,
-        effort: args.launch.effort,
-        budget: args.launch.cohort.budget,
-        max_turns: args.launch.max_turns,
-        timeout: args.launch.timeout,
-        keep: args.launch.keep,
-        retries: args.launch.retries.unwrap_or(0),
-        verify: args.launch.verify,
-        max_attempts: args.launch.max_attempts,
-        loop_zone: false,
-        loop_task: None,
-        passthrough: args.launch.passthrough,
-        managed_launch: rimz::agents::ManagedLaunchState::PendingResolution,
-    };
+        rimz::agents::ManagedLaunchState::PendingResolution,
+    );
+    request.description = args.launch.cohort.description;
+    request.worktree = args.launch.cohort.worktree;
+    request.from_pr = args.launch.cohort.from_pr;
+    request.channel = args.launch.cohort.channel;
+    request.name = args.launch.name;
+    request.background = args.launch.cohort.bg;
+    request.self_cleanup_on_completion =
+        args.launch.cohort.bg || args.launch.self_cleanup_on_completion;
+    request.subagent = args.launch.subagent;
+    request.force_new_tab = args.launch.cohort.new_tab;
+    request.agent = rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref());
+    request.model = args.launch.model;
+    request.system_prompt_file = system_prompt_file;
+    request.append_system_prompt_files = append_system_prompt_files;
+    request.effort = args.launch.effort;
+    request.budget = args.launch.cohort.budget;
+    request.max_turns = args.launch.max_turns;
+    request.timeout = args.launch.timeout;
+    request.keep = args.launch.keep;
+    request.retries = args.launch.retries.unwrap_or(0);
+    request.verify = args.launch.verify;
+    request.max_attempts = args.launch.max_attempts;
+    request.passthrough = args.launch.passthrough;
     Ok((
         request,
         supervised::SupervisedPresentation {

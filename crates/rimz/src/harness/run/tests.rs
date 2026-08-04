@@ -571,44 +571,6 @@ fn record_failure_tail_caps_stored_tail() {
     assert!(stored.ends_with('b'));
 }
 
-#[test]
-fn retry_prompt_includes_the_latest_failure_tail() {
-    let prompt = retry_prompt("fix it", Some("error: broken\nlast line"));
-
-    assert!(prompt.starts_with("fix it\n\n<previous-attempt-failure>"));
-    assert!(prompt.contains("The tail of its terminal output:\nerror: broken\nlast line"));
-    assert!(prompt.ends_with("</previous-attempt-failure>"));
-}
-
-#[test]
-fn retry_prompt_explains_when_no_tail_was_captured() {
-    let prompt = retry_prompt("fix it", None);
-
-    assert!(prompt.contains("no terminal output was captured"));
-}
-
-#[test]
-fn retry_prompt_recomposes_from_the_base_without_nesting() {
-    let first = retry_prompt("fix it", Some("first failure"));
-    let second = retry_prompt("fix it", Some("second failure"));
-
-    assert!(first.contains("first failure"));
-    assert!(!second.contains("first failure"));
-    assert_eq!(second.matches("<previous-attempt-failure>").count(), 1);
-}
-
-#[test]
-fn verify_reprompt_formats_status_and_caps_the_output_tail() {
-    let output = format!("old{}latest", "x".repeat(FAILURE_TAIL_CAP));
-
-    let prompt = verify_reprompt("cargo xtask test auth", "1", &output);
-
-    assert!(prompt.starts_with("Verification failed — the task is not done yet."));
-    assert!(prompt.contains("--- verify `cargo xtask test auth` exited 1 ---"));
-    assert!(!prompt.contains("old"));
-    assert!(prompt.ends_with("latest"));
-}
-
 fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {
     let mut agent = crate::sidebar::test_support::root_agent(kind, id, None);
     agent.name = None;

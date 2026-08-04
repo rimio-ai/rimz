@@ -69,7 +69,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::harness::run::PermissionMode;
+    use crate::agents::PermissionMode;
     use crate::ids::{AgentKind, WorkspaceId};
 
     fn record() -> RunRecord {

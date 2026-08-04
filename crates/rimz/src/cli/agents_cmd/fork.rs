@@ -464,17 +464,14 @@ mod tests {
         agent.channel = Some("auth".to_owned());
         agent.team = Some("forge".to_owned());
         agent.role = Some("coder".to_owned());
-        agent.mode = Some(rimz::harness::run::PermissionMode::Yolo);
+        agent.mode = Some(rimz::agents::PermissionMode::Yolo);
 
         let seed = validate_fork_source(&agent, |_| true, |_| true).expect("valid fork");
 
         assert_eq!(seed.source_session_id, AgentSessionId::from("session-1"));
         assert_eq!(seed.cwd, PathBuf::from("/repo/worktree"));
         assert_eq!(seed.launch.profile.as_deref(), Some("planner"));
-        assert_eq!(
-            seed.launch.mode,
-            Some(rimz::harness::run::PermissionMode::Yolo)
-        );
+        assert_eq!(seed.launch.mode, Some(rimz::agents::PermissionMode::Yolo));
         assert_eq!(seed.launch.channel.as_deref(), Some("auth"));
         assert_eq!(seed.launch.team, None);
         assert_eq!(seed.launch.role, None);

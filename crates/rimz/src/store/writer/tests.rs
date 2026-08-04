@@ -51,7 +51,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
             launch_depth: Some(2),
             profile: Some("codex-coder".to_owned()),
-            mode: Some(crate::harness::run::PermissionMode::Yolo),
+            mode: Some(crate::agents::PermissionMode::Yolo),
             role: Some("coder".to_owned()),
             model: Some("gpt-5.6-sol".to_owned()),
             effort: Some("xhigh".to_owned()),

@@ -342,8 +342,8 @@ fn validates_config_key_read_and_write_surfaces() {
 
 #[test]
 fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
+    use crate::agents::PermissionMode;
     use crate::config::{Profile, RoleBinding, Team};
-    use crate::harness::run::PermissionMode;
 
     let profile = Profile {
         agent: "claude".to_owned(),

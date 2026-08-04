@@ -72,7 +72,8 @@ pub(crate) fn list(runs_dir: &Path) -> Result<Vec<RunRecord>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::run::{PermissionMode, RunStatus};
+    use crate::agents::PermissionMode;
+    use crate::harness::run::RunStatus;
     use crate::ids::{AgentKind, WorkspaceId};
     use tempfile::tempdir;
 

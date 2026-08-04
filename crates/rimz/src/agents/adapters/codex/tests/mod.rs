@@ -1,11 +1,11 @@
 use serde_json::json;
 
 use super::*;
+use crate::agents::PermissionMode;
 use crate::agents::testkit::hook_output;
 use crate::agents::{
     HookIngressAcceptance, HookIngressDecision, HookIngressIgnoreReason, HookIngressOwner,
 };
-use crate::harness::run::PermissionMode;
 use std::io::Write;
 use std::path::Path;
 

@@ -1500,7 +1500,7 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
     let record = rimz::harness::run::RunRecord::new(
         env.workspace_id.clone(),
         AgentKind::new_unchecked("codex"),
-        rimz::harness::run::PermissionMode::Auto,
+        rimz::agents::PermissionMode::Auto,
         "missing".to_owned(),
         missing.clone(),
     );

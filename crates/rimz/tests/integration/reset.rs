@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
+use rimz::agents::PermissionMode;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
-use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
+use rimz::harness::run::{RunRecord, RunStatus};
 use rimz::harness::run_wake::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::store::event::EventEnvelope;

@@ -20,12 +20,13 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
+use crate::agents::PermissionMode;
 use crate::agents::{
     HookPreflightErr, ManagedLaunchState, ProviderCapacity, TurnLifecycleNeed, WindowSurplus,
     find_definition, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
-use crate::harness::run::{PermissionMode, RunRecord, SupervisedRunOutcome, SupervisedRunRequest};
+use crate::harness::run::{RunRecord, SupervisedRunOutcome, SupervisedRunRequest};
 use crate::harness::schedule::TaskAction;
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
 use crate::harness::schedule::run_log::{
@@ -596,36 +597,18 @@ impl<'a> TaskFire<'a> {
             .as_deref()
             .map(str::parse::<crate::harness::budget::BudgetSpec>)
             .transpose()?;
-        Ok(SupervisedRunRequest {
-            spec,
-            prompt,
-            description: None,
-            worktree: self.entry.worktree.clone(),
-            from_pr: None,
-            channel: None,
-            name: None,
-            background: false,
-            self_cleanup_on_completion: false,
-            subagent: false,
-            force_new_tab: false,
-            permission_mode,
-            agent: None,
-            model: None,
-            system_prompt_file,
-            append_system_prompt_files: Vec::new(),
-            effort: self.entry.effort.clone(),
-            budget,
-            max_turns: None,
-            timeout,
-            keep: self.keep,
-            retries: 0,
-            verify: self.entry.verify.clone(),
-            max_attempts: self.entry.max_attempts,
-            loop_zone: self.mode == LoopRunMode::Scheduled,
-            loop_task: Some(self.name.clone()),
-            passthrough: Vec::new(),
-            managed_launch,
-        })
+        let mut request = SupervisedRunRequest::new(spec, prompt, permission_mode, managed_launch);
+        request.worktree.clone_from(&self.entry.worktree);
+        request.system_prompt_file = system_prompt_file;
+        request.effort.clone_from(&self.entry.effort);
+        request.budget = budget;
+        request.timeout = timeout;
+        request.keep = self.keep;
+        request.verify.clone_from(&self.entry.verify);
+        request.max_attempts = self.entry.max_attempts;
+        request.loop_zone = self.mode == LoopRunMode::Scheduled;
+        request.loop_task = Some(self.name.clone());
+        Ok(request)
     }
 
     fn prepare_delivery(
@@ -1041,25 +1024,11 @@ fn resolve_managed_spawn_state(
         model: resolved.model.clone(),
         ..crate::agents::LaunchParams::default()
     };
-    let invocation = crate::harness::launch::ExecRequest {
-        kind: crate::ids::AgentKind::new_unchecked(resolved.kind.clone()),
-        action: crate::harness::launch::ExecAction::Launch {
-            prompt: None,
-            extra_args: resolved.args.clone(),
-        },
-        system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
-        provider_account: crate::harness::launch::ProviderAccountState::Unbound,
-        run_id: None,
-        worktree_path: None,
-        close_pane_on_exit: false,
-        exit_on_run_completion: false,
-        subagent: false,
-        identity: crate::harness::launch::ExecIdentity {
-            params: launch,
-            ..Default::default()
-        },
-    };
+    let mut invocation = crate::harness::launch::ExecRequest::bare_launch(
+        crate::ids::AgentKind::new_unchecked(resolved.kind.clone()),
+        resolved.args.clone(),
+    );
+    invocation.identity.params = launch;
     let (_, managed_launch) = crate::harness::launch::compile_managed_agent_process(
         &workspace.project_root,
         config.harness.rtk,

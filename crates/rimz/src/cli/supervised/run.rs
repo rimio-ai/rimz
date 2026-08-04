@@ -2,11 +2,10 @@ use super::*;
 use crate::cli::supervised;
 
 use crate::cli::render;
+use rimz::agents::PermissionMode;
 use rimz::agents::transcript::TranscriptCursor;
 use rimz::harness::plan::{LaunchFinalizeOptions, launch_identity_requests};
-use rimz::harness::run::{
-    PermissionMode, RunRecord, RunStatus, SupervisedRunOutcome, SupervisedRunRequest,
-};
+use rimz::harness::run::{RunRecord, RunStatus, SupervisedRunOutcome, SupervisedRunRequest};
 use rimz::harness::run_wake::{self, ExpectedRunFrame};
 use rimz::harness::spec::LayoutSpec;
 use rimz::ids::AgentKind;
@@ -470,25 +469,20 @@ fn prepare_supervised(
     }
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
-    let launch_invocation = rimz::harness::launch::ExecRequest {
-        kind: agent_cell.kind.clone(),
-        action: rimz::harness::launch::ExecAction::Launch {
-            prompt: Some(prompt.to_string()),
-            extra_args: agent_cell.args.clone(),
-        },
-        system_prompt_file: agent_cell.system_prompt_file.clone(),
-        append_system_prompt_files: agent_cell.append_system_prompt_files.clone(),
-        provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
-        run_id: None,
-        worktree_path: None,
-        close_pane_on_exit: false,
-        exit_on_run_completion: false,
-        subagent: request.subagent,
-        identity: rimz::harness::launch::ExecIdentity {
-            params: preflight_launch,
-            ..rimz::harness::launch::ExecIdentity::default()
-        },
+    let mut launch_invocation = rimz::harness::launch::ExecRequest::bare_launch(
+        agent_cell.kind.clone(),
+        agent_cell.args.clone(),
+    );
+    launch_invocation.action = rimz::harness::launch::ExecAction::Launch {
+        prompt: Some(prompt.to_string()),
+        extra_args: agent_cell.args.clone(),
     };
+    launch_invocation.system_prompt_file = agent_cell.system_prompt_file.clone();
+    launch_invocation
+        .append_system_prompt_files
+        .clone_from(&agent_cell.append_system_prompt_files);
+    launch_invocation.subagent = request.subagent;
+    launch_invocation.identity.params = preflight_launch;
     let (process, managed_launch) = rimz::harness::launch::compile_managed_agent_process(
         &workspace.project_root,
         machine_config.harness.rtk,
@@ -725,7 +719,7 @@ fn verify_phase(
             "rimz: verify `{cmd}` exited {status}; re-prompting (attempt {} of {max_attempts})",
             verify_attempt + 1,
         )?;
-        let reprompt = rimz::harness::run::verify_reprompt(cmd, &status, &verify.output);
+        let reprompt = rimz::harness::prompt_compose::verify_reprompt(cmd, &status, &verify.output);
         record =
             rimz::harness::run::reopen_for_verify(prepared.store.paths(), &record.run_id, verify)?;
         if let Err(err) = supervised::verify::deliver_reprompt(
@@ -877,7 +871,10 @@ pub(in crate::cli) fn run_supervised(
             u64::from(attempt) + 2,
             u64::from(retries) + 1,
         )?;
-        prompt = rimz::harness::run::retry_prompt(&base_prompt, record.failure_tail.as_deref());
+        prompt = rimz::harness::prompt_compose::retry_prompt(
+            &base_prompt,
+            record.failure_tail.as_deref(),
+        );
         retry_of = Some(record.run_id.clone());
         attempt += 1;
     }
