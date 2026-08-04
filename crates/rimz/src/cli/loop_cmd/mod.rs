@@ -23,16 +23,17 @@ use clap::{Args, Subcommand};
 use jiff::Timestamp;
 
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
+use rimz::harness::plan::{ResolvedSingleAgentLaunch, resolve_single_agent_launch};
 use rimz::harness::run::RunRecord;
 use rimz::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
     RunTransition,
 };
 use rimz::harness::schedule::runner::{
-    CheckEcho, ResolvedTaskSpec, RunLockInfo, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL,
-    StopAction, newest_active_run, newest_active_run_for_entry, next_stop_action, parse_mode,
-    parse_task_timeout, preflight_entry, probe_run_lock, resolve_task_spec, run_lock_path,
-    signal_run_lock_holder, wait_for_run_lock_release,
+    CheckEcho, RunLockInfo, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL, StopAction,
+    newest_active_run, newest_active_run_for_entry, next_stop_action, parse_mode,
+    parse_task_timeout, preflight_entry, probe_run_lock, run_lock_path, signal_run_lock_holder,
+    wait_for_run_lock_release,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,

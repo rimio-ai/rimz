@@ -9,7 +9,7 @@ struct AddTiming {
 
 enum AddTaskAction {
     Spawn {
-        resolved: ResolvedTaskSpec,
+        resolved: ResolvedSingleAgentLaunch,
         mode: Option<String>,
     },
     Deliver {
@@ -170,7 +170,7 @@ fn resolve_add_action(
     let mut action = match kind {
         TaskActionKind::Spawn => {
             let spec = args.agent.as_deref().unwrap_or_default();
-            let resolved = resolve_task_spec(spec, workspace)?;
+            let resolved = resolve_single_agent_launch(spec, workspace)?;
             AddTaskAction::Spawn {
                 resolved,
                 mode: None,
@@ -195,7 +195,7 @@ fn build_task_entry(
     args: &AddArgs,
     action: AddTaskAction,
     project_root: &Path,
-) -> Result<(TaskEntry, Option<ResolvedTaskSpec>)> {
+) -> Result<(TaskEntry, Option<ResolvedSingleAgentLaunch>)> {
     if let Some(timeout) = args.timeout.as_deref() {
         parse_task_timeout(timeout).map_err(|err| anyhow::anyhow!("{err}"))?;
     }

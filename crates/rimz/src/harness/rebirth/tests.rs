@@ -1,7 +1,8 @@
 use super::*;
 use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
 use crate::config::{Profile, RoleBinding, Team};
-use crate::harness::resume::{CohortSeed, RecoveryEntry};
+use crate::harness::plan::CohortSeed;
+use crate::harness::resume::RecoveryEntry;
 use crate::ids::{MuxName, PaneId};
 
 struct Fixture {

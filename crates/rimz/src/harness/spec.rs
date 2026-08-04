@@ -808,33 +808,21 @@ fn compile_team_layout(
         .keys()
         .map(|role| (role.clone(), 0usize))
         .collect();
-    let mut columns = Vec::new();
-    for column in structure.columns {
-        let mut rows = Vec::new();
-        for cell_name in column.cells {
-            if let Some(cell) = role_cells.get(cell_name) {
-                *placements
-                    .get_mut(cell_name)
-                    .expect("placement map mirrors role cells") += 1;
-                rows.push(Cell::Agent(cell.clone()));
-                continue;
-            }
-            match parse_cell(cell_name, profiles, commands, base_override) {
-                Ok(cell) => rows.push(cell),
-                Err(LayoutErr::UnknownCell { .. }) => {
-                    return Err(LayoutErr::UnknownRoleInLayout {
-                        team: team_name.to_owned(),
-                        role: cell_name.to_owned(),
-                    });
-                }
-                Err(err) => return Err(err),
-            }
+    let layout = fold_layout(structure, |cell_name| {
+        if let Some(cell) = role_cells.get(cell_name) {
+            *placements
+                .get_mut(cell_name)
+                .expect("placement map mirrors role cells") += 1;
+            return Ok(Cell::Agent(cell.clone()));
         }
-        columns.push(Column {
-            rows,
-            stacked: column.stacked,
-        });
-    }
+        parse_cell(cell_name, profiles, commands, base_override).map_err(|err| match err {
+            LayoutErr::UnknownCell { .. } => LayoutErr::UnknownRoleInLayout {
+                team: team_name.to_owned(),
+                role: cell_name.to_owned(),
+            },
+            err => err,
+        })
+    })?;
 
     for (role, count) in placements {
         match count {
@@ -854,7 +842,7 @@ fn compile_team_layout(
         }
     }
 
-    Ok(LayoutSpec { columns })
+    Ok(layout)
 }
 
 /// Resolve `name` through profile inheritance to a concrete built-in kind.
@@ -1005,36 +993,48 @@ fn parse_layout_spec_validated(
 ) -> Result<LayoutSpec> {
     let structure = parse_layout_structure(raw)?;
     let mut seen_roles = BTreeSet::new();
-    let mut columns = Vec::new();
-    for column in structure.columns {
-        let mut rows = Vec::new();
-        for raw_cell in column.cells {
-            let (cell_name, role) = split_inline_role(raw_cell, profiles, commands);
-            if let Some(role) = role {
-                validate_inline_role(role)?;
-                if !seen_roles.insert(role.to_owned()) {
-                    return Err(LayoutErr::DuplicateInlineRole {
-                        role: role.to_owned(),
-                    });
-                }
+    fold_layout(structure, |raw_cell| {
+        let (cell_name, role) = split_inline_role(raw_cell, profiles, commands);
+        if let Some(role) = role {
+            validate_inline_role(role)?;
+            if !seen_roles.insert(role.to_owned()) {
+                return Err(LayoutErr::DuplicateInlineRole {
+                    role: role.to_owned(),
+                });
             }
-            let mut cell = parse_cell(cell_name, profiles, commands, base_override)?;
-            if let Some(role) = role {
-                let Cell::Agent(agent) = &mut cell else {
-                    return Err(LayoutErr::RoleOnCommandCell {
-                        cell: cell_name.to_owned(),
-                        role: role.to_owned(),
-                    });
-                };
-                agent.launch.role = Some(role.to_owned());
-            }
-            rows.push(cell);
         }
-        columns.push(Column {
-            rows,
-            stacked: column.stacked,
-        });
-    }
+        let mut cell = parse_cell(cell_name, profiles, commands, base_override)?;
+        if let Some(role) = role {
+            let Cell::Agent(agent) = &mut cell else {
+                return Err(LayoutErr::RoleOnCommandCell {
+                    cell: cell_name.to_owned(),
+                    role: role.to_owned(),
+                });
+            };
+            agent.launch.role = Some(role.to_owned());
+        }
+        Ok(cell)
+    })
+}
+
+fn fold_layout<'a>(
+    structure: RawLayout<'a>,
+    mut resolve: impl FnMut(&'a str) -> Result<Cell>,
+) -> Result<LayoutSpec> {
+    let columns = structure
+        .columns
+        .into_iter()
+        .map(|column| {
+            Ok(Column {
+                rows: column
+                    .cells
+                    .into_iter()
+                    .map(&mut resolve)
+                    .collect::<Result<Vec<_>>>()?,
+                stacked: column.stacked,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(LayoutSpec { columns })
 }
 

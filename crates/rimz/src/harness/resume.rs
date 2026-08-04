@@ -23,7 +23,8 @@ use crate::agents::find_definition;
 use crate::agents::{AgentState, LocalSessionObservation};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::plan::{
-    LayoutPaneParams, cohort_cells, compile_layout_panes, launch_identity_requests,
+    CohortCell, CohortResumePlan, CohortSeed, LayoutPaneParams, cohort_cells, compile_layout_panes,
+    launch_identity_requests,
 };
 use crate::harness::spec::LayoutSpec;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
@@ -388,39 +389,23 @@ pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -
             },
         );
     }
-    if let Err(err) = crate::harness::plan::validate_system_prompt_support(
-        &cell,
-        find_definition(cell.kind.as_str()),
-    ) {
-        return ResumePosture::degrade(
-            request.stamped_mode,
-            request.kind,
-            PostureDegrade::PromptUnsupported {
+    if let Err(err) =
+        crate::harness::plan::validate_finalized_cell(&cell, find_definition(cell.kind.as_str()))
+    {
+        let reason = err.to_string();
+        let degraded = match err {
+            crate::harness::plan::LaunchFinalizeError::PromptFile(_) => {
+                PostureDegrade::PromptFileMissing {
+                    profile: name.to_owned(),
+                    reason,
+                }
+            }
+            _ => PostureDegrade::PromptUnsupported {
                 profile: name.to_owned(),
-                reason: err.to_string(),
+                reason,
             },
-        );
-    }
-    let layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(cell.clone()));
-    if let Err(err) = crate::harness::plan::validate_profile_prompt_files(&layout) {
-        return ResumePosture::degrade(
-            request.stamped_mode,
-            request.kind,
-            PostureDegrade::PromptFileMissing {
-                profile: name.to_owned(),
-                reason: err.to_string(),
-            },
-        );
-    }
-    if let Err(err) = crate::harness::plan::validate_system_prompt_text(&cell) {
-        return ResumePosture::degrade(
-            request.stamped_mode,
-            request.kind,
-            PostureDegrade::PromptUnsupported {
-                profile: name.to_owned(),
-                reason: err.to_string(),
-            },
-        );
+        };
+        return ResumePosture::degrade(request.stamped_mode, request.kind, degraded);
     }
     let mut posture = ResumePosture::from_cell(&cell);
     // A profile that declares no mode leaves the granted posture to the launch
@@ -455,40 +440,12 @@ pub struct ResumePlan {
     pub warnings: Vec<String>,
 }
 
-/// One cell in an explicit cohort resume spec, reduced to the matching fields
-/// the planner needs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CohortCell {
-    pub kind: AgentKind,
-    pub role: Option<String>,
-}
-
 /// Durable relaunch state for one worktree cohort.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CohortRelaunchState {
     Absent,
     Present { focus_pane: Option<PaneId> },
     Closed,
-}
-
-/// One agent cell's explicit-resume seed.
-#[derive(Clone, Debug, PartialEq)]
-pub enum CohortSeed {
-    /// Resume a prior provider-native session, replaying its launch identity.
-    Resume(Box<AgentState>),
-    /// Launch a fresh pane for a cell missing resumable history.
-    Fresh,
-}
-
-/// Explicit `rimz agents <spec> --resume` plan, parallel to the layout's agent
-/// cells.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CohortResumePlan {
-    pub seeds: Vec<CohortSeed>,
-    pub cwd: Option<PathBuf>,
-    pub channel: Option<String>,
-    pub fresh: Vec<String>,
-    pub launch_group: Option<String>,
 }
 
 /// One named-team tab selected for restore and awaiting launch materialization.
@@ -814,6 +771,39 @@ impl ResumeCandidate {
 
     fn key(&self) -> ResumeCandidateKey {
         resume_candidate_key(&self.kind, &self.session_id, self.pane_id.as_ref())
+    }
+}
+
+fn resume_launch_identity(
+    candidate: &ResumeCandidate,
+) -> crate::harness::plan::ResumeLaunchIdentity {
+    crate::harness::plan::ResumeLaunchIdentity {
+        kind: candidate.kind.clone(),
+        session_id: candidate.session_id.clone(),
+        launch_id: candidate.launch_id.clone(),
+        name: candidate.name.clone(),
+        name_explicit: candidate.name_explicit,
+        profile: candidate.profile.clone(),
+        role: candidate.role.clone(),
+        team: candidate.team.clone(),
+        launch_group: candidate.launch_group.clone(),
+        launch_ordinal: candidate.launch_ordinal,
+        channel: candidate.channel.clone(),
+        parent_agent_id: candidate.parent_agent_id.clone(),
+        parent_agent_kind: candidate.parent_agent_kind.clone(),
+        launch_depth: candidate.launch_depth,
+    }
+}
+
+fn resume_launch_posture(posture: &ResumePosture) -> crate::harness::plan::ResumeLaunchPosture {
+    crate::harness::plan::ResumeLaunchPosture {
+        args: posture.args.clone(),
+        system_prompt_file: posture.system_prompt_file.clone(),
+        append_system_prompt_files: posture.append_system_prompt_files.clone(),
+        mode: posture.mode,
+        model: posture.model.clone(),
+        effort: posture.effort.clone(),
+        budget: posture.budget.clone(),
     }
 }
 
@@ -1766,8 +1756,12 @@ fn plan_resume_candidates_detailed(
                 .as_ref()
                 .map(|reason| format!("{reason}; resuming bare")),
         );
-        let command =
-            candidate_resume_command(ctx.rimz_bin, &candidate, channel.as_deref(), &posture);
+        let command = crate::harness::plan::resume_command(
+            ctx.rimz_bin,
+            &resume_launch_identity(&candidate),
+            channel.as_deref(),
+            &resume_launch_posture(&posture),
+        );
         let tab_label = channel_label(channel.as_deref(), &candidate.cwd);
         let identity = resume_tab_identity(channel.as_deref(), &candidate.cwd);
         let resumed_key = (candidate.kind.clone(), candidate.session_id.clone());
@@ -2337,85 +2331,6 @@ fn unique_label(base: &str, used: &mut HashSet<String>) -> String {
         }
     }
     unreachable!("unbounded ordinal search always yields a fresh label")
-}
-
-/// Wrapper argv for resuming one prior provider-native session with its durable
-/// RimZ launch identity, rebirth channel, and profile-declared posture.
-pub fn resume_command(
-    rimz_bin: &Path,
-    agent: &AgentState,
-    channel: Option<&str>,
-    posture: &ResumePosture,
-) -> Vec<String> {
-    candidate_resume_command(
-        rimz_bin,
-        &ResumeCandidate::from_agent_identity(agent, true),
-        channel,
-        posture,
-    )
-}
-
-fn candidate_resume_command(
-    rimz_bin: &Path,
-    candidate: &ResumeCandidate,
-    channel: Option<&str>,
-    posture: &ResumePosture,
-) -> Vec<String> {
-    let channel = candidate
-        .channel
-        .as_deref()
-        .filter(|channel| !channel.is_empty())
-        .or_else(|| channel.filter(|channel| !channel.is_empty()));
-    let params = crate::agents::LaunchParams {
-        parent_agent_id: candidate.parent_agent_id.clone(),
-        parent_agent_kind: candidate.parent_agent_kind.clone(),
-        launch_depth: candidate.launch_depth,
-        profile: candidate.profile.clone(),
-        role: candidate.role.clone(),
-        team: candidate.team.clone(),
-        launch_group: candidate.launch_group.clone(),
-        launch_ordinal: candidate.launch_ordinal,
-        channel: channel.map(ToOwned::to_owned),
-        // Posture is profile-declared; one-off launch values stay out.
-        mode: posture.mode,
-        model: posture.model.clone(),
-        effort: posture.effort.clone(),
-        budget: posture.budget.clone(),
-        ..Default::default()
-    };
-    let result = crate::harness::launch::exec_argv(
-        rimz_bin,
-        &crate::harness::launch::ExecRequest {
-            kind: candidate.kind.clone(),
-            action: crate::harness::launch::ExecAction::Resume {
-                session_id: candidate.session_id.to_string(),
-                extra_args: posture.args.clone(),
-            },
-            system_prompt_file: posture.system_prompt_file.clone(),
-            append_system_prompt_files: posture.append_system_prompt_files.clone(),
-            provider_account: crate::harness::launch::ProviderAccountState::Unbound,
-            run_id: None,
-            worktree_path: None,
-            close_pane_on_exit: true,
-            exit_on_run_completion: false,
-            subagent: false,
-            identity: crate::harness::launch::ExecIdentity {
-                name: candidate.name.clone(),
-                name_explicit: candidate.name_explicit,
-                launch_id: Some(
-                    candidate
-                        .launch_id
-                        .as_ref()
-                        .unwrap_or(&candidate.session_id)
-                        .to_string(),
-                ),
-                params,
-            },
-        },
-    );
-    // ExecRequest contains only JSON strings, integers, booleans, and enums;
-    // serde_json cannot reject this in-memory shape.
-    result.unwrap_or_else(|err| unreachable!("serializing canonical exec request: {err}"))
 }
 
 /// The launch spec that re-addresses one durable agent identity: a named team

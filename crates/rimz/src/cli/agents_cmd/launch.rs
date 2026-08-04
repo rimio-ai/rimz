@@ -607,11 +607,11 @@ fn cohort_resume_subject(spec: &str, scope: Option<&str>) -> String {
     }
 }
 
-fn report_cohort_resume(plan: &rimz::harness::resume::CohortResumePlan) {
+fn report_cohort_resume(plan: &rimz::harness::plan::CohortResumePlan) {
     let mut fresh = plan.fresh.iter();
     for seed in &plan.seeds {
         match seed {
-            rimz::harness::resume::CohortSeed::Resume(agent) => {
+            rimz::harness::plan::CohortSeed::Resume(agent) => {
                 let name = agent.name.as_deref().unwrap_or("unnamed");
                 let _ = writeln!(
                     std::io::stderr(),
@@ -621,7 +621,7 @@ fn report_cohort_resume(plan: &rimz::harness::resume::CohortResumePlan) {
                     agent.agent_id
                 );
             }
-            rimz::harness::resume::CohortSeed::Fresh => {
+            rimz::harness::plan::CohortSeed::Fresh => {
                 let label = fresh.next().map_or("agent", String::as_str);
                 let _ = writeln!(std::io::stderr(), "started fresh {label}");
             }
