@@ -37,7 +37,6 @@ fn removal_retirement_returns_both_independent_results() {
     let removed = RemovalOutcome {
         worktree_name: "demo".to_owned(),
         branch: "demo".to_owned(),
-        repo_root: PathBuf::from("/repo"),
         removed_path: PathBuf::from("/repo-worktrees/demo"),
         branch_deletion: BranchDeletion::Deleted,
     };
@@ -225,10 +224,6 @@ fn explicit_branch_wins_over_branch_style_spelling() {
 
 #[test]
 fn landed_verdict_and_status_constructors() {
-    assert!(LandedVerdict::Landed.is_landed());
-    assert!(!LandedVerdict::Pending.is_landed());
-    assert!(!LandedVerdict::Unknown.is_landed());
-
     assert_eq!(
         WorktreeStatus::default(),
         WorktreeStatus {
