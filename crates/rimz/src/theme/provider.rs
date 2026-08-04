@@ -66,7 +66,7 @@ impl BrandColor {
         }
     }
 
-    pub fn indexed(self) -> u8 {
+    pub(crate) fn indexed(self) -> u8 {
         match self {
             Self::Role(_) => 7,
             Self::Indexed(index) => index,
@@ -114,7 +114,7 @@ pub fn resolve_provider_identity(
 }
 
 /// Title-case a `-`/`_`/space-delimited token.
-pub fn provider_title_case(value: &str) -> String {
+pub(crate) fn provider_title_case(value: &str) -> String {
     value
         .split(['-', '_', ' '])
         .filter(|word| !word.is_empty())

@@ -13,7 +13,6 @@ use clap::Args;
 use super::GlobalFlags;
 use crate::cli::render;
 use rimz::config;
-use rimz::theme::scheme;
 
 const GROUP_GAP: usize = 3;
 
@@ -25,7 +24,11 @@ pub struct ListThemesArgs {
 }
 
 pub fn run(args: ListThemesArgs, _globals: &GlobalFlags) -> Result<()> {
-    let names = config::available_scheme_names();
+    let swatches = config::scheme_swatches();
+    let names = swatches
+        .iter()
+        .map(|swatch| swatch.name.as_str())
+        .collect::<Vec<_>>();
     if args.json {
         return render::json_pretty(&names);
     }
@@ -45,13 +48,12 @@ pub fn run(args: ListThemesArgs, _globals: &GlobalFlags) -> Result<()> {
         .unwrap_or(0);
     write_legend(&mut out, name_w)?;
     let accent = render::palette::accent();
-    for name in &names {
+    for swatch in &swatches {
+        let name = &swatch.name;
         write!(out, "{}{name}{}", accent.render(), accent.render_reset())?;
         let pad = name_w.saturating_sub(name.chars().count());
         write!(out, "{:pad$}  ", "", pad = pad)?;
-        if let Some(swatch) = scheme::scheme_swatch(name) {
-            write_swatch(&mut out, &swatch)?;
-        }
+        write_swatch(&mut out, swatch)?;
         writeln!(out)?;
     }
     Ok(())
@@ -79,7 +81,7 @@ fn write_legend_group(out: &mut impl Write, tokens: &[&str]) -> std::io::Result<
     Ok(())
 }
 
-fn write_swatch(out: &mut impl Write, swatch: &scheme::SchemeSwatch) -> std::io::Result<()> {
+fn write_swatch(out: &mut impl Write, swatch: &config::SchemeSwatch) -> std::io::Result<()> {
     write_chips(out, &[swatch.background, swatch.foreground])?;
     write!(out, "{:gap$}", "", gap = GROUP_GAP)?;
     write_chips(
@@ -131,7 +133,8 @@ mod tests {
 
     #[test]
     fn swatch_writes_background_chips_in_grouped_order() {
-        let swatch = scheme::SchemeSwatch {
+        let swatch = config::SchemeSwatch {
+            name: "test".to_owned(),
             background: (0, 0, 0),
             foreground: (255, 255, 255),
             red: (255, 0, 0),

@@ -21,7 +21,7 @@ pub enum Identity {
 }
 
 impl Identity {
-    pub const fn base_rgb(self) -> Rgb {
+    pub(crate) const fn base_rgb(self) -> Rgb {
         match self {
             Self::Claude => (0xd9, 0x77, 0x57),
             Self::Money => (0x85, 0xbb, 0x65),
