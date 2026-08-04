@@ -5,10 +5,8 @@ use std::time::Duration;
 
 use crate::Store;
 use crate::agents::AgentState;
-use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::message::{
-    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
-    WhenCondition,
+    AutoCompact, MessageBody, MessageDraft, MessageRecord, MessageSender, Recipient,
 };
 use crate::mux::{NamedKey, paste_into_pane, press_pane_key, type_into_pane};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
@@ -51,107 +49,6 @@ impl LiveSend {
             sleeper(self.command_submit_delay);
         }
         should_sleep
-    }
-}
-
-/// Everything one dispatch decides once and every recipient in the fan-out
-/// shares. Text and address vary per recipient and arrive at [`Self::record`].
-pub(crate) struct MessageDraft {
-    pub body: MessageBody,
-    pub enter: bool,
-    pub gate: DeliveryGate,
-    pub sender: MessageSender,
-    pub automated: bool,
-    pub force: bool,
-    pub auto_compact: Option<AutoCompact>,
-    pub not_before: Option<jiff::Timestamp>,
-    pub after: Vec<AfterCondition>,
-    pub when: Vec<WhenCondition>,
-}
-
-pub(crate) enum Recipient<'a> {
-    Agent {
-        agent: &'a AgentState,
-        pane: Option<&'a PaneAgent>,
-    },
-    Pane {
-        pane: &'a PaneAgent,
-        bound: Option<&'a AgentState>,
-    },
-}
-
-struct RecipientIdentity {
-    kind: AgentKind,
-    agent_id: AgentSessionId,
-    agent_name: Option<String>,
-    channel: Option<String>,
-    pane_id: Option<PaneId>,
-}
-
-impl Recipient<'_> {
-    fn into_identity(self, scope_channel: Option<&str>) -> RecipientIdentity {
-        match self {
-            Self::Agent { agent, pane } => RecipientIdentity {
-                kind: agent.kind.clone(),
-                agent_id: agent.agent_id.clone(),
-                agent_name: agent.name.clone(),
-                channel: crate::harness::target::agent_channel(agent).or_else(|| {
-                    pane.and_then(|pane| {
-                        crate::harness::target::recipient_channel(pane, Some(agent), scope_channel)
-                    })
-                }),
-                pane_id: pane.map(|pane| pane.pane_id.clone()),
-            },
-            Self::Pane { pane, bound } => RecipientIdentity {
-                kind: pane.kind.clone(),
-                agent_id: bound
-                    .map(|agent| agent.agent_id.clone())
-                    .or_else(|| pane.agent_id.clone())
-                    .unwrap_or_else(|| synthetic_session_for_pane(&pane.pane_id)),
-                agent_name: bound
-                    .and_then(|agent| agent.name.clone())
-                    .or_else(|| pane.name.clone()),
-                channel: crate::harness::target::recipient_channel(pane, bound, scope_channel),
-                pane_id: Some(pane.pane_id.clone()),
-            },
-        }
-    }
-}
-
-impl MessageDraft {
-    /// Stamp this dispatch's decisions onto one recipient's durable record.
-    pub(crate) fn record(
-        &self,
-        workspace_id: WorkspaceId,
-        recipient: Recipient<'_>,
-        scope_channel: Option<&str>,
-        text: &str,
-        address: Option<&str>,
-    ) -> MessageRecord {
-        let recipient = recipient.into_identity(scope_channel);
-        let record = MessageRecord::new_for_card(
-            workspace_id,
-            recipient.kind,
-            recipient.agent_id,
-            recipient.agent_name,
-            text.to_owned(),
-            self.enter,
-            self.gate,
-        )
-        .with_body(self.body)
-        .with_force(self.force)
-        .with_address(address.map(ToOwned::to_owned))
-        .with_channel(recipient.channel)
-        .with_sender(self.sender.clone())
-        .with_automated(self.automated)
-        .with_auto_compact(self.auto_compact)
-        .with_not_before(self.not_before)
-        .with_after(self.after.clone())
-        .with_when(self.when.clone());
-        match recipient.pane_id {
-            Some(pane_id) => record.with_pane_id(pane_id),
-            None => record,
-        }
     }
 }
 
@@ -228,15 +125,6 @@ pub(crate) fn send_batch_to_live_pane(
             PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
         },
     )
-}
-
-pub fn synthetic_session_for_pane(pane_id: &crate::ids::PaneId) -> AgentSessionId {
-    let mut rendered = String::from("pane_");
-    rendered.extend(pane_id.as_str().chars().map(|ch| match ch {
-        'a'..='z' | 'A'..='Z' | '0'..='9' => ch,
-        _ => '_',
-    }));
-    AgentSessionId::from(rendered)
 }
 
 pub struct Pacer {
@@ -405,181 +293,6 @@ pub fn already_compacted_at(store: &Store, agent: &AgentState, command: &str, us
 mod tests {
     use super::*;
 
-    use crate::agents::AgentStatus;
-    use crate::ids::{MuxName, PaneId, WorkspaceId};
-    fn agent() -> AgentState {
-        let mut agent = AgentState::stub("claude", "sess-a", AgentStatus::Idle);
-        agent.name = Some("lucid-atlas".to_owned());
-        agent
-    }
-
-    fn draft(not_before: Option<jiff::Timestamp>) -> MessageDraft {
-        MessageDraft {
-            body: MessageBody::Prompt,
-            enter: true,
-            gate: DeliveryGate::Done,
-            sender: MessageSender::Human,
-            automated: false,
-            force: false,
-            auto_compact: None,
-            not_before,
-            after: Vec::new(),
-            when: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn draft_record_uses_recipient_identity_and_live_pane_context() {
-        let agent = agent();
-        let pane = PaneAgent {
-            kind: agent.kind.clone(),
-            kind_ordinal: agent.kind_ordinal,
-            name: agent.name.clone(),
-            name_explicit: true,
-            profile: None,
-            role: None,
-            channel: Some("auth".to_owned()),
-            agent_id: Some(agent.agent_id.clone()),
-            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
-            pane_pid: None,
-            worktree_path: None,
-            worktree_branch: None,
-        };
-        let workspace_id = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
-        let not_before = jiff::Timestamp::now();
-
-        let live = draft(Some(not_before)).record(
-            workspace_id.clone(),
-            Recipient::Agent {
-                agent: &agent,
-                pane: Some(&pane),
-            },
-            None,
-            "hello",
-            Some("@claude"),
-        );
-        let parked = draft(Some(not_before)).record(
-            workspace_id,
-            Recipient::Agent {
-                agent: &agent,
-                pane: None,
-            },
-            None,
-            "hello",
-            Some("@claude"),
-        );
-
-        assert_eq!(live.agent_id, agent.agent_id);
-        assert_eq!(live.pane_id.as_ref(), Some(&pane.pane_id));
-        assert_eq!(live.channel.as_deref(), Some("auth"));
-        assert_eq!(live.not_before, Some(not_before));
-        assert_eq!(parked.pane_id, None);
-        assert_eq!(parked.channel, None);
-    }
-
-    #[test]
-    fn draft_record_normalizes_bound_provisional_lazy_and_pane_identity() {
-        let workspace_id = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
-        let mut bound = agent();
-        bound.channel = Some("bound-channel".to_owned());
-        let bound_pane = pane(
-            "claude",
-            Some("pane-session"),
-            Some("pane-name"),
-            Some("pane-channel"),
-            Some("/repo/pane-worktree"),
-            "terminal_1",
-        );
-        let record = draft(None).record(
-            workspace_id.clone(),
-            Recipient::Pane {
-                pane: &bound_pane,
-                bound: Some(&bound),
-            },
-            Some("scope"),
-            "hello",
-            Some("@claude"),
-        );
-        assert_eq!(record.agent_id, bound.agent_id);
-        assert_eq!(record.agent_name, bound.name);
-        assert_eq!(record.channel.as_deref(), Some("bound-channel"));
-        assert_eq!(record.pane_id.as_ref(), Some(&bound_pane.pane_id));
-
-        let mut provisional = agent();
-        provisional.agent_id = AgentSessionId::from("launch_pending");
-        provisional.channel = None;
-        let provisional_pane = pane(
-            "claude",
-            None,
-            None,
-            Some("provisional-channel"),
-            None,
-            "terminal_2",
-        );
-        let record = draft(None).record(
-            workspace_id.clone(),
-            Recipient::Agent {
-                agent: &provisional,
-                pane: Some(&provisional_pane),
-            },
-            Some("scope"),
-            "hello",
-            Some("@claude"),
-        );
-        assert_eq!(record.agent_id.as_str(), "launch_pending");
-        assert_eq!(record.channel.as_deref(), Some("provisional-channel"));
-        assert_eq!(record.pane_id.as_ref(), Some(&provisional_pane.pane_id));
-
-        let lazy = pane("codex", None, None, None, Some("/repo/lazy"), "terminal_3");
-        let record = draft(None).record(
-            workspace_id.clone(),
-            Recipient::Pane {
-                pane: &lazy,
-                bound: None,
-            },
-            Some("scope"),
-            "hello",
-            Some("@claude"),
-        );
-        assert_eq!(record.agent_id, synthetic_session_for_pane(&lazy.pane_id));
-        assert_eq!(record.channel.as_deref(), Some("lazy"));
-
-        let pane_only = pane(
-            "codex",
-            Some("pane-session"),
-            Some("pane-name"),
-            None,
-            None,
-            "terminal_4",
-        );
-        let record = draft(None).record(
-            workspace_id.clone(),
-            Recipient::Pane {
-                pane: &pane_only,
-                bound: None,
-            },
-            Some("scope"),
-            "hello",
-            Some("@claude"),
-        );
-        assert_eq!(record.agent_id.as_str(), "pane-session");
-        assert_eq!(record.agent_name.as_deref(), Some("pane-name"));
-        assert_eq!(record.channel.as_deref(), Some("scope"));
-
-        let fresh = pane("codex", None, None, None, None, "terminal_5");
-        let record = draft(None).record(
-            workspace_id,
-            Recipient::Pane {
-                pane: &fresh,
-                bound: None,
-            },
-            Some("explicit"),
-            "hello",
-            Some("@claude"),
-        );
-        assert_eq!(record.channel.as_deref(), Some("explicit"));
-    }
-
     #[test]
     fn pacer_skips_first_write_and_honors_configured_interval() {
         let mut pacer = Pacer::new(Duration::from_millis(40));
@@ -629,29 +342,5 @@ mod tests {
                 panic!("zero command delay must not sleep");
             })
         );
-    }
-
-    fn pane(
-        kind: &str,
-        agent_id: Option<&str>,
-        name: Option<&str>,
-        channel: Option<&str>,
-        worktree_path: Option<&str>,
-        raw: &str,
-    ) -> PaneAgent {
-        PaneAgent {
-            kind: crate::ids::AgentKind::new_unchecked(kind),
-            kind_ordinal: None,
-            name: name.map(ToOwned::to_owned),
-            name_explicit: false,
-            profile: None,
-            role: None,
-            channel: channel.map(ToOwned::to_owned),
-            agent_id: agent_id.map(AgentSessionId::from),
-            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
-            pane_pid: None,
-            worktree_path: worktree_path.map(ToOwned::to_owned),
-            worktree_branch: None,
-        }
     }
 }

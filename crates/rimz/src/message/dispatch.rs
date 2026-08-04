@@ -13,8 +13,9 @@ use jiff::Timestamp;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{
-    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
-    WhenCondition, command_submit_delay_from_env, message_interval_from_env, queue_head,
+    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageDraft, MessageRecord,
+    MessageSender, Recipient, WhenCondition, command_submit_delay_from_env,
+    message_interval_from_env, queue_head,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
@@ -575,7 +576,7 @@ fn agent_needs_live_resolution(
 
 struct PreparedMode {
     steer: bool,
-    draft: send::MessageDraft,
+    draft: MessageDraft,
 }
 
 #[derive(Clone, Copy)]
@@ -602,7 +603,7 @@ fn prepare_mode(
             auto_compact,
         } => Ok(PreparedMode {
             steer: true,
-            draft: send::MessageDraft {
+            draft: MessageDraft {
                 body: MessageBody::Prompt,
                 enter,
                 gate: DeliveryGate::Any,
@@ -625,7 +626,7 @@ fn prepare_mode(
             when,
         } => Ok(PreparedMode {
             steer: false,
-            draft: send::MessageDraft {
+            draft: MessageDraft {
                 body: MessageBody::Prompt,
                 enter,
                 gate,
@@ -804,8 +805,8 @@ impl DispatchState<'_> {
         handle: &str,
     ) -> Result<MessageRecord> {
         let recipient = match (target.agent.as_ref(), pane) {
-            (Some(agent), pane) => send::Recipient::Agent { agent, pane },
-            (None, Some(pane)) => send::Recipient::Pane {
+            (Some(agent), pane) => Recipient::Agent { agent, pane },
+            (None, Some(pane)) => Recipient::Pane {
                 pane,
                 bound: target.bound(self.snapshot),
             },
@@ -1139,7 +1140,7 @@ mod tests {
         assert!(target.bound(&snapshot).is_none());
         let mode = PreparedMode {
             steer: false,
-            draft: send::MessageDraft {
+            draft: MessageDraft {
                 body: MessageBody::Prompt,
                 enter: true,
                 gate: DeliveryGate::Done,
