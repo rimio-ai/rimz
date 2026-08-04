@@ -44,6 +44,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use super::GlobalFlags;
 pub(super) use crate::cli::Ctx;
 use crate::cli::supervised;
+use placement::{Placement, apply_in_place_downgrade, resolve_fork_placement, resolve_placement};
 use rimz::agents::{AgentState, LifecycleRefreshRequest};
 use rimz::harness::AutoContinueRequest;
 use rimz::harness::auto_redeem::AutoRedeemRequest;
@@ -51,9 +52,8 @@ use rimz::harness::budget::BudgetParkRequest;
 use rimz::harness::idle_compact::IdleCompactRequest;
 use rimz::harness::orphan_sweep::OrphanSubagentRequest;
 use rimz::harness::plan::{
-    LaunchFinalizeOptions, LayoutPaneParams, Placement, ResolvedLaunch, apply_in_place_downgrade,
-    cohort_cells, compile_layout_panes, launch_identity_requests, mint_launch_id,
-    resolve_fork_placement, resolve_placement, validate_agent_name,
+    LaunchFinalizeOptions, LayoutPaneParams, ResolvedLaunch, cohort_cells, compile_layout_panes,
+    launch_identity_requests, mint_launch_id, validate_agent_name,
 };
 use rimz::harness::resume::{PostureDegrade, ResumePosture};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus, SupervisedRunOutcome};
@@ -965,7 +965,7 @@ pub(crate) fn create_on_miss(
     let inline_named_channel = target
         .split_once('#')
         .is_some_and(|(_, channel)| rimz::channel::valid_name(channel));
-    let current_named = std::env::var(rimz::harness::run::ENV_CHANNEL).ok();
+    let current_named = std::env::var(rimz::harness::launch::ENV_CHANNEL).ok();
     let named = channel_flag.is_some()
         || (worktree_flag.is_none() && inline_named_channel)
         || create

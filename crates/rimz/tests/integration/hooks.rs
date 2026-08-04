@@ -1638,7 +1638,7 @@ fn duplicate_cursor_session_end_is_idempotent_beyond_audit_end_stamps() {
     .to_string();
     let feed_end = || {
         let mut command = env.hook_command("cursor");
-        command.env(rimz::harness::run::ENV_RUN_ID, run.run_id.as_str());
+        command.env(rimz::harness::launch::ENV_RUN_ID, run.run_id.as_str());
         let output = env
             .spawn_payload(command, &payload)
             .wait_with_output()

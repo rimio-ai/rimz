@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) fn env_run_id() -> Option<rimz::RunId> {
-    let raw = std::env::var(rimz::harness::run::ENV_RUN_ID).ok()?;
+    let raw = std::env::var(rimz::harness::launch::ENV_RUN_ID).ok()?;
     match raw.parse() {
         Ok(run_id) => Some(run_id),
         Err(err) => {
@@ -46,37 +46,40 @@ pub(in crate::cli::hooks) fn fill_root_launch_identity(
         return;
     }
     if observation.launch.role.is_none() {
-        observation.launch.role = identity_env(observation, rimz::harness::run::ENV_AGENT_ROLE);
+        observation.launch.role = identity_env(observation, rimz::harness::launch::ENV_AGENT_ROLE);
     }
     if observation.launch.team.is_none() {
-        observation.launch.team = identity_env(observation, rimz::harness::run::ENV_TEAM);
+        observation.launch.team = identity_env(observation, rimz::harness::launch::ENV_TEAM);
     }
     if observation.launch.launch_group.is_none() {
         observation.launch.launch_group =
-            identity_env(observation, rimz::harness::run::ENV_LAUNCH_GROUP);
+            identity_env(observation, rimz::harness::launch::ENV_LAUNCH_GROUP);
     }
     if observation.launch.launch_ordinal.is_none() {
         observation.launch.launch_ordinal =
-            identity_env(observation, rimz::harness::run::ENV_LAUNCH_ORDINAL)
+            identity_env(observation, rimz::harness::launch::ENV_LAUNCH_ORDINAL)
                 .and_then(|raw| raw.parse::<u32>().ok());
     }
     if observation.launch.channel.is_none() {
-        observation.launch.channel = identity_env(observation, rimz::harness::run::ENV_CHANNEL);
+        observation.launch.channel = identity_env(observation, rimz::harness::launch::ENV_CHANNEL);
     }
     if observation.launch.profile.is_none() {
         observation.launch.profile =
-            identity_env(observation, rimz::harness::run::ENV_AGENT_PROFILE);
+            identity_env(observation, rimz::harness::launch::ENV_AGENT_PROFILE);
     }
     if observation.launch.model.is_none() {
-        observation.launch.model = identity_env(observation, rimz::harness::run::ENV_AGENT_MODEL)
-            .or(configured_identity.0);
+        observation.launch.model =
+            identity_env(observation, rimz::harness::launch::ENV_AGENT_MODEL)
+                .or(configured_identity.0);
     }
     if observation.launch.effort.is_none() {
-        observation.launch.effort = identity_env(observation, rimz::harness::run::ENV_AGENT_EFFORT)
-            .or(configured_identity.1);
+        observation.launch.effort =
+            identity_env(observation, rimz::harness::launch::ENV_AGENT_EFFORT)
+                .or(configured_identity.1);
     }
     if observation.launch.budget.is_none() {
-        observation.launch.budget = identity_env(observation, rimz::harness::run::ENV_AGENT_BUDGET);
+        observation.launch.budget =
+            identity_env(observation, rimz::harness::launch::ENV_AGENT_BUDGET);
     }
 }
 

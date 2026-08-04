@@ -139,8 +139,8 @@ fn tmux_room_shows_agent_after_hook() {
     let hook_env = [
         ("TMUX_PANE", codex_pane.as_str()),
         ("RIMZ_AGENT_PID", codex_pid.as_str()),
-        (rimz::harness::run::ENV_AGENT_ROLE, "coder"),
-        (rimz::harness::run::ENV_AGENT_PROFILE, "codex-coder"),
+        (rimz::harness::launch::ENV_AGENT_ROLE, "coder"),
+        (rimz::harness::launch::ENV_AGENT_PROFILE, "codex-coder"),
     ];
     let out = env.run_installed_hook_in_pane(
         "codex",
@@ -382,8 +382,8 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     let hook_env = [
         ("TMUX_PANE", codex_pane.as_str()),
         ("RIMZ_AGENT_PID", codex_pid.as_str()),
-        (rimz::harness::run::ENV_AGENT_ROLE, "coder"),
-        (rimz::harness::run::ENV_AGENT_PROFILE, "codex-coder"),
+        (rimz::harness::launch::ENV_AGENT_ROLE, "coder"),
+        (rimz::harness::launch::ENV_AGENT_PROFILE, "codex-coder"),
     ];
     let out = env.run_installed_hook_in_pane(
         "codex",
@@ -518,8 +518,8 @@ fn zellij_room_shows_agent_after_hook() {
 
     env.install_agent_hooks("codex");
     let hook_env = [
-        (rimz::harness::run::ENV_AGENT_ROLE, "codex"),
-        (rimz::harness::run::ENV_AGENT_PROFILE, "codex"),
+        (rimz::harness::launch::ENV_AGENT_ROLE, "codex"),
+        (rimz::harness::launch::ENV_AGENT_PROFILE, "codex"),
     ];
     let out = env.run_installed_hook_in_pane(
         "codex",
@@ -762,8 +762,11 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
         .env("PATH", &agent_path)
         .env("TMUX", tmux_env(&socket))
         .env("TMUX_PANE", &parent_pane_raw)
-        .env(rimz::harness::run::ENV_AGENT_KIND, "codex")
-        .env(rimz::harness::run::ENV_AGENT_ID, parent_launch_id.as_str())
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
         .env("RIMZ_TEST_AGENT_SESSION", "sess-journey-child")
         .env("RIMZ_TEST_AGENT_SLEEP_MS", "30000")
         .args([
@@ -809,8 +812,11 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
         .env("PATH", &agent_path)
         .env("TMUX", tmux_env(&socket))
         .env("TMUX_PANE", &parent_pane_raw)
-        .env(rimz::harness::run::ENV_AGENT_KIND, "codex")
-        .env(rimz::harness::run::ENV_AGENT_ID, parent_launch_id.as_str())
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
         .env("RIMZ_TEST_AGENT_SESSION", "sess-journey-sibling")
         .env("RIMZ_TEST_AGENT_SLEEP_MS", "30000")
         .args([
@@ -1022,8 +1028,11 @@ fn tmux_completed_subagent_lingers_until_parent_pane_disappears() {
         .env("PATH", &agent_path)
         .env("TMUX", tmux_env(&socket))
         .env("TMUX_PANE", &parent_pane_raw)
-        .env(rimz::harness::run::ENV_AGENT_KIND, "codex")
-        .env(rimz::harness::run::ENV_AGENT_ID, parent_launch_id.as_str())
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
         .env("RIMZ_TEST_AGENT_SESSION", "sess-parent-watch-child")
         .env("RIMZ_TEST_AGENT_SLEEP_MS", "0")
         .args([
@@ -1368,8 +1377,8 @@ fn real_agent_room(env: &Env, agent_session: &str) -> (PathBuf, String, String, 
     let hook_env = [
         ("TMUX_PANE", codex_pane.as_str()),
         ("RIMZ_AGENT_PID", codex_pid.as_str()),
-        (rimz::harness::run::ENV_AGENT_ROLE, "coder"),
-        (rimz::harness::run::ENV_AGENT_PROFILE, "codex-coder"),
+        (rimz::harness::launch::ENV_AGENT_ROLE, "coder"),
+        (rimz::harness::launch::ENV_AGENT_PROFILE, "codex-coder"),
     ];
     let out = env.run_installed_hook_in_pane(
         "codex",

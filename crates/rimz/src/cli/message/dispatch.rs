@@ -74,7 +74,7 @@ pub(super) fn send_message(
         text: text.clone(),
         target_scope: worktree.clone().or_else(|| channel_flag.clone()),
         current_channel: current_channel.clone(),
-        caller: rimz::harness::plan::LaunchCallerEnv::from_env(),
+        caller: rimz::harness::ancestry::LaunchCallerEnv::from_env(),
         sender: sender.clone(),
         automated: false,
         allow_fanout: all,

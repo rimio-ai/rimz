@@ -174,10 +174,10 @@ impl SelfIdentity {
     pub fn from_env() -> Self {
         Self {
             pane: rimz::mux::ambient_pane_id(),
-            kind: env_string(rimz::harness::run::ENV_AGENT_KIND).map(AgentKind::new_unchecked),
-            name: env_string(rimz::harness::run::ENV_AGENT_NAME),
-            profile: env_string(rimz::harness::run::ENV_AGENT_PROFILE),
-            role: env_string(rimz::harness::run::ENV_AGENT_ROLE),
+            kind: env_string(rimz::harness::launch::ENV_AGENT_KIND).map(AgentKind::new_unchecked),
+            name: env_string(rimz::harness::launch::ENV_AGENT_NAME),
+            profile: env_string(rimz::harness::launch::ENV_AGENT_PROFILE),
+            role: env_string(rimz::harness::launch::ENV_AGENT_ROLE),
         }
     }
 

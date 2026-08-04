@@ -483,7 +483,7 @@ fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
 }
 
 fn caller_and_children(agents: &[AgentState]) -> Result<(&AgentState, Vec<&AgentState>)> {
-    let caller = rimz::harness::plan::resolve_launch_caller_from_env(agents)?;
+    let caller = rimz::harness::ancestry::resolve_launch_caller_from_env(agents)?;
     let children = rimz::harness::target::launched_children(agents, caller);
     Ok((caller, children))
 }

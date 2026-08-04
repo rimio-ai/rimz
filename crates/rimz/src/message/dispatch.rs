@@ -102,7 +102,7 @@ pub struct DispatchRequest {
     pub text: String,
     pub target_scope: Option<String>,
     pub current_channel: Option<String>,
-    pub caller: Option<crate::harness::plan::LaunchCallerEnv>,
+    pub caller: Option<crate::harness::ancestry::LaunchCallerEnv>,
     pub sender: MessageSender,
     pub automated: bool,
     pub allow_fanout: bool,
@@ -407,14 +407,14 @@ fn exclude_broadcast_caller(
     raw: &str,
     targets: &mut Vec<ResolvedTarget>,
     durable_agents: &[AgentState],
-    caller_env: Option<&crate::harness::plan::LaunchCallerEnv>,
+    caller_env: Option<&crate::harness::ancestry::LaunchCallerEnv>,
     channel: Option<&str>,
 ) -> Result<()> {
     if !crate::harness::target::is_broadcast(raw) {
         return Ok(());
     }
     let Some(caller) = caller_env.and_then(|caller| {
-        crate::harness::plan::resolve_launch_caller(durable_agents, caller).ok()
+        crate::harness::ancestry::resolve_launch_caller(durable_agents, caller).ok()
     }) else {
         return Ok(());
     };
@@ -1355,7 +1355,7 @@ mod tests {
                 pane_only("terminal_2", "coder"),
             ],
         );
-        let legacy = crate::harness::plan::LaunchCallerEnv {
+        let legacy = crate::harness::ancestry::LaunchCallerEnv {
             kind: AgentKind::new_unchecked("claude"),
             launch_id: None,
             pane_id: Some(caller_pane),
@@ -1442,8 +1442,8 @@ mod tests {
         agent
     }
 
-    fn launch_caller(launch_id: &str) -> crate::harness::plan::LaunchCallerEnv {
-        crate::harness::plan::LaunchCallerEnv {
+    fn launch_caller(launch_id: &str) -> crate::harness::ancestry::LaunchCallerEnv {
+        crate::harness::ancestry::LaunchCallerEnv {
             kind: AgentKind::new_unchecked("claude"),
             launch_id: Some(AgentSessionId::from(launch_id)),
             pane_id: None,

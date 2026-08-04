@@ -108,8 +108,8 @@ fn over_limit_agent_launch_refuses_before_creating_runtime_state() {
     let output = env
         .rimz()
         .args(["agents", "claude", "--worktree=depth-refused"])
-        .env(rimz::harness::run::ENV_AGENT_KIND, "codex")
-        .env(rimz::harness::run::ENV_AGENT_ID, launch_id.as_str())
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(rimz::harness::launch::ENV_AGENT_ID, launch_id.as_str())
         .output()
         .expect("run nested launch");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -180,8 +180,8 @@ fn subagent_caller_refuses_subagent_launch_before_creating_runtime_state() {
             "--name",
             "subagent-refused",
         ])
-        .env(rimz::harness::run::ENV_AGENT_KIND, "codex")
-        .env(rimz::harness::run::ENV_AGENT_ID, launch_id.as_str())
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(rimz::harness::launch::ENV_AGENT_ID, launch_id.as_str())
         .output()
         .expect("run launch from subagent");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -255,8 +255,8 @@ fn launch_identity_and_parentage_survive_event_log_rotation() {
     let output = env
         .rimz()
         .args(["subagents", "list", "--json"])
-        .env(rimz::harness::run::ENV_AGENT_KIND, kind.as_str())
-        .env(rimz::harness::run::ENV_AGENT_ID, launch_id.as_str())
+        .env(rimz::harness::launch::ENV_AGENT_KIND, kind.as_str())
+        .env(rimz::harness::launch::ENV_AGENT_ID, launch_id.as_str())
         .output()
         .expect("resolve rotated launch identity through subagents list");
     assert!(

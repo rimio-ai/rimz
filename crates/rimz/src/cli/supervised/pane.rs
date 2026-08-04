@@ -176,7 +176,7 @@ pub(super) fn subagent_companion_title(store: &rimz::Store) -> String {
         .runtime_projection(rimz::RuntimeScope::Audit)
         .ok()
         .and_then(|projection| {
-            rimz::harness::plan::resolve_launch_caller_from_env(&projection.agents)
+            rimz::harness::ancestry::resolve_launch_caller_from_env(&projection.agents)
                 .ok()
                 .map(|caller| companion_title(caller, &machine.theme))
         })
@@ -215,7 +215,7 @@ pub(super) fn split_into_subagent_zone(
             return SubagentZoneOpen::RunTab;
         }
     };
-    let caller = match rimz::harness::plan::resolve_launch_caller_from_env(&projection.agents) {
+    let caller = match rimz::harness::ancestry::resolve_launch_caller_from_env(&projection.agents) {
         Ok(caller) => caller,
         Err(err) => {
             tracing::debug!(

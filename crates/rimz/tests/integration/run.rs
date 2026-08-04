@@ -431,7 +431,7 @@ fn hooks_bind_and_complete_supervised_run() {
     })
     .to_string();
     let mut prompt_cmd = env.hook_command("codex");
-    prompt_cmd.env(rimz::harness::run::ENV_RUN_ID, run_id.as_str());
+    prompt_cmd.env(rimz::harness::launch::ENV_RUN_ID, run_id.as_str());
     prompt_cmd.env("RIMZ_CODEX_SESSIONS", &sessions);
     let out = env
         .spawn_payload(prompt_cmd, &prompt_payload)
@@ -458,7 +458,7 @@ fn hooks_bind_and_complete_supervised_run() {
     })
     .to_string();
     let mut stop_cmd = env.hook_command("codex");
-    stop_cmd.env(rimz::harness::run::ENV_RUN_ID, run_id.as_str());
+    stop_cmd.env(rimz::harness::launch::ENV_RUN_ID, run_id.as_str());
     stop_cmd.env("RIMZ_CODEX_SESSIONS", &sessions);
     let out = env
         .spawn_payload(stop_cmd, &stop_payload)
@@ -506,7 +506,7 @@ fn copilot_hooks_bind_transcript_and_capture_supervised_final_text() {
     rimz::harness::run::create(store.paths(), &record).expect("create run");
 
     let mut prompt_cmd = env.copilot_hook_command("userPromptSubmitted");
-    prompt_cmd.env(rimz::harness::run::ENV_RUN_ID, run_id.as_str());
+    prompt_cmd.env(rimz::harness::launch::ENV_RUN_ID, run_id.as_str());
     let out = env
         .spawn_payload(
             prompt_cmd,
@@ -534,7 +534,7 @@ fn copilot_hooks_bind_transcript_and_capture_supervised_final_text() {
         )
         .unwrap();
     let mut stop_cmd = env.copilot_hook_command("agentStop");
-    stop_cmd.env(rimz::harness::run::ENV_RUN_ID, run_id.as_str());
+    stop_cmd.env(rimz::harness::launch::ENV_RUN_ID, run_id.as_str());
     let out = env
         .spawn_payload(
             stop_cmd,
@@ -573,7 +573,7 @@ fn cursor_response_hook_seeds_run_before_terminal_outcome() {
     };
     let hook = |run: &RunRecord, payload: serde_json::Value| {
         let mut command = env.hook_command("cursor");
-        command.env(rimz::harness::run::ENV_RUN_ID, run.run_id.as_str());
+        command.env(rimz::harness::launch::ENV_RUN_ID, run.run_id.as_str());
         let output = env
             .spawn_payload(command, &payload.to_string())
             .wait_with_output()

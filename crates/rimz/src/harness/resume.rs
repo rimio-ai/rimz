@@ -1418,7 +1418,7 @@ pub fn materialize_team_restore_tab(
         };
         Some(match (agent.parent_agent_id.clone(), agent.launch_depth) {
             (Some(parent_agent_id), Some(launch_generation)) => {
-                Some(crate::harness::plan::LaunchAncestry::Subagent {
+                Some(crate::harness::ancestry::LaunchAncestry::Subagent {
                     parent_agent_id,
                     parent_agent_kind: agent
                         .parent_agent_kind
@@ -1428,7 +1428,7 @@ pub fn materialize_team_restore_tab(
                 })
             }
             (None, Some(launch_generation)) => {
-                Some(crate::harness::plan::LaunchAncestry::Peer { launch_generation })
+                Some(crate::harness::ancestry::LaunchAncestry::Peer { launch_generation })
             }
             _ => None,
         })

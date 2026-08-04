@@ -163,8 +163,8 @@ impl<'a> RoomHarness<'a> {
         cmd.env("RIMZ_BIN", env.rimz_bin());
         cmd.env("XDG_RUNTIME_DIR", runtime.path());
         cmd.env("RIMZ_TEST_PANE_LIST", &pane_file);
-        cmd.env(rimz::harness::run::ENV_CHANNEL, "");
-        cmd.env(rimz::harness::run::ENV_TEAM, "");
+        cmd.env(rimz::harness::launch::ENV_CHANNEL, "");
+        cmd.env(rimz::harness::launch::ENV_TEAM, "");
         cmd.env_remove("RUST_LOG");
 
         let child = pair.slave.spawn_command(cmd).expect("spawn rimz sidebar");
@@ -360,23 +360,26 @@ impl<'a> RoomHarness<'a> {
         runtime: Option<&std::path::Path>,
     ) -> Vec<(String, String)> {
         let mut env = self.pane_env(session_id);
-        env.push((rimz::harness::run::ENV_AGENT_NAME.to_owned(), String::new()));
-        env.push((rimz::harness::run::ENV_CHANNEL.to_owned(), String::new()));
-        env.push((rimz::harness::run::ENV_TEAM.to_owned(), String::new()));
         env.push((
-            rimz::harness::run::ENV_LAUNCH_GROUP.to_owned(),
+            rimz::harness::launch::ENV_AGENT_NAME.to_owned(),
+            String::new(),
+        ));
+        env.push((rimz::harness::launch::ENV_CHANNEL.to_owned(), String::new()));
+        env.push((rimz::harness::launch::ENV_TEAM.to_owned(), String::new()));
+        env.push((
+            rimz::harness::launch::ENV_LAUNCH_GROUP.to_owned(),
             String::new(),
         ));
         env.push((
-            rimz::harness::run::ENV_LAUNCH_ORDINAL.to_owned(),
+            rimz::harness::launch::ENV_LAUNCH_ORDINAL.to_owned(),
             String::new(),
         ));
         env.push((
-            rimz::harness::run::ENV_AGENT_MODEL.to_owned(),
+            rimz::harness::launch::ENV_AGENT_MODEL.to_owned(),
             String::new(),
         ));
         env.push((
-            rimz::harness::run::ENV_AGENT_EFFORT.to_owned(),
+            rimz::harness::launch::ENV_AGENT_EFFORT.to_owned(),
             String::new(),
         ));
         if let Some(runtime) = runtime {
@@ -545,11 +548,11 @@ fn journey_launch_identity(source: &str) -> Vec<(String, String)> {
 fn launch_identity(role: &str, profile: &str) -> Vec<(String, String)> {
     vec![
         (
-            rimz::harness::run::ENV_AGENT_ROLE.to_owned(),
+            rimz::harness::launch::ENV_AGENT_ROLE.to_owned(),
             role.to_owned(),
         ),
         (
-            rimz::harness::run::ENV_AGENT_PROFILE.to_owned(),
+            rimz::harness::launch::ENV_AGENT_PROFILE.to_owned(),
             profile.to_owned(),
         ),
     ]
@@ -562,9 +565,9 @@ fn launch_team_identity(
     profile: &str,
 ) -> Vec<(String, String)> {
     let mut identity = launch_identity(role, profile);
-    identity.push((rimz::harness::run::ENV_TEAM.to_owned(), team.to_owned()));
+    identity.push((rimz::harness::launch::ENV_TEAM.to_owned(), team.to_owned()));
     identity.push((
-        rimz::harness::run::ENV_CHANNEL.to_owned(),
+        rimz::harness::launch::ENV_CHANNEL.to_owned(),
         channel.to_owned(),
     ));
     identity

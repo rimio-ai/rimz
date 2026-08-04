@@ -4,14 +4,98 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result};
-use rimz::harness::plan::Placement;
+use anyhow::{Context, Result, bail};
+use rimz::config::LaunchPlacement;
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::{
     LayoutPanes, MuxBackend, SidebarPaneOptions, SplitPaneOptions, SplitPlacement, SplitTarget,
     TabOptions, own_pane_id,
 };
 use rimz::store::writer::AgentLaunchBatch;
+
+/// Where a launch lands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Placement {
+    SamePane,
+    NewPane,
+    NewTab,
+}
+
+/// Resolve launch placement from explicit flags, config policy, and current
+/// pane feasibility.
+pub(super) fn resolve_placement(
+    new_tab: bool,
+    new_pane: bool,
+    policy: LaunchPlacement,
+    is_worktree: bool,
+    single_cell: bool,
+    has_launching_pane: bool,
+) -> Result<Placement> {
+    if new_tab {
+        return Ok(Placement::NewTab);
+    }
+    if new_pane {
+        if !single_cell {
+            bail!(
+                "--new-pane opens a single agent cell; a multi-cell layout opens a new tab — drop --new-pane or pass --new-tab"
+            );
+        }
+        if !has_launching_pane {
+            bail!(
+                "--new-pane splits the current pane, so run it from inside the room; drop it to open a new tab"
+            );
+        }
+        return Ok(Placement::NewPane);
+    }
+    Ok(match policy {
+        LaunchPlacement::Tab => Placement::NewTab,
+        LaunchPlacement::Pane if is_worktree => Placement::NewTab,
+        LaunchPlacement::Pane => {
+            feasible_or_new(Placement::NewPane, single_cell, has_launching_pane)
+        }
+        LaunchPlacement::Auto if is_worktree => Placement::NewTab,
+        LaunchPlacement::Auto => {
+            feasible_or_new(Placement::SamePane, single_cell, has_launching_pane)
+        }
+    })
+}
+
+pub(super) fn resolve_fork_placement(
+    new_tab: bool,
+    new_pane: bool,
+    bg: bool,
+    has_launching_pane: bool,
+) -> Result<Placement> {
+    let placement = resolve_placement(
+        new_tab,
+        new_pane,
+        LaunchPlacement::Auto,
+        false,
+        true,
+        has_launching_pane,
+    )?;
+    Ok(apply_in_place_downgrade(placement, bg, true))
+}
+
+pub(super) fn apply_in_place_downgrade(
+    placement: Placement,
+    bg: bool,
+    allow_in_place: bool,
+) -> Placement {
+    if placement == Placement::SamePane && (bg || !allow_in_place) {
+        Placement::NewPane
+    } else {
+        placement
+    }
+}
+
+fn feasible_or_new(target: Placement, single_cell: bool, has_launching_pane: bool) -> Placement {
+    if single_cell && has_launching_pane {
+        target
+    } else {
+        Placement::NewTab
+    }
+}
 
 pub(super) struct PlacementRequest {
     pub placement: Placement,
@@ -278,6 +362,62 @@ mod tests {
                 Placement::SamePane => request.errors.same_pane,
             };
             assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn resolves_launch_placement_matrix() {
+        use Placement::{NewPane, NewTab, SamePane};
+
+        for (policy, is_worktree, single_cell, has_pane, expected) in [
+            (LaunchPlacement::Auto, false, true, true, SamePane),
+            (LaunchPlacement::Auto, true, true, true, NewTab),
+            (LaunchPlacement::Auto, false, false, true, NewTab),
+            (LaunchPlacement::Auto, false, true, false, NewTab),
+            (LaunchPlacement::Pane, false, true, true, NewPane),
+            (LaunchPlacement::Pane, true, true, true, NewTab),
+            (LaunchPlacement::Tab, false, true, true, NewTab),
+        ] {
+            assert_eq!(
+                resolve_placement(false, false, policy, is_worktree, single_cell, has_pane)
+                    .unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            resolve_placement(true, false, LaunchPlacement::Auto, false, true, true).unwrap(),
+            NewTab
+        );
+        assert_eq!(
+            resolve_placement(false, true, LaunchPlacement::Auto, true, true, true).unwrap(),
+            NewPane
+        );
+        assert_eq!(apply_in_place_downgrade(SamePane, true, true), NewPane);
+        assert_eq!(apply_in_place_downgrade(SamePane, false, false), NewPane);
+
+        let multi =
+            resolve_placement(false, true, LaunchPlacement::Auto, false, false, true).unwrap_err();
+        assert!(multi.to_string().contains("single agent cell"));
+        let outside =
+            resolve_placement(false, true, LaunchPlacement::Auto, false, true, false).unwrap_err();
+        assert!(outside.to_string().contains("inside the room"));
+    }
+
+    #[test]
+    fn fork_defaults_to_launching_pane() {
+        use Placement::{NewPane, NewTab, SamePane};
+
+        for (new_tab, new_pane, bg, has_pane, expected) in [
+            (false, false, false, true, SamePane),
+            (false, true, false, true, NewPane),
+            (true, false, false, true, NewTab),
+            (false, false, true, true, NewPane),
+            (false, false, false, false, NewTab),
+        ] {
+            assert_eq!(
+                resolve_fork_placement(new_tab, new_pane, bg, has_pane).unwrap(),
+                expected
+            );
         }
     }
 }

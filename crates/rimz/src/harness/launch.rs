@@ -23,6 +23,22 @@ const ENV_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const ENV_PROBE_POLL: Duration = Duration::from_millis(25);
 static ENV_PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
+pub const ENV_AGENT_ID: &str = "RIMZ_AGENT_ID";
+pub const ENV_AGENT_KIND: &str = "RIMZ_AGENT_KIND";
+pub const ENV_AGENT_NAME: &str = "RIMZ_AGENT_NAME";
+pub const ENV_AGENT_PROFILE: &str = "RIMZ_AGENT_PROFILE";
+pub const ENV_AGENT_ROLE: &str = "RIMZ_AGENT_ROLE";
+pub const ENV_TEAM: &str = "RIMZ_TEAM";
+pub const ENV_LAUNCH_GROUP: &str = "RIMZ_LAUNCH_GROUP";
+pub const ENV_LAUNCH_ORDINAL: &str = "RIMZ_LAUNCH_ORDINAL";
+pub const ENV_CHANNEL: &str = "RIMZ_CHANNEL";
+pub const ENV_WORKTREE_PATH: &str = "RIMZ_WORKTREE_PATH";
+pub const ENV_AGENT_MODEL: &str = "RIMZ_AGENT_MODEL";
+pub const ENV_AGENT_EFFORT: &str = "RIMZ_AGENT_EFFORT";
+pub const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
+pub(super) const ENV_RTK: &str = "RIMZ_RTK";
+
 pub const SUBAGENT_REMINDER: &str = concat!(
     "<system_reminder>You are a subagent: a supervised child launched by another agent to ",
     "complete the task you were given. You must not spawn agents or subagents of any kind — do not use ",
@@ -179,10 +195,10 @@ pub fn channel_shell_argv(
         ),
         format!(
             "{}={}",
-            crate::harness::run::ENV_WORKTREE_PATH,
+            crate::harness::launch::ENV_WORKTREE_PATH,
             worktree_path.display()
         ),
-        format!("{}={channel}", crate::harness::run::ENV_CHANNEL),
+        format!("{}={channel}", crate::harness::launch::ENV_CHANNEL),
         user_shell_program(),
     ]
 }
@@ -201,7 +217,7 @@ pub fn channel_label_shell_argv(
 }
 
 /// The identity a `rimz agents exec` pane carries in its structured request
-/// and as RIMZ_* env (crate::harness::run::ENV_*) for lifecycle hooks and peer
+/// and as RIMZ_* env (crate::harness::launch::ENV_*) for lifecycle hooks and peer
 /// attribution.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecIdentity {
@@ -248,7 +264,7 @@ fn launch_fields(params: &crate::agents::LaunchParams) -> [LaunchField<'_>; 10] 
     };
     [
         LaunchField {
-            env: Some(crate::harness::run::ENV_AGENT_PROFILE),
+            env: Some(crate::harness::launch::ENV_AGENT_PROFILE),
             value: text(|params| params.profile.as_deref()),
         },
         LaunchField {
@@ -256,35 +272,35 @@ fn launch_fields(params: &crate::agents::LaunchParams) -> [LaunchField<'_>; 10] 
             value: LaunchFieldValue::Mode(params.mode),
         },
         LaunchField {
-            env: Some(crate::harness::run::ENV_AGENT_ROLE),
+            env: Some(crate::harness::launch::ENV_AGENT_ROLE),
             value: text(|params| params.role.as_deref()),
         },
         LaunchField {
-            env: Some(crate::harness::run::ENV_TEAM),
+            env: Some(crate::harness::launch::ENV_TEAM),
             value: text(|params| params.team.as_deref()),
         },
         LaunchField {
-            env: Some(crate::harness::run::ENV_LAUNCH_GROUP),
+            env: Some(crate::harness::launch::ENV_LAUNCH_GROUP),
             value: text(|params| params.launch_group.as_deref()),
         },
         LaunchField {
-            env: Some(crate::harness::run::ENV_LAUNCH_ORDINAL),
+            env: Some(crate::harness::launch::ENV_LAUNCH_ORDINAL),
             value: LaunchFieldValue::Ordinal(params.launch_ordinal),
         },
         LaunchField {
-            env: Some(crate::harness::run::ENV_CHANNEL),
+            env: Some(crate::harness::launch::ENV_CHANNEL),
             value: text(|params| params.channel.as_deref()),
         },
         LaunchField {
-            env: Some(crate::harness::run::ENV_AGENT_MODEL),
+            env: Some(crate::harness::launch::ENV_AGENT_MODEL),
             value: text(|params| params.model.as_deref()),
         },
         LaunchField {
-            env: Some(crate::harness::run::ENV_AGENT_EFFORT),
+            env: Some(crate::harness::launch::ENV_AGENT_EFFORT),
             value: text(|params| params.effort.as_deref()),
         },
         LaunchField {
-            env: Some(crate::harness::run::ENV_AGENT_BUDGET),
+            env: Some(crate::harness::launch::ENV_AGENT_BUDGET),
             value: text(|params| params.budget.as_deref()),
         },
     ]
@@ -677,7 +693,7 @@ fn compose_agent_env(
     env.extend(system_prompt_env.clone());
     env.extend(exec_identity_env(request));
     env.insert(
-        crate::harness::run::ENV_RTK.to_owned(),
+        crate::harness::launch::ENV_RTK.to_owned(),
         rtk.as_str().to_owned(),
     );
     if request.subagent {
@@ -819,24 +835,27 @@ fn validate_exec_request(request: &ExecRequest) -> Result<(), ExecWireErr> {
 pub fn exec_identity_env(request: &ExecRequest) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     env.insert(
-        crate::harness::run::ENV_AGENT_KIND.to_owned(),
+        crate::harness::launch::ENV_AGENT_KIND.to_owned(),
         request.kind.to_string(),
     );
     // Always overwrite the ambient value. Resume records predating launch ids
     // deliberately export an empty value rather than inheriting their caller's
     // identity into the new pane.
     env.insert(
-        crate::harness::run::ENV_AGENT_ID.to_owned(),
+        crate::harness::launch::ENV_AGENT_ID.to_owned(),
         request.identity.launch_id.clone().unwrap_or_default(),
     );
     if let Some(run_id) = request.run_id.as_ref() {
         env.insert(
-            crate::harness::run::ENV_RUN_ID.to_owned(),
+            crate::harness::launch::ENV_RUN_ID.to_owned(),
             run_id.to_string(),
         );
     }
     if let Some(name) = request.identity.name.as_ref() {
-        env.insert(crate::harness::run::ENV_AGENT_NAME.to_owned(), name.clone());
+        env.insert(
+            crate::harness::launch::ENV_AGENT_NAME.to_owned(),
+            name.clone(),
+        );
     }
     for field in launch_fields(&request.identity.params) {
         if let (Some(key), Some(value)) = (field.env, field.value.into_env()) {
