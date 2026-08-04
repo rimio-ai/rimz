@@ -640,7 +640,8 @@ fn wake_alive_with_plugin_telemetry_records_a_sample() {
     );
 
     let logs = env.plugin_presence_logs();
-    let bytes = std::fs::read_to_string(&logs[0]).expect("presence log exists");
+    let bytes = std::fs::read_to_string(logs.first().expect("presence log exists"))
+        .expect("read presence log");
     let lines = bytes.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 1);
     let sample: serde_json::Value = serde_json::from_str(lines[0]).expect("sample is JSON");
