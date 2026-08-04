@@ -227,7 +227,7 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-surface-budget = 73
+surface-budget = 68
 
 [[module]]
 path = "crates/rimz/src/message.rs"
@@ -301,16 +301,6 @@ allowed-imports = [
     "workspace",
 ]
 surface-budget = 15
-
-[[strangler]]
-symbol = "purge_zellij_session_cache_in"
-path = "crates/rimz/src/mux/recovery.rs"
-baseline = 0
-
-[[strangler]]
-symbol = "logtail"
-path = "crates/rimz/src/mux"
-baseline = 0
 
 [[module]]
 path = "crates/rimz/src/observability"
@@ -669,6 +659,16 @@ allowed-imports = [
     "workspace",
 ]
 surface-budget = 65
+
+[[strangler]]
+symbol = "purge_zellij_session_cache_in"
+path = "crates/rimz/src/mux/recovery.rs"
+baseline = 0
+
+[[strangler]]
+symbol = "logtail"
+path = "crates/rimz/src/mux"
+baseline = 0
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"

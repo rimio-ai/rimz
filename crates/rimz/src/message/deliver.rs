@@ -901,7 +901,7 @@ pub fn register_message_wake(workspace: &ResolvedWorkspace, store: &Store) -> Re
     refresh_wake_stamp(&runtime, store, Timestamp::now())
 }
 
-pub fn refresh_wake_stamp(runtime: &RuntimePaths, store: &Store, now: Timestamp) -> Result<()> {
+fn refresh_wake_stamp(runtime: &RuntimePaths, store: &Store, now: Timestamp) -> Result<()> {
     let path = wake_stamp_path(runtime);
     let next = store.earliest_message_wake(now)?;
     match next {

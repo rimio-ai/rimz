@@ -701,6 +701,116 @@ impl MessageRecord {
     }
 }
 
+/// Everything one dispatch decides once and every recipient in the fan-out
+/// shares. Text and address vary per recipient and arrive at [`Self::record`].
+struct MessageDraft {
+    body: MessageBody,
+    enter: bool,
+    gate: DeliveryGate,
+    sender: MessageSender,
+    automated: bool,
+    force: bool,
+    auto_compact: Option<AutoCompact>,
+    not_before: Option<Timestamp>,
+    after: Vec<AfterCondition>,
+    when: Vec<WhenCondition>,
+}
+
+enum Recipient<'a> {
+    Agent {
+        agent: &'a AgentState,
+        pane: Option<&'a crate::store::snapshot::PaneAgent>,
+    },
+    Pane {
+        pane: &'a crate::store::snapshot::PaneAgent,
+        bound: Option<&'a AgentState>,
+    },
+}
+
+struct RecipientIdentity {
+    kind: AgentKind,
+    agent_id: AgentSessionId,
+    agent_name: Option<String>,
+    channel: Option<String>,
+    pane_id: Option<PaneId>,
+}
+
+impl Recipient<'_> {
+    fn into_identity(self, scope_channel: Option<&str>) -> RecipientIdentity {
+        match self {
+            Self::Agent { agent, pane } => RecipientIdentity {
+                kind: agent.kind.clone(),
+                agent_id: agent.agent_id.clone(),
+                agent_name: agent.name.clone(),
+                channel: crate::harness::target::agent_channel(agent).or_else(|| {
+                    pane.and_then(|pane| {
+                        crate::harness::target::recipient_channel(pane, Some(agent), scope_channel)
+                    })
+                }),
+                pane_id: pane.map(|pane| pane.pane_id.clone()),
+            },
+            Self::Pane { pane, bound } => RecipientIdentity {
+                kind: pane.kind.clone(),
+                agent_id: bound
+                    .map(|agent| agent.agent_id.clone())
+                    .or_else(|| pane.agent_id.clone())
+                    .unwrap_or_else(|| synthetic_session_for_pane(&pane.pane_id)),
+                agent_name: bound
+                    .and_then(|agent| agent.name.clone())
+                    .or_else(|| pane.name.clone()),
+                channel: crate::harness::target::recipient_channel(pane, bound, scope_channel),
+                pane_id: Some(pane.pane_id.clone()),
+            },
+        }
+    }
+}
+
+impl MessageDraft {
+    /// Stamp this dispatch's decisions onto one recipient's durable record.
+    fn record(
+        &self,
+        workspace_id: WorkspaceId,
+        recipient: Recipient<'_>,
+        scope_channel: Option<&str>,
+        text: &str,
+        address: Option<&str>,
+    ) -> MessageRecord {
+        let recipient = recipient.into_identity(scope_channel);
+        let record = MessageRecord::new_for_card(
+            workspace_id,
+            recipient.kind,
+            recipient.agent_id,
+            recipient.agent_name,
+            text.to_owned(),
+            self.enter,
+            self.gate,
+        )
+        .with_body(self.body)
+        .with_force(self.force)
+        .with_address(address.map(ToOwned::to_owned))
+        .with_channel(recipient.channel)
+        .with_sender(self.sender.clone())
+        .with_automated(self.automated)
+        .with_auto_compact(self.auto_compact)
+        .with_not_before(self.not_before)
+        .with_after(self.after.clone())
+        .with_when(self.when.clone());
+        match recipient.pane_id {
+            Some(pane_id) => record.with_pane_id(pane_id),
+            None => record,
+        }
+    }
+}
+
+fn synthetic_session_for_pane(pane_id: &PaneId) -> AgentSessionId {
+    let mut rendered = String::from("pane_");
+    rendered.extend(pane_id.as_str().chars().map(|ch| match ch {
+        'a'..='z' | 'A'..='Z' | '0'..='9' => ch,
+        _ => '_',
+    }));
+    AgentSessionId::from(rendered)
+}
+
 pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
     match gate {
         DeliveryGate::Done => matches!(status, AgentStatus::Idle | AgentStatus::Success),
@@ -922,7 +1032,7 @@ pub fn command_submit_delay_from_env() -> Duration {
     env_ms(COMMAND_SUBMIT_DELAY_ENV).unwrap_or(DEFAULT_COMMAND_SUBMIT_DELAY)
 }
 
-pub fn delivery_window_from_env() -> Duration {
+pub(crate) fn delivery_window_from_env() -> Duration {
     MessageBody::Prompt.delivery_window()
 }
 

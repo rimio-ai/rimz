@@ -7,6 +7,113 @@ use crate::agents::{
     AgentContext, AgentState, AgentStatus, LifecycleSignal, TurnSettle, TurnSettleOutcome,
 };
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
+use crate::store::snapshot::PaneAgent;
+
+#[test]
+fn draft_record_uses_recipient_identity_and_live_pane_context() {
+    let agent = agent("sess-a", Some("lucid-atlas"));
+    let pane = pane(
+        "claude",
+        Some("sess-a"),
+        Some("lucid-atlas"),
+        Some("auth"),
+        None,
+        "terminal_1",
+    );
+    let workspace_id = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+    let not_before = Timestamp::now();
+
+    let live = draft(Some(not_before)).record(
+        workspace_id.clone(),
+        Recipient::Agent {
+            agent: &agent,
+            pane: Some(&pane),
+        },
+        None,
+        "hello",
+        Some("@claude"),
+    );
+    let parked = draft(Some(not_before)).record(
+        workspace_id,
+        Recipient::Agent {
+            agent: &agent,
+            pane: None,
+        },
+        None,
+        "hello",
+        Some("@claude"),
+    );
+
+    assert_eq!(live.agent_id, agent.agent_id);
+    assert_eq!(live.pane_id.as_ref(), Some(&pane.pane_id));
+    assert_eq!(live.channel.as_deref(), Some("auth"));
+    assert_eq!(live.not_before, Some(not_before));
+    assert_eq!(parked.pane_id, None);
+    assert_eq!(parked.channel, None);
+}
+
+#[test]
+fn draft_record_normalizes_bound_provisional_lazy_and_pane_identity() {
+    let workspace_id = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+    let mut bound = agent("sess-a", Some("lucid-atlas"));
+    bound.channel = Some("bound-channel".to_owned());
+    let bound_pane = pane(
+        "claude",
+        Some("pane-session"),
+        Some("pane-name"),
+        Some("pane-channel"),
+        Some("/repo/pane-worktree"),
+        "terminal_1",
+    );
+    let record = pane_record(workspace_id.clone(), &bound_pane, Some(&bound), "scope");
+    assert_eq!(record.agent_id, bound.agent_id);
+    assert_eq!(record.agent_name, bound.name);
+    assert_eq!(record.channel.as_deref(), Some("bound-channel"));
+    assert_eq!(record.pane_id.as_ref(), Some(&bound_pane.pane_id));
+
+    let mut provisional = agent("sess-a", Some("lucid-atlas"));
+    provisional.agent_id = AgentSessionId::from("launch_pending");
+    provisional.channel = None;
+    let provisional_pane = pane(
+        "claude",
+        None,
+        None,
+        Some("provisional-channel"),
+        None,
+        "terminal_2",
+    );
+    let record = agent_record(
+        workspace_id.clone(),
+        &provisional,
+        Some(&provisional_pane),
+        "scope",
+    );
+    assert_eq!(record.agent_id.as_str(), "launch_pending");
+    assert_eq!(record.channel.as_deref(), Some("provisional-channel"));
+    assert_eq!(record.pane_id.as_ref(), Some(&provisional_pane.pane_id));
+
+    let lazy = pane("codex", None, None, None, Some("/repo/lazy"), "terminal_3");
+    let record = pane_record(workspace_id.clone(), &lazy, None, "scope");
+    assert_eq!(record.agent_id, synthetic_session_for_pane(&lazy.pane_id));
+    assert_eq!(record.channel.as_deref(), Some("lazy"));
+
+    let pane_only = pane(
+        "codex",
+        Some("pane-session"),
+        Some("pane-name"),
+        None,
+        None,
+        "terminal_4",
+    );
+    let record = pane_record(workspace_id.clone(), &pane_only, None, "scope");
+    assert_eq!(record.agent_id.as_str(), "pane-session");
+    assert_eq!(record.agent_name.as_deref(), Some("pane-name"));
+    assert_eq!(record.channel.as_deref(), Some("scope"));
+
+    let fresh = pane("codex", None, None, None, None, "terminal_5");
+    let record = pane_record(workspace_id, &fresh, None, "explicit");
+    assert_eq!(record.channel.as_deref(), Some("explicit"));
+}
 
 #[test]
 fn user_input_requires_plain_human_delivery() {
@@ -1088,6 +1195,75 @@ fn agent(id: &str, name: Option<&str>) -> AgentState {
     let mut agent = AgentState::stub("claude", id, AgentStatus::Idle);
     agent.name = name.map(ToOwned::to_owned);
     agent
+}
+
+fn draft(not_before: Option<Timestamp>) -> MessageDraft {
+    MessageDraft {
+        body: MessageBody::Prompt,
+        enter: true,
+        gate: DeliveryGate::Done,
+        sender: MessageSender::Human,
+        automated: false,
+        force: false,
+        auto_compact: None,
+        not_before,
+        after: Vec::new(),
+        when: Vec::new(),
+    }
+}
+
+fn agent_record(
+    workspace_id: WorkspaceId,
+    agent: &AgentState,
+    pane: Option<&PaneAgent>,
+    channel: &str,
+) -> MessageRecord {
+    draft(None).record(
+        workspace_id,
+        Recipient::Agent { agent, pane },
+        Some(channel),
+        "hello",
+        Some("@claude"),
+    )
+}
+
+fn pane_record(
+    workspace_id: WorkspaceId,
+    pane: &PaneAgent,
+    bound: Option<&AgentState>,
+    channel: &str,
+) -> MessageRecord {
+    draft(None).record(
+        workspace_id,
+        Recipient::Pane { pane, bound },
+        Some(channel),
+        "hello",
+        Some("@claude"),
+    )
+}
+
+fn pane(
+    kind: &str,
+    agent_id: Option<&str>,
+    name: Option<&str>,
+    channel: Option<&str>,
+    worktree_path: Option<&str>,
+    raw: &str,
+) -> PaneAgent {
+    PaneAgent {
+        kind: AgentKind::new_unchecked(kind),
+        kind_ordinal: None,
+        name: name.map(ToOwned::to_owned),
+        name_explicit: false,
+        profile: None,
+        role: None,
+        channel: channel.map(ToOwned::to_owned),
+        agent_id: agent_id.map(AgentSessionId::from),
+        pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+        pane_pid: None,
+        worktree_path: worktree_path.map(ToOwned::to_owned),
+        worktree_branch: None,
+    }
 }
 
 fn condition_snapshot(agents: Vec<AgentState>) -> crate::store::snapshot::SidebarSnapshot {

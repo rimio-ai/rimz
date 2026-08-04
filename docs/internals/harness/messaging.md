@@ -22,9 +22,9 @@ Start here when you are looking for where a behaviour lives.
 
 | File | Owns |
 | --- | --- |
-| [`message.rs`](../../../crates/rimz/src/message.rs) | The vocabulary: `MessageRecord`, `MessageStatus`, `DeliveryGate`, `AfterCondition`/`WhenCondition`, `AutoCompact`, card matching, FIFO head and batch selection, and the environment knobs. Pure logic, no I/O. |
+| [`message.rs`](../../../crates/rimz/src/message.rs) | The vocabulary: `MessageRecord`, durable record construction, `MessageStatus`, `DeliveryGate`, `AfterCondition`/`WhenCondition`, `AutoCompact`, card matching, FIFO head and batch selection, and the environment knobs. Pure logic, no I/O. |
 | [`message/dispatch.rs`](../../../crates/rimz/src/message/dispatch.rs) | One send request end to end: resolve targets, bind conditions, preflight hooks, build records, decide park-vs-live, order the fan-out. |
-| [`message/send.rs`](../../../crates/rimz/src/message/send.rs) | The pane write: payload construction, the bracketed paste, the submit barrier, pacing, and the compact-first command. |
+| [`message/send.rs`](../../../crates/rimz/src/message/send.rs) | The pane write: bracketed paste, the submit barrier, pacing, and the compact-first command. |
 | [`message/deliver.rs`](../../../crates/rimz/src/message/deliver.rs) | Readiness: the ordered delivery check, the delivery attempt and its failure recovery, condition evaluation, the sweep, and the wake stamp. |
 | [`message/reply.rs`](../../../crates/rimz/src/message/reply.rs) | `--wait`: leg state machines, transcript anchoring, cycle detection, join settlement. |
 | [`message/fire.rs`](../../../crates/rimz/src/message/fire.rs) | The elder's side of the clock: read the wake stamp, spawn `message sweep`. Nothing else. |
