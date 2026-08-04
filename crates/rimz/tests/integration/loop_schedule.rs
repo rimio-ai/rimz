@@ -227,6 +227,8 @@ fn agent_budget_edits_and_views_use_local_day() {
 fn loop_spawn_controls_persist_render_and_gate_daily_budget() {
     let env = Env::new();
     env.install_agent_hooks("claude");
+    loop_ok(&env, &["config", "init"]);
+    loop_ok(&env, &["config", "set", "harness.budget", "0/day"]);
     write_loop_config(&env, "default-timeout = \"3h\"\n");
     loop_ok(
         &env,
@@ -287,10 +289,47 @@ fn loop_spawn_controls_persist_render_and_gate_daily_budget() {
             .is_some_and(|error| error.contains("daily budget"))
     );
     assert!(
+        !skipped
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("fleet budget")),
+        "task daily budget must gate before the simultaneously closed fleet scope"
+    );
+    assert!(
         std::fs::read_to_string(loop_config_path(&env))
             .expect("read loop config")
             .contains("[tasks.bounded]")
     );
+
+    let marker = env.project_root.join("scope-check-ran");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "scope-bounded",
+            "--agent",
+            "claude",
+            "--prompt",
+            "bounded work",
+            "--check",
+            &format!("touch {}", marker.display()),
+            "--on",
+            "success",
+            "--every",
+            "15m",
+        ],
+    );
+    loop_ok(&env, &["loop", "run", "scope-bounded"]);
+    let skipped = last_loop_record(&env);
+    assert_eq!(skipped.result, LoopRunResult::BudgetSkipped);
+    assert!(
+        skipped
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("fleet budget exhausted"))
+    );
+    assert!(!marker.exists(), "scope caps must gate before the check");
 }
 
 #[test]
@@ -299,13 +338,16 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.shared]\ncheck = \"printf machine\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "[tasks.shared]\ncheck = \"printf machine\"\nroot = \"{}\"\nevery = \"15m\"\n\
+             [tasks.profile-ref]\nagent = \"repo-agent\"\nprompt = \"work\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            env.project_root.display(),
             env.project_root.display()
         ),
     );
     write_project_config(
         &env,
-        "[tasks.repo-check]\ncheck = \"true\"\nevery = \"15m\"\n\
+        "[profiles.repo-agent]\nagent = \"claude\"\n\
+         [tasks.repo-check]\ncheck = \"true\"\nevery = \"15m\"\n\
          [tasks.shared]\ncheck = \"printf project\"\nevery = \"15m\"\n",
     );
 
@@ -323,6 +365,13 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
         error.contains("loop task `repo-check` is blocked — project trust is untrusted")
             && error.contains("rimz trust grant"),
         "{error}"
+    );
+    let (_stdout, error) = loop_fail(&env, &["loop", "run", "profile-ref"]);
+    assert!(
+        error.contains("profiles are configured")
+            && error.contains("untrusted")
+            && error.contains("rimz trust grant"),
+        "the loop launch resolver must refuse an untrusted project profile: {error}"
     );
 
     loop_ok(&env, &["loop", "run", "shared"]);
@@ -826,6 +875,8 @@ fn loop_rename_rejects_collisions_and_reports_missing() {
 #[test]
 fn loop_qwen_exact_quota_skip_precedes_check_command() {
     let env = Env::new();
+    loop_ok(&env, &["config", "init"]);
+    loop_ok(&env, &["config", "set", "harness.budget", "0/day"]);
     let settings = env.agent_config_path("qwen");
     std::fs::create_dir_all(settings.parent().expect("Qwen config parent"))
         .expect("create Qwen config");
@@ -865,43 +916,44 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
         .to_owned();
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
+    let rate_cache = |used_7d, used_30d| RateLimitsCache {
+        entries: [(
+            "qwen".to_owned(),
+            RateLimitCacheEntry {
+                scope: binding.scope().clone(),
+                account_key: Some(account_key.clone()),
+                limits: AgentRateLimits {
+                    windows: vec![
+                        RateLimitWindow {
+                            used_percentage: Some(used_7d),
+                            resets_at: Some(
+                                Timestamp::now() + jiff::SignedDuration::from_hours(84),
+                            ),
+                            duration_mins: Some(7 * 24 * 60),
+                            ..RateLimitWindow::default()
+                        },
+                        RateLimitWindow {
+                            used_percentage: Some(used_30d),
+                            resets_at: Some(
+                                Timestamp::now() + jiff::SignedDuration::from_hours(360),
+                            ),
+                            duration_mins: Some(30 * 24 * 60),
+                            ..RateLimitWindow::default()
+                        },
+                    ],
+                },
+                bound_limits: None,
+                pending: Vec::new(),
+                unknown_since_ms: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..RateLimitsCache::default()
+    };
     rimz::store::atomic::write_temp_then_rename_cache(
         &runtime.shared_rate_limits_path(),
-        &RateLimitsCache {
-            entries: [(
-                "qwen".to_owned(),
-                RateLimitCacheEntry {
-                    scope: binding.scope().clone(),
-                    account_key: Some(account_key.clone()),
-                    limits: AgentRateLimits {
-                        windows: vec![
-                            RateLimitWindow {
-                                used_percentage: Some(20),
-                                resets_at: Some(
-                                    Timestamp::now() + jiff::SignedDuration::from_hours(2),
-                                ),
-                                duration_mins: Some(7 * 24 * 60),
-                                ..RateLimitWindow::default()
-                            },
-                            RateLimitWindow {
-                                used_percentage: Some(100),
-                                resets_at: Some(
-                                    Timestamp::now() + jiff::SignedDuration::from_hours(1),
-                                ),
-                                duration_mins: Some(30 * 24 * 60),
-                                ..RateLimitWindow::default()
-                            },
-                        ],
-                    },
-                    bound_limits: None,
-                    pending: Vec::new(),
-                    unknown_since_ms: None,
-                },
-            )]
-            .into_iter()
-            .collect(),
-            ..RateLimitsCache::default()
-        },
+        &rate_cache(20, 100),
     )
     .expect("write exact quota cache");
     assert!(
@@ -925,10 +977,49 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
             "qwen",
             "--prompt",
             "work",
+            "--surplus",
+            "2x",
             "--every",
             "15m",
         ],
     );
+    let mut config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).expect("read loop config"))
+            .expect("parse loop config");
+    config
+        .tasks
+        .0
+        .get_mut("qwen-bounded")
+        .expect("Qwen task")
+        .deadline = Some(Timestamp::from_second(1).expect("deadline"));
+    std::fs::write(
+        loop_config_path(&env),
+        toml::to_string_pretty(&config).expect("serialize loop config"),
+    )
+    .expect("write loop config");
+    let lock_path = loop_run_lock_path(&env, "qwen-bounded");
+    std::fs::create_dir_all(lock_path.parent().expect("lock parent")).expect("mkdir runtime");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("open run lock");
+    lock_file.try_lock().expect("hold run lock");
+
+    qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
+    let scope_skip = last_loop_record(&env);
+    assert_eq!(scope_skip.result, LoopRunResult::BudgetSkipped);
+    assert!(
+        scope_skip
+            .error
+            .as_deref()
+            .is_some_and(|reason| reason.contains("fleet budget exhausted")),
+        "scope cap must gate before provider quota"
+    );
+
+    loop_ok(&env, &["budget", "off", "--no-continue"]);
     qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
 
     assert!(
@@ -945,6 +1036,44 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
     );
     assert!(!reason.contains("sentinel-loop-secret"), "{reason}");
     assert!(!reason.contains(&account_key), "{reason}");
+
+    rimz::store::atomic::write_temp_then_rename_cache(
+        &runtime.shared_rate_limits_path(),
+        &rate_cache(80, 80),
+    )
+    .expect("write surplus cache");
+    qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
+    let surplus = last_loop_record(&env);
+    assert_eq!(surplus.result, LoopRunResult::SurplusSkipped);
+    assert!(
+        surplus
+            .error
+            .as_deref()
+            .is_some_and(|reason| reason.contains("surplus")),
+        "surplus must gate before run lock, deadline, and check"
+    );
+
+    config
+        .tasks
+        .0
+        .get_mut("qwen-bounded")
+        .expect("Qwen task")
+        .surplus = None;
+    std::fs::write(
+        loop_config_path(&env),
+        toml::to_string_pretty(&config).expect("serialize loop config"),
+    )
+    .expect("write loop config");
+    qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
+    assert_eq!(last_loop_record(&env).result, LoopRunResult::Overlapped);
+
+    lock_file.unlock().expect("unlock run lock");
+    qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
+    assert_eq!(last_loop_record(&env).result, LoopRunResult::Expired);
+    assert!(
+        !marker.exists(),
+        "ordered gates must stop before the check command"
+    );
 }
 
 #[test]
@@ -1102,7 +1231,13 @@ fn loop_trip_then_preparation_error_records_and_renders() {
         error.contains("reading prompt-file") && error.contains("missing-prompt.txt"),
         "{error}"
     );
-    let record = last_loop_record(&env);
+    let records = read_loop_run_records(&env);
+    assert_eq!(
+        records.len(),
+        1,
+        "a preparation error must append exactly one terminal row"
+    );
+    let record = &records[0];
     assert_eq!(record.result, LoopRunResult::Errored);
     assert!(
         record
@@ -1306,7 +1441,13 @@ fn loop_poll_until_delivers_once_or_expires() {
     );
     loop_ok(&expired, &["loop", "run", "expired"]);
     assert!(read_loop_instances(&expired).0.is_empty());
-    assert_eq!(last_loop_record(&expired).result, LoopRunResult::Expired);
+    let records = read_loop_run_records(&expired);
+    assert_eq!(
+        records.len(),
+        1,
+        "a prepare-time Done result must append exactly one terminal row"
+    );
+    assert_eq!(records[0].result, LoopRunResult::Expired);
     assert!(
         expired
             .store()
