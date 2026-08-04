@@ -393,6 +393,24 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn cancel_and_wake_delivers_terminal_frame() {
+        let fixture = RunFixture::new(RunStatus::Running);
+        let waiter = fixture.waiter(RunCancellation::new());
+        let sock =
+            adopt(waiter.sock.try_clone().expect("clone run socket")).expect("adopt run socket");
+
+        let canceled = crate::harness::run::cancel_and_wake(&fixture.store, &fixture.record.run_id)
+            .expect("cancel and wake");
+        let outcome =
+            wait_for_run_completion(&sock, &waiter.expected, Some(Duration::from_secs(1)))
+                .await
+                .expect("receive cancellation wake");
+
+        assert_eq!(canceled.status, RunStatus::Canceled);
+        assert_eq!(outcome, RunWakeOutcome::Completed(RunStatus::Canceled));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn run_completion_wait_times_out_neutral() {
         let dir = short_runtime_root();
         let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));

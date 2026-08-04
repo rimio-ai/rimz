@@ -469,10 +469,8 @@ fn prepare_supervised(
     }
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
-    let mut launch_invocation = rimz::harness::launch::ExecRequest::bare_launch(
-        agent_cell.kind.clone(),
-        agent_cell.args.clone(),
-    );
+    let mut launch_invocation =
+        rimz::harness::launch::ExecRequest::bare_launch(agent_cell.kind.clone(), Vec::new());
     launch_invocation.action = rimz::harness::launch::ExecAction::Launch {
         prompt: Some(prompt.to_string()),
         extra_args: agent_cell.args.clone(),

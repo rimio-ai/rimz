@@ -121,6 +121,10 @@ pub fn resolve_launch_ancestry_from_env(
 }
 
 /// Resolve the pane-backed agent that owns the current process environment.
+///
+/// Command doorways that operate on the caller's descendants use the same
+/// stable launch-id rules as ancestry stamping, so a stale pane environment
+/// cannot select another agent's children.
 pub fn resolve_launch_caller_from_env(
     agents: &[crate::agents::AgentState],
 ) -> Result<&crate::agents::AgentState, LaunchAncestryError> {
