@@ -21,7 +21,7 @@ use super::{
     gate::Cidr,
 };
 
-pub(super) mod client;
+mod client;
 
 use client::ClientProfile;
 
@@ -34,10 +34,10 @@ const SHARE_DAEMON_FILE: &str = "web-ttyd-share.json";
 const SHARE_DAEMON_LOCK_FILE: &str = "web-ttyd-share.lock";
 const LEGACY_INSTANCE_DIR: &str = "web-ttyd";
 const START_TIMEOUT: Duration = Duration::from_secs(5);
-pub(super) const MIN_TTYD_VERSION: TtydVersion = TtydVersion::new(1, 7, 5);
+const MIN_TTYD_VERSION: TtydVersion = TtydVersion::new(1, 7, 5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct TtydVersion {
+struct TtydVersion {
     major: u32,
     minor: u32,
     patch: u32,
@@ -60,7 +60,7 @@ impl fmt::Display for TtydVersion {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct TtydCredential {
+struct TtydCredential {
     name: String,
     created_at: Timestamp,
     secret: String,
@@ -73,11 +73,11 @@ pub(super) struct TtydProcessRecord {
     #[serde(default = "default_interface")]
     pub(super) interface: String,
     #[serde(default)]
-    pub(super) launch_context_scrubbed: bool,
+    launch_context_scrubbed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) pixel_protocol: Option<u32>,
+    pixel_protocol: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) index_key: Option<String>,
+    index_key: Option<String>,
 }
 
 impl TtydProcessRecord {
@@ -94,25 +94,25 @@ pub(super) struct WritableDaemonRecord {
     #[serde(flatten)]
     pub(super) process: TtydProcessRecord,
     #[serde(default)]
-    pub(super) auth: WebAuth,
+    auth: WebAuth,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(super) auth_users: Vec<String>,
+    auth_users: Vec<String>,
     #[serde(default)]
-    pub(super) trusted_proxies: Vec<String>,
+    trusted_proxies: Vec<String>,
     #[serde(default)]
-    pub(super) gate: Option<GateRecord>,
+    gate: Option<GateRecord>,
     #[serde(default)]
-    pub(super) basic_upstream: bool,
+    basic_upstream: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct GateRecord {
-    pub(super) pid: u32,
-    pub(super) upstream_port: u16,
+struct GateRecord {
+    pid: u32,
+    upstream_port: u16,
 }
 
 impl WritableDaemonRecord {
-    pub(super) fn basic_loopback(pid: u32, port: u16) -> Self {
+    fn basic_loopback(pid: u32, port: u16) -> Self {
         Self {
             process: TtydProcessRecord {
                 pid,
@@ -194,7 +194,7 @@ pub(super) fn version_at(program: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(text).trim().to_owned())
 }
 
-pub(super) fn required_program_with_version() -> Result<(PathBuf, String)> {
+fn required_program_with_version() -> Result<(PathBuf, String)> {
     let program = program()?;
     let reported = version_at(&program)?;
     require_supported_version(&reported)?;
@@ -503,7 +503,7 @@ fn reap_legacy_instances() {
     remove_legacy_instance_dir(&dir);
 }
 
-pub(super) fn is_ttyd_process(process: &crate::proc::ProcInfo) -> bool {
+fn is_ttyd_process(process: &crate::proc::ProcInfo) -> bool {
     crate::proc::command::program_label(&process.cmdline) == "ttyd"
 }
 
@@ -775,7 +775,7 @@ pub(super) fn daemon_status() -> Result<Option<WritableDaemonRecord>> {
     daemon_status_locked()
 }
 
-pub(crate) fn pixel_daemon_record() -> Option<(u32, u32)> {
+pub(super) fn pixel_daemon_record() -> Option<(u32, u32)> {
     let bytes = fs::read(state_path(DAEMON_FILE)).ok()?;
     let record = serde_json::from_slice::<WritableDaemonRecord>(&bytes).ok()?;
     record
@@ -879,7 +879,7 @@ fn terminate_live_record(record: &WritableDaemonRecord, ttyd_live: bool, gate_li
 }
 
 #[cfg(unix)]
-pub(super) fn terminate_pids(pids: &[u32]) {
+fn terminate_pids(pids: &[u32]) {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
 
@@ -906,7 +906,7 @@ pub(super) fn terminate_pids(pids: &[u32]) {
 }
 
 #[cfg(not(unix))]
-pub(super) fn terminate_pids(_pids: &[u32]) {}
+fn terminate_pids(_pids: &[u32]) {}
 
 #[derive(Clone, Copy)]
 enum TtydMode<'a> {
@@ -993,7 +993,7 @@ fn spawn_ttyd_process(
     })
 }
 
-pub(super) fn spawn_detached(spec: CommandSpec) -> Result<u32> {
+fn spawn_detached(spec: CommandSpec) -> Result<u32> {
     let mut command = spec.to_command();
     command
         .stdin(Stdio::null())
@@ -1037,7 +1037,7 @@ fn wait_for_port(port: u16, timeout: Duration) -> bool {
     )
 }
 
-pub(super) fn wait_for_address(address: SocketAddr, timeout: Duration) -> bool {
+fn wait_for_address(address: SocketAddr, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if TcpStream::connect(address).is_ok() {
@@ -1049,14 +1049,14 @@ pub(super) fn wait_for_address(address: SocketAddr, timeout: Duration) -> bool {
 }
 
 #[cfg(unix)]
-pub(super) fn wait_for_address_close(address: SocketAddr, timeout: Duration) {
+fn wait_for_address_close(address: SocketAddr, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline && TcpStream::connect(address).is_ok() {
         std::thread::sleep(Duration::from_millis(25));
     }
 }
 
-pub(super) fn socket_address(interface: &str, port: u16) -> Result<SocketAddr> {
+fn socket_address(interface: &str, port: u16) -> Result<SocketAddr> {
     let interface = interface
         .parse::<IpAddr>()
         .map_err(|_| WebErr::InvalidInterface {
@@ -1076,7 +1076,7 @@ fn process_address(record: &TtydProcessRecord) -> Result<SocketAddr> {
     )?))
 }
 
-pub(super) fn probe_address(mut address: SocketAddr) -> SocketAddr {
+fn probe_address(mut address: SocketAddr) -> SocketAddr {
     if address.ip().is_unspecified() {
         address.set_ip(match address.ip() {
             IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -1123,7 +1123,7 @@ fn write_cache_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn read_json_optional<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
+fn read_json_optional<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -1142,7 +1142,7 @@ pub(super) fn read_json_optional<T: for<'de> Deserialize<'de>>(path: &Path) -> R
         })
 }
 
-pub(super) fn remove_optional(path: &Path) -> Result<bool> {
+fn remove_optional(path: &Path) -> Result<bool> {
     match fs::remove_file(path) {
         Ok(()) => Ok(true),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -1244,7 +1244,7 @@ pub(super) fn broadcast_status() -> Result<Option<TtydProcessRecord>> {
     broadcast_status_locked()
 }
 
-pub(crate) fn pixel_broadcast_record() -> Option<(u32, u32)> {
+pub(super) fn pixel_broadcast_record() -> Option<(u32, u32)> {
     let bytes = fs::read(state_path(SHARE_DAEMON_FILE)).ok()?;
     let record = serde_json::from_slice::<TtydProcessRecord>(&bytes).ok()?;
     record.pixel_protocol.map(|protocol| (record.pid, protocol))
