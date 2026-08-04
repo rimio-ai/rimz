@@ -491,7 +491,6 @@ struct PreparedMode {
     draft: MessageDraft,
 }
 
-#[derive(Clone, Copy)]
 struct ResolutionView<'a> {
     snapshot: &'a SidebarSnapshot,
     durable_agents: &'a [AgentState],
