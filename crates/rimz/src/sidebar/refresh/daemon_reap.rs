@@ -29,7 +29,7 @@ pub(crate) fn codex_daemon_reap_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("codex-daemon-reap.json")
 }
 
-pub fn write_codex_daemon_reap(
+pub(crate) fn write_codex_daemon_reap(
     runtime: &RuntimePaths,
     cache: &CodexDaemonReap,
 ) -> crate::store::atomic::Result<()> {

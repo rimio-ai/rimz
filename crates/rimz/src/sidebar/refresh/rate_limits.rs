@@ -145,7 +145,7 @@ pub fn merge_account_rate_limits(
 /// Drop one provider kind's account-scoped windows after the local OAuth account
 /// key changes. The detached writer waits for normal producer contention; a
 /// real lock acquisition failure or absent kind is a no-op.
-pub fn drop_kind_rate_limits(runtime: &RuntimePaths, kind: &str) {
+pub(super) fn drop_kind_rate_limits(runtime: &RuntimePaths, kind: &str) {
     let path = runtime.shared_rate_limits_path();
     let Some(_guard) = acquire_rate_limits_cache_lock(
         &runtime.shared_rate_limits_lock(),
@@ -159,17 +159,6 @@ pub fn drop_kind_rate_limits(runtime: &RuntimePaths, kind: &str) {
     }
     cache.refreshed_at_ms = unix_now_ms();
     write_rate_limits_cache(&path, &cache);
-}
-
-/// Project a budget window's reset-to-max roll forward to `now`: the timestamp-
-/// aware refill the dashboard and the window-priming guard share. Before the
-/// reset the last-known (most-drained) reading stands unchanged; once `now`
-/// reaches the reset the window has refilled, so synthesize a full window (0%
-/// used) with its reset rolled its own `duration_mins` forward, so the countdown
-/// reads sensibly until a live reading overwrites it. A window with no reset, or
-/// no known duration to roll by, shows as-is.
-pub(crate) fn project_window(cached: RateLimitWindow, now: Timestamp) -> RateLimitWindow {
-    cached.projected_at(now)
 }
 
 /// Whether the cached account reading has aged past its longest freshness
@@ -482,7 +471,7 @@ fn apply_rate_limit_cache_with(
                 if cache_unknown || expired_named_quota {
                     unknown_idle_window(window)
                 } else {
-                    project_window(window, now)
+                    window.projected_at(now)
                 }
             })
             .collect();
