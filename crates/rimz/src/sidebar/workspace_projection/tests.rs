@@ -3,7 +3,7 @@ use jiff::Timestamp;
 use super::*;
 use crate::agents::AgentStatus;
 use crate::ids::WorkspaceId;
-use crate::sidebar::consumer::{ConsumerSnapshotSource, PublishedSnapshotReader};
+use crate::sidebar::consumer::PublishedSnapshotReader;
 use crate::sidebar::enrich::{FoldOpts, enrich_workspace};
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -214,9 +214,7 @@ fn quiet_time_transition_republishes_and_reaches_a_cached_adopter() {
     );
     let mut reader = PublishedSnapshotReader::new(runtime.clone(), "rimz-test", None);
     let first = reader.read_adopting(&state).unwrap();
-    assert_eq!(first.source, ConsumerSnapshotSource::Adoption);
-    assert_eq!(status(&first.snapshot), Some(AgentStatus::Running));
-    let slim_before = crate::sidebar::consumer::consumer_projection_inputs_stamp(&state, &runtime);
+    assert_eq!(status(&first), Some(AgentStatus::Running));
 
     assert_eq!(
         publisher
@@ -225,12 +223,6 @@ fn quiet_time_transition_republishes_and_reaches_a_cached_adopter() {
         WorkspaceProjectionPublish::Published,
         "the skipped projection clock still changes its serialized verdict",
     );
-    assert_ne!(
-        crate::sidebar::consumer::consumer_projection_inputs_stamp(&state, &runtime),
-        slim_before,
-        "the slim memo notices an unchanged-source content publication",
-    );
     let second = reader.read_adopting(&state).unwrap();
-    assert_eq!(second.source, ConsumerSnapshotSource::Adoption);
-    assert_eq!(status(&second.snapshot), Some(AgentStatus::Failed));
+    assert_eq!(status(&second), Some(AgentStatus::Failed));
 }

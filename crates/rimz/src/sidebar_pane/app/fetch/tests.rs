@@ -630,6 +630,52 @@ fn unchanged_consumer_inputs_skip_the_second_fold() {
 }
 
 #[test]
+fn failed_consumer_fold_clears_warm_unchanged_memo() {
+    let fixture = ConsumerFixture::new();
+    fixture.write_pane_frame();
+    let mut rollup = SidebarSnapshot::build(
+        fixture.workspace_id.clone(),
+        Vec::new(),
+        jiff::Timestamp::now(),
+    );
+    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    std::fs::write(
+        &fixture.state.latest_snapshot,
+        serde_json::to_vec(&rollup).unwrap(),
+    )
+    .unwrap();
+    let mut worker = fixture.worker();
+
+    assert!(matches!(
+        fixture.run_with(FetchRequest::default(), &mut worker)[0],
+        FetchUpdate::Snapshot { .. }
+    ));
+    assert!(matches!(
+        fixture.run_with(FetchRequest::default(), &mut worker)[0],
+        FetchUpdate::Unchanged { .. }
+    ));
+
+    std::fs::create_dir_all(&fixture.state.events_log).unwrap();
+    assert!(matches!(
+        fixture.run_with(FetchRequest::default(), &mut worker)[0],
+        FetchUpdate::Failed { .. }
+    ));
+    std::fs::remove_dir_all(&fixture.state.events_log).unwrap();
+
+    assert!(matches!(
+        fixture.run_with(FetchRequest::default(), &mut worker)[0],
+        FetchUpdate::Snapshot { .. }
+    ));
+    assert!(matches!(
+        fixture.run_with(FetchRequest::default(), &mut worker)[0],
+        FetchUpdate::Unchanged { .. }
+    ));
+}
+
+#[test]
 fn producer_fast_fold_publishes_workspace_content_without_a_pane_refresh() {
     let fixture = ConsumerFixture::new();
     fixture.write_pane_frame();
@@ -715,7 +761,6 @@ fn adopted_consumer_uses_slim_stamp_until_truth_moves() {
         fixture.run_with(FetchRequest::default(), &mut worker)[0],
         FetchUpdate::Snapshot { .. }
     ));
-    assert!(worker.consumer_memo.last_was_adoption());
 
     std::fs::write(fixture.runtime.diff_stats_path(), b"producer-owned-change").unwrap();
     assert!(matches!(
@@ -735,10 +780,22 @@ fn adopted_consumer_uses_slim_stamp_until_truth_moves() {
         fixture.run_with(FetchRequest::default(), &mut worker)[0],
         FetchUpdate::Snapshot { .. }
     ));
+    std::fs::write(
+        fixture.runtime.diff_stats_path(),
+        b"fallback-owned-change-with-longer-content",
+    )
+    .unwrap();
     assert!(
-        !worker.consumer_memo.last_was_adoption(),
-        "a stale projection falls back and restores the full stamp"
+        matches!(
+            fixture.run_with(FetchRequest::default(), &mut worker)[0],
+            FetchUpdate::Snapshot { .. }
+        ),
+        "fallback restores full-stamp invalidation",
     );
+    assert!(matches!(
+        fixture.run_with(FetchRequest::default(), &mut worker)[0],
+        FetchUpdate::Unchanged { .. }
+    ));
 }
 
 #[test]
