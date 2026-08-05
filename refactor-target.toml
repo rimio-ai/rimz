@@ -453,7 +453,7 @@ allowed-imports = [
     "workspace",
     "worktree",
 ]
-surface-budget = 481
+surface-budget = 479
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"

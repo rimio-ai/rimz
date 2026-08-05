@@ -289,27 +289,6 @@ pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
     !fresh_sidebar_instances(rt).is_empty()
 }
 
-/// True when a live sidebar holds an older instance id than `own_id`. UUIDv7
-/// ids sort by birth time, so the lowest id is the eldest. The eldest is the
-/// sole producer (it finds no elder); every younger renderer reads its
-/// published cache rather than running its own mux/git reads (see
-/// [`crate::sidebar`] module docs). The election trusts the same heartbeat TTL
-/// as the launch gate, so a just-SIGKILLed elder is honoured for at most one
-/// TTL before the next-eldest renderer takes over production.
-pub fn elder_sidebar_instance(
-    rt: &RuntimePaths,
-    own_id: &SidebarInstanceId,
-) -> Option<SidebarInstanceId> {
-    fresh_sidebar_instances(rt)
-        .into_iter()
-        .filter(|id| id.as_str() < own_id.as_str())
-        .min_by(|left, right| left.as_str().cmp(right.as_str()))
-}
-
-pub fn elder_sidebar_present(rt: &RuntimePaths, own_id: &SidebarInstanceId) -> bool {
-    elder_sidebar_instance(rt, own_id).is_some()
-}
-
 /// Process-local memo of the renderer's producer election.
 ///
 /// Heartbeats remain the liveness source and the snapshot single-flight remains
