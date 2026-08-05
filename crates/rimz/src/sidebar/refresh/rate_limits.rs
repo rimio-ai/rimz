@@ -128,6 +128,7 @@ pub(crate) fn merge_account_rate_limits(
     let index = WindowIndex::new(prior_entry, windows.windows);
     let mut fused = Vec::with_capacity(index.live.len());
     let mut pending = Vec::new();
+    // Authoritative reads are complete snapshots: live-only keys prune omitted windows.
     for (key, live) in index.live {
         let (truth, refill) = fuse_window(
             index.prior.get(&key),
@@ -227,7 +228,10 @@ fn unknown_idle_window(cached: RateLimitWindow) -> RateLimitWindow {
 
 /// Project persisted account windows onto consumer panels without changing the
 /// shared cache, tracing fusion, confirming a refill, or forcing OAuth reads.
-pub(crate) fn apply_cached_rate_limits(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths) {
+pub(in crate::sidebar) fn apply_cached_rate_limits(
+    snapshot: &mut SidebarSnapshot,
+    runtime: &RuntimePaths,
+) {
     if snapshot.providers.is_empty() {
         return;
     }
