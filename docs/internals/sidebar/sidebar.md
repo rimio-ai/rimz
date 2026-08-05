@@ -57,7 +57,7 @@ The contract types are [`view.rs`](../../../crates/rimz/src/store/snapshot/view.
 | module | owns |
 |---|---|
 | [`app.rs`](../../../crates/rimz/src/sidebar_pane/app.rs), [`app/loop_state.rs`](../../../crates/rimz/src/sidebar_pane/app/loop_state.rs) | the fixed-timestep serve loop and its wakeup dispatch |
-| [`app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | the off-thread fetch worker: cadence, election, memoization, and single-flight coalescing ([state.md](./state.md#one-fetch-cycle)) |
+| [`app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | the off-thread fetch worker: cadence, election, request coalescing, notification state, and publication ([state.md](./state.md#one-fetch-cycle)) |
 | [`app/selection.rs`](../../../crates/rimz/src/sidebar_pane/app/selection.rs) | the identity-keyed highlight, the browse layer, and the key and mouse handlers |
 | [`app/gate.rs`](../../../crates/rimz/src/sidebar_pane/app/gate.rs) | the last-resort hold that refuses a regressive frame |
 | [`app/health.rs`](../../../crates/rimz/src/sidebar_pane/app/health.rs) | failure debounce, the sticky alert, and the give-up rule |
