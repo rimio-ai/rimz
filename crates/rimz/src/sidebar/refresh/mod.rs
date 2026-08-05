@@ -35,8 +35,6 @@ pub mod usage;
 
 pub use accounts::{AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts};
 pub use credits::merge_provider_realtime_usage;
-#[cfg(test)]
-pub(crate) use daemon_reap::write_codex_daemon_reap;
 pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap};
 pub use live_spend::{apply_live_day_spend, apply_live_today_spend};
 pub use pr::{PrLink, PrStateCache};
