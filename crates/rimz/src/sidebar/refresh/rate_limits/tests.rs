@@ -105,7 +105,7 @@ fn scoped_quota_windows_fuse_and_expire_independently() {
             ],
         )],
     );
-    apply_rate_limit_cache(&mut producer, &runtime, true);
+    refresh_rate_limits(&mut producer, &runtime);
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
         cache_window(
@@ -142,7 +142,7 @@ fn scoped_quota_windows_fuse_and_expire_independently() {
         ),
     );
     let mut consumer = snapshot_with_panels(workspace, vec![provider_panel("plugin", Vec::new())]);
-    apply_rate_limit_cache(&mut consumer, &runtime, false);
+    apply_cached_rate_limits(&mut consumer, &runtime);
     let build = consumer.providers[0]
         .windows
         .iter()
@@ -167,14 +167,14 @@ fn producer_persisted_windows_feed_idle_consumers() {
         workspace.clone(),
         vec![provider_panel("claude", vec![rl_window(60, Some(future))])],
     );
-    apply_rate_limit_cache(&mut producer, &runtime, true);
+    refresh_rate_limits(&mut producer, &runtime);
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
         cache_window(&cache, "claude", RateLimitWindowKey::Duration(Some(300))).used_percentage,
         Some(60)
     );
     let mut consumer = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    apply_rate_limit_cache(&mut consumer, &runtime, false);
+    apply_cached_rate_limits(&mut consumer, &runtime);
     assert_eq!(consumer.providers[0].windows[0].used_percentage, Some(60));
 }
 
@@ -209,7 +209,7 @@ fn account_scope_isolates_cached_windows() {
     let mut matching = provider_panel("qwen", Vec::new());
     matching.account_scope = international.clone();
     let mut matching = snapshot_with_panels(workspace.clone(), vec![matching]);
-    apply_rate_limit_cache(&mut matching, &runtime, false);
+    apply_cached_rate_limits(&mut matching, &runtime);
     assert_eq!(
         matching.providers[0]
             .windows
@@ -221,7 +221,7 @@ fn account_scope_isolates_cached_windows() {
     let mut mismatched = provider_panel("qwen", Vec::new());
     mismatched.account_scope = china.clone();
     let mut mismatched = snapshot_with_panels(workspace.clone(), vec![mismatched]);
-    apply_rate_limit_cache(&mut mismatched, &runtime, false);
+    apply_cached_rate_limits(&mut mismatched, &runtime);
     assert!(mismatched.providers[0].windows.is_empty());
     assert_eq!(
         read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries["qwen"].scope,
@@ -231,7 +231,7 @@ fn account_scope_isolates_cached_windows() {
     let mut switched = provider_panel("qwen", vec![rl_window_mins(55, None, 43_200)]);
     switched.account_scope = china.clone();
     let mut switched = snapshot_with_panels(workspace, vec![switched]);
-    apply_rate_limit_cache(&mut switched, &runtime, true);
+    refresh_rate_limits(&mut switched, &runtime);
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(cache.entries["qwen"].scope, china);
     assert_eq!(cache.entries["qwen"].limits.windows.len(), 1);
@@ -285,7 +285,7 @@ fn reset_epoch_invalidates_oauth_usage_throttle() {
         workspace,
         vec![provider_panel("codex", vec![rl_window(1, Some(new_reset))])],
     );
-    apply_rate_limit_cache(&mut frame, &runtime, true);
+    refresh_rate_limits(&mut frame, &runtime);
 
     let credits =
         crate::sidebar::refresh::credits::read_credits_cache(&runtime.shared_credits_path());
@@ -336,7 +336,7 @@ fn unknown_display_forces_immediate_account_refresh() {
     seed_settled_credits(&runtime, "claude", 1_700_000_000_000);
 
     let mut frame = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    apply_rate_limit_cache(&mut frame, &runtime, true);
+    refresh_rate_limits(&mut frame, &runtime);
 
     // The display went unknown, so the settled read is dropped and the next
     // claim is due immediately rather than an hour from now.
@@ -361,7 +361,7 @@ fn unknown_display_forces_refresh_once_per_episode() {
         workspace.clone(),
         vec![provider_panel("claude", Vec::new())],
     );
-    apply_rate_limit_cache(&mut first, &runtime, true);
+    refresh_rate_limits(&mut first, &runtime);
     assert_eq!(oauth_read_at_ms(&runtime, "claude"), 0);
     let forced_at = unknown_since_ms(&runtime, "claude").expect("episode marker");
 
@@ -370,7 +370,7 @@ fn unknown_display_forces_refresh_once_per_episode() {
     // with nothing to report costs one fetch rather than one per frame.
     seed_settled_credits(&runtime, "claude", 1_700_000_500_000);
     let mut second = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    apply_rate_limit_cache(&mut second, &runtime, true);
+    refresh_rate_limits(&mut second, &runtime);
 
     assert_eq!(oauth_read_at_ms(&runtime, "claude"), 1_700_000_500_000);
     assert_eq!(unknown_since_ms(&runtime, "claude"), Some(forced_at));
@@ -388,7 +388,7 @@ fn usable_window_rearms_the_unknown_refresh() {
         workspace.clone(),
         vec![provider_panel("claude", Vec::new())],
     );
-    apply_rate_limit_cache(&mut unknown, &runtime, true);
+    refresh_rate_limits(&mut unknown, &runtime);
     assert!(unknown_since_ms(&runtime, "claude").is_some());
 
     // A live reading paints a real value again, closing the episode so the next
@@ -402,7 +402,7 @@ fn usable_window_rearms_the_unknown_refresh() {
             vec![rl_window_mins(35, Some(future), 300)],
         )],
     );
-    apply_rate_limit_cache(&mut known, &runtime, true);
+    refresh_rate_limits(&mut known, &runtime);
 
     assert_eq!(known.providers[0].windows[0].used_percentage, Some(35));
     assert_eq!(unknown_since_ms(&runtime, "claude"), None);
@@ -416,7 +416,7 @@ fn cold_start_without_cached_windows_forces_refresh() {
     // No rate-limit cache at all: nothing expires, so the aged-out path never
     // trips, yet the dashboard is just as blank.
     let mut frame = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    apply_rate_limit_cache(&mut frame, &runtime, true);
+    refresh_rate_limits(&mut frame, &runtime);
 
     assert!(frame.providers[0].windows.is_empty());
     assert_eq!(oauth_read_at_ms(&runtime, "claude"), 0);
@@ -436,7 +436,7 @@ fn elapsed_short_idle_window_shows_full_without_persisting_projection() {
         ],
     );
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    apply_rate_limit_cache(&mut idle, &runtime, true);
+    refresh_rate_limits(&mut idle, &runtime);
     assert_eq!(idle.providers[0].windows[0].used_percentage, Some(0));
     assert_eq!(idle.providers[0].windows[1].used_percentage, Some(70));
 
@@ -459,7 +459,7 @@ fn elapsed_long_live_window_rolls_forward_without_persisting_projection() {
             ],
         )],
     );
-    apply_rate_limit_cache(&mut frame, &runtime, true);
+    refresh_rate_limits(&mut frame, &runtime);
     assert_eq!(frame.providers[0].windows[0].used_percentage, Some(40));
     assert_eq!(frame.providers[0].windows[1].used_percentage, Some(0));
     assert!(
@@ -484,7 +484,7 @@ fn elapsed_longest_idle_cache_shows_unknown_without_persisting_projection() {
         ],
     );
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    apply_rate_limit_cache(&mut idle, &runtime, true);
+    refresh_rate_limits(&mut idle, &runtime);
     let shown = &idle.providers[0].windows;
     assert!(
         shown
@@ -528,7 +528,7 @@ fn shortest_elapsed_undated_window_opens_unknown_refresh_episode() {
 
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
     idle.now = observed_at + SignedDuration::from_mins(301);
-    apply_rate_limit_cache(&mut idle, &runtime, true);
+    refresh_rate_limits(&mut idle, &runtime);
 
     assert!(
         idle.providers[0]
@@ -553,7 +553,7 @@ fn lone_undated_weekly_window_keeps_its_weeklong_ceiling() {
 
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
     idle.now = observed_at + SignedDuration::from_hours(6 * 24);
-    apply_rate_limit_cache(&mut idle, &runtime, true);
+    refresh_rate_limits(&mut idle, &runtime);
 
     assert_eq!(idle.providers[0].windows[0].used_percentage, Some(4));
     assert_eq!(unknown_since_ms(&runtime, "claude"), None);
@@ -592,7 +592,7 @@ fn dated_long_window_keeps_undated_lifted_window_cache_fresh() {
     );
 
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("codex", Vec::new())]);
-    apply_rate_limit_cache(&mut idle, &runtime, true);
+    refresh_rate_limits(&mut idle, &runtime);
 
     assert!(idle.providers[0].windows[0].lifted);
     assert_eq!(
@@ -616,24 +616,24 @@ fn producer_cache_tracks_logged_in_panels() {
             provider_panel("codex", vec![rl_window(30, Some(future))]),
         ],
     );
-    apply_rate_limit_cache(&mut seeded, &runtime, true);
+    refresh_rate_limits(&mut seeded, &runtime);
 
     let mut partial = snapshot_with_panels(
         workspace.clone(),
         vec![provider_panel("claude", vec![rl_window(40, Some(future))])],
     );
-    apply_rate_limit_cache(&mut partial, &runtime, true);
+    refresh_rate_limits(&mut partial, &runtime);
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert!(cache.entries.contains_key("claude"));
     assert!(!cache.entries.contains_key("codex"));
 
     let mut consumer = snapshot_with_panels(workspace.clone(), Vec::new());
-    apply_rate_limit_cache(&mut consumer, &runtime, false);
+    apply_cached_rate_limits(&mut consumer, &runtime);
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert!(cache.entries.contains_key("claude"));
 
     let mut producer = snapshot_with_panels(workspace, Vec::new());
-    apply_rate_limit_cache(&mut producer, &runtime, true);
+    refresh_rate_limits(&mut producer, &runtime);
     assert!(
         read_rate_limits_cache(&runtime.shared_rate_limits_path())
             .entries
@@ -698,7 +698,7 @@ fn account_merge_fuses_authoritative_drops_and_confirms_persistent_readings() {
             ],
         )],
     );
-    apply_rate_limit_cache(&mut producer, &runtime, true);
+    refresh_rate_limits(&mut producer, &runtime);
     let climbed = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(climbed.entries["claude"].account_key, identity.account_key);
     assert_eq!(
@@ -891,7 +891,7 @@ fn authoritative_account_identity_survives_publication_and_rotates_by_key() {
         vec![provider_panel("qwen", vec![rl_window_mins(10, None, 300)])],
     );
     snapshot.providers[0].account_scope = scope;
-    apply_rate_limit_cache(&mut snapshot, &runtime, true);
+    refresh_rate_limits(&mut snapshot, &runtime);
     let after_display_fusion = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
         after_display_fusion.entries["qwen"].account_key.as_deref(),
@@ -992,7 +992,7 @@ fn omission_completion_requires_matching_authoritative_duration_truth() {
     let mut matching = provider_panel("pi", vec![weekly.clone()]);
     matching.account_scope = openai;
     let mut matching = snapshot_with_panels(workspace.clone(), vec![matching]);
-    apply_rate_limit_cache(&mut matching, &runtime, false);
+    apply_cached_rate_limits(&mut matching, &runtime);
     assert!(
         matching.providers[0]
             .windows
@@ -1003,7 +1003,7 @@ fn omission_completion_requires_matching_authoritative_duration_truth() {
     let mut mismatched = provider_panel("pi", vec![weekly]);
     mismatched.account_scope = ProviderAccountScope::sub_provider("anthropic", "oauth");
     let mut mismatched = snapshot_with_panels(workspace, vec![mismatched]);
-    apply_rate_limit_cache(&mut mismatched, &runtime, false);
+    apply_cached_rate_limits(&mut mismatched, &runtime);
     assert_eq!(mismatched.providers[0].windows.len(), 1);
     assert!(
         mismatched.providers[0]
@@ -1085,7 +1085,7 @@ fn producer_lock_contention_degrades_to_read_only() {
         workspace,
         vec![provider_panel("codex", vec![rl_window(55, None)])],
     );
-    apply_rate_limit_cache(&mut contending, &runtime, true);
+    refresh_rate_limits(&mut contending, &runtime);
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
         cache_window(&cache, "claude", RateLimitWindowKey::Duration(Some(300))).used_percentage,
