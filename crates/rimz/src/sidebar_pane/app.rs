@@ -569,6 +569,7 @@ fn spawn_pane_focus(
                 &session_name,
                 &pane_id,
                 nonce,
+                Default::default(),
             ) {
                 Ok(true) => (Some(nonce), "accepted_unconfirmed", None),
                 Ok(false) => (

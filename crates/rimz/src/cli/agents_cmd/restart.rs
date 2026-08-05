@@ -155,6 +155,7 @@ pub(in crate::cli) fn restart_resolved(
         old_pane.clone(),
         rimz::sidebar::focus_anchor::FocusOrigin::User,
         None,
+        Default::default(),
     )
     .context("focusing the agent pane for restart")
     {

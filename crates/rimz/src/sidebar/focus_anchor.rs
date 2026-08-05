@@ -124,6 +124,15 @@ pub struct FocusDispatchRetries {
     pub delay: Duration,
 }
 
+impl Default for FocusDispatchRetries {
+    fn default() -> Self {
+        Self {
+            attempts: 1,
+            delay: Duration::ZERO,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FocusObservationOutcome {
     Present,
@@ -286,26 +295,7 @@ pub fn dispatch_action(
     session_name: &str,
     pane_id: &PaneId,
     nonce: FocusNonce,
-) -> Result<bool, FocusActionError> {
-    dispatch_action_retried(
-        backend,
-        runtime,
-        session_name,
-        pane_id,
-        nonce,
-        1,
-        Duration::ZERO,
-    )
-}
-
-pub fn dispatch_action_retried(
-    backend: &dyn MuxBackend,
-    runtime: &RuntimePaths,
-    session_name: &str,
-    pane_id: &PaneId,
-    nonce: FocusNonce,
-    attempts: u32,
-    retry_delay: Duration,
+    retries: FocusDispatchRetries,
 ) -> Result<bool, FocusActionError> {
     let _guard = crate::store::lock::WorkspaceLock::acquire(&runtime.focus_anchor_lock())?;
     let Some(mut anchor) = load(runtime).filter(|anchor| anchor.nonce == nonce) else {
@@ -313,9 +303,9 @@ pub fn dispatch_action_retried(
     };
     let mut accepted = false;
     let mut last_error = None;
-    for attempt in 0..attempts.max(1) {
+    for attempt in 0..retries.attempts.max(1) {
         if attempt > 0 {
-            std::thread::sleep(retry_delay);
+            std::thread::sleep(retries.delay);
         }
         match backend.focus_pane(pane_id, Some(session_name)) {
             Ok(()) => accepted = true,
@@ -347,28 +337,6 @@ pub fn execute_action(
     pane_id: PaneId,
     origin: FocusOrigin,
     expected_pre_action: Option<&[ClientPaneView]>,
-) -> Result<FocusNonce, FocusActionError> {
-    execute_action_retried(
-        backend,
-        runtime,
-        session_name,
-        pane_id,
-        origin,
-        expected_pre_action,
-        FocusDispatchRetries {
-            attempts: 1,
-            delay: Duration::ZERO,
-        },
-    )
-}
-
-pub fn execute_action_retried(
-    backend: &dyn MuxBackend,
-    runtime: &RuntimePaths,
-    session_name: &str,
-    pane_id: PaneId,
-    origin: FocusOrigin,
-    expected_pre_action: Option<&[ClientPaneView]>,
     retries: FocusDispatchRetries,
 ) -> Result<FocusNonce, FocusActionError> {
     let nonce = request_action(
@@ -384,15 +352,7 @@ pub fn execute_action_retried(
             order: None,
         },
     )?;
-    if dispatch_action_retried(
-        backend,
-        runtime,
-        session_name,
-        &pane_id,
-        nonce,
-        retries.attempts,
-        retries.delay,
-    )? {
+    if dispatch_action(backend, runtime, session_name, &pane_id, nonce, retries)? {
         Ok(nonce)
     } else {
         Err(FocusActionError::Superseded)
