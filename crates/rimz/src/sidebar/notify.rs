@@ -34,7 +34,7 @@ pub struct Notification {
 }
 
 impl Notification {
-    pub fn agent_env(&self) -> String {
+    fn agent_env(&self) -> String {
         self.agents
             .iter()
             .map(|agent| agent.label.as_str())

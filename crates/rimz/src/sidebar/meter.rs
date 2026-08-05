@@ -17,16 +17,16 @@ use crate::lane::WorkLane;
 
 /// Lifecycle frames are pinned under 1KiB; a 100-agent burst folds about 100KiB,
 /// and warm unchanged logs fold zero bytes. Cold catch-up trips one tick only.
-pub(crate) const TICK_FOLD_BYTES_BUDGET: u64 = 256 * 1024;
+const TICK_FOLD_BYTES_BUDGET: u64 = 256 * 1024;
 /// Warm produce with fresh inputs is pinned at zero spawns; hot git sweeps burst
 /// once per diff-stats TTL rather than on consecutive ticks.
-pub(crate) const TICK_SPAWN_BUDGET: u64 = 32;
+const TICK_SPAWN_BUDGET: u64 = 32;
 /// Mux subprocess wait budget. Mux waits are accounted separately from
 /// in-process work.
-pub(crate) const TICK_MUX_WAIT_BUDGET_MS: u64 = 5_000;
+const TICK_MUX_WAIT_BUDGET_MS: u64 = 5_000;
 /// Consecutive over-budget ticks required before a diagnostic. The streak window
 /// filters one-off IO stalls like the health-alert and observer windows do.
-pub(crate) const TICK_BUDGET_BREACH_TICKS: u32 = 5;
+const TICK_BUDGET_BREACH_TICKS: u32 = 5;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct TickSample {
     wall_ms: u64,
