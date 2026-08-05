@@ -669,6 +669,8 @@ fn probe_due_repos(
         .iter()
         .filter(|(repo_key, _)| due.contains(*repo_key))
         .collect::<Vec<_>>();
+    // PR probes stay on `Other`: their gh/tea/git forks have never counted against
+    // the tick spawn budget in `meter.rs`, which is calibrated without them.
     let results = super::runner::bounded_map(
         crate::lane::WorkLane::Other,
         MAX_PARALLEL_PR_PROBES,
