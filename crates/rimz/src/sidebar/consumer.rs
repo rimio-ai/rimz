@@ -292,7 +292,7 @@ fn read_published_agent_projection(
 /// Cheap identity of the files a consumer fold reads. A matching stamp lets a
 /// long-lived renderer skip the fold and keep its last committed frame; the
 /// poll backstop still forces a real fold periodically.
-pub fn consumer_fold_inputs_stamp(
+fn consumer_fold_inputs_stamp(
     state: &StatePaths,
     runtime: &RuntimePaths,
 ) -> ConsumerFoldInputsStamp {
@@ -347,7 +347,7 @@ pub fn consumer_fold_inputs_stamp(
 /// Slim unchanged identity after a successful projection adoption. Every
 /// source-identity input and the projection publication itself remains in the
 /// set; broad enrichment sidecars return only after a fallback.
-pub fn consumer_projection_inputs_stamp(
+pub(crate) fn consumer_projection_inputs_stamp(
     state: &StatePaths,
     runtime: &RuntimePaths,
 ) -> ConsumerFoldInputsStamp {
