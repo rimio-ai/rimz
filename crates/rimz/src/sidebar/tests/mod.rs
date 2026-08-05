@@ -237,14 +237,13 @@ fn younger_yields_to_live_elder_eldest_survives() {
     h.write_sidebar_for(&elder);
     h.write_sidebar_for(&middle);
     h.write_sidebar_for(&younger);
+    let younger_tracker = ProducerElectionTracker::new(h.runtime.clone(), younger);
+    let elder_tracker = ProducerElectionTracker::new(h.runtime.clone(), elder.clone());
+    let now = SystemTime::now();
     // The younger sees an older live instance and yields; the eldest finds no
     // elder and stays, so exactly one survives.
-    assert!(elder_sidebar_present(&h.runtime, &younger));
-    assert_eq!(
-        elder_sidebar_instance(&h.runtime, &younger),
-        Some(elder.clone())
-    );
-    assert!(!elder_sidebar_present(&h.runtime, &elder));
+    assert_eq!(younger_tracker.elder_instance_at(now), Some(elder.clone()));
+    assert_eq!(elder_tracker.elder_instance_at(now), None);
 }
 
 #[test]
@@ -379,7 +378,9 @@ fn no_elder_when_alone() {
     let h = Harness::new();
     let only = instance("05");
     h.write_sidebar_for(&only);
-    assert!(!elder_sidebar_present(&h.runtime, &only));
+    let tracker = ProducerElectionTracker::new(h.runtime.clone(), only);
+    let now = SystemTime::now();
+    assert_eq!(tracker.elder_instance_at(now), None);
 }
 
 #[test]
@@ -392,7 +393,9 @@ fn stale_or_wrong_protocol_elder_is_not_honored() {
     make_stale(&h.write_sidebar_for(&stale_elder));
     // A wrong-protocol lower id is not a peer we hand off to.
     h.write_sidebar("sidebar.0000000000000008.json", "rimz.plugin.v0");
-    assert!(!elder_sidebar_present(&h.runtime, &younger));
+    let tracker = ProducerElectionTracker::new(h.runtime.clone(), younger);
+    let now = SystemTime::now();
+    assert_eq!(tracker.elder_instance_at(now), None);
 }
 
 #[test]
