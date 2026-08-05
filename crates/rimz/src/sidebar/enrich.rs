@@ -40,17 +40,6 @@ use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 #[cfg(test)]
 mod tests;
 
-/// The repo's worktree checkout roots the producer last published, read-only
-/// (no `git worktree list` fork). A consumer reuses whatever the elder cached,
-/// even stale; an empty set leaves the reducer's project-root prefix test to
-/// stand alone.
-pub fn cached_worktree_roots(runtime: &RuntimePaths) -> Vec<PathBuf> {
-    read_diff_stats_cache(&runtime.diff_stats_path())
-        .worktrees
-        .map(|cache| cache.roots)
-        .unwrap_or_default()
-}
-
 pub(crate) fn read_auto_continue_resume_messages(
     store: Option<&Store>,
     config: &crate::config::ResumeConfig,
@@ -65,7 +54,7 @@ pub(crate) fn read_auto_continue_resume_messages(
 
 /// Fold the remote-link stats sidecar onto the snapshot. Local rooms never have
 /// this file; corrupt, unknown-version, and expired files erase the badge.
-pub fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, now_ms: u64) {
+fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, now_ms: u64) {
     let path = crate::remote::link::stats_path(runtime);
     let Ok(bytes) = std::fs::read(path) else {
         snapshot.link = None;
@@ -106,7 +95,7 @@ pub fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, n
 /// validates checkout paths before refreshing their entries and publishes
 /// exact channel marker classifications; consumers project that cache without
 /// git subprocesses or checkout metadata reads.
-pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
+fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
     for group in &mut snapshot.worktree_groups {
         if group.kind == SidebarWorktreeKind::Channel {
             group.worktree_backed = false;
@@ -171,7 +160,7 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
 
 /// Qualify groups whose final display labels collide with the shortest
 /// distinguishing trailing checkout path.
-pub fn disambiguate_group_labels(snapshot: &mut SidebarSnapshot) {
+fn disambiguate_group_labels(snapshot: &mut SidebarSnapshot) {
     let mut by_label = BTreeMap::<String, Vec<(usize, Vec<String>, usize)>>::new();
 
     for (index, group) in snapshot.worktree_groups.iter_mut().enumerate() {
@@ -242,7 +231,7 @@ fn trailing_path_suffix(components: &[String], depth: usize) -> String {
     components[components.len().saturating_sub(depth)..].join("/")
 }
 
-pub fn project_cohort_effort(snapshot: &mut SidebarSnapshot, cache: &CohortSpendCache) {
+fn project_cohort_effort(snapshot: &mut SidebarSnapshot, cache: &CohortSpendCache) {
     for group in &mut snapshot.worktree_groups {
         group.cohort_effort = cache.groups.get(&group.key).cloned();
     }
@@ -270,7 +259,7 @@ fn cached_git_backed_worktree_path<'a>(
     }
 }
 
-pub fn project_pr_state_map(
+fn project_pr_state_map(
     snapshot: &mut SidebarSnapshot,
     states: &BTreeMap<String, PrLink>,
     branch_ci: &BTreeMap<String, WorktreePrCi>,
@@ -318,7 +307,7 @@ pub fn project_pr_state_map(
     }
 }
 
-pub(crate) fn project_cached_pr_states(
+fn project_cached_pr_states(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
     diff_cache: &DiffStatsCache,
@@ -327,7 +316,7 @@ pub(crate) fn project_cached_pr_states(
     project_pr_state_map(snapshot, &cache.states, &cache.branch_ci, diff_cache);
 }
 
-pub(crate) fn classify_trunk_sync(
+fn classify_trunk_sync(
     entry: &DiffStatsCacheEntry,
     label: &str,
     trunk_display: &str,
@@ -376,7 +365,7 @@ pub(crate) struct RemoteControlServerHealth {
 /// an enabled host must not have left a record saying its server died — a pane
 /// outlives the child that answers for it, so presence alone reads healthy long
 /// after the host stopped working. No record keeps the answer positive.
-pub(crate) fn claude_host_serving(
+fn claude_host_serving(
     pane_present: bool,
     enabled: bool,
     liveness: crate::agents::runtime_control::RuntimeControlLiveness,
@@ -986,7 +975,7 @@ fn remote_control_badge(
 /// `[theme.display.context_meter]` bands: [`crate::agents::ContextSeverity::classify`] over
 /// the row's gauge inputs, the one verdict the renderer's color ramp and any
 /// future signal emitter read. Process rows carry no context and stay `None`.
-pub(crate) fn stamp_context_severity(
+fn stamp_context_severity(
     groups: &mut [SidebarWorktreeGroup],
     bands: &crate::config::ContextMeterConfig,
 ) {
