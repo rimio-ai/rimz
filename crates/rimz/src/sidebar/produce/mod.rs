@@ -207,7 +207,7 @@ pub fn produce_snapshot_with_refresh(
 /// pane targets; they do not read group roots, spending, accounts, provider
 /// dashboards, or git facts, so this path pays one pane enumeration and stops
 /// there.
-pub fn produce_resolution_snapshot(
+fn produce_resolution_snapshot(
     cursor: &mut RollupCursor,
     state: &StatePaths,
     runtime: &RuntimePaths,

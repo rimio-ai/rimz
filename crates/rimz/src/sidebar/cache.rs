@@ -120,7 +120,7 @@ pub struct PresenceStamp {
 /// throttles external `list-clients` calls; pane presence remains sourced from
 /// the published frame.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PresenceProbeStamp {
+struct PresenceProbeStamp {
     pub written_at_ms: u64,
 }
 
@@ -129,7 +129,7 @@ pub fn presence_stamp_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("presence.stamp")
 }
 
-pub fn presence_probe_stamp_path(runtime: &RuntimePaths) -> PathBuf {
+fn presence_probe_stamp_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("client-presence-probe.stamp")
 }
 

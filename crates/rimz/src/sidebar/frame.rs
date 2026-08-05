@@ -233,7 +233,7 @@ impl PaneState {
     /// metrics-layer derivation, and only that layer's `starttime` pid-reuse
     /// guard may restore it ([`super::produce`]'s metrics module) — a rotation
     /// carry would republish a stale binding without ever revalidating it.
-    pub fn rotate_on_process_change(&mut self, prior: &PaneState) {
+    pub(in crate::sidebar) fn rotate_on_process_change(&mut self, prior: &PaneState) {
         let spawn_changed = match (
             self.current.spawn_command.as_deref(),
             prior.current.spawn_command.as_deref(),
@@ -345,14 +345,6 @@ pub fn assemble_frame(
     produced_at_ms: u64,
     session_name: impl Into<String>,
 ) -> PaneFrame {
-    assemble_frame_with_diagnostics(panes, produced_at_ms, session_name).0
-}
-
-pub fn assemble_frame_with_diagnostics(
-    panes: Vec<PaneRef>,
-    produced_at_ms: u64,
-    session_name: impl Into<String>,
-) -> (PaneFrame, Vec<DiagEvent>) {
     assemble_frame_from_inputs(FrameInputs {
         panes,
         produced_at_ms,
@@ -364,6 +356,7 @@ pub fn assemble_frame_with_diagnostics(
         client_view_fresh: false,
         prior: None,
     })
+    .0
 }
 
 pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<DiagEvent>) {
@@ -465,7 +458,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
     )
 }
 
-pub(crate) fn resolve_session_focus(
+fn resolve_session_focus(
     session_focus: Option<&PaneId>,
     prior: Option<&PaneId>,
     client_viewed: &[PaneId],
