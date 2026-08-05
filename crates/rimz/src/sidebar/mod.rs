@@ -233,7 +233,7 @@ pub const FRESH_PANE_GRACE: Duration = SIDEBAR_HEARTBEAT_TTL.saturating_mul(2);
 /// matching heartbeat is unlocated (no pane id). Attach folds this into the
 /// reconcile planner so an older generation is replaced
 /// add-before-close instead of protected as healthy.
-pub fn sidebar_liveness(
+fn sidebar_liveness(
     rt: &RuntimePaths,
     build: &str,
     mux: MuxName,

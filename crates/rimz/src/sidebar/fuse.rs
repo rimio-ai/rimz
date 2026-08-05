@@ -108,20 +108,6 @@ fn apply_fusion(
     fused
 }
 
-pub fn focus_intent_confirmed(
-    pulled: &SidebarSnapshot,
-    events: &EventStore,
-    intent: &FocusAnchor,
-    now_ms: u64,
-) -> bool {
-    focus_intent_confirmed_from(
-        &FocusObservation::from_snapshot(pulled),
-        events,
-        intent,
-        now_ms,
-    )
-}
-
 pub(crate) fn focus_intent_confirmed_from(
     pulled: &FocusObservation,
     events: &EventStore,
@@ -149,6 +135,21 @@ pub(crate) fn focus_intent_confirmed_from(
     });
 
     pulled_confirms || event_confirms
+}
+
+#[cfg(test)]
+fn focus_intent_confirmed(
+    pulled: &SidebarSnapshot,
+    events: &EventStore,
+    intent: &FocusAnchor,
+    now_ms: u64,
+) -> bool {
+    focus_intent_confirmed_from(
+        &FocusObservation::from_snapshot(pulled),
+        events,
+        intent,
+        now_ms,
+    )
 }
 
 fn snapshot_has_pane(snapshot: &SidebarSnapshot, pane_id: &crate::ids::PaneId) -> bool {

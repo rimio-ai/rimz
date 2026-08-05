@@ -17,7 +17,7 @@ use crate::mux::{ClientFocusOptions, ClientPaneView, MuxBackend};
 use crate::sidebar::timing::FOCUS_ANCHOR_FRESH;
 use crate::store::{RuntimePaths, atomic};
 
-pub const FOCUS_ANCHOR_VERSION: &str = "rimz.focus-anchor.v3";
+const FOCUS_ANCHOR_VERSION: &str = "rimz.focus-anchor.v3";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -399,14 +399,6 @@ pub fn execute_action_retried(
     }
 }
 
-pub fn observation_outcome(
-    anchor: &FocusAnchor,
-    snapshot: &crate::store::snapshot::SidebarSnapshot,
-    now_ms: u64,
-) -> FocusObservationOutcome {
-    observation_outcome_from(anchor, &FocusObservation::from_snapshot(snapshot), now_ms)
-}
-
 pub(crate) fn observation_outcome_from(
     anchor: &FocusAnchor,
     observation: &FocusObservation,
@@ -464,6 +456,15 @@ pub(crate) fn observation_outcome_from(
     } else {
         FocusObservationOutcome::Fence
     }
+}
+
+#[cfg(test)]
+fn observation_outcome(
+    anchor: &FocusAnchor,
+    snapshot: &crate::store::snapshot::SidebarSnapshot,
+    now_ms: u64,
+) -> FocusObservationOutcome {
+    observation_outcome_from(anchor, &FocusObservation::from_snapshot(snapshot), now_ms)
 }
 
 pub fn clear_matching(runtime: &RuntimePaths, nonce: FocusNonce) -> bool {
