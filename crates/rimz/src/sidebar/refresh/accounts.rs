@@ -352,12 +352,13 @@ fn execute_account_probes(
     let started = Instant::now();
     let jobs: Vec<_> = due_kinds.iter().cloned().collect();
     let worker_count = MAX_PARALLEL_ACCOUNT_PROBES.min(jobs.len());
-    let mut results: Vec<_> = super::runner::bounded_map(worker_count, &jobs, |kind| {
-        probe(kind, active_version_kinds.contains(kind))
-    })
-    .into_iter()
-    .flatten()
-    .collect();
+    let mut results: Vec<_> =
+        super::runner::bounded_map(crate::lane::current(), worker_count, &jobs, |kind| {
+            probe(kind, active_version_kinds.contains(kind))
+        })
+        .into_iter()
+        .flatten()
+        .collect();
     results.sort_by(|left, right| left.kind.cmp(&right.kind));
     ProbeBatch {
         results,

@@ -14,6 +14,7 @@ pub(super) fn read_json_cache<T: Default + DeserializeOwned>(path: &Path) -> T {
 }
 
 pub(super) fn bounded_map<T: Sync, R: Send>(
+    work_lane: crate::lane::WorkLane,
     max_workers: usize,
     items: &[T],
     map: impl Fn(&T) -> R + Sync,
@@ -21,7 +22,6 @@ pub(super) fn bounded_map<T: Sync, R: Send>(
     if items.is_empty() {
         return Vec::new();
     }
-    let lane = crate::lane::current();
     let next = AtomicUsize::new(0);
     let results = Mutex::new((0..items.len()).map(|_| None).collect::<Vec<_>>());
     std::thread::scope(|scope| {
@@ -29,7 +29,7 @@ pub(super) fn bounded_map<T: Sync, R: Send>(
         let handles = (0..workers)
             .map(|_| {
                 scope.spawn(|| {
-                    crate::lane::set(lane);
+                    crate::lane::set(work_lane);
                     loop {
                         let index = next.fetch_add(1, Ordering::Relaxed);
                         let Some(item) = items.get(index) else {

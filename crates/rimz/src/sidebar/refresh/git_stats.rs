@@ -500,13 +500,18 @@ fn refresh_entries(
     if paths.is_empty() {
         return Vec::new();
     }
-    super::runner::bounded_map(MAX_PARALLEL_GIT, paths, |(path, due)| {
-        let prior = cache.entries.get(path.as_str()).cloned();
-        let prior_memo = prior_memos.get(path.as_str()).cloned().unwrap_or_default();
-        let (entry, memo) =
-            refresh_entry_with_memo(path, prior.as_ref(), *due, configured_trunk, &prior_memo);
-        (path.clone(), entry, memo)
-    })
+    super::runner::bounded_map(
+        crate::lane::current(),
+        MAX_PARALLEL_GIT,
+        paths,
+        |(path, due)| {
+            let prior = cache.entries.get(path.as_str()).cloned();
+            let prior_memo = prior_memos.get(path.as_str()).cloned().unwrap_or_default();
+            let (entry, memo) =
+                refresh_entry_with_memo(path, prior.as_ref(), *due, configured_trunk, &prior_memo);
+            (path.clone(), entry, memo)
+        },
+    )
 }
 
 /// Produce a merged diff-stats entry for one worktree path. The trunk and
