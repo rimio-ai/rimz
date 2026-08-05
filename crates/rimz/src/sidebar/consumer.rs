@@ -30,7 +30,12 @@ pub struct PublishedSnapshotReader {
     session: String,
     exclude: Option<PaneId>,
     cursor: RollupCursor,
+    source: ConsumerSnapshotSource,
+    last_fold: Option<(ConsumerFoldInputsStamp, u64, ConsumerSnapshotSource)>,
+    prepared_stamp: Option<(ConsumerSnapshotSource, ConsumerFoldInputsStamp)>,
 }
+
+const CONSUMER_UNCHANGED_BACKSTOP_MS: u64 = 30_000;
 
 impl PublishedSnapshotReader {
     pub fn new(runtime: RuntimePaths, session: impl Into<String>, exclude: Option<PaneId>) -> Self {
@@ -39,6 +44,9 @@ impl PublishedSnapshotReader {
             session: session.into(),
             exclude,
             cursor: RollupCursor::new(),
+            source: ConsumerSnapshotSource::Fallback,
+            last_fold: None,
+            prepared_stamp: None,
         }
     }
 
@@ -62,18 +70,10 @@ impl PublishedSnapshotReader {
         read_published_workspace_snapshot(&mut self.cursor, state, &self.runtime, &self.session)
     }
 
-    pub fn inputs_stamp(&self, state: &StatePaths) -> ConsumerFoldInputsStamp {
-        consumer_fold_inputs_stamp(state, &self.runtime)
-    }
-
-    pub fn projection_inputs_stamp(&self, state: &StatePaths) -> ConsumerFoldInputsStamp {
-        consumer_projection_inputs_stamp(state, &self.runtime)
-    }
-
     pub fn read_adopting(
         &mut self,
         state: &StatePaths,
-    ) -> crate::store::snapshot::Result<ConsumerSnapshotRead> {
+    ) -> crate::store::snapshot::Result<SidebarSnapshot> {
         let frame = read_snapshot_cache(&self.runtime.pane_frame_path(), &self.session);
         let adopted = frame.as_deref().and_then(|frame| {
             let published = read_workspace_projection(&self.runtime)?;
@@ -92,15 +92,45 @@ impl PublishedSnapshotReader {
             })
         });
         match adopted {
-            Some(snapshot) => Ok(ConsumerSnapshotRead {
-                snapshot,
-                source: ConsumerSnapshotSource::Adoption,
-            }),
-            None => self.read(state).map(|snapshot| ConsumerSnapshotRead {
-                snapshot,
-                source: ConsumerSnapshotSource::Fallback,
-            }),
+            Some(snapshot) => {
+                self.source = ConsumerSnapshotSource::Adoption;
+                Ok(snapshot)
+            }
+            None => {
+                self.source = ConsumerSnapshotSource::Fallback;
+                self.read(state)
+            }
         }
+    }
+
+    pub(crate) fn fold_unchanged(&mut self, state: &StatePaths, now_ms: u64) -> bool {
+        let source = self.source;
+        let stamp = source.inputs_stamp(state, &self.runtime);
+        let unchanged =
+            self.last_fold
+                .as_ref()
+                .is_some_and(|(last_stamp, folded_at_ms, last_source)| {
+                    *last_source == source
+                        && last_stamp == &stamp
+                        && now_ms.saturating_sub(*folded_at_ms) < CONSUMER_UNCHANGED_BACKSTOP_MS
+                });
+        self.prepared_stamp = Some((source, stamp));
+        unchanged
+    }
+
+    pub(crate) fn record_fold(&mut self, state: &StatePaths, now_ms: u64) {
+        let source = self.source;
+        let stamp = match self.prepared_stamp.take() {
+            Some((prepared_source, stamp)) if prepared_source == source => stamp,
+            _ => source.inputs_stamp(state, &self.runtime),
+        };
+        self.last_fold = Some((stamp, now_ms, source));
+    }
+
+    pub(crate) fn clear_fold(&mut self) {
+        self.source = ConsumerSnapshotSource::Fallback;
+        self.last_fold = None;
+        self.prepared_stamp = None;
     }
 
     /// Producer lane escape hatch for sharing the warm rollup with pane production.
@@ -115,18 +145,22 @@ impl PublishedSnapshotReader {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConsumerSnapshotSource {
+enum ConsumerSnapshotSource {
     Adoption,
     Fallback,
 }
 
-pub struct ConsumerSnapshotRead {
-    pub snapshot: SidebarSnapshot,
-    pub source: ConsumerSnapshotSource,
+impl ConsumerSnapshotSource {
+    fn inputs_stamp(self, state: &StatePaths, runtime: &RuntimePaths) -> ConsumerFoldInputsStamp {
+        match self {
+            Self::Adoption => consumer_projection_inputs_stamp(state, runtime),
+            Self::Fallback => consumer_fold_inputs_stamp(state, runtime),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConsumerFoldInputsStamp {
+struct ConsumerFoldInputsStamp {
     state: Vec<StampedPath>,
     runtime: Vec<StampedPath>,
     dirs: Vec<StampedPath>,
@@ -344,7 +378,7 @@ fn consumer_fold_inputs_stamp(
 /// Slim unchanged identity after a successful projection adoption. Every
 /// source-identity input and the projection publication itself remains in the
 /// set; broad enrichment sidecars return only after a fallback.
-pub(crate) fn consumer_projection_inputs_stamp(
+fn consumer_projection_inputs_stamp(
     state: &StatePaths,
     runtime: &RuntimePaths,
 ) -> ConsumerFoldInputsStamp {

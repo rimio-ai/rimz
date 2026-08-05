@@ -1,10 +1,11 @@
 //! The off-thread fetch machinery: the two-speed fetch cycle (the in-process
 //! consumer fast lane plus the elder's in-process produce, sharing one warm
 //! [`PublishedSnapshotReader`]), and its single-flight request coalescing.
-//! `FetchWorker` owns cadence, election, memoization, notification state, and
-//! typed result publication. Everything here runs on a worker thread so the
-//! render/input loop never blocks on pane production; heavy git/spend/account
-//! refreshes run on the cache refresher.
+//! `FetchWorker` owns cadence, election, request coalescing, notification state,
+//! and typed result publication; the reader owns consumer fold memoization.
+//! Everything here runs on a worker thread so the render/input loop never
+//! blocks on pane production; heavy git/spend/account refreshes run on the
+//! cache refresher.
 
 use std::collections::HashMap;
 use std::os::unix::net::UnixDatagram;
@@ -16,9 +17,7 @@ use crate::config::NotificationsPrefs;
 use crate::diag::record::TickLoop;
 use crate::ids::{PaneId, SidebarInstanceId};
 use crate::sidebar::ProducerElectionTracker;
-use crate::sidebar::consumer::{
-    ConsumerFoldInputsStamp, ConsumerSnapshotSource, PublishedSnapshotReader, RollupCursor,
-};
+use crate::sidebar::consumer::{PublishedSnapshotReader, RollupCursor};
 use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
@@ -193,38 +192,6 @@ impl FetchUpdate {
 /// single-flight loser wait was shorter than a `list-panes`, so every loser
 /// timed out into its own uncached produce). A lone renderer is its own
 /// next-eldest, so it still self-heals through the producer branch.
-const CONSUMER_UNCHANGED_BACKSTOP_MS: u64 = 30_000;
-
-#[derive(Default)]
-struct ConsumerFoldMemo {
-    last_ok: Option<(ConsumerFoldInputsStamp, u64, bool)>,
-}
-
-impl ConsumerFoldMemo {
-    fn should_skip(&self, stamp: &ConsumerFoldInputsStamp, now_ms: u64) -> bool {
-        self.last_ok
-            .as_ref()
-            .is_some_and(|(last, folded_at_ms, _)| {
-                last == stamp
-                    && now_ms.saturating_sub(*folded_at_ms) < CONSUMER_UNCHANGED_BACKSTOP_MS
-            })
-    }
-
-    fn record(&mut self, stamp: ConsumerFoldInputsStamp, at_ms: u64, adopted: bool) {
-        self.last_ok = Some((stamp, at_ms, adopted));
-    }
-
-    fn last_was_adoption(&self) -> bool {
-        self.last_ok
-            .as_ref()
-            .is_some_and(|(_, _, adopted)| *adopted)
-    }
-
-    fn clear(&mut self) {
-        self.last_ok = None;
-    }
-}
-
 /// Decides whether a cycle pays the produce from cheap pre-reads. The producer
 /// runs on a hard refresh, on a producer-only topology refresh, or when the
 /// published frame outlived one data tick (`None` age = no usable frame — cold
@@ -325,7 +292,6 @@ struct FetchWorker {
     diag: crate::diag::DiagSink,
     election: ProducerElectionTracker,
     reader: PublishedSnapshotReader,
-    consumer_memo: ConsumerFoldMemo,
     producer_cadence: ProducerCadence,
     notifications: NotificationState,
     link_notifications: LinkNotificationState,
@@ -340,9 +306,6 @@ struct FastFold {
     role: FetchRole,
     produce: bool,
     pane_frame: PaneFrame,
-    stamp: Option<ConsumerFoldInputsStamp>,
-    now_ms: u64,
-    adopted: bool,
 }
 
 impl FetchWorker {
@@ -366,7 +329,6 @@ impl FetchWorker {
             diag,
             election,
             reader,
-            consumer_memo: ConsumerFoldMemo::default(),
             producer_cadence: ProducerCadence::default(),
             notifications: NotificationState::default(),
             link_notifications: LinkNotificationState::default(),
@@ -382,57 +344,37 @@ impl FetchWorker {
         let now_ms = crate::sidebar::timing::unix_now_ms();
         let frame_stamps =
             crate::sidebar::cache::published_frame_stamps(&self.runtime, &self.config.session_name);
-        let last_was_adoption = self.consumer_memo.last_was_adoption();
-        let mut fold_stamp = consumer_stamp_recordable(request, role.is_producer()).then(|| {
-            if last_was_adoption {
-                self.reader.projection_inputs_stamp(state)
-            } else {
-                self.reader.inputs_stamp(state)
-            }
-        });
-        if self.consumer_fold_unchanged(request, role, fold_stamp.as_ref(), now_ms) {
+        let recordable = consumer_stamp_recordable(request, role.is_producer());
+        let unchanged = recordable && self.reader.fold_unchanged(state, now_ms);
+        if consumer_stamp_skippable(request, role.is_producer()) && unchanged {
             sink.publish(FetchUpdate::Unchanged { role });
             return;
         }
 
-        let (fast, adopted) = if role.is_producer() {
-            (self.read_and_publish_workspace(state), false)
+        let fast = if role.is_producer() {
+            self.read_and_publish_workspace(state)
         } else {
-            match self.reader.read_adopting(state) {
-                Ok(read) => (
-                    Ok(read.snapshot),
-                    read.source == ConsumerSnapshotSource::Adoption,
-                ),
-                Err(err) => (Err(err), false),
-            }
+            self.reader.read_adopting(state)
         };
-        if consumer_stamp_recordable(request, role.is_producer()) && adopted != last_was_adoption {
-            fold_stamp = Some(if adopted {
-                self.reader.projection_inputs_stamp(state)
-            } else {
-                self.reader.inputs_stamp(state)
-            });
-        }
         let produce = self.start_produce_if_due(request, role, frame_stamps, &fast, now_ms);
         let pane_frame = fast_pane_frame(request, frame_stamps, &fast);
-        let folded_consumer_ok = self.publish_fast_fold(
+        let fast_fold_ok = self.publish_fast_fold(
             state,
             FastFold {
                 result: fast,
                 role,
                 produce,
                 pane_frame,
-                stamp: fold_stamp.take(),
-                now_ms,
-                adopted,
             },
             sink,
         );
+        if fast_fold_ok && recordable {
+            self.reader.record_fold(state, now_ms);
+        } else {
+            self.reader.clear_fold();
+        }
         if produce {
             self.publish_produced_fold(state, request, role, sink);
-        }
-        if !folded_consumer_ok {
-            self.consumer_memo.clear();
         }
     }
 
@@ -469,17 +411,6 @@ impl FetchWorker {
             frame.as_deref(),
             self.config.own_pane.as_ref(),
         ))
-    }
-
-    fn consumer_fold_unchanged(
-        &self,
-        request: FetchRequest,
-        role: FetchRole,
-        stamp: Option<&ConsumerFoldInputsStamp>,
-        now_ms: u64,
-    ) -> bool {
-        consumer_stamp_skippable(request, role.is_producer())
-            && stamp.is_some_and(|stamp| self.consumer_memo.should_skip(stamp, now_ms))
     }
 
     fn start_produce_if_due(
@@ -530,11 +461,7 @@ impl FetchWorker {
                     },
                     sink,
                 );
-                if let Some(stamp) = fold.stamp {
-                    self.consumer_memo.record(stamp, fold.now_ms, fold.adopted);
-                    return true;
-                }
-                false
+                true
             }
             Err(err) if !fold.produce => {
                 sink.publish(FetchUpdate::Failed {

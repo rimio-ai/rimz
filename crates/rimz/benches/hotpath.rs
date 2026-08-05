@@ -244,13 +244,9 @@ fn consumer_adopt_fixture(warm_parse: bool) -> ConsumerAdoptFixture {
         None,
     );
     if warm_parse {
-        let read = reader
+        reader
             .read_adopting(&workspace.paths)
             .expect("warm adoption");
-        assert_eq!(
-            read.source,
-            rimz::sidebar::consumer::ConsumerSnapshotSource::Adoption
-        );
     }
     ConsumerAdoptFixture {
         paths: workspace.paths.clone(),

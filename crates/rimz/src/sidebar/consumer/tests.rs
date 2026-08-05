@@ -52,10 +52,6 @@ impl StampFixture {
             runtime,
         }
     }
-
-    fn reader(&self) -> PublishedSnapshotReader {
-        PublishedSnapshotReader::new(self.runtime.clone(), "rimz-test", None)
-    }
 }
 
 fn file_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'static str, PathBuf)> {
@@ -275,12 +271,23 @@ fn cached_daemon_reap_forwards_published_live_panes() {
 #[test]
 fn consumer_fold_inputs_stamp_is_stable_for_unchanged_inputs() {
     let fixture = StampFixture::new();
-    let reader = fixture.reader();
 
     assert_eq!(
-        reader.inputs_stamp(&fixture.state),
-        reader.inputs_stamp(&fixture.state)
+        consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
+        consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime)
     );
+}
+
+#[test]
+fn unchanged_backstop_uses_last_successful_fold_time() {
+    let fixture = StampFixture::new();
+    let mut reader = PublishedSnapshotReader::new(fixture.runtime.clone(), "rimz-test", None);
+    let folded_at_ms = 10;
+
+    assert!(!reader.fold_unchanged(&fixture.state, folded_at_ms));
+    reader.record_fold(&fixture.state, folded_at_ms);
+    assert!(reader.fold_unchanged(&fixture.state, folded_at_ms + 29_999));
+    assert!(!reader.fold_unchanged(&fixture.state, folded_at_ms + 30_000));
 }
 
 #[test]
@@ -323,8 +330,7 @@ fn consumer_fold_inputs_stamp_changes_for_each_file_input() {
         "codex_daemon_reap",
     ] {
         let fixture = StampFixture::new();
-        let reader = fixture.reader();
-        let before = reader.inputs_stamp(&fixture.state);
+        let before = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
         let path = file_stamp_inputs(&fixture.state, &fixture.runtime)
             .into_iter()
             .find(|(candidate, _)| *candidate == name)
@@ -334,7 +340,7 @@ fn consumer_fold_inputs_stamp_changes_for_each_file_input() {
         std::fs::write(&path, format!("{name}-changed-with-a-longer-body")).unwrap();
 
         assert_ne!(
-            reader.inputs_stamp(&fixture.state),
+            consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
             before,
             "{name} must participate in the consumer fold input stamp",
         );
@@ -352,8 +358,7 @@ fn consumer_fold_inputs_stamp_changes_for_each_dir_input() {
         "read_marks_dir",
     ] {
         let fixture = StampFixture::new();
-        let reader = fixture.reader();
-        let before = reader.inputs_stamp(&fixture.state);
+        let before = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
         let path = dir_stamp_inputs(&fixture.state, &fixture.runtime)
             .into_iter()
             .find(|(candidate, _)| *candidate == name)
@@ -363,7 +368,7 @@ fn consumer_fold_inputs_stamp_changes_for_each_dir_input() {
         std::fs::remove_dir_all(&path).unwrap();
 
         assert_ne!(
-            reader.inputs_stamp(&fixture.state),
+            consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
             before,
             "{name} must participate in the consumer fold input stamp",
         );
@@ -373,8 +378,7 @@ fn consumer_fold_inputs_stamp_changes_for_each_dir_input() {
 #[test]
 fn consumer_fold_inputs_stamp_ignores_unrelated_runtime_churn() {
     let fixture = StampFixture::new();
-    let reader = fixture.reader();
-    let baseline = reader.inputs_stamp(&fixture.state);
+    let baseline = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
     let unrelated = [
         fixture.runtime.root.join("snapshot.lock"),
         fixture.runtime.root.join("presence.stamp"),
@@ -384,7 +388,7 @@ fn consumer_fold_inputs_stamp_ignores_unrelated_runtime_churn() {
     for path in unrelated {
         std::fs::write(&path, b"churn").unwrap();
         assert_eq!(
-            reader.inputs_stamp(&fixture.state),
+            consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
             baseline,
             "{} is not a consumer fold input",
             path.display(),
@@ -399,13 +403,15 @@ fn consumer_fold_inputs_stamp_ignores_unrelated_runtime_churn() {
     std::fs::remove_file(renamed).unwrap();
     let heartbeat = fixture.runtime.heartbeat_dir.join("sidebar.unrelated.json");
     std::fs::write(heartbeat, b"{}").unwrap();
-    assert_eq!(reader.inputs_stamp(&fixture.state), baseline,);
+    assert_eq!(
+        consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
+        baseline,
+    );
 }
 
 #[test]
 fn consumer_fold_inputs_stamp_tracks_filtered_dynamic_files() {
     let fixture = StampFixture::new();
-    let reader = fixture.reader();
     for path in [
         fixture
             .runtime
@@ -423,18 +429,18 @@ fn consumer_fold_inputs_stamp_tracks_filtered_dynamic_files() {
             .persistent_shared_root
             .join("budget.account.codex.json"),
     ] {
-        let before_create = reader.inputs_stamp(&fixture.state);
+        let before_create = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
         write_stamp_file(&path, "created");
-        let after_create = reader.inputs_stamp(&fixture.state);
+        let after_create = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
         assert_ne!(after_create, before_create, "create {}", path.display());
 
         std::fs::write(&path, b"replaced-with-a-longer-payload").unwrap();
-        let after_replace = reader.inputs_stamp(&fixture.state);
+        let after_replace = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
         assert_ne!(after_replace, after_create, "replace {}", path.display());
 
         std::fs::remove_file(&path).unwrap();
         assert_ne!(
-            reader.inputs_stamp(&fixture.state),
+            consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
             after_replace,
             "remove {}",
             path.display(),
@@ -1096,19 +1102,19 @@ impl AdoptionFixture {
         }
     }
 
-    fn read(&self) -> ConsumerSnapshotRead {
-        PublishedSnapshotReader::new(self.runtime.clone(), "rimz-test", None)
-            .read_adopting(&self.state)
-            .unwrap()
+    fn read(&self) -> (SidebarSnapshot, ConsumerSnapshotSource) {
+        let mut reader = PublishedSnapshotReader::new(self.runtime.clone(), "rimz-test", None);
+        let snapshot = reader.read_adopting(&self.state).unwrap();
+        (snapshot, reader.source)
     }
 }
 
 #[test]
 fn consumer_adopts_only_an_exact_workspace_projection() {
     let fixture = AdoptionFixture::new();
-    let read = fixture.read();
-    assert_eq!(read.source, ConsumerSnapshotSource::Adoption);
-    assert_eq!(read.snapshot.display_name, "projected");
+    let (snapshot, read_source) = fixture.read();
+    assert_eq!(read_source, ConsumerSnapshotSource::Adoption);
+    assert_eq!(snapshot.display_name, "projected");
 
     for (field, value) in [
         ("schema_version", serde_json::json!(99)),
@@ -1122,7 +1128,7 @@ fn consumer_adopts_only_an_exact_workspace_projection() {
         projection[field] = value;
         atomic::write_temp_then_rename_cache(&path, &projection).unwrap();
         assert_eq!(
-            fixture.read().source,
+            fixture.read().1,
             ConsumerSnapshotSource::Fallback,
             "{field}"
         );
@@ -1134,14 +1140,14 @@ fn consumer_adopts_only_an_exact_workspace_projection() {
         b"{broken projection",
     )
     .unwrap();
-    assert_eq!(fixture.read().source, ConsumerSnapshotSource::Fallback);
+    assert_eq!(fixture.read().1, ConsumerSnapshotSource::Fallback);
 
     let fixture = AdoptionFixture::new();
     std::fs::remove_file(
         crate::sidebar::workspace_projection::workspace_projection_path(&fixture.runtime),
     )
     .unwrap();
-    assert_eq!(fixture.read().source, ConsumerSnapshotSource::Fallback);
+    assert_eq!(fixture.read().1, ConsumerSnapshotSource::Fallback);
 }
 
 #[test]
@@ -1155,20 +1161,20 @@ fn consumer_falls_back_for_stale_truth_or_legacy_frame() {
         ),
     )
     .unwrap();
-    assert_eq!(fixture.read().source, ConsumerSnapshotSource::Fallback);
+    assert_eq!(fixture.read().1, ConsumerSnapshotSource::Fallback);
 
     let mut fixture = AdoptionFixture::new();
     fixture.frame.metrics_stamp_ms = Some(99);
     atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
         .unwrap();
-    assert_eq!(fixture.read().source, ConsumerSnapshotSource::Fallback);
+    assert_eq!(fixture.read().1, ConsumerSnapshotSource::Fallback);
 
     let mut fixture = AdoptionFixture::new();
     fixture.frame.topology_stamp_ms = None;
     fixture.frame.metrics_stamp_ms = None;
     atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
         .unwrap();
-    assert_eq!(fixture.read().source, ConsumerSnapshotSource::Fallback);
+    assert_eq!(fixture.read().1, ConsumerSnapshotSource::Fallback);
 }
 
 #[test]
@@ -1198,9 +1204,9 @@ fn consumer_adopts_an_event_fresh_projection_while_latest_publish_trails() {
         )
         .unwrap();
 
-    let read = fixture.read();
-    assert_eq!(read.source, ConsumerSnapshotSource::Adoption);
-    assert_eq!(read.snapshot.display_name, "event-fresh projection");
+    let (snapshot, read_source) = fixture.read();
+    assert_eq!(read_source, ConsumerSnapshotSource::Adoption);
+    assert_eq!(snapshot.display_name, "event-fresh projection");
 }
 
 #[test]
@@ -1218,8 +1224,8 @@ fn presence_only_frame_publication_keeps_projection_match() {
     atomic::write_temp_then_rename_cache(&fixture.runtime.pane_frame_path(), &fixture.frame)
         .unwrap();
 
-    let read = fixture.read();
-    assert_eq!(read.source, ConsumerSnapshotSource::Adoption);
+    let (snapshot, read_source) = fixture.read();
+    assert_eq!(read_source, ConsumerSnapshotSource::Adoption);
     assert_eq!(
         (
             fixture.frame.topology_stamp_ms,
@@ -1228,7 +1234,7 @@ fn presence_only_frame_publication_keeps_projection_match() {
         source
     );
     assert_eq!(
-        read.snapshot.presence,
+        snapshot.presence,
         Some(crate::store::snapshot::SidebarPresence::Detached)
     );
 }
