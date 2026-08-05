@@ -8,7 +8,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use jiff::SignedDuration;
@@ -189,10 +188,7 @@ pub(crate) fn is_trunk_branch(branch: &str, trunk: Option<&str>) -> bool {
 }
 
 pub fn read_diff_stats_cache(path: &Path) -> DiffStatsCache {
-    let Ok(bytes) = std::fs::read(path) else {
-        return DiffStatsCache::default();
-    };
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    super::runner::read_json_cache(path)
 }
 
 /// Refresh the producer's per-worktree git facts. The git forks are the
@@ -504,44 +500,13 @@ fn refresh_entries(
     if paths.is_empty() {
         return Vec::new();
     }
-    let lane = crate::lane::current();
-    let next = AtomicUsize::new(0);
-    let workers = MAX_PARALLEL_GIT.min(paths.len());
-    let mut out = Vec::with_capacity(paths.len());
-    std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..workers)
-            .map(|_| {
-                scope.spawn(|| {
-                    crate::lane::set(lane);
-                    let mut local = Vec::new();
-                    loop {
-                        let idx = next.fetch_add(1, Ordering::Relaxed);
-                        let Some((path, due)) = paths.get(idx) else {
-                            break;
-                        };
-                        let prior = cache.entries.get(path.as_str()).cloned();
-                        let prior_memo =
-                            prior_memos.get(path.as_str()).cloned().unwrap_or_default();
-                        let (entry, memo) = refresh_entry_with_memo(
-                            path,
-                            prior.as_ref(),
-                            *due,
-                            configured_trunk,
-                            &prior_memo,
-                        );
-                        local.push((path.clone(), entry, memo));
-                    }
-                    local
-                })
-            })
-            .collect();
-        for handle in handles {
-            if let Ok(local) = handle.join() {
-                out.extend(local);
-            }
-        }
-    });
-    out
+    super::runner::bounded_map(MAX_PARALLEL_GIT, paths, |(path, due)| {
+        let prior = cache.entries.get(path.as_str()).cloned();
+        let prior_memo = prior_memos.get(path.as_str()).cloned().unwrap_or_default();
+        let (entry, memo) =
+            refresh_entry_with_memo(path, prior.as_ref(), *due, configured_trunk, &prior_memo);
+        (path.clone(), entry, memo)
+    })
 }
 
 /// Produce a merged diff-stats entry for one worktree path. The trunk and

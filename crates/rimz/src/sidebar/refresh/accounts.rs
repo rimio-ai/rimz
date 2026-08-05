@@ -1,7 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -352,42 +350,14 @@ fn execute_account_probes(
         };
     }
     let started = Instant::now();
-    let lane = crate::lane::current();
     let jobs: Vec<_> = due_kinds.iter().cloned().collect();
-    let next = AtomicUsize::new(0);
     let worker_count = MAX_PARALLEL_ACCOUNT_PROBES.min(jobs.len());
-    let results = Mutex::new((0..jobs.len()).map(|_| None).collect::<Vec<_>>());
-    std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..worker_count)
-            .map(|_| {
-                scope.spawn(|| {
-                    crate::lane::set(lane);
-                    loop {
-                        let index = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(kind) = jobs.get(index) else {
-                            break;
-                        };
-                        let active = active_version_kinds.contains(kind);
-                        let Some(result) = probe(kind, active) else {
-                            continue;
-                        };
-                        if let Ok(mut results) = results.lock() {
-                            results[index] = Some(result);
-                        }
-                    }
-                })
-            })
-            .collect();
-        for worker in workers {
-            let _ = worker.join();
-        }
-    });
-    let mut results: Vec<_> = results
-        .into_inner()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .into_iter()
-        .flatten()
-        .collect();
+    let mut results: Vec<_> = super::runner::bounded_map(worker_count, &jobs, |kind| {
+        probe(kind, active_version_kinds.contains(kind))
+    })
+    .into_iter()
+    .flatten()
+    .collect();
     results.sort_by(|left, right| left.kind.cmp(&right.kind));
     ProbeBatch {
         results,
@@ -562,10 +532,7 @@ fn active_version_probe_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
 /// Read the producer's published account cache, or an empty cache on a cold,
 /// corrupt, or old-schema file. Read-only and fork-free.
 pub(crate) fn read_accounts_cache(path: &Path) -> AccountsCache {
-    std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    super::runner::read_json_cache(path)
 }
 
 /// Publish the probed account cache atomically so readers never observe a
@@ -584,7 +551,7 @@ pub(super) fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier, Mutex};
 
     use jiff::Timestamp;

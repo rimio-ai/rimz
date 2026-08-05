@@ -215,10 +215,7 @@ pub(super) struct AccountUsageCompletion {
 }
 
 pub(crate) fn read_credits_cache(path: &Path) -> CreditsCache {
-    std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    super::runner::read_json_cache(path)
 }
 
 pub(crate) fn write_credits_cache(path: &Path, cache: &CreditsCache) {
