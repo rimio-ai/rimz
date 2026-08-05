@@ -669,10 +669,12 @@ fn probe_due_repos(
         .iter()
         .filter(|(repo_key, _)| due.contains(*repo_key))
         .collect::<Vec<_>>();
-    let results =
-        super::runner::bounded_map(MAX_PARALLEL_PR_PROBES, &due_groups, |(repo_key, group)| {
-            probe_repo_group(repo_key, group, &prior.states, &prior.branch_ci)
-        });
+    let results = super::runner::bounded_map(
+        crate::lane::WorkLane::Other,
+        MAX_PARALLEL_PR_PROBES,
+        &due_groups,
+        |(repo_key, group)| probe_repo_group(repo_key, group, &prior.states, &prior.branch_ci),
+    );
     for result in results {
         for target in &result.targets {
             cache.states.remove(&target.path);
