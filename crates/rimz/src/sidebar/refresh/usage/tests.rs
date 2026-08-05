@@ -317,7 +317,7 @@ fn authoritative_direct_completion_survives_live_session_exit() {
         runtime.workspace_id.clone(),
         vec![provider_panel("claude", Vec::new())],
     );
-    super::super::apply_rate_limit_cache(&mut idle, &runtime, false);
+    super::super::rate_limits::apply_cached_rate_limits(&mut idle, &runtime);
     assert_eq!(
         idle.providers[0]
             .windows

@@ -38,7 +38,7 @@ pub use credits::merge_provider_realtime_usage;
 pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap};
 pub use live_spend::{apply_live_day_spend, apply_live_today_spend};
 pub use pr::{PrLink, PrStateCache};
-pub use rate_limits::merge_account_rate_limits;
+pub(crate) use rate_limits::merge_account_rate_limits;
 pub use sessions::{
     ForcedSessionRefresh, force_refresh_session_context, refresh_session_transcript_context,
     refresh_session_transcript_context_from_watch,
@@ -53,7 +53,7 @@ use self::cohort_spend::refresh_cohort_spend_for;
 use self::daemon_reap::refresh_codex_daemon_reap_cache;
 use self::git_stats::refresh_diff_stats_for;
 use self::pr::produce_pr_states;
-use self::rate_limits::apply_rate_limit_cache;
+use self::rate_limits::refresh_rate_limits;
 use self::sessions::refresh_live_sessions;
 use self::usage::refresh_account_usage;
 use super::enrich::{
@@ -239,7 +239,7 @@ pub fn refresh_heavy_lanes(
         // This scoped fold is not returned as the final snapshot.
         RemoteControlServerHealth::default(),
     );
-    apply_rate_limit_cache(&mut panels, runtime, true);
+    refresh_rate_limits(&mut panels, runtime);
     // `with_provider_aggregates` rebuilds panels with empty credit fields; the
     // scoped producer fold must reapply the shared cache before auto-redeem can
     // evaluate the already-known reset credits.

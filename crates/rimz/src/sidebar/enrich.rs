@@ -34,7 +34,7 @@ use super::refresh::git_stats::{
 };
 use super::refresh::live_spend::{apply_live_day_spend, apply_live_today_spend};
 use super::refresh::pr::{PrLink, read_pr_state_cache};
-use super::refresh::rate_limits::apply_rate_limit_cache;
+use super::refresh::rate_limits::apply_cached_rate_limits;
 use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 
 #[cfg(test)]
@@ -872,7 +872,7 @@ fn fold_machine_config(
     );
     // Every fold merges the producer-published account windows read-only. The
     // refresh lane owns writes.
-    apply_rate_limit_cache(&mut snapshot, runtime, false);
+    apply_cached_rate_limits(&mut snapshot, runtime);
     apply_credits_cache(&mut snapshot, runtime, &accounts_config);
     (snapshot, spending)
 }
@@ -900,7 +900,7 @@ pub fn provider_panels_from_caches(
         &provider_spending.spending.by_provider,
         RemoteControlServerHealth::default(),
     );
-    apply_rate_limit_cache(&mut snapshot, runtime, false);
+    apply_cached_rate_limits(&mut snapshot, runtime);
     apply_credits_cache(&mut snapshot, runtime, &config.accounts);
     crate::harness::budget::project_budget_views(
         &mut snapshot,

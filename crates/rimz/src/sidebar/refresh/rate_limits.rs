@@ -23,12 +23,12 @@ mod tests;
 /// same-epoch drop contested by stamped best-effort truth. Shorter, a single
 /// lagging or garbled sample could dip the bar; longer is needless lag on a real
 /// refill. Tuned against captured reset traces (see [`trace_rate_limits`]).
-pub(crate) const REFILL_CONFIRM_SECS: i64 = 120;
+const REFILL_CONFIRM_SECS: i64 = 120;
 /// Coarse backstop: a live candidate captured longer ago than this is ignored.
 /// Content-staleness is already caught upstream — the snapshot view drops a
 /// reading whose shortest applicable window has reset — so this only guards a
 /// wildly old reading slipping through.
-pub(crate) const LIVE_HORIZON_SECS: i64 = 6 * 3600;
+const LIVE_HORIZON_SECS: i64 = 6 * 3600;
 /// A later reset instant must beat the prior by more than this to count as a new
 /// window epoch; sub-second parse jitter between sessions never does.
 const RESET_ADVANCE_SECS: i64 = 60;
@@ -43,7 +43,7 @@ const REFILL_FLOOR_PCT: u8 = 25;
 /// Publish the rate-limit window cache for every tab to read, atomically so a
 /// reader never observes a half-written file. Best-effort: a write failure logs
 /// and leaves the prior cache in place.
-pub(crate) fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
+fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
     if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(path, cache) {
         tracing::warn!(
             path = %path.display(),
@@ -51,6 +51,30 @@ pub(crate) fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
             error = &err as &dyn std::error::Error,
             "sidebar rate-limits cache write failed",
         );
+    }
+}
+
+struct WindowIndex {
+    prior: BTreeMap<RateLimitWindowKey, RateLimitWindow>,
+    pending: BTreeMap<RateLimitWindowKey, PendingRefill>,
+    live: BTreeMap<RateLimitWindowKey, RateLimitWindow>,
+}
+
+impl WindowIndex {
+    fn new(prior: Option<&RateLimitCacheEntry>, live: Vec<RateLimitWindow>) -> Self {
+        let windows = prior.map_or(&[][..], |entry| entry.limits.windows.as_slice());
+        let refills = prior.map_or(&[][..], |entry| entry.pending.as_slice());
+        Self {
+            prior: BTreeMap::from_iter(windows.iter().map(|window| (window.key(), window.clone()))),
+            pending: BTreeMap::from_iter(
+                refills.iter().map(|refill| (refill.key(), refill.clone())),
+            ),
+            live: BTreeMap::from_iter(live.into_iter().map(|window| (window.key(), window))),
+        }
+    }
+
+    fn projection_keys(&self) -> BTreeSet<RateLimitWindowKey> {
+        self.live.keys().chain(self.prior.keys()).cloned().collect()
     }
 }
 
@@ -63,7 +87,7 @@ pub(crate) fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
 /// section so an accepted OAuth observation is published before its five-minute
 /// attempt throttle advances. Used by the detached `rimz agents refresh-usage`
 /// helper, never on the per-tick path.
-pub fn merge_account_rate_limits(
+pub(crate) fn merge_account_rate_limits(
     runtime: &RuntimePaths,
     kind: &str,
     identity: AccountUsageIdentity,
@@ -101,27 +125,14 @@ pub fn merge_account_rate_limits(
         .unwrap_or(prior_fused);
     complete_omitted_duration_windows(prior_bound, &mut windows);
     let bound_limits = identity.account_key.is_some().then(|| windows.clone());
-    let prior: BTreeMap<RateLimitWindowKey, RateLimitWindow> = prior_fused
-        .iter()
-        .map(|window| (window.key(), window.clone()))
-        .collect();
-    let prior_pending: BTreeMap<RateLimitWindowKey, PendingRefill> = prior_entry
-        .into_iter()
-        .flat_map(|entry| entry.pending.iter())
-        .map(|pending| (pending.key(), pending.clone()))
-        .collect();
-    let live: BTreeMap<RateLimitWindowKey, RateLimitWindow> = windows
-        .windows
-        .into_iter()
-        .map(|window| (window.key(), window))
-        .collect();
-    let mut fused = Vec::with_capacity(live.len());
+    let index = WindowIndex::new(prior_entry, windows.windows);
+    let mut fused = Vec::with_capacity(index.live.len());
     let mut pending = Vec::new();
-    for (key, live) in live {
+    for (key, live) in index.live {
         let (truth, refill) = fuse_window(
-            prior.get(&key),
+            index.prior.get(&key),
             Some(&live),
-            prior_pending.get(&key),
+            index.pending.get(&key),
             observed_at,
             true,
         );
@@ -214,66 +225,44 @@ fn unknown_idle_window(cached: RateLimitWindow) -> RateLimitWindow {
     }
 }
 
-/// Fold the persisted account-scoped windows onto the resolved provider panels:
-/// a kind with no live reading this frame paints its last-known bars (projected
-/// through [`project_window`]'s reset-to-max rule) instead of an empty
-/// dashboard. Once the account freshness ceiling has reset with no live reading,
-/// the display switches all cached windows to unknown bars until a provider
-/// refresh succeeds. Reconciled per stable window identity, so each budget is
-/// carried forward independently while the cache remains current. On the producer
-/// (`persist`) the live readings are written back — and only the live ground
-/// truth, never the synthesized full or unknown windows — so budgets survive a
-/// session ending or going idle. The written cache tracks login: it is rebuilt
-/// from the panels alone, so a logged-out kind (no panel) drops out. A consumer
-/// reads the same cache but never writes it.
-pub(crate) fn apply_rate_limit_cache(
-    snapshot: &mut SidebarSnapshot,
-    runtime: &RuntimePaths,
-    persist: bool,
-) {
-    // No dashboard: nothing to project onto and nothing to fall back to. A
-    // consumer is done — the same idle-room gate the context/activity reads use.
-    // The producer must still reap the cache once *every* provider has logged
-    // out: with no surviving panel to rebuild from, the per-panel reap below
-    // never runs, so a stale cache would flash old budgets on a later re-login.
-    // The reap is a no-op on an already-empty cache, keeping a logged-out room
-    // off the per-tick write path.
+/// Project persisted account windows onto consumer panels without changing the
+/// shared cache, tracing fusion, confirming a refill, or forcing OAuth reads.
+pub(crate) fn apply_cached_rate_limits(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths) {
     if snapshot.providers.is_empty() {
-        if persist {
-            reset_logged_out_rate_limits_cache(runtime);
-        }
         return;
     }
+    let cached = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let _ = project_rate_limits(snapshot, &cached, false, None);
+}
 
+/// Fuse live account windows into the shared cache and project producer panels.
+/// The cache is rebuilt from current panels, so a logged-out kind drops out.
+pub(super) fn refresh_rate_limits(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths) {
+    if snapshot.providers.is_empty() {
+        reset_logged_out_rate_limits_cache(runtime);
+        return;
+    }
     let path = runtime.shared_rate_limits_path();
-    if persist {
-        let reset_kinds = {
-            let Some(_guard) =
-                crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_rate_limits_lock())
-                    .ok()
-                    .flatten()
-            else {
-                let cached = read_rate_limits_cache(&path);
-                let _ = apply_rate_limit_cache_with(snapshot, &cached, false, None);
-                return;
-            };
-            let cached = read_rate_limits_cache(&path);
-            let trace = rate_limits_trace_path(runtime);
-            let (next, reset_kinds) =
-                apply_rate_limit_cache_with(snapshot, &cached, true, trace.as_deref());
-            if let Some(next) = next {
-                write_rate_limits_cache(&path, &next);
-            }
-            reset_kinds
+    let reset_kinds = {
+        let Some(_guard) =
+            crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_rate_limits_lock())
+                .ok()
+                .flatten()
+        else {
+            apply_cached_rate_limits(snapshot, runtime);
+            return;
         };
-        for kind in reset_kinds {
-            super::credits::invalidate_oauth_read(runtime, &kind);
+        let cached = read_rate_limits_cache(&path);
+        let trace = rate_limits_trace_path(runtime);
+        let (next, reset_kinds) = project_rate_limits(snapshot, &cached, true, trace.as_deref());
+        if let Some(next) = next {
+            write_rate_limits_cache(&path, &next);
         }
-        return;
+        reset_kinds
+    };
+    for kind in reset_kinds {
+        super::credits::invalidate_oauth_read(runtime, &kind);
     }
-
-    let cached = read_rate_limits_cache(&path);
-    let _ = apply_rate_limit_cache_with(snapshot, &cached, false, None);
 }
 
 /// Clear the published cache once every provider has logged out, so a later
@@ -363,10 +352,10 @@ fn complete_omitted_duration_windows(prior: &[RateLimitWindow], current: &mut Ag
     );
 }
 
-fn apply_rate_limit_cache_with(
+fn project_rate_limits(
     snapshot: &mut SidebarSnapshot,
     cached: &RateLimitsCache,
-    persist: bool,
+    producer: bool,
     trace: Option<&Path>,
 ) -> (Option<RateLimitsCache>, Vec<String>) {
     // The snapshot's single projection clock, so the idle-window reset
@@ -399,26 +388,7 @@ fn apply_rate_limit_cache_with(
             .or_else(|| prior_entry.map(|entry| entry.limits.windows.as_slice()))
             .unwrap_or_default();
         complete_omitted_duration_windows(prior_authoritative, &mut live_limits);
-        let live: BTreeMap<RateLimitWindowKey, RateLimitWindow> = live_limits
-            .windows
-            .into_iter()
-            .map(|window| (window.key(), window))
-            .collect();
-        let prev: BTreeMap<RateLimitWindowKey, RateLimitWindow> = prior_entry
-            .into_iter()
-            .flat_map(|entry| entry.limits.windows.iter())
-            .map(|window| (window.key(), window.clone()))
-            .collect();
-        let prev_pending: BTreeMap<RateLimitWindowKey, PendingRefill> = cached
-            .entries
-            .get(&panel.kind)
-            .filter(|entry| entry.scope == panel.account_scope)
-            .into_iter()
-            .flat_map(|entry| entry.pending.iter())
-            .map(|refill| (refill.key(), refill.clone()))
-            .collect();
-        let window_keys: BTreeSet<RateLimitWindowKey> =
-            live.keys().chain(prev.keys()).cloned().collect();
+        let index = WindowIndex::new(prior_entry, live_limits.windows);
 
         // Fuse each duration to its ground truth and carry or advance its
         // debounce marker. A live reading drives the fusion; absent one, the
@@ -426,33 +396,34 @@ fn apply_rate_limit_cache_with(
         let mut truth: BTreeMap<RateLimitWindowKey, RateLimitWindow> = BTreeMap::new();
         let mut pending: Vec<PendingRefill> = Vec::new();
         let mut kind_reset_advanced = false;
-        for key in &window_keys {
+        for key in index.projection_keys() {
             let (window, refill) = fuse_window(
-                prev.get(key),
-                live.get(key),
-                prev_pending.get(key),
+                index.prior.get(&key),
+                index.live.get(&key),
+                index.pending.get(&key),
                 now,
-                persist,
+                producer,
             );
             if let (Some(window), Some(path)) = (window.as_ref(), trace) {
-                trace_rate_limits(path, &panel.kind, live.get(key), window, now);
+                trace_rate_limits(path, &panel.kind, index.live.get(&key), window, now);
             }
             if let Some(window) = window {
-                if persist
-                    && prev
-                        .get(key)
+                if producer
+                    && index
+                        .prior
+                        .get(&key)
                         .is_some_and(|prev| reset_advanced(prev.resets_at, window.resets_at))
                 {
                     kind_reset_advanced = true;
                 }
-                truth.insert(key.clone(), window);
+                truth.insert(key, window);
             }
             if let Some(refill) = refill {
                 pending.push(refill);
             }
         }
-        let cache_unknown = live.is_empty() && longest_cached_window_expired(&truth, now);
-        if persist && !cache_unknown && kind_reset_advanced {
+        let cache_unknown = index.live.is_empty() && longest_cached_window_expired(&truth, now);
+        if producer && !cache_unknown && kind_reset_advanced {
             refresh_kinds.insert(panel.kind.clone());
         }
 
@@ -486,7 +457,7 @@ fn apply_rate_limit_cache_with(
         // the durable claim keeps the fetch itself single-flight, and completion
         // restamps the read on success and failure alike, so a provider that
         // stays unreachable falls back to ordinary throttling.
-        let display_unknown = persist
+        let display_unknown = producer
             && display
                 .iter()
                 .all(|window| window.used_percentage.is_none());
@@ -503,7 +474,7 @@ fn apply_rate_limit_cache_with(
         // Persist fused truth, including authoritative lifted rows, any in-flight
         // refill, and the open unknown episode's marker. Display-only reset
         // projections and unknown windows are recomputed each frame.
-        if persist && (!truth.is_empty() || !pending.is_empty() || unknown_since_ms.is_some()) {
+        if producer && (!truth.is_empty() || !pending.is_empty() || unknown_since_ms.is_some()) {
             let limits = AgentRateLimits {
                 windows: truth.values().cloned().collect(),
             };
@@ -533,7 +504,10 @@ fn apply_rate_limit_cache_with(
         }
     }
 
-    (persist.then_some(next), refresh_kinds.into_iter().collect())
+    (
+        producer.then_some(next),
+        refresh_kinds.into_iter().collect(),
+    )
 }
 
 /// Fuse one stable window identity's prior truth with this frame's live reading
@@ -557,7 +531,7 @@ fn apply_rate_limit_cache_with(
 ///
 /// `allow_confirm` is the producer flag — a consumer never lowers the bar on its
 /// own, it mirrors the producer's persisted truth.
-pub(crate) fn fuse_window(
+fn fuse_window(
     prior: Option<&RateLimitWindow>,
     live: Option<&RateLimitWindow>,
     pending: Option<&PendingRefill>,
