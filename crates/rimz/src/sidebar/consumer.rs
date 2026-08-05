@@ -35,6 +35,11 @@ pub struct PublishedSnapshotReader {
     prepared_stamp: Option<(ConsumerSnapshotSource, ConsumerFoldInputsStamp)>,
 }
 
+/// Maximum time unchanged input metadata may suppress a real fold.
+///
+/// Stamps are a latency hint, not truth: bounded re-reads cover filesystem
+/// metadata aliasing and future drift in the fold's input set. Skips never
+/// advance this window; it measures from the last successful fold.
 const CONSUMER_UNCHANGED_BACKSTOP_MS: u64 = 30_000;
 
 impl PublishedSnapshotReader {
@@ -70,6 +75,7 @@ impl PublishedSnapshotReader {
         read_published_workspace_snapshot(&mut self.cursor, state, &self.runtime, &self.session)
     }
 
+    /// Adopt a matching producer projection, or run the full consumer fold.
     pub fn read_adopting(
         &mut self,
         state: &StatePaths,
@@ -103,6 +109,11 @@ impl PublishedSnapshotReader {
         }
     }
 
+    /// Prepare the stamp for a possible fold and test it against the last success.
+    ///
+    /// This query does not advance the successful-fold timestamp. Its prepared
+    /// stamp lets [`Self::record_fold`] avoid a second filesystem walk when the
+    /// read keeps the same adoption/fallback source.
     pub(crate) fn fold_unchanged(&mut self, state: &StatePaths, now_ms: u64) -> bool {
         let source = self.source;
         let stamp = source.inputs_stamp(state, &self.runtime);
@@ -118,6 +129,10 @@ impl PublishedSnapshotReader {
         unchanged
     }
 
+    /// Record a successful fold, reusing a prepared stamp when its source matches.
+    ///
+    /// Missing preparation or an adoption/fallback transition pays a fresh
+    /// filesystem walk for the correct input set.
     pub(crate) fn record_fold(&mut self, state: &StatePaths, now_ms: u64) {
         let source = self.source;
         let stamp = match self.prepared_stamp.take() {
@@ -127,6 +142,7 @@ impl PublishedSnapshotReader {
         self.last_fold = Some((stamp, now_ms, source));
     }
 
+    /// Clear skip state and restore full inputs after a producer, mandatory, or failed fold.
     pub(crate) fn clear_fold(&mut self) {
         self.source = ConsumerSnapshotSource::Fallback;
         self.last_fold = None;

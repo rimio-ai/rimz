@@ -54,7 +54,7 @@ Reading and folding:
 
 | Module | What it owns |
 | --- | --- |
-| [`consumer.rs`](../../../crates/rimz/src/sidebar/consumer.rs) | The consumer read: event-fresh rollup over the published pane frame, projection adoption, and the fold-skip input stamps. |
+| [`consumer.rs`](../../../crates/rimz/src/sidebar/consumer.rs) | The consumer read: event-fresh rollup over the published pane frame, projection adoption, fold-skip input stamps, and memo lifecycle. |
 | [`enrich.rs`](../../../crates/rimz/src/sidebar/enrich.rs) | The ordered fold spine both producer and consumer run, so the two paths cannot drift. |
 | [`frame.rs`](../../../crates/rimz/src/sidebar/frame.rs) | `PaneFrame`, the typed pane topology the producer publishes. |
 | [`cache.rs`](../../../crates/rimz/src/sidebar/cache.rs) | The pane-frame cache read, its freshness verdict, and the presence and topology hint files. |

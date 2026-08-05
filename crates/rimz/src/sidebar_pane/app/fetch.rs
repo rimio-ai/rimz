@@ -156,42 +156,6 @@ impl FetchUpdate {
     }
 }
 
-/// One fetch cycle, posting one or two outcomes. Runs on the fetch worker
-/// thread, keeping the produce's `list-panes` + git round-trips off the
-/// render/input loop so animation never stalls on it. `state` is resolved per
-/// cycle by the worker loop, so a `workspace migrate` lands without a restart.
-///
-/// **Fast lane (every cycle, producer and consumer alike):** fold the
-/// event-fresh store rollup over the published pane frame entirely in process
-/// ([`crate::sidebar::consumer::read_published_snapshot`]) — no `list-panes`,
-/// no git. This is the paint that lands a status flip or a cost update within
-/// one wakeup, in single-digit milliseconds — and it runs even over an aged
-/// pane frame, so a dead producer stales only pane *presence* while status
-/// keeps flowing. On cold start, before any usable frame exists, this still
-/// returns a frameless rollup snapshot so startup waits do not read as refresh
-/// failures; the produce below recovers the pane frame.
-///
-/// **Produce lane (the elder's reconciliation):**
-/// [`crate::sidebar::produce::produce_snapshot`] runs in process on this same
-/// worker — same thread, same warm cursor as the fast lane, so the rollup
-/// fold stays O(new log bytes) and promotion to producer is warm by
-/// construction. It refreshes pane truth and roots, then publishes the shared
-/// frame every other tab reads. One producer per
-/// workspace — the eldest live instance — and on it the produce is gated to
-/// the data tick: a store-delta storm paints per delta but produces at most
-/// once per tick. Heavy git/spend/account lanes are refreshed by the elder's
-/// cache refresher and projected here, so this worker stays responsible for
-/// pane truth, roots, notifications, and publish order. Topology freshness is
-/// producer-only: consumers wait for the
-/// producer's `PaneFramePublished` event and fold the new cache without
-/// locally producing. Only a hard refresh (reload/manual recovery) lets a
-/// consumer produce. Stale-frame recovery belongs to the election, not the
-/// consumers — a dead elder's heartbeat ages out within one TTL and the
-/// next-eldest *becomes* the producer, so a wedged producer costs one handoff,
-/// never an every-consumer produce storm (the old self-heal, whose
-/// single-flight loser wait was shorter than a `list-panes`, so every loser
-/// timed out into its own uncached produce). A lone renderer is its own
-/// next-eldest, so it still self-heals through the producer branch.
 /// Decides whether a cycle pays the produce from cheap pre-reads. The producer
 /// runs on a hard refresh, on a producer-only topology refresh, or when the
 /// published frame outlived one data tick (`None` age = no usable frame — cold
@@ -339,6 +303,42 @@ impl FetchWorker {
         }
     }
 
+    /// One fetch cycle, posting one or two outcomes. Runs on the fetch worker
+    /// thread, keeping the produce's `list-panes` + git round-trips off the
+    /// render/input loop so animation never stalls on it. `state` is resolved per
+    /// cycle by the worker loop, so a `workspace migrate` lands without a restart.
+    ///
+    /// **Fast lane (every cycle, producer and consumer alike):** fold the
+    /// event-fresh store rollup over the published pane frame entirely in process
+    /// ([`crate::sidebar::consumer::read_published_snapshot`]) — no `list-panes`,
+    /// no git. This is the paint that lands a status flip or a cost update within
+    /// one wakeup, in single-digit milliseconds — and it runs even over an aged
+    /// pane frame, so a dead producer stales only pane *presence* while status
+    /// keeps flowing. On cold start, before any usable frame exists, this still
+    /// returns a frameless rollup snapshot so startup waits do not read as refresh
+    /// failures; the produce below recovers the pane frame.
+    ///
+    /// **Produce lane (the elder's reconciliation):**
+    /// [`crate::sidebar::produce::produce_snapshot`] runs in process on this same
+    /// worker — same thread, same warm cursor as the fast lane, so the rollup
+    /// fold stays O(new log bytes) and promotion to producer is warm by
+    /// construction. It refreshes pane truth and roots, then publishes the shared
+    /// frame every other tab reads. One producer per
+    /// workspace — the eldest live instance — and on it the produce is gated to
+    /// the data tick: a store-delta storm paints per delta but produces at most
+    /// once per tick. Heavy git/spend/account lanes are refreshed by the elder's
+    /// cache refresher and projected here, so this worker stays responsible for
+    /// pane truth, roots, notifications, and publish order. Topology freshness is
+    /// producer-only: consumers wait for the
+    /// producer's `PaneFramePublished` event and fold the new cache without
+    /// locally producing. Only a hard refresh (reload/manual recovery) lets a
+    /// consumer produce. Stale-frame recovery belongs to the election, not the
+    /// consumers — a dead elder's heartbeat ages out within one TTL and the
+    /// next-eldest *becomes* the producer, so a wedged producer costs one handoff,
+    /// never an every-consumer produce storm (the old self-heal, whose
+    /// single-flight loser wait was shorter than a `list-panes`, so every loser
+    /// timed out into its own uncached produce). A lone renderer is its own
+    /// next-eldest, so it still self-heals through the producer branch.
     fn run_cycle(&mut self, state: &StatePaths, request: FetchRequest, sink: &mut ResultSink) {
         let role = self.observe_role();
         let now_ms = crate::sidebar::timing::unix_now_ms();
