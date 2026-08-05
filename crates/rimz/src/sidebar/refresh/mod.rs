@@ -24,9 +24,11 @@ pub mod credits;
 pub mod daemon_reap;
 mod git_refs;
 pub mod git_stats;
+pub(crate) mod inputs;
 pub mod live_spend;
 pub mod pr;
 pub mod rate_limits;
+mod runner;
 pub mod sessions;
 mod trace;
 pub mod usage;
@@ -166,9 +168,7 @@ fn sole_published_workspace_cache(runtime: &RuntimePaths) -> Option<WorkspaceSpe
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name.starts_with("workspace-spending.") && name.ends_with(".json")
-                })
+                .is_some_and(inputs::is_workspace_spending_file)
         });
     let candidate = published.next()?;
     if published.next().is_some() {

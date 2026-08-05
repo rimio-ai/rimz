@@ -669,50 +669,40 @@ fn probe_due_repos(
         .iter()
         .filter(|(repo_key, _)| due.contains(*repo_key))
         .collect::<Vec<_>>();
-    for chunk in due_groups.chunks(MAX_PARALLEL_PR_PROBES) {
-        std::thread::scope(|scope| {
-            let handles = chunk
-                .iter()
-                .map(|(repo_key, group)| {
-                    scope.spawn(move || {
-                        probe_repo_group(repo_key, group, &prior.states, &prior.branch_ci)
-                    })
-                })
-                .collect::<Vec<_>>();
-            for handle in handles {
-                if let Ok(result) = handle.join() {
-                    for target in &result.targets {
-                        cache.states.remove(&target.path);
-                        cache.branch_ci.remove(&target.path);
-                        cache.head_seen.insert(
-                            target.path.clone(),
-                            target.head_sha.clone().unwrap_or_default(),
-                        );
-                        cache
-                            .path_repos
-                            .insert(target.path.clone(), target.repo_key.clone());
-                    }
-                    for (path, state) in result.states {
-                        cache.states.insert(path, state);
-                    }
-                    for (path, ci) in result.branch_ci {
-                        cache.branch_ci.insert(path, ci);
-                    }
-                    let repo_key = result.repo_key.clone();
-                    cache.repos.insert(
-                        repo_key.clone(),
-                        RepoProbe {
-                            refreshed_at_ms: now_ms,
-                            ok: result.ok,
-                            consecutive_failures: next_consecutive_failures(
-                                prior.repos.get(&repo_key),
-                                result.ok,
-                            ),
-                        },
-                    );
-                }
-            }
+    let results =
+        super::runner::bounded_map(MAX_PARALLEL_PR_PROBES, &due_groups, |(repo_key, group)| {
+            probe_repo_group(repo_key, group, &prior.states, &prior.branch_ci)
         });
+    for result in results {
+        for target in &result.targets {
+            cache.states.remove(&target.path);
+            cache.branch_ci.remove(&target.path);
+            cache.head_seen.insert(
+                target.path.clone(),
+                target.head_sha.clone().unwrap_or_default(),
+            );
+            cache
+                .path_repos
+                .insert(target.path.clone(), target.repo_key.clone());
+        }
+        for (path, state) in result.states {
+            cache.states.insert(path, state);
+        }
+        for (path, ci) in result.branch_ci {
+            cache.branch_ci.insert(path, ci);
+        }
+        let repo_key = result.repo_key.clone();
+        cache.repos.insert(
+            repo_key.clone(),
+            RepoProbe {
+                refreshed_at_ms: now_ms,
+                ok: result.ok,
+                consecutive_failures: next_consecutive_failures(
+                    prior.repos.get(&repo_key),
+                    result.ok,
+                ),
+            },
+        );
     }
     let active_repo_keys = active_repo_keys(&cache);
     cache
@@ -1163,10 +1153,7 @@ fn command_stdout(worktree: &Path, program: &str, args: &[&str]) -> Option<Strin
 }
 
 pub(crate) fn read_pr_state_cache(path: &Path) -> PrStateCache {
-    std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    super::runner::read_json_cache(path)
 }
 
 fn write_pr_state_cache(path: &Path, cache: &PrStateCache) {
