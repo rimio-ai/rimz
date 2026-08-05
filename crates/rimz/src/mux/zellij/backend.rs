@@ -175,6 +175,7 @@ impl ZellijBackend {
                 target_pane.clone(),
                 crate::sidebar::focus_anchor::FocusOrigin::User,
                 None,
+                Default::default(),
             );
         } else {
             let _ = self.focus_pane(target_pane, Some(session_name));
@@ -1351,14 +1352,16 @@ fn execute_focus_restoration(
         },
     )?;
     let _ = backend.go_to_tab_position(session_name, tab_position);
-    if crate::sidebar::focus_anchor::dispatch_action_retried(
+    if crate::sidebar::focus_anchor::dispatch_action(
         backend,
         runtime,
         session_name,
         pane,
         nonce,
-        super::FOCUS_RESTORE_ATTEMPTS,
-        super::FOCUS_RESTORE_RETRY_DELAY,
+        crate::sidebar::focus_anchor::FocusDispatchRetries {
+            attempts: super::FOCUS_RESTORE_ATTEMPTS,
+            delay: super::FOCUS_RESTORE_RETRY_DELAY,
+        },
     )? {
         Ok(())
     } else {

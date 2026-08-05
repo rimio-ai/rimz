@@ -1252,6 +1252,7 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
             target,
             rimz::sidebar::focus_anchor::FocusOrigin::User,
             None,
+            Default::default(),
         )
         .context("focusing pane")?;
     }

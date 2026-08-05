@@ -103,6 +103,7 @@ pub(super) fn resume_lane(
                 pane_id,
                 rimz::sidebar::focus_anchor::FocusOrigin::User,
                 None,
+                Default::default(),
             )?;
             writeln!(
                 std::io::stdout().lock(),

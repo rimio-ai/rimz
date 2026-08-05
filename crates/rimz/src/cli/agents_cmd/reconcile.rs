@@ -40,6 +40,7 @@ pub(super) fn reconcile_cohort_launch(
                     pane_id,
                     rimz::sidebar::focus_anchor::FocusOrigin::User,
                     None,
+                    Default::default(),
                 )?;
                 writeln!(
                     std::io::stderr().lock(),

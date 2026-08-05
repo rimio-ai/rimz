@@ -567,6 +567,7 @@ fn focus(
         pane.clone(),
         rimz::sidebar::focus_anchor::FocusOrigin::User,
         None,
+        Default::default(),
     )?;
     Ok(())
 }

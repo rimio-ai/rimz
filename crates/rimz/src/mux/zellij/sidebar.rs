@@ -463,7 +463,7 @@ impl ZellijBackend {
         let Ok(runtime) = self.runtime_paths_for_workspace(workspace_id.clone()) else {
             return;
         };
-        let _ = crate::sidebar::focus_anchor::execute_action_retried(
+        let _ = crate::sidebar::focus_anchor::execute_action(
             self,
             &runtime,
             session,
