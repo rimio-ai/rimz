@@ -32,14 +32,13 @@ mod trace;
 pub mod usage;
 
 pub use accounts::{AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts};
-pub use credits::{
-    CreditsCache, DirectQueryClaim, ProviderCreditsEntry, merge_provider_credits,
-    merge_provider_realtime_usage,
-};
-pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap, write_codex_daemon_reap};
+pub use credits::merge_provider_realtime_usage;
+#[cfg(test)]
+pub(crate) use daemon_reap::write_codex_daemon_reap;
+pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap};
 pub use live_spend::{apply_live_day_spend, apply_live_today_spend};
 pub use pr::{PrLink, PrStateCache};
-pub use rate_limits::{drop_kind_rate_limits, merge_account_rate_limits};
+pub use rate_limits::merge_account_rate_limits;
 pub use sessions::{
     ForcedSessionRefresh, force_refresh_session_context, refresh_session_transcript_context,
     refresh_session_transcript_context_from_watch,

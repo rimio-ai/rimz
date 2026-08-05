@@ -230,10 +230,6 @@ pub(crate) fn refresh_diff_stats_for(
 /// stabler than any one row's cwd: a root-keyed pod's rows can sit in
 /// different subdirs of one checkout. A non-path key (`branch:…`, the
 /// `external` catch-all) falls back to the rows' shared path.
-pub(crate) fn worktree_group_path(group: &SidebarWorktreeGroup) -> Option<&str> {
-    worktree_group_path_fields(&group.key, &group.rows)
-}
-
 pub(crate) fn worktree_group_path_fields<'a>(
     key: &'a str,
     rows: &'a [crate::store::snapshot::SidebarRow],
@@ -269,7 +265,7 @@ pub(crate) fn needed_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
 /// worktree marker whose name matches the lane label before they inherit that
 /// checkout's git story.
 pub(crate) fn git_backed_worktree_path(group: &SidebarWorktreeGroup) -> Option<String> {
-    let path = worktree_group_path(group)?;
+    let path = worktree_group_path_fields(&group.key, &group.rows)?;
     if !Path::new(path).is_dir() {
         return None;
     }

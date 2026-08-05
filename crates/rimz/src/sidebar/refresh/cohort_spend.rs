@@ -15,7 +15,7 @@ use crate::{RuntimePaths, StatePaths};
 
 use super::super::timing::COHORT_SPEND_TTL;
 
-pub const COHORT_SPEND_CACHE_VERSION: u32 = 2;
+pub(crate) const COHORT_SPEND_CACHE_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CohortSpendCache {

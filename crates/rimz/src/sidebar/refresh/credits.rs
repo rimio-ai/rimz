@@ -20,13 +20,13 @@ use crate::store::snapshot::{SidebarSnapshot, format_plan_label};
 
 /// Shared provider extra-credits cache, keyed by agent kind.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct CreditsCache {
+pub(crate) struct CreditsCache {
     pub refreshed_at_ms: u64,
     pub entries: BTreeMap<String, ProviderCreditsEntry>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProviderCreditsEntry {
+pub(crate) struct ProviderCreditsEntry {
     #[serde(default)]
     pub scope: ProviderAccountScope,
     pub observed_at_ms: u64,
@@ -60,7 +60,7 @@ pub struct ProviderCreditsEntry {
 
 impl ProviderCreditsEntry {
     /// Complete one matching account-usage claim without I/O or clock reads.
-    pub(crate) fn complete_account_usage(
+    pub(super) fn complete_account_usage(
         self,
         nonce: Uuid,
         probe: AccountUsageProbe,
@@ -195,7 +195,7 @@ fn fill_missing_display_fields(entry: &mut ProviderCreditsEntry, prior: &Provide
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DirectQueryClaim {
+pub(crate) struct DirectQueryClaim {
     pub nonce: Uuid,
     pub claimed_at_ms: u64,
     pub requested_scope: ProviderAccountScope,
@@ -208,7 +208,7 @@ pub struct DirectQueryClaim {
 }
 
 #[derive(Debug)]
-pub struct AccountUsageCompletion {
+pub(super) struct AccountUsageCompletion {
     pub identity: AccountUsageIdentity,
     pub snapshot: Option<AccountUsageSnapshot>,
     pub account_changed: bool,
@@ -230,24 +230,6 @@ pub(crate) fn write_credits_cache(path: &Path, cache: &CreditsCache) {
             "sidebar credits cache write failed",
         );
     }
-}
-
-/// Merge one provider's paid-usage reading into the shared cache. Best-effort:
-/// another producer may win the lock first, and the next due helper converges.
-pub fn merge_provider_credits(
-    runtime: &RuntimePaths,
-    kind: &str,
-    extra_credits: Option<ExtraCredits>,
-) {
-    merge_provider_realtime_usage(
-        runtime,
-        kind,
-        ProviderAccountScope::KindWide,
-        AccountUsageSnapshot {
-            extra_credits,
-            ..Default::default()
-        },
-    );
 }
 
 pub fn merge_provider_realtime_usage(
@@ -273,7 +255,7 @@ pub fn merge_provider_realtime_usage(
 }
 
 /// Claim one due direct account-usage read under the shared credits lock.
-pub fn claim_provider_account_usage(
+pub(super) fn claim_provider_account_usage(
     runtime: &RuntimePaths,
     kind: &str,
     cached_hint: Option<AccountUsageIdentity>,
@@ -361,7 +343,7 @@ fn cache_derived_claim_identity(
     hint
 }
 
-pub fn account_usage_claim_matches(runtime: &RuntimePaths, kind: &str, nonce: Uuid) -> bool {
+pub(super) fn account_usage_claim_matches(runtime: &RuntimePaths, kind: &str, nonce: Uuid) -> bool {
     read_credits_cache(&runtime.shared_credits_path())
         .entries
         .get(kind)
@@ -371,7 +353,7 @@ pub fn account_usage_claim_matches(runtime: &RuntimePaths, kind: &str, nonce: Uu
 
 /// Renew the matching live direct-query lease immediately before direct
 /// provider work. A replaced claim or contended credits lock cannot be renewed.
-pub(crate) fn renew_provider_account_usage_claim(
+pub(super) fn renew_provider_account_usage_claim(
     runtime: &RuntimePaths,
     kind: &str,
     nonce: Uuid,
@@ -408,7 +390,7 @@ fn renew_provider_account_usage_claim_at(
     true
 }
 
-pub fn cancel_provider_account_usage_claim(
+pub(super) fn cancel_provider_account_usage_claim(
     runtime: &RuntimePaths,
     kind: &str,
     nonce: Uuid,
@@ -434,7 +416,7 @@ pub fn cancel_provider_account_usage_claim(
     true
 }
 
-pub fn complete_provider_account_usage(
+pub(super) fn complete_provider_account_usage(
     runtime: &RuntimePaths,
     kind: &str,
     nonce: Uuid,
@@ -465,7 +447,7 @@ fn account_usage_credit_fields(
     (plan, extra_credits, reset_credits)
 }
 
-pub(crate) fn merge_provider_credits_entry(
+pub(super) fn merge_provider_credits_entry(
     runtime: &RuntimePaths,
     kind: &str,
     entry: ProviderCreditsEntry,
@@ -514,7 +496,7 @@ pub(crate) fn merge_provider_credits_entry(
     write_credits_cache(&path, &cache);
 }
 
-pub fn invalidate_oauth_read(runtime: &RuntimePaths, kind: &str) {
+pub(super) fn invalidate_oauth_read(runtime: &RuntimePaths, kind: &str) {
     let path = runtime.shared_credits_path();
     let Some(_guard) =
         crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())

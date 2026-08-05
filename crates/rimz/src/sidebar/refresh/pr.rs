@@ -39,16 +39,16 @@ pub struct PrStateCache {
     pub branch_ci: BTreeMap<String, WorktreePrCi>,
     /// Probe freshness by origin repo key.
     #[serde(default)]
-    pub repos: BTreeMap<String, RepoProbe>,
+    pub(crate) repos: BTreeMap<String, RepoProbe>,
     /// Last HEAD SHA observed when a worktree's repo was probed.
     #[serde(default)]
-    pub head_seen: BTreeMap<String, String>,
+    pub(crate) head_seen: BTreeMap<String, String>,
     /// Last repo classification seen for a worktree. Supported repos store
     /// their repo key; unsupported/undiscoverable paths store an empty marker.
     /// This preserves the no-fork fresh path: per-repo TTL can be evaluated
     /// before shelling out for branch/remote metadata.
     #[serde(default)]
-    pub path_repos: BTreeMap<String, String>,
+    pub(crate) path_repos: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,7 +73,7 @@ pub struct PrLink {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RepoProbe {
+pub(crate) struct RepoProbe {
     pub refreshed_at_ms: u64,
     /// Whether the last repo probe completed without an infrastructure
     /// failure. A logged-in repo with no PR is a success and keeps an empty map.

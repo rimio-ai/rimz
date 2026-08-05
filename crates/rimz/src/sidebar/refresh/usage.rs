@@ -22,8 +22,9 @@ use super::credits::{
     complete_provider_account_usage, merge_provider_realtime_usage,
     renew_provider_account_usage_claim,
 };
+use super::rate_limits::drop_kind_rate_limits;
 use super::trace::{TraceEvent, duration_ms};
-use super::{drop_kind_rate_limits, merge_account_rate_limits, trace};
+use super::{merge_account_rate_limits, trace};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountUsageRefreshRequest {
