@@ -437,14 +437,20 @@ fn sidebar_pane_can_be_the_session_focus_register() {
 
 #[test]
 fn duplicate_pane_ids_keep_first_and_report_diagnostic() {
-    let (frame, diagnostics) = assemble_frame_with_diagnostics(
-        vec![
+    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), false),
             pane("terminal_1", "tab_0", Some("cargo build"), true),
         ],
-        7,
-        "rimz-test",
-    );
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        session_focus: None,
+        client_viewed: &[],
+        client_views: &[],
+        client_view_fresh: false,
+        prior: None,
+    });
 
     assert_eq!(frame.pane_states().count(), 1);
     assert_eq!(
