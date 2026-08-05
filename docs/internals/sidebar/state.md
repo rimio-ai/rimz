@@ -64,7 +64,7 @@ Producing and publishing, all producer-only:
 | Module | What it owns |
 | --- | --- |
 | [`produce/`](../../../crates/rimz/src/sidebar/produce/mod.rs) | The producer read. `panes.rs` assembles and publishes the pane frame behind a single flight, `metrics.rs` samples per-pane `/proc`, `git.rs` enumerates worktree roots. |
-| [`refresh/`](../../../crates/rimz/src/sidebar/refresh/mod.rs) | The heavy lanes, each self-gated on its own TTL: `git_stats.rs`, `pr.rs`, `accounts.rs`, `usage.rs`, `credits.rs`, `rate_limits.rs`, `sessions.rs`, `live_spend.rs`, `cohort_spend.rs`, `daemon_reap.rs`. `git_refs.rs` reads ref files in process to skip a `git` fork, and `trace.rs` is the opt-in account-refresh timing trace. |
+| [`refresh/`](../../../crates/rimz/src/sidebar/refresh/mod.rs) | The heavy lanes, each self-gated on its own TTL: `git_stats.rs`, `pr.rs`, `accounts.rs`, `usage.rs`, `credits.rs`, `rate_limits.rs`, `sessions.rs`, `live_spend.rs`, `cohort_spend.rs`, `daemon_reap.rs`. `runner.rs` shares bounded worker and cache-read mechanics, `inputs.rs` lists consumer-fold cache inputs, `git_refs.rs` reads ref files in process to skip a `git` fork, and `trace.rs` is the opt-in account-refresh timing trace. |
 | [`workspace_projection.rs`](../../../crates/rimz/src/sidebar/workspace_projection.rs) | The renderer-independent fold publication and the consumer's adoption check. |
 | [`agent_projection.rs`](../../../crates/rimz/src/sidebar/agent_projection.rs) | Published adapter wiring and provider-local session discovery. |
 
