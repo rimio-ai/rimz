@@ -5,11 +5,12 @@ use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
 use crate::sidebar::refresh::AccountsCache;
 use crate::sidebar::refresh::PrLink;
+use crate::sidebar::refresh::daemon_reap::write_codex_daemon_reap;
 use crate::sidebar::refresh::git_stats::{
     DiffStatsCache, DiffStatsCacheEntry, WorktreeRootsCache, focused_worktree_paths,
     hot_worktree_paths, needed_worktree_paths,
 };
-use crate::sidebar::refresh::{CodexDaemonReap, read_codex_daemon_reap, write_codex_daemon_reap};
+use crate::sidebar::refresh::{CodexDaemonReap, read_codex_daemon_reap};
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
 use crate::sidebar::timing::GIT_ACTIVITY_WINDOW;
 use crate::sidebar::timing::unix_now_ms;
