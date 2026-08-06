@@ -9,7 +9,7 @@ use crate::agents::spending::{
 use crate::store::snapshot::SidebarSnapshot;
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct LiveCardSpend {
+struct LiveCardSpend {
     pub(crate) session_keys: Vec<String>,
     pub(crate) cost_usd: f64,
 }
@@ -55,7 +55,7 @@ fn live_spend_addback(snapshot: &SidebarSnapshot, workspace: &WorkspaceSpendingC
 /// baseline keys. Rows without an absolute worktree path, a matching agent
 /// state, an absolute transcript path, or a finite cost are omitted so the
 /// overlay stays aligned with the workspace-scoped transcript tally.
-pub(crate) fn live_card_sessions(snapshot: &SidebarSnapshot) -> Vec<LiveCardSpend> {
+fn live_card_sessions(snapshot: &SidebarSnapshot) -> Vec<LiveCardSpend> {
     let scope = SpendScope::for_workspace(
         snapshot.project_root.as_deref(),
         &snapshot.worktree_roots,

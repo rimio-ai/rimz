@@ -25,11 +25,11 @@ pub struct CodexDaemonReap {
     pub loaded: Option<BTreeSet<String>>,
 }
 
-pub(crate) fn codex_daemon_reap_path(runtime: &RuntimePaths) -> PathBuf {
+pub(in crate::sidebar) fn codex_daemon_reap_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("codex-daemon-reap.json")
 }
 
-pub(crate) fn write_codex_daemon_reap(
+pub(in crate::sidebar) fn write_codex_daemon_reap(
     runtime: &RuntimePaths,
     cache: &CodexDaemonReap,
 ) -> crate::store::atomic::Result<()> {
@@ -41,7 +41,7 @@ pub fn read_codex_daemon_reap(runtime: &RuntimePaths) -> Option<CodexDaemonReap>
     serde_json::from_slice(&bytes).ok()
 }
 
-pub(crate) fn daemon_reap_due(cache: &Option<CodexDaemonReap>, now_ms: u64) -> bool {
+fn daemon_reap_due(cache: &Option<CodexDaemonReap>, now_ms: u64) -> bool {
     cache.as_ref().is_none_or(|cache| {
         now_ms.saturating_sub(cache.produced_at_ms) > CODEX_DAEMON_REAP_TTL.as_millis() as u64
     })
@@ -56,7 +56,7 @@ fn should_probe_codex_daemon_reap(agents: &[AgentState], codex_rc_enabled: bool)
         })
 }
 
-pub(crate) fn refresh_codex_daemon_reap_cache(
+pub(super) fn refresh_codex_daemon_reap_cache(
     agents: &[AgentState],
     runtime: &RuntimePaths,
     now_ms: u64,

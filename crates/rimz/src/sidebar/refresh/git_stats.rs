@@ -182,7 +182,7 @@ impl DiffStatsCacheEntry {
 /// Whether `branch` names this repository's trunk checkout. `main` remains a
 /// trunk name even when the repository resolves a different configured or
 /// remote-default trunk.
-pub(crate) fn is_trunk_branch(branch: &str, trunk: Option<&str>) -> bool {
+pub(in crate::sidebar) fn is_trunk_branch(branch: &str, trunk: Option<&str>) -> bool {
     branch == "main"
         || trunk.map(|trunk| trunk.strip_prefix("origin/").unwrap_or(trunk)) == Some(branch)
 }
@@ -195,7 +195,7 @@ pub fn read_diff_stats_cache(path: &Path) -> DiffStatsCache {
 /// producer's job — consumers and the fetch worker project the published cache
 /// without reaching here. `configured_trunk` is the per-machine `[sidebar] trunk`
 /// preference the trunk ladder tries first.
-pub(crate) fn refresh_diff_stats_for(
+pub(super) fn refresh_diff_stats_for(
     snapshot: &SidebarSnapshot,
     runtime: &crate::RuntimePaths,
     configured_trunk: Option<&str>,
@@ -226,7 +226,7 @@ pub(crate) fn refresh_diff_stats_for(
 /// stabler than any one row's cwd: a root-keyed pod's rows can sit in
 /// different subdirs of one checkout. A non-path key (`branch:…`, the
 /// `external` catch-all) falls back to the rows' shared path.
-pub(crate) fn worktree_group_path_fields<'a>(
+pub(in crate::sidebar) fn worktree_group_path_fields<'a>(
     key: &'a str,
     rows: &'a [crate::store::snapshot::SidebarRow],
 ) -> Option<&'a str> {
@@ -243,7 +243,7 @@ pub(crate) fn worktree_group_path_fields<'a>(
 /// The live worktree paths this snapshot needs git facts for: a git-backed
 /// group whose recovered path is a live directory, de-duplicated so two
 /// branch-split groups for one dir share a single git read.
-pub(crate) fn needed_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
+pub(in crate::sidebar) fn needed_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
     let mut needed: Vec<String> = Vec::new();
     for group in &snapshot.worktree_groups {
         let Some(path) = git_backed_worktree_path(group) else {
@@ -260,7 +260,7 @@ pub(crate) fn needed_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
 /// worktree groups trust their path; channel groups must carry the RimZ
 /// worktree marker whose name matches the lane label before they inherit that
 /// checkout's git story.
-pub(crate) fn git_backed_worktree_path(group: &SidebarWorktreeGroup) -> Option<String> {
+fn git_backed_worktree_path(group: &SidebarWorktreeGroup) -> Option<String> {
     let path = worktree_group_path_fields(&group.key, &group.rows)?;
     if !Path::new(path).is_dir() {
         return None;
@@ -282,7 +282,7 @@ fn is_worktree_channel(path: &str, label: &str) -> bool {
 }
 
 /// The worktree paths whose git facts refresh on the fast [`DIFF_STATS_TTL`].
-pub(crate) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
+pub(in crate::sidebar) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
     let window = SignedDuration::try_from(crate::sidebar::timing::GIT_ACTIVITY_WINDOW)
         .unwrap_or(SignedDuration::MAX);
     let mut hot = BTreeSet::new();
@@ -304,7 +304,7 @@ pub(crate) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String>
 
 /// The worktree paths whose edit-sensitive git facts refresh on the focused
 /// tier.
-pub(crate) fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
+pub(in crate::sidebar) fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
     let viewed: HashSet<&PaneId> = snapshot.viewed_panes.iter().collect();
     let mut focused = BTreeSet::new();
     for group in &snapshot.worktree_groups {

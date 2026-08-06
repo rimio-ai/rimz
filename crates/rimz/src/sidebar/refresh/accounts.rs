@@ -94,7 +94,7 @@ impl ProviderStatus {
 /// Resolve provider accounts for the producer behind a process-wide
 /// single-flight. Fresh providers ride their own timestamps; only due kinds
 /// fork, and the winner merges those records into the shared cache.
-pub(crate) fn produce_accounts(
+pub(super) fn produce_accounts(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
 ) -> BTreeMap<String, AgentAccount> {
@@ -197,7 +197,7 @@ fn query_provider_accounts_with(
     }
 }
 
-pub(crate) fn cached_accounts_for_snapshot(
+pub(in crate::sidebar) fn cached_accounts_for_snapshot(
     cache: AccountsCache,
     snapshot: &SidebarSnapshot,
 ) -> BTreeMap<String, AgentAccount> {
@@ -205,7 +205,7 @@ pub(crate) fn cached_accounts_for_snapshot(
 }
 
 /// Cheap scheduling hint from the already-published account cache.
-pub(crate) fn cached_account_usage_hint(
+pub(super) fn cached_account_usage_hint(
     runtime: &RuntimePaths,
     kind: &str,
 ) -> Option<crate::agents::AccountUsageIdentity> {
@@ -532,7 +532,7 @@ fn active_version_probe_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
 
 /// Read the producer's published account cache, or an empty cache on a cold,
 /// corrupt, or old-schema file. Read-only and fork-free.
-pub(crate) fn read_accounts_cache(path: &Path) -> AccountsCache {
+pub(in crate::sidebar) fn read_accounts_cache(path: &Path) -> AccountsCache {
     super::runner::read_json_cache(path)
 }
 

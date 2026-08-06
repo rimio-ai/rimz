@@ -20,13 +20,13 @@ use crate::store::snapshot::{SidebarSnapshot, format_plan_label};
 
 /// Shared provider extra-credits cache, keyed by agent kind.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub(crate) struct CreditsCache {
+pub(super) struct CreditsCache {
     pub refreshed_at_ms: u64,
     pub entries: BTreeMap<String, ProviderCreditsEntry>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct ProviderCreditsEntry {
+pub(super) struct ProviderCreditsEntry {
     #[serde(default)]
     pub scope: ProviderAccountScope,
     pub observed_at_ms: u64,
@@ -195,7 +195,7 @@ fn fill_missing_display_fields(entry: &mut ProviderCreditsEntry, prior: &Provide
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct DirectQueryClaim {
+pub(super) struct DirectQueryClaim {
     pub nonce: Uuid,
     pub claimed_at_ms: u64,
     pub requested_scope: ProviderAccountScope,
@@ -214,11 +214,11 @@ pub(super) struct AccountUsageCompletion {
     pub account_changed: bool,
 }
 
-pub(crate) fn read_credits_cache(path: &Path) -> CreditsCache {
+pub(super) fn read_credits_cache(path: &Path) -> CreditsCache {
     super::runner::read_json_cache(path)
 }
 
-pub(crate) fn write_credits_cache(path: &Path, cache: &CreditsCache) {
+pub(super) fn write_credits_cache(path: &Path, cache: &CreditsCache) {
     if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(path, cache) {
         tracing::warn!(
             path = %path.display(),
@@ -557,7 +557,7 @@ fn entry_is_displayable(entry: &ProviderCreditsEntry, now_ms: u64) -> bool {
         && now_ms.saturating_sub(entry.observed_at_ms) <= CREDITS_DISPLAY_MAX_AGE.as_millis() as u64
 }
 
-pub(crate) fn apply_credits_cache(
+pub(in crate::sidebar) fn apply_credits_cache(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
     accounts: &AccountsConfig,

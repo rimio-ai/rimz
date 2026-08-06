@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::RuntimePaths;
 
-pub(crate) fn published_lane_inputs(runtime: &RuntimePaths) -> [PathBuf; 8] {
+pub(in crate::sidebar) fn published_lane_inputs(runtime: &RuntimePaths) -> [PathBuf; 8] {
     [
         runtime.diff_stats_path(),
         runtime.cohort_spend_path(),
@@ -17,6 +17,6 @@ pub(crate) fn published_lane_inputs(runtime: &RuntimePaths) -> [PathBuf; 8] {
     ]
 }
 
-pub(crate) fn is_workspace_spending_file(name: &str) -> bool {
+pub(in crate::sidebar) fn is_workspace_spending_file(name: &str) -> bool {
     name.starts_with("workspace-spending.") && name.ends_with(".json")
 }
