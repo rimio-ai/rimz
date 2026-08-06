@@ -15,7 +15,7 @@ use crate::{RuntimePaths, StatePaths};
 
 use super::super::timing::COHORT_SPEND_TTL;
 
-pub(crate) const COHORT_SPEND_CACHE_VERSION: u32 = 2;
+pub(in crate::sidebar) const COHORT_SPEND_CACHE_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CohortSpendCache {
@@ -43,7 +43,7 @@ fn cache_due(cache: &CohortSpendCache, now_ms: u64) -> bool {
         || now_ms.saturating_sub(cache.refreshed_at_ms) > COHORT_SPEND_TTL.as_millis() as u64
 }
 
-pub(crate) fn refresh_cohort_spend_for(
+pub(super) fn refresh_cohort_spend_for(
     snapshot: &SidebarSnapshot,
     state: &StatePaths,
     runtime: &RuntimePaths,

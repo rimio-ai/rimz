@@ -107,7 +107,7 @@ fn compute_fleet_spending_via_service(
 }
 
 /// Read producer-published spending without opening transcript or cursor data.
-pub(crate) fn consumer_spending_caches(
+pub(super) fn consumer_spending_caches(
     runtime: &RuntimePaths,
     snapshot: &SidebarSnapshot,
 ) -> SpendingCaches {

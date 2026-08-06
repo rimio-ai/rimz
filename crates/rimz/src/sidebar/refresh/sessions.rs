@@ -31,7 +31,7 @@ type SessionRefreshResult<T> = std::result::Result<T, crate::store::atomic::Atom
 /// producer. Inline transcript reads run first with their adapter stat gate;
 /// detached helpers run on a coarse per-session cadence for richer realtime
 /// channels.
-pub(crate) fn refresh_live_sessions(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
+pub(super) fn refresh_live_sessions(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
     for refresh in live_session_refreshes(snapshot) {
         refresh_session_transcript_context_with_snapshot(
             Some(snapshot),
@@ -334,13 +334,13 @@ fn codex_turn_death_retry_due(kind: &str, error: &AgentTurnError, now: Timestamp
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LiveSessionRefresh {
+struct LiveSessionRefresh {
     pub kind: String,
     pub session_id: String,
     pub model_hint: Option<String>,
 }
 
-pub(crate) fn live_session_refreshes(snapshot: &SidebarSnapshot) -> Vec<LiveSessionRefresh> {
+fn live_session_refreshes(snapshot: &SidebarSnapshot) -> Vec<LiveSessionRefresh> {
     snapshot
         .agents
         .iter()
@@ -361,7 +361,7 @@ pub(crate) fn live_session_refreshes(snapshot: &SidebarSnapshot) -> Vec<LiveSess
 /// Throttle one session's detached context refresh via a marker file under the
 /// runtime root: skip when the last attempt is younger than the interval, touch
 /// it before spawning.
-pub(crate) fn session_probe_due(runtime: &RuntimePaths, kind: &str, session_id: &str) -> bool {
+fn session_probe_due(runtime: &RuntimePaths, kind: &str, session_id: &str) -> bool {
     let path = session_probe_marker(runtime, kind, session_id);
     let due = std::fs::metadata(&path)
         .and_then(|meta| meta.modified())
@@ -375,11 +375,7 @@ pub(crate) fn session_probe_due(runtime: &RuntimePaths, kind: &str, session_id: 
     due
 }
 
-pub(crate) fn session_probe_marker(
-    runtime: &RuntimePaths,
-    kind: &str,
-    session_id: &str,
-) -> PathBuf {
+fn session_probe_marker(runtime: &RuntimePaths, kind: &str, session_id: &str) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(b"session-context");
     hasher.update([0]);

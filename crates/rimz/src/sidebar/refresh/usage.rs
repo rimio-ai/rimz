@@ -34,7 +34,7 @@ pub struct AccountUsageRefreshRequest {
 }
 
 /// Claim and spawn each metered provider's direct account-usage refresh.
-pub(crate) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
+pub(super) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
     refresh_account_usage_with(snapshot, runtime, spawn_usage_refresh);
 }
 
