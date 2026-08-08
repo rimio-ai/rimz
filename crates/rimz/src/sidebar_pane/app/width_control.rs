@@ -231,6 +231,7 @@ pub(super) struct WidthController {
     mux: MuxName,
     width: crate::mux::SidebarWidth,
     convergence: WidthControl,
+    current_view_cols: Option<u16>,
     last_classified_view_cols: Option<u16>,
     last_siblings: Option<usize>,
     structural_at_ms: Option<u64>,
@@ -256,6 +257,7 @@ impl WidthController {
             mux,
             width,
             convergence: WidthControl::new(None),
+            current_view_cols: None,
             last_classified_view_cols: None,
             last_siblings: None,
             structural_at_ms: None,
@@ -269,10 +271,7 @@ impl WidthController {
     pub(super) fn feedback_deadline(&self) -> Option<Instant> {
         [
             self.convergence.feedback_deadline(),
-            self.last_classified_view_cols
-                .is_none()
-                .then_some(self.baseline_probe_deadline)
-                .flatten(),
+            self.baseline_probe_deadline,
             self.classification_deadline,
             self.idle_retry_deadline,
         ]
@@ -294,11 +293,29 @@ impl WidthController {
         diag: &DiagSink,
     ) {
         self.width = crate::mux::SidebarWidth::from_config(theme);
-        let target = self.last_classified_view_cols.map(|view_cols| {
-            crate::sidebar::width_target::resolve(&self.runtime, self.width, Some(view_cols))
-                .cols(Some(view_cols))
+        let step = self.own_pane.as_ref().and_then(|pane| {
+            crate::mux::backend_for(self.mux)
+                .sidebar_width_step(&self.runtime, &self.session_name, pane)
+                .ok()
         });
-        self.convergence.retarget(target);
+        if let Some(step) = step.filter(|step| step.view_cols > 0) {
+            self.current_view_cols = Some(step.view_cols);
+            self.last_classified_view_cols.get_or_insert(step.view_cols);
+            self.convergence.seed_native_step(step.band_cols);
+            let target = crate::sidebar::width_target::resolve(
+                &self.runtime,
+                self.width,
+                Some(step.view_cols),
+            );
+            self.convergence
+                .retarget(Some(target.cols(Some(step.view_cols))));
+            self.baseline_probe_deadline = None;
+        } else if self.own_pane.is_some() {
+            // A topology broadcast can arrive while the sidebar is the tab's
+            // only materialized pane. Keep the proven target and retry once the
+            // sibling has made the viewport measurable.
+            self.baseline_probe_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
+        }
         if let Some(cols) = measured_cols {
             self.observe(cols, SidebarWidthControlTrigger::Retarget, diag);
         }
@@ -328,6 +345,7 @@ impl WidthController {
                     trigger,
                     own_cols,
                     base_cols,
+                    view_cols: 0,
                     step_cols: None,
                     step_exact: false,
                     target_cols: None,
@@ -344,6 +362,7 @@ impl WidthController {
                 trigger,
                 own_cols,
                 base_cols,
+                view_cols: step.view_cols,
                 step_cols: Some(adjustment_cols),
                 step_exact: step.exact,
                 target_cols: None,
@@ -352,6 +371,7 @@ impl WidthController {
             debug!(pane = %pane, "sidebar width intent dropped without backend geometry");
             return;
         };
+        self.current_view_cols = Some(view_cols.get());
         let Some(target) = crate::mux::width::adjust_target_cols(
             base_cols,
             dir,
@@ -362,6 +382,7 @@ impl WidthController {
                 trigger,
                 own_cols,
                 base_cols,
+                view_cols: view_cols.get(),
                 step_cols: Some(adjustment_cols),
                 step_exact: step.exact,
                 target_cols: None,
@@ -374,6 +395,7 @@ impl WidthController {
             trigger,
             own_cols,
             base_cols,
+            view_cols: view_cols.get(),
             step_cols: Some(adjustment_cols),
             step_exact: step.exact,
             target_cols: Some(target.get()),
@@ -414,6 +436,7 @@ impl WidthController {
                 WidthTransition::StepIssued { from, target } => {
                     diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthNudge {
                         trigger,
+                        view_cols: self.current_view_cols.unwrap_or(0),
                         from_cols: from,
                         target_cols: target,
                     });
@@ -484,10 +507,9 @@ impl WidthController {
                 );
             }
         }
-        if self.last_classified_view_cols.is_none()
-            && self
-                .baseline_probe_deadline
-                .is_some_and(|deadline| now >= deadline)
+        if self
+            .baseline_probe_deadline
+            .is_some_and(|deadline| now >= deadline)
         {
             self.baseline_probe_deadline = Some(now + FEEDBACK_TIMEOUT);
             if let Some(cols) = measured_cols
@@ -550,6 +572,7 @@ impl WidthController {
         ) && step.view_cols > 0
         {
             self.convergence.seed_native_step(step.band_cols);
+            self.current_view_cols = Some(step.view_cols);
             self.last_classified_view_cols = Some(step.view_cols);
             let target = crate::sidebar::width_target::resolve(
                 &self.runtime,
@@ -607,6 +630,7 @@ impl WidthController {
             self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
             return;
         };
+        self.current_view_cols = Some(view_cols.get());
         let Some(resize_at_ms) = self.classification_resize_at_ms else {
             self.classification_deadline = None;
             return;
@@ -674,6 +698,7 @@ impl WidthController {
             trigger: SidebarWidthIntentTrigger::MouseAdopt,
             own_cols: measured_cols,
             base_cols,
+            view_cols: view_cols.get(),
             step_cols: Some(step.cols),
             step_exact: step.exact,
             target_cols: Some(target.get()),

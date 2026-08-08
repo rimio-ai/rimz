@@ -218,6 +218,7 @@ fn severity_table_pins_conditional_and_regression_categories() {
             trigger: SidebarWidthIntentTrigger::Narrower,
             own_cols: 40,
             base_cols: 40,
+            view_cols: 200,
             step_cols: Some(10),
             step_exact: false,
             target_cols: Some(30),
@@ -225,6 +226,7 @@ fn severity_table_pins_conditional_and_regression_categories() {
         },
         DiagEvent::SidebarWidthNudge {
             trigger: SidebarWidthControlTrigger::Retarget,
+            view_cols: 200,
             from_cols: 40,
             target_cols: 30,
         },
@@ -312,6 +314,7 @@ fn sidebar_width_trace_round_trips() {
         trigger: SidebarWidthIntentTrigger::Wider,
         own_cols: 30,
         base_cols: 40,
+        view_cols: 200,
         step_cols: Some(10),
         step_exact: false,
         target_cols: Some(50),
@@ -320,6 +323,7 @@ fn sidebar_width_trace_round_trips() {
 
     let encoded = serde_json::to_value(&event).expect("encode width intent");
     assert_eq!(encoded["kind"], "sidebar_width_intent");
+    assert_eq!(encoded["view_cols"], 200);
     assert_eq!(encoded["target_cols"], 50);
     assert_eq!(
         serde_json::from_value::<DiagEvent>(encoded).expect("decode width intent"),

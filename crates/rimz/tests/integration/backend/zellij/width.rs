@@ -5,6 +5,63 @@ use tempfile::TempDir;
 use super::support::*;
 
 #[test]
+fn renderer_width_keys_hold_their_live_zellij_step() {
+    require_zellij!();
+
+    const VIEW_COLS: u16 = 320;
+    const VIEW_ROWS: u16 = 80;
+    const SETTLE_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+
+    let room = LiveZellijSession::new("renderer-width");
+    let xdg = room.path();
+    let name = room.name().to_owned();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    let sidebar = sidebar_opts(&name, cwd.path(), rimz, VIEW_COLS);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &sidebar);
+    backend.open_sidebar(&sidebar, None).expect("open sidebar");
+    wait_for_pane_count(xdg, &name, 2);
+    let _client = AttachedClient::attach(&room, VIEW_COLS, VIEW_ROWS);
+    write_topology_cache_from_list_panes(xdg, &sidebar.workspace_id, &name);
+    let _mirror = topology_cache_mirror(xdg, &sidebar.workspace_id, &name);
+
+    let listed = raw_sidebar_pane(xdg, &name);
+    let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", listed.id));
+    let initial = listed.pane_columns;
+
+    backend.send_keys(&pane, "d").expect("send wider key");
+    let wider = wait_for_sidebar_columns_matching(
+        xdg,
+        &name,
+        listed.id,
+        |columns| columns > initial,
+        "renderer wider key",
+    );
+    std::thread::sleep(SETTLE_WINDOW);
+    let held_wider = raw_sidebar_pane(xdg, &name).pane_columns;
+    assert_eq!(
+        held_wider, wider,
+        "the renderer convergence loop reverted the wider key after settling",
+    );
+
+    backend.send_keys(&pane, "a").expect("send narrower key");
+    let narrower = wait_for_sidebar_columns_matching(
+        xdg,
+        &name,
+        listed.id,
+        |columns| columns < held_wider,
+        "renderer narrower key",
+    );
+    std::thread::sleep(SETTLE_WINDOW);
+    assert_eq!(
+        raw_sidebar_pane(xdg, &name).pane_columns,
+        narrower,
+        "the renderer convergence loop reverted the narrower key after settling",
+    );
+}
+
+#[test]
 fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     require_zellij!();
 

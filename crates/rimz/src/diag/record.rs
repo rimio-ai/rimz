@@ -337,6 +337,8 @@ pub enum DiagEvent {
         trigger: SidebarWidthIntentTrigger,
         own_cols: u16,
         base_cols: u16,
+        #[serde(default)]
+        view_cols: u16,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step_cols: Option<u16>,
         step_exact: bool,
@@ -346,6 +348,8 @@ pub enum DiagEvent {
     },
     SidebarWidthNudge {
         trigger: SidebarWidthControlTrigger,
+        #[serde(default)]
+        view_cols: u16,
         from_cols: u16,
         target_cols: u16,
     },
@@ -737,6 +741,7 @@ impl DiagEvent {
                 trigger,
                 from_cols,
                 target_cols,
+                ..
             } => format!(
                 "{}:{}:{from_cols}:{target_cols}",
                 self.kind_name(),
@@ -1092,21 +1097,23 @@ impl DiagEvent {
                 trigger,
                 own_cols,
                 base_cols,
+                view_cols,
                 step_cols,
                 step_exact,
                 target_cols,
                 verdict,
             } => format!(
-                "sidebar width {}: own {own_cols}, base {base_cols}, step {step_cols:?} (exact={step_exact}), target {target_cols:?}; {}",
+                "sidebar width {}: own {own_cols}, base {base_cols}, view {view_cols}, step {step_cols:?} (exact={step_exact}), target {target_cols:?}; {}",
                 trigger.as_str(),
                 verdict.as_str(),
             ),
             Self::SidebarWidthNudge {
                 trigger,
+                view_cols,
                 from_cols,
                 target_cols,
             } => format!(
-                "sidebar width nudge ({}) {from_cols}->{target_cols}",
+                "sidebar width nudge ({}) {from_cols}->{target_cols} in {view_cols} cols",
                 trigger.as_str()
             ),
             Self::SidebarWidthSettle {

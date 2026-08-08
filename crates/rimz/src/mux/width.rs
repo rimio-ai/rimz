@@ -47,8 +47,7 @@ impl WidthStep {
 }
 
 /// Resolve the validated absolute target requested by one width keypress.
-/// Inexact backends reject a narrower step that would cross the minimum;
-/// exact backends clamp that step to the minimum instead.
+/// Narrower steps clamp to the minimum until the pane is already at its floor.
 pub(crate) fn adjust_target_cols(
     base: u16,
     dir: WidthAdjust,
@@ -59,14 +58,7 @@ pub(crate) fn adjust_target_cols(
         WidthAdjust::Wider => NonZeroU16::new(base.saturating_add(step.cols)),
         WidthAdjust::Narrower if base <= min_cols => None,
         WidthAdjust::Narrower => {
-            let target = base.saturating_sub(step.adjustment_cols(dir));
-            if target >= min_cols {
-                NonZeroU16::new(target)
-            } else if step.exact {
-                NonZeroU16::new(min_cols)
-            } else {
-                None
-            }
+            NonZeroU16::new(base.saturating_sub(step.adjustment_cols(dir)).max(min_cols))
         }
     }
 }
@@ -338,7 +330,7 @@ mod tests {
         );
         assert_eq!(
             adjust_target_cols(30, WidthAdjust::Narrower, inexact, 24),
-            None
+            NonZeroU16::new(24)
         );
         assert_eq!(
             adjust_target_cols(25, WidthAdjust::Narrower, exact, 24),
