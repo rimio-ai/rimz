@@ -457,7 +457,7 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
 
 /// Zellij: same arc through a real Zellij session. Self-skips without `zellij`.
 #[test]
-fn zellij_room_shows_agent_after_hook() {
+fn zellij_room_shows_agent_and_holds_width_keys() {
     if which::which("zellij").is_err() {
         eprintln!("zellij not on PATH; skipping deep zellij smoke");
         return;
@@ -573,7 +573,7 @@ fn zellij_room_shows_agent_after_hook() {
     let wider =
         wait_for_rendered_sidebar_width(&client, |width| width > initial, "wider sidebar frame");
     std::thread::sleep(Duration::from_secs(3));
-    let held_wider = rendered_sidebar_width(&client.contents()).unwrap_or(0);
+    let held_wider = wait_for_rendered_sidebar_width(&client, |_| true, "settled wider frame");
     let diag = env.diag_tail(name, DIAG_EVIDENCE_RECORDS);
     assert_eq!(
         held_wider, wider,
@@ -587,7 +587,8 @@ fn zellij_room_shows_agent_after_hook() {
         "narrower sidebar frame",
     );
     std::thread::sleep(Duration::from_secs(3));
-    let held_narrower = rendered_sidebar_width(&client.contents()).unwrap_or(0);
+    let held_narrower =
+        wait_for_rendered_sidebar_width(&client, |_| true, "settled narrower frame");
     let diag = env.diag_tail(name, DIAG_EVIDENCE_RECORDS);
     assert_eq!(
         held_narrower, narrower,
