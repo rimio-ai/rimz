@@ -347,6 +347,14 @@ endY:r.y+({end_raw_y}+.5)*r.cellHeight
                     Instant::now() < sample_deadline,
                     "tmux copy cursor stopped tracking the held drag: expected={expected_y}, cursor={cursor_y}, samples={samples:?}"
                 );
+                dispatch_mouse(
+                    &tab,
+                    Input::DispatchMouseEventTypeOption::MouseMoved,
+                    x,
+                    y,
+                    Some(Input::MouseButton::Left),
+                    Some(1),
+                );
                 std::thread::sleep(Duration::from_millis(10));
             };
             let state = fixture.target_copy_state();
@@ -364,6 +372,18 @@ endY:r.y+({end_raw_y}+.5)*r.cellHeight
         Some(Input::MouseButton::Left),
         None,
     );
+    let release_deadline = Instant::now() + Duration::from_secs(2);
+    while !frames
+        .sent_payloads()
+        .iter()
+        .any(|payload| payload.starts_with(b"0\x1b[<0;") && payload.last() == Some(&b'm'))
+    {
+        assert!(
+            Instant::now() < release_deadline,
+            "browser release produced no tmux mouse report"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     fixture.cancel_target_copy_mode();
 
     let sent_payloads = frames.sent_payloads();
