@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::diag::record::DiagEvent;
+use rimz::mux::{MuxBackend, PaneListOptions, PaneReadConsistency, ZellijBackend};
 use tempfile::TempDir;
 
 use super::{RoomHarness, SETTLE, rimz_bin, session_start_at};
@@ -479,6 +480,8 @@ fn zellij_room_shows_agent_after_hook() {
         namespace,
     };
     let runtime = cleanup.namespace.path();
+    let runtime_paths =
+        rimz::RuntimePaths::under(env.workspace_id.clone(), runtime).expect("zellij runtime paths");
 
     // Birth a background session whose left pane is a real renderer over the
     // shared store (the self-close layout shape from `backend/zellij.rs`).
@@ -516,6 +519,12 @@ fn zellij_room_shows_agent_after_hook() {
         .expect("create background session");
     assert!(created.success(), "create-background failed for {name}");
 
+    // Reproduce the real startup ordering: the presence feed can publish the
+    // sidebar before the rest of the layout. That one-pane extent must remain
+    // unknown rather than becoming the room's viewport basis.
+    write_zellij_topology(&cleanup.namespace, &runtime_paths, name, true);
+    std::thread::sleep(Duration::from_millis(1_200));
+
     env.install_agent_hooks("codex");
     let hook_env = [
         (rimz::harness::launch::ENV_AGENT_ROLE, "codex"),
@@ -539,13 +548,50 @@ fn zellij_room_shows_agent_after_hook() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Attach a real client so panes get a usable size and render (a
-    // never-attached background session draws into a placeholder pane). Read
-    // the composited screen the user would see and look for the agent row.
-    let screen = attach_and_read_until(&cleanup.namespace, name, "codex", CAPTURE_BUDGET);
+    // This geometry is load-bearing: below the 240-column policy breakpoint,
+    // the correct automatic target aliases the 24-column safety floor closely
+    // enough that a sidebar-only viewport bug is invisible.
+    let client = AttachedZellijScreen::new(&cleanup.namespace, name, 320, 80);
+    let screen = client.wait_until(|screen| screen.contains("codex"), CAPTURE_BUDGET);
     assert!(
         screen.contains("codex"),
         "the live zellij sidebar pane should show the agent row:\n{screen}"
+    );
+
+    // Keep the raced feed in place long enough for the old controller to
+    // converge against it, then publish the completed tab without a target
+    // broadcast. The next keypress must resolve against this proven viewport.
+    std::thread::sleep(Duration::from_secs(3));
+    write_zellij_topology(&cleanup.namespace, &runtime_paths, name, false);
+
+    let backend = ZellijBackend::with_runtime_dir(runtime);
+    let pane = wait_for_zellij_sidebar_pane(&backend, &runtime_paths, name);
+    std::thread::sleep(Duration::from_secs(3));
+    let initial = wait_for_rendered_sidebar_width(&client, |_| true, "initial sidebar width");
+
+    backend.send_keys(&pane, "d").expect("send wider key");
+    let wider =
+        wait_for_rendered_sidebar_width(&client, |width| width > initial, "wider sidebar frame");
+    std::thread::sleep(Duration::from_secs(3));
+    let held_wider = rendered_sidebar_width(&client.contents()).unwrap_or(0);
+    let diag = env.diag_tail(name, DIAG_EVIDENCE_RECORDS);
+    assert_eq!(
+        held_wider, wider,
+        "the wider sidebar frame reverted after the convergence settle window\n{diag}",
+    );
+
+    backend.send_keys(&pane, "a").expect("send narrower key");
+    let narrower = wait_for_rendered_sidebar_width(
+        &client,
+        |width| width < held_wider,
+        "narrower sidebar frame",
+    );
+    std::thread::sleep(Duration::from_secs(3));
+    let held_narrower = rendered_sidebar_width(&client.contents()).unwrap_or(0);
+    let diag = env.diag_tail(name, DIAG_EVIDENCE_RECORDS);
+    assert_eq!(
+        held_narrower, narrower,
+        "the narrower sidebar frame reverted after the convergence settle window\n{diag}",
     );
 }
 
@@ -1275,61 +1321,207 @@ fn wait_for_named_terminal_run(
     }
 }
 
-/// Attach a `portable-pty` client to `session` and poll the composited screen
-/// (vt100-parsed master output) until it contains `needle` or the budget
-/// elapses.
-fn attach_and_read_until(
-    namespace: &ZellijNamespace,
-    session: &str,
-    needle: &str,
-    budget: Duration,
-) -> String {
-    const ROWS: u16 = 40;
-    const COLS: u16 = 120;
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows: ROWS,
-            cols: COLS,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("openpty");
-    let mut cmd = CommandBuilder::new("zellij");
-    cmd.args(["attach", session]);
-    namespace.pin_pty(&mut cmd);
-    let mut child = pair.slave.spawn_command(cmd).expect("attach zellij");
-    drop(pair.slave);
+/// A persistent `portable-pty` client whose parser exposes the composited
+/// screen while width actions run against the attached Zellij session.
+struct AttachedZellijScreen {
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+    parser: Arc<Mutex<vt100::Parser>>,
+    reader: Option<std::thread::JoinHandle<()>>,
+}
 
-    // One persistent parser fed as bytes arrive — the poll loop then reads the
-    // current grid in O(grid) instead of re-parsing the whole buffer each tick.
-    let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0)));
-    let mut reader = pair.master.try_clone_reader().expect("clone reader");
-    let sink = Arc::clone(&parser);
-    let reader = std::thread::spawn(move || {
-        let mut chunk = [0u8; 4096];
-        loop {
-            match reader.read(&mut chunk) {
-                Ok(0) | Err(_) => return,
-                Ok(n) => sink.lock().expect("parser").process(&chunk[..n]),
+impl AttachedZellijScreen {
+    fn new(namespace: &ZellijNamespace, session: &str, cols: u16, rows: u16) -> Self {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new("zellij");
+        cmd.args(["attach", session]);
+        namespace.pin_pty(&mut cmd);
+        let child = pair.slave.spawn_command(cmd).expect("attach zellij");
+        drop(pair.slave);
+
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
+        let mut reader = pair.master.try_clone_reader().expect("clone reader");
+        let sink = Arc::clone(&parser);
+        let reader = std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            loop {
+                match reader.read(&mut chunk) {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => sink.lock().expect("parser").process(&chunk[..n]),
+                }
             }
-        }
-    });
+        });
 
-    let deadline = Instant::now() + budget;
-    let mut text = String::new();
-    while Instant::now() < deadline {
-        text = parser.lock().expect("parser").screen().contents();
-        if text.contains(needle) {
-            break;
+        Self {
+            child,
+            master: Some(pair.master),
+            parser,
+            reader: Some(reader),
         }
-        std::thread::sleep(Duration::from_millis(150));
     }
 
-    let _ = child.kill();
-    let _ = child.wait();
-    drop(pair.master);
-    let _ = reader.join();
-    text
+    fn contents(&self) -> String {
+        self.parser.lock().expect("parser").screen().contents()
+    }
+
+    fn wait_until(&self, mut ready: impl FnMut(&str) -> bool, budget: Duration) -> String {
+        let deadline = Instant::now() + budget;
+        let mut text = String::new();
+        while Instant::now() < deadline {
+            text = self.contents();
+            if ready(&text) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        text
+    }
+}
+
+impl Drop for AttachedZellijScreen {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        drop(self.master.take());
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
+
+fn write_zellij_topology(
+    namespace: &ZellijNamespace,
+    runtime: &rimz::RuntimePaths,
+    session: &str,
+    sidebar_only: bool,
+) {
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    let mut panes = loop {
+        let output = namespace
+            .command()
+            .args(["--session", session, "action", "list-panes", "--json"])
+            .bounded_output()
+            .expect("list Zellij panes for topology fixture");
+        assert!(output.status.success(), "list-panes failed for {session}");
+        let mut values: Vec<serde_json::Value> =
+            serde_json::from_slice(&output.stdout).expect("decode Zellij pane list");
+        for value in &mut values {
+            let Some(object) = value.as_object_mut() else {
+                continue;
+            };
+            if object
+                .get("tab_position")
+                .is_some_and(|value| value.is_number())
+            {
+                object.remove("tab_id");
+            } else {
+                object.remove("tab_position");
+            }
+        }
+        let panes: Vec<rimz::mux::zellij::pane_topology::PaneTopologyPane> = values
+            .into_iter()
+            .map(|value| serde_json::from_value(value).expect("decode Zellij pane topology"))
+            .collect();
+        if panes.iter().filter(|pane| !pane.is_plugin).count() >= 2 {
+            break panes;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for Zellij layout panes",
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    if sidebar_only {
+        let sidebar_id = panes
+            .iter()
+            .filter(|pane| !pane.is_plugin && !pane.is_floating)
+            .min_by_key(|pane| (pane.pane_x.unwrap_or(u64::MAX), pane.id))
+            .map(|pane| pane.id)
+            .expect("startup fixture needs a tiled pane");
+        panes.retain(|pane| !pane.is_plugin && pane.id == sidebar_id);
+        assert_eq!(panes.len(), 1, "startup fixture needs one sidebar pane");
+    }
+    let cache = rimz::mux::zellij::pane_topology::PaneTopologyCache {
+        session_name: session.to_owned(),
+        produced_at_ms: rimz::sidebar::timing::unix_now_ms(),
+        writer: None,
+        focused_pane: None,
+        clients: None,
+        panes,
+    };
+    rimz::sidebar::cache::write_pane_topology_cache(runtime, &cache)
+        .expect("publish Zellij pane topology fixture");
+}
+
+fn wait_for_zellij_sidebar_pane(
+    backend: &ZellijBackend,
+    runtime: &rimz::RuntimePaths,
+    session: &str,
+) -> rimz::ids::PaneId {
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    loop {
+        let pane = backend
+            .list_panes(PaneListOptions {
+                session_name: Some(session.to_owned()),
+                runtime_paths: Some(runtime.clone()),
+                workspace_id: Some(runtime.workspace_id.clone()),
+                consistency: PaneReadConsistency::PreferAuthoritative,
+                ..PaneListOptions::default()
+            })
+            .ok()
+            .and_then(|listing| {
+                listing
+                    .panes
+                    .into_iter()
+                    .find(|pane| pane.title.as_deref() == Some("rimz-sidebar"))
+            });
+        if let Some(pane) = pane {
+            return pane.pane_id;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out locating the live Zellij sidebar pane",
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn rendered_sidebar_width(screen: &str) -> Option<usize> {
+    const FOOTER: &str = "? for help";
+    screen
+        .lines()
+        .find_map(|line| line.split_once(FOOTER).map(|(prefix, _)| prefix))
+        .map(|prefix| prefix.chars().count() + FOOTER.chars().count())
+}
+
+fn wait_for_rendered_sidebar_width(
+    client: &AttachedZellijScreen,
+    mut ready: impl FnMut(usize) -> bool,
+    label: &str,
+) -> usize {
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    let mut last_width = None;
+    loop {
+        let last_screen = client.contents();
+        if let Some(width) = rendered_sidebar_width(&last_screen) {
+            last_width = Some(width);
+            if ready(width) {
+                return width;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {label}; last width {last_width:?}\n{last_screen}",
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn real_agent_room(env: &Env, agent_session: &str) -> (PathBuf, String, String, TmuxServerGuard) {

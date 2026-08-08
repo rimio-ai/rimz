@@ -5,6 +5,25 @@ use crate::ids::{MuxName, PaneId};
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 
 #[test]
+fn tab_view_width_needs_a_sibling_extent() {
+    let panes: Vec<PaneTopologyPane> = serde_json::from_str(
+        r#"[
+          {"id": 1, "is_plugin": false, "tab_id": 0, "pane_x": 0, "pane_columns": 24,
+           "title": "rimz-sidebar"},
+          {"id": 2, "is_plugin": false, "tab_id": 0, "pane_x": 24, "pane_columns": 296}
+        ]"#,
+    )
+    .expect("pane topology");
+
+    assert_eq!(
+        tab_view_cols(&panes[..1], 0),
+        None,
+        "the first sidebar pane cannot prove the tab viewport",
+    );
+    assert_eq!(tab_view_cols(&panes, 0), Some(320));
+}
+
+#[test]
 fn raw_pane_position_metadata_accepts_live_and_topology_shapes() {
     let json = r#"[
           {

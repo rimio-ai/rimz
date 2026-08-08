@@ -30,7 +30,15 @@ fn write_zellij_topology(runtime: &RuntimePaths) {
     write_zellij_topology_for_view(runtime, 200);
 }
 
+fn write_zellij_sidebar_only_topology(runtime: &RuntimePaths, sidebar_cols: u16) {
+    write_zellij_topology_panes(runtime, sidebar_cols, None);
+}
+
 fn write_zellij_topology_for_view(runtime: &RuntimePaths, view_cols: u16) {
+    write_zellij_topology_panes(runtime, 80, Some(view_cols));
+}
+
+fn write_zellij_topology_panes(runtime: &RuntimePaths, sidebar_cols: u16, view_cols: Option<u16>) {
     use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 
     let pane = |id, pane_x, pane_columns, title: &str| PaneTopologyPane {
@@ -58,10 +66,16 @@ fn write_zellij_topology_for_view(runtime: &RuntimePaths, view_cols: u16) {
             writer: None,
             focused_pane: None,
             clients: None,
-            panes: vec![
-                pane(1, 0, 80, "rimz-sidebar"),
-                pane(2, 80, u64::from(view_cols.saturating_sub(80)), "work"),
-            ],
+            panes: std::iter::once(pane(1, 0, u64::from(sidebar_cols), "rimz-sidebar"))
+                .chain(view_cols.map(|view_cols| {
+                    pane(
+                        2,
+                        u64::from(sidebar_cols),
+                        u64::from(view_cols.saturating_sub(sidebar_cols)),
+                        "work",
+                    )
+                }))
+                .collect(),
         },
     )
     .expect("write pane topology");
@@ -137,7 +151,7 @@ fn width_target_pin_broadcasts_without_a_producer_fetch() {
 }
 
 #[test]
-fn zellij_uses_live_step_and_rejects_floor_crossing() {
+fn zellij_uses_live_step_and_clamps_floor_crossing() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
     let diag = crate::diag::DiagSink::disabled();
@@ -159,8 +173,13 @@ fn zellij_uses_live_step_and_rejects_floor_crossing() {
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
     controller.adjust(30, WidthAdjust::Narrower, &diag);
     assert_eq!(
+        crate::sidebar::width_target::pinned(&runtime),
+        Some(crate::mux::WidthPermille::from_percent(12)),
+        "the inexact step pins the 24-column floor instead of being ignored",
+    );
+    assert_ne!(
         crate::sidebar::width_target::load(&runtime),
-        Some(prior_share),
+        Some(prior_share)
     );
 }
 
@@ -207,6 +226,27 @@ fn first_backend_geometry_resolves_the_initial_target() {
     assert_eq!(controller.convergence.target(), Some(target(50)));
     assert_eq!(controller.last_classified_view_cols, Some(200));
     assert_eq!(controller.last_siblings, Some(1));
+}
+
+#[test]
+fn sidebar_only_startup_never_latches_the_floor_as_the_view_basis() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_sidebar_only_topology(&runtime, 10);
+    let diag = crate::diag::DiagSink::disabled();
+
+    controller.backstop(Some(10), Some(0), None, &diag);
+    assert_eq!(controller.convergence.target(), None);
+    assert_eq!(controller.last_classified_view_cols, None);
+
+    // Model a target poisoned by the former single-pane inference, then prove
+    // that a broadcast reload consults the completed tab instead of reusing it.
+    controller.convergence.retarget(Some(target(24)));
+    controller.last_classified_view_cols = Some(10);
+    write_zellij_topology_for_view(&runtime, 320);
+    controller.reload_target(&crate::config::ThemeConfig::default(), Some(96), &diag);
+
+    assert_eq!(controller.current_view_cols, Some(320));
+    assert_eq!(controller.convergence.target(), Some(target(72)));
 }
 
 #[test]
@@ -507,6 +547,7 @@ fn settled_resize_without_geometry_never_adopts() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     controller.last_classified_view_cols = Some(200);
     controller.last_siblings = Some(1);
+    controller.convergence.retarget(Some(target(50)));
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
 
