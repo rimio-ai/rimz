@@ -50,6 +50,14 @@ pub fn resolve(
 ) -> crate::mux::SidebarTarget {
     let stored = load_file(runtime);
     let view_cols = view_cols.and_then(NonZeroU16::new);
+    resolve_loaded(stored, width, view_cols)
+}
+
+fn resolve_loaded(
+    stored: Option<WidthTargetFile>,
+    width: SidebarWidth,
+    view_cols: Option<NonZeroU16>,
+) -> crate::mux::SidebarTarget {
     if view_cols.is_none()
         && let Some(file) = stored
     {
@@ -90,12 +98,13 @@ pub(crate) fn adopt(
     width: SidebarWidth,
     view_cols: NonZeroU16,
 ) -> crate::mux::SidebarTarget {
-    let target = resolve(runtime, width, Some(view_cols.get()));
+    let stored = load_file(runtime);
+    let target = resolve_loaded(stored, width, Some(view_cols));
     let resolved = WidthTargetFile {
         permille: target.share,
         pinned: target.pinned,
     };
-    if load_file(runtime) != Some(resolved)
+    if stored != Some(resolved)
         && let Err(err) = write_and_broadcast(runtime, resolved)
     {
         warn!(error = %err, "sidebar width target adopt write failed");

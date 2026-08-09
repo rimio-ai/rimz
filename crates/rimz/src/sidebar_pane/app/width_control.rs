@@ -468,7 +468,9 @@ impl WidthController {
                 .map_or(at_ms, |previous| previous.max(at_ms)),
         );
         if self.refresh_target(Some(at_ms)).is_none() {
-            self.baseline_probe_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
+            if self.own_pane.is_some() {
+                self.baseline_probe_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
+            }
             return false;
         }
         self.baseline_probe_deadline = None;
@@ -559,7 +561,10 @@ impl WidthController {
     }
 
     fn capture_classification_baseline(&mut self, measured_cols: u16, diag: &DiagSink) -> bool {
-        if self.refresh_target(Some(self.started_at_ms)).is_some() {
+        let floor = self
+            .structural_at_ms
+            .map_or(self.started_at_ms, |at_ms| at_ms.max(self.started_at_ms));
+        if self.refresh_target(Some(floor)).is_some() {
             self.observe(measured_cols, SidebarWidthControlTrigger::Backstop, diag);
             return true;
         }
@@ -583,8 +588,8 @@ impl WidthController {
             return;
         }
         let previous_view_cols = self.current_view_cols;
-        let step = match self.refresh_target(None) {
-            Some(step) => step,
+        let (step, view_cols) = match self.refresh_target(None) {
+            Some(proven) => proven,
             None => {
                 debug!("sidebar settled resize lacks backend geometry");
                 self.observe(
@@ -595,15 +600,6 @@ impl WidthController {
                 self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
                 return;
             }
-        };
-        let Some(view_cols) = NonZeroU16::new(step.view_cols) else {
-            self.observe(
-                measured_cols,
-                SidebarWidthControlTrigger::Classification,
-                diag,
-            );
-            self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
-            return;
         };
         let Some(resize_at_ms) = self.classification_resize_at_ms else {
             self.classification_deadline = None;
@@ -616,11 +612,6 @@ impl WidthController {
         if view_changed {
             self.classification_deadline = None;
             self.classification_resize_at_ms = None;
-            let target_cols = self
-                .convergence
-                .target()
-                .expect("proven viewport refresh establishes a target");
-            spawn_width_default_record(self.mux, &self.session_name, target_cols.get());
             self.observe(
                 measured_cols,
                 SidebarWidthControlTrigger::Classification,
@@ -686,7 +677,10 @@ impl WidthController {
     /// Re-derive the target from a proven viewport. `floor` is the event this
     /// decision reacts to: an older topology observation cannot describe the
     /// geometry that event produced. A failed proof leaves the target untouched.
-    fn refresh_target(&mut self, floor: Option<u64>) -> Option<crate::mux::WidthStep> {
+    fn refresh_target(
+        &mut self,
+        floor: Option<u64>,
+    ) -> Option<(crate::mux::WidthStep, NonZeroU16)> {
         let pane = self.own_pane.as_ref()?;
         let step = crate::mux::backend_for(self.mux)
             .sidebar_width_step(&self.runtime, &self.session_name, pane, floor)
@@ -694,14 +688,21 @@ impl WidthController {
         let view_cols = NonZeroU16::new(step.view_cols)?;
         self.convergence.seed_native_step(step.band_cols);
         self.current_view_cols = Some(view_cols.get());
-        let target = crate::sidebar::width_target::adopt(&self.runtime, self.width, view_cols)
-            .cols(Some(view_cols.get()));
+        let target = match floor {
+            Some(_) => crate::sidebar::width_target::adopt(&self.runtime, self.width, view_cols),
+            None => crate::sidebar::width_target::resolve(
+                &self.runtime,
+                self.width,
+                Some(view_cols.get()),
+            ),
+        }
+        .cols(Some(view_cols.get()));
         let changed = self.convergence.target() != Some(target);
         self.convergence.retarget(Some(target));
         if changed {
             spawn_width_default_record(self.mux, &self.session_name, target.get());
         }
-        Some(step)
+        Some((step, view_cols))
     }
 }
 
