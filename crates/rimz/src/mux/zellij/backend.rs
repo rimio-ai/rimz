@@ -964,7 +964,8 @@ impl MuxBackend for ZellijBackend {
         // Kept sidebars (not planned for closing) whose geometry sits off the
         // layout's dock — the residue of a mis-mounted add — converge in place
         // this pass, renderer untouched.
-        let off_spec = off_spec_sidebars(&panes, &planned_closes, opts.target);
+        let width_floor = live.topology_floor_ms;
+        let off_spec = off_spec_sidebars(&panes, &planned_closes, width_floor.map(|_| opts.target));
         if plan.is_empty() && off_spec.is_empty() {
             return Ok(SidebarRecovery::default());
         }
@@ -990,7 +991,14 @@ impl MuxBackend for ZellijBackend {
         let attached = !needs_attached || self.session_has_attached_client(&opts.session_name);
         if attached {
             for (tab_position, raw_id) in &off_spec {
-                repair_sidebar_geometry(self, opts, *tab_position, *raw_id, &mut report);
+                repair_sidebar_geometry(
+                    self,
+                    opts,
+                    *tab_position,
+                    *raw_id,
+                    width_floor,
+                    &mut report,
+                );
             }
         }
         if needs_attached && !attached {
@@ -1006,7 +1014,7 @@ impl MuxBackend for ZellijBackend {
                     program: "zellij".to_owned(),
                     reason: format!("invalid sidebar tab position `{view}`: {err}"),
                 })?;
-                let added = self.add_sidebar_to_tab(opts, tab_position)?;
+                let added = self.add_sidebar_to_tab(opts, tab_position, width_floor)?;
                 if !prove_sidebar_mount(opts, MuxName::Zellij, &added.pane, &build, || {
                     if let Some(raw_id) = ZellijPaneId::try_from(&added.pane)
                         .ok()
@@ -1231,14 +1239,14 @@ pub(super) fn reconcile_pane(pane: &PaneTopologyPane) -> Option<ReconcilePane> {
 fn off_spec_sidebars(
     panes: &[PaneTopologyPane],
     closing: &[PaneId],
-    target: crate::mux::SidebarTarget,
+    width_target: Option<crate::mux::SidebarTarget>,
 ) -> Vec<(u64, u64)> {
     let closing: HashSet<u64> = closing.iter().filter_map(parse_zellij_raw).collect();
     panes
         .iter()
         .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
         .filter(|pane| !closing.contains(&pane.id))
-        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, target))
+        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, width_target))
         .map(|pane| (pane.tab_position, pane.id))
         .collect()
 }
@@ -1254,9 +1262,10 @@ fn repair_sidebar_geometry(
     opts: &SidebarPaneOptions,
     tab_position: u64,
     raw_id: u64,
+    width_floor: Option<u64>,
     report: &mut SidebarRecovery,
 ) {
-    let floor = backend.converge_sidebar_geometry(opts, tab_position, raw_id);
+    let floor = backend.converge_sidebar_geometry(opts, tab_position, raw_id, width_floor);
     match backend.sidebar_dock_outcome(
         &opts.session_name,
         &opts.workspace_id,

@@ -397,7 +397,8 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
         stub,
         view_cols,
     );
-    let liveness = claimed_liveness(sidebar_id);
+    let mut liveness = claimed_liveness(sidebar_id);
+    liveness.topology_floor_ms = Some(0);
     write_topology_cache_from_list_panes(&xdg, &opts.workspace_id, &name);
     let _mirror = topology_cache_mirror(&xdg, &opts.workspace_id, &name);
     let report = reconcile_until_converged(&xdg, &opts, &liveness);

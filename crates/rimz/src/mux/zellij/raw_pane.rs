@@ -216,28 +216,30 @@ pub(super) fn repairable_nested_work_pane_ids(
 
 /// Whether a kept sidebar pane sits off the layout's dock: outside the
 /// full-height left column, nested beside a tiled pane that intrudes into its
-/// column band, or outside the upward stop band for its live per-view target.
-/// Unknown geometry never reads off-spec.
+/// column band, or — when `width_target` is proven — outside the upward stop
+/// band for its live per-view target. Unknown geometry never reads off-spec.
 pub(super) fn sidebar_geometry_off_spec(
     pane: &PaneTopologyPane,
     panes: &[PaneTopologyPane],
     excluded: &HashSet<u64>,
-    target: crate::mux::SidebarTarget,
+    width_target: Option<crate::mux::SidebarTarget>,
 ) -> bool {
     let Some(verdict) = sidebar_dock_verdict(pane, panes, excluded) else {
         return false;
     };
     matches!(verdict, SidebarDock::SwapReachable | SidebarDock::NestedRow)
-        || pane.pane_columns.is_some_and(|cols| {
-            tab_view_cols(panes, pane.tab_position).is_some_and(|view_cols| {
-                let target_cols = target
-                    .cols(Some(u16::try_from(view_cols).unwrap_or(u16::MAX)))
-                    .get();
-                sidebar_width_off_spec(
-                    cols,
-                    u64::from(target_cols),
-                    zellij_resize_stop_step_cols(view_cols),
-                )
+        || width_target.is_some_and(|target| {
+            pane.pane_columns.is_some_and(|cols| {
+                tab_view_cols(panes, pane.tab_position).is_some_and(|view_cols| {
+                    let target_cols = target
+                        .cols(Some(u16::try_from(view_cols).unwrap_or(u16::MAX)))
+                        .get();
+                    sidebar_width_off_spec(
+                        cols,
+                        u64::from(target_cols),
+                        zellij_resize_stop_step_cols(view_cols),
+                    )
+                })
             })
         })
 }
