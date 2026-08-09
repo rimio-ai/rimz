@@ -675,6 +675,7 @@ impl MuxBackend for ZellijBackend {
         runtime: &RuntimePaths,
         session: &str,
         pane: &PaneId,
+        min_observed_at_ms: Option<u64>,
     ) -> Result<WidthStep> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let pane_id = ZellijPaneId::try_from(pane)
@@ -688,7 +689,7 @@ impl MuxBackend for ZellijBackend {
             runtime,
             session,
             crate::sidebar::timing::unix_now_ms(),
-            None,
+            min_observed_at_ms,
         )
         .ok_or_else(|| MuxErr::Output {
             program: "zellij".to_owned(),

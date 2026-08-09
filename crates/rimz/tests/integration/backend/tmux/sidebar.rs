@@ -173,7 +173,7 @@ fn sidebar_width_step_is_exact_two_columns() {
     let runtime = RuntimePaths::under(workspace_id, server._tempdir.path()).expect("runtime");
     let step = server
         .backend
-        .sidebar_width_step(&runtime, session, &pane)
+        .sidebar_width_step(&runtime, session, &pane, None)
         .expect("read sidebar step");
     assert_eq!(step.cols, 2);
     assert!(step.exact);

@@ -295,7 +295,7 @@ impl WidthController {
         self.width = crate::mux::SidebarWidth::from_config(theme);
         let step = self.own_pane.as_ref().and_then(|pane| {
             crate::mux::backend_for(self.mux)
-                .sidebar_width_step(&self.runtime, &self.session_name, pane)
+                .sidebar_width_step(&self.runtime, &self.session_name, pane, None)
                 .ok()
         });
         if let Some(step) = step.filter(|step| step.view_cols > 0) {
@@ -338,6 +338,7 @@ impl WidthController {
             &self.runtime,
             &self.session_name,
             pane,
+            None,
         ) {
             Ok(step) => step,
             Err(err) => {
@@ -569,6 +570,7 @@ impl WidthController {
             &self.runtime,
             &self.session_name,
             pane,
+            None,
         ) && step.view_cols > 0
         {
             self.convergence.seed_native_step(step.band_cols);
@@ -607,6 +609,7 @@ impl WidthController {
             &self.runtime,
             &self.session_name,
             pane,
+            None,
         ) {
             Ok(step) => step,
             Err(err) => {
