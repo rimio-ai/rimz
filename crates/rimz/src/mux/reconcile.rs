@@ -29,6 +29,8 @@ pub struct SidebarLiveness {
     pub claimed_panes: HashSet<PaneId>,
     pub has_unlocated: bool,
     pub young_panes: HashSet<PaneId>,
+    /// Oldest topology observation this repair pass may treat as current.
+    pub topology_floor_ms: Option<u64>,
 }
 
 /// One view's sidebar panes in mux order and whether the view contains work or
