@@ -835,6 +835,7 @@ pub trait MuxBackend: Send + Sync {
         runtime: &crate::store::RuntimePaths,
         session: &str,
         pane: &PaneId,
+        min_observed_at_ms: Option<u64>,
     ) -> Result<WidthStep>;
     /// Move one sidebar pane toward an absolute target. Zellij performs one
     /// native relative step; tmux can apply the target exactly.

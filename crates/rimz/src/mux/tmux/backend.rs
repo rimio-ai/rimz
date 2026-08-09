@@ -333,8 +333,10 @@ impl MuxBackend for TmuxBackend {
         _runtime: &crate::store::RuntimePaths,
         _session: &str,
         pane: &PaneId,
+        _min_observed_at_ms: Option<u64>,
     ) -> Result<WidthStep> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
+        // The window width comes from this live tmux query, so it cannot predate a caller's floor.
         Ok(WidthStep {
             cols: SIDEBAR_RESIZE_STEP_COLS,
             band_cols: 1,
