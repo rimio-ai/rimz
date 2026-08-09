@@ -155,7 +155,10 @@ fn width_target_pin_broadcasts_without_a_producer_fetch() {
 
     let permille =
         crate::sidebar::width_target::pin(&runtime, target(82), 200).expect("pin width target");
-    assert_eq!(crate::sidebar::width_target::load(&runtime), Some(permille));
+    assert_eq!(
+        crate::sidebar::width_target::pinned(&runtime),
+        Some(permille)
+    );
     let mut payload = [0_u8; 1024];
     let received = socket.recv(&mut payload).expect("receive target broadcast");
     let envelope: SidebarEventEnvelope =
@@ -192,7 +195,7 @@ fn zellij_uses_live_step_and_clamps_floor_crossing() {
         "the inexact step pins the 24-column floor instead of being ignored",
     );
     assert_ne!(
-        crate::sidebar::width_target::load(&runtime),
+        crate::sidebar::width_target::pinned(&runtime),
         Some(prior_share)
     );
 }
@@ -346,7 +349,7 @@ fn unproven_viewport_never_rewrites_the_room_share() {
     controller.backstop(Some(24), Some(1), None, &diag);
 
     assert_eq!(controller.convergence.target(), None);
-    assert_eq!(crate::sidebar::width_target::load(&runtime), None);
+    assert!(!runtime.sidebar_width_path().exists());
 }
 
 #[test]
