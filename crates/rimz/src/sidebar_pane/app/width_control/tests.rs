@@ -31,14 +31,28 @@ fn write_zellij_topology(runtime: &RuntimePaths) {
 }
 
 fn write_zellij_sidebar_only_topology(runtime: &RuntimePaths, sidebar_cols: u16) {
-    write_zellij_topology_panes(runtime, sidebar_cols, None);
+    write_zellij_topology_panes(
+        runtime,
+        sidebar_cols,
+        None,
+        crate::sidebar::timing::unix_now_ms(),
+    );
 }
 
 fn write_zellij_topology_for_view(runtime: &RuntimePaths, view_cols: u16) {
-    write_zellij_topology_panes(runtime, 80, Some(view_cols));
+    write_zellij_topology_for_view_at(runtime, view_cols, crate::sidebar::timing::unix_now_ms());
 }
 
-fn write_zellij_topology_panes(runtime: &RuntimePaths, sidebar_cols: u16, view_cols: Option<u16>) {
+fn write_zellij_topology_for_view_at(runtime: &RuntimePaths, view_cols: u16, produced_at_ms: u64) {
+    write_zellij_topology_panes(runtime, 80, Some(view_cols), produced_at_ms);
+}
+
+fn write_zellij_topology_panes(
+    runtime: &RuntimePaths,
+    sidebar_cols: u16,
+    view_cols: Option<u16>,
+    produced_at_ms: u64,
+) {
     use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 
     let pane = |id, pane_x, pane_columns, title: &str| PaneTopologyPane {
@@ -62,7 +76,7 @@ fn write_zellij_topology_panes(runtime: &RuntimePaths, sidebar_cols: u16, view_c
         runtime,
         &PaneTopologyCache {
             session_name: "rimz-test".to_owned(),
-            produced_at_ms: crate::sidebar::timing::unix_now_ms(),
+            produced_at_ms,
             writer: None,
             focused_pane: None,
             clients: None,
@@ -224,7 +238,7 @@ fn first_backend_geometry_resolves_the_initial_target() {
     controller.backstop(Some(80), Some(1), None, &diag);
 
     assert_eq!(controller.convergence.target(), Some(target(50)));
-    assert_eq!(controller.last_classified_view_cols, Some(200));
+    assert_eq!(controller.current_view_cols, Some(200));
     assert_eq!(controller.last_siblings, Some(1));
 }
 
@@ -236,12 +250,12 @@ fn sidebar_only_startup_never_latches_the_floor_as_the_view_basis() {
 
     controller.backstop(Some(10), Some(0), None, &diag);
     assert_eq!(controller.convergence.target(), None);
-    assert_eq!(controller.last_classified_view_cols, None);
+    assert_eq!(controller.current_view_cols, None);
 
     // Model a target poisoned by the former single-pane inference, then prove
     // that a broadcast reload consults the completed tab instead of reusing it.
     controller.convergence.retarget(Some(target(24)));
-    controller.last_classified_view_cols = Some(10);
+    controller.current_view_cols = Some(10);
     write_zellij_topology_for_view(&runtime, 320);
     controller.reload_target(&crate::config::ThemeConfig::default(), Some(96), &diag);
 
@@ -278,7 +292,61 @@ fn missing_backend_geometry_retries_the_baseline_at_most_once_per_second() {
         Some(retry),
         "an immediate render iteration does not probe again",
     );
-    assert_eq!(controller.last_classified_view_cols, None);
+    assert_eq!(controller.current_view_cols, None);
+}
+
+#[test]
+fn attach_viewport_change_never_converges_against_the_pre_attach_snapshot() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    let diag = crate::diag::DiagSink::disabled();
+    write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
+    controller.backstop(Some(24), Some(1), None, &diag);
+    assert_eq!(controller.convergence.target(), Some(target(24)));
+
+    let structural_at_ms = controller.started_at_ms.saturating_add(10);
+    write_zellij_topology_for_view_at(&runtime, 319, structural_at_ms.saturating_sub(1));
+    controller.note_structural(structural_at_ms, Some(64), &diag);
+
+    assert_eq!(controller.convergence.target(), Some(target(24)));
+    assert!(!controller.convergence.in_flight());
+    assert!(controller.baseline_probe_deadline.is_some());
+
+    write_zellij_topology_for_view_at(&runtime, 319, structural_at_ms);
+    controller.note_structural(structural_at_ms, Some(32), &diag);
+
+    assert_eq!(controller.current_view_cols, Some(319));
+    assert_eq!(controller.convergence.target(), Some(target(72)));
+    assert!(controller.convergence.in_flight(), "the correction grows");
+}
+
+#[test]
+fn parked_controller_repicks_a_changed_viewport_on_idle_retry() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    let diag = crate::diag::DiagSink::disabled();
+    write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
+    controller.backstop(Some(24), Some(1), None, &diag);
+    controller.convergence.learned_step = Some(16);
+    controller.convergence.idle_at = Some(32);
+
+    write_zellij_topology_for_view(&runtime, 319);
+    controller.idle_retry_deadline = Some(Instant::now() - Duration::from_millis(1));
+    controller.backstop(Some(32), Some(1), None, &diag);
+
+    assert_eq!(controller.current_view_cols, Some(319));
+    assert_eq!(controller.convergence.target(), Some(target(72)));
+    assert!(controller.convergence.in_flight());
+}
+
+#[test]
+fn unproven_viewport_never_rewrites_the_room_share() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    let diag = crate::diag::DiagSink::disabled();
+    write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms.saturating_sub(1));
+
+    controller.backstop(Some(24), Some(1), None, &diag);
+
+    assert_eq!(controller.convergence.target(), None);
+    assert_eq!(crate::sidebar::width_target::load(&runtime), None);
 }
 
 #[test]
@@ -296,7 +364,6 @@ fn legitimate_paint_width_tracks_the_target_or_falls_back_to_the_cap() {
 fn settled_drag_pins_once_after_the_debounce() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
-    controller.last_classified_view_cols = Some(200);
     controller.last_siblings = Some(1);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
@@ -364,14 +431,15 @@ fn drag_inside_the_native_band_never_arms_classification() {
 fn settled_structural_resize_converges_without_adopting() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
-    controller.last_classified_view_cols = Some(200);
     controller.last_siblings = Some(1);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
 
     controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
     controller.classification_deadline = Some(Instant::now());
-    controller.backstop(Some(83), Some(2), Some(u64::MAX), &diag);
+    let structural_at_ms = crate::sidebar::timing::unix_now_ms();
+    write_zellij_topology_for_view_at(&runtime, 200, structural_at_ms);
+    controller.backstop(Some(83), Some(2), Some(structural_at_ms), &diag);
 
     assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
     assert_eq!(controller.convergence.target(), Some(target(50)));
@@ -384,9 +452,11 @@ fn sibling_change_backstop_converges_without_resize_feedback() {
     let diag = crate::diag::DiagSink::disabled();
 
     controller.backstop(Some(50), Some(3), None, &diag);
-    controller.backstop(Some(80), Some(2), Some(u64::MAX), &diag);
+    let structural_at_ms = crate::sidebar::timing::unix_now_ms();
+    write_zellij_topology_for_view_at(&runtime, 200, structural_at_ms);
+    controller.backstop(Some(80), Some(2), Some(structural_at_ms), &diag);
 
-    assert_eq!(controller.structural_at_ms, Some(u64::MAX));
+    assert_eq!(controller.structural_at_ms, Some(structural_at_ms));
     assert_eq!(controller.convergence.target(), Some(target(50)));
     assert!(controller.convergence.in_flight());
     assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
@@ -399,9 +469,11 @@ fn structural_event_converges_without_resize_feedback() {
     let diag = crate::diag::DiagSink::disabled();
 
     controller.backstop(Some(50), Some(3), None, &diag);
-    controller.note_structural(u64::MAX, Some(80), &diag);
+    let structural_at_ms = crate::sidebar::timing::unix_now_ms();
+    write_zellij_topology_for_view_at(&runtime, 200, structural_at_ms);
+    controller.note_structural(structural_at_ms, Some(80), &diag);
 
-    assert_eq!(controller.structural_at_ms, Some(u64::MAX));
+    assert_eq!(controller.structural_at_ms, Some(structural_at_ms));
     assert_eq!(controller.convergence.target(), Some(target(50)));
     assert!(controller.convergence.in_flight());
     assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
@@ -414,7 +486,9 @@ fn stalled_structural_resize_is_not_adopted_on_later_feedback() {
     let diag = crate::diag::DiagSink::disabled();
 
     controller.backstop(Some(50), Some(3), None, &diag);
-    controller.backstop(Some(83), Some(2), Some(u64::MAX), &diag);
+    let structural_at_ms = crate::sidebar::timing::unix_now_ms();
+    write_zellij_topology_for_view_at(&runtime, 200, structural_at_ms);
+    controller.backstop(Some(83), Some(2), Some(structural_at_ms), &diag);
     controller
         .convergence
         .in_flight
@@ -490,11 +564,11 @@ fn pending_mouse_classification_suppresses_a_due_idle_retry() {
 #[test]
 fn settled_view_resize_reresolves_an_unpinned_target() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
-    write_zellij_topology_for_view(&runtime, 240);
-    controller.last_classified_view_cols = Some(200);
+    write_zellij_topology(&runtime);
     controller.last_siblings = Some(1);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+    write_zellij_topology_for_view(&runtime, 240);
 
     controller.observe(80, SidebarWidthControlTrigger::ResizeFeedback, &diag);
     controller.classification_deadline = Some(Instant::now());
@@ -507,11 +581,11 @@ fn settled_view_resize_reresolves_an_unpinned_target() {
 #[test]
 fn structural_marker_does_not_swallow_a_concurrent_view_change() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
-    write_zellij_topology_for_view(&runtime, 240);
-    controller.last_classified_view_cols = Some(200);
+    write_zellij_topology(&runtime);
     controller.last_siblings = Some(1);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+    write_zellij_topology_for_view(&runtime, 240);
 
     controller.observe(80, SidebarWidthControlTrigger::ResizeFeedback, &diag);
     controller.structural_at_ms = Some(u64::MAX);
@@ -519,20 +593,20 @@ fn structural_marker_does_not_swallow_a_concurrent_view_change() {
     controller.backstop(Some(80), Some(1), Some(u64::MAX), &diag);
 
     assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
-    assert_eq!(controller.last_classified_view_cols, Some(240));
+    assert_eq!(controller.current_view_cols, Some(240));
     assert_eq!(controller.convergence.target(), Some(target(60)));
 }
 
 #[test]
 fn settled_view_resize_scales_a_pinned_target() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
-    write_zellij_topology_for_view(&runtime, 240);
-    controller.last_classified_view_cols = Some(200);
+    write_zellij_topology(&runtime);
     controller.last_siblings = Some(1);
     let share =
         crate::sidebar::width_target::pin(&runtime, target(80), 200).expect("pin width target");
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+    write_zellij_topology_for_view(&runtime, 240);
 
     controller.observe(96, SidebarWidthControlTrigger::ResizeFeedback, &diag);
     controller.classification_deadline = Some(Instant::now());
@@ -545,7 +619,7 @@ fn settled_view_resize_scales_a_pinned_target() {
 #[test]
 fn settled_resize_without_geometry_never_adopts() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
-    controller.last_classified_view_cols = Some(200);
+    controller.current_view_cols = Some(200);
     controller.last_siblings = Some(1);
     controller.convergence.retarget(Some(target(50)));
     let diag = crate::diag::DiagSink::disabled();
@@ -563,7 +637,6 @@ fn settled_resize_without_geometry_never_adopts() {
 fn stale_pane_observation_waits_without_adopting_or_nudging() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
-    controller.last_classified_view_cols = Some(200);
     controller.last_siblings = Some(1);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
@@ -585,7 +658,6 @@ fn stale_pane_observation_waits_without_adopting_or_nudging() {
 fn merely_newer_sibling_observation_waits_without_adopting_or_nudging() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
-    controller.last_classified_view_cols = Some(200);
     controller.last_siblings = Some(1);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);

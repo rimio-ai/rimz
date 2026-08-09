@@ -62,6 +62,44 @@ fn renderer_width_keys_hold_their_live_zellij_step() {
 }
 
 #[test]
+fn renderer_repicks_the_viewport_after_a_wider_attach() {
+    require_zellij!();
+
+    const ATTACHED_VIEW_COLS: u16 = 319;
+    const ATTACHED_VIEW_ROWS: u16 = 80;
+
+    let room = LiveZellijSession::new("renderer-attach-width");
+    let xdg = room.path();
+    let name = room.name().to_owned();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    let sidebar = sidebar_opts(&name, cwd.path(), rimz, 50);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &sidebar);
+    backend.open_sidebar(&sidebar, None).expect("open sidebar");
+    wait_for_pane_count(xdg, &name, 2);
+
+    // Seed the renderer with a valid detached topology, then attach a much
+    // wider client before publishing the new geometry. The old observation
+    // must never be used to shrink the attached pane.
+    write_topology_cache_from_list_panes(xdg, &sidebar.workspace_id, &name);
+    let _client = AttachedClient::attach(&room, ATTACHED_VIEW_COLS, ATTACHED_VIEW_ROWS);
+    let _mirror = topology_cache_mirror(xdg, &sidebar.workspace_id, &name);
+
+    let target_cols = rimz::mux::SidebarWidth::default().target_cols(u64::from(ATTACHED_VIEW_COLS));
+    let stop_step = u64::from(ATTACHED_VIEW_COLS).div_ceil(20);
+    assert!(
+        wait_for_sidebar_columns(
+            xdg,
+            &name,
+            &[target_cols..=target_cols.saturating_add(stop_step).saturating_sub(1)],
+        ),
+        "renderer did not converge against the attached viewport: {:?}",
+        sidebar_columns_by_tab(xdg, &name),
+    );
+}
+
+#[test]
 fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     require_zellij!();
 
