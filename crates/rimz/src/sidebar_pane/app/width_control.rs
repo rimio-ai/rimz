@@ -491,14 +491,14 @@ impl WidthController {
         let now = Instant::now();
         if let Some(siblings) = sibling_count {
             let previous = self.last_siblings.replace(siblings);
-            if previous.is_some_and(|previous| previous != siblings) {
-                if !self.note_structural(
+            if previous.is_some_and(|previous| previous != siblings)
+                && !self.note_structural(
                     panes_observed_at_ms.unwrap_or_else(crate::sidebar::timing::unix_now_ms),
                     measured_cols,
                     diag,
-                ) {
-                    return;
-                }
+                )
+            {
+                return;
             }
         }
         if self
