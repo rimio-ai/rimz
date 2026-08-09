@@ -36,11 +36,6 @@ fn load_file(runtime: &RuntimePaths) -> Option<WidthTargetFile> {
 }
 
 #[cfg(test)]
-pub(crate) fn load(runtime: &RuntimePaths) -> Option<WidthPermille> {
-    load_file(runtime).map(|file| file.permille)
-}
-
-#[cfg(test)]
 pub(crate) fn pinned(runtime: &RuntimePaths) -> Option<WidthPermille> {
     load_file(runtime)
         .filter(|file| file.pinned)
@@ -90,7 +85,7 @@ pub fn resolve(
 }
 
 /// Adopt the target derived from a proven viewport as the room-wide target.
-pub fn adopt(
+pub(crate) fn adopt(
     runtime: &RuntimePaths,
     width: SidebarWidth,
     view_cols: NonZeroU16,
@@ -171,20 +166,26 @@ mod tests {
     fn adopt_tracks_unpinned_geometry_and_recovers_invalid_files() {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = runtime(dir.path());
-        assert_eq!(load(&runtime), None);
+        assert_eq!(load_file(&runtime), None);
 
         let width = SidebarWidth::default();
         assert_eq!(
             adopt(&runtime, width, NonZeroU16::new(200).unwrap()).cols(Some(200)),
             NonZeroU16::new(50).expect("nonzero"),
         );
-        assert_eq!(load(&runtime), Some(WidthPermille::from_percent(25)));
+        assert_eq!(
+            load_file(&runtime).map(|file| file.permille),
+            Some(WidthPermille::from_percent(25))
+        );
         assert_eq!(pinned(&runtime), None);
         assert_eq!(
             adopt(&runtime, width, NonZeroU16::new(300).unwrap()).cols(Some(300)),
             NonZeroU16::new(72).expect("nonzero"),
         );
-        assert_ne!(load(&runtime), Some(WidthPermille::from_percent(25)));
+        assert_ne!(
+            load_file(&runtime).map(|file| file.permille),
+            Some(WidthPermille::from_percent(25))
+        );
 
         fs::write(runtime.sidebar_width_path(), b"not json").expect("garbage file");
         assert_eq!(
@@ -287,7 +288,11 @@ mod tests {
         let target = resolve(&runtime, SidebarWidth::from_config(&theme), None);
         assert_eq!(target.cols(None), theme.display.max_cols);
         assert_eq!(target.percent(), 40);
-        assert_eq!(load(&runtime), None, "a blind fallback is not persisted");
+        assert_eq!(
+            load_file(&runtime),
+            None,
+            "a blind fallback is not persisted"
+        );
 
         clear(&runtime).expect("clear explicit target");
         theme.display.width_percent = None;
@@ -303,7 +308,7 @@ mod tests {
         let runtime = runtime(dir.path());
         pin(&runtime, NonZeroU16::new(81).expect("nonzero"), 200).expect("pin target");
         clear(&runtime).expect("clear target");
-        assert_eq!(load(&runtime), None);
+        assert_eq!(load_file(&runtime), None);
         clear(&runtime).expect("clear missing target");
     }
 }
