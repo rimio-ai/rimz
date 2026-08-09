@@ -433,6 +433,41 @@ fn reconcile_sidebars_rejects_topology_before_the_liveness_floor() {
 
 #[cfg(unix)]
 #[test]
+fn floorless_reconcile_skips_width_only_repairs() {
+    let room = TestRoom::new();
+    room.write_cache(
+        unix_now_ms(),
+        Some(1),
+        None,
+        vec![
+            terminal_pane(1, 0, 150, 0, "rimz-sidebar"),
+            terminal_pane(2, 0, 50, 150, "work"),
+        ],
+    );
+    let (temp, shim) = zellij_shim("#!/bin/sh\nexit 1\n");
+    let backend = room.backend(&shim);
+    let live = SidebarLiveness {
+        claimed_panes: [PaneId::from_parts(
+            crate::ids::MuxName::Zellij,
+            "terminal_1",
+        )]
+        .into(),
+        ..SidebarLiveness::default()
+    };
+
+    let report = backend
+        .reconcile_sidebars(&room.sidebar_options(200), &live)
+        .expect("floorless structural reconcile");
+
+    assert_eq!(report, crate::mux::SidebarRecovery::default());
+    assert!(
+        shim_log(&temp).is_empty(),
+        "an unproven viewport must not trigger a width action",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn cached_pane_roster_reads_only_fresh_normalized_terminal_ids() {
     let room = TestRoom::new();
     let produced_at_ms = unix_now_ms();
@@ -969,7 +1004,7 @@ exit 1
 "#,
     );
     let backend = room.backend(&shim);
-    backend.converge_sidebar_geometry(&room.sidebar_options(1120), 1, 8);
+    backend.converge_sidebar_geometry(&room.sidebar_options(1120), 1, 8, Some(0));
     let log = shim_log(&temp);
     let lines: Vec<_> = log.lines().collect();
     let moves: Vec<_> = lines
@@ -1011,7 +1046,7 @@ exit 1
 "#,
     );
     room.backend(&shim)
-        .converge_sidebar_geometry(&room.sidebar_options(270), 1, 8);
+        .converge_sidebar_geometry(&room.sidebar_options(270), 1, 8, Some(0));
     let log = shim_log(&temp);
     assert_eq!(command_count(&log, "action move-pane left"), 1, "{log}");
     assert!(!log.contains("action resize"), "{log}");
@@ -1085,7 +1120,7 @@ exit 0
     let (temp, shim) = zellij_shim(&script);
     if let Err(err) = room
         .backend(&shim)
-        .add_sidebar_to_tab(&room.sidebar_options(120), 1)
+        .add_sidebar_to_tab(&room.sidebar_options(120), 1, Some(0))
     {
         panic!("retry add: {err}\n{}", shim_log(&temp));
     }

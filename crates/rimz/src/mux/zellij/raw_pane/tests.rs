@@ -354,7 +354,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
     let by_id = |id: u64| panes.iter().find(|pane| pane.id == id).unwrap();
     let excluded = HashSet::new();
     assert!(
-        sidebar_geometry_off_spec(by_id(2), &panes, &excluded, target),
+        sidebar_geometry_off_spec(by_id(2), &panes, &excluded, Some(target)),
         "right-docked 50% sidebar is off-spec",
     );
     assert_eq!(
@@ -362,7 +362,11 @@ fn sidebar_geometry_classifies_dock_shapes() {
         Some(SidebarDock::SwapReachable),
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(3), &panes, &excluded, target),
+        sidebar_geometry_off_spec(by_id(2), &panes, &excluded, None),
+        "dock repair does not require a proven viewport",
+    );
+    assert!(
+        sidebar_geometry_off_spec(by_id(3), &panes, &excluded, Some(target)),
         "a layout-born sidebar below the target is repaired",
     );
     assert_eq!(
@@ -370,7 +374,11 @@ fn sidebar_geometry_classifies_dock_shapes() {
         Some(SidebarDock::Docked),
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(5), &panes, &excluded, target),
+        !sidebar_geometry_off_spec(by_id(3), &panes, &excluded, None),
+        "width-only repair requires a proven viewport",
+    );
+    assert!(
+        sidebar_geometry_off_spec(by_id(5), &panes, &excluded, Some(target)),
         "left but 50%-wide still wants the resize",
     );
     assert_eq!(
@@ -379,12 +387,12 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "a wide sidebar with a clear band is docked and only needs resizing",
     );
     assert!(
-        !sidebar_geometry_off_spec(by_id(7), &panes, &excluded, target),
+        !sidebar_geometry_off_spec(by_id(7), &panes, &excluded, Some(target)),
         "missing geometry leaves nothing safe to repair",
     );
     assert_eq!(sidebar_dock_verdict(by_id(7), &panes, &excluded), None);
     assert!(
-        sidebar_geometry_off_spec(by_id(9), &panes, &excluded, target),
+        sidebar_geometry_off_spec(by_id(9), &panes, &excluded, Some(target)),
         "the live broken nested-row shape is off-spec",
     );
     assert_eq!(
@@ -397,7 +405,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "the narrow one-right-column nested shape can be repaired by stacking",
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(12), &panes, &excluded, target),
+        sidebar_geometry_off_spec(by_id(12), &panes, &excluded, Some(target)),
         "a docked sidebar below the target still needs resizing",
     );
     assert_eq!(
@@ -416,7 +424,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "plugin, floating, and suppressed panes do not intrude into the dock band",
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(23), &panes, &excluded, target),
+        sidebar_geometry_off_spec(by_id(23), &panes, &excluded, Some(target)),
         "a dead pane still means the sidebar is not a full-height dock",
     );
     assert_eq!(
@@ -443,11 +451,11 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "a newly added nested sidebar can stack every live work pane without replacing it",
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(30), &panes, &excluded, target),
+        sidebar_geometry_off_spec(by_id(30), &panes, &excluded, Some(target)),
         "a sidebar below the target grows",
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(32), &panes, &excluded, target),
+        sidebar_geometry_off_spec(by_id(32), &panes, &excluded, Some(target)),
         "a sidebar at least one resize step above the target shrinks",
     );
     assert_eq!(

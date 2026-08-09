@@ -244,6 +244,7 @@ impl ZellijBackend {
         &self,
         opts: &SidebarPaneOptions,
         tab_position: u64,
+        width_floor: Option<u64>,
     ) -> Result<AddedSidebar> {
         let mut last_error = None;
         let mut fallback_misdocked: Option<u64> = None;
@@ -317,7 +318,13 @@ impl ZellijBackend {
             if let Some(previous) = fallback_misdocked.take() {
                 self.cleanup_failed_add(opts, previous);
             }
-            let floor = self.converge_added_sidebar_geometry(opts, tab_position, raw_id);
+            let floor = self.converge_added_sidebar_geometry(
+                opts,
+                tab_position,
+                raw_id,
+                floor_ms,
+                width_floor,
+            );
             match self.sidebar_dock_outcome(
                 &opts.session_name,
                 &opts.workspace_id,
@@ -482,7 +489,8 @@ impl ZellijBackend {
     /// one adjacent pane and must strictly reduce authoritative `pane_x`; the
     /// tab's tiled-pane count bounds the loop. A narrow nested row can then be
     /// stacked into the right column. Width convergence starts only after the
-    /// same current geometry proves a full-height left dock. Returns the latest
+    /// same current geometry proves a full-height left dock and `width_floor`
+    /// carries the caller's temporal viewport proof. Returns the latest
     /// successful repair-action timestamp. Best-effort: any failure leaves the
     /// pane for the next pass.
     pub(super) fn converge_sidebar_geometry(
@@ -490,8 +498,16 @@ impl ZellijBackend {
         opts: &SidebarPaneOptions,
         tab_position: u64,
         raw_id: u64,
+        width_floor: Option<u64>,
     ) -> Option<u64> {
-        self.converge_sidebar_geometry_with(opts, tab_position, raw_id, false)
+        self.converge_sidebar_geometry_with(
+            opts,
+            tab_position,
+            raw_id,
+            false,
+            width_floor,
+            width_floor.is_some(),
+        )
     }
 
     fn converge_added_sidebar_geometry(
@@ -499,8 +515,17 @@ impl ZellijBackend {
         opts: &SidebarPaneOptions,
         tab_position: u64,
         raw_id: u64,
+        structural_floor: u64,
+        width_floor: Option<u64>,
     ) -> Option<u64> {
-        self.converge_sidebar_geometry_with(opts, tab_position, raw_id, true)
+        self.converge_sidebar_geometry_with(
+            opts,
+            tab_position,
+            raw_id,
+            true,
+            Some(structural_floor.max(width_floor.unwrap_or_default())),
+            width_floor.is_some(),
+        )
     }
 
     fn converge_sidebar_geometry_with(
@@ -509,9 +534,11 @@ impl ZellijBackend {
         tab_position: u64,
         raw_id: u64,
         stack_multicolumn_work: bool,
+        initial_floor: Option<u64>,
+        repair_width: bool,
     ) -> Option<u64> {
         let pane_raw = ZellijPaneId::Terminal(raw_id).action_target();
-        let mut floor = None;
+        let mut floor = initial_floor;
         let Ok(mut listing) =
             self.structural_geometry_listing(&opts.session_name, &opts.workspace_id, floor)
         else {
@@ -595,6 +622,9 @@ impl ZellijBackend {
         let verdict = sidebar_pane(&listing.panes, tab_position, raw_id)
             .and_then(|pane| sidebar_dock_verdict(pane, &listing.panes, &excluded));
         if verdict != Some(SidebarDock::Docked) {
+            return floor;
+        }
+        if !repair_width {
             return floor;
         }
         let sync = WidthSyncOptions {
