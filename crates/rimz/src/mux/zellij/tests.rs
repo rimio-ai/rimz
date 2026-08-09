@@ -16,8 +16,8 @@ use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, Top
 #[cfg(unix)]
 use crate::mux::{
     LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, PaneReadConsistency,
-    ReconcilePaneRole, SidebarPaneOptions, SidebarWidth, SplitDirection, SplitPaneOptions,
-    SplitPlacement, SplitTarget, TabOptions, WidthSyncOptions,
+    ReconcilePaneRole, SidebarLiveness, SidebarPaneOptions, SidebarWidth, SplitDirection,
+    SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthSyncOptions,
 };
 #[cfg(unix)]
 use crate::sidebar::cache::write_pane_topology_cache;
@@ -398,6 +398,37 @@ exit 1
             ..Default::default()
         })
         .expect_err("explicit floor rejects pre-floor cache");
+}
+
+#[cfg(unix)]
+#[test]
+fn reconcile_sidebars_rejects_topology_before_the_liveness_floor() {
+    let room = TestRoom::new();
+    let produced_at_ms = unix_now_ms();
+    room.write_cache(
+        produced_at_ms,
+        Some(1),
+        None,
+        vec![
+            terminal_pane(1, 0, 50, 0, "rimz-sidebar"),
+            terminal_pane(2, 0, 150, 50, "work"),
+        ],
+    );
+    let (_temp, shim) = zellij_shim("#!/bin/sh\nexit 1\n");
+    let backend = room.backend(&shim);
+    let live = SidebarLiveness {
+        claimed_panes: [PaneId::from_parts(
+            crate::ids::MuxName::Zellij,
+            "terminal_1",
+        )]
+        .into(),
+        topology_floor_ms: Some(produced_at_ms.saturating_add(1)),
+        ..SidebarLiveness::default()
+    };
+
+    backend
+        .reconcile_sidebars(&room.sidebar_options(200), &live)
+        .expect_err("a repair pass cannot judge geometry from pre-floor topology");
 }
 
 #[cfg(unix)]

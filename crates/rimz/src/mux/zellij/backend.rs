@@ -954,7 +954,7 @@ impl MuxBackend for ZellijBackend {
             Some(&opts.session_name),
             None,
             Some(&opts.workspace_id),
-            None,
+            live.topology_floor_ms,
             crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
         )?;
         let panes = listing.panes;
