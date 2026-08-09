@@ -4,6 +4,7 @@ mod birth;
 pub mod session;
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -278,11 +279,15 @@ impl RoomContext {
         resume_tabs: Vec<crate::mux::ResumeTab>,
         refresh_ms: Option<u16>,
     ) -> SidebarPaneOptions {
-        let target = crate::sidebar::width_target::resolve(
-            &self.runtime,
-            self.width,
-            self.detected_size.map(|(cols, _)| cols),
-        );
+        let target = match self
+            .detected_size
+            .and_then(|(cols, _)| NonZeroU16::new(cols))
+        {
+            Some(view_cols) => {
+                crate::sidebar::width_target::adopt(&self.runtime, self.width, view_cols)
+            }
+            None => crate::sidebar::width_target::resolve(&self.runtime, self.width, None),
+        };
         SidebarPaneOptions {
             session_name: self.workspace.session_name.clone(),
             workspace_id: self.workspace.workspace_id.clone(),

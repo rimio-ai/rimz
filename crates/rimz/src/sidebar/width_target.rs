@@ -47,7 +47,7 @@ pub(crate) fn pinned(runtime: &RuntimePaths) -> Option<WidthPermille> {
         .map(|file| file.permille)
 }
 
-/// Resolve the room target against the current backend geometry.
+/// Resolve the room target against the current backend geometry without changing it.
 pub fn resolve(
     runtime: &RuntimePaths,
     width: SidebarWidth,
@@ -64,8 +64,8 @@ pub fn resolve(
             pinned: file.pinned,
         };
     }
-    let (permille, pinned, persist) = match (stored, view_cols) {
-        (Some(file), Some(_)) if file.pinned => (file.permille, true, true),
+    let (permille, pinned) = match (stored, view_cols) {
+        (Some(file), Some(_)) if file.pinned => (file.permille, true),
         (_, Some(view_cols)) => {
             let target_cols =
                 u16::try_from(width.target_cols(u64::from(view_cols.get()))).unwrap_or(u16::MAX);
@@ -75,27 +75,37 @@ pub fn resolve(
                     view_cols,
                 ),
                 false,
-                true,
             )
         }
         _ => (
             WidthPermille::from_percent(width.percent.resolve(None)),
             false,
-            false,
         ),
     };
-    let resolved = WidthTargetFile { permille, pinned };
-    if persist
-        && stored != Some(resolved)
-        && let Err(err) = write_and_broadcast(runtime, resolved)
-    {
-        warn!(error = %err, "sidebar width target resolve write failed");
-    }
     crate::mux::SidebarTarget {
         share: permille,
         max_cols: width.max_cols,
         pinned,
     }
+}
+
+/// Adopt the target derived from a proven viewport as the room-wide target.
+pub fn adopt(
+    runtime: &RuntimePaths,
+    width: SidebarWidth,
+    view_cols: NonZeroU16,
+) -> crate::mux::SidebarTarget {
+    let target = resolve(runtime, width, Some(view_cols.get()));
+    let resolved = WidthTargetFile {
+        permille: target.share,
+        pinned: target.pinned,
+    };
+    if load_file(runtime) != Some(resolved)
+        && let Err(err) = write_and_broadcast(runtime, resolved)
+    {
+        warn!(error = %err, "sidebar width target adopt write failed");
+    }
+    target
 }
 
 /// Pin a user-selected room target as its exact measured share of the view.
@@ -158,33 +168,33 @@ mod tests {
     }
 
     #[test]
-    fn resolve_tracks_unpinned_geometry_and_recovers_invalid_files() {
+    fn adopt_tracks_unpinned_geometry_and_recovers_invalid_files() {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = runtime(dir.path());
         assert_eq!(load(&runtime), None);
 
         let width = SidebarWidth::default();
         assert_eq!(
-            resolve(&runtime, width, Some(200)).cols(Some(200)),
+            adopt(&runtime, width, NonZeroU16::new(200).unwrap()).cols(Some(200)),
             NonZeroU16::new(50).expect("nonzero"),
         );
         assert_eq!(load(&runtime), Some(WidthPermille::from_percent(25)));
         assert_eq!(pinned(&runtime), None);
         assert_eq!(
-            resolve(&runtime, width, Some(300)).cols(Some(300)),
+            adopt(&runtime, width, NonZeroU16::new(300).unwrap()).cols(Some(300)),
             NonZeroU16::new(72).expect("nonzero"),
         );
         assert_ne!(load(&runtime), Some(WidthPermille::from_percent(25)));
 
         fs::write(runtime.sidebar_width_path(), b"not json").expect("garbage file");
         assert_eq!(
-            resolve(&runtime, width, Some(120)).cols(Some(120)),
+            adopt(&runtime, width, NonZeroU16::new(120).unwrap()).cols(Some(120)),
             NonZeroU16::new(30).expect("nonzero"),
         );
 
         fs::write(runtime.sidebar_width_path(), br#"{"cols":90}"#).expect("old record");
         assert_eq!(
-            resolve(&runtime, width, Some(120)).cols(Some(120)),
+            adopt(&runtime, width, NonZeroU16::new(120).unwrap()).cols(Some(120)),
             NonZeroU16::new(30).expect("nonzero"),
         );
     }
@@ -257,7 +267,7 @@ mod tests {
         let runtime = runtime(dir.path());
         let width = SidebarWidth::default();
 
-        let established = resolve(&runtime, width, Some(250));
+        let established = adopt(&runtime, width, NonZeroU16::new(250).unwrap());
         assert_eq!(established.cols(Some(250)), NonZeroU16::new(72).unwrap());
         let without_geometry = resolve(&runtime, width, None);
         assert_eq!(without_geometry.share, established.share);
