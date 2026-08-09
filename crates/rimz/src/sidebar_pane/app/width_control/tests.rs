@@ -227,6 +227,11 @@ fn observation_without_an_owned_pane_stays_idle() {
         SidebarWidthControlTrigger::ResizeFeedback,
         &crate::diag::DiagSink::disabled(),
     );
+    assert!(!controller.note_structural(
+        crate::sidebar::timing::unix_now_ms(),
+        Some(80),
+        &crate::diag::DiagSink::disabled(),
+    ));
 
     assert_eq!(controller.feedback_deadline(), None);
 }
@@ -314,6 +319,19 @@ fn attach_viewport_change_never_converges_against_the_pre_attach_snapshot() {
     assert!(!controller.convergence.in_flight());
     assert!(controller.baseline_probe_deadline.is_some());
 
+    controller.baseline_probe_deadline = Some(Instant::now() - Duration::from_millis(1));
+    controller.backstop(Some(64), Some(1), None, &diag);
+
+    assert_eq!(
+        controller.convergence.target(),
+        Some(target(24)),
+        "the retry must keep the structural event's stronger floor",
+    );
+    assert!(
+        !controller.convergence.in_flight(),
+        "the rejected pre-attach snapshot must not issue a delayed shrink",
+    );
+
     write_zellij_topology_for_view_at(&runtime, 319, structural_at_ms);
     controller.note_structural(structural_at_ms, Some(32), &diag);
 
@@ -328,6 +346,9 @@ fn parked_controller_repicks_a_changed_viewport_on_idle_retry() {
     let diag = crate::diag::DiagSink::disabled();
     write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
     controller.backstop(Some(24), Some(1), None, &diag);
+    let adopted_share =
+        crate::sidebar::width_target::resolve(&runtime, crate::mux::SidebarWidth::default(), None)
+            .share;
     controller.convergence.learned_step = Some(16);
     controller.convergence.idle_at = Some(32);
 
@@ -338,6 +359,12 @@ fn parked_controller_repicks_a_changed_viewport_on_idle_retry() {
     assert_eq!(controller.current_view_cols, Some(319));
     assert_eq!(controller.convergence.target(), Some(target(72)));
     assert!(controller.convergence.in_flight());
+    assert_eq!(
+        crate::sidebar::width_target::resolve(&runtime, crate::mux::SidebarWidth::default(), None,)
+            .share,
+        adopted_share,
+        "a floorless recovery reads the share without rewriting it",
+    );
 }
 
 #[test]

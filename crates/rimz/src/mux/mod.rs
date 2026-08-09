@@ -830,6 +830,8 @@ pub trait MuxBackend: Send + Sync {
     /// ids are server-global.
     fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()>;
     /// Report the backend-native step one sidebar width keypress represents.
+    /// Reject cached geometry older than `min_observed_at_ms`; a backend whose
+    /// geometry read is always live may ignore the floor.
     fn sidebar_width_step(
         &self,
         runtime: &crate::store::RuntimePaths,
