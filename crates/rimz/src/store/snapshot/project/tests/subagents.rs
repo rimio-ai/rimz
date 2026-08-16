@@ -254,6 +254,65 @@ fn parent_stamped_observation_cannot_reparent_or_release_existing_roots() {
 }
 
 #[test]
+fn explicit_root_registration_clears_stale_child_lineage() {
+    let child = raw_lifecycle(
+        "pi",
+        serde_json::json!({
+            "event_name": "subagent_started",
+            "agent_id": "resumed-session",
+            "parent_agent_id": "temporary-session",
+            "task": "resume lane",
+            "signal": { "signal": "subagent_started" },
+        }),
+    );
+    let promoted = raw_lifecycle(
+        "pi",
+        serde_json::json!({
+            "event_name": "session_start",
+            "agent_id": "resumed-session",
+            "explicit_root": true,
+            "signal": { "signal": "registered" },
+        }),
+    );
+
+    let agents = reduce_agent_states(&[child, promoted]);
+    let resumed = agents
+        .iter()
+        .find(|agent| agent.agent_id == "resumed-session")
+        .expect("resumed session");
+    assert_eq!(resumed.parent_agent_id, None);
+}
+
+#[test]
+fn legacy_registration_preserves_established_child_lineage() {
+    let child = raw_lifecycle(
+        "pi",
+        serde_json::json!({
+            "event_name": "subagent_started",
+            "agent_id": "child-session",
+            "parent_agent_id": "root-session",
+            "task": "review lane",
+            "signal": { "signal": "subagent_started" },
+        }),
+    );
+    let legacy_registration = raw_lifecycle(
+        "pi",
+        serde_json::json!({
+            "event_name": "session_start",
+            "agent_id": "child-session",
+            "signal": { "signal": "registered" },
+        }),
+    );
+
+    let agents = reduce_agent_states(&[child, legacy_registration]);
+    let child = agents
+        .iter()
+        .find(|agent| agent.agent_id == "child-session")
+        .expect("child session");
+    assert_eq!(child.parent_agent_id.as_deref(), Some("root-session"));
+}
+
+#[test]
 fn subagent_adoption_attaches_an_existing_root_once() {
     let root = raw_lifecycle(
         "antigravity",

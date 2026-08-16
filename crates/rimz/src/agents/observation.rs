@@ -306,6 +306,11 @@ pub struct AgentLifecycleObservation {
     /// its parent row by `(kind, parent_agent_id)` for the whole child's life.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_agent_id: Option<AgentSessionId>,
+    /// A provider-owned session wire explicitly identified this observation as
+    /// a root registration. False preserves established lineage; true clears a
+    /// stale parent left by an earlier ambiguous observation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub explicit_root: bool,
 }
 
 impl AgentLifecycleObservation {
@@ -330,6 +335,7 @@ impl AgentLifecycleObservation {
             pane_id: None,
             pane_stamp: None,
             parent_agent_id: None,
+            explicit_root: false,
         }
     }
 

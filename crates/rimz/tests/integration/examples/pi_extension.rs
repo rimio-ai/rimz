@@ -3,6 +3,10 @@
 //! the same exported factory through Node and captures the `rimz hooks feed`
 //! envelopes it would spawn.
 
+use serde_json::{Value, json};
+
+use crate::common::Env;
+
 #[test]
 #[cfg(unix)]
 fn extension_tracks_settled_boundary_cost_and_child_lineage() {
@@ -81,6 +85,8 @@ import fs from "node:fs/promises";
 
 process.env.RIMZ_BIN = {};
 process.env.RIMZ_CAPTURE = {};
+delete process.env.RIMZ_PI_PARENT_SESSION;
+delete process.env.PI_SUBAGENT_CHILD_AGENT;
 const boundaryEvent = {};
 const absentEvent = {};
 const hasNativeSettled = {};
@@ -196,6 +202,19 @@ if (globalThis[Symbol.for("rimz.pi.primary-session")]?.id !== "sess-subprocess" 
 }}
 subprocessHandlers.get("session_shutdown")({{ reason: "quit" }}, subprocessCtx);
 
+delete process.env.PI_SUBAGENT_CHILD_AGENT;
+globalThis[Symbol.for("rimz.pi.primary-session")] = {{ id: "sess-legacy-root" }};
+process.env.RIMZ_PI_PARENT_SESSION = "sess-legacy-root";
+const {{ pi: reloadPi, handlers: reloadHandlers }} = makePi();
+const reloadCtx = {{
+  sessionManager: {{
+    getSessionId: () => "sess-legacy-root",
+    getCwd: () => "/repo/reload",
+  }},
+}};
+rimz(reloadPi);
+reloadHandlers.get("session_start")({{ reason: "reload" }}, reloadCtx);
+
 const readPayloads = async () => {{
   try {{
     const text = await fs.readFile({}, "utf8");
@@ -206,7 +225,7 @@ const readPayloads = async () => {{
 }};
 
 let payloads = [];
-const expectedPayloads = hasNativeSettled ? 17 : 16;
+const expectedPayloads = hasNativeSettled ? 18 : 17;
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
   if (payloads.length >= expectedPayloads) break;
@@ -218,6 +237,20 @@ if (payloads.length < expectedPayloads) {{
 const rootPayloads = payloads.filter((payload) =>
   payload.session_id === "sess-1" && !payload.hook_event_name.startsWith("subagent_"));
 const byEvent = Object.fromEntries(rootPayloads.map((payload) => [payload.hook_event_name, payload]));
+const sessionStarts = payloads.filter((payload) => payload.hook_event_name === "session_start");
+const sessionStart = (id) => sessionStarts.find((payload) => payload.session_id === id);
+for (const id of ["sess-1", "sess-2", "sess-legacy-root"]) {{
+  const payload = sessionStart(id);
+  if (payload?.session_lineage !== "root" || "parent_session_id" in payload) {{
+    throw new Error(`root session lineage was ${{JSON.stringify(payload)}}`);
+  }}
+}}
+for (const [id, parentId] of [["sess-child", "sess-2"], ["sess-subprocess", "env-parent"]]) {{
+  const payload = sessionStart(id);
+  if (payload?.session_lineage !== "child" || payload.parent_session_id !== parentId) {{
+    throw new Error(`child session lineage was ${{JSON.stringify(payload)}}`);
+  }}
+}}
 if (byEvent.tool_call?.tool_call_id !== "ask-call") {{
   throw new Error(`tool_call lost correlation: ${{JSON.stringify(byEvent.tool_call)}}`);
 }}
@@ -286,4 +319,45 @@ if (subprocessStart?.session_id !== "env-parent" || subprocessStart.subagent_lab
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+
+    let payloads = std::fs::read_to_string(&capture_path)
+        .expect("read captured Pi extension payloads")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("captured payload JSON"))
+        .collect::<Vec<_>>();
+    let reload_payload = payloads
+        .iter()
+        .find(|payload| {
+            payload["hook_event_name"] == "session_start"
+                && payload["session_id"] == "sess-legacy-root"
+        })
+        .expect("legacy reload session_start payload");
+    assert_eq!(reload_payload["session_lineage"], "root");
+
+    let env = Env::new();
+    let stale_child = json!({
+        "hook_event_name": "subagent_started",
+        "session_id": "temporary-session",
+        "subagent_id": "sess-legacy-root",
+        "subagent_label": "resumed lane",
+        "subagent_source": "pi-session",
+        "cwd": env.project_root,
+    });
+    for payload in [&stale_child, reload_payload] {
+        let output = env.run_hook("pi", &payload.to_string());
+        assert!(
+            output.status.success(),
+            "pi hook failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty(), "pi lifecycle hook is silent");
+    }
+    let snapshot = env.snapshot_json();
+    let repaired = snapshot["agents"]
+        .as_array()
+        .expect("agents")
+        .iter()
+        .find(|agent| agent["agent_id"] == "sess-legacy-root")
+        .expect("repaired Pi root row");
+    assert_eq!(repaired["parent_agent_id"], Value::Null);
 }

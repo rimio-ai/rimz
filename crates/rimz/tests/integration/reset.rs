@@ -226,5 +226,6 @@ fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
         pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
         pane_stamp: None,
         parent_agent_id: None,
+        explicit_root: false,
     }
 }

@@ -110,8 +110,16 @@ fn extension_source_wires_every_catalog_event() {
             "primary-session identification",
         ),
         (
-            "!isPrimary && id && parentId && parentId !== id",
-            "the child admission rule mirroring subagent quarantine",
+            "session_lineage: sessionLineage",
+            "the explicit root-versus-child session registration",
+        ),
+        (
+            "parent_session_id: childParentId",
+            "the child registration's durable parent identity",
+        ),
+        (
+            "Same-process /new, /resume, and /fork replace the root conversation",
+            "same-process session switches and legacy reloads promote to root",
         ),
         (
             "process.env.PI_SUBAGENT_CHILD_AGENT",

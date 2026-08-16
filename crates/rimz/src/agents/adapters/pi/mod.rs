@@ -453,6 +453,24 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
         let agent_id = decoded.event_agent_id().cloned();
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+        if event_name == "session_start" {
+            match parsed.session_lineage {
+                Some(payloads::PiSessionLineage::Root) => {
+                    observation.explicit_root = true;
+                }
+                Some(payloads::PiSessionLineage::Child) => {
+                    if let Some(parent_id) =
+                        parsed.parent_session_id.as_deref().filter(|parent_id| {
+                            observation.agent_id.as_deref() != Some(*parent_id)
+                                && !parent_id.trim().is_empty()
+                        })
+                    {
+                        observation.parent_agent_id = Some(parent_id.into());
+                    }
+                }
+                None => {}
+            }
+        }
         observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.launch.model = parsed.model;

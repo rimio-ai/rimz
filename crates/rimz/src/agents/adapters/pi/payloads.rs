@@ -24,6 +24,14 @@ pub(crate) enum PiCompactionReason {
     Unknown,
 }
 
+/// Process-local lineage stamped by the RimZ-owned Pi extension.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum PiSessionLineage {
+    Root,
+    Child,
+}
+
 impl PiCompactionReason {
     pub(crate) const fn auto_flag(&self) -> Option<bool> {
         match self {
@@ -39,6 +47,11 @@ impl PiCompactionReason {
 pub(crate) struct PiHookPayload {
     /// Every event: stable session identity supplied by the RimZ extension.
     pub session_id: Option<String>,
+    /// `session_start`: whether the active Pi process owns a root or child
+    /// session. Older managed extensions omit this field.
+    pub session_lineage: Option<PiSessionLineage>,
+    /// `session_start`: the parent session for an explicit child lineage.
+    pub parent_session_id: Option<String>,
     /// Every event after Pi reports session metadata: the `/name` title.
     pub session_name: Option<String>,
     /// `before_agent_start`: the user's prompt.

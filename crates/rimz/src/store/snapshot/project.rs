@@ -588,6 +588,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     fold_launch_params(&mut state, &input.observation.launch);
     let ended_at =
         matches!(&input.signal, lifecycle::LifecycleSignal::Ended).then_some(input.event.timestamp);
+    let explicit_root = input.observation.explicit_root;
     let lifecycle = lifecycle_projection(input.prior, input.event.timestamp, input.signal);
     let default_window = crate::agents::spec_by_kind(input.kind.as_str())
         .and_then(|definition| definition.default_context_window);
@@ -595,14 +596,18 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         .observation
         .usage
         .merge(input.prior.map(|prior| &prior.usage), default_window);
-    // Established lineage stays authoritative. The explicit adoption event is
-    // the one path that converts a provisional root after provider evidence
-    // became readable later than the child's own hooks.
-    let parent_agent_id = match input.prior {
-        Some(prior) if prior.parent_agent_id.is_some() => prior.parent_agent_id.clone(),
-        Some(_) if input.event_name == Some("SubagentAdopted") => input.event_parent_agent_id,
-        Some(_) => None,
-        None => input.event_parent_agent_id,
+    // Established lineage stays authoritative unless the provider explicitly
+    // reclassifies the session. Adoption attaches late child evidence; an
+    // explicit root registration repairs stale lineage after a session switch.
+    let parent_agent_id = if explicit_root {
+        None
+    } else {
+        match input.prior {
+            Some(prior) if prior.parent_agent_id.is_some() => prior.parent_agent_id.clone(),
+            Some(_) if input.event_name == Some("SubagentAdopted") => input.event_parent_agent_id,
+            Some(_) => None,
+            None => input.event_parent_agent_id,
+        }
     };
     let worktree = worktree_projection(
         input.observation,

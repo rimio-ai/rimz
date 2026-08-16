@@ -48,6 +48,7 @@ fn inject_lifecycle(
         pane_id: None,
         pane_stamp: None,
         parent_agent_id: None,
+        explicit_root: false,
     };
     let envelope = EventEnvelope::agent_lifecycle(
         env.workspace_id.clone(),
