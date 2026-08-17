@@ -451,6 +451,9 @@ fn web_exit_action(verdict: rimz::remote::Verdict, host: &str) -> Result<WebExit
     match verdict {
         rimz::remote::Verdict::CleanExit => Ok(WebExitAction::Done),
         rimz::remote::Verdict::Retry => Ok(WebExitAction::Retry),
+        // `settle_web_exit` uses the transport-only classifier, which never
+        // returns the foreground-multiplexer reattach verdict.
+        rimz::remote::Verdict::Reattach => unreachable!("web tunnel cannot request reattach"),
         rimz::remote::Verdict::Fatal { code } => {
             bail!("web tunnel to {host} exited with status {code}; not reconnecting")
         }

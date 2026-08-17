@@ -1242,6 +1242,44 @@ fn established_link_drop_reconnects_and_notifies_once() {
 }
 
 #[test]
+fn established_mux_disconnect_reconnects() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    // tmux can return 1 when a reload disconnects its established client;
+    // the replacement attach then detaches cleanly.
+    std::fs::write(&plan, "1\n0\n").expect("write plan");
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_SLEEP_MS", "80")
+        .env("RIMZ_REMOTE_GATETIME_MS", "20")
+        .bounded_output()
+        .expect("run rimz remote connect --attach");
+
+    assert!(
+        out.status.success(),
+        "established mux disconnect reattaches\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        main_invocation_count(&log),
+        2,
+        "the established mux client is reattached once"
+    );
+    assert_eq!(
+        master_invocation_count(&log),
+        1,
+        "reattach reuses the healthy SSH connection"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("remote session on dev-box disconnected"),
+        "the mux disconnect is reported separately from link loss"
+    );
+    assert!(!stderr.contains("link to dev-box lost"), "{stderr}");
+}
+
+#[test]
 fn ctrl_c_during_remote_setup_prompt_stops_without_reconnecting() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
