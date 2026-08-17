@@ -4,7 +4,8 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,9 @@ const PROFILING_RUSTFLAGS: &str = "-C force-frame-pointers=yes -C symbol-manglin
 const BUILD_PROFILE_OVERRIDE_ENV: &str = "RIMZ_BUILD_PROFILE_OVERRIDE";
 const BUILD_VERSION_OVERRIDE_ENV: &str = "RIMZ_BUILD_VERSION_OVERRIDE";
 const STABLE_CHECKOUT_BUILD_ATTEMPTS: usize = 3;
+const SENTRY_UPLOAD_RETRIES: usize = 3;
+const SENTRY_UPLOAD_ATTEMPTS: usize = SENTRY_UPLOAD_RETRIES + 1;
+const SENTRY_UPLOAD_RETRY_DELAY: Duration = Duration::from_secs(1);
 pub(crate) const WASM_MAGIC: [u8; 4] = *b"\0asm";
 const ENCODED_RUSTFLAGS_SEPARATOR: &str = "\x1f";
 const CANONICAL_REGISTRY_SOURCE_ROOT: &str = "/cargo/registry/src";
@@ -627,7 +631,8 @@ pub(crate) fn install_dev(root: &Path) -> Result<()> {
     run(root, "sh", ["scripts/install-dev-tools.sh"])?;
     let stage = stage_dev_install(root)?;
     install_from_stage(&stage)?;
-    upload_debug_files(&stage.join("rimz"))
+    upload_debug_files(&stage.join("rimz"));
+    Ok(())
 }
 
 /// Build an optimized host `rimz` with line-tables debug info, frame pointers,
@@ -708,27 +713,77 @@ fn report_install(version: &str, paths: &[PathBuf]) {
     clippy::print_stderr,
     reason = "install-dev reports optional Sentry debug-file enrichment"
 )]
-fn upload_debug_files(binary: &Path) -> Result<()> {
-    match Command::new("sentry-cli")
-        .args(["debug-files", "upload"])
-        .arg(binary)
-        .status()
-    {
-        Ok(status) if status.success() => {
-            println!("Uploaded Sentry debug files for {}", binary.display());
-        }
-        Ok(status) => {
+fn upload_debug_files(binary: &Path) {
+    let result = retry_debug_file_upload(
+        || {
+            let status = Command::new("sentry-cli")
+                .args(["debug-files", "upload"])
+                .arg(binary)
+                .status()
+                .map_err(SentryUploadFailure::CouldNotStart)?;
+            status
+                .success()
+                .then_some(())
+                .ok_or(SentryUploadFailure::Failed(status))
+        },
+        SentryUploadFailure::retryable,
+        |next_attempt, failure| {
             eprintln!(
-                "warning: sentry-cli debug-files upload failed with status {status}; install still succeeded"
+                "warning: sentry-cli debug-files upload {failure}; retrying (attempt {next_attempt} of {SENTRY_UPLOAD_ATTEMPTS})"
             );
-        }
-        Err(err) => {
-            eprintln!(
-                "warning: sentry-cli debug-files upload could not start: {err}; install still succeeded"
-            );
+            std::thread::sleep(SENTRY_UPLOAD_RETRY_DELAY);
+        },
+    );
+
+    match result {
+        Ok(()) => println!("Uploaded Sentry debug files for {}", binary.display()),
+        Err(SentryUploadFailure::CouldNotStart(error)) => eprintln!(
+            "warning: sentry-cli debug-files upload could not start: {error}; install still succeeded"
+        ),
+        Err(SentryUploadFailure::Failed(status)) => eprintln!(
+            "warning: sentry-cli debug-files upload failed with status {status} after {SENTRY_UPLOAD_ATTEMPTS} attempts; install still succeeded"
+        ),
+    }
+}
+
+enum SentryUploadFailure {
+    CouldNotStart(std::io::Error),
+    Failed(ExitStatus),
+}
+
+impl SentryUploadFailure {
+    fn retryable(&self) -> bool {
+        matches!(self, Self::Failed(_))
+    }
+}
+
+impl std::fmt::Display for SentryUploadFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CouldNotStart(error) => write!(formatter, "could not start: {error}"),
+            Self::Failed(status) => write!(formatter, "failed with status {status}"),
         }
     }
-    Ok(())
+}
+
+fn retry_debug_file_upload<E>(
+    mut upload: impl FnMut() -> Result<(), E>,
+    mut retryable: impl FnMut(&E) -> bool,
+    mut before_retry: impl FnMut(usize, &E),
+) -> Result<(), E> {
+    let mut attempt = 1;
+    loop {
+        match upload() {
+            Ok(()) => return Ok(()),
+            Err(failure) if attempt == SENTRY_UPLOAD_ATTEMPTS || !retryable(&failure) => {
+                return Err(failure);
+            }
+            Err(failure) => {
+                attempt += 1;
+                before_retry(attempt, &failure);
+            }
+        }
+    }
 }
 
 #[expect(
