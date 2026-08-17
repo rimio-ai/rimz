@@ -215,6 +215,64 @@ fn install_keeps_a_real_build_failure_from_a_stable_checkout() {
 }
 
 #[test]
+fn debug_file_upload_retries_until_it_succeeds() {
+    let mut attempts = 0;
+    let mut retries = Vec::new();
+
+    let result = retry_debug_file_upload(
+        || {
+            attempts += 1;
+            if attempts < SENTRY_UPLOAD_ATTEMPTS {
+                Err("transient request failure")
+            } else {
+                Ok(())
+            }
+        },
+        |_| true,
+        |next_attempt, _| retries.push(next_attempt),
+    );
+
+    assert_eq!(result, Ok(()));
+    assert_eq!(attempts, SENTRY_UPLOAD_ATTEMPTS);
+    assert_eq!(retries, vec![2, 3, 4]);
+    assert_eq!(retries.len(), SENTRY_UPLOAD_RETRIES);
+}
+
+#[test]
+fn debug_file_upload_stops_after_the_attempt_budget() {
+    let mut attempts = 0;
+
+    let result = retry_debug_file_upload(
+        || {
+            attempts += 1;
+            Err::<(), _>("persistent request failure")
+        },
+        |_| true,
+        |_, _| {},
+    );
+
+    assert_eq!(result, Err("persistent request failure"));
+    assert_eq!(attempts, SENTRY_UPLOAD_ATTEMPTS);
+}
+
+#[test]
+fn debug_file_upload_does_not_retry_a_start_failure() {
+    let mut attempts = 0;
+
+    let result = retry_debug_file_upload(
+        || {
+            attempts += 1;
+            Err::<(), _>("missing sentry-cli")
+        },
+        |_| false,
+        |_, _| {},
+    );
+
+    assert_eq!(result, Err("missing sentry-cli"));
+    assert_eq!(attempts, 1);
+}
+
+#[test]
 fn dev_install_builds_profiling_with_the_sentry_feature() {
     let args = host_build_args(HostProfile::Profiling, &["sentry"]);
 
