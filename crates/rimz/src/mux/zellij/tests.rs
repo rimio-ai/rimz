@@ -1302,7 +1302,7 @@ fn zellij_options_respect_defaults_overrides_and_version_gates() {
     use crate::config::{ZellijClipboard, ZellijForceClose};
 
     let expected_defaults = expected_option_map(
-        "--auto-layout=false --default-mode=locked --disable-session-metadata=true --focus-follows-mouse=false --mouse-click-through=true --osc8-hyperlinks=true --session-serialization=false --stacked-resize=true",
+        "--auto-layout=false --default-mode=locked --disable-session-metadata=true --focus-follows-mouse=false --mouse-click-through=true --session-serialization=false --stacked-resize=true",
     );
     assert_eq!(
         option_map(&zellij_options_args(
@@ -1354,7 +1354,7 @@ fn zellij_options_respect_defaults_overrides_and_version_gates() {
         copy_clipboard: Some(ZellijClipboard::Primary),
         copy_on_select: Some(false),
         support_kitty_keyboard_protocol: Some(false),
-        osc8_hyperlinks: false,
+        osc8_hyperlinks: Some(false),
         ..ZellijConfig::default()
     };
     assert_eq!(

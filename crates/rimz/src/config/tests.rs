@@ -1853,7 +1853,6 @@ fn zellij_room_options_parse_and_defaults_are_agent_friendly() {
     assert_eq!(defaults.zellij.copy_clipboard, None);
     assert!(defaults.zellij.mouse_click_through);
     assert!(!defaults.zellij.focus_follows_mouse);
-    assert!(defaults.zellij.osc8_hyperlinks);
     assert!(!defaults.zellij.session_serialization);
 
     let config = load_no_fragments(&write(
@@ -1882,7 +1881,7 @@ fn zellij_room_options_parse_and_defaults_are_agent_friendly() {
     assert_eq!(config.zellij.copy_clipboard, Some(ZellijClipboard::Primary));
     assert_eq!(config.zellij.copy_on_select, Some(false));
     assert_eq!(config.zellij.support_kitty_keyboard_protocol, Some(false));
-    assert!(!config.zellij.osc8_hyperlinks);
+    assert_eq!(config.zellij.osc8_hyperlinks, Some(false));
     assert_eq!(config.zellij.scroll_buffer_size, Some(200_000));
     assert_eq!(config.zellij.show_startup_tips, Some(true));
     assert_eq!(config.zellij.show_release_notes, Some(true));
