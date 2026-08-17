@@ -6,6 +6,7 @@ use MachineConfigFileKind as Kind;
 const ACTIVE_ZELLIJ_DEFAULTS: &[&str] = &[
     "mouse_click_through",
     "focus_follows_mouse",
+    "osc8_hyperlinks",
     "session_serialization",
     "disable_session_metadata",
 ];
