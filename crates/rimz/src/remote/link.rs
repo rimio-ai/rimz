@@ -151,18 +151,6 @@ pub struct SessionLinkUpdate {
     pub next_deadline: Option<Duration>,
 }
 
-/// Evidence settled when the foreground SSH child exits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SessionLinkExit {
-    /// The shared SSH transport answered a probe or the foreground child lived
-    /// past the gatetime.
-    pub established: bool,
-    /// The foreground child itself lived past the gatetime. Unlike a probe
-    /// acknowledgement, this proves the attached multiplexer client was not
-    /// an immediate launch failure.
-    pub lived_past_gatetime: bool,
-}
-
 /// Establishment, outage edges, and zombie eligibility for terminal SSH.
 ///
 /// Elapsed time is supplied by the CLI so clocks, waits, process state, and
@@ -233,7 +221,7 @@ impl SessionLinkState {
         &mut self,
         elapsed: Duration,
         events: impl IntoIterator<Item = LinkEvent>,
-    ) -> SessionLinkExit {
+    ) -> (bool, bool) {
         for event in events {
             if matches!(event, LinkEvent::FirstAck) {
                 self.transport_confirmed = true;
@@ -242,10 +230,7 @@ impl SessionLinkState {
         }
         let lived_past_gatetime = elapsed >= self.gatetime;
         self.established |= lived_past_gatetime;
-        SessionLinkExit {
-            established: self.established,
-            lived_past_gatetime,
-        }
+        (self.established, lived_past_gatetime)
     }
 
     /// Record a dropped transport, returning the notification edge once per
@@ -875,7 +860,7 @@ mod tests {
         assert!(update.actions.contains(&SessionLinkAction::VerifyZombie));
 
         assert!(
-            state.finish(Duration::from_secs(2), []).established,
+            state.finish(Duration::from_secs(2), []).0,
             "an exited acknowledged child is settled instead of zombie-killed"
         );
     }
