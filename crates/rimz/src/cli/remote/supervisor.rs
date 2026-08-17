@@ -326,13 +326,10 @@ pub(super) fn supervise_remote(
             reconnect.settle_zombie_kill();
             RetryCause::Zombie
         } else {
-            match reconnect.settle_attached(
+            match reconnect.settle(
                 outcome.status.code(),
                 outcome.established,
-                rimz::remote::AttachExitEvidence {
-                    control_alive,
-                    lived_past_gatetime: outcome.lived_past_gatetime,
-                },
+                Some((control_alive, outcome.lived_past_gatetime)),
             ) {
                 Verdict::CleanExit => {
                     if outcome.stderr.is_some() {
@@ -476,11 +473,12 @@ fn run_ssh_session(
     let mut update = link.begin_session();
     loop {
         if let Some(status) = child.try_wait().context("polling ssh session")? {
-            let link_exit = link.finish(started.elapsed(), events.try_iter());
+            let (established, lived_past_gatetime) =
+                link.finish(started.elapsed(), events.try_iter());
             return Ok(SessionOutcome {
                 status,
-                established: link_exit.established,
-                lived_past_gatetime: link_exit.lived_past_gatetime,
+                established,
+                lived_past_gatetime,
                 killed_zombie: false,
                 stderr: finish_session_stderr(stderr),
             });

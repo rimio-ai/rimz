@@ -439,7 +439,7 @@ fn settle_web_exit(
     master_confirmed: bool,
     port_ready: bool,
 ) -> rimz::remote::Verdict {
-    reconnect.settle(exit_code, master_confirmed || port_ready)
+    reconnect.settle(exit_code, master_confirmed || port_ready, None)
 }
 
 enum WebExitAction {

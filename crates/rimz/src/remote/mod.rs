@@ -896,13 +896,6 @@ pub enum Verdict {
     Reattach,
 }
 
-/// SSH and foreground-lifetime evidence available only to terminal attaches.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AttachExitEvidence {
-    pub control_alive: bool,
-    pub lived_past_gatetime: bool,
-}
-
 #[derive(Default)]
 pub struct ReconnectState {
     established: bool,
@@ -914,29 +907,14 @@ impl ReconnectState {
         Self::default()
     }
 
-    /// Settle one finished ssh session: a session that confirmed its transport
-    /// or lived past the gatetime marks the link established and resets the
-    /// failure count; a Retry verdict counts one more consecutive failure.
-    pub fn settle(&mut self, exit_code: Option<i32>, established: bool) -> Verdict {
-        self.settle_with_link(exit_code, established, None)
-    }
-
-    /// Settle a foreground attach with independent evidence about the SSH
-    /// transport and the multiplexer client's lifetime.
-    pub fn settle_attached(
+    /// Settle one finished ssh process. Terminal attaches supply ControlMaster
+    /// liveness and whether the foreground client lived past the gatetime;
+    /// callers without a multiplexer client pass `None`.
+    pub fn settle(
         &mut self,
         exit_code: Option<i32>,
         established: bool,
-        evidence: AttachExitEvidence,
-    ) -> Verdict {
-        self.settle_with_link(exit_code, established, Some(evidence))
-    }
-
-    fn settle_with_link(
-        &mut self,
-        exit_code: Option<i32>,
-        established: bool,
-        evidence: Option<AttachExitEvidence>,
+        evidence: Option<(bool, bool)>,
     ) -> Verdict {
         if established {
             self.established = true;
@@ -951,13 +929,14 @@ impl ReconnectState {
             ) => Verdict::Fatal { code },
             Some(SSH_TRANSPORT_EXIT) if self.established => Verdict::Retry,
             Some(_)
-                if self.established && evidence.is_some_and(|evidence| !evidence.control_alive) =>
+                if self.established
+                    && evidence.is_some_and(|(control_alive, _)| !control_alive) =>
             {
                 Verdict::Retry
             }
             Some(_)
-                if evidence.is_some_and(|evidence| {
-                    evidence.control_alive && evidence.lived_past_gatetime
+                if evidence.is_some_and(|(control_alive, lived_past_gatetime)| {
+                    control_alive && lived_past_gatetime
                 }) =>
             {
                 Verdict::Reattach
