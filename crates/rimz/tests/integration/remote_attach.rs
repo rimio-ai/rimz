@@ -769,6 +769,38 @@ fn supervised_initial_auth_failure_falls_back_to_one_interactive_attach() {
 }
 
 #[test]
+fn established_interactive_fallback_failure_stays_fatal() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    let master_plan = env.project_root.join("ssh-master.plan");
+    std::fs::write(&plan, "1\n").expect("write main plan");
+    std::fs::write(&master_plan, "255\n").expect("write master plan");
+
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_MASTER_PLAN", &master_plan)
+        .env(
+            "RIMZ_TEST_SSH_MASTER_STDERR",
+            "Permission denied (publickey).\n",
+        )
+        .env("RIMZ_TEST_SSH_SLEEP_MS", "80")
+        .env("RIMZ_REMOTE_GATETIME_MS", "20")
+        .bounded_output()
+        .expect("run established interactive fallback");
+
+    assert!(!out.status.success(), "the foreground failure stays fatal");
+    assert_eq!(master_invocation_count(&log), 1);
+    assert_eq!(main_invocation_count(&log), 1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("ssh to dev-box exited with status 1; not reconnecting"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("link to dev-box lost"), "{stderr}");
+}
+
+#[test]
 fn supervised_initial_transport_failure_retries_before_main_attach() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
