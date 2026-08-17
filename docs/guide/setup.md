@@ -168,7 +168,7 @@ The same table carries watchdogs and self-wakes, where an agent turn runs on an 
 
 ## Configure your multiplexer
 
-RimZ sets the room's behavior for you: on every session birth and reattach it applies the options agents need — locked mode and single-click sidebar jumps on Zellij; mouse, focus events, OSC passthrough, CSI-u soft-newline keys, and clipboard on tmux; 100k-line scrollback on both — so a freshly installed multiplexer works without touching its config. Your own `~/.config/zellij/config.kdl` or `~/.tmux.conf` owns everything RimZ leaves alone — the theme, true color, copy-mode, the status bar, and your keybindings — inside the room and in every session you run outside RimZ.
+RimZ sets the room's behavior for you: on every session birth and reattach it applies the options agents need — locked mode and single-click sidebar jumps on Zellij; mouse, focus events, OSC passthrough, CSI-u soft-newline keys, clipboard, and clickable OSC 8 links on tmux; 100k-line scrollback on both — so a freshly installed multiplexer works without touching its config. Your own `~/.config/zellij/config.kdl` or `~/.tmux.conf` owns everything RimZ leaves alone — the theme, true color, copy-mode, the status bar, and your keybindings — inside the room and in every session you run outside RimZ.
 
 The fastest path to a good config of your own is copying the shipped baselines under [examples/](../../examples/README.md) — Zellij as a complete starting file, tmux as sourceable modules:
 
