@@ -357,7 +357,7 @@ Top-level KDL options (`option_name value`). The scalar options exposed by `zell
 | `copy_command` | e.g. `wl-copy` | replaces OSC52 |
 | `copy_clipboard` | `system` \| `primary` | OSC52 destination |
 | `copy_on_select` | `true` \| `false` | |
-| `osc8_hyperlinks` | `false` \| `true` | |
+| `osc8_hyperlinks` | `true` \| `false` | output is on unless disabled; flag exists ≥ 0.44.0 |
 | `scroll_buffer_size` | `10000` | lines per pane |
 | `scrollback_editor` | `$EDITOR`/`$VISUAL` | |
 | `styled_underlines` | `true` \| `false` | |

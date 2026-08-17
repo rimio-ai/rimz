@@ -275,7 +275,7 @@ The `[mux]` table selects the default backend after the `--mux <name>` selection
 
 The two backends differ in how a key takes effect:
 
-- **`[zellij]`** carries a few invariants RimZ always applies (locked mode, click-through with focus-follows-mouse off, OSC 8 hyperlinks, no session serialization since RimZ owns rebirth, disabled session metadata, and native focused-pane splitting) plus optional keys (`pane_frames`, `copy_clipboard`, …) that apply only when you set them and otherwise fall through to your `~/.config/zellij/config.kdl`. The sidebar pane is always borderless so its hit-testing stays stable regardless of `pane_frames`.
+- **`[zellij]`** carries a few invariants RimZ always applies (locked mode, click-through with focus-follows-mouse off, no session serialization since RimZ owns rebirth, disabled session metadata, and native focused-pane splitting) plus optional keys (`pane_frames`, `copy_clipboard`, …) that apply only when you set them and otherwise fall through to your `~/.config/zellij/config.kdl`. The sidebar pane is always borderless so its hit-testing stays stable regardless of `pane_frames`.
 - **`[tmux]`** applies its room invariants on every birth, each key carrying a RimZ default you can override. The pane-border keys are optional overrides; unset, they fall through to your `~/.tmux.conf` or tmux defaults just like `pane_frames`. Setting `pane_border_status` makes RimZ own `pane-border-format` too, blanking the sidebar border row and overriding any `~/.tmux.conf` format; unset, your tmux config wins and may title the sidebar. The table spans session, window, and server scope, including clipboard and rich-key handling, because tmux has no per-session form for those.
 
 ```toml
