@@ -100,6 +100,7 @@ mouse_click_through = true            # single click on a card jumps to the agen
 focus_follows_mouse = false           # off so a single click passes through to the renderer
 session_serialization = false         # RimZ owns rebirth instead of Zellij resurrection
 disable_session_metadata = true       # stop Zellij's per-second metadata/ps loop
+osc8_hyperlinks = true                # render clickable links from the sidebar and panes
 
 # Optional: uncomment to override your ~/.config/zellij/config.kdl. Left unset,
 # RimZ leaves these to your Zellij config or Zellij's defaults.
@@ -114,7 +115,6 @@ disable_session_metadata = true       # stop Zellij's per-second metadata/ps loo
 ## copy_clipboard = "system"          # "system" or "primary"
 ## copy_on_select = true
 ## support_kitty_keyboard_protocol = true
-## osc8_hyperlinks = true
 
 [tmux]
 # RimZ applies these to its tmux session on every birth.

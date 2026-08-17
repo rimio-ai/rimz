@@ -96,6 +96,10 @@ fn ensure_session_applies_room_contract() {
         terminal_features.contains("sync"),
         "sync terminal-feature lets tmux forward atomic redraws for flicker-free pets and TUIs",
     );
+    assert!(
+        terminal_features.contains("hyperlinks"),
+        "hyperlinks terminal-feature lets tmux render OSC 8 links from the sidebar and panes",
+    );
     let root_keys = server.list_keys("root");
     assert!(
         root_keys
@@ -225,6 +229,11 @@ fn ensure_session_applies_room_contract() {
         terminal_feature_count(&repaired_features, "*:extkeys"),
         1,
         "repeat ensure must keep one extkeys entry: {repaired_features}",
+    );
+    assert_eq!(
+        terminal_feature_count(&repaired_features, "*:hyperlinks"),
+        1,
+        "repeat ensure must keep one hyperlinks entry: {repaired_features}",
     );
     assert_eq!(
         show_session_environment(&server, "rimz-options", "RIMZ_TEST_REASSERT"),

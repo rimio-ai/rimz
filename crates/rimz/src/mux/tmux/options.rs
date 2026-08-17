@@ -144,7 +144,8 @@ pub(super) fn tmux_terminal_features_commands(
     let mut commands: Vec<Vec<String>> = current
         .iter()
         .filter(|(index, value)| {
-            !matches!(index, 240 | 241) && matches!(value.as_str(), "*:sync" | "*:extkeys")
+            !matches!(index, 240..=242)
+                && matches!(value.as_str(), "*:sync" | "*:extkeys" | "*:hyperlinks")
         })
         .map(|(index, _)| {
             vec![
@@ -176,6 +177,12 @@ pub(super) fn tmux_terminal_features_commands(
             "terminal-features[241]".to_owned(),
         ]
     });
+    commands.push(vec![
+        "set-option".to_owned(),
+        "-s".to_owned(),
+        "terminal-features[242]".to_owned(),
+        "*:hyperlinks".to_owned(),
+    ]);
     commands
 }
 
@@ -437,6 +444,7 @@ mod tests {
             vec![
                 vec!["set-option", "-s", "terminal-features[240]", "*:sync"],
                 vec!["set-option", "-s", "terminal-features[241]", "*:extkeys"],
+                vec!["set-option", "-s", "terminal-features[242]", "*:hyperlinks"],
             ],
         );
         assert_eq!(
@@ -497,6 +505,7 @@ mod tests {
             vec![
                 vec!["set-option", "-s", "terminal-features[240]", "*:sync"],
                 vec!["set-option", "-su", "terminal-features[241]"],
+                vec!["set-option", "-s", "terminal-features[242]", "*:hyperlinks"],
             ],
         );
 
@@ -504,23 +513,28 @@ mod tests {
             (2, "xterm*:RGB".to_owned()),
             (8, "*:sync".to_owned()),
             (9, "*:extkeys".to_owned()),
+            (10, "*:hyperlinks".to_owned()),
             (240, "*:sync".to_owned()),
             (241, "*:extkeys".to_owned()),
+            (242, "*:hyperlinks".to_owned()),
         ];
         assert_eq!(
             tmux_terminal_features_commands(&TmuxConfig::default(), &current),
             vec![
                 vec!["set-option", "-su", "terminal-features[8]"],
                 vec!["set-option", "-su", "terminal-features[9]"],
+                vec!["set-option", "-su", "terminal-features[10]"],
                 vec!["set-option", "-s", "terminal-features[240]", "*:sync"],
                 vec!["set-option", "-s", "terminal-features[241]", "*:extkeys"],
+                vec!["set-option", "-s", "terminal-features[242]", "*:hyperlinks"],
             ],
         );
         assert_eq!(
-            tmux_terminal_features_commands(&TmuxConfig::default(), &current[3..]),
+            tmux_terminal_features_commands(&TmuxConfig::default(), &current[4..]),
             vec![
                 vec!["set-option", "-s", "terminal-features[240]", "*:sync"],
                 vec!["set-option", "-s", "terminal-features[241]", "*:extkeys"],
+                vec!["set-option", "-s", "terminal-features[242]", "*:hyperlinks"],
             ],
         );
     }

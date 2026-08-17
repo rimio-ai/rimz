@@ -61,8 +61,9 @@ pub struct ZellijConfig {
     pub copy_on_select: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub support_kitty_keyboard_protocol: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub osc8_hyperlinks: Option<bool>,
+    /// Whether Zellij renders OSC 8 hyperlinks emitted by panes. RimZ keeps
+    /// this enabled so links in the sidebar and agent output are clickable.
+    pub osc8_hyperlinks: bool,
     /// Whether Zellij serializes this room to disk for later resurrection. RimZ
     /// keeps it off: a resurrected room comes back with every command pane
     /// `start_suspended` ("Waiting to run") and a dead mouse. RimZ owns rebirth,
@@ -96,7 +97,7 @@ impl Default for ZellijConfig {
             copy_clipboard: None,
             copy_on_select: None,
             support_kitty_keyboard_protocol: None,
-            osc8_hyperlinks: None,
+            osc8_hyperlinks: true,
             session_serialization: false,
             disable_session_metadata: true,
         }
