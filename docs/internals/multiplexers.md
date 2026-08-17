@@ -327,7 +327,7 @@ Birth branches on the session's liveness, as reported by `zellij list-sessions`:
 
 ### Room options and the CLI XOR problem
 
-`<room-options>` combines the RimZ-owned invariants with the optional `[zellij]` keys the user sets in RimZ config. Each maps onto a Zellij `options` flag ([reference → options catalog](../externals/mux-adapter/zellij-reference.md#options-catalog)), and newer flags are version-gated so an older host degrades to its default rather than aborting.
+`<room-options>` combines the RimZ-owned invariants with the optional `[zellij]` keys the user sets in RimZ config. Each maps onto a Zellij `options` flag ([reference → options catalog](../externals/mux-adapter/zellij-reference.md#options-catalog)), and newer flags are version-gated so an older host degrades to its default rather than aborting. `osc8_hyperlinks true` is one of those room defaults, keeping links from both the sidebar and pane applications clickable even though Zellij's own default is false.
 
 Mouse options need a second mechanism. Zellij XORs boolean CLI options against values already set in the user's `config.kdl`, so a CLI flag cannot express an absolute room invariant for every user. Birth and attach still pass `--mouse-click-through true` and `--focus-follows-mouse false` as a birth-window hint, but the presence plugin applies RimZ's resolved values through `reconfigure(..., false)`, whose KDL path merges onto the live config absolutely and never writes the user's file. With the defaults, Zellij 0.44 sends the first click through: a single click both focuses the sidebar pane and reaches the renderer, so a jump lands on the first click rather than the second.
 
@@ -586,10 +586,11 @@ Session birth proves the property rather than assuming it: it reads the birth pa
 
 `ensure_session` applies the per-machine `[tmux]` room options in one batched client call, and the `after-new-window` hook replays window options before docking the sidebar so later windows match the birth window. Session and window options stay scoped to the RimZ session; server-scoped options (clipboard, rich-key handling, focus events) are runtime-global because tmux has no per-session equivalent.
 
-The batch also does four things the option list alone does not express:
+The batch also does five things the option list alone does not express:
 
-- writes `*:sync` at the fixed `terminal-features[240]` index for atomic redraws in pixel pets and TUIs, purging exact `*:sync`/`*:extkeys` entries leaked at other indices by the former append path,
+- writes `*:sync` at the fixed `terminal-features[240]` index for atomic redraws in pixel pets and TUIs, purging exact `*:sync`/`*:extkeys`/`*:hyperlinks` entries leaked at other indices by the former append path,
 - writes `*:extkeys` at `terminal-features[241]` whenever extended keys are enabled and unsets that index when they are disabled,
+- writes `*:hyperlinks` at `terminal-features[242]` so OSC 8 links from the sidebar and panes remain clickable,
 - registers root-table `S-Enter` and `M-Enter` bindings that inject the configured modified-Enter sequence, so agents receive soft newlines even when they do not request modifyOtherKeys,
 - names `ESC[27u` as `user-keys[240]` and binds it to Escape, because tmux passes that modifier-less form into panes verbatim.
 

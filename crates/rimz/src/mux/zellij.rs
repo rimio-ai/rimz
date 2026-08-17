@@ -245,9 +245,10 @@ fn zellij_options_args(
             bool_value(value),
         ]);
     }
-    if let Some(value) = config.osc8_hyperlinks {
-        args.extend(["--osc8-hyperlinks".to_owned(), bool_value(value)]);
-    }
+    args.extend([
+        "--osc8-hyperlinks".to_owned(),
+        bool_value(config.osc8_hyperlinks),
+    ]);
     args
 }
 

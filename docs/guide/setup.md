@@ -168,7 +168,7 @@ The same table carries watchdogs and self-wakes, where an agent turn runs on an 
 
 ## Configure your multiplexer
 
-RimZ sets the room's behavior for you: on every session birth and reattach it applies the options agents need — locked mode and single-click sidebar jumps on Zellij; mouse, focus events, OSC passthrough, CSI-u soft-newline keys, and clipboard on tmux; 100k-line scrollback on both — so a freshly installed multiplexer works without touching its config. Your own `~/.config/zellij/config.kdl` or `~/.tmux.conf` owns everything RimZ leaves alone — the theme, true color, copy-mode, the status bar, and your keybindings — inside the room and in every session you run outside RimZ.
+RimZ sets the room's behavior for you: on every session birth and reattach it applies the options agents need — locked mode and single-click sidebar jumps on Zellij; mouse, focus events, OSC passthrough, CSI-u soft-newline keys, and clipboard on tmux; clickable hyperlinks and 100k-line scrollback on both — so a freshly installed multiplexer works without touching its config. Your own `~/.config/zellij/config.kdl` or `~/.tmux.conf` owns everything RimZ leaves alone — the theme, true color, copy-mode, the status bar, and your keybindings — inside the room and in every session you run outside RimZ.
 
 The fastest path to a good config of your own is copying the shipped baselines under [examples/](../../examples/README.md) — Zellij as a complete starting file, tmux as sourceable modules:
 
@@ -191,6 +191,7 @@ mouse_mode true                        // scroll, select, and resize with the mo
 copy_on_select true                    // selecting text copies it
 copy_clipboard "system"                // yank into the OS clipboard
 support_kitty_keyboard_protocol true   // Shift+Enter and friends reach TUI agents
+osc8_hyperlinks true                   // links from agents and the sidebar are clickable
 ```
 
 `default_mode "locked"` is the one that matters most: locked mode passes ordinary keystrokes to the focused pane, so an agent's TUI gets your input until you deliberately press `Ctrl+g` for a Zellij mode. RimZ already opens its room in locked mode; setting it here keeps your own sessions consistent and your muscle memory intact. Zellij inherits true color from the terminal it runs in, so there is no color flag to set.
@@ -210,6 +211,7 @@ set -g  mouse on                 # scroll, select panes, resize
 set -g  history-limit 100000     # long Claude/Codex output stays in scrollback
 set -sg escape-time 10           # upstream 3.5+ default; safely joins split ESC sequences
 set -ga terminal-features ",*:sync"   # atomic redraws for tmux sessions outside RimZ
+set -ga terminal-features ",*:hyperlinks" # clickable OSC 8 links
 set -g  focus-events on          # editors and agents see focus changes
 set -g  allow-passthrough on     # let desktop notifications pass through tmux
 set -s  extended-keys on             # distinguish modified Enter from Enter
