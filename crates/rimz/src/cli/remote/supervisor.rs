@@ -307,11 +307,11 @@ pub(super) fn supervise_remote(
             confirmed_master,
         );
         drop(probe);
-        let control_alive = ready_master
+        let attach_evidence = ready_master
             .as_mut()
             .map(MasterGuard::is_running)
             .transpose()?
-            .unwrap_or(false);
+            .map(|control_alive| (control_alive, outcome.lived_past_gatetime));
         if outcome.established {
             outage = None;
         }
@@ -326,11 +326,7 @@ pub(super) fn supervise_remote(
             reconnect.settle_zombie_kill();
             RetryCause::Zombie
         } else {
-            match reconnect.settle(
-                outcome.status.code(),
-                outcome.established,
-                Some((control_alive, outcome.lived_past_gatetime)),
-            ) {
+            match reconnect.settle(outcome.status.code(), outcome.established, attach_evidence) {
                 Verdict::CleanExit => {
                     if outcome.stderr.is_some() {
                         let _ = writeln!(std::io::stderr().lock(), "rimz: detached from {host}");
