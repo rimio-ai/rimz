@@ -891,6 +891,16 @@ pub enum Verdict {
     },
     /// The link dropped on an established session — enter background recovery.
     Retry,
+    /// SSH is still healthy, but an established multiplexer client ended
+    /// abnormally — attach a replacement over the existing connection.
+    Reattach,
+}
+
+/// SSH and foreground-lifetime evidence available only to terminal attaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttachExitEvidence {
+    pub control_alive: bool,
+    pub lived_past_gatetime: bool,
 }
 
 #[derive(Default)]
@@ -908,13 +918,50 @@ impl ReconnectState {
     /// or lived past the gatetime marks the link established and resets the
     /// failure count; a Retry verdict counts one more consecutive failure.
     pub fn settle(&mut self, exit_code: Option<i32>, established: bool) -> Verdict {
+        self.settle_with_link(exit_code, established, None)
+    }
+
+    /// Settle a foreground attach with independent evidence about the SSH
+    /// transport and the multiplexer client's lifetime.
+    pub fn settle_attached(
+        &mut self,
+        exit_code: Option<i32>,
+        established: bool,
+        evidence: AttachExitEvidence,
+    ) -> Verdict {
+        self.settle_with_link(exit_code, established, Some(evidence))
+    }
+
+    fn settle_with_link(
+        &mut self,
+        exit_code: Option<i32>,
+        established: bool,
+        evidence: Option<AttachExitEvidence>,
+    ) -> Verdict {
         if established {
             self.established = true;
             self.consecutive_failures = 0;
         }
         let verdict = match exit_code {
             Some(0) => Verdict::CleanExit,
+            Some(
+                code @ (REMOTE_RIMZ_MISSING_EXIT
+                | REMOTE_VERSION_SKEW_EXIT
+                | REMOTE_VERSION_INCOMPATIBLE_EXIT),
+            ) => Verdict::Fatal { code },
             Some(SSH_TRANSPORT_EXIT) if self.established => Verdict::Retry,
+            Some(_)
+                if self.established && evidence.is_some_and(|evidence| !evidence.control_alive) =>
+            {
+                Verdict::Retry
+            }
+            Some(_)
+                if evidence.is_some_and(|evidence| {
+                    evidence.control_alive && evidence.lived_past_gatetime
+                }) =>
+            {
+                Verdict::Reattach
+            }
             Some(code) => Verdict::Fatal { code },
             // Signal-death: something killed ssh deliberately; don't fight it.
             None => Verdict::Fatal { code: 1 },

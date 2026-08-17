@@ -307,11 +307,16 @@ pub(super) fn supervise_remote(
             confirmed_master,
         );
         drop(probe);
-        drop(ready_master.take());
+        let control_alive = ready_master
+            .as_mut()
+            .map(MasterGuard::is_running)
+            .transpose()?
+            .unwrap_or(false);
         if outcome.established {
             outage = None;
         }
         let retry_cause = if outcome.killed_zombie {
+            drop(ready_master.take());
             guard.discard_pending_input();
             guard.reset_emulator();
             let _ = writeln!(
@@ -321,7 +326,14 @@ pub(super) fn supervise_remote(
             reconnect.settle_zombie_kill();
             RetryCause::Zombie
         } else {
-            match reconnect.settle(outcome.status.code(), outcome.established) {
+            match reconnect.settle_attached(
+                outcome.status.code(),
+                outcome.established,
+                rimz::remote::AttachExitEvidence {
+                    control_alive,
+                    lived_past_gatetime: outcome.lived_past_gatetime,
+                },
+            ) {
                 Verdict::CleanExit => {
                     if outcome.stderr.is_some() {
                         let _ = writeln!(std::io::stderr().lock(), "rimz: detached from {host}");
@@ -336,9 +348,23 @@ pub(super) fn supervise_remote(
                     )
                 }
                 Verdict::Retry => {
+                    drop(ready_master.take());
                     guard.discard_pending_input();
                     guard.reset_emulator();
                     RetryCause::Dropped
+                }
+                Verdict::Reattach => {
+                    guard.discard_pending_input();
+                    guard.reset_emulator();
+                    let detail = summary
+                        .as_deref()
+                        .map(|summary| format!(" — {summary}"))
+                        .unwrap_or_default();
+                    let _ = writeln!(
+                        std::io::stderr().lock(),
+                        "rimz: remote session on {host} disconnected{detail} — reattaching",
+                    );
+                    continue;
                 }
             }
         };
@@ -421,10 +447,7 @@ pub(super) fn fatal_session_message(
              `rimz remote setup {setup_hint}` upgrades the remote"
         ),
         _ => {
-            let message = format!(
-                "ssh to {host} exited with status {code}; not reconnecting \
-                 (only a dropped link on an established session is retried)"
-            );
+            let message = format!("ssh to {host} exited with status {code}; not reconnecting");
             match summary {
                 Some(summary) => format!("{message} — {summary}"),
                 None => message,
@@ -453,10 +476,11 @@ fn run_ssh_session(
     let mut update = link.begin_session();
     loop {
         if let Some(status) = child.try_wait().context("polling ssh session")? {
-            let established = link.finish(started.elapsed(), events.try_iter());
+            let link_exit = link.finish(started.elapsed(), events.try_iter());
             return Ok(SessionOutcome {
                 status,
-                established,
+                established: link_exit.established,
+                lived_past_gatetime: link_exit.lived_past_gatetime,
                 killed_zombie: false,
                 stderr: finish_session_stderr(stderr),
             });
@@ -516,6 +540,7 @@ fn verify_zombie(
             Ok(Some(SessionOutcome {
                 status,
                 established: true,
+                lived_past_gatetime: true,
                 killed_zombie: true,
                 stderr: None,
             }))
@@ -524,6 +549,7 @@ fn verify_zombie(
             Some(status) => Ok(Some(SessionOutcome {
                 status,
                 established: true,
+                lived_past_gatetime: true,
                 killed_zombie: false,
                 stderr: None,
             })),
@@ -541,6 +567,7 @@ fn session_poll_interval(elapsed: Duration, next_deadline: Option<Duration>) -> 
 struct SessionOutcome {
     status: std::process::ExitStatus,
     established: bool,
+    lived_past_gatetime: bool,
     killed_zombie: bool,
     stderr: Option<String>,
 }
@@ -1213,6 +1240,15 @@ struct MasterGuard {
 }
 
 impl MasterGuard {
+    fn is_running(&mut self) -> Result<bool> {
+        self.child
+            .as_mut()
+            .context("SSH ControlMaster is not running")?
+            .try_wait()
+            .context("polling SSH ControlMaster")
+            .map(|status| status.is_none())
+    }
+
     /// Wait for the owning ControlMaster. Master-owned forwards remain live
     /// until this child exits, so remote web uses this as its foreground wait.
     fn wait_for_exit(&mut self) -> Result<Option<i32>> {

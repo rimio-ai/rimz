@@ -174,16 +174,18 @@ An attach over a confirmed master pipes and drains SSH stderr instead of letting
 
 **Classifying the end** of a session is pure:
 
-| Exit | `established` | Verdict |
+| Exit | Evidence | Verdict |
 | --- | --- | --- |
 | `0` | any | `CleanExit` — return to the caller |
 | `255` with OpenSSH's remote `SIGINT` diagnostic | any | Explicit Ctrl-C — return to the caller without retrying |
-| `255` | yes | `Retry` — enter background recovery |
-| `255` | no | `Fatal` — the link never came up |
-| any other code | any | `Fatal` — auth failure, missing remote `rimz`, version refusal, a stuck room |
+| remote RimZ precondition sentinel (`65`, `66`, `127`) | any | `Fatal` — surface the specific version or install fix |
+| `255` | established SSH | `Retry` — enter background recovery |
+| nonzero | established SSH, ControlMaster ended | `Retry` — the attach status is not trusted over SSH liveness |
+| nonzero | ControlMaster alive, foreground attach lived past gatetime | `Reattach` — replace only the multiplexer client over the existing SSH connection |
+| any other code | no settled attach evidence | `Fatal` — an immediate remote room or authentication failure |
 | signal death | any | `Fatal` — something killed `ssh` deliberately |
 
-A session counts as established once its link probe receives the first ack, once its initial master is confirmed, or once it lives past the gatetime (30 seconds by default). `ReconnectState` folds establishment and consecutive failures across sessions; `settle_zombie_kill` records an intentional kill without classifying its signal exit as fatal.
+SSH counts as established once its link probe receives the first ack, once its initial master is confirmed, or once the foreground attach lives past the gatetime (30 seconds by default). The gatetime is also independent evidence that the multiplexer attach ran rather than failing at launch. This split matters because tmux and Zellij may return a nonzero client status when a reload deliberately disconnects an established client: a live ControlMaster makes that a fast reattach, not a false link-loss notification. `ReconnectState` folds transport establishment and consecutive failures across sessions; `settle_zombie_kill` records an intentional kill without classifying its signal exit as fatal.
 
 **Terminal hygiene** wraps every session. `TtyGuard` snapshots local termios at connect, repairs a leftover raw tty at entry, and restores the snapshot after each SSH session. Before a retry or zombie replacement, it discards pending tty input so terminal-protocol replies addressed to the dead SSH generation cannot reach the next attach; exit paths never flush, preserving type-ahead for the shell that regains the terminal. An unclean end also writes the emulator reset string, because `ssh -t` mirrors local tty modes onto the remote pty and a `SIGKILL`ed transport cannot restore terminal-emulator state itself.
 

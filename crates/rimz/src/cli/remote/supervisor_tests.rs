@@ -38,7 +38,7 @@ fn fatal_session_message_points_missing_remote_rimz_at_setup() {
 }
 
 #[test]
-fn fatal_session_message_keeps_reconnect_tail_for_other_codes() {
+fn fatal_session_message_reports_other_codes_without_setup_hint() {
     let message = fatal_session_message(2, "dev-box", "dev", None);
 
     assert!(

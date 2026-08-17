@@ -868,3 +868,34 @@ fn reconnect_state_settles_established_sessions_and_failures() {
     );
     assert_eq!(state.consecutive_failures, 0);
 }
+
+#[test]
+fn attached_exit_uses_control_liveness_instead_of_mux_status() {
+    let settle = |control_alive, lived_past_gatetime| {
+        ReconnectState::new().settle_attached(
+            Some(1),
+            true,
+            AttachExitEvidence {
+                control_alive,
+                lived_past_gatetime,
+            },
+        )
+    };
+
+    assert_eq!(settle(true, true), Verdict::Reattach);
+    assert_eq!(settle(false, true), Verdict::Retry);
+    assert_eq!(settle(true, false), Verdict::Fatal { code: 1 });
+    assert_eq!(
+        ReconnectState::new().settle_attached(
+            Some(REMOTE_VERSION_SKEW_EXIT),
+            true,
+            AttachExitEvidence {
+                control_alive: true,
+                lived_past_gatetime: true,
+            },
+        ),
+        Verdict::Fatal {
+            code: REMOTE_VERSION_SKEW_EXIT
+        }
+    );
+}
