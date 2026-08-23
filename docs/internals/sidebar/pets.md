@@ -152,7 +152,7 @@ Terminal cells are taller than they are wide, so a naive fit distorts the sprite
 2. The pty probe, reading pixel and cell dimensions from `TIOCGWINSZ`.
 3. `13/6`, the neutral fallback where the historical `36x27` subcell sample preserves a `192x208` frame exactly.
 
-The explicit config exists because Zellij reports zero pty pixel dimensions; tmux 3.4 and newer forwards them. Under `NO_COLOR` the body is suppressed entirely and the caption carries the pet's state.
+The explicit config covers any pty that reports zero pixel dimensions. Zellij has forwarded dimensions reported by its host terminal since 0.35, but this 0.45 audit did not have a real host-terminal reply with which to verify that path; tmux 3.4 and newer forwards them. Under `NO_COLOR` the body is suppressed entirely and the caption carries the pet's state.
 
 ## Pixel tier
 

@@ -71,7 +71,7 @@ pub struct PetsConfig {
     /// Render tier: `auto` tries pixels, then sextants.
     pub glyphs: PetsGlyphMode,
     /// Manual cell height/width ratio for terminals whose pty reports no pixel
-    /// size (notably Zellij). Overrides the runtime probe.
+    /// size. Overrides the runtime probe.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_aspect: Option<CellAspect>,
     /// Show canned captions on fleet-status changes.

@@ -658,7 +658,14 @@ impl MuxBackend for ZellijBackend {
             }
         }
         spec.run()?;
-        self.restore_background_split_focus(opts.placement, opts.focus, focus_workspace, &target);
+        if !no_focus {
+            self.restore_background_split_focus(
+                opts.placement,
+                opts.focus,
+                focus_workspace,
+                &target,
+            );
+        }
         Ok(())
     }
 

@@ -254,6 +254,17 @@ exit 0
                 session_name: "rimz-test".to_owned(),
                 pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
             },
+            placement: SplitPlacement::Directional(SplitDirection::Right),
+            focus: false,
+            ..Default::default()
+        })
+        .expect("background directional split");
+    backend
+        .split_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: "rimz-test".to_owned(),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+            },
             placement: SplitPlacement::Stacked,
             focus: false,
             ..Default::default()
@@ -271,6 +282,12 @@ exit 0
         log.contains("--session rimz-test action new-pane --direction right --tab-id 42 | pane=7"),
         "{log}"
     );
+    assert!(
+        log.contains(
+            "--session rimz-test action new-pane --direction right --tab-id 42 --no-focus | pane=7"
+        ),
+        "{log}"
+    );
     let anchored = log.lines().last().expect("anchored command");
     assert!(
         anchored.contains("action new-pane --stacked --no-focus | pane=7"),
@@ -282,7 +299,7 @@ exit 0
     );
     assert_eq!(
         log.lines().count(),
-        5,
+        7,
         "expected split and lookup calls:\n{log}"
     );
 }
