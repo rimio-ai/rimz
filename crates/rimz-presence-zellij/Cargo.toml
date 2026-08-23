@@ -33,9 +33,8 @@ serde_json.workspace = true
 
 # The official Zellij plugin API, wasm-only: its shims call extern host
 # functions that exist only inside Zellij's plugin host, so host targets must
-# not link it. Pinned to the 0.44 line — the plugin-load gate
-# (`PRESENCE_PLUGIN_MIN_ZELLIJ`) only attempts the load on hosts at or above
-# this line, and an older host that refuses the artifact degrades to poll
-# mode, byte-identical to a session with no plugin.
+# not link it. Pinned to the 0.44 line so one vendored artifact loads across
+# RimZ's supported Zellij hosts. The host-side `MIN_ZELLIJ_VERSION` gate in
+# `capabilities()` rejects older versions before room startup.
 [target.'cfg(target_family = "wasm")'.dependencies]
 zellij-tile = "0.44"

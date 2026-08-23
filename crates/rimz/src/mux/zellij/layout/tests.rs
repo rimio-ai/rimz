@@ -189,6 +189,7 @@ fn session_layout_renders_terminal_template_bar_and_runtime_args() {
     assert!(layout.contains(r#""--refresh-ms" "50""#), "{layout}");
     assert!(layout.contains("session_serialization false"), "{layout}");
     assert!(layout.contains("disable_session_metadata true"), "{layout}");
+    assert!(layout.contains("stacked_pane_list false"), "{layout}");
 }
 
 #[test]

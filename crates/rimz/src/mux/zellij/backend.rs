@@ -576,12 +576,19 @@ impl MuxBackend for ZellijBackend {
             ensure_pane_backend(target_pane, MuxName::Zellij)?;
         }
         let anchored_stack = opts.placement == SplitPlacement::Stacked && target_pane.is_some();
-        // Zellij gives `--tab-id` precedence over the CLI pane context, so an
-        // anchored stack must use `--near-current-pane` and let
-        // `ZELLIJ_PANE_ID` imply the tab. Only stacked spawns honor that flag;
-        // directional spawns silently no-op with it and keep resolving a stable
-        // tab id. An anchored stack leaves client focus alone, while the
-        // `focus-pane-id` restore below always switches the client's tab.
+        let no_focus = !opts.focus
+            && self
+                .version()
+                .ok()
+                .as_deref()
+                .and_then(super::parse_version)
+                .is_some_and(|version| version >= super::MIN_NO_FOCUS_ZELLIJ_VERSION);
+        // Zellij gives `--tab-id` precedence over the CLI pane context. On
+        // 0.45+, `--no-focus` lets both tab-targeted and pane-targeted spawns
+        // preserve every attached client's view. On 0.44 an anchored stack
+        // uses `--near-current-pane` and lets `ZELLIJ_PANE_ID` imply the tab;
+        // directional spawns silently no-op with that flag and keep resolving
+        // a stable tab id.
         let target_tab_id = match (&target, opts.placement) {
             (
                 SplitTarget::SessionPane {
@@ -599,7 +606,7 @@ impl MuxBackend for ZellijBackend {
         match opts.placement {
             SplitPlacement::Stacked => {
                 spec = spec.arg("--stacked");
-                if anchored_stack {
+                if anchored_stack && !no_focus {
                     spec = spec.arg("--near-current-pane");
                 }
             }
@@ -626,6 +633,9 @@ impl MuxBackend for ZellijBackend {
         }
         if let Some(tab_id) = target_tab_id {
             spec = spec.args(["--tab-id".to_owned(), tab_id.to_string()]);
+        }
+        if no_focus {
+            spec = spec.arg("--no-focus");
         }
         if opts.close_on_exit {
             spec = spec.arg("--close-on-exit");
