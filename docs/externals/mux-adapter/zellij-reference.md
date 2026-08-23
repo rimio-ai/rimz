@@ -47,7 +47,7 @@ Events arrive asynchronously with no ordering guarantee. `render` runs after an 
 
 ### Events
 
-Full `Event` catalog as defined in `zellij-utils 0.45.0 src/data.rs` (46 variants). ✓ marks what `rimz-presence-zellij` subscribes to. The permission column is the *event-delivery* gate as documented upstream; an ungated event still requires `subscribe`. `RunCommandResult` is subscribed so the plugin drains replies to its `run_command` pokes.
+Full `Event` catalog as defined in `zellij-utils 0.45.0 src/data.rs` (48 variants). ✓ marks what `rimz-presence-zellij` subscribes to. The permission column is the *event-delivery* gate as documented upstream; an ungated event still requires `subscribe`. `RunCommandResult` is subscribed so the plugin drains replies to its `run_command` pokes.
 
 | Event | Payload | Permission | ✓ |
 | --- | --- | --- | :---: |
@@ -92,6 +92,8 @@ Full `Event` catalog as defined in `zellij-utils 0.45.0 src/data.rs` (46 variant
 | `InitialKeybinds` | `KeybindsVec` | — | |
 | `HostTerminalThemeChanged` | `HostTerminalThemeMode` (`Dark` \| `Light`) via CSI 2031 / DSR 997 | — | |
 | `SoftKeyboardVisibilityChanged` | `bool` | — | |
+| `HintText` | `BTreeMap<usize, StyledText>` | — | |
+| `ActivePaneScroll` | `Option<(usize, usize)>` | — | |
 
 `Context` is `BTreeMap<String, String>` — the caller-supplied dictionary echoed back on the matching reply event; it is how a plugin correlates async replies to requests.
 
@@ -383,7 +385,7 @@ Top-level KDL options (`option_name value`). The scalar options exposed by `zell
 | `nested_session_handling` | `ask` \| `fullscreen` \| `descend` \| `never` | nested-Zellij policy |
 | `pane_frame_style` | `titles` \| `full` \| `none` | pane-frame presentation style |
 | `dangerously_enable_paste_buffer_read` | `false` \| `true` | permits reading the paste buffer |
-| `stacked_pane_list` | `true` \| `false` | shows the stacked-pane list; RimZ pins false because the list mode omits collapsed members from pane manifests and `list-panes` |
+| `stacked_pane_list` | `true` \| `false` | list mode marks hidden stack members suppressed and gives every member the stack's full rect; RimZ pins false because its topology filters suppression and reads per-pane geometry |
 | `mouse_scroll_resize` | `true` \| `false` | lets Ctrl+wheel resize panes |
 | `mouse_hover_tips` | `true` \| `false` | shows hover tips |
 | `osc133_command_selection` | `true` \| `false` | enables OSC 133-aware command selection |
@@ -399,7 +401,7 @@ Zellij terminates the kitty graphics protocol inside the server rather than pass
 
 The supported placement model is cursor-addressed. Transmission-and-place (`a=T`) and separate place (`a=p`) accept cell spans (`c`, `r`), source cropping (`x`, `y`, `w`, `h`), pixel offsets (`X`, `Y`), and z-index (`z`). Zellij rejects unicode placeholders (`U=1`), animation frame actions (`a=f`, `a=a`, `a=c`), and shared-memory transport (`t=s`). A single unchunked APC is capped at 1 MiB; decoded images are capped at 100 MiB and 10,000 pixels on either axis.
 
-At client startup Zellij queries the host with `a=q,i=31` before a Primary DA barrier. Host support and the `support_kitty_graphics_protocol` option fold into one server-side state. A pane can issue its own `a=q` query: supported paths reply `i=<id>;OK`, an unsupported host replies `ENOTSUPPORTED`, and a disabled protocol stays silent. The option defaults to enabled, but graphics still require a host terminal that implements kitty graphics.
+At client startup Zellij queries the host with `a=q,i=31` before a Primary DA barrier. Host support and the `support_kitty_graphics_protocol` option fold into one server-side state. A pane can issue its own `a=q` query: supported paths reply `i=<id>;OK`, an unsupported host replies `ENOTSUPPORTED`, and a disabled protocol stays silent. From the pane, silence is not uniquely attributable: an older live server or a lost/slow reply has the same shape, so RimZ reports it as `no_reply` rather than asserting the option is off. The option defaults to enabled, but graphics still require a host terminal that implements kitty graphics.
 
 ### Mouse handling and reconfigure (0.45.0)
 
