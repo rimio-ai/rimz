@@ -2,7 +2,7 @@
 
 > The RimZ-side contracts live in [multiplexers.md](../../internals/multiplexers.md) — the `MuxBackend` seam, the presence channel, the birth layout, the health gates — and [web.md](../../internals/web.md) for browser access. This doc mirrors the upstream surface itself.
 
-This is the single home for the **Zellij upstream surface** RimZ binds to — the wasm plugin API (lifecycle, events, commands, types, permissions, workers, pipes), the CLI control surface, the configuration options, the layout KDL, and session serialization. It is a hand-maintained mirror of zellij.dev's docs cross-checked against the installed binary's `--help` and the `zellij-utils`/`zellij-tile` 0.44.3 source, audited in 2026-07 against the current **Zellij 0.44.3** release (2026-05-13). Where the website and the source disagree, the source wins.
+This is the single home for the **Zellij upstream surface** RimZ binds to — the wasm plugin API (lifecycle, events, commands, types, permissions, workers, pipes), the CLI control surface, the configuration options, the layout KDL, terminal graphics, and session serialization. It is a hand-maintained mirror of zellij.dev's docs cross-checked against the installed binary's `--help` and the `zellij-utils`/`zellij-tile` source, audited in 2026-08 against **Zellij 0.45.0**. Where the website and the source disagree, the source wins.
 
 Coverage is **depth on what RimZ wires, breadth as an index**: the events and host commands the presence plugin uses, the CLI verbs the backend adapter calls, and the layout nodes the birth templates spell are documented in full; the rest of the catalog is listed so a contributor wiring a new surface knows it exists.
 
@@ -12,7 +12,7 @@ Re-fetch these to refresh this mirror. The canonical type definitions live in th
 
 | Surface | Source |
 | --- | --- |
-| Release baseline | <https://github.com/zellij-org/zellij/releases/tag/v0.44.3> |
+| Release baseline | <https://github.com/zellij-org/zellij/releases/tag/v0.45.0> |
 | Plugin events | <https://zellij.dev/documentation/plugin-api-events.html> |
 | Plugin commands | <https://zellij.dev/documentation/plugin-api-commands.html> |
 | Plugin types | <https://zellij.dev/documentation/plugin-api-types.html> → docs.rs |
@@ -24,6 +24,7 @@ Re-fetch these to refresh this mirror. The canonical type definitions live in th
 | CLI control | <https://zellij.dev/documentation/controlling-zellij-through-cli.html>, <https://zellij.dev/documentation/cli-actions.html>, <https://zellij.dev/documentation/zellij-run-and-edit.html> |
 | CLI recipes | <https://zellij.dev/documentation/cli-recipes.html> |
 | Config & options | <https://zellij.dev/documentation/configuration.html>, <https://zellij.dev/documentation/options.html>, <https://zellij.dev/documentation/command-line-options.html> |
+| Kitty graphics | <https://github.com/zellij-org/zellij/tree/v0.45.0/zellij-server/src/panes/kitty_graphics>, <https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-integration-tests/tests/kitty_graphics.rs> |
 | Layout KDL | <https://zellij.dev/documentation/creating-a-layout.html> |
 | Session resurrection | <https://zellij.dev/documentation/session-resurrection.html> |
 
@@ -46,7 +47,7 @@ Events arrive asynchronously with no ordering guarantee. `render` runs after an 
 
 ### Events
 
-Full `Event` catalog as defined in `zellij-utils 0.44.3 src/data.rs` (46 variants). ✓ marks what `rimz-presence-zellij` subscribes to. The permission column is the *event-delivery* gate as documented upstream; an ungated event still requires `subscribe`. `RunCommandResult` is subscribed so the plugin drains replies to its `run_command` pokes.
+Full `Event` catalog as defined in `zellij-utils 0.45.0 src/data.rs` (46 variants). ✓ marks what `rimz-presence-zellij` subscribes to. The permission column is the *event-delivery* gate as documented upstream; an ungated event still requires `subscribe`. `RunCommandResult` is subscribed so the plugin drains replies to its `run_command` pokes.
 
 | Event | Payload | Permission | ✓ |
 | --- | --- | --- | :---: |
@@ -81,7 +82,7 @@ Full `Event` catalog as defined in `zellij-utils 0.44.3 src/data.rs` (46 variant
 | `BeforeClose` | — fires before plugin unload, for cleanup | — | |
 | `InterceptedKeyPress` | `KeyWithModifier` — consumed, not processed normally | InterceptInput | |
 | `UserAction` | `Action`, `ClientId`, `Option<u32>` terminal id, `Option<ClientId>` CLI client | InterceptInput | |
-| `PaneRenderReport` / `PaneRenderReportWithAnsi` | `HashMap<PaneId, PaneContents>` — periodic; without/with ANSI | ReadPaneContents | |
+| `PaneRenderReport` | `HashMap<PaneId, PaneContents>` — periodic pane contents with ANSI | ReadPaneContents | |
 | `ActionComplete` | `Action`, `Option<PaneId>`, `Context` — reply to `run_action` | RunActionsAsUser | |
 | `CwdChanged` | `PaneId`, `PathBuf` new cwd, `Vec<ClientId>` focused clients | — | ✓ |
 | `CommandChanged` | `PaneId`, `Vec<String>` argv, `bool` is_foreground, `Vec<ClientId>` focused clients | — | ✓ |
@@ -90,6 +91,7 @@ Full `Event` catalog as defined in `zellij-utils 0.44.3 src/data.rs` (46 variant
 | `HighlightClicked` | `{ pane_id, pattern, matched_string, context }` — from `set_pane_regex_highlights`; `matched_string` is capture group 1 if present | — | |
 | `InitialKeybinds` | `KeybindsVec` | — | |
 | `HostTerminalThemeChanged` | `HostTerminalThemeMode` (`Dark` \| `Light`) via CSI 2031 / DSR 997 | — | |
+| `SoftKeyboardVisibilityChanged` | `bool` | — | |
 
 `Context` is `BTreeMap<String, String>` — the caller-supplied dictionary echoed back on the matching reply event; it is how a plugin correlates async replies to requests.
 
@@ -128,7 +130,7 @@ The `get_pane_pid` / `get_pane_running_command` / `get_pane_cwd` request/respons
 
 ### Types
 
-Canonical home: [docs.rs `zellij_tile`](https://docs.rs/zellij-tile/latest/zellij_tile/) / `zellij-utils/src/data.rs`. The shapes RimZ reads or will read, verified against 0.44.3 source:
+Canonical home: [docs.rs `zellij_tile`](https://docs.rs/zellij-tile/latest/zellij_tile/) / `zellij-utils/src/data.rs`. The shapes RimZ reads or will read, verified against 0.45.0 source:
 
 ```rust
 enum PaneId { Terminal(u32), Plugin(u32) }
@@ -169,7 +171,7 @@ Integer-width inconsistency to keep straight: `TabInfo.tab_id` is `usize`, `clos
 
 ### Permissions
 
-17 `PermissionType` variants (0.44.3 source):
+17 `PermissionType` variants (0.45.0 source):
 
 | Permission | Grants (upstream display string) |
 | --- | --- |
@@ -237,11 +239,11 @@ PipeMessage {
 
 ### Keybind actions
 
-Plugin keybind KDL nodes parse to the same `Action::KeybindPipe` variant: the action shape carries `plugin: Option<String>`, `plugin_id: Option<u32>` (which supersedes `plugin`), `configuration`, `launch_new`, `skip_cache`, optional `cwd`, and pane launch hints ([`actions.rs`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/input/actions.rs#L513-L525)). `MessagePlugin "<url>" { … }` fills the URL destination, child configuration, optional `cwd`, and defaults `launch_new` and `skip_cache` to `false` unless child nodes set them ([`kdl/mod.rs`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/kdl/mod.rs#L2152-L2208)). `MessagePluginId <id> { … }` fills `plugin_id`, leaves URL/configuration/cwd unset, and hardcodes `launch_new` and `skip_cache` to `false` ([`kdl/mod.rs`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/kdl/mod.rs#L2211-L2248)).
+Plugin keybind KDL nodes parse to the same `Action::KeybindPipe` variant: the action shape carries `plugin: Option<String>`, `plugin_id: Option<u32>` (which supersedes `plugin`), `configuration`, `launch_new`, `skip_cache`, optional `cwd`, and pane launch hints ([`actions.rs`](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-utils/src/input/actions.rs#L535-L549)). `MessagePlugin "<url>" { … }` fills the URL destination, child configuration, optional `cwd`, and defaults `launch_new` and `skip_cache` to `false` unless child nodes set them ([`kdl/mod.rs`](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-utils/src/kdl/mod.rs#L2244-L2300)). `MessagePluginId <id> { … }` fills `plugin_id`, leaves URL/configuration/cwd unset, and hardcodes `launch_new` and `skip_cache` to `false` ([`kdl/mod.rs`](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-utils/src/kdl/mod.rs#L2303-L2338)).
 
 On Zellij 0.44.x, plugin keybinds that dispatch `KeybindPipe` can pause the UI for about one second before the action completes; upstream tracks this in [zellij #4635](https://github.com/zellij-org/zellij/issues/4635).
 
-## CLI surface (0.44.3)
+## CLI surface (0.45.0)
 
 From the installed binary's `--help`.
 
@@ -271,7 +273,7 @@ zellij attach [OPTIONS] [SESSION_NAME] [options …]
   remote/web auth: -t/--token, -r/--remember (4-week re-auth), --ca-cert <pem>, --insecure
 ```
 
-`attach <session> options --…` applies room options onto the attach (and `attach --create-background <s> options --…` onto birth) — this is the channel RimZ uses for per-machine `[zellij]` config. **`options` accepts every config option as a kebab-case flag** (42 flags at 0.44.3 — `zellij options --help` is the authority). `attach` doubles as the remote client for `zellij web`-served sessions, hence the token/TLS flags.
+`attach <session> options --…` applies room options onto the attach (and `attach --create-background <s> options --…` onto birth) — this is the channel RimZ uses for per-machine `[zellij]` config. **`options` accepts every config option as a kebab-case flag** (52 flags at 0.45.0 — `zellij options --help` is the authority). `attach` doubles as the remote client for `zellij web`-served sessions, hence the token/TLS flags.
 
 ### `action` catalog
 
@@ -280,7 +282,7 @@ zellij attach [OPTIONS] [SESSION_NAME] [options …]
 | Group | Verbs |
 | --- | --- |
 | Query | `list-panes [--tab] [--command] [--state] [--geometry] [--all] [--json/-j]` · `list-tabs [--state] [--dimensions] [--panes] [--layout] [--all] [--json]` · `list-clients` · `current-tab-info [--json]` · `query-tab-names` · `dump-layout` · `dump-screen [--path f] [--full] [--ansi] [--pane-id]` |
-| Panes | `new-pane [--direction right\|down] [--floating] [--in-place] [--cwd] [--name] [--close-on-exit] [--start-suspended] [--stacked] [--tab-id] [--near-current-pane] [--borderless true\|false] [--plugin url] [--blocking \| --block-until-exit[-success\|-failure]] [-- cmd…]` · `close-pane [--pane-id]` · `rename-pane` / `undo-rename-pane` · `move-pane [dir]` / `move-pane-backwards` · `resize [dir\|+\|-]` · `clear` · `toggle-fullscreen` · `stack-panes -- id…` |
+| Panes | `new-pane [--direction right\|down] [--floating] [--in-place] [--cwd] [--name] [--close-on-exit] [--start-suspended] [--stacked] [--tab-id] [--near-current-pane] [--no-focus] [--borderless true\|false] [--plugin url] [--blocking \| --block-until-exit[-success\|-failure]] [-- cmd…]` · `close-pane [--pane-id]` · `rename-pane` / `undo-rename-pane` · `move-pane [dir]` / `move-pane-backwards` · `resize [dir\|+\|-]` · `clear` · `toggle-fullscreen` · `stack-panes -- id…` |
 | Floating | `toggle-floating-panes` · `show-/hide-floating-panes [--tab-id]` · `are-floating-panes-visible` (exit code) · `toggle-pane-embed-or-floating` · `toggle-pane-pinned` · `change-floating-pane-coordinates --pane-id [--x --y --width --height --pinned --borderless]` |
 | Style | `set-pane-color [--pane-id] [--fg c] [--bg c] [--reset]` · `toggle-pane-borderless` / `set-pane-borderless` · `toggle-pane-frames` |
 | Focus | `focus-pane-id <id>` (implicitly switches to the holding tab) · `focus-next-pane` / `focus-previous-pane` · `move-focus [dir]` / `move-focus-or-tab [dir]` |
@@ -293,7 +295,7 @@ zellij attach [OPTIONS] [SESSION_NAME] [options …]
 | Theme | `set-dark-theme` / `set-light-theme` / `toggle-theme` |
 | Files | `edit <path> [--line-number n] [--direction] [--floating] [--in-place] [--cwd] [--tab-id] [floating geometry]` |
 
-For `new-pane`, `--tab-id` takes precedence over the CLI pane context and discards its pane anchor. `--near-current-pane` preserves that anchor for stacked spawns; directional splits with the flag silently create nothing despite reporting a pane id (verified live on 0.44.3). The `--near-current-pane` stack form works on RimZ's Zellij 0.44.0 floor, where `new-pane --tab-id` is not yet available.
+For `new-pane`, `--tab-id` takes precedence over the CLI pane context and discards its pane anchor. `--near-current-pane` preserves that anchor for stacked spawns; directional splits with the flag silently create nothing despite reporting a pane id (verified live on 0.44.3). The `--near-current-pane` stack form works on RimZ's Zellij 0.44.0 floor. Zellij 0.45 adds `--no-focus`, which targets the command's pane or explicit tab without moving an attached client; RimZ uses it for background splits and retains the older anchor path on 0.44.
 
 `list-panes -j` output (0.44) carries per-pane `id`, internal `tab_id`, `tab_position`, `tab_name`, `title`, and geometry, plus the *spawn* command — `terminal_command` for command panes (preserved verbatim across an in-place re-exec), `pane_command` for default-shell panes (the shell) — and **no durable live foreground command, cwd, or pid**: live process state is plugin-surface-only (the `get_pane_*` trio and the `CommandChanged`/`CwdChanged` pushes above). RimZ's `pane-topology.json` cache is not raw `list-panes`: the presence plugin retains foreground and shell commands from `CommandChanged`, cwd from `CwdChanged`, and each terminal pane's root pid from one `get_pane_pid` lookup, then publishes `pane_command`, `pane_cwd`, and `pane_pid` beside the spawn `terminal_command`. It does not call `get_pane_running_command` or `get_pane_cwd`; those synchronous host calls perform process discovery on Zellij's PTY thread. In 0.44.3 source, the route handler enters `enrich_panes_with_pty_data` whenever JSON output is requested, independent of the selected field flags; that enrichment performs command and cwd PTY round trips per terminal pane, so RimZ avoids `-j` on the hot path when the presence plugin has published fresh topology.
 
@@ -335,7 +337,7 @@ KDL, one file. Lookup order: `--config-dir` flag → `$ZELLIJ_CONFIG_DIR` → `$
 
 ### Options catalog
 
-Top-level KDL options (`option_name value`). The scalar options exposed by `zellij options --help` double as 42 kebab-case flags; `env` stays KDL-only, and the five `web_server_*` address/TLS fields are positional `zellij options` arguments in 0.44.3 rather than long flags. Field names verified against the 0.44.3 source.
+Top-level KDL options (`option_name value`). The scalar options exposed by `zellij options --help` double as 52 kebab-case flags; `env` stays KDL-only, and the five `web_server_*` address/TLS fields are positional `zellij options` arguments rather than long flags. Field names verified against the 0.45.0 source.
 
 | Option | Values (default first) | Note |
 | --- | --- | --- |
@@ -354,6 +356,7 @@ Top-level KDL options (`option_name value`). The scalar options exposed by `zell
 | `mouse_hover_effects` | `true` \| `false` | frame highlight + help text on hover; flag exists ≥ 0.44.0 |
 | `focus_follows_mouse` | `false` \| `true` | 0.44: first click only passes through when click-through on **and** this off |
 | `support_kitty_keyboard_protocol` | `true` \| `false` | |
+| `support_kitty_graphics_protocol` | `true` \| `false` | default true; effective only when the host terminal answers Zellij's startup probe |
 | `copy_command` | e.g. `wl-copy` | replaces OSC52 |
 | `copy_clipboard` | `system` \| `primary` | OSC52 destination |
 | `copy_on_select` | `true` \| `false` | |
@@ -377,22 +380,38 @@ Top-level KDL options (`option_name value`). The scalar options exposed by `zell
 | `web_server` | `false` \| `true` | start server on startup; + `web_server_ip` (`127.0.0.1`), `web_server_port` (`8082`), `web_server_cert` / `web_server_key`, `enforce_https_for_localhost` |
 | `web_sharing` | `"off"` \| `"on"` \| `"disabled"` | `disabled` cannot be re-enabled at runtime |
 | `client_async_worker_tasks` | `4`; `0` = physical core count | async workers per active client; currently web clients only |
+| `nested_session_handling` | `ask` \| `fullscreen` \| `descend` \| `never` | nested-Zellij policy |
+| `pane_frame_style` | `titles` \| `full` \| `none` | pane-frame presentation style |
+| `dangerously_enable_paste_buffer_read` | `false` \| `true` | permits reading the paste buffer |
+| `stacked_pane_list` | `true` \| `false` | shows the stacked-pane list; RimZ pins false because the list mode omits collapsed members from pane manifests and `list-panes` |
+| `mouse_scroll_resize` | `true` \| `false` | lets Ctrl+wheel resize panes |
+| `mouse_hover_tips` | `true` \| `false` | shows hover tips |
+| `osc133_command_selection` | `true` \| `false` | enables OSC 133-aware command selection |
+| `word_separators` | `"[]{}<>()"` | extra characters that delimit word selection |
 
 Plus the `keybinds`, `themes`, `plugins` (aliases), and `load_plugins` blocks. `load_plugins { "file:/path.wasm" }` starts background plugins at session start — config-level only; **a layout-level `load_plugins` does not exist** (verified live, 0.44.3), so a layout cannot be a plugin-load channel.
 
-Boolean `options` CLI flags are toggles over config values, not absolute overrides: `Options::merge_from_cli` XORs a bool when both `config.kdl` and the CLI set it, and only uses the CLI value directly when the config omits that key. A room that needs an absolute boolean over user config must use the KDL merge/reconfigure path instead ([`merge_from_cli`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/input/options.rs#L443-L506), plain [`Options::merge`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/input/options.rs#L330-L371)).
+Boolean `options` CLI flags are toggles over config values, not absolute overrides: `Options::merge_from_cli` XORs a bool when both `config.kdl` and the CLI set it, and only uses the CLI value directly when the config omits that key. A room that needs an absolute boolean over user config must use the KDL merge/reconfigure path instead ([`merge_from_cli`](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-utils/src/input/options.rs#L657-L817), plain [`Options::merge`](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-utils/src/input/options.rs#L501-L651)).
 
-### Mouse handling and reconfigure (0.44.3)
+### Kitty graphics protocol (0.45.0)
 
-The tab mouse handler gathers `focus_follows_mouse` and `mouse_click_through` from tab state, then `determine_mouse_action` returns `FocusPaneAndClickThrough` for a plain left press on an inactive pane only when click-through is enabled and focus-follows-mouse is disabled; otherwise the press focuses the pane and the user needs a later click to reach the terminal/application ([`mouse_handler.rs`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L396-L401), [`determine_mouse_action`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L1196-L1441)).
+Zellij terminates the kitty graphics protocol inside the server rather than passing APC bytes through. It base64-decodes and, when requested, decompresses payloads; PNG inputs are decoded to RGBA and held in a session-wide 320 MiB LRU store. Zellij assigns its own host-terminal image ids. Images for panes that become invisible are removed from the host terminal and placed again when the pane returns, while the decoded image remains in the store.
 
-`advanced_mouse_actions` participates in hover chrome, grouping, and resize branches; the click-through branch reads only `mouse_click_through` and `focus_follows_mouse` ([hover branch](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L1086-L1089), [click-through branch](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L1357-L1362)).
+The supported placement model is cursor-addressed. Transmission-and-place (`a=T`) and separate place (`a=p`) accept cell spans (`c`, `r`), source cropping (`x`, `y`, `w`, `h`), pixel offsets (`X`, `Y`), and z-index (`z`). Zellij rejects unicode placeholders (`U=1`), animation frame actions (`a=f`, `a=a`, `a=c`), and shared-memory transport (`t=s`). A single unchunked APC is capped at 1 MiB; decoded images are capped at 100 MiB and 10,000 pixels on either axis.
 
-Runtime reconfigure parses the supplied KDL with the current client configuration as its base, then `Options::merge` applies only supplied option keys (`other.or(self)`); an absent option stays at its current live value, while an explicit option wins over `config.kdl`. `propagate_configuration_changes` then applies the resulting live config to all tabs ([server reconfigure path](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/lib.rs#L366-L385), [`Config::from_kdl`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/kdl/mod.rs#L4855-L4861), [`propagate_configuration_changes`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/lib.rs#L387-L435)).
+At client startup Zellij queries the host with `a=q,i=31` before a Primary DA barrier. Host support and the `support_kitty_graphics_protocol` option fold into one server-side state. A pane can issue its own `a=q` query: supported paths reply `i=<id>;OK`, an unsupported host replies `ENOTSUPPORTED`, and a disabled protocol stays silent. The option defaults to enabled, but graphics still require a host terminal that implements kitty graphics.
 
-The client input handler enables mouse reporting from `mouse_mode`, converts terminal mouse events, and forwards them as `Action::MouseEvent` to the server; the mode-specific key handling sits on the keyboard path, so locked mode still forwards mouse events ([`input_handler.rs`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-client/src/input_handler.rs#L149-L180), [mouse forwarding](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-client/src/input_handler.rs#L326-L330)).
+### Mouse handling and reconfigure (0.45.0)
 
-Per-pane frameless rendering has two surfaces: `zellij action new-pane --borderless <true|false>` on the CLI and `borderless=true` on layout `pane` nodes. Both avoid changing global `pane_frames` ([CLI action definition](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/cli.rs#L1607-L1620), [layout parser](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/kdl/kdl_layout_parser.rs#L90-L91), [pane parse](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/kdl/kdl_layout_parser.rs#L523-L533)).
+The tab mouse handler gathers `focus_follows_mouse` and `mouse_click_through` from tab state, then `determine_mouse_action` returns `FocusPaneAndClickThrough` for a plain left press on an inactive pane only when click-through is enabled and focus-follows-mouse is disabled; otherwise the press focuses the pane and the user needs a later click to reach the terminal/application ([`mouse_handler.rs`](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-server/src/tab/mouse_handler.rs#L470-L485), [`determine_mouse_action`](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-server/src/tab/mouse_handler.rs#L1319-L1540)).
+
+`advanced_mouse_actions` participates in hover chrome, grouping, and resize branches; the click-through branch reads only `mouse_click_through` and `focus_follows_mouse` ([hover branch](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-server/src/tab/mouse_handler.rs#L1212-L1216), [click-through branch](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-server/src/tab/mouse_handler.rs#L1522-L1528)).
+
+Runtime reconfigure parses the supplied KDL with the current client configuration as its base, then `Options::merge` applies only supplied option keys (`other.or(self)`); an absent option stays at its current live value, while an explicit option wins over `config.kdl`. `propagate_configuration_changes` then applies the resulting live config to all tabs ([server reconfigure path](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-server/src/lib.rs#L260-L284), [`Config::from_kdl`](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-utils/src/kdl/mod.rs#L5357-L5368), [`propagate_configuration_changes`](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-server/src/lib.rs#L402-L455)).
+
+The client input handler enables mouse reporting from `mouse_mode`, converts terminal mouse events, and forwards them as `Action::MouseEvent` to the server; the mode-specific key handling sits on the keyboard path, so locked mode still forwards mouse events ([`input_handler.rs`](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-client/src/input_handler.rs#L154-L180), [mouse forwarding](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-client/src/input_handler.rs#L374-L390)).
+
+Per-pane frameless rendering has two surfaces: `zellij action new-pane --borderless <true|false>` on the CLI and `borderless=true` on layout `pane` nodes. Both avoid changing global `pane_frames` ([CLI action definition](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-utils/src/cli.rs#L1515-L1531), [layout parser](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-utils/src/kdl/kdl_layout_parser.rs#L79-L113), [pane parse](https://github.com/zellij-org/zellij/blob/v0.45.0/zellij-utils/src/kdl/kdl_layout_parser.rs#L533-L584)).
 
 ### Plugin aliases
 

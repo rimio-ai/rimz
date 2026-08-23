@@ -61,7 +61,7 @@ Every source uses the petdex sheet geometry — a `1536x1872` image holding an `
 
 ## Crisp pixels and cell art
 
-Two tiers render the same sheet. **Pixel** draws the sprite through the kitty graphics protocol, crisp at native resolution: it works in Ghostty and kitty ([installation](./installation.md#truecolor-terminal-and-a-nerd-font-optional) sets one up), and in the RimZ browser page for tmux rooms; tmux 3.6+ with `allow-passthrough on` (or `all`) remains required. **Sextant** draws the sprite as cell art, each terminal cell split into a 2x3 pixel grid, and works everywhere: Zellij, SSH, stock ttyd pages, and any terminal that shows color.
+Two tiers render the same sheet. **Pixel** draws the sprite through the kitty graphics protocol, crisp at native resolution: it works in Ghostty and kitty ([installation](./installation.md#truecolor-terminal-and-a-nerd-font-optional) sets one up), and in the RimZ browser page for tmux rooms; tmux 3.6+ with `allow-passthrough on` (or `all`) remains required. **Sextant** draws the sprite as cell art, each terminal cell split into a 2x3 pixel grid, and works everywhere: Zellij, SSH, stock ttyd pages, and any terminal that shows color. Zellij 0.45 understands cursor-placed kitty images, but not the unicode-placeholder placement RimZ's pixel painter uses, so pets remain on this portable tier there.
 
 <p align="center">
   <img src="../rimz-pets-sexant.png" alt="rimz list-pets in Alacritty: the same built-in pets rendered as sextant cell art" width="100%">
@@ -76,7 +76,7 @@ Two tiers render the same sheet. **Pixel** draws the sprite through the kitty gr
 | `pixel` | opts past the terminal-name allowlist for newer kitty-compatible terminals, while hard gates such as tmux passthrough still apply |
 | `sextant` | the most portable cell art, on every backend |
 
-`auto` requires every rendering client attached to the tmux room to support RimZ's Kitty subset. Attaching a plain terminal drops the room to sextant within ten seconds; detaching it restores pixels. `glyphs = "sextant"` remains authoritative in the browser, and Zellij remains on sextant.
+`auto` requires every rendering client attached to the tmux room to support RimZ's Kitty subset. Attaching a plain terminal drops the room to sextant within ten seconds; detaching it restores pixels. `glyphs = "sextant"` remains authoritative in the browser, and Zellij remains on sextant. On Zellij 0.45+, `rimz doctor` reports whether the host terminal and Zellij's graphics option can support a future cursor-placement path.
 
 Sextant pets fit their source proportions inside the fixed dashboard footprint. RimZ probes the terminal's cell pixel dimensions when the pty exposes them; Zellij reports no pixel dimensions, so set the ratio manually when its font makes pets look tall or wide: `rimz config set theme.pets.cell_aspect 2.5`. Explicit config wins over the probe, and a neutral `13/6` fallback preserves the previous rendering when neither fact is available.
 

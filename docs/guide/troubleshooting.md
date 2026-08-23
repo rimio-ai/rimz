@@ -102,7 +102,7 @@ Open a fresh terminal window that is not attached to Zellij or tmux, then run `r
 
 ### Zellij or tmux is missing or too old
 
-RimZ needs Zellij 0.44+ or tmux 3.5+ on the machine, and pixel-perfect pets add tmux 3.6+. The `MULTIPLEXER` section reports the detected backend and its version against the floor (`zellij floor: ✓ OK (>= 0.44.0 required)`, or `TOO OLD`). Install or upgrade the multiplexer if the row flags it. When both are installed and doctor resolved the one you did not want, pick a backend explicitly with `--zellij`, `--tmux`, or `--mux <name>`.
+RimZ needs Zellij 0.44+ or tmux 3.5+ on the machine, pixel-perfect pets add tmux 3.6+, and Zellij's kitty-graphics capability requires 0.45+. The `MULTIPLEXER` section reports the detected backend and its version against the floor (`zellij floor: ✓ OK (>= 0.44.0 required)`, or `TOO OLD`). Install or upgrade the multiplexer if the row flags it. When both are installed and doctor resolved the one you did not want, pick a backend explicitly with `--zellij`, `--tmux`, or `--mux <name>`.
 
 ### ttyd is missing, too old, or a browser room will not start
 
@@ -159,7 +159,7 @@ rimz config set theme.style modern        # truecolor + Nerd Font icons
 rimz config set theme.pets.enabled true   # an animated companion on the dashboard
 ```
 
-`modern` needs a Nerd Font installed in the terminal, and pets render as crisp pixels only in Ghostty and kitty; inside tmux that also needs tmux 3.6+ with `allow-passthrough on`. Everywhere else, including Zellij, the pet falls back to cell art. The full appearance model is in [theming](./theme.md); the per-terminal pet notes are in the [pets guide](./pets.md).
+`modern` needs a Nerd Font installed in the terminal, and pets render as crisp pixels only in Ghostty and kitty; inside tmux that also needs tmux 3.6+ with `allow-passthrough on`. Everywhere else, including Zellij, the pet falls back to cell art. From inside Zellij 0.45, the `zellij kitty graphics` doctor row distinguishes an unsupported host terminal and a disabled graphics option; outside Zellij or without a controlling tty it says the capability was not probed. The pet stays cell art because Zellij does not support RimZ's placement mode. The full appearance model is in [theming](./theme.md); the per-terminal pet notes are in the [pets guide](./pets.md).
 
 ### A pane looks stale after upgrading RimZ
 
