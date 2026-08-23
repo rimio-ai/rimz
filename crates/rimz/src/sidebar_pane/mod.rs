@@ -10,12 +10,11 @@
 pub mod app;
 pub mod pets;
 pub(crate) mod pixel;
-#[doc(hidden)]
-pub use pixel::tty::{BarrierSource, GraphicsReplyScanner, TtyBarrierSource};
+pub use pixel::probe::{ZellijKittySupport, probe_zellij_kitty};
 pub use pixel::{
-    PixelRenderCaps, ZellijKittySupport, detect_pixel_render_env, encode_png,
-    inline_placeholder_row, probe_zellij_kitty, transmit_png_chunks, virtual_place,
-    wrap_pixel_payload, write_synchronized_pixel_output,
+    LiveGraphicsPacer, PixelRenderCaps, detect_pixel_render_env, encode_png,
+    inline_placeholder_row, transmit_png_chunks, virtual_place, wrap_pixel_payload,
+    write_synchronized_pixel_output,
 };
 pub mod render;
 pub mod supervise;
