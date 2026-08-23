@@ -131,12 +131,12 @@ The two tiers keep different things in memory. Cell tier renders all 72 grids on
 
 Capabilities come from [`pixel/probe.rs`](../../../crates/rimz/src/sidebar_pane/pixel/probe.rs) as two independent facts:
 
-- **Pixel transport.** Inside tmux: version 3.6 or newer *and* `allow-passthrough` set to `on` or `all` on the pane (falling back to the session). Standalone: always available. Zellij: never.
+- **Pixel transport.** Inside tmux: version 3.6 or newer *and* `allow-passthrough` set to `on` or `all` on the pane (falling back to the session). Standalone: always available. Zellij 0.45 can terminate kitty graphics and `rimz doctor` queries that capability, but its server rejects RimZ's unicode-placeholder placement; the renderer therefore keeps both capability bits off until it has a cursor-placement path.
 - **Kitty clients.** Inside tmux: every rendering client either advertises `xterm-ghostty`, `ghostty`, `xterm-kitty`, or `kitty`, or descends from the live ttyd daemon serving RimZ's current pixel compatibility protocol; control-mode clients are excluded. Standalone: `$TERM` matches the native-terminal list.
 
 Live re-probes fold failures onto the previous reading — a command that fails keeps the last known fact rather than flapping the tier — and every runtime probe only reads. Resize re-probes immediately; a ten-second tmux backstop covers equal-size browser attaches and detaches. One startup command writes: it raises the sidebar's own pane from `allow-passthrough on` to `all`, so graphics transmitted while the window is hidden still reach the terminal. A pane already at `all`, and a user's explicit `off`, stay as they are.
 
-Sextant is the downgrade target because it is the portable baseline. Capability misses, Zellij, `NO_COLOR`, a suppressed body, and a dashboard with no provider column all converge on it.
+Sextant is the downgrade target because it is the portable baseline. Capability misses, Zellij's unsupported placement mode, `NO_COLOR`, a suppressed body, and a dashboard with no provider column all converge on it.
 
 **Geometry follows the tier.** Pixel pets reserve `15x9` cells and cell-art pets reserve `18x9`, with one empty row under either body.
 
