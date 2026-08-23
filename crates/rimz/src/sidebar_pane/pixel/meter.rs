@@ -12,7 +12,7 @@ const CELL_W: u32 = 8;
 const CELL_H: u32 = 16;
 /// Pet sprites use IDs directly above the shared base; their sheets are bounded
 /// far below this offset. Meter slots occupy the range beginning here.
-pub(crate) const METER_ID_OFFSET: u32 = 0x4000;
+const METER_ID_OFFSET: u32 = 0x4000;
 const METER_ID_CAPACITY: u32 = 512;
 
 /// The exact pixel shape of one context meter. Quantizing before interning keeps
@@ -181,11 +181,11 @@ impl MeterPixels {
     }
 }
 
-pub(crate) fn meter_image_id(id_base: u32, index: u32) -> u32 {
+fn meter_image_id(id_base: u32, index: u32) -> u32 {
     (id_base.wrapping_add(METER_ID_OFFSET).wrapping_add(index) & IMAGE_ID_COLOR_MASK).max(1)
 }
 
-pub(crate) fn rasterize(raster: &MeterRaster) -> RgbaImage {
+fn rasterize(raster: &MeterRaster) -> RgbaImage {
     let width = u32::from(raster.width_cells).saturating_mul(CELL_W).max(1);
     let mut image = RgbaImage {
         width,

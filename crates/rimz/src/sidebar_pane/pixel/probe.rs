@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crate::ids::MuxName;
 
 const MIN_PIXEL_TMUX_VERSION: (u32, u32, u32) = (3, 6, 0);
-pub const MIN_PIXEL_ZELLIJ_VERSION: (u32, u32, u32) = (0, 45, 0);
+const MIN_PIXEL_ZELLIJ_VERSION: (u32, u32, u32) = (0, 45, 0);
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(500);
 const KITTY_QUERY_TIMEOUT: Duration = Duration::from_millis(500);
 const KITTY_PROBE_ID: u32 = 0x52_49_4d;

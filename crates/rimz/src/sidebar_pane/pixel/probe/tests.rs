@@ -69,6 +69,26 @@ impl super::super::tty::BarrierSource for FakeKittySource {
     }
 }
 
+#[test]
+fn scanner_surfaces_partial_graphics_reply_payload() {
+    let mut scanner = super::super::tty::GraphicsReplyScanner::default();
+
+    assert!(scanner.push(b"\x1b").is_empty());
+    assert!(scanner.push(b"_Gi=42;OK").is_empty());
+    assert_eq!(scanner.push(b"\x1b\\"), [b"i=42;OK".to_vec()]);
+}
+
+#[test]
+fn scanner_ignores_unrelated_bytes_and_keeps_multiple_replies() {
+    let mut scanner = super::super::tty::GraphicsReplyScanner::default();
+
+    assert!(scanner.push(b"noise\x1b]0;title\x1b\\").is_empty());
+    assert_eq!(
+        scanner.push(b"\x1b_Gi=1;OK\x1b\\\x1b_Gi=2;EINVAL\x1b\\"),
+        [b"i=1;OK".to_vec(), b"i=2;EINVAL".to_vec()]
+    );
+}
+
 impl FakeProbe {
     fn ok() -> Self {
         Self {

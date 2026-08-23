@@ -6,20 +6,19 @@ use std::time::Duration;
 const GRAPHICS_REPLY_START: &[u8] = b"\x1b_G";
 const ESC: u8 = 0x1b;
 
-#[doc(hidden)]
-pub trait BarrierSource {
+pub(super) trait BarrierSource {
     fn poll_read(&mut self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>>;
 
     fn restore(&mut self) {}
 }
 
 #[derive(Default)]
-pub struct GraphicsReplyScanner {
+pub(super) struct GraphicsReplyScanner {
     state: ScannerState,
 }
 
 impl GraphicsReplyScanner {
-    pub fn push(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
+    pub(super) fn push(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
         let mut replies = Vec::new();
         for byte in bytes {
             match &mut self.state {
@@ -57,7 +56,7 @@ impl GraphicsReplyScanner {
         replies
     }
 
-    pub fn reset(&mut self) {
+    pub(super) fn reset(&mut self) {
         self.state = ScannerState::default();
     }
 }
@@ -74,14 +73,14 @@ impl Default for ScannerState {
 }
 
 #[cfg(unix)]
-pub struct TtyBarrierSource {
+pub(super) struct TtyBarrierSource {
     tty: std::fs::File,
     saved: Option<nix::sys::termios::Termios>,
 }
 
 #[cfg(unix)]
 impl TtyBarrierSource {
-    pub fn open_raw() -> io::Result<Self> {
+    pub(super) fn open_raw() -> io::Result<Self> {
         use nix::sys::termios::{self, SetArg};
 
         let tty = std::fs::OpenOptions::new()
@@ -156,29 +155,4 @@ impl Drop for TtyBarrierSource {
 #[cfg(unix)]
 fn nix_to_io(err: nix::errno::Errno) -> io::Error {
     io::Error::from_raw_os_error(err as i32)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scanner_surfaces_partial_graphics_reply_payload() {
-        let mut scanner = GraphicsReplyScanner::default();
-
-        assert!(scanner.push(b"\x1b").is_empty());
-        assert!(scanner.push(b"_Gi=42;OK").is_empty());
-        assert_eq!(scanner.push(b"\x1b\\"), [b"i=42;OK".to_vec()]);
-    }
-
-    #[test]
-    fn scanner_ignores_unrelated_bytes_and_keeps_multiple_replies() {
-        let mut scanner = GraphicsReplyScanner::default();
-
-        assert!(scanner.push(b"noise\x1b]0;title\x1b\\").is_empty());
-        assert_eq!(
-            scanner.push(b"\x1b_Gi=1;OK\x1b\\\x1b_Gi=2;EINVAL\x1b\\"),
-            [b"i=1;OK".to_vec(), b"i=2;EINVAL".to_vec()]
-        );
-    }
 }

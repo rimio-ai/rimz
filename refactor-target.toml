@@ -474,7 +474,7 @@ allowed-imports = [
     "theme",
     "tui",
 ]
-surface-budget = 187
+surface-budget = 190
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/pets"

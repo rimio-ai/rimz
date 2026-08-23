@@ -1,13 +1,13 @@
 //! Shared kitty graphics transport for pane-resident pixel surfaces.
 
 pub(crate) mod meter;
+mod pacing;
 pub(crate) mod probe;
 pub(crate) mod tty;
 
+pub use pacing::LiveGraphicsPacer;
 pub(crate) use probe::detect as detect_pixel_render_caps;
-pub use probe::{
-    PixelRenderCaps, ZellijKittySupport, detect_env as detect_pixel_render_env, probe_zellij_kitty,
-};
+pub use probe::{PixelRenderCaps, detect_env as detect_pixel_render_env};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
@@ -578,7 +578,7 @@ fn kitty_escape(control: &str, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-pub(super) fn tmux_passthrough(payload: &[u8]) -> Vec<u8> {
+fn tmux_passthrough(payload: &[u8]) -> Vec<u8> {
     let mut out = b"\x1bPtmux;".to_vec();
     for byte in payload {
         if *byte == ESC {
@@ -616,7 +616,7 @@ pub(crate) fn placeholder_cluster(row: u16, col: u16) -> String {
     out
 }
 
-pub(crate) fn image_id_rgb(image_id: u32) -> (u8, u8, u8) {
+fn image_id_rgb(image_id: u32) -> (u8, u8, u8) {
     (
         ((image_id >> 16) & 0xff) as u8,
         ((image_id >> 8) & 0xff) as u8,
