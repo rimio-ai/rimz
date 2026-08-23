@@ -468,6 +468,7 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
         }}
     }}
 }}
+stacked_pane_list false
 "#,
         )
     });

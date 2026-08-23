@@ -42,6 +42,10 @@ use crate::ids::PaneId;
 /// floor.
 pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 44, 0);
 
+/// Zellij 0.45's non-focusing pane spawn preserves a background target
+/// without moving any attached client.
+const MIN_NO_FOCUS_ZELLIJ_VERSION: (u32, u32, u32) = (0, 45, 0);
+
 /// Per-attempt bound for the pre-attach health probe.
 const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 

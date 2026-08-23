@@ -160,7 +160,7 @@ impl LiveZellijSession {
         std::fs::write(
             &layout,
             format!(
-                "layout {{\n    pane command=\"sleep\" {{\n        args \"{sleep}\"\n    }}\n}}\n"
+                "layout {{\n    pane command=\"sleep\" {{\n        args \"{sleep}\"\n    }}\n}}\nstacked_pane_list false\n"
             ),
         )
         .expect("write plain layout");

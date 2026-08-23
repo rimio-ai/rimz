@@ -217,6 +217,7 @@ fn split_pane_routes_directional_and_anchored_requests() {
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
 dir=$(dirname "$0")
+if [ "$1" = "--version" ]; then printf 'zellij 0.45.0\n'; exit 0; fi
 printf '%s | pane=%s\n' "$*" "$ZELLIJ_PANE_ID" >> "$dir/zellij.log"
 case " $* " in
   *" action list-panes --all --json "*)
@@ -272,7 +273,7 @@ exit 0
     );
     let anchored = log.lines().last().expect("anchored command");
     assert!(
-        anchored.contains("action new-pane --stacked --near-current-pane | pane=7"),
+        anchored.contains("action new-pane --stacked --no-focus | pane=7"),
         "{log}"
     );
     assert!(
@@ -284,6 +285,37 @@ exit 0
         5,
         "expected split and lookup calls:\n{log}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn split_pane_keeps_the_legacy_anchor_below_zellij_045() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
+printf '%s | pane=%s\n' "$*" "$ZELLIJ_PANE_ID" >> "$dir/zellij.log"
+exit 0
+"#,
+    );
+    ZellijBackend::with_program_for_test(&shim)
+        .split_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: "rimz-test".to_owned(),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+            },
+            placement: SplitPlacement::Stacked,
+            focus: false,
+            ..Default::default()
+        })
+        .expect("anchored stack");
+
+    let log = shim_log(&temp);
+    assert!(
+        log.contains("action new-pane --stacked --near-current-pane | pane=7"),
+        "{log}"
+    );
+    assert!(!log.contains("--no-focus"), "{log}");
 }
 
 #[cfg(unix)]

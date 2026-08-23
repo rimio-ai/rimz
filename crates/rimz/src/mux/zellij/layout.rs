@@ -101,6 +101,10 @@ fn sidebar_pane_kdl(
 /// inherit the session's `--default-cwd` except the daemon hosts and resumed
 /// agents, which carry their own worktree cwd.
 ///
+/// Zellij 0.45 defaults `stacked_pane_list` on, which removes collapsed stack
+/// members from both pane manifests and `list-panes`. RimZ keeps it off so
+/// every agent pane remains observable; older hosts ignore the unknown option.
+///
 /// Zellij 0.44 drops `attach --create-background … options` flags while
 /// starting the detached server, and fixes serialization and metadata behavior
 /// at first-client initialization. The layout therefore carries those options
@@ -193,6 +197,7 @@ pub(super) fn render_session_layout(
 }}
 session_serialization {session_serialization}
 disable_session_metadata {disable_session_metadata}
+stacked_pane_list false
 "#,
         session_serialization = opts.config.zellij.session_serialization,
         disable_session_metadata = opts.config.zellij.disable_session_metadata,

@@ -260,8 +260,8 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
                 pane_id: target.pane_id.clone(),
             },
             cwd: Some(cwd.path().to_string_lossy().into_owned()),
-            command: Some(vec!["sleep".to_owned(), "5".to_owned()]),
-            title: None,
+            command: Some(vec!["sleep".to_owned(), "60".to_owned()]),
+            title: Some("rimz-new-stack".to_owned()),
             close_on_exit: false,
             env: BTreeMap::new(),
             placement: SplitPlacement::Stacked,
@@ -302,7 +302,7 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
     let new_geometry = snapshot
         .panes
         .iter()
-        .find(|pane| pane.terminal_command.as_deref() == Some("sleep 5"))
+        .find(|pane| pane.title.as_deref() == Some("rimz-new-stack"))
         .expect("new pane geometry");
     assert_eq!(
         (new_geometry.pane_x, new_geometry.pane_columns),
