@@ -459,16 +459,16 @@ fn push_capabilities(kv: &mut KeyVals, tally: &mut Tally, capabilities: &Capabil
             let graphics = match caps.kitty_graphics {
                 ZellijKittyGraphics::Supported => verdict(tally, Health::Ok, "supported"),
                 ZellijKittyGraphics::Unsupported => {
-                    verdict(tally, Health::Warn, "unsupported by host terminal")
+                    verdict(tally, Health::Info, "unsupported by host terminal")
                 }
-                ZellijKittyGraphics::ProtocolDisabled => verdict(
+                ZellijKittyGraphics::NoReply => verdict(
                     tally,
-                    Health::Warn,
-                    "disabled by `support_kitty_graphics_protocol`",
+                    Health::Info,
+                    "no reply (graphics disabled or session predates Zellij 0.45)",
                 ),
                 ZellijKittyGraphics::BelowMinimum => verdict(
                     tally,
-                    Health::Warn,
+                    Health::Info,
                     "unavailable (requires Zellij >= 0.45.0)",
                 ),
                 ZellijKittyGraphics::NotProbed => {

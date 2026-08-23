@@ -318,6 +318,78 @@ fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
     );
 }
 
+#[test]
+fn doctor_kitty_probe_completes_inside_a_live_zellij_pane() {
+    require_zellij!();
+
+    let room = LiveZellijSession::new("doctorgraphics");
+    let backend = ZellijBackend::with_runtime_dir(room.path());
+    let version = backend.version().expect("Zellij version");
+    let parsed = version
+        .split_whitespace()
+        .nth(1)
+        .and_then(|version| {
+            let mut parts = version
+                .split('.')
+                .filter_map(|part| part.parse::<u32>().ok());
+            Some((parts.next()?, parts.next()?))
+        })
+        .expect("numeric Zellij major.minor version");
+    if parsed < (0, 45) {
+        return;
+    }
+
+    let _client = AttachedClient::create_and_attach(&room, 80, 24);
+    let output_dir = TempDir::new().expect("doctor output dir");
+    let output_path = output_dir.path().join("doctor.json");
+    let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    let spawned = room
+        .command()
+        .args([
+            "--session",
+            room.name(),
+            "action",
+            "new-pane",
+            "--name",
+            "rimz-doctor-graphics",
+            "--",
+            "sh",
+            "-c",
+            r#""$1" --zellij doctor --json > "$2""#,
+            "rimz-doctor",
+        ])
+        .arg(&rimz)
+        .arg(&output_path)
+        .bounded_output()
+        .expect("spawn doctor inside Zellij pane");
+    assert!(
+        spawned.status.success(),
+        "doctor pane spawn failed: {}",
+        String::from_utf8_lossy(&spawned.stderr),
+    );
+
+    let report = poll_until(
+        Duration::from_secs(10),
+        || {
+            let bytes = std::fs::read(&output_path).map_err(|err| err.to_string())?;
+            serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|err| err.to_string())
+        },
+        |report| {
+            report["mux"]["ready"]["capabilities"]["ready"]["kitty_graphics"]
+                .as_str()
+                .is_some()
+        },
+        "doctor kitty capability from a live Zellij pane",
+    );
+    let graphics = report["mux"]["ready"]["capabilities"]["ready"]["kitty_graphics"]
+        .as_str()
+        .expect("typed kitty graphics state");
+    assert!(
+        matches!(graphics, "supported" | "unsupported" | "no_reply"),
+        "live 0.45+ probe must attempt the round trip: {report:#}"
+    );
+}
+
 /// `paste_text` writes one bracketed paste (`ESC[200~` … `ESC[201~`) with
 /// terminal-style CR line endings — the message delivery path. A raw reader
 /// captures the exact PTY bytes. A leading dash also guards that the byte-write

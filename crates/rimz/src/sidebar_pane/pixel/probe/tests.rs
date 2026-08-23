@@ -386,14 +386,24 @@ fn zellij_kitty_probe_requires_version_and_matching_ok_reply() {
         ZellijKittySupport::Unsupported
     );
 
-    let mut disabled = FakeKittySource::new([None]);
+    let mut no_reply = FakeKittySource::new([None]);
     assert_eq!(
         probe_zellij_kitty_with(
             MIN_PIXEL_ZELLIJ_VERSION,
-            &mut disabled,
+            &mut no_reply,
             std::time::Duration::from_millis(1),
         ),
-        ZellijKittySupport::ProtocolDisabled
+        ZellijKittySupport::NoReply
+    );
+
+    let mut eof = FakeKittySource::new([Some(b"".as_slice())]);
+    assert_eq!(
+        probe_zellij_kitty_with(
+            MIN_PIXEL_ZELLIJ_VERSION,
+            &mut eof,
+            std::time::Duration::from_millis(1),
+        ),
+        ZellijKittySupport::NotProbed
     );
 }
 

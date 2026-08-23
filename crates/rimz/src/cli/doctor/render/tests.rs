@@ -118,8 +118,8 @@ fn zellij_graphics_capability_names_each_probe_outcome() {
             "unsupported by host terminal",
         ),
         (
-            ZellijKittyGraphics::ProtocolDisabled,
-            "disabled by `support_kitty_graphics_protocol`",
+            ZellijKittyGraphics::NoReply,
+            "graphics disabled or session predates Zellij 0.45",
         ),
         (
             ZellijKittyGraphics::BelowMinimum,
@@ -146,6 +146,31 @@ fn zellij_graphics_capability_names_each_probe_outcome() {
 
         assert!(out.contains("zellij kitty graphics"), "{out}");
         assert!(out.contains(expected), "{out}");
+    }
+}
+
+#[test]
+fn zellij_graphics_capability_does_not_degrade_doctor_health() {
+    for kitty_graphics in [
+        ZellijKittyGraphics::Unsupported,
+        ZellijKittyGraphics::NoReply,
+        ZellijKittyGraphics::BelowMinimum,
+        ZellijKittyGraphics::NotProbed,
+    ] {
+        let mut kv = KeyVals::new();
+        let mut tally = Tally::default();
+        push_capabilities(
+            &mut kv,
+            &mut tally,
+            &Capabilities::Zellij(Probe::Ready(ZellijCaps {
+                meets_min_version: true,
+                min_version: (0, 44, 0),
+                kitty_graphics,
+            })),
+        );
+
+        assert!(tally.warns.is_empty(), "{kitty_graphics:?}");
+        assert!(tally.alarms.is_empty(), "{kitty_graphics:?}");
     }
 }
 

@@ -424,9 +424,7 @@ fn collect_zellij_capabilities() -> model::Probe<model::ZellijCaps> {
             let kitty_graphics = match rimz::sidebar_pane::probe_zellij_kitty(caps.parsed_version) {
                 ZellijKittySupport::Supported => model::ZellijKittyGraphics::Supported,
                 ZellijKittySupport::Unsupported => model::ZellijKittyGraphics::Unsupported,
-                ZellijKittySupport::ProtocolDisabled => {
-                    model::ZellijKittyGraphics::ProtocolDisabled
-                }
+                ZellijKittySupport::NoReply => model::ZellijKittyGraphics::NoReply,
                 ZellijKittySupport::BelowMinimum => model::ZellijKittyGraphics::BelowMinimum,
                 ZellijKittySupport::NotProbed => model::ZellijKittyGraphics::NotProbed,
             };
