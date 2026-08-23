@@ -3,9 +3,9 @@
 use std::io;
 use std::time::{Duration, Instant};
 
+use rimz::sidebar_pane::{BarrierSource, GraphicsReplyScanner, TtyBarrierSource};
+
 const ACK_TIMEOUT: Duration = Duration::from_millis(500);
-const GRAPHICS_REPLY_START: &[u8] = b"\x1b_G";
-const ESC: u8 = 0x1b;
 
 #[cfg(unix)]
 pub(crate) type LiveGraphicsPacer = GraphicsPacer<TtyBarrierSource>;
@@ -15,7 +15,7 @@ pub(crate) type LiveGraphicsPacer = NoopGraphicsPacer;
 
 pub(crate) struct GraphicsPacer<S: BarrierSource> {
     source: S,
-    scanner: GraphicsAckScanner,
+    scanner: GraphicsReplyScanner,
     active: bool,
     owed_ack: bool,
     timeout: Duration,
@@ -29,7 +29,7 @@ impl<S: BarrierSource> GraphicsPacer<S> {
     fn with_timeout(source: S, timeout: Duration) -> Self {
         Self {
             source,
-            scanner: GraphicsAckScanner::default(),
+            scanner: GraphicsReplyScanner::default(),
             active: true,
             owed_ack: false,
             timeout,
@@ -64,7 +64,7 @@ impl<S: BarrierSource> GraphicsPacer<S> {
             match self.source.poll_read(&mut buf, remaining) {
                 Ok(Some(0)) | Ok(None) => return false,
                 Ok(Some(read)) => {
-                    if self.scanner.push(&buf[..read]) {
+                    if !self.scanner.push(&buf[..read]).is_empty() {
                         return true;
                     }
                 }
@@ -118,128 +118,11 @@ impl<S: BarrierSource> PixelPacer for GraphicsPacer<S> {
     }
 }
 
-pub(crate) trait BarrierSource {
-    fn poll_read(&mut self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>>;
-
-    fn restore(&mut self) {}
-}
-
-#[derive(Default)]
-struct GraphicsAckScanner {
-    state: ScannerState,
-}
-
-impl GraphicsAckScanner {
-    fn push(&mut self, bytes: &[u8]) -> bool {
-        for byte in bytes {
-            match &mut self.state {
-                ScannerState::Seeking { matched } => {
-                    if *byte == GRAPHICS_REPLY_START[*matched] {
-                        *matched += 1;
-                        if *matched == GRAPHICS_REPLY_START.len() {
-                            self.state = ScannerState::InReply { saw_esc: false };
-                        }
-                    } else {
-                        *matched = usize::from(*byte == GRAPHICS_REPLY_START[0]);
-                    }
-                }
-                ScannerState::InReply { saw_esc } => {
-                    if *saw_esc && *byte == b'\\' {
-                        self.reset();
-                        return true;
-                    }
-                    *saw_esc = *byte == ESC;
-                }
-            }
-        }
-        false
-    }
-
-    fn reset(&mut self) {
-        self.state = ScannerState::default();
-    }
-}
-
-enum ScannerState {
-    Seeking { matched: usize },
-    InReply { saw_esc: bool },
-}
-
-impl Default for ScannerState {
-    fn default() -> Self {
-        Self::Seeking { matched: 0 }
-    }
-}
-
-#[cfg(unix)]
-pub(crate) struct TtyBarrierSource {
-    tty: std::fs::File,
-    saved: Option<nix::sys::termios::Termios>,
-}
-
 #[cfg(unix)]
 impl GraphicsPacer<TtyBarrierSource> {
     pub(super) fn open() -> Option<Self> {
-        TtyBarrierSource::open().ok().map(Self::new)
+        TtyBarrierSource::open_raw().ok().map(Self::new)
     }
-}
-
-#[cfg(unix)]
-impl TtyBarrierSource {
-    fn open() -> io::Result<Self> {
-        use nix::sys::termios::{self, SetArg};
-
-        let tty = std::fs::OpenOptions::new().read(true).open("/dev/tty")?;
-        let saved = termios::tcgetattr(&tty).map_err(nix_to_io)?;
-        let mut raw = saved.clone();
-        termios::cfmakeraw(&mut raw);
-        raw.output_flags = saved.output_flags;
-        termios::tcsetattr(&tty, SetArg::TCSANOW, &raw).map_err(nix_to_io)?;
-        Ok(Self {
-            tty,
-            saved: Some(saved),
-        })
-    }
-}
-
-#[cfg(unix)]
-impl BarrierSource for TtyBarrierSource {
-    fn poll_read(&mut self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
-        use std::io::Read;
-        use std::os::fd::AsFd;
-
-        use nix::errno::Errno;
-        use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
-
-        let mut fds = [PollFd::new(self.tty.as_fd(), PollFlags::POLLIN)];
-        let timeout = PollTimeout::try_from(timeout).map_err(io::Error::other)?;
-        match poll(&mut fds, timeout) {
-            Ok(0) => Ok(None),
-            Ok(_)
-                if fds[0]
-                    .revents()
-                    .is_some_and(|events| events.contains(PollFlags::POLLIN)) =>
-            {
-                self.tty.read(buf).map(Some)
-            }
-            Ok(_) => Ok(None),
-            Err(Errno::EINTR) => Err(io::Error::from(io::ErrorKind::Interrupted)),
-            Err(err) => Err(nix_to_io(err)),
-        }
-    }
-
-    fn restore(&mut self) {
-        use nix::sys::termios::{self, SetArg};
-
-        if let Some(saved) = self.saved.take() {
-            let _ = termios::tcsetattr(&self.tty, SetArg::TCSANOW, &saved);
-        }
-    }
-}
-
-#[cfg(unix)]
-fn nix_to_io(err: nix::errno::Errno) -> io::Error {
-    io::Error::from_raw_os_error(err as i32)
 }
 
 #[cfg(not(unix))]
@@ -267,23 +150,6 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;
-
-    #[test]
-    fn scanner_accepts_partial_graphics_reply() {
-        let mut scanner = GraphicsAckScanner::default();
-
-        assert!(!scanner.push(b"\x1b"));
-        assert!(!scanner.push(b"_G;OK"));
-        assert!(scanner.push(b"\x1b\\"));
-    }
-
-    #[test]
-    fn scanner_ignores_unrelated_bytes() {
-        let mut scanner = GraphicsAckScanner::default();
-
-        assert!(!scanner.push(b"noise\x1b]0;title\x1b\\"));
-        assert!(scanner.push(b"\x1b_Gi=42;OK\x1b\\"));
-    }
 
     #[test]
     fn pacer_waits_once_per_acknowledged_image() {

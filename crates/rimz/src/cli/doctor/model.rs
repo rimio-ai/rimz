@@ -355,6 +355,17 @@ pub(super) enum Capabilities {
 pub(super) struct ZellijCaps {
     pub(super) meets_min_version: bool,
     pub(super) min_version: (u32, u32, u32),
+    pub(super) kitty_graphics: ZellijKittyGraphics,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ZellijKittyGraphics {
+    Supported,
+    Unsupported,
+    ProtocolDisabled,
+    BelowMinimum,
+    NotProbed,
 }
 
 #[derive(Debug, Serialize)]

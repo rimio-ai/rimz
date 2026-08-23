@@ -1,6 +1,6 @@
 use super::*;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 const TEST_SESSION: &str = "rimz-test";
 
@@ -24,6 +24,49 @@ struct FakeProbe {
     env: BTreeMap<String, String>,
     passthrough_targets: RefCell<Vec<String>>,
     passthrough_all_panes: RefCell<Vec<String>>,
+}
+
+struct FakeKittySource {
+    reads: VecDeque<Option<&'static [u8]>>,
+    writes: Vec<u8>,
+    read_count: usize,
+}
+
+impl FakeKittySource {
+    fn new(reads: impl IntoIterator<Item = Option<&'static [u8]>>) -> Self {
+        Self {
+            reads: reads.into_iter().collect(),
+            writes: Vec::new(),
+            read_count: 0,
+        }
+    }
+}
+
+impl io::Write for FakeKittySource {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.writes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl super::super::tty::BarrierSource for FakeKittySource {
+    fn poll_read(
+        &mut self,
+        buf: &mut [u8],
+        _timeout: std::time::Duration,
+    ) -> io::Result<Option<usize>> {
+        self.read_count += 1;
+        let Some(bytes) = self.reads.pop_front().flatten() else {
+            return Ok(None);
+        };
+        let len = bytes.len().min(buf.len());
+        buf[..len].copy_from_slice(&bytes[..len]);
+        Ok(Some(len))
+    }
 }
 
 impl FakeProbe {
@@ -269,6 +312,68 @@ fn tmux_pixel_gate_requires_version_passthrough_and_allowed_termname() {
             pixel_transport: true,
             kitty_clients: false,
         }
+    );
+}
+
+#[test]
+fn zellij_resize_probe_holds_the_startup_caps() {
+    let caps = PixelRenderCaps {
+        pixel_transport: true,
+        kitty_clients: true,
+    };
+
+    assert_eq!(
+        detect_with(MuxName::Zellij, TEST_SESSION, caps, &FakeProbe::ok()),
+        caps
+    );
+}
+
+#[test]
+fn zellij_kitty_probe_requires_version_and_matching_ok_reply() {
+    let mut old = FakeKittySource::new([]);
+    assert_eq!(
+        probe_zellij_kitty_with((0, 44, 3), &mut old, std::time::Duration::ZERO),
+        ZellijKittySupport::BelowMinimum
+    );
+    assert!(old.writes.is_empty());
+    assert_eq!(old.read_count, 0);
+
+    let mut supported = FakeKittySource::new([
+        Some(b"noise\x1b_Gi=31;OK\x1b\\".as_slice()),
+        Some(b"\x1b_Gi=5392717;OK\x1b\\".as_slice()),
+    ]);
+    assert_eq!(
+        probe_zellij_kitty_with(
+            MIN_PIXEL_ZELLIJ_VERSION,
+            &mut supported,
+            std::time::Duration::from_millis(1),
+        ),
+        ZellijKittySupport::Supported
+    );
+    assert_eq!(
+        supported.writes,
+        b"\x1b_Ga=q,i=5392717,s=1,v=1,t=d,f=24;AAAA\x1b\\"
+    );
+
+    let mut unsupported =
+        FakeKittySource::new([Some(b"\x1b_Gi=5392717;ENOTSUPPORTED:host\x1b\\".as_slice())]);
+    assert_eq!(
+        probe_zellij_kitty_with(
+            MIN_PIXEL_ZELLIJ_VERSION,
+            &mut unsupported,
+            std::time::Duration::from_millis(1),
+        ),
+        ZellijKittySupport::Unsupported
+    );
+
+    let mut disabled = FakeKittySource::new([None]);
+    assert_eq!(
+        probe_zellij_kitty_with(
+            MIN_PIXEL_ZELLIJ_VERSION,
+            &mut disabled,
+            std::time::Duration::from_millis(1),
+        ),
+        ZellijKittySupport::ProtocolDisabled
     );
 }
 
