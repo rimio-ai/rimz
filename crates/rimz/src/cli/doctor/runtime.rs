@@ -11,6 +11,7 @@ use rimz::mux::{
     tmux::{self as tmux_mod, MIN_TMUX_VERSION},
     zellij::{self as zellij_mod, MIN_ZELLIJ_VERSION},
 };
+use rimz::sidebar_pane::ZellijKittySupport;
 use rimz::store::event::SessionDeathCause;
 use rimz::{RuntimePaths, StatePaths};
 
@@ -419,10 +420,22 @@ fn collect_session_health(
 
 fn collect_zellij_capabilities() -> model::Probe<model::ZellijCaps> {
     match zellij_mod::capabilities() {
-        Ok(caps) => model::Probe::Ready(model::ZellijCaps {
-            meets_min_version: caps.meets_min_version,
-            min_version: MIN_ZELLIJ_VERSION,
-        }),
+        Ok(caps) => {
+            let kitty_graphics = match rimz::sidebar_pane::probe_zellij_kitty(caps.parsed_version) {
+                ZellijKittySupport::Supported => model::ZellijKittyGraphics::Supported,
+                ZellijKittySupport::Unsupported => model::ZellijKittyGraphics::Unsupported,
+                ZellijKittySupport::ProtocolDisabled => {
+                    model::ZellijKittyGraphics::ProtocolDisabled
+                }
+                ZellijKittySupport::BelowMinimum => model::ZellijKittyGraphics::BelowMinimum,
+                ZellijKittySupport::NotProbed => model::ZellijKittyGraphics::NotProbed,
+            };
+            model::Probe::Ready(model::ZellijCaps {
+                meets_min_version: caps.meets_min_version,
+                min_version: MIN_ZELLIJ_VERSION,
+                kitty_graphics,
+            })
+        }
         Err(err) => model::Probe::Unavailable {
             error: err.to_string(),
         },

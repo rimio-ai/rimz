@@ -1,17 +1,99 @@
 //! Probes terminal and tmux capabilities for shared kitty graphics support.
 
-use std::io;
-use std::time::Duration;
+use std::io::{self, Write};
+use std::time::{Duration, Instant};
 
 use crate::ids::MuxName;
 
 const MIN_PIXEL_TMUX_VERSION: (u32, u32, u32) = (3, 6, 0);
+pub const MIN_PIXEL_ZELLIJ_VERSION: (u32, u32, u32) = (0, 45, 0);
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(500);
+const KITTY_QUERY_TIMEOUT: Duration = Duration::from_millis(500);
+const KITTY_PROBE_ID: u32 = 0x52_49_4d;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PixelRenderCaps {
     pub pixel_transport: bool,
     pub kitty_clients: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZellijKittySupport {
+    Supported,
+    Unsupported,
+    ProtocolDisabled,
+    BelowMinimum,
+    NotProbed,
+}
+
+pub fn probe_zellij_kitty(version: Option<(u32, u32, u32)>) -> ZellijKittySupport {
+    let Some(version) = version else {
+        return ZellijKittySupport::NotProbed;
+    };
+    if version < MIN_PIXEL_ZELLIJ_VERSION {
+        return ZellijKittySupport::BelowMinimum;
+    }
+    if std::env::var_os("ZELLIJ").is_none_or(|value| value.is_empty()) {
+        return ZellijKittySupport::NotProbed;
+    }
+
+    #[cfg(unix)]
+    {
+        let Ok(mut tty) = super::tty::TtyBarrierSource::open_raw() else {
+            return ZellijKittySupport::NotProbed;
+        };
+        probe_zellij_kitty_with(version, &mut tty, KITTY_QUERY_TIMEOUT)
+    }
+    #[cfg(not(unix))]
+    {
+        ZellijKittySupport::NotProbed
+    }
+}
+
+fn probe_zellij_kitty_with(
+    version: (u32, u32, u32),
+    source: &mut (impl super::tty::BarrierSource + Write),
+    timeout: Duration,
+) -> ZellijKittySupport {
+    if version < MIN_PIXEL_ZELLIJ_VERSION {
+        return ZellijKittySupport::BelowMinimum;
+    }
+
+    let query = format!("\x1b_Ga=q,i={KITTY_PROBE_ID},s=1,v=1,t=d,f=24;AAAA\x1b\\");
+    if source
+        .write_all(query.as_bytes())
+        .and_then(|()| source.flush())
+        .is_err()
+    {
+        return ZellijKittySupport::NotProbed;
+    }
+
+    let expected = format!("i={KITTY_PROBE_ID};");
+    let mut scanner = super::tty::GraphicsReplyScanner::default();
+    let deadline = Instant::now() + timeout;
+    let mut buf = [0_u8; 256];
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return ZellijKittySupport::ProtocolDisabled;
+        };
+        match source.poll_read(&mut buf, remaining) {
+            Ok(Some(0)) | Ok(None) => return ZellijKittySupport::ProtocolDisabled,
+            Ok(Some(read)) => {
+                for payload in scanner.push(&buf[..read]) {
+                    let Some(status) = payload.strip_prefix(expected.as_bytes()) else {
+                        continue;
+                    };
+                    return if status == b"OK" {
+                        ZellijKittySupport::Supported
+                    } else {
+                        ZellijKittySupport::Unsupported
+                    };
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => return ZellijKittySupport::NotProbed,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,7 +143,7 @@ fn detect_with(
 ) -> PixelRenderCaps {
     match probed_mux {
         MuxName::Tmux => detect_tmux(session_name, probe, prev),
-        MuxName::Zellij => detect_zellij(probe),
+        MuxName::Zellij => detect_zellij(prev),
     }
 }
 
@@ -74,7 +156,7 @@ fn detect_env_with(probe: &impl Probe) -> (PixelRenderCaps, bool) {
         return (caps, true);
     }
     if env_present(probe, "ZELLIJ") {
-        return (detect_zellij(probe), false);
+        return (PixelRenderCaps::default(), false);
     }
     (detect_standalone(probe), false)
 }
@@ -106,8 +188,8 @@ fn detect_tmux(session_name: &str, probe: &impl Probe, prev: PixelRenderCaps) ->
     }
 }
 
-fn detect_zellij(_probe: &impl Probe) -> PixelRenderCaps {
-    PixelRenderCaps::default()
+fn detect_zellij(prev: PixelRenderCaps) -> PixelRenderCaps {
+    prev
 }
 
 fn detect_standalone(probe: &impl Probe) -> PixelRenderCaps {

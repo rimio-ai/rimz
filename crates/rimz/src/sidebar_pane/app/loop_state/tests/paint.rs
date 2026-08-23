@@ -337,3 +337,32 @@ fn stale_tmux_caps_reprobe_is_bounded_and_adopts_changes() {
         |_, _, _| panic!("Zellij caps must not re-probe"),
     ));
 }
+
+#[test]
+fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
+    for glyphs in [
+        crate::config::PetsGlyphMode::Auto,
+        crate::config::PetsGlyphMode::Pixel,
+        crate::config::PetsGlyphMode::Sextant,
+    ] {
+        assert_eq!(
+            crate::sidebar_pane::pets::effective_render_tier(
+                glyphs,
+                crate::config::PixelMode::Auto,
+                PixelRenderCaps::default(),
+                true,
+            ),
+            crate::sidebar_pane::pets::PetRenderTier::Cell,
+            "{glyphs:?} must stay on the implemented Zellij placement path"
+        );
+    }
+
+    let mut rig = Rig::new();
+    rig.state.ui.meter_pixels = Some(crate::sidebar_pane::pixel::meter::MeterPixels::new(1));
+    let snapshot = rig.state.current.clone();
+    rig.state
+        .paint
+        .refresh_view(&mut rig.state.ui, &snapshot, false);
+
+    assert!(rig.state.ui.meter_pixels.is_none());
+}

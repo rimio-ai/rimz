@@ -20,7 +20,7 @@ use super::model::{
     MachineConfigProblemKind, MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow,
     Presence, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry, PresencePlugins,
     Probe, Protocols, RemoteAgent, RemoteControl, Room, RoomState, SessionHealth, Storage,
-    Terminal, TopologyWriterHealth, Trust, Version, Workspace,
+    Terminal, TopologyWriterHealth, Trust, Version, Workspace, ZellijKittyGraphics,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -451,10 +451,32 @@ fn mux_version_cell(tally: &mut Tally, version: &Version) -> Cell {
 
 fn push_capabilities(kv: &mut KeyVals, tally: &mut Tally, capabilities: &Capabilities) {
     match capabilities {
-        Capabilities::Zellij(Probe::Ready(caps)) => kv.push(
-            "zellij floor",
-            floor_cell(tally, caps.meets_min_version, caps.min_version),
-        ),
+        Capabilities::Zellij(Probe::Ready(caps)) => {
+            kv.push(
+                "zellij floor",
+                floor_cell(tally, caps.meets_min_version, caps.min_version),
+            );
+            let graphics = match caps.kitty_graphics {
+                ZellijKittyGraphics::Supported => verdict(tally, Health::Ok, "supported"),
+                ZellijKittyGraphics::Unsupported => {
+                    verdict(tally, Health::Warn, "unsupported by host terminal")
+                }
+                ZellijKittyGraphics::ProtocolDisabled => verdict(
+                    tally,
+                    Health::Warn,
+                    "disabled by `support_kitty_graphics_protocol`",
+                ),
+                ZellijKittyGraphics::BelowMinimum => verdict(
+                    tally,
+                    Health::Warn,
+                    "unavailable (requires Zellij >= 0.45.0)",
+                ),
+                ZellijKittyGraphics::NotProbed => {
+                    cell("not probed (outside Zellij or no controlling tty)").fg(palette::faint())
+                }
+            };
+            kv.push("zellij kitty graphics", graphics);
+        }
         Capabilities::Zellij(Probe::Unavailable { error }) => {
             kv.push("zellij floor", unavailable(tally, Health::Warn, error));
         }

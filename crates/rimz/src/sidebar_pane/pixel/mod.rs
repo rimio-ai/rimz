@@ -2,9 +2,12 @@
 
 pub(crate) mod meter;
 pub(crate) mod probe;
+pub(crate) mod tty;
 
 pub(crate) use probe::detect as detect_pixel_render_caps;
-pub use probe::{PixelRenderCaps, detect_env as detect_pixel_render_env};
+pub use probe::{
+    PixelRenderCaps, ZellijKittySupport, detect_env as detect_pixel_render_env, probe_zellij_kitty,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};

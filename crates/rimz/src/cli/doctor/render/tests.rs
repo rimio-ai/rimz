@@ -3,7 +3,7 @@ use crate::cli::doctor::model::{
     HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow, MachineConfigProblem,
     MachineConfigProblemKind, MessageProblemRow, MuxBinaries, MuxLogIssue, OpenCounts,
     PresenceCommandFailure, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry,
-    PresencePlugins, RemoteAgent, StorageRootView, TmuxCaps,
+    PresencePlugins, RemoteAgent, StorageRootView, TmuxCaps, ZellijCaps, ZellijKittyGraphics,
 };
 use rimz::ids::MuxName;
 
@@ -106,6 +106,46 @@ fn mux_fixture() -> Mux {
         presence: None,
         topology_writer: None,
         ttyd: None,
+    }
+}
+
+#[test]
+fn zellij_graphics_capability_names_each_probe_outcome() {
+    let cases = [
+        (ZellijKittyGraphics::Supported, "supported"),
+        (
+            ZellijKittyGraphics::Unsupported,
+            "unsupported by host terminal",
+        ),
+        (
+            ZellijKittyGraphics::ProtocolDisabled,
+            "disabled by `support_kitty_graphics_protocol`",
+        ),
+        (
+            ZellijKittyGraphics::BelowMinimum,
+            "requires Zellij >= 0.45.0",
+        ),
+        (ZellijKittyGraphics::NotProbed, "not probed"),
+    ];
+
+    for (kitty_graphics, expected) in cases {
+        let out = strip(|w| {
+            let mut kv = KeyVals::new();
+            let mut tally = Tally::default();
+            push_capabilities(
+                &mut kv,
+                &mut tally,
+                &Capabilities::Zellij(Probe::Ready(ZellijCaps {
+                    meets_min_version: true,
+                    min_version: (0, 44, 0),
+                    kitty_graphics,
+                })),
+            );
+            kv.render(w)
+        });
+
+        assert!(out.contains("zellij kitty graphics"), "{out}");
+        assert!(out.contains(expected), "{out}");
     }
 }
 
