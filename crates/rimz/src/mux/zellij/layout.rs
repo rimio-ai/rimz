@@ -102,7 +102,7 @@ fn sidebar_pane_kdl(
 /// agents, which carry their own worktree cwd.
 ///
 /// Zellij 0.45 defaults `stacked_pane_list` on, which removes collapsed stack
-/// members from both pane manifests and `list-panes`. RimZ keeps it off so
+/// members from both pane manifests and the CLI pane roster. RimZ keeps it off so
 /// every agent pane remains observable; older hosts ignore the unknown option.
 ///
 /// Zellij 0.44 drops `attach --create-background … options` flags while
