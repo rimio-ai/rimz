@@ -363,7 +363,7 @@ pub(super) struct ZellijCaps {
 pub(super) enum ZellijKittyGraphics {
     Supported,
     Unsupported,
-    ProtocolDisabled,
+    NoReply,
     BelowMinimum,
     NotProbed,
 }

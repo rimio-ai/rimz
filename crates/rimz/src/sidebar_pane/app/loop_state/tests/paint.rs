@@ -340,6 +340,10 @@ fn stale_tmux_caps_reprobe_is_bounded_and_adopts_changes() {
 
 #[test]
 fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
+    let caps =
+        crate::sidebar_pane::app::initial_pet_render_caps(crate::MuxName::Zellij, "rimz-test");
+    assert_eq!(caps, PixelRenderCaps::default());
+
     for glyphs in [
         crate::config::PetsGlyphMode::Auto,
         crate::config::PetsGlyphMode::Pixel,
@@ -349,7 +353,7 @@ fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
             crate::sidebar_pane::pets::effective_render_tier(
                 glyphs,
                 crate::config::PixelMode::Auto,
-                PixelRenderCaps::default(),
+                caps,
                 true,
             ),
             crate::sidebar_pane::pets::PetRenderTier::Cell,
@@ -357,7 +361,8 @@ fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
         );
     }
 
-    let mut rig = Rig::new();
+    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let mut rig = Rig::with_own_pane(own_pane);
     rig.state.ui.meter_pixels = Some(crate::sidebar_pane::pixel::meter::MeterPixels::new(1));
     let snapshot = rig.state.current.clone();
     rig.state

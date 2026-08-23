@@ -21,7 +21,7 @@ pub struct PixelRenderCaps {
 pub enum ZellijKittySupport {
     Supported,
     Unsupported,
-    ProtocolDisabled,
+    NoReply,
     BelowMinimum,
     NotProbed,
 }
@@ -74,10 +74,11 @@ fn probe_zellij_kitty_with(
     let mut buf = [0_u8; 256];
     loop {
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-            return ZellijKittySupport::ProtocolDisabled;
+            return ZellijKittySupport::NoReply;
         };
         match source.poll_read(&mut buf, remaining) {
-            Ok(Some(0)) | Ok(None) => return ZellijKittySupport::ProtocolDisabled,
+            Ok(Some(0)) => return ZellijKittySupport::NotProbed,
+            Ok(None) => return ZellijKittySupport::NoReply,
             Ok(Some(read)) => {
                 for payload in scanner.push(&buf[..read]) {
                     let Some(status) = payload.strip_prefix(expected.as_bytes()) else {

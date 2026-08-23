@@ -128,6 +128,10 @@ pub enum ServeOutcome {
     SelfCloseRequested,
 }
 
+fn initial_pet_render_caps(mux: MuxName, session_name: &str) -> PixelRenderCaps {
+    detect_pixel_render_caps(mux, session_name, PixelRenderCaps::default())
+}
+
 pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     crate::build_id::warm();
     reap_inherited_zombies();
@@ -162,8 +166,7 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     // store uses, so a resize is just another wakeup; without it the first
     // usable frame waits for the next `tick`, reading as a blank sidebar.
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main)?;
-    let pet_render_caps =
-        detect_pixel_render_caps(config.mux, &config.session_name, PixelRenderCaps::default());
+    let pet_render_caps = initial_pet_render_caps(config.mux, &config.session_name);
     if config.mux == MuxName::Tmux
         && let Err(err) = escalate_own_pane_passthrough()
     {

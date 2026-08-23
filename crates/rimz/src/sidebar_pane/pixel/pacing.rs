@@ -1,10 +1,16 @@
 //! TTY barrier for pacing multi-image kitty graphics output through tmux.
 
+#[cfg(any(unix, test))]
 use std::io;
+#[cfg(any(unix, test))]
 use std::time::{Duration, Instant};
 
-use super::tty::{BarrierSource, GraphicsReplyScanner, TtyBarrierSource};
+#[cfg(unix)]
+use super::tty::TtyBarrierSource;
+#[cfg(any(unix, test))]
+use super::tty::{BarrierSource, GraphicsReplyScanner};
 
+#[cfg(any(unix, test))]
 const ACK_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub struct LiveGraphicsPacer {
@@ -40,6 +46,7 @@ impl LiveGraphicsPacer {
     }
 }
 
+#[cfg(any(unix, test))]
 struct GraphicsPacer<S: BarrierSource> {
     source: S,
     scanner: GraphicsReplyScanner,
@@ -48,6 +55,7 @@ struct GraphicsPacer<S: BarrierSource> {
     timeout: Duration,
 }
 
+#[cfg(any(unix, test))]
 impl<S: BarrierSource> GraphicsPacer<S> {
     fn new(source: S) -> Self {
         Self::with_timeout(source, ACK_TIMEOUT)
@@ -122,6 +130,7 @@ impl<S: BarrierSource> GraphicsPacer<S> {
     }
 }
 
+#[cfg(any(unix, test))]
 impl<S: BarrierSource> Drop for GraphicsPacer<S> {
     fn drop(&mut self) {
         self.drain_owed_ack();
