@@ -37,4 +37,4 @@ serde_json.workspace = true
 # RimZ's supported Zellij hosts. The host-side `MIN_ZELLIJ_VERSION` gate in
 # `capabilities()` rejects older versions before room startup.
 [target.'cfg(target_family = "wasm")'.dependencies]
-zellij-tile = "0.44"
+zellij-tile = "0.45"
