@@ -41,9 +41,6 @@ deny = [
     { name = "fs2", reason = "unmaintained; use std `File` locking instead" },
 ]
 skip = [
-    # The HTTP stack and headless browser fixture still pin base64 0.22 while
-    # RimZ's direct browser-input codec tracks 0.23; drop when those roots move.
-    { crate = "base64@0.22.1", reason = "ureq and headless_chrome pin base64 0.22; workspace direct dependency is 0.23" },
     # The `ring` crypto backend reached via `ureq`/`rustls` pins older support
     # crates than the rest of the tree; isolated to the TLS stack, drop when ring
     # catches up. (The former wit-bindgen and windows-sys skips left with the
@@ -54,9 +51,9 @@ skip = [
     { crate = "getrandom@0.3.4", reason = "proptest and sentry-core's rand 0.9 pin getrandom 0.3; uuid and tungstenite carry 0.4" },
     { crate = "rand@0.9.4", reason = "proptest and sentry retain rand 0.9; tungstenite carries rand 0.10" },
     { crate = "rand_core@0.9.5", reason = "proptest and sentry's rand 0.9 pins rand_core 0.9; tungstenite carries 0.10" },
-    # `thiserror-impl` 2.0.19 leads the proc-macro stack onto syn 3; every other
+    # `thiserror-impl` 2.0.20 leads the proc-macro stack onto syn 3; every other
     # derive crate still carries syn 2. Drop when the rest follow.
-    { crate = "syn@3.0.3", reason = "thiserror-impl 2.0.19 pins syn 3; the rest of the proc-macro stack carries syn 2" },
+    { crate = "syn@3.0.3", reason = "thiserror-impl 2.0.20 pins syn 3; the rest of the proc-macro stack carries syn 2" },
     # `toml_edit`/`indexmap` has moved to hashbrown 0.17 while the ratatui
     # stack still carries 0.16; drop when either upstream converges.
     { crate = "hashbrown@0.17.1", reason = "toml_edit/indexmap pins hashbrown 0.17; ratatui stack pins 0.16" },
