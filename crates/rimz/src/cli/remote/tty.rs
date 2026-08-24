@@ -1,5 +1,5 @@
 use std::io::{self, IsTerminal, Write};
-use std::os::fd::AsFd as _;
+use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
 
 use nix::errno::Errno;
@@ -58,44 +58,7 @@ impl TtyGuard {
             return;
         }
 
-        let started = Instant::now();
-        let deadline = started + SETTLE_MAX;
-        let mut quiet_deadline = started + SETTLE_QUIET;
-        let mut buffer = [0_u8; 256];
-        loop {
-            let now = Instant::now();
-            let wait_until = quiet_deadline.min(deadline);
-            if now >= wait_until {
-                break;
-            }
-            let timeout = PollTimeout::try_from(wait_until.saturating_duration_since(now))
-                .unwrap_or(PollTimeout::MAX);
-            let mut fds = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];
-            match poll(&mut fds, timeout) {
-                Ok(0) => break,
-                Ok(_)
-                    if fds[0]
-                        .revents()
-                        .is_some_and(|events| events.contains(PollFlags::POLLIN)) =>
-                {
-                    match nix::unistd::read(&stdin, &mut buffer) {
-                        Ok(0) => break,
-                        Ok(_) => quiet_deadline = Instant::now() + SETTLE_QUIET,
-                        Err(Errno::EINTR) => {}
-                        Err(err) => {
-                            tracing::debug!(error = %err, "local tty settle read failed");
-                            break;
-                        }
-                    }
-                }
-                Ok(_) => break,
-                Err(Errno::EINTR) => {}
-                Err(err) => {
-                    tracing::debug!(error = %err, "local tty settle poll failed");
-                    break;
-                }
-            }
-        }
+        drain_until_quiet(&stdin, SETTLE_QUIET, SETTLE_MAX);
 
         if let Err(err) = termios::tcflush(&stdin, FlushArg::TCIFLUSH) {
             tracing::debug!(error = %err, "local tty input flush failed");
@@ -115,6 +78,48 @@ impl TtyGuard {
             .and_then(|()| stderr.flush())
         {
             tracing::debug!(error = %err, "local terminal emulator reset failed");
+        }
+    }
+}
+
+fn drain_until_quiet(stdin: &impl AsFd, quiet: Duration, max: Duration) {
+    let started = Instant::now();
+    let deadline = started + max;
+    let mut quiet_deadline = started + quiet;
+    let mut buffer = [0_u8; 256];
+    loop {
+        let now = Instant::now();
+        let wait_until = quiet_deadline.min(deadline);
+        if now >= wait_until {
+            break;
+        }
+        let timeout = PollTimeout::try_from(wait_until.saturating_duration_since(now))
+            .unwrap_or(PollTimeout::MAX);
+        let mut fds = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];
+        match poll(&mut fds, timeout) {
+            Ok(0) => break,
+            Ok(_)
+                if fds[0]
+                    .revents()
+                    .is_some_and(|events| events.contains(PollFlags::POLLIN)) =>
+            {
+                match nix::unistd::read(stdin, &mut buffer) {
+                    Ok(0) => break,
+                    Ok(read) if buffer[..read].contains(&0x03) => break,
+                    Ok(_) => quiet_deadline = Instant::now() + quiet,
+                    Err(Errno::EINTR) => {}
+                    Err(err) => {
+                        tracing::debug!(error = %err, "local tty settle read failed");
+                        break;
+                    }
+                }
+            }
+            Ok(_) => break,
+            Err(Errno::EINTR) => {}
+            Err(err) => {
+                tracing::debug!(error = %err, "local tty settle poll failed");
+                break;
+            }
         }
     }
 }
@@ -151,4 +156,24 @@ fn sanitize_and_snapshot() -> Option<Termios> {
         return None;
     }
     Some(saved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_c_ends_the_drain_without_waiting_for_quiet() {
+        let (reader, writer) = nix::unistd::pipe().expect("open test pipe");
+        nix::unistd::write(&writer, b"\x03").expect("write Ctrl-C");
+        let quiet = Duration::from_secs(1);
+        let started = Instant::now();
+
+        drain_until_quiet(&reader, quiet, Duration::from_secs(2));
+
+        assert!(
+            started.elapsed() < quiet / 2,
+            "Ctrl-C should end the drain immediately, not after {quiet:?}"
+        );
+    }
 }
