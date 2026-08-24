@@ -271,6 +271,7 @@ pub(super) fn supervise_remote(
                 port_sync.clone(),
             )
         };
+        let replacement = !first_attempt;
         let attempt = if first_attempt {
             plan.initial()
         } else {
@@ -279,6 +280,9 @@ pub(super) fn supervise_remote(
         .with_mark(held_alt && !rimz::tui::no_color());
         first_attempt = false;
         let spec = probe.attach_spec(&attempt);
+        if replacement {
+            guard.settle_terminal_replies();
+        }
         let outcome = run_ssh_session(
             &spec,
             host,
@@ -317,7 +321,6 @@ pub(super) fn supervise_remote(
         }
         let retry_cause = if outcome.killed_zombie {
             drop(ready_master.take());
-            guard.discard_pending_input();
             guard.reset_emulator();
             let _ = writeln!(
                 std::io::stderr().lock(),
@@ -342,12 +345,10 @@ pub(super) fn supervise_remote(
                 }
                 Verdict::Retry => {
                     drop(ready_master.take());
-                    guard.discard_pending_input();
                     guard.reset_emulator();
                     RetryCause::Dropped
                 }
                 Verdict::Reattach => {
-                    guard.discard_pending_input();
                     guard.reset_emulator();
                     let detail = summary
                         .as_deref()
