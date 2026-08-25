@@ -221,6 +221,8 @@ Four scope tables — server, session, window, pane — each in a global and a l
 | `mouse` | session | **on** \| off | mouse events become bindable keys; click focuses panes |
 | `history-limit` | session | lines, **100000** | scrollback cap; through 3.6 it applies only to panes created after the set, while 3.7 also updates existing panes (the 3.7b option-table help still says new panes only, but CHANGES, `options.c`, and a live format probe agree on the retroactive behavior) |
 | `renumber-windows` | session | **on** \| off | closing a window renumbers indexes (respects `base-index`); `@id`s never move |
+| `set-titles` | session | **on** \| off | writes an outer-terminal title for attached clients whose terminal capabilities include title set/restore; RimZ enables it so the tab title stays room-controlled |
+| `set-titles-string` | session | format string, **`#S \| #{pane_current_command}`** | payload used by `set-titles`; RimZ excludes the shell-writable `#T` pane title |
 | `allow-passthrough` | pane (set at window scope) | off \| **on** \| all | the `\ePtmux;…\e\\` passthrough escape; **3.3+, default off**; `on` works only while the pane is visible, `all` always (3.4); the pet pixel tier also requires tmux 3.6+ and a kitty-capable attached client termname (`#{client_termname}`) unless `[theme.pets] glyphs = "pixel"` explicitly opts past that allowlist |
 | `aggressive-resize` | window | **on** \| off | size to the smallest/largest session currently *viewing* the window rather than merely linked to it |
 | `pane-border-status` | window | **off** \| top \| bottom | a per-pane border text line (`pane-border-format`) |

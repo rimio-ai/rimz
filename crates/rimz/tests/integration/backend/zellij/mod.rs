@@ -31,4 +31,5 @@ mod resume;
 mod self_close;
 mod support;
 mod tabs;
+mod title;
 mod width;

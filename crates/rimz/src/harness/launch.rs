@@ -205,6 +205,20 @@ pub fn user_shell_program() -> String {
         .into_owned()
 }
 
+/// Short, stable process identity for a pane title.
+pub fn pane_short_name(argv: &[String]) -> Option<String> {
+    if argv.get(1).is_some_and(|arg| arg == "agents")
+        && argv.get(2).is_some_and(|arg| arg == "exec")
+    {
+        return argv.get(3).filter(|kind| !kind.is_empty()).cloned();
+    }
+    Path::new(argv.first()?)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 /// Shell pane argv for an empty named channel, pinned to the room identity.
 pub fn channel_shell_argv(
     workspace_id: &WorkspaceId,

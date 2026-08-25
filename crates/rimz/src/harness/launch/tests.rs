@@ -1028,6 +1028,26 @@ fn launchable_shell_rejects_missing_and_disabled_shells() {
     assert!(!launchable_shell(Path::new("/bin/false")));
 }
 
+#[test]
+fn pane_short_name_uses_agent_kind_or_program_basename() {
+    assert_eq!(
+        pane_short_name(&[
+            "/opt/rimz".to_owned(),
+            "agents".to_owned(),
+            "exec".to_owned(),
+            "claude".to_owned(),
+            "--request".to_owned(),
+            "{}".to_owned(),
+        ]),
+        Some("claude".to_owned()),
+    );
+    assert_eq!(
+        pane_short_name(&["/usr/bin/zsh".to_owned(), "-l".to_owned()]),
+        Some("zsh".to_owned()),
+    );
+    assert_eq!(pane_short_name(&[]), None);
+}
+
 fn unique_probe_program() -> String {
     format!("rimz-agent-probe-{}", std::process::id())
 }

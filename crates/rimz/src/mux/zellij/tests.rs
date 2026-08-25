@@ -272,6 +272,9 @@ exit 0
         .expect("anchored stack");
 
     let log = shim_log(&temp);
+    let shell = crate::harness::launch::user_shell_program();
+    let shell = crate::harness::launch::pane_short_name(std::slice::from_ref(&shell))
+        .unwrap_or_else(|| "sh".to_owned());
     for command in [
         "action new-pane --direction right --name rimz managed pane",
         "action new-pane --direction down --name rimz managed pane",
@@ -279,18 +282,24 @@ exit 0
         assert!(log.contains(command), "{log}");
     }
     assert!(
-        log.contains("--session rimz-test action new-pane --direction right --tab-id 42 | pane=7"),
+        log.contains(&format!(
+            "--session rimz-test action new-pane --direction right --tab-id 42 --name {shell} | pane=7"
+        )),
         "{log}"
     );
     assert!(
         log.contains(
-            "--session rimz-test action new-pane --direction right --tab-id 42 --no-focus | pane=7"
+            &format!(
+                "--session rimz-test action new-pane --direction right --tab-id 42 --no-focus --name {shell} | pane=7"
+            )
         ),
         "{log}"
     );
     let anchored = log.lines().last().expect("anchored command");
     assert!(
-        anchored.contains("action new-pane --stacked --no-focus | pane=7"),
+        anchored.contains(&format!(
+            "action new-pane --stacked --no-focus --name {shell} | pane=7"
+        )),
         "{log}"
     );
     assert!(
@@ -328,8 +337,13 @@ exit 0
         .expect("anchored stack");
 
     let log = shim_log(&temp);
+    let shell = crate::harness::launch::user_shell_program();
+    let shell = crate::harness::launch::pane_short_name(std::slice::from_ref(&shell))
+        .unwrap_or_else(|| "sh".to_owned());
     assert!(
-        log.contains("action new-pane --stacked --near-current-pane | pane=7"),
+        log.contains(&format!(
+            "action new-pane --stacked --near-current-pane --name {shell} | pane=7"
+        )),
         "{log}"
     );
     assert!(!log.contains("--no-focus"), "{log}");

@@ -18,6 +18,8 @@ The one catch is age. Multiplexers predate coding agents by decades, and their d
 
 RimZ's room is session-scoped. On every session birth and reattach it applies the settings agents need (locked mode and single-click sidebar jumps on Zellij; mouse, focus events, notification passthrough, soft-newline keys, clipboard, and clickable OSC 8 links on tmux; a deep scrollback on both) and stops there. It does not edit your `~/.config/zellij/config.kdl` or `~/.tmux.conf`. Your theme, keybinds, copy-mode, and status bar are yours, inside the room and in every session you run outside it. The per-setting detail is in [set up your machine](./setup.md#configure-your-multiplexer); the exact keys and defaults are in [configuration](./configuration.md#multiplexer-room-options).
 
+For panes RimZ creates, the outer terminal tab also stays on a short room-and-process title such as `rimz-myrepo-a1b2c3 | zsh` or `rimz-myrepo-a1b2c3 | codex`. A shell prompt cannot replace it with an SSH host and working path.
+
 One thing more happens on Zellij: RimZ seeds a permission grant for the presence plugin it ships, so the first attach is not interrupted by Zellij's plugin prompt. Your `config.kdl` stays untouched and the grant is yours to revoke; the full boundary is in [security and trust](./security.md#the-zellij-presence-plugin).
 
 `rimz config init --print` lists every room option RimZ applies, with its default. Nothing outside the room changes, so undoing RimZ is closing the room.
