@@ -7,7 +7,7 @@ use crate::ids::{MuxName, PaneId};
 use crate::mux::{CommandSpec, HostPane, MuxErr, Result, SidebarPaneOptions, ensure_pane_backend};
 
 use super::TmuxBackend;
-use super::options::sidebar_serve_command;
+use super::options::{RIMZ_TITLE_OPTION, sidebar_serve_command};
 use super::parse::parse_new_window_ids;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +42,22 @@ pub(super) fn sanitize_window_name(raw: &str) -> String {
 }
 
 impl TmuxBackend {
+    /// Attach a RimZ-owned display identity to one pane. Pane user options are
+    /// not writable through terminal escape sequences, unlike `pane_title`.
+    pub(super) fn set_pane_rimz_title(&self, pane_id: &str, name: &str) -> Result<()> {
+        self.cmd()
+            .args([
+                "set-option".to_owned(),
+                "-p".to_owned(),
+                "-t".to_owned(),
+                pane_id.to_owned(),
+                RIMZ_TITLE_OPTION.to_owned(),
+                name.to_owned(),
+            ])
+            .run()
+            .map(|_| ())
+    }
+
     pub(super) fn rename_window_command(&self, anchor: &PaneId, name: &str) -> Result<CommandSpec> {
         ensure_pane_backend(anchor, MuxName::Tmux)?;
         Ok(self.cmd().args([
@@ -579,13 +595,13 @@ impl TmuxBackend {
                 continue; // already seeded by an earlier birth
             }
             let fallback_shell;
-            let first = if let Some(first) = tab
+            let (first, first_name) = if let Some(first) = tab
                 .layout
                 .columns
                 .first()
                 .and_then(|column| column.panes.first())
             {
-                &first.argv
+                (&first.argv, first.name.as_deref())
             } else {
                 fallback_shell = crate::harness::launch::channel_label_shell_argv(
                     &opts.workspace_id,
@@ -593,10 +609,21 @@ impl TmuxBackend {
                     &tab.cwd,
                     &tab.label,
                 );
-                &fallback_shell
+                (&fallback_shell, Some(tab.label.as_str()))
             };
             match self.open_named_window(&opts.session_name, &tab.label, &tab.cwd, first) {
                 Ok(opened) => {
+                    if let Some(name) = first_name
+                        && let Err(err) = self.set_pane_rimz_title(&opened.first_pane, name)
+                    {
+                        tracing::warn!(
+                            session = %opts.session_name,
+                            tab = %tab.label,
+                            tags.operation = "tmux.resume.set_pane_title",
+                            error = &err as &dyn std::error::Error,
+                            "resume: setting the first pane title failed; leaving its process fallback",
+                        );
+                    }
                     if focus_window.is_none() {
                         focus_window = Some(opened.window_id.clone());
                     }
@@ -636,20 +663,21 @@ impl TmuxBackend {
         }
     }
 
-    pub(super) fn split_printed(
+    pub(super) fn split_named_printed(
         &self,
         direction: &str,
         target: &str,
         size: Option<&str>,
         cwd: &Path,
-        argv: &[String],
+        pane: &crate::mux::PaneCmd,
     ) -> Result<String> {
-        self.split_printed_with_reason(
+        self.split_named_printed_with_reason(
             direction,
             target,
             size,
             cwd,
-            argv,
+            &pane.argv,
+            pane.name.as_deref(),
             "split-window did not print a pane id",
         )
     }
@@ -685,6 +713,19 @@ impl TmuxBackend {
         argv: &[String],
         empty_reason: &str,
     ) -> Result<String> {
+        self.split_named_printed_with_reason(direction, target, size, cwd, argv, None, empty_reason)
+    }
+
+    fn split_named_printed_with_reason(
+        &self,
+        direction: &str,
+        target: &str,
+        size: Option<&str>,
+        cwd: &Path,
+        argv: &[String],
+        name: Option<&str>,
+        empty_reason: &str,
+    ) -> Result<String> {
         let mut args = vec![
             "split-window".to_owned(),
             "-d".to_owned(),
@@ -706,6 +747,9 @@ impl TmuxBackend {
                 program: "tmux".to_owned(),
                 reason: empty_reason.to_owned(),
             });
+        }
+        if let Some(name) = name {
+            self.set_pane_rimz_title(&pane_id, name)?;
         }
         Ok(pane_id)
     }

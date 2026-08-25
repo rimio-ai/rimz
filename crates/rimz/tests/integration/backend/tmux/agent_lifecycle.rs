@@ -323,7 +323,10 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         .open_tab(&TabOptions {
             title: "#reborn".to_owned(),
             panes: LayoutPanes {
-                columns: vec![tiled_column(vec![PaneCmd { argv: command }])],
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: command,
+                    name: None,
+                }])],
             },
             focus: false,
             dock_sidebar: false,
@@ -481,7 +484,10 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
         .open_tab(&TabOptions {
             title: "#rimz-clean".to_owned(),
             panes: LayoutPanes {
-                columns: vec![tiled_column(vec![PaneCmd { argv: command }])],
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: command,
+                    name: None,
+                }])],
             },
             focus: false,
             dock_sidebar: true,
@@ -540,7 +546,10 @@ fn failing_close_pane_agent_drops_to_shell() {
         .open_tab(&TabOptions {
             title: "#rimz-fail".to_owned(),
             panes: LayoutPanes {
-                columns: vec![tiled_column(vec![PaneCmd { argv: command }])],
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: command,
+                    name: None,
+                }])],
             },
             focus: false,
             dock_sidebar: true,

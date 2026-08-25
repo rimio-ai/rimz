@@ -205,13 +205,13 @@ pub fn user_shell_program() -> String {
         .into_owned()
 }
 
-/// Short, stable process identity for a pane title.
-pub fn pane_short_name(argv: &[String]) -> Option<String> {
-    if argv.get(1).is_some_and(|arg| arg == "agents")
-        && argv.get(2).is_some_and(|arg| arg == "exec")
-    {
-        return argv.get(3).filter(|kind| !kind.is_empty()).cloned();
-    }
+/// Short, stable identity for an ordinary shell pane.
+pub fn shell_pane_name() -> String {
+    pane_short_name(std::slice::from_ref(&user_shell_program())).unwrap_or_else(|| "sh".to_owned())
+}
+
+/// Short process identity used when a pane caller supplies no semantic name.
+fn pane_short_name(argv: &[String]) -> Option<String> {
     Path::new(argv.first()?)
         .file_name()
         .and_then(|name| name.to_str())

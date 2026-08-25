@@ -938,8 +938,12 @@ pub fn compile_layout_panes(
                     let pane = match cell {
                         Cell::Command { argv } if argv.is_empty() => PaneCmd {
                             argv: vec![crate::harness::launch::user_shell_program()],
+                            name: Some(crate::harness::launch::shell_pane_name()),
                         },
-                        Cell::Command { argv } => PaneCmd { argv: argv.clone() },
+                        Cell::Command { argv } => PaneCmd {
+                            argv: argv.clone(),
+                            name: None,
+                        },
                         Cell::Agent(cell) => {
                             let seed = params.resume_seeds.map(|seeds| &seeds[agent_index]);
                             let pane = match seed {
@@ -952,6 +956,7 @@ pub fn compile_layout_panes(
                                         params.fallback_channel,
                                         &ResumeLaunchPosture::from(cell),
                                     ),
+                                    name: Some(cell.kind.to_string()),
                                 },
                                 Some(CohortSeed::Fresh) | None => {
                                     let Some(launch) = launches.next() else {
@@ -1013,6 +1018,7 @@ fn fresh_agent_pane(
                 },
             },
         )?,
+        name: Some(cell.kind.to_string()),
     })
 }
 

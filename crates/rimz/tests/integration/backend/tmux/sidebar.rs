@@ -664,6 +664,7 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
                     rimz::mux::LayoutColumn {
                         panes: vec![rimz::mux::PaneCmd {
                             argv: vec!["sleep".to_owned(), "120".to_owned()],
+                            name: None,
                         }],
                         stacked: false,
                     },
@@ -671,9 +672,11 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
                         panes: vec![
                             rimz::mux::PaneCmd {
                                 argv: vec!["sleep".to_owned(), "120".to_owned()],
+                                name: None,
                             },
                             rimz::mux::PaneCmd {
                                 argv: vec!["sleep".to_owned(), "120".to_owned()],
+                                name: None,
                             },
                         ],
                         stacked: false,

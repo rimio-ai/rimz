@@ -642,11 +642,8 @@ impl MuxBackend for ZellijBackend {
         }
         let title = opts.title.or_else(|| {
             opts.command.as_ref().map_or_else(
-                || {
-                    let shell = crate::harness::launch::user_shell_program();
-                    crate::harness::launch::pane_short_name(std::slice::from_ref(&shell))
-                },
-                |command| crate::harness::launch::pane_short_name(command),
+                || Some(crate::harness::launch::shell_pane_name()),
+                |command| super::pane_short_name(command),
             )
         });
         if let Some(title) = title {

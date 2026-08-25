@@ -468,7 +468,6 @@ fn spawn_process_at(
         .expect("openpty");
     let mut command = CommandBuilder::new("zellij");
     crate::common::ZellijNamespace::pin_pty_at(xdg, &mut command);
-    command.env("TERM", "xterm-256color");
     if let AttachMode::ExactLineage(lineage) = mode {
         command.env(rimz::remote::REMOTE_LINEAGE_ENV, lineage);
     }

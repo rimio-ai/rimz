@@ -402,9 +402,7 @@ fn render_sidebar_work_area(sidebar: &str, work_panes: &str, indent: usize) -> S
 }
 
 fn render_plain_terminal_pane(indent: usize) -> Result<String> {
-    let shell = crate::harness::launch::user_shell_program();
-    let name = crate::harness::launch::pane_short_name(std::slice::from_ref(&shell))
-        .unwrap_or_else(|| "sh".to_owned());
+    let name = crate::harness::launch::shell_pane_name();
     Ok(format!(
         "{}pane focus=true name={}\n",
         " ".repeat(indent),
@@ -422,19 +420,13 @@ fn render_tab_column(
     if rows.is_empty() {
         let focus = !*focused;
         *focused = true;
-        return render_command_pane(&first.argv, cwd, focus, indent, None);
+        return render_command_pane(first, cwd, focus, indent, None);
     }
     let mut rendered = String::new();
     for pane in std::iter::once(first).chain(rows) {
         let focus = !*focused;
         *focused = true;
-        rendered.push_str(&render_command_pane(
-            &pane.argv,
-            cwd,
-            focus,
-            indent + 4,
-            None,
-        )?);
+        rendered.push_str(&render_command_pane(pane, cwd, focus, indent + 4, None)?);
     }
     let base = " ".repeat(indent);
     let container = if column.stacked {
@@ -455,14 +447,15 @@ fn render_tab_column(
 /// `size` pins a daemon edge column to the same percentage verdict as the
 /// sidebar while content remains sizeless and absorbs the center remainder.
 fn render_command_pane(
-    argv: &[String],
+    pane: &crate::mux::PaneCmd,
     cwd: &Path,
     focus: bool,
     indent: usize,
     size: Option<&str>,
 ) -> Result<String> {
-    let name = crate::harness::launch::pane_short_name(argv);
-    render_named_command_pane(argv, cwd, focus, indent, size, name.as_deref())
+    let fallback = super::pane_short_name(&pane.argv);
+    let name = pane.name.as_deref().or(fallback.as_deref());
+    render_named_command_pane(&pane.argv, cwd, focus, indent, size, name)
 }
 
 fn render_managed_command_pane(

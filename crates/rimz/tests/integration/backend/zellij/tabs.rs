@@ -136,6 +136,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
                             input_log.display(),
                         ),
                     ],
+                    name: None,
                 }])],
             },
             focus: true,
@@ -166,6 +167,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
                     argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    name: None,
                 }])],
             },
             focus: false,
@@ -225,6 +227,7 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
     let tab_name = "sidebar gallery";
     let work_pane = || PaneCmd {
         argv: vec!["sleep".to_owned(), "600".to_owned()],
+        name: None,
     };
     backend
         .open_tab(&TabOptions {
@@ -294,6 +297,7 @@ fn native_focused_split_preserves_docked_sidebar() {
     let _mirror = topology_cache_mirror(xdg, &sidebar.workspace_id, &name);
     let work_pane = || PaneCmd {
         argv: vec!["sleep".to_owned(), "600".to_owned()],
+        name: None,
     };
 
     let split_tab = "backend focused split";

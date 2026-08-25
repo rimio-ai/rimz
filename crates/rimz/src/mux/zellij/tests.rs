@@ -272,9 +272,7 @@ exit 0
         .expect("anchored stack");
 
     let log = shim_log(&temp);
-    let shell = crate::harness::launch::user_shell_program();
-    let shell = crate::harness::launch::pane_short_name(std::slice::from_ref(&shell))
-        .unwrap_or_else(|| "sh".to_owned());
+    let shell = crate::harness::launch::shell_pane_name();
     for command in [
         "action new-pane --direction right --name rimz managed pane",
         "action new-pane --direction down --name rimz managed pane",
@@ -337,9 +335,7 @@ exit 0
         .expect("anchored stack");
 
     let log = shim_log(&temp);
-    let shell = crate::harness::launch::user_shell_program();
-    let shell = crate::harness::launch::pane_short_name(std::slice::from_ref(&shell))
-        .unwrap_or_else(|| "sh".to_owned());
+    let shell = crate::harness::launch::shell_pane_name();
     assert!(
         log.contains(&format!(
             "action new-pane --stacked --near-current-pane --name {shell} | pane=7"
@@ -1298,6 +1294,7 @@ exit 0
                 columns: vec![LayoutColumn {
                     panes: vec![PaneCmd {
                         argv: vec!["sleep".to_owned(), "600".to_owned()],
+                        name: None,
                     }],
                     stacked: false,
                 }],

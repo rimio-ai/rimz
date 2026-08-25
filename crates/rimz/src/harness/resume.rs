@@ -190,7 +190,7 @@ pub enum LaneResumeAction {
         cwd: PathBuf,
         channel: Option<String>,
         target_pane_id: PaneId,
-        commands: Vec<Vec<String>>,
+        commands: Vec<crate::mux::PaneCmd>,
         skipped: Vec<ResumeSkip>,
         warnings: Vec<String>,
         live_labels: Vec<String>,
@@ -1199,7 +1199,7 @@ fn plan_live_lane_split(
         .iter()
         .flat_map(|tab| &tab.layout.columns)
         .flat_map(|column| &column.panes)
-        .map(|pane| pane.argv.clone())
+        .cloned()
         .collect::<Vec<_>>();
     if commands.is_empty() {
         return Err(LaneResumeError::Nothing {
@@ -1759,7 +1759,10 @@ fn plan_resume_candidates_detailed(
         let resumed_key = (candidate.kind.clone(), candidate.session_id.clone());
         if let Some(tab) = tabs.iter_mut().find(|tab| tab.identity == identity) {
             if let Some(column) = tab.tab.layout.columns.first_mut() {
-                column.panes.push(crate::mux::PaneCmd { argv: command });
+                column.panes.push(crate::mux::PaneCmd {
+                    argv: command,
+                    name: Some(candidate.kind.to_string()),
+                });
                 tab.resumed.insert(resumed_key.clone());
                 plan.resumed.insert(resumed_key);
             }
@@ -1767,7 +1770,19 @@ fn plan_resume_candidates_detailed(
             let resumed = BTreeSet::from([resumed_key.clone()]);
             tabs.push(PlannedResumeTab {
                 identity,
-                tab: ResumeTab::flat(tab_label, candidate.cwd, vec![command]),
+                tab: ResumeTab {
+                    label: tab_label,
+                    cwd: candidate.cwd,
+                    layout: crate::mux::LayoutPanes {
+                        columns: vec![crate::mux::LayoutColumn {
+                            panes: vec![crate::mux::PaneCmd {
+                                argv: command,
+                                name: Some(candidate.kind.to_string()),
+                            }],
+                            stacked: false,
+                        }],
+                    },
+                },
                 freshest: candidate.last_activity,
                 resumed,
             });

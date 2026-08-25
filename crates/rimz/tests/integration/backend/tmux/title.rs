@@ -1,6 +1,61 @@
 use super::support::*;
 
 #[test]
+fn named_layout_pane_drives_the_terminal_title_format() {
+    require_tmux!();
+
+    let session = "rimz-native-named-title";
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, session, Some((120, 40)));
+    server
+        .backend
+        .open_tab(&TabOptions {
+            title: "#agents".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "30".to_owned()],
+                    name: Some("codex".to_owned()),
+                }])],
+            },
+            focus: true,
+            dock_sidebar: true,
+            sidebar: sidebar_opts(session, PathBuf::from("/bin/true"), Some(120)),
+        })
+        .expect("open named pane tab");
+
+    let target = format!("{session}:#agents");
+    assert_eq!(
+        server.display(
+            &target,
+            "#S | #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}}",
+        ),
+        format!("{session} | codex"),
+    );
+
+    let anchor = PaneId::from_parts(MuxName::Tmux, server.display(&target, "#{pane_id}"));
+    server
+        .backend
+        .split_pane(SplitPaneOptions {
+            target: SplitTarget::Pane(anchor),
+            cwd: Some(std::env::temp_dir().to_string_lossy().into_owned()),
+            command: Some(vec!["sleep".to_owned(), "30".to_owned()]),
+            title: Some("claude".to_owned()),
+            close_on_exit: false,
+            env: BTreeMap::new(),
+            placement: SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+            focus: true,
+        })
+        .expect("split named pane");
+    assert_eq!(
+        server.display(
+            &target,
+            "#S | #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}}",
+        ),
+        format!("{session} | claude"),
+    );
+}
+
+#[test]
 fn attached_terminal_title_ignores_shell_osc_title() {
     require_tmux!();
 

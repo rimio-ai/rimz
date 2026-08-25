@@ -437,7 +437,7 @@ pub(super) fn split_into_loop_zone(
         },
         cwd: Some(cwd.to_string_lossy().into_owned()),
         command: Some(pane.argv.clone()),
-        title: None,
+        title: pane.name.clone(),
         close_on_exit: false,
         env,
         placement: SplitPlacement::Stacked,

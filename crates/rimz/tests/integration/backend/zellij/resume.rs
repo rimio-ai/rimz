@@ -60,7 +60,10 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
         .open_tab(&TabOptions {
             title: tab_name.to_owned(),
             panes: LayoutPanes {
-                columns: vec![tiled_column(vec![PaneCmd { argv: command }])],
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: command,
+                    name: None,
+                }])],
             },
             focus: true,
             dock_sidebar: true,

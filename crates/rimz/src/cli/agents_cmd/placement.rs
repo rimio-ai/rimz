@@ -8,8 +8,8 @@ use anyhow::{Context, Result, bail};
 use rimz::config::LaunchPlacement;
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::{
-    LayoutPanes, MuxBackend, SidebarPaneOptions, SplitPaneOptions, SplitPlacement, SplitTarget,
-    TabOptions, own_pane_id,
+    LayoutPanes, MuxBackend, PaneCmd, SidebarPaneOptions, SplitPaneOptions, SplitPlacement,
+    SplitTarget, TabOptions, own_pane_id,
 };
 use rimz::store::writer::AgentLaunchBatch;
 
@@ -186,18 +186,21 @@ fn prepare_resolved(
             dock_sidebar: true,
             sidebar,
         }),
-        Placement::NewPane => PreparedPlacement::NewPane(SplitPaneOptions {
-            target: target_pane_id.map_or(SplitTarget::Ambient, SplitTarget::Pane),
-            cwd: Some(cwd.to_string_lossy().into_owned()),
-            command: Some(single_pane_argv(&panes)?),
-            title: None,
-            close_on_exit: false,
-            env: identity_env,
-            placement: SplitPlacement::Directional(direction),
-            focus: !background,
-        }),
+        Placement::NewPane => {
+            let pane = single_pane(&panes)?;
+            PreparedPlacement::NewPane(SplitPaneOptions {
+                target: target_pane_id.map_or(SplitTarget::Ambient, SplitTarget::Pane),
+                cwd: Some(cwd.to_string_lossy().into_owned()),
+                command: Some(pane.argv.clone()),
+                title: pane.name.clone(),
+                close_on_exit: false,
+                env: identity_env,
+                placement: SplitPlacement::Directional(direction),
+                focus: !background,
+            })
+        }
         Placement::SamePane => PreparedPlacement::SamePane {
-            argv: single_pane_argv(&panes)?,
+            argv: single_pane(&panes)?.argv.clone(),
             env: identity_env,
             cwd,
         },
@@ -206,12 +209,11 @@ fn prepare_resolved(
 
 /// The one pane command of an in-pane launch (the resolver guarantees a single
 /// cell before this is reached).
-fn single_pane_argv(panes: &LayoutPanes) -> Result<Vec<String>> {
+fn single_pane(panes: &LayoutPanes) -> Result<&PaneCmd> {
     panes
         .columns
         .first()
         .and_then(|column| column.panes.first())
-        .map(|pane| pane.argv.clone())
         .context("in-pane launch produced no pane command")
 }
 
@@ -256,6 +258,7 @@ mod tests {
                 columns: vec![LayoutColumn {
                     panes: vec![PaneCmd {
                         argv: vec!["rimz".to_owned(), "agents".to_owned()],
+                        name: Some("codex".to_owned()),
                     }],
                     stacked: false,
                 }],
@@ -322,6 +325,7 @@ mod tests {
             Some(&["rimz".to_owned(), "agents".to_owned()][..])
         );
         assert_eq!(options.env["RIMZ_PROJECT_MODE"], "1");
+        assert_eq!(options.title.as_deref(), Some("codex"));
         assert_eq!(options.placement, SplitPlacement::default());
         assert!(!options.focus);
     }

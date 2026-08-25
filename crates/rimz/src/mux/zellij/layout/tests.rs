@@ -83,6 +83,7 @@ fn layout_column(panes: &[&[&str]], stacked: bool) -> crate::mux::LayoutColumn {
             .iter()
             .map(|argv| PaneCmd {
                 argv: argv.iter().map(|arg| arg.to_string()).collect(),
+                name: None,
             })
             .collect(),
         stacked,
@@ -167,6 +168,7 @@ fn resume_tab_with_columns(label: &str, columns: &[&[&[&str]]], cwd: &str) -> Re
                         .iter()
                         .map(|argv| crate::mux::PaneCmd {
                             argv: argv.iter().map(|arg| arg.to_string()).collect(),
+                            name: None,
                         })
                         .collect(),
                     stacked: false,
@@ -181,9 +183,7 @@ fn session_layout_renders_terminal_template_bar_and_runtime_args() {
     let layout =
         render_session_layout(&sidebar_opts("rimz-contract", Some(50), None), None, &[]).unwrap();
     assert_work_area_template(&layout, 2, 3);
-    let shell = crate::harness::launch::user_shell_program();
-    let shell = crate::harness::launch::pane_short_name(std::slice::from_ref(&shell))
-        .unwrap_or_else(|| "sh".to_owned());
+    let shell = crate::harness::launch::shell_pane_name();
     assert_eq!(
         layout
             .matches(&format!(r#"pane focus=true name="{shell}""#))
@@ -393,6 +393,34 @@ fn tab_layout_derives_percent_from_an_explicit_live_width() {
 }
 
 #[test]
+fn tab_layout_prefers_the_callers_pane_name_over_the_argv_wrapper() {
+    let opts = TabOptions {
+        title: "#feature".to_owned(),
+        panes: crate::mux::LayoutPanes {
+            columns: vec![crate::mux::LayoutColumn {
+                panes: vec![PaneCmd {
+                    argv: vec![
+                        "env".to_owned(),
+                        "RIMZ_CHANNEL=feature".to_owned(),
+                        "zsh".to_owned(),
+                    ],
+                    name: Some("#feature".to_owned()),
+                }],
+                stacked: false,
+            }],
+        },
+        focus: true,
+        dock_sidebar: true,
+        sidebar: background_view_opts(vec![]).sidebar,
+    };
+
+    let layout = render_tab_layout(&opts, 25).expect("render tab layout");
+
+    assert!(layout.contains(r##"name="#feature""##), "{layout}");
+    assert!(!layout.contains(r#"name="env""#), "{layout}");
+}
+
+#[test]
 fn tab_layout_renders_tiled_and_stacked_columns() {
     let sidebar = background_view_opts(vec![]).sidebar;
     let opts = TabOptions {
@@ -543,6 +571,19 @@ fn session_layout_renders_resume_columns() {
     assert!(layout.contains(r#"name="planner""#), "{layout}");
     assert!(layout.contains(r#"name="coder""#), "{layout}");
     assert!(layout.contains(r#"name="reviewer""#), "{layout}");
+}
+
+#[test]
+fn session_layout_names_an_empty_resumed_channel_pane() {
+    let opts = background_view_opts(vec![]).sidebar;
+    let resume = vec![resume_tab("#feature", &[], "/proj/feature")];
+
+    let layout = render_session_layout(&opts, None, &resume).expect("render resume layout");
+
+    assert!(
+        layout.contains(r##"pane focus=true name="#feature""##),
+        "empty resumed channel pane must keep its channel identity:\n{layout}",
+    );
 }
 
 #[test]
