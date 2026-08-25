@@ -71,6 +71,9 @@ pub const REMOTE_VERSION_SKEW_EXIT: i32 = 65;
 /// The remote host refused a hard major version mismatch.
 pub const REMOTE_VERSION_INCOMPATIBLE_EXIT: i32 = 66;
 
+/// The guarded snippet refused a remote workspace path that does not exist.
+pub const REMOTE_PATH_MISSING_EXIT: i32 = 67;
+
 /// What the part after the `:` names on the remote host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RemoteSpec {
@@ -180,6 +183,14 @@ impl RemoteTarget {
     /// The SSH destination part of this target.
     pub fn ssh_destination(&self) -> &SshDestination {
         &self.destination
+    }
+
+    /// The remote workspace path, when this target births or enters by path.
+    pub fn remote_path(&self) -> Option<&str> {
+        match &self.spec {
+            RemoteSpec::Path(path) => Some(path),
+            RemoteSpec::Session(_) => None,
+        }
     }
 }
 
@@ -414,6 +425,39 @@ impl SshAttachPlan {
             .arg(format!("ControlPath={}", control_path.display()))
             .args(["--", self.options.target.ssh_destination().as_str()])
     }
+
+    /// Probe a path target over an established ControlMaster before the tty
+    /// attach. Session targets need no filesystem precondition.
+    pub fn path_preflight(&self, control_path: &Path) -> Option<CommandSpec> {
+        let path = self.options.target.remote_path()?;
+        Some(
+            CommandSpec::new(ssh_program())
+                .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"])
+                .args(control_options(control_path))
+                .args(["--", self.options.target.ssh_destination().as_str()])
+                .arg(format!("test -d {}", quote_remote_path(path))),
+        )
+    }
+}
+
+/// Result of the conservative remote-path preflight classification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathPreflight {
+    Exists,
+    Missing,
+    /// Transport and unexpected command failures belong to the attach path,
+    /// which can report them without misdiagnosing a missing directory.
+    Unknown,
+}
+
+impl PathPreflight {
+    pub fn classify(exit_code: Option<i32>) -> Self {
+        match exit_code {
+            Some(0) => Self::Exists,
+            Some(1) => Self::Missing,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 impl SshAttachAttempt<'_> {
@@ -603,8 +647,21 @@ fn guarded_snippet(
     remote_exec_snippet(
         options.target.host_display(),
         &env_setup,
+        &remote_path_guard(&options.target),
         &format!("{rimz} -- {arg}"),
     )
+}
+
+fn remote_path_guard(target: &RemoteTarget) -> String {
+    let Some(path) = target.remote_path() else {
+        return String::new();
+    };
+    let arg = quote_remote_path(path);
+    let missing = sh_quote(&format!(
+        "remote path does not exist on {}: {path}; check the target with `rimz remote list`, then correct the alias or remote path",
+        target.host_display()
+    ));
+    format!("test -d {arg} || {{ echo {missing} >&2; exit {REMOTE_PATH_MISSING_EXIT}; }}; ")
 }
 
 fn client_size_env_setup(client_size: Option<(u16, u16)>) -> String {
@@ -613,14 +670,19 @@ fn client_size_env_setup(client_size: Option<(u16, u16)>) -> String {
     })
 }
 
-fn remote_exec_snippet(host_display: &str, env_setup: &str, rimz_command: &str) -> String {
+fn remote_exec_snippet(
+    host_display: &str,
+    env_setup: &str,
+    path_guard: &str,
+    rimz_command: &str,
+) -> String {
     let not_found = sh_quote(&format!(
         "rimz not found on {host_display} — run `rimz remote setup <alias-or-host>` locally, or install rimz manually",
     ));
     format!(
         "{}; \
          command -v rimz >/dev/null 2>&1 || {{ echo {not_found} >&2; exit {code}; }}; \
-         {env_setup}exec {rimz_command}",
+         {path_guard}{env_setup}exec {rimz_command}",
         remote_path_prefix(),
         code = REMOTE_RIMZ_MISSING_EXIT,
     )
@@ -925,7 +987,8 @@ impl ReconnectState {
             Some(
                 code @ (REMOTE_RIMZ_MISSING_EXIT
                 | REMOTE_VERSION_SKEW_EXIT
-                | REMOTE_VERSION_INCOMPATIBLE_EXIT),
+                | REMOTE_VERSION_INCOMPATIBLE_EXIT
+                | REMOTE_PATH_MISSING_EXIT),
             ) => Verdict::Fatal { code },
             Some(SSH_TRANSPORT_EXIT) if self.established => Verdict::Retry,
             Some(_)

@@ -10,7 +10,8 @@ use std::path::Path;
 
 use super::{
     REMOTE_CLIENT_VERSION_ENV, REMOTE_FORCE_VERSION_ENV, RemoteSpec, RemoteTarget,
-    client_size_env_setup, quote_remote_path, remote_exec_snippet, sh_quote, ssh_program,
+    client_size_env_setup, quote_remote_path, remote_exec_snippet, remote_path_guard, sh_quote,
+    ssh_program,
 };
 use crate::mux::CommandSpec;
 
@@ -169,7 +170,12 @@ fn web_snippet(
         env_setup.push_str(&format!("export {REMOTE_FORCE_VERSION_ENV}=1; "));
     }
     env_setup.push_str(&client_size_env_setup(client_size));
-    remote_exec_snippet(target.host_display(), &env_setup, rimz)
+    remote_exec_snippet(
+        target.host_display(),
+        &env_setup,
+        &remote_path_guard(target),
+        rimz,
+    )
 }
 
 #[cfg(test)]

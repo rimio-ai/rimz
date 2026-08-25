@@ -278,6 +278,57 @@ fn master_spec_pins_supervised_lifecycle_and_has_no_remote_command() {
 }
 
 #[test]
+fn path_preflight_reuses_the_master_and_quotes_the_remote_path() {
+    let plan = attach_plan(
+        "dev-box:~/code/query engine",
+        false,
+        None,
+        TermPlan::Keep,
+        false,
+    );
+    let spec = plan
+        .path_preflight(Path::new("/tmp/rimz.sock"))
+        .expect("path target has a preflight");
+
+    assert_eq!(
+        spec.args,
+        [
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "ControlMaster=auto",
+            "-o",
+            "ControlPath=/tmp/rimz.sock",
+            "-o",
+            "ControlPersist=no",
+            "--",
+            "dev-box",
+            "test -d \"$HOME\"'/code/query engine'",
+        ]
+    );
+    assert_eq!(plan.target().remote_path(), Some("$HOME/code/query engine"));
+
+    let session = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false);
+    assert!(
+        session
+            .path_preflight(Path::new("/tmp/rimz.sock"))
+            .is_none()
+    );
+    assert_eq!(session.target().remote_path(), None);
+}
+
+#[test]
+fn path_preflight_classifies_only_exit_one_as_missing() {
+    assert_eq!(PathPreflight::classify(Some(0)), PathPreflight::Exists);
+    assert_eq!(PathPreflight::classify(Some(1)), PathPreflight::Missing);
+    for code in [Some(2), Some(SSH_TRANSPORT_EXIT), None] {
+        assert_eq!(PathPreflight::classify(code), PathPreflight::Unknown);
+    }
+}
+
+#[test]
 fn ssh_error_summary_uses_the_last_open_ssh_line() {
     assert_eq!(
         ssh_error_summary("debug noise\nssh: connect to host dev port 22: Connection refused\n"),
@@ -440,7 +491,12 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
             truecolor: false,
             control: None,
             destination_index: 10,
-            snippet_contains: &["exec rimz start --attach -- \"$HOME\"'/code/query-engine'"],
+            snippet_contains: &[
+                "test -d \"$HOME\"'/code/query-engine'",
+                "remote path does not exist on dev-box: $HOME/code/query-engine",
+                "exit 67",
+                "exec rimz start --attach -- \"$HOME\"'/code/query-engine'",
+            ],
         },
         SpecCase {
             name: "no resume and mux",
@@ -586,6 +642,11 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
                 case.name
             );
         }
+        assert_eq!(
+            snippet.contains("test -d"),
+            case.target.contains('/'),
+            "only path targets carry the directory guard: {snippet}"
+        );
         assert!(
             !snippet.contains(crate::mux::CLIENT_SIZE_ENV),
             "{} has no client-size export: {snippet}",
@@ -774,6 +835,12 @@ fn verdict_and_backoff_classify_reconnects() {
         settle(Some(REMOTE_RIMZ_MISSING_EXIT), true),
         Verdict::Fatal {
             code: REMOTE_RIMZ_MISSING_EXIT
+        }
+    );
+    assert_eq!(
+        settle(Some(REMOTE_PATH_MISSING_EXIT), true),
+        Verdict::Fatal {
+            code: REMOTE_PATH_MISSING_EXIT
         }
     );
     assert_eq!(settle(None, true), Verdict::Fatal { code: 1 });
