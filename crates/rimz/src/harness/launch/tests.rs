@@ -1029,31 +1029,13 @@ fn launchable_shell_rejects_missing_and_disabled_shells() {
 }
 
 #[test]
-fn pane_short_name_uses_program_basename() {
-    assert_eq!(
-        pane_short_name(&[
-            "/opt/rimz".to_owned(),
-            "agents".to_owned(),
-            "exec".to_owned(),
-            "claude".to_owned(),
-            "--request".to_owned(),
-            "{}".to_owned(),
-        ]),
-        Some("rimz".to_owned()),
-    );
-    assert_eq!(
-        pane_short_name(&["/usr/bin/zsh".to_owned(), "-l".to_owned()]),
-        Some("zsh".to_owned()),
-    );
-    assert_eq!(pane_short_name(&[]), None);
-}
-
-#[test]
 fn shell_pane_name_uses_configured_shell_basename() {
-    assert_eq!(
-        shell_pane_name(),
-        pane_short_name(std::slice::from_ref(&user_shell_program())).expect("shell basename"),
-    );
+    let shell = user_shell_program();
+    let expected = Path::new(&shell)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("shell basename");
+    assert_eq!(shell_pane_name(), expected);
 }
 
 fn unique_probe_program() -> String {

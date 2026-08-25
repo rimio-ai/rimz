@@ -316,7 +316,7 @@ impl MuxBackend for TmuxBackend {
                     reason: "split-window did not print a pane id".to_owned(),
                 });
             }
-            self.set_pane_rimz_title(&pane_id, &title)?;
+            self.set_pane_rimz_title(&pane_id, &title);
         }
         Ok(())
     }
@@ -799,7 +799,7 @@ impl MuxBackend for TmuxBackend {
         let window_id = opened.window_id;
         let first_pane = opened.first_pane;
         if let Some(name) = &first.name {
-            self.set_pane_rimz_title(&first_pane, name)?;
+            self.set_pane_rimz_title(&first_pane, name);
         }
 
         // A tab opened from a narrow pane (for example a half-width floating
