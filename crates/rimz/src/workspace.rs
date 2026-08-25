@@ -126,22 +126,6 @@ pub struct KnownWorkspace {
     pub updated_at: jiff::Timestamp,
 }
 
-/// True when `inner` is `outer` itself or nested under it, compared by path
-/// components so `/home/userX` is never read as under `/home/user`. A
-/// lexical test on recorded roots — no filesystem access — shared by the
-/// `rimz start` overlap notice and the doctor room tree.
-pub fn root_contains(outer: &Path, inner: &Path) -> bool {
-    let mut outer_components = outer.components();
-    let mut inner_components = inner.components();
-    loop {
-        match (outer_components.next(), inner_components.next()) {
-            (Some(o), Some(i)) if o == i => continue,
-            (Some(_), _) => return false,
-            (None, _) => return true,
-        }
-    }
-}
-
 /// Every workspace with a readable, current `workspace.json` under the state dir,
 /// deduplicated by session name with the newest record winning. A directory
 /// missing its record is skipped quietly (half-removed or never finished); a
