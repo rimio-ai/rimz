@@ -1023,7 +1023,7 @@ fn valid_env_key(key: &str) -> bool {
     !key.is_empty() && !key.contains('=') && !key.starts_with('-')
 }
 
-pub fn invalid_env_key(env: &BTreeMap<String, String>) -> Option<&str> {
+fn invalid_env_key(env: &BTreeMap<String, String>) -> Option<&str> {
     env.keys()
         .find(|key| !valid_env_key(key))
         .map(String::as_str)
