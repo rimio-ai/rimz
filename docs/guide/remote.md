@@ -10,7 +10,7 @@ Point `rimz remote connect` at a target and RimZ builds the SSH command, connect
 rimz remote connect dev-box:~/code/query-engine   # [user@]host:<session-or-path>
 ```
 
-The target is `[user@]host:<session-or-path>`. After the colon, a path opens (or creates) that project's room, and a bare session name reaches one by name. Under the hood this is close to typing `ssh -t dev-box rimz attach query-engine` yourself: a normal SSH session that runs the host's own `rimz`, so your SSH config, keys, agent, ports, and jump hosts all apply exactly as for any `ssh` you run.
+The target is `[user@]host:<session-or-path>`. After the colon, an existing path opens (or creates) that project's room, and a bare session name reaches one by name. A missing path fails immediately with the path and alias fix before RimZ starts the visible attach; use `rimz remote list` to check a saved target. Under the hood this is close to typing `ssh -t dev-box rimz attach query-engine` yourself: a normal SSH session that runs the host's own `rimz`, so your SSH config, keys, agent, ports, and jump hosts all apply exactly as for any `ssh` you run.
 
 RimZ compares the local and remote versions before it enters the room. A patch difference warns and proceeds; a minor difference refuses until you upgrade the older side, with `--force-version` available as a one-shot bypass; and a major difference refuses without a bypass. An older remote RimZ keeps its prior warn-only behavior because the compatibility gate runs on the host.
 

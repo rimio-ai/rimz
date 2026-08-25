@@ -89,6 +89,10 @@ The `MACHINE CONFIG` section names any `config.toml`, `theme.toml`, `agents.toml
 
 ## The room won't start
 
+### RimZ says the workspace path does not exist
+
+`rimz start -- /path/to/project` only creates a room for a directory that already exists. Correct a typo in the path or create the directory first, then run the command again. Remote path targets follow the same rule before attach; run `rimz remote list` to inspect a saved alias and correct its target.
+
 ### RimZ reports an existing room instead of opening one
 
 A RimZ room is its own Zellij or tmux session, so it cannot nest inside a session you are already attached to. Run bare `rimz` (or `rimz start`) from inside one, and instead of nesting it names the room and tells you how to reach it:
