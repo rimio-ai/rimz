@@ -55,3 +55,51 @@ pub fn exec_args(request: &rimz::harness::launch::ExecRequest) -> Vec<String> {
         .skip(1)
         .collect()
 }
+
+pub fn osc_titles(bytes: &[u8]) -> Vec<String> {
+    let mut titles = Vec::new();
+    let mut cursor = 0;
+    while cursor + 4 <= bytes.len() {
+        if bytes[cursor] != 0x1b
+            || bytes[cursor + 1] != b']'
+            || !matches!(bytes[cursor + 2], b'0' | b'1' | b'2')
+            || bytes[cursor + 3] != b';'
+        {
+            cursor += 1;
+            continue;
+        }
+
+        let payload_start = cursor + 4;
+        let mut end = payload_start;
+        while end < bytes.len() {
+            if bytes[end] == 0x07 {
+                titles.push(String::from_utf8_lossy(&bytes[payload_start..end]).into_owned());
+                cursor = end + 1;
+                break;
+            }
+            if bytes[end] == 0x1b && bytes.get(end + 1) == Some(&b'\\') {
+                titles.push(String::from_utf8_lossy(&bytes[payload_start..end]).into_owned());
+                cursor = end + 2;
+                break;
+            }
+            end += 1;
+        }
+        if end == bytes.len() {
+            break;
+        }
+    }
+    titles
+}
+
+#[cfg(test)]
+mod tests {
+    use super::osc_titles;
+
+    #[test]
+    fn osc_titles_parses_bel_and_st_terminators() {
+        assert_eq!(
+            osc_titles(b"noise\x1b]0;zero\x07\x1b]1;one\x1b\\\x1b]2;two\x07tail"),
+            ["zero", "one", "two"],
+        );
+    }
+}

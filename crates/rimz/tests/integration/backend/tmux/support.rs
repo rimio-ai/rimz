@@ -2,6 +2,7 @@ pub(super) use std::collections::BTreeMap;
 pub(super) use std::io::Read;
 pub(super) use std::path::{Path, PathBuf};
 pub(super) use std::process::Command;
+pub(super) use std::sync::{Arc, Mutex};
 pub(super) use std::thread;
 pub(super) use std::time::{Duration, Instant};
 
@@ -462,6 +463,7 @@ impl Drop for TmuxServer {
 pub(super) struct AttachedTmuxClient {
     pub(super) _master: Box<dyn portable_pty::MasterPty + Send>,
     pub(super) child: Box<dyn portable_pty::Child + Send + Sync>,
+    output_tail: Arc<Mutex<Vec<u8>>>,
 }
 
 impl AttachedTmuxClient {
@@ -492,19 +494,38 @@ impl AttachedTmuxClient {
         // Drain the PTY in the background so the kernel buffer never fills and
         // stalls the client; the thread exits with the PTY on drop.
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
+        let output_tail = Arc::new(Mutex::new(Vec::new()));
+        let reader_output_tail = Arc::clone(&output_tail);
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => return,
-                    Ok(_) => continue,
+                    Ok(read) => {
+                        let mut tail = reader_output_tail
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        tail.extend_from_slice(&buf[..read]);
+                        let excess = tail.len().saturating_sub(64 * 1024);
+                        if excess > 0 {
+                            tail.drain(..excess);
+                        }
+                    }
                 }
             }
         });
         Self {
             _master: pair.master,
             child,
+            output_tail,
         }
+    }
+
+    pub(super) fn output_bytes(&self) -> Vec<u8> {
+        self.output_tail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 

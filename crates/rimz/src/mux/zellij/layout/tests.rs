@@ -181,7 +181,16 @@ fn session_layout_renders_terminal_template_bar_and_runtime_args() {
     let layout =
         render_session_layout(&sidebar_opts("rimz-contract", Some(50), None), None, &[]).unwrap();
     assert_work_area_template(&layout, 2, 3);
-    assert!(layout.contains("pane focus=true"), "{layout}");
+    let shell = crate::harness::launch::user_shell_program();
+    let shell = crate::harness::launch::pane_short_name(std::slice::from_ref(&shell))
+        .unwrap_or_else(|| "sh".to_owned());
+    assert_eq!(
+        layout
+            .matches(&format!(r#"pane focus=true name="{shell}""#))
+            .count(),
+        2,
+        "the birth pane and new-tab template have stable shell titles:\n{layout}",
+    );
     assert!(layout.contains("tab focus=true"), "{layout}");
     assert!(!layout.contains("default_tab_template"), "{layout}");
     assert!(layout.contains("start_suspended false"), "{layout}");
@@ -372,6 +381,7 @@ fn tab_layout_derives_percent_from_an_explicit_live_width() {
         "{layout}"
     );
     assert!(layout.contains(r#"command "codex""#), "{layout}");
+    assert!(layout.contains(r#"name="codex""#), "{layout}");
     assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
 
     let layout = render_tab_layout(&opts, 25).expect("render tab layout");
@@ -411,6 +421,8 @@ fn tab_layout_renders_tiled_and_stacked_columns() {
     );
     assert!(layout.contains(r#"command "coder""#), "{layout}");
     assert!(layout.contains(r#"command "reviewer""#), "{layout}");
+    assert!(layout.contains(r#"name="coder""#), "{layout}");
+    assert!(layout.contains(r#"name="reviewer""#), "{layout}");
     assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
 }
 
@@ -528,6 +540,9 @@ fn session_layout_renders_resume_columns() {
     assert!(layout.contains(r#"command "planner""#), "{layout}");
     assert!(layout.contains(r#"command "coder""#), "{layout}");
     assert!(layout.contains(r#"command "reviewer""#), "{layout}");
+    assert!(layout.contains(r#"name="planner""#), "{layout}");
+    assert!(layout.contains(r#"name="coder""#), "{layout}");
+    assert!(layout.contains(r#"name="reviewer""#), "{layout}");
 }
 
 #[test]

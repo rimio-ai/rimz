@@ -640,7 +640,16 @@ impl MuxBackend for ZellijBackend {
         if opts.close_on_exit {
             spec = spec.arg("--close-on-exit");
         }
-        if let Some(title) = opts.title {
+        let title = opts.title.or_else(|| {
+            opts.command.as_ref().map_or_else(
+                || {
+                    let shell = crate::harness::launch::user_shell_program();
+                    crate::harness::launch::pane_short_name(std::slice::from_ref(&shell))
+                },
+                |command| crate::harness::launch::pane_short_name(command),
+            )
+        });
+        if let Some(title) = title {
             spec = spec.args(["--name".to_owned(), title]);
         }
         if let Some(cwd) = opts.cwd {

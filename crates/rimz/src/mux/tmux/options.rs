@@ -224,6 +224,11 @@ pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, St
         ("mouse", tmux_bool(config.mouse)),
         ("history-limit", config.history_limit.to_string()),
         ("renumber-windows", tmux_bool(config.renumber_windows)),
+        ("set-titles", "on".to_owned()),
+        (
+            "set-titles-string",
+            "#S | #{pane_current_command}".to_owned(),
+        ),
     ]
 }
 
@@ -453,6 +458,11 @@ mod tests {
                 ("mouse", "on".to_owned()),
                 ("history-limit", "100000".to_owned()),
                 ("renumber-windows", "on".to_owned()),
+                ("set-titles", "on".to_owned()),
+                (
+                    "set-titles-string",
+                    "#S | #{pane_current_command}".to_owned(),
+                ),
             ],
         );
         assert_eq!(

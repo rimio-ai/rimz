@@ -148,18 +148,13 @@ pub(super) fn render_session_layout(
     for (index, tab) in resume.iter().enumerate() {
         let tab_name = kdl_string(&tab.label)?;
         let agent_panes = if tab.layout.columns.is_empty() {
-            render_command_pane(
-                &crate::harness::launch::channel_label_shell_argv(
-                    &opts.workspace_id,
-                    &opts.project_root,
-                    &tab.cwd,
-                    &tab.label,
-                ),
+            let argv = crate::harness::launch::channel_label_shell_argv(
+                &opts.workspace_id,
+                &opts.project_root,
                 &tab.cwd,
-                true,
-                16,
-                None,
-            )?
+                &tab.label,
+            );
+            render_named_command_pane(&argv, &tab.cwd, true, 16, None, Some(&tab.label))?
         } else {
             let mut focused = false;
             let mut columns = String::new();
@@ -181,9 +176,9 @@ pub(super) fn render_session_layout(
 
     // The free working terminal: focused only when no resumed agent took focus.
     let work_focus = if resume.is_empty() { " focus=true" } else { "" };
-    let work_pane = render_plain_terminal_pane(16);
+    let work_pane = render_plain_terminal_pane(16)?;
     let work_body = render_sidebar_work_area(&sidebar, &work_pane, 8);
-    let new_tab_pane = render_plain_terminal_pane(16);
+    let new_tab_pane = render_plain_terminal_pane(16)?;
     let new_tab_body = render_sidebar_work_area(&sidebar, &new_tab_pane, 8);
     Ok(format!(
         r#"layout {{
@@ -406,8 +401,15 @@ fn render_sidebar_work_area(sidebar: &str, work_panes: &str, indent: usize) -> S
     )
 }
 
-fn render_plain_terminal_pane(indent: usize) -> String {
-    format!("{}pane focus=true\n", " ".repeat(indent))
+fn render_plain_terminal_pane(indent: usize) -> Result<String> {
+    let shell = crate::harness::launch::user_shell_program();
+    let name = crate::harness::launch::pane_short_name(std::slice::from_ref(&shell))
+        .unwrap_or_else(|| "sh".to_owned());
+    Ok(format!(
+        "{}pane focus=true name={}\n",
+        " ".repeat(indent),
+        kdl_string(&name)?,
+    ))
 }
 
 fn render_tab_column(
@@ -459,7 +461,8 @@ fn render_command_pane(
     indent: usize,
     size: Option<&str>,
 ) -> Result<String> {
-    render_named_command_pane(argv, cwd, focus, indent, size, None)
+    let name = crate::harness::launch::pane_short_name(argv);
+    render_named_command_pane(argv, cwd, focus, indent, size, name.as_deref())
 }
 
 fn render_managed_command_pane(

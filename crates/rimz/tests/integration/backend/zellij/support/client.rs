@@ -11,7 +11,7 @@ use rimz::mux::{ClientFocusOptions, ClientView, MuxBackend, ZellijBackend};
 use super::session::{LiveZellijSession, SPAWN_TIMEOUT};
 
 const REGISTRATION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(15);
-const OUTPUT_TAIL_BYTES: usize = 8 * 1024;
+const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
 const CLIENT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const FOCUS_TIMEOUT: Duration = Duration::from_secs(30);
 const INPUT_DELIVERY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -428,6 +428,13 @@ impl AttachedClient {
         self.process.child.try_wait().ok().flatten()
     }
 
+    pub(in crate::backend::zellij) fn output_bytes(&self) -> Vec<u8> {
+        self.output_tail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     fn output_tail(&self) -> String {
         let tail = self
             .output_tail
@@ -461,6 +468,7 @@ fn spawn_process_at(
         .expect("openpty");
     let mut command = CommandBuilder::new("zellij");
     crate::common::ZellijNamespace::pin_pty_at(xdg, &mut command);
+    command.env("TERM", "xterm-256color");
     if let AttachMode::ExactLineage(lineage) = mode {
         command.env(rimz::remote::REMOTE_LINEAGE_ENV, lineage);
     }

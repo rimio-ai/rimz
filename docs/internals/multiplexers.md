@@ -156,6 +156,12 @@ Neither backend reports a per-pane process start, so RimZ derives `pane_process_
 
 The pane PID is only the walk root and metrics binding, because a pane's PID is its shell rather than the agent it launched. Agent liveness uses the agent's own PID, captured best-effort by its hook ([model.md](./agents/model.md)).
 
+### Outer-terminal titles
+
+The attached terminal's tab title is RimZ-controlled for every pane RimZ creates. Both backends include the room session and a short pane/process identity rather than accepting the shell's OSC 0/1/2 host-and-path title.
+
+Zellij computes the outer title from the focused pane. A non-empty layout or `new-pane --name` value takes precedence over the pane grid's OSC-derived title, so birth layouts name shell panes by shell basename, channel shells by channel label, and command panes by agent kind or executable basename. Runtime splits follow the same rule. tmux instead enables session-scoped `set-titles` and fixes `set-titles-string` to `#S | #{pane_current_command}`; it deliberately excludes `#T`, the shell-writable pane title.
+
 ## Reading the room
 
 Each backend has one authoritative roster and, optionally, one push channel that makes reads fresher.
