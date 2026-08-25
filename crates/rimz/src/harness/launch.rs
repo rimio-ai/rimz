@@ -207,16 +207,13 @@ pub fn user_shell_program() -> String {
 
 /// Short, stable identity for an ordinary shell pane.
 pub fn shell_pane_name() -> String {
-    pane_short_name(std::slice::from_ref(&user_shell_program())).unwrap_or_else(|| "sh".to_owned())
-}
-
-/// Short process identity used when a pane caller supplies no semantic name.
-fn pane_short_name(argv: &[String]) -> Option<String> {
-    Path::new(argv.first()?)
+    let shell = user_shell_program();
+    Path::new(&shell)
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "sh".to_owned())
 }
 
 /// Shell pane argv for an empty named channel, pinned to the room identity.

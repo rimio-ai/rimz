@@ -44,8 +44,9 @@ pub(super) fn sanitize_window_name(raw: &str) -> String {
 impl TmuxBackend {
     /// Attach a RimZ-owned display identity to one pane. Pane user options are
     /// not writable through terminal escape sequences, unlike `pane_title`.
-    pub(super) fn set_pane_rimz_title(&self, pane_id: &str, name: &str) -> Result<()> {
-        self.cmd()
+    pub(super) fn set_pane_rimz_title(&self, pane_id: &str, name: &str) {
+        if let Err(err) = self
+            .cmd()
             .args([
                 "set-option".to_owned(),
                 "-p".to_owned(),
@@ -55,7 +56,15 @@ impl TmuxBackend {
                 name.to_owned(),
             ])
             .run()
-            .map(|_| ())
+        {
+            tracing::warn!(
+                pane = pane_id,
+                title = name,
+                tags.operation = "tmux.set_pane_title",
+                error = &err as &dyn std::error::Error,
+                "could not set the pane's RimZ title; using its process fallback",
+            );
+        }
     }
 
     pub(super) fn rename_window_command(&self, anchor: &PaneId, name: &str) -> Result<CommandSpec> {
@@ -613,16 +622,8 @@ impl TmuxBackend {
             };
             match self.open_named_window(&opts.session_name, &tab.label, &tab.cwd, first) {
                 Ok(opened) => {
-                    if let Some(name) = first_name
-                        && let Err(err) = self.set_pane_rimz_title(&opened.first_pane, name)
-                    {
-                        tracing::warn!(
-                            session = %opts.session_name,
-                            tab = %tab.label,
-                            tags.operation = "tmux.resume.set_pane_title",
-                            error = &err as &dyn std::error::Error,
-                            "resume: setting the first pane title failed; leaving its process fallback",
-                        );
+                    if let Some(name) = first_name {
+                        self.set_pane_rimz_title(&opened.first_pane, name);
                     }
                     if focus_window.is_none() {
                         focus_window = Some(opened.window_id.clone());
@@ -680,7 +681,7 @@ impl TmuxBackend {
             "split-window did not print a pane id",
         )?;
         if let Some(name) = &pane.name {
-            self.set_pane_rimz_title(&pane_id, name)?;
+            self.set_pane_rimz_title(&pane_id, name);
         }
         Ok(pane_id)
     }

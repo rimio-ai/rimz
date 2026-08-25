@@ -26,6 +26,24 @@ use crate::sidebar::timing::unix_now_ms;
 #[cfg(unix)]
 use crate::store::paths::RuntimePaths;
 
+#[test]
+fn pane_short_name_uses_program_basename() {
+    assert_eq!(
+        pane_short_name(&[
+            "/opt/rimz".to_owned(),
+            "agents".to_owned(),
+            "exec".to_owned(),
+            "claude".to_owned(),
+        ]),
+        Some("rimz".to_owned()),
+    );
+    assert_eq!(
+        pane_short_name(&["/usr/bin/zsh".to_owned(), "-l".to_owned()]),
+        Some("zsh".to_owned()),
+    );
+    assert_eq!(pane_short_name(&[]), None);
+}
+
 #[cfg(unix)]
 struct TestRoom {
     runtime_root: tempfile::TempDir,
