@@ -72,6 +72,24 @@ fn remote_connect_command(env: &Env, log: &Path) -> Command {
     cmd
 }
 
+fn remote_path_connect_command(env: &Env, log: &Path) -> Command {
+    let mut cmd = env.rimz();
+    cmd.args([
+        "remote",
+        "connect",
+        "dev-box:workspace/query-engine",
+        "--attach",
+    ])
+    .env("RIMZ_SSH_BIN", ssh_shim())
+    .env("RIMZ_TEST_SSH_LOG", log)
+    .env("RIMZ_REMOTE_DIAL_MS", "0")
+    .env("RIMZ_REMOTE_PROBE_MS", "0")
+    .env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "1")
+    .env("RIMZ_REMOTE_MIN_DISPLAY_MS", "0")
+    .env("TERM", "xterm-256color");
+    cmd
+}
+
 fn remote_connect_pty_command(env: &Env, log: &Path) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(env.rimz_bin());
     env.pin_pty_command(&mut cmd);
@@ -275,6 +293,10 @@ fn is_config_query_invocation(argv: &[String]) -> bool {
     argv.iter().any(|arg| arg == "-G")
 }
 
+fn is_path_preflight_invocation(argv: &[String]) -> bool {
+    argv.iter().any(|arg| arg.starts_with("test -d "))
+}
+
 fn is_master_invocation(argv: &[String]) -> bool {
     argv.iter().any(|arg| arg == "-M")
 }
@@ -284,6 +306,7 @@ fn is_main_invocation(argv: &[String]) -> bool {
         && !is_control_check_invocation(argv)
         && !is_config_query_invocation(argv)
         && !is_master_invocation(argv)
+        && !is_path_preflight_invocation(argv)
 }
 
 fn main_invocation_count(log: &Path) -> usize {
@@ -730,6 +753,88 @@ fn one_shot_connect_mirrors_the_ssh_clients_suspend() {
     killpg(pid, Signal::SIGCONT).expect("foreground the attach process group");
     let status = child.wait().expect("wait resumed remote connect");
     assert!(status.success(), "resumed attach failed with {status}");
+}
+
+#[test]
+fn supervised_missing_remote_path_fails_before_attach() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let preflight_plan = env.project_root.join("ssh-path-preflight.plan");
+    std::fs::write(&preflight_plan, "1\n").expect("write path preflight plan");
+
+    let out = remote_path_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_PATH_PREFLIGHT_PLAN", &preflight_plan)
+        .bounded_output()
+        .expect("run missing-path remote connect");
+
+    assert!(!out.status.success(), "missing path must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("remote path does not exist on dev-box: workspace/query-engine"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("rimz remote list"), "{stderr}");
+    let invocations = shim_invocations(&log);
+    assert_eq!(
+        invocations
+            .iter()
+            .filter(|argv| is_path_preflight_invocation(argv))
+            .count(),
+        1,
+        "one path preflight: {invocations:?}"
+    );
+    assert_eq!(
+        main_invocation_count(&log),
+        0,
+        "the tty attach must not run: {invocations:?}"
+    );
+}
+
+#[test]
+fn supervised_existing_remote_path_preflights_before_attach() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+
+    let out = remote_path_connect_command(&env, &log)
+        .bounded_output()
+        .expect("run existing-path remote connect");
+
+    assert!(
+        out.status.success(),
+        "existing path reaches attach\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let invocations = shim_invocations(&log);
+    let preflight_index = invocations
+        .iter()
+        .position(|argv| is_path_preflight_invocation(argv))
+        .expect("path preflight invocation");
+    let attach_index = invocations
+        .iter()
+        .position(|argv| is_main_invocation(argv))
+        .expect("main attach invocation");
+    assert!(
+        preflight_index < attach_index,
+        "preflight precedes attach: {invocations:?}"
+    );
+}
+
+#[test]
+fn supervised_session_target_skips_path_preflight() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+
+    let out = remote_connect_command(&env, &log)
+        .bounded_output()
+        .expect("run session remote connect");
+
+    assert!(out.status.success(), "session attach succeeds");
+    assert!(
+        !shim_invocations(&log)
+            .iter()
+            .any(|argv| is_path_preflight_invocation(argv)),
+        "session targets have no filesystem preflight"
+    );
 }
 
 #[test]
