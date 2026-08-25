@@ -299,7 +299,7 @@ fn open_attempt_pane(
                 target: target.map_or(SplitTarget::Ambient, SplitTarget::Pane),
                 cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
                 command: Some(pane.argv.clone()),
-                title: None,
+                title: pane.name.clone(),
                 close_on_exit: false,
                 env: rimz::room::pane_identity_env(
                     &prepared.workspace,

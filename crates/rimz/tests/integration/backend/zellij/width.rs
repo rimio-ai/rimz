@@ -160,6 +160,7 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
                     argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    name: None,
                 }])],
             },
             focus: true,

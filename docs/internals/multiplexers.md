@@ -160,7 +160,9 @@ The pane PID is only the walk root and metrics binding, because a pane's PID is 
 
 The attached terminal's tab title is RimZ-controlled for every pane RimZ creates. Both backends include the room session and a short pane/process identity rather than accepting the shell's OSC 0/1/2 host-and-path title.
 
-Zellij computes the outer title from the focused pane. A non-empty layout or `new-pane --name` value takes precedence over the pane grid's OSC-derived title, so birth layouts name shell panes by shell basename, channel shells by channel label, and command panes by agent kind or executable basename. Runtime splits follow the same rule. tmux instead enables session-scoped `set-titles` and fixes `set-titles-string` to `#S | #{pane_current_command}`; it deliberately excludes `#T`, the shell-writable pane title.
+Zellij computes the outer title from the focused pane. A non-empty layout or `new-pane --name` value takes precedence over the pane grid's OSC-derived title, so birth layouts name shell panes by shell basename, channel shells by channel label, and caller-identified command panes by that identity. Other command panes fall back to the executable basename, and runtime splits follow the same rule.
+
+tmux enables session-scoped `set-titles`. For caller-identified panes the backend writes a pane-scoped `@rimz_title` user option, which terminal escape sequences cannot change; its fixed `set-titles-string` chooses that value and otherwise falls back to `#{pane_current_command}`. The format deliberately excludes `#T`/`#{pane_title}`, which applications can rewrite with OSC title sequences. RimZ's tmux 3.5 floor is already newer than the 3.1 release that added pane-scoped options.
 
 ## Reading the room
 

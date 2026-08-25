@@ -280,7 +280,11 @@ impl MuxBackend for TmuxBackend {
             SplitPlacement::Directional(SplitDirection::Right) => "-h",
             SplitPlacement::Directional(SplitDirection::Down) | SplitPlacement::Stacked => "-v",
         };
+        let title = opts.title;
         let mut spec = self.cmd().args(["split-window", flag]);
+        if title.is_some() {
+            spec = spec.args(["-P", "-F", "#{pane_id}"]);
+        }
         if !opts.focus {
             spec = spec.arg("-d");
         }
@@ -303,7 +307,18 @@ impl MuxBackend for TmuxBackend {
         if let Some(command) = opts.command {
             spec = spec.args(command);
         }
-        spec.run().map(|_| ())
+        let output = spec.run()?;
+        if let Some(title) = title {
+            let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if pane_id.is_empty() {
+                return Err(MuxErr::Output {
+                    program: "tmux".to_owned(),
+                    reason: "split-window did not print a pane id".to_owned(),
+                });
+            }
+            self.set_pane_rimz_title(&pane_id, &title)?;
+        }
+        Ok(())
     }
 
     fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()> {
@@ -783,6 +798,9 @@ impl MuxBackend for TmuxBackend {
         )?;
         let window_id = opened.window_id;
         let first_pane = opened.first_pane;
+        if let Some(name) = &first.name {
+            self.set_pane_rimz_title(&first_pane, name)?;
+        }
 
         // A tab opened from a narrow pane (for example a half-width floating
         // pane) is born at that pane's width, so the hook-docked sidebar and
@@ -877,7 +895,7 @@ impl TmuxBackend {
         let mut previous_in_column = first_pane.to_owned();
         for pane in first_column_rest {
             previous_in_column =
-                self.split_printed("-v", &previous_in_column, None, cwd, &pane.argv)?;
+                self.split_named_printed("-v", &previous_in_column, None, cwd, pane)?;
         }
         for column in rest_columns {
             // tmux has no native stack, so stacked columns use tiled rows.
@@ -886,11 +904,11 @@ impl TmuxBackend {
                 .last()
                 .cloned()
                 .unwrap_or_else(|| window_id.to_owned());
-            let new_column = self.split_printed("-h", &target, None, cwd, &top.argv)?;
+            let new_column = self.split_named_printed("-h", &target, None, cwd, top)?;
             column_anchors.push(new_column.clone());
             let mut previous = new_column;
             for row in rows {
-                previous = self.split_printed("-v", &previous, None, cwd, &row.argv)?;
+                previous = self.split_named_printed("-v", &previous, None, cwd, row)?;
             }
         }
         Ok(())

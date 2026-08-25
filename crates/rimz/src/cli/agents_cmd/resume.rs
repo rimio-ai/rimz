@@ -130,13 +130,13 @@ pub(super) fn resume_lane(
                 .unwrap_or_default();
             let mut lane_workspace = workspace.clone();
             lane_workspace.worktree_root = cwd.clone();
-            for command in commands {
+            for pane in commands {
                 backend.split_pane(SplitPaneOptions {
                     target: SplitTarget::Pane(target_pane_id.clone()),
                     cwd: Some(cwd.to_string_lossy().into_owned()),
-                    command: Some(command),
+                    command: Some(pane.argv),
                     env: rimz::room::pane_identity_env(&lane_workspace, channel.as_deref(), false),
-                    title: None,
+                    title: pane.name,
                     close_on_exit: false,
                     placement: SplitPlacement::Directional(direction),
                     focus: !bg,

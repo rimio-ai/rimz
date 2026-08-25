@@ -1475,6 +1475,7 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
         &exec_request(&panes.columns[0].panes[0].argv).action,
         crate::harness::launch::ExecAction::Launch { prompt: None, .. }
     ));
+    assert_eq!(panes.columns[0].panes[0].name.as_deref(), Some("claude"));
     assert_request_field(
         &panes.columns[1].panes[1].argv,
         RequestField::Prompt,
@@ -1483,6 +1484,10 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
     assert_eq!(
         panes.columns[1].panes[0].argv,
         [crate::harness::launch::user_shell_program()]
+    );
+    assert_eq!(
+        panes.columns[1].panes[0].name.as_deref(),
+        Some(crate::harness::launch::shell_pane_name().as_str()),
     );
 }
 
@@ -1533,10 +1538,12 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
 
     let panes = &panes.columns[0].panes;
     assert_request_field(&panes[0].argv, RequestField::Resume, "sess-resume");
+    assert_eq!(panes[0].name.as_deref(), Some("claude"));
     assert_request_field(&panes[0].argv, RequestField::Channel, "fallback");
     assert_eq!(panes[1].argv, vec!["watch"]);
     assert_request_field(&panes[2].argv, RequestField::Name, "bright-river");
     assert_request_field(&panes[2].argv, RequestField::Prompt, "fresh prompt");
+    assert_eq!(panes[2].name.as_deref(), Some("codex"));
 
     let err = compile_layout_panes(
         &layout,

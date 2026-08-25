@@ -508,7 +508,10 @@ impl ResumeTab {
             Vec::new()
         } else {
             vec![LayoutColumn {
-                panes: panes.into_iter().map(|argv| PaneCmd { argv }).collect(),
+                panes: panes
+                    .into_iter()
+                    .map(|argv| PaneCmd { argv, name: None })
+                    .collect(),
                 stacked: false,
             }]
         };
@@ -533,9 +536,8 @@ pub struct SplitPaneOptions {
     pub target: SplitTarget,
     pub cwd: Option<String>,
     pub command: Option<Vec<String>>,
-    /// Explicit pane name so a managed Zellij pane keeps its launch identity
-    /// while foreground children churn. tmux ignores this because
-    /// `pane_start_command` already preserves launch identity.
+    /// Explicit pane name so the backend keeps its launch identity while
+    /// foreground children churn.
     pub title: Option<String>,
     /// Close the pane when its command exits, matching `close_on_exit true` on
     /// layout-born managed panes. tmux already does this with its default
@@ -653,11 +655,14 @@ pub struct HostPane {
     pub cwd: PathBuf,
 }
 
-/// One command pane in a caller-built tab layout. The caller owns semantics
-/// (agent exec wrapper vs shell); backends only run argv.
+/// One command pane in a caller-built tab layout. The caller owns semantic
+/// identity (agent exec wrapper vs shell); backends run argv and project the
+/// optional name into their native pane-title mechanism.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaneCmd {
     pub argv: Vec<String>,
+    /// Stable short pane identity supplied when argv does not express it.
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

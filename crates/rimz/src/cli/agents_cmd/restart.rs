@@ -137,6 +137,7 @@ pub(in crate::cli) fn restart_resolved(
             params: restart_params,
         },
     };
+    let pane_name = invocation.kind.to_string();
     let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), &invocation)?;
     let mut env = rimz::room::pane_identity_env(workspace, agent.channel.as_deref(), false);
     env.insert(
@@ -167,7 +168,7 @@ pub(in crate::cli) fn restart_resolved(
             target: rimz::mux::SplitTarget::Pane(old_pane.clone()),
             cwd: Some(cwd.display().to_string()),
             command: Some(argv),
-            title: None,
+            title: Some(pane_name),
             close_on_exit: false,
             env,
             placement: rimz::mux::SplitPlacement::Directional(direction),

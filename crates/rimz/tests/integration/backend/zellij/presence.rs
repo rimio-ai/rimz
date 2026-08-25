@@ -676,6 +676,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
                             sh_quote(&input_log.display().to_string()),
                         ),
                     ],
+                    name: None,
                 }])],
             },
             focus: true,

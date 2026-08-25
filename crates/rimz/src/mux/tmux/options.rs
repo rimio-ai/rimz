@@ -9,6 +9,7 @@ use crate::mux::{SidebarPaneOptions, sidebar_serve_args};
 use crate::pane::SIDEBAR_CHROME_TITLE;
 
 pub(super) const SIDEBAR_WIDTH_OPTION: &str = "@rimz_sidebar_cols";
+pub(super) const RIMZ_TITLE_OPTION: &str = "@rimz_title";
 
 /// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
 /// launch and in-place recovery so the two cannot drift.
@@ -227,7 +228,7 @@ pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, St
         ("set-titles", "on".to_owned()),
         (
             "set-titles-string",
-            "#S | #{pane_current_command}".to_owned(),
+            "#S | #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}}".to_owned(),
         ),
     ]
 }
@@ -461,7 +462,7 @@ mod tests {
                 ("set-titles", "on".to_owned()),
                 (
                     "set-titles-string",
-                    "#S | #{pane_current_command}".to_owned(),
+                    "#S | #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}}".to_owned(),
                 ),
             ],
         );

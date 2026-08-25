@@ -158,7 +158,10 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     )?;
     let panes = LayoutPanes {
         columns: vec![LayoutColumn {
-            panes: vec![PaneCmd { argv }],
+            panes: vec![PaneCmd {
+                argv,
+                name: Some(seed.kind.to_string()),
+            }],
             stacked: false,
         }],
     };

@@ -145,10 +145,11 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     let (close_pane_on_exit, exit_on_run_completion) =
         run_exit_policy(args.self_cleanup_on_completion, args.subagent);
     let rimz_bin = rimz::proc::rimz_exe();
+    let name = args.adapter.spec().kind_id();
     let argv = rimz::harness::launch::exec_argv(
         &rimz_bin,
         &rimz::harness::launch::ExecRequest {
-            kind: args.adapter.spec().kind_id(),
+            kind: name.clone(),
             action: rimz::harness::launch::ExecAction::Launch {
                 prompt: Some(args.prompt.to_owned()),
                 extra_args: args.permission_args.to_vec(),
@@ -174,7 +175,10 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
             },
         },
     )?;
-    Ok(PaneCmd { argv })
+    Ok(PaneCmd {
+        argv,
+        name: Some(name.to_string()),
+    })
 }
 
 fn run_exit_policy(self_cleanup_on_completion: bool, subagent: bool) -> (bool, bool) {

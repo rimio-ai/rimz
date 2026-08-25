@@ -180,7 +180,7 @@ fn lane_partial_resume_targets_live_pane_and_only_seeds_closed_members() {
     assert_eq!(target_pane_id, pane_id("live-pane"));
     assert_eq!(commands.len(), 1);
     assert!(matches!(
-        decode_exec_request(&commands[0]).action,
+        decode_exec_request(&commands[0].argv).action,
         crate::harness::launch::ExecAction::Resume { ref session_id, .. }
             if session_id == "closed"
     ));

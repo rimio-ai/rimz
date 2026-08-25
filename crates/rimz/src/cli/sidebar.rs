@@ -979,7 +979,7 @@ fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
     if pets {
         argv.push("--pets".to_owned());
     }
-    let gallery_pane = rimz::mux::PaneCmd { argv };
+    let gallery_pane = rimz::mux::PaneCmd { argv, name: None };
     room.backend()
         .open_tab(&rimz::mux::TabOptions {
             title: "gallery".to_owned(),

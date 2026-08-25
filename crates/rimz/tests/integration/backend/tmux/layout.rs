@@ -364,6 +364,7 @@ fn open_tab_builds_multi_column_layout() {
         .expect("open_sidebar");
     let work_pane = || PaneCmd {
         argv: vec!["sleep".to_owned(), "600".to_owned()],
+        name: None,
     };
     server
         .backend
@@ -504,6 +505,7 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
         .expect("open_sidebar");
     let work_pane = || PaneCmd {
         argv: vec!["sleep".to_owned(), "600".to_owned()],
+        name: None,
     };
     server
         .backend
@@ -595,6 +597,7 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
     }
     let work_pane = || PaneCmd {
         argv: vec!["sleep".to_owned(), "600".to_owned()],
+        name: None,
     };
     server
         .backend

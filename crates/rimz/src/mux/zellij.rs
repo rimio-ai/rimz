@@ -29,7 +29,7 @@ pub use reap::{ReapOutcome, reap_lineage_clients};
 pub use socket::{ZellijSocketHeadroom, socket_headroom, socket_preflight};
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -75,6 +75,14 @@ const PRESENCE_RETIRE_PROOF_TIMEOUT: Duration = Duration::from_secs(5);
 /// `list-tabs` can hit an action-client startup race during busy session ticks.
 const LIST_TABS_ATTEMPTS: u32 = 5;
 const LIST_TABS_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+fn pane_short_name(argv: &[String]) -> Option<String> {
+    Path::new(argv.first()?)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+}
 
 /// Zellij can accept a transient action client and still drop a `new-tab`
 /// mutation under load. Confirm the tab name appears, then retry only while it
