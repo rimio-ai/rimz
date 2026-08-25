@@ -20,6 +20,7 @@
 //! publishes the control socket marker before parking.
 //! `$RIMZ_TEST_SSH_MASTER_EXIT_PLAN` and `$RIMZ_TEST_SSH_MASTER_EXIT_MS`
 //! script established ControlMaster exits.
+//! `$RIMZ_TEST_SSH_PATH_PREFLIGHT_PLAN` scripts remote `test -d` probes.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -50,6 +51,10 @@ fn main() {
             run_web_control_forward();
         }
         return;
+    }
+
+    if is_path_preflight(&argv) {
+        exit_from_plan("RIMZ_TEST_SSH_PATH_PREFLIGHT_PLAN");
     }
 
     if argv
@@ -390,6 +395,10 @@ fn is_control_check(argv: &[String]) -> bool {
 fn is_forward_control(argv: &[String]) -> bool {
     argv.windows(2)
         .any(|args| args[0] == "-O" && matches!(args[1].as_str(), "forward" | "cancel"))
+}
+
+fn is_path_preflight(argv: &[String]) -> bool {
+    argv.iter().any(|arg| arg.starts_with("test -d "))
 }
 
 fn exit_control_check(argv: &[String]) -> ! {
