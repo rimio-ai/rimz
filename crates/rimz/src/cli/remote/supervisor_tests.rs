@@ -22,6 +22,7 @@ fn fatal_session_message_points_missing_remote_rimz_at_setup() {
     let message = fatal_session_message(
         rimz::remote::REMOTE_RIMZ_MISSING_EXIT,
         "dev-box",
+        None,
         "dev",
         None,
     );
@@ -39,7 +40,7 @@ fn fatal_session_message_points_missing_remote_rimz_at_setup() {
 
 #[test]
 fn fatal_session_message_reports_other_codes_without_setup_hint() {
-    let message = fatal_session_message(2, "dev-box", "dev", None);
+    let message = fatal_session_message(2, "dev-box", None, "dev", None);
 
     assert!(
         message.contains("ssh to dev-box exited with status 2"),
@@ -51,8 +52,13 @@ fn fatal_session_message_reports_other_codes_without_setup_hint() {
 
 #[test]
 fn fatal_session_message_includes_a_captured_attach_error() {
-    let message =
-        fatal_session_message(2, "dev-box", "dev", Some("SSH control connection dropped"));
+    let message = fatal_session_message(
+        2,
+        "dev-box",
+        None,
+        "dev",
+        Some("SSH control connection dropped"),
+    );
 
     assert!(
         message.ends_with("— SSH control connection dropped"),
@@ -89,6 +95,7 @@ fn fatal_session_message_explains_minor_version_bypass() {
     let message = fatal_session_message(
         rimz::remote::REMOTE_VERSION_SKEW_EXIT,
         "dev-box",
+        None,
         "dev",
         None,
     );
@@ -103,6 +110,7 @@ fn fatal_session_message_keeps_major_version_refusal_hard() {
     let message = fatal_session_message(
         rimz::remote::REMOTE_VERSION_INCOMPATIBLE_EXIT,
         "dev-box",
+        None,
         "dev",
         None,
     );
@@ -111,6 +119,72 @@ fn fatal_session_message_keeps_major_version_refusal_hard() {
     assert!(message.contains("upgrade required"), "{message}");
     assert!(message.contains("rimz remote setup dev"), "{message}");
     assert!(!message.contains("--force-version"), "{message}");
+}
+
+#[test]
+fn fatal_session_message_explains_a_missing_remote_path() {
+    let message = fatal_session_message(
+        rimz::remote::REMOTE_PATH_MISSING_EXIT,
+        "dev-box",
+        Some("workspace/missing"),
+        "dev",
+        Some(
+            "remote path does not exist on dev-box: workspace/mis…; check the target with `rimz remote list`",
+        ),
+    );
+
+    assert!(
+        message.contains("remote path does not exist on dev-box: workspace/missing"),
+        "{message}"
+    );
+    assert!(message.contains("rimz remote list"), "{message}");
+    assert_eq!(message.matches("rimz remote list").count(), 1, "{message}");
+}
+
+#[test]
+fn missing_path_sentinel_rebuilds_a_long_path_without_stderr() {
+    let path =
+        "workspace/projects/query-engine/with/a/very/long/path/that/exceeds/the/summary/limit";
+
+    let message = fatal_session_message(
+        rimz::remote::REMOTE_PATH_MISSING_EXIT,
+        "dev-box",
+        Some(path),
+        "dev",
+        None,
+    );
+
+    assert!(message.contains(path), "{message}");
+    assert_eq!(message.matches("rimz remote list").count(), 1, "{message}");
+}
+
+#[test]
+fn interrupted_message_preserves_the_last_ssh_error() {
+    assert_eq!(
+        interrupted_message(
+            ConnectStage::Initial,
+            "dev-box",
+            Some("Permission denied (publickey).")
+        ),
+        "rimz: connect to dev-box stopped — last error: Permission denied (publickey)."
+    );
+    assert_eq!(
+        interrupted_message(ConnectStage::Recovery, "dev-box", None),
+        "rimz: reconnect to dev-box stopped"
+    );
+}
+
+#[test]
+fn path_preflight_classifies_only_exit_one_as_missing() {
+    assert!(path_preflight_missing(Some(1)));
+    for code in [
+        Some(0),
+        Some(2),
+        Some(rimz::remote::SSH_TRANSPORT_EXIT),
+        None,
+    ] {
+        assert!(!path_preflight_missing(code));
+    }
 }
 
 #[test]

@@ -286,7 +286,7 @@ fn path_preflight_reuses_the_master_and_quotes_the_remote_path() {
         TermPlan::Keep,
         false,
     );
-    let spec = plan
+    let (spec, path) = plan
         .path_preflight(Path::new("/tmp/rimz.sock"))
         .expect("path target has a preflight");
 
@@ -308,7 +308,7 @@ fn path_preflight_reuses_the_master_and_quotes_the_remote_path() {
             "test -d \"$HOME\"'/code/query engine'",
         ]
     );
-    assert_eq!(plan.target().remote_path(), Some("$HOME/code/query engine"));
+    assert_eq!(path, "$HOME/code/query engine");
 
     let session = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false);
     assert!(
@@ -316,16 +316,6 @@ fn path_preflight_reuses_the_master_and_quotes_the_remote_path() {
             .path_preflight(Path::new("/tmp/rimz.sock"))
             .is_none()
     );
-    assert_eq!(session.target().remote_path(), None);
-}
-
-#[test]
-fn path_preflight_classifies_only_exit_one_as_missing() {
-    assert_eq!(PathPreflight::classify(Some(0)), PathPreflight::Exists);
-    assert_eq!(PathPreflight::classify(Some(1)), PathPreflight::Missing);
-    for code in [Some(2), Some(SSH_TRANSPORT_EXIT), None] {
-        assert_eq!(PathPreflight::classify(code), PathPreflight::Unknown);
-    }
 }
 
 #[test]
@@ -822,7 +812,7 @@ fn verdict_and_backoff_classify_reconnects() {
     );
 
     let settle =
-        |exit_code, established| ReconnectState::new().settle(exit_code, established, None);
+        |exit_code, established| ReconnectState::default().settle(exit_code, established, None);
     assert_eq!(settle(Some(0), true), Verdict::CleanExit);
     assert_eq!(settle(Some(SSH_TRANSPORT_EXIT), true), Verdict::Retry);
     assert_eq!(
@@ -906,7 +896,7 @@ fn unreachable_retry_delay_uses_the_user_safety_ladder() {
 
 #[test]
 fn reconnect_state_settles_established_sessions_and_failures() {
-    let mut state = ReconnectState::new();
+    let mut state = ReconnectState::default();
 
     assert_eq!(
         state.settle(Some(SSH_TRANSPORT_EXIT), false, None),
@@ -943,14 +933,14 @@ fn reconnect_state_settles_established_sessions_and_failures() {
 #[test]
 fn attached_exit_uses_control_liveness_instead_of_mux_status() {
     let settle = |control_alive, lived_past_gatetime| {
-        ReconnectState::new().settle(Some(1), true, Some((control_alive, lived_past_gatetime)))
+        ReconnectState::default().settle(Some(1), true, Some((control_alive, lived_past_gatetime)))
     };
 
     assert_eq!(settle(true, true), Verdict::Reattach);
     assert_eq!(settle(false, true), Verdict::Retry);
     assert_eq!(settle(true, false), Verdict::Fatal { code: 1 });
     assert_eq!(
-        ReconnectState::new().settle(Some(REMOTE_VERSION_SKEW_EXIT), true, Some((true, true)),),
+        ReconnectState::default().settle(Some(REMOTE_VERSION_SKEW_EXIT), true, Some((true, true)),),
         Verdict::Fatal {
             code: REMOTE_VERSION_SKEW_EXIT
         }

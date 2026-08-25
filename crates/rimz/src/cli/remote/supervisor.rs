@@ -174,10 +174,7 @@ impl LinkSupervisor {
                 self.held_alt = held_alt;
                 Ok(true)
             }
-            WaitOutcome::Interrupted => {
-                let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped");
-                Ok(false)
-            }
+            WaitOutcome::Interrupted => Ok(false),
             WaitOutcome::NeedsInteractive => unreachable!("web recovery stays in batch mode"),
         }
     }
@@ -220,7 +217,7 @@ pub(super) fn supervise_remote(
     use rimz::remote::{ReconnectPolicy, ReconnectState, Verdict};
 
     let policy = ReconnectPolicy::from_env();
-    let mut reconnect = ReconnectState::new();
+    let mut reconnect = ReconnectState::default();
     let target = plan.target();
     let host = target.host_display();
     let dial_plan = resolve_dial_plan(target.ssh_destination().as_str());
@@ -340,7 +337,13 @@ pub(super) fn supervise_remote(
                     guard.reset_emulator();
                     bail!(
                         "{}",
-                        fatal_session_message(code, host, setup_hint, summary.as_deref())
+                        fatal_session_message(
+                            code,
+                            host,
+                            target.remote_path(),
+                            setup_hint,
+                            summary.as_deref()
+                        )
                     )
                 }
                 Verdict::Retry => {
@@ -405,7 +408,6 @@ pub(super) fn supervise_remote(
                 held_alt = next_held_alt;
             }
             WaitOutcome::Interrupted => {
-                let _ = writeln!(std::io::stderr().lock(), "rimz: reconnect stopped");
                 return Ok(());
             }
             // `wait_for_master` only requests an interactive fallback for an
@@ -423,10 +425,14 @@ enum RetryCause {
 pub(super) fn fatal_session_message(
     code: i32,
     host: &str,
+    remote_path: Option<&str>,
     setup_hint: &str,
     summary: Option<&str>,
 ) -> String {
     match code {
+        rimz::remote::REMOTE_PATH_MISSING_EXIT => {
+            remote_path_missing_message(host, remote_path, None)
+        }
         rimz::remote::REMOTE_RIMZ_MISSING_EXIT => format!(
             "rimz is not installed on {host}; install it over SSH with:\n    \
              rimz remote setup {setup_hint}"
@@ -448,6 +454,34 @@ pub(super) fn fatal_session_message(
             }
         }
     }
+}
+
+fn remote_path_missing_message(host: &str, path: Option<&str>, summary: Option<&str>) -> String {
+    let error = summary.map_or_else(
+        || match path {
+            Some(path) => format!("remote path does not exist on {host}: {path}"),
+            None => format!("remote path does not exist on {host}"),
+        },
+        str::to_owned,
+    );
+    format!(
+        "{error}\ncheck the target with `rimz remote list`, then correct the alias or remote path"
+    )
+}
+
+fn interrupted_message(
+    connect_stage: ConnectStage,
+    host: &str,
+    last_error: Option<&str>,
+) -> String {
+    let action = match connect_stage {
+        ConnectStage::Initial => "connect",
+        ConnectStage::Recovery => "reconnect",
+    };
+    let detail = last_error
+        .map(|error| format!(" — last error: {error}"))
+        .unwrap_or_default();
+    format!("rimz: {action} to {host} stopped{detail}")
 }
 
 fn run_ssh_session(
@@ -646,7 +680,17 @@ fn wait_for_master(
         reachability.poll(now).present(Some(&mut outage.panel), ui);
         if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
             drop(std::mem::take(&mut master));
+            let last_error = outage.panel.last_error().map(str::to_owned);
             ui.release()?;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "{}",
+                interrupted_message(
+                    connect_stage,
+                    plan.target().host_display(),
+                    last_error.as_deref()
+                )
+            );
             return Ok(WaitOutcome::Interrupted);
         }
         reachability.schedule_probes(now);
@@ -681,6 +725,19 @@ fn wait_for_master(
                 }
             }
             MasterTick::Connected(guard) => {
+                if connect_stage == ConnectStage::Initial
+                    && let Some((spec, path)) = plan.path_preflight(control_path)
+                    && run_path_preflight(&spec)
+                {
+                    let fix = "check the target with `rimz remote list`, then correct the alias or remote path".to_owned();
+                    let details = [format!("{}: {path}", plan.target().host_display()), fix];
+                    let message =
+                        remote_path_missing_message(plan.target().host_display(), Some(path), None);
+                    outage.panel.note_ssh_error(Some(message.clone()));
+                    ui.fail_hold("Remote path does not exist", &details)?;
+                    drop(guard);
+                    return Err(anyhow::anyhow!(message));
+                }
                 let frame = outage
                     .panel
                     .frame(outage.elapsed(), FooterPhase::Connecting);
@@ -737,11 +794,45 @@ fn wait_for_master(
         )? == UiEvent::Interrupted
         {
             drop(std::mem::take(&mut master));
+            let last_error = outage.panel.last_error().map(str::to_owned);
             ui.release()?;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "{}",
+                interrupted_message(
+                    connect_stage,
+                    plan.target().host_display(),
+                    last_error.as_deref()
+                )
+            );
             return Ok(WaitOutcome::Interrupted);
         }
         sleep_retry_wait(PANEL_TICK, stop);
     }
+}
+
+fn run_path_preflight(spec: &rimz::mux::CommandSpec) -> bool {
+    match spec
+        .to_command()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(status) => path_preflight_missing(status.code()),
+        Err(err) => {
+            tracing::debug!(
+                error = %err,
+                command = %rimz::remote::display_ssh_command(spec),
+                "remote path preflight unavailable"
+            );
+            false
+        }
+    }
+}
+
+fn path_preflight_missing(exit_code: Option<i32>) -> bool {
+    exit_code == Some(1)
 }
 
 fn note_master_failure(

@@ -241,6 +241,11 @@ impl RecoveryPanel {
         })
     }
 
+    /// Most recent SSH error retained for final interrupt and failure output.
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
     pub fn frame(&self, outage_for: Duration, phase: FooterPhase) -> RecoveryFrame {
         let mut rows = Vec::with_capacity(4);
         if let Some(checkpoint) = &self.internet {

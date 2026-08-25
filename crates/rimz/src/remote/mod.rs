@@ -428,35 +428,14 @@ impl SshAttachPlan {
 
     /// Probe a path target over an established ControlMaster before the tty
     /// attach. Session targets need no filesystem precondition.
-    pub fn path_preflight(&self, control_path: &Path) -> Option<CommandSpec> {
+    pub fn path_preflight(&self, control_path: &Path) -> Option<(CommandSpec, &str)> {
         let path = self.options.target.remote_path()?;
-        Some(
-            CommandSpec::new(ssh_program())
-                .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"])
-                .args(control_options(control_path))
-                .args(["--", self.options.target.ssh_destination().as_str()])
-                .arg(format!("test -d {}", quote_remote_path(path))),
-        )
-    }
-}
-
-/// Result of the conservative remote-path preflight classification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PathPreflight {
-    Exists,
-    Missing,
-    /// Transport and unexpected command failures belong to the attach path,
-    /// which can report them without misdiagnosing a missing directory.
-    Unknown,
-}
-
-impl PathPreflight {
-    pub fn classify(exit_code: Option<i32>) -> Self {
-        match exit_code {
-            Some(0) => Self::Exists,
-            Some(1) => Self::Missing,
-            _ => Self::Unknown,
-        }
+        let spec = CommandSpec::new(ssh_program())
+            .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"])
+            .args(control_options(control_path))
+            .args(["--", self.options.target.ssh_destination().as_str()])
+            .arg(format!("test -d {}", quote_remote_path(path)));
+        Some((spec, path))
     }
 }
 
@@ -965,10 +944,6 @@ pub struct ReconnectState {
 }
 
 impl ReconnectState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Settle one finished ssh process. Terminal attaches supply ControlMaster
     /// liveness and whether the foreground client lived past the gatetime;
     /// callers without a multiplexer client pass `None`.

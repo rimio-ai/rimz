@@ -130,6 +130,7 @@ fn run_direct_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -> Re
         ),
         "preparing remote web access",
         remote.target.host_display(),
+        remote.target.remote_path(),
         remote.origin.as_str(),
     )?;
     let WebPrepOutcome::Ready(prep) = prep else {
@@ -172,7 +173,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
     let control = rimz::remote::link::validated_control_path()
         .context("checking SSH ControlMaster socket path")?;
     let plan = remote.attach_plan(client_size)?;
-    let mut reconnect = rimz::remote::ReconnectState::new();
+    let mut reconnect = rimz::remote::ReconnectState::default();
     let host = remote.target.host_display();
     let Some(mut supervisor) = LinkSupervisor::connect(plan, control)? else {
         return Ok(());
@@ -193,6 +194,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
             ),
             "preparing remote web access",
             host,
+            remote.target.remote_path(),
             remote.origin.as_str(),
         )?;
         let prep = match prep {
@@ -382,6 +384,7 @@ fn run_web_prep(
     spec: &rimz::mux::CommandSpec,
     label: &str,
     host: &str,
+    remote_path: Option<&str>,
     setup_hint: &str,
 ) -> Result<WebPrepOutcome> {
     let mut child = spec
@@ -417,11 +420,12 @@ fn run_web_prep(
             rimz::remote::REMOTE_RIMZ_MISSING_EXIT
                 | rimz::remote::REMOTE_VERSION_SKEW_EXIT
                 | rimz::remote::REMOTE_VERSION_INCOMPATIBLE_EXIT
+                | rimz::remote::REMOTE_PATH_MISSING_EXIT
         )
     {
         bail!(
             "{}",
-            super::supervisor::fatal_session_message(code, host, setup_hint, None)
+            super::supervisor::fatal_session_message(code, host, remote_path, setup_hint, None)
         );
     }
     bail!("{label} failed with {status}");
@@ -500,7 +504,7 @@ mod tests {
     fn web_exit_settlement_uses_master_or_port_establishment() {
         let settle = |exit_code, master_confirmed, port_ready| {
             settle_web_exit(
-                &mut rimz::remote::ReconnectState::new(),
+                &mut rimz::remote::ReconnectState::default(),
                 exit_code,
                 master_confirmed,
                 port_ready,
