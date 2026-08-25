@@ -10,9 +10,136 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::queue;
 use ratatui::crossterm::style::Print;
 use ratatui::crossterm::{cursor, terminal};
+use tracing_subscriber::fmt::MakeWriter;
 
 type PanicHook = Box<dyn Fn(&PanicHookInfo<'_>) + Sync + Send + 'static>;
 type SharedPanicHook = Arc<Mutex<Option<PanicHook>>>;
+const LOG_CAPTURE_CAP: usize = 64 * 1024;
+
+#[derive(Default)]
+struct LogCapture {
+    depth: usize,
+    bytes: Vec<u8>,
+}
+
+fn log_capture() -> &'static Mutex<LogCapture> {
+    static CAPTURE: OnceLock<Mutex<LogCapture>> = OnceLock::new();
+    CAPTURE.get_or_init(|| Mutex::new(LogCapture::default()))
+}
+
+fn begin_log_capture() {
+    let mut capture = log_capture()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if capture.depth == 0 {
+        capture.bytes.clear();
+    }
+    capture.depth += 1;
+}
+
+fn end_log_capture() -> Option<Vec<u8>> {
+    let mut capture = log_capture()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if capture.depth == 0 {
+        return None;
+    }
+    capture.depth -= 1;
+    (capture.depth == 0).then(|| std::mem::take(&mut capture.bytes))
+}
+
+fn end_log_capture_flush() {
+    let Some(bytes) = end_log_capture() else {
+        return;
+    };
+    let mut stderr = io::stderr().lock();
+    let _ = stderr.write_all(&bytes);
+    let _ = stderr.flush();
+}
+
+/// Captured tracing lines for a full-screen surface to render without writing
+/// over its active terminal frame.
+pub fn captured_log_lines() -> Vec<String> {
+    let bytes = log_capture()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .bytes
+        .clone();
+    String::from_utf8_lossy(&bytes)
+        .lines()
+        .map(strip_ansi)
+        .collect()
+}
+
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            if let Some('[') = chars.next() {
+                for escaped in chars.by_ref() {
+                    if matches!(escaped, '\x40'..='\x7e') {
+                        break;
+                    }
+                }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Tracing writer that diverts stderr into the active terminal surface.
+pub struct TuiLogWriter;
+
+struct CapturedLogOutput;
+
+impl Write for CapturedLogOutput {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut capture = log_capture()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if buf.len() >= LOG_CAPTURE_CAP {
+            capture.bytes.clear();
+            capture
+                .bytes
+                .extend_from_slice(&buf[buf.len() - LOG_CAPTURE_CAP..]);
+        } else {
+            let overflow = capture
+                .bytes
+                .len()
+                .saturating_add(buf.len())
+                .saturating_sub(LOG_CAPTURE_CAP);
+            if overflow > 0 {
+                capture.bytes.drain(..overflow);
+            }
+            capture.bytes.extend_from_slice(buf);
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for TuiLogWriter {
+    type Writer = Box<dyn Write + 'a>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        let captured = log_capture()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .depth
+            > 0;
+        if captured {
+            Box::new(CapturedLogOutput)
+        } else {
+            Box::new(io::stderr())
+        }
+    }
+}
 
 /// Click + wheel tracking (?1000) with SGR encoding (?1006) — the only modes
 /// the sidebar consumes (`sidebar_pane::app::input::encode_mouse`). Crossterm's
@@ -85,7 +212,7 @@ pub fn truecolor() -> bool {
 }
 
 /// Write a buffered terminal frame with raw-mode-safe, self-clearing lines.
-pub fn write_crlf(w: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
+fn write_crlf(w: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
     let mut start = 0;
     for (index, byte) in bytes.iter().enumerate() {
         if *byte != b'\n' {
@@ -161,7 +288,11 @@ fn tput_capability(
 
 impl TerminalModeGuard {
     pub fn enable(mouse: MouseCapture, screen: Screen) -> io::Result<Self> {
-        terminal::enable_raw_mode()?;
+        begin_log_capture();
+        if let Err(err) = terminal::enable_raw_mode() {
+            end_log_capture_flush();
+            return Err(err);
+        }
         if screen == Screen::Alternate
             && let Err(err) = execute!(
                 io::stdout(),
@@ -204,6 +335,8 @@ impl TerminalModeGuard {
         // The process exits immediately after this handoff, so keeping the
         // panic hook installed and skipping the terminal restore are both
         // intentional.
+        // ponytail: the capture buffer dies with this process; transfer it if
+        // reexec handoffs ever need to preserve diagnostics.
         std::mem::forget(self);
     }
 
@@ -273,6 +406,7 @@ pub(crate) fn restore_terminal(mouse: MouseCapture, screen: Screen) {
         );
     }
     let _ = terminal::disable_raw_mode();
+    end_log_capture_flush();
 }
 
 /// Complete a terminal handoff whose guard preserved the active screen and
@@ -284,10 +418,12 @@ pub fn finish_handoff(mouse: MouseCapture, screen: Screen) {
 #[cfg(test)]
 mod tests {
     use super::{
-        DISABLE_CLICK_WHEEL_CAPTURE, ENABLE_CLICK_WHEEL_CAPTURE, TruecolorSignals, replace_frame,
-        write_crlf,
+        DISABLE_CLICK_WHEEL_CAPTURE, ENABLE_CLICK_WHEEL_CAPTURE, LOG_CAPTURE_CAP, TruecolorSignals,
+        TuiLogWriter, begin_log_capture, captured_log_lines, end_log_capture, replace_frame,
+        strip_ansi, write_crlf,
     };
     use std::io::Write;
+    use tracing_subscriber::fmt::MakeWriter;
 
     #[derive(Default)]
     struct RecordingWriter {
@@ -369,5 +505,33 @@ mod tests {
     fn mouse_capture_requests_only_click_wheel_and_sgr_modes() {
         assert_eq!(ENABLE_CLICK_WHEEL_CAPTURE, "\x1b[?1000h\x1b[?1006h");
         assert_eq!(DISABLE_CLICK_WHEEL_CAPTURE, "\x1b[?1006l\x1b[?1000l");
+    }
+
+    #[test]
+    fn tracing_writer_captures_and_cleans_full_screen_logs() {
+        let writer = TuiLogWriter;
+        begin_log_capture();
+        let mut output = writer.make_writer();
+        output
+            .write_all(b"\x1b[31mwarning\x1b[0m\nnext\n")
+            .expect("capture log");
+        assert_eq!(captured_log_lines(), ["warning", "next"]);
+        assert_eq!(
+            end_log_capture().expect("drain capture"),
+            b"\x1b[31mwarning\x1b[0m\nnext\n"
+        );
+        assert!(captured_log_lines().is_empty());
+        assert_eq!(strip_ansi("a\x1b[1;31mb\x1b[0mc"), "abc");
+
+        begin_log_capture();
+        let oversized = vec![b'x'; LOG_CAPTURE_CAP + 1];
+        writer
+            .make_writer()
+            .write_all(&oversized)
+            .expect("capture oversized log");
+        assert_eq!(
+            end_log_capture().expect("drain bounded capture").len(),
+            LOG_CAPTURE_CAP
+        );
     }
 }

@@ -137,19 +137,20 @@ pub(super) fn run(
             .context("session picker lost its terminal guard")?
             .handoff_keep_screen()
             .context("handing off the session picker")?;
-        let (target, outcome) = match launch {
-            Launch::Attach(session, display_name, spec) => {
-                write_session_sync(mode, Some((&session, &display_name)))?;
-                let outcome = spec
-                    .to_command()
-                    .spawn()
-                    .and_then(|mut child| child.wait())
-                    .map_err(anyhow::Error::from);
-                (Some((session, display_name)), outcome)
-            }
-            Launch::Create(path) => {
-                match crate::cli::room::ensure_workspace_room_detached(&path, globals, false, false)
-                {
+        let launched = (|| -> Result<_> {
+            Ok(match launch {
+                Launch::Attach(session, display_name, spec) => {
+                    write_session_sync(mode, Some((&session, &display_name)))?;
+                    let outcome = spec
+                        .to_command()
+                        .spawn()
+                        .and_then(|mut child| child.wait())
+                        .map_err(anyhow::Error::from);
+                    (Some((session, display_name)), outcome)
+                }
+                Launch::Create(path) => match crate::cli::room::ensure_workspace_room_detached(
+                    &path, globals, false, false,
+                ) {
                     Ok(context) => {
                         let session = context.session_name().to_owned();
                         let display_name = session_display_name(&session);
@@ -167,9 +168,11 @@ pub(super) fn run(
                         let error = err.context(format!("creating a room for {}", path.display()));
                         (None, Err(error))
                     }
-                }
-            }
-        };
+                },
+            })
+        })();
+        rimz::tui::finish_handoff(MouseCapture::Stdout, Screen::Alternate);
+        let (target, outcome) = launched?;
         guard = Some(
             TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Alternate)
                 .context("restoring the session picker")?,

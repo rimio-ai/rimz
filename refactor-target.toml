@@ -660,7 +660,9 @@ surface-budget = 48
 [[module]]
 path = "crates/rimz/src/tui.rs"
 allowed-imports = []
-surface-budget = 15
+# Reload handoffs need a named terminal-preservation API; hiding the lifecycle
+# behind call-site `mem::forget` makes the log-capture ownership invisible.
+surface-budget = 16
 
 [[module]]
 path = "crates/rimz/src/uninstall.rs"
