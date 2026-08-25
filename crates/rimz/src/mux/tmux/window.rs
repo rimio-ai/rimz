@@ -671,15 +671,18 @@ impl TmuxBackend {
         cwd: &Path,
         pane: &crate::mux::PaneCmd,
     ) -> Result<String> {
-        self.split_named_printed_with_reason(
+        let pane_id = self.split_printed_with_reason(
             direction,
             target,
             size,
             cwd,
             &pane.argv,
-            pane.name.as_deref(),
             "split-window did not print a pane id",
-        )
+        )?;
+        if let Some(name) = &pane.name {
+            self.set_pane_rimz_title(&pane_id, name)?;
+        }
+        Ok(pane_id)
     }
 
     pub(super) fn append_equal_host_rows<'a>(
@@ -713,19 +716,6 @@ impl TmuxBackend {
         argv: &[String],
         empty_reason: &str,
     ) -> Result<String> {
-        self.split_named_printed_with_reason(direction, target, size, cwd, argv, None, empty_reason)
-    }
-
-    fn split_named_printed_with_reason(
-        &self,
-        direction: &str,
-        target: &str,
-        size: Option<&str>,
-        cwd: &Path,
-        argv: &[String],
-        name: Option<&str>,
-        empty_reason: &str,
-    ) -> Result<String> {
         let mut args = vec![
             "split-window".to_owned(),
             "-d".to_owned(),
@@ -747,9 +737,6 @@ impl TmuxBackend {
                 program: "tmux".to_owned(),
                 reason: empty_reason.to_owned(),
             });
-        }
-        if let Some(name) = name {
-            self.set_pane_rimz_title(&pane_id, name)?;
         }
         Ok(pane_id)
     }
