@@ -186,6 +186,18 @@ impl OutageUi {
         }
     }
 
+    /// Hold a final failure frame long enough to read it before restoring the
+    /// main screen, where the caller will report the same error to scrollback.
+    pub(super) fn fail_hold(&mut self, headline: &str, details: &[String]) -> io::Result<()> {
+        let UiState::Panel(panel) = &mut self.state else {
+            return Ok(());
+        };
+        let rows = failure_rows(headline, details, &rimz::tui::captured_log_lines());
+        panel.draw_rows(&rows)?;
+        panel.wait_for_keypress()?;
+        self.release()
+    }
+
     pub(super) fn handoff(&mut self, frame: &RecoveryFrame) -> io::Result<bool> {
         match std::mem::replace(&mut self.state, UiState::Released) {
             UiState::Panel(panel) => {
@@ -292,6 +304,17 @@ impl OutagePanel {
         Ok(UiEvent::Continue)
     }
 
+    fn wait_for_keypress(&self) -> io::Result<()> {
+        loop {
+            let Event::Key(key) = event::read()? else {
+                continue;
+            };
+            if key.kind == KeyEventKind::Press {
+                return Ok(());
+            }
+        }
+    }
+
     fn release(mut self) -> io::Result<()> {
         drop(self.guard.take());
         Ok(())
@@ -321,6 +344,48 @@ struct DisplayRow {
     color: Color,
     bold: bool,
     dim: bool,
+}
+
+fn failure_rows(headline: &str, details: &[String], captured_logs: &[String]) -> Vec<DisplayRow> {
+    let mut rows = Vec::with_capacity(details.len() + captured_logs.len().min(5) + 4);
+    rows.push(DisplayRow {
+        text: format!("✗ {headline}"),
+        color: Color::Red,
+        bold: true,
+        dim: false,
+    });
+    rows.extend(details.iter().map(|detail| DisplayRow {
+        text: detail.clone(),
+        color: Color::Reset,
+        bold: false,
+        dim: false,
+    }));
+    rows.extend(
+        captured_logs
+            .iter()
+            .rev()
+            .take(5)
+            .rev()
+            .map(|line| DisplayRow {
+                text: format!("⚠  {line}"),
+                color: Color::DarkGrey,
+                bold: false,
+                dim: true,
+            }),
+    );
+    rows.push(DisplayRow {
+        text: String::new(),
+        color: Color::Reset,
+        bold: false,
+        dim: false,
+    });
+    rows.push(DisplayRow {
+        text: "press any key to exit".to_owned(),
+        color: Color::DarkGrey,
+        bold: false,
+        dim: true,
+    });
+    rows
 }
 
 fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
@@ -577,6 +642,38 @@ mod tests {
         assert_eq!(layout.x0, 14);
         assert_eq!(layout.first_y, 9);
         assert_eq!(layout.row_count, 2);
+    }
+
+    #[test]
+    fn failure_rows_hold_the_error_fix_and_recent_warnings() {
+        let details = [
+            "remote path: workspace/missing".to_owned(),
+            "fix alias".to_owned(),
+        ];
+        let logs = (1..=7)
+            .map(|index| format!("warning {index}"))
+            .collect::<Vec<_>>();
+
+        let rows = failure_rows("remote path does not exist", &details, &logs);
+        let text = rows.iter().map(|row| row.text.as_str()).collect::<Vec<_>>();
+
+        assert_eq!(text[0], "✗ remote path does not exist");
+        assert_eq!(text[1..3], details);
+        assert_eq!(
+            text[3..8],
+            [
+                "⚠  warning 3",
+                "⚠  warning 4",
+                "⚠  warning 5",
+                "⚠  warning 6",
+                "⚠  warning 7",
+            ]
+        );
+        assert_eq!(text[9], "press any key to exit");
+        assert!(rows[0].bold);
+        assert_eq!(rows[0].color, Color::Red);
+        assert!(rows[3..8].iter().all(|row| row.dim));
+        assert!(rows[9].dim);
     }
 
     fn stage(stage: RecoveryStage, status: StageStatus, label: &str, detail: &str) -> StageFrame {
