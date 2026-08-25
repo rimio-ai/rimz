@@ -6,10 +6,9 @@
 # versions in its skip list. Land the audit and the skip-list edit on the
 # Dependabot branch before merging.
 #
-# One crate moves in lockstep with a pin Dependabot cannot see: zellij-tile in
-# crates/rimz-presence-zellij tracks the Zellij plugin API, and the host it runs
-# against is ZELLIJ_VERSION in ci/Dockerfile. Bump both together or the plugin
-# and host disagree on protocol.
+# `zellij-tile` deliberately stays on the oldest supported Zellij plugin API so
+# the vendored wasm loads on every supported host. Raise its ignored ceiling
+# only when RimZ's minimum Zellij version moves with it.
 
 version: 2
 updates:
@@ -30,6 +29,10 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "zellij-tile"
+        versions:
+          - ">= 0.45"
 
   # Actions pinned in .github/workflows. The .gitea/workflows mirror is out of
   # Dependabot's reach; carry the same pin bumps across by hand.
