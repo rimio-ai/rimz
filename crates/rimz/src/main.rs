@@ -46,7 +46,7 @@ fn install_tracing(report_to_sentry: bool) {
     // The env filter is per-layer on the fmt sink, so rendered panes silence
     // stderr without gating the Sentry layer's own `WARN` capture.
     let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr)
+        .with_writer(rimz::tui::TuiLogWriter)
         .with_filter(filter);
     let sentry_layer = report_to_sentry.then(observability::sentry_tracing_layer);
     tracing_subscriber::registry()
