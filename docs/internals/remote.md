@@ -71,8 +71,9 @@ Every remote invocation ships one shell word to the remote login shell. The atta
 
 1. Repair `PATH`, because a non-login shell often lacks `~/.cargo/bin`, `~/.local/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`.
 2. `command -v rimz` or exit `127` after printing the install fix. The supervisor special-cases that sentinel and prints `rimz remote setup <original-input>` instead of its reconnect-policy tail.
-3. Export the environment the remote room reads.
-4. `exec` into `rimz`, so no shell survives between SSH and the room.
+3. For a path target, `test -d` or exit `67` after naming the missing path. This guard stays in the snippet so one-shot connections, interactive fallback, and older remote RimZ versions refuse before room birth.
+4. Export the environment the remote room reads.
+5. `exec` into `rimz`, so no shell survives between SSH and the room.
 
 The probe stream is the exception: it repairs `PATH` and execs `rimz remote link-stats ingest` without the missing-binary guard, because a probe that cannot start is best-effort and must not print into the user's session.
 
@@ -136,7 +137,10 @@ supervise_remote
      │                       reachability workers pace the attempts
      │                       ssh -M -N -o BatchMode=yes, then -O check
      │
-     ├── Connected ───────►  start the probe stream, then ssh -t on the same socket
+     ├── Connected ───────►  path target? test -d over the same socket
+     │                            │
+     │                            ▼
+     │                       start the probe stream, then ssh -t on the same socket
      │                            │
      │                            ▼
      │                       Verdict::CleanExit → return to the caller
@@ -147,7 +151,7 @@ supervise_remote
                              (prompts are usable; a failure there is fatal)
 ```
 
-**Proving the transport first** is why the master exists. RimZ launches `ssh -M -N -o BatchMode=yes` with piped stderr onto a PID-scoped control socket, then polls `ssh -S <socket> -O check`. A successful check proves transport and authentication before anything paints, so the panel never shows an all-healthy frame it cannot back. The visible `ssh -t` then reuses that socket.
+**Proving the transport first** is why the master exists. RimZ launches `ssh -M -N -o BatchMode=yes` with piped stderr onto a PID-scoped control socket, then polls `ssh -S <socket> -O check`. A successful check proves transport and authentication before anything paints, so the panel never shows an all-healthy frame it cannot back. On the initial connection, a path target then runs `test -d` over that same socket before handoff. Exit `1` is the one conclusive missing-path result; transport and unexpected exits stay unknown and defer to the normal attach instead of being misdiagnosed. The visible `ssh -t` then reuses the socket.
 
 `MasterState` holds three variants and each tick yields one outcome:
 
@@ -178,7 +182,7 @@ An attach over a confirmed master pipes and drains SSH stderr instead of letting
 | --- | --- | --- |
 | `0` | any | `CleanExit` — return to the caller |
 | `255` with OpenSSH's remote `SIGINT` diagnostic | any | Explicit Ctrl-C — return to the caller without retrying |
-| remote RimZ precondition sentinel (`65`, `66`, `127`) | any | `Fatal` — surface the specific version or install fix |
+| remote RimZ precondition sentinel (`65`, `66`, `67`, `127`) | any | `Fatal` — surface the specific version, path, or install fix |
 | `255` | established SSH | `Retry` — enter background recovery |
 | nonzero | established SSH, ControlMaster ended | `Retry` — the attach status is not trusted over SSH liveness |
 | nonzero | ControlMaster alive, foreground attach lived past gatetime | `Reattach` — replace only the multiplexer client over the existing SSH connection |
@@ -187,7 +191,7 @@ An attach over a confirmed master pipes and drains SSH stderr instead of letting
 
 SSH counts as established once its link probe receives the first ack, once its initial master is confirmed, or once the foreground attach lives past the gatetime (30 seconds by default). The gatetime is also independent evidence that the multiplexer attach ran rather than failing at launch. This split matters because tmux and Zellij may return a nonzero client status when a reload deliberately disconnects an established client: a live ControlMaster makes that a fast reattach, not a false link-loss notification. `ReconnectState` folds transport establishment and consecutive failures across sessions; `settle_zombie_kill` records an intentional kill without classifying its signal exit as fatal.
 
-**Terminal hygiene** wraps every session. `TtyGuard` snapshots local termios at connect, repairs a leftover raw tty at entry, and restores the snapshot after each SSH session. Before every replacement attach, it puts the local tty in raw mode and drains it until quiet. This absorbs DA1, DA2, and XTVERSION replies addressed to the dead SSH generation: a duplicate reply is what tmux passes through to the focused pane as keystrokes after the replacement client has already accepted the stale copy. Ctrl-C ends the drain promptly instead of extending the quiet window. Exit paths and the initial attach never drain, preserving type-ahead for the shell that regains the terminal and input typed while `rimz remote connect` starts. An unclean end also writes the emulator reset string, because `ssh -t` mirrors local tty modes onto the remote pty and a `SIGKILL`ed transport cannot restore terminal-emulator state itself.
+**Terminal hygiene** wraps every session. `TtyGuard` snapshots local termios at connect, repairs a leftover raw tty at entry, and restores the snapshot after each SSH session. Before every replacement attach, it puts the local tty in raw mode and drains it until quiet. This absorbs DA1, DA2, and XTVERSION replies addressed to the dead SSH generation: a duplicate reply is what tmux passes through to the focused pane as keystrokes after the replacement client has already accepted the stale copy. Ctrl-C ends the drain promptly instead of extending the quiet window. Exit paths and the initial attach never drain, preserving type-ahead for the shell that regains the terminal and input typed while `rimz remote connect` starts. An unclean end also writes the emulator reset string, because `ssh -t` mirrors local tty modes onto the remote pty and a `SIGKILL`ed transport cannot restore terminal-emulator state itself. While any full-screen guard owns the terminal, the tracing writer buffers warnings instead of writing through the frame; the panel can render their cleaned tail, and terminal restore replays the original bytes to stderr.
 
 ## Reconnect pacing and reachability
 
@@ -230,7 +234,7 @@ The panel separates four pipeline stages. Network checkpoints hold their last se
 
 `StageStatus::Suspect` is the one non-obvious status. A server that still answers TCP after at least two failed SSH attempts reads yellow with `answers TCP · SSH failing`, rather than a green row beside a failing connection. A TUN route reads `via TUN <interface> · TCP check skipped`, becoming `via TUN <interface> · SSH failing` under the same condition.
 
-Presentation details worth preserving: the panel centers one block with left-aligned rows and fixed label columns; initial-stage wording says `Connecting` while recovery says `Connection lost`; exactly one row animates, the Internet row while waiting for the network, the SSH session row while establishing the master, and the Multiplexer row after confirmation; the active phase, countdown, and final OpenSSH stderr line fold into that row while the dim header carries the attempt, elapsed time, and `Ctrl-C stops`. Once shown, the panel stays for at least `1.5s`, so a fast reconnect uses the remaining hold window for the attaching animation instead of flashing. A connection that lands inside the grace never shows a panel, marker, or handoff frame.
+Presentation details worth preserving: the panel centers one block with left-aligned rows and fixed label columns; initial-stage wording says `Connecting` while recovery says `Connection lost`; exactly one row animates, the Internet row while waiting for the network, the SSH session row while establishing the master, and the Multiplexer row after confirmation; the active phase, countdown, and final OpenSSH stderr line fold into that row while the dim header carries the attempt, elapsed time, and `Ctrl-C stops`. Once shown, the panel stays for at least `1.5s`, so a fast reconnect uses the remaining hold window for the attaching animation instead of flashing. A connection that lands inside the grace never shows a panel, marker, or handoff frame. A fatal pre-attach failure replaces an active panel with the error, its fix, and up to five captured warning lines, then holds that frame until any key is pressed. Restore returns to the main screen before the CLI reports the error again, preserving it in scrollback.
 
 Ctrl-C is polled as a terminal event in raw mode: it kills a pending master, restores the terminal, and stops the supervisor cleanly. Once SSH owns the terminal, OpenSSH reports a remote prompt interrupted by Ctrl-C as status 255 plus `Killed by signal 2.`; the supervisor recognizes that diagnostic before transport classification and stops instead of reconnecting.
 
