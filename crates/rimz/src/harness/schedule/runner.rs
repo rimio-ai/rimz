@@ -182,10 +182,10 @@ impl FireContext {
                 scope: None,
             });
         }
-        let workspace = WorkspaceResolver::resolve(&root, None)?;
-        let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
         let scope = match &action {
             TaskAction::Spawn(spec) => {
+                let workspace = WorkspaceResolver::resolve(&root, None)?;
+                let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
                 let resolved = crate::harness::plan::resolve_single_agent_launch(spec, &workspace)?;
                 let managed_launch =
                     resolve_managed_spawn_state(entry, &workspace, &resolved, config)?;
@@ -198,6 +198,8 @@ impl FireContext {
                 scope
             }
             TaskAction::Deliver(target) => {
+                let workspace_id = WorkspaceResolver::persisted_workspace_id(&root)?;
+                let runtime = RuntimePaths::for_workspace(workspace_id)?;
                 let mut scope = FireScope::new(
                     crate::ids::AgentKind::new_unchecked(target.kind.clone()),
                     runtime,
@@ -992,9 +994,9 @@ pub fn newest_active_run(paths: &StatePaths, name: &str) -> Result<Option<RunRec
 /// Resolve the task workspace before selecting its newest active run.
 pub fn newest_active_run_for_entry(name: &str, entry: &TaskEntry) -> Result<Option<RunRecord>> {
     let root = entry.resolved_root();
-    let workspace = WorkspaceResolver::resolve(&root, None)
-        .with_context(|| format!("resolving project root at {}", root.display()))?;
-    let paths = StatePaths::for_workspace(workspace.workspace_id)?;
+    let workspace_id = WorkspaceResolver::persisted_workspace_id(&root)
+        .with_context(|| format!("resolving persisted project root at {}", root.display()))?;
+    let paths = StatePaths::for_workspace(workspace_id)?;
     newest_active_run(&paths, name)
 }
 

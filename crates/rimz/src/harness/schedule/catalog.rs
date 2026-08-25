@@ -452,10 +452,10 @@ pub fn delivery_target_alive(
     target: &crate::config::TaskTarget,
 ) -> Result<bool> {
     let root = entry.resolved_root();
-    let workspace = WorkspaceResolver::resolve(&root, None)
-        .with_context(|| format!("resolving project root at {}", root.display()))?;
-    let paths = StatePaths::for_workspace(workspace.workspace_id.clone())?;
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id)?;
+    let workspace_id = WorkspaceResolver::persisted_workspace_id(&root)
+        .with_context(|| format!("resolving persisted project root at {}", root.display()))?;
+    let paths = StatePaths::for_workspace(workspace_id.clone())?;
+    let runtime = RuntimePaths::for_workspace(workspace_id)?;
     let store = Store::open(paths, runtime)?;
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     Ok(snapshot.agents.iter().any(|agent| {
@@ -583,5 +583,21 @@ mod tests {
         entry.every = Some("15m".to_owned());
         entry.deadline = Some(jiff::Timestamp::UNIX_EPOCH);
         assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
+    }
+
+    #[test]
+    fn vanished_delivery_root_is_not_alive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let entry = TaskEntry {
+            root: dir.path().join("vanished"),
+            ..TaskEntry::default()
+        };
+        let target = crate::config::TaskTarget {
+            kind: "claude".to_owned(),
+            session: "missing-session".to_owned(),
+            handle: "@claude".to_owned(),
+        };
+
+        assert!(!delivery_target_alive(&entry, &target).expect("check vanished target"));
     }
 }

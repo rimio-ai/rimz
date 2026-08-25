@@ -349,6 +349,19 @@ impl WorkspaceResolver {
         )
     }
 
+    /// Resolve the workspace identity recorded by durable state. Persisted
+    /// roots can outlive their directory, so a vanished path is normalized
+    /// lexically instead of being treated as a new room precondition.
+    pub fn persisted_workspace_id(root: impl AsRef<Path>) -> Result<WorkspaceId> {
+        let root = root.as_ref();
+        if root.exists() {
+            return Self::resolve(root, None).map(|workspace| workspace.workspace_id);
+        }
+        Ok(WorkspaceId::from_project_root(&normalized_root(
+            root.to_path_buf(),
+        )?))
+    }
+
     /// Resolve on behalf of a participant in a live room: the session's
     /// verified env pin ([`ENV_WORKSPACE_ID`]/[`ENV_PROJECT_ROOT`]) beats the
     /// static ladder; an explicit `root_override` beats both.
@@ -419,6 +432,12 @@ impl WorkspaceResolver {
                 let class = classify_root(&root)?;
                 let cwd_project_root = (class == RootClass::Repo).then(|| root.clone());
                 (root.clone(), cwd_project_root, root, class)
+            } else if mode == ResolveMode::Create && !start.exists() {
+                return Err(WorkspaceErr::Resolve {
+                    path: start_in.to_path_buf(),
+                    reason: "the path does not exist; check the path or create the directory first"
+                        .to_owned(),
+                });
             } else if let Some(pinned) = match mode {
                 ResolveMode::Create => None,
                 ResolveMode::Participate => {
