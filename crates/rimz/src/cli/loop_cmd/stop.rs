@@ -17,14 +17,19 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
     }
 
     let root = entry.resolved_root();
-    let workspace = WorkspaceResolver::resolve(&root, None)
-        .with_context(|| format!("resolving project root at {}", root.display()))?;
-    let store = crate::cli::open_store(&workspace)?;
+    let (workspace, workspace_id) = stop_workspace(&root)?;
+    let paths = StatePaths::for_workspace(workspace_id.clone())?;
+    let runtime = RuntimePaths::for_workspace(workspace_id)?;
+    let store = rimz::Store::open(paths, runtime)?;
     let run = newest_active_run(store.paths(), name)?;
     if next_stop_action(&lock_state, run.is_some(), false, false) == StopAction::CancelRun
         && let Some(record) = &run
     {
-        crate::cli::supervised::stop_supervised_run(&workspace, &store, globals, record)?;
+        if let Some(workspace) = workspace.as_ref() {
+            crate::cli::supervised::stop_supervised_run(workspace, &store, globals, record)?;
+        } else {
+            crate::cli::supervised::cancel_supervised_run(&store, record)?;
+        }
     }
 
     if wait_for_run_lock_release(name, entry, STOP_GRACE)? {
@@ -65,6 +70,19 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
     )
 }
 
+fn stop_workspace(root: &Path) -> Result<(Option<rimz::ResolvedWorkspace>, WorkspaceId)> {
+    let workspace = root
+        .exists()
+        .then(|| WorkspaceResolver::resolve(root, None))
+        .transpose()
+        .with_context(|| format!("resolving project root at {}", root.display()))?;
+    let workspace_id = match &workspace {
+        Some(workspace) => workspace.workspace_id.clone(),
+        None => WorkspaceResolver::persisted_workspace_id(root)?,
+    };
+    Ok((workspace, workspace_id))
+}
+
 fn lock_info(state: &RunLockState) -> Option<RunLockInfo> {
     match state {
         RunLockState::Held(info) => *info,
@@ -100,4 +118,20 @@ fn write_stopped(name: &str, run: Option<&RunRecord>, signaled: bool) -> std::io
         .unwrap_or_default();
     let backstop = if signaled { " · SIGTERM" } else { "" };
     writeln!(ui::out(), "loop `{name}`: stopped{run_id}{backstop}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanished_task_root_keeps_its_persisted_workspace_identity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("vanished");
+
+        let (workspace, workspace_id) = stop_workspace(&root).expect("resolve stop workspace");
+
+        assert!(workspace.is_none());
+        assert_eq!(workspace_id, WorkspaceId::from_project_root(&root));
+    }
 }

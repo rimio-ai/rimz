@@ -394,6 +394,36 @@ fn create_mode_ignores_the_pin() {
 }
 
 #[test]
+fn create_mode_refuses_a_missing_starting_path() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let missing = dir.path().join("missing");
+
+    let err =
+        WorkspaceResolver::resolve_with(ResolveMode::Create, &missing, None, &no_env, NO_SCAN)
+            .expect_err("missing path must fail");
+
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "could not resolve workspace from {}: the path does not exist; check the path or create the directory first",
+            missing.display()
+        )
+    );
+}
+
+#[test]
+fn participate_mode_keeps_missing_path_fallback() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let missing = dir.path().join("missing");
+
+    let resolved =
+        WorkspaceResolver::resolve_with(ResolveMode::Participate, &missing, None, &no_env, NO_SCAN)
+            .expect("participant resolution must not fail");
+
+    assert_eq!(resolved.project_root, missing);
+}
+
+#[test]
 fn root_override_beats_the_pin() {
     let (dir, pinned_root, marker_dir) = pin_fixture();
     let pinned_root = pinned_root.canonicalize().expect("canonical room");
@@ -483,6 +513,20 @@ fn bare_directory_resolves_as_a_directory_workspace() {
     );
     assert_eq!(resolved.project_root, resolved.worktree_root);
     assert_eq!(resolved.cwd_project_root, None);
+}
+
+#[test]
+fn persisted_workspace_id_absolutizes_a_vanished_relative_root() {
+    let relative = Path::new("target/rimz-vanished-persisted-root");
+    assert!(!relative.exists(), "fixture root must stay nonexistent");
+    let absolute = crate::worktree::normalize_path_lexical(
+        &std::env::current_dir().expect("current dir").join(relative),
+    );
+
+    assert_eq!(
+        WorkspaceResolver::persisted_workspace_id(relative).expect("resolve persisted identity"),
+        WorkspaceId::from_project_root(&absolute)
+    );
 }
 
 #[test]

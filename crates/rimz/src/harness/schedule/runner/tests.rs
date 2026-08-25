@@ -3,6 +3,35 @@ use std::path::Path;
 use super::*;
 
 #[test]
+fn vanished_delivery_root_still_resolves_and_finds_no_active_run() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("vanished");
+    let entry = TaskEntry {
+        root: root.clone(),
+        ..TaskEntry::default()
+    };
+    let target = TaskTarget {
+        kind: "claude".to_owned(),
+        session: "session".to_owned(),
+        handle: "@claude".to_owned(),
+    };
+
+    let context = FireContext::resolve(
+        &entry,
+        TaskAction::Deliver(target),
+        &MachineConfig::default(),
+    )
+    .expect("resolve persisted delivery root");
+
+    assert!(context.scope.is_some());
+    assert!(
+        newest_active_run_for_entry("vanished-root", &entry)
+            .expect("read persisted workspace runs")
+            .is_none()
+    );
+}
+
+#[test]
 fn spawn_timeout_prefers_task_then_config_then_builtin() {
     use LoopRunMode::{Manual, Scheduled};
     let task = Duration::from_secs(30);

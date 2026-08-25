@@ -103,9 +103,7 @@ pub(crate) fn stop_supervised_run(
     globals: &GlobalFlags,
     run: &RunRecord,
 ) -> Result<()> {
-    if !run.status.is_terminal() {
-        rimz::harness::run::cancel_and_wake(store, &run.run_id)?;
-    }
+    cancel_supervised_run(store, run)?;
     if let Ok(backend) = pane::backend_for_workspace_session(workspace, globals) {
         pane::close_stopped_run_pane_after_grace(
             backend.as_ref(),
@@ -114,6 +112,13 @@ pub(crate) fn stop_supervised_run(
             run,
             pane::STOP_BACKSTOP_GRACE,
         );
+    }
+    Ok(())
+}
+
+pub(crate) fn cancel_supervised_run(store: &rimz::Store, run: &RunRecord) -> Result<()> {
+    if !run.status.is_terminal() {
+        rimz::harness::run::cancel_and_wake(store, &run.run_id)?;
     }
     Ok(())
 }
