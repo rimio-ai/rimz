@@ -26,8 +26,8 @@ pub enum WidthAdjust {
 pub struct WidthStep {
     /// Requested target movement for one width keypress.
     pub cols: u16,
-    /// Stop-band width that spans the backend's widest possible movement.
-    pub band_cols: u16,
+    /// Widest backend-native movement used to derive nearest-width tolerance.
+    pub stop_step_cols: u16,
     pub exact: bool,
     /// Full width of the pane's view, or zero when the backend cannot resolve
     /// geometry for this request.
@@ -35,11 +35,11 @@ pub struct WidthStep {
 }
 
 impl WidthStep {
-    /// Target delta for one keypress. An inexact shrink must clear the upward
-    /// stop band; an inexact grow must not skip the next reachable width.
+    /// Target delta for one keypress. An inexact shrink uses the ceiling step;
+    /// an inexact grow must not skip the next reachable width.
     pub(crate) fn adjustment_cols(self, dir: WidthAdjust) -> u16 {
         if dir == WidthAdjust::Narrower && !self.exact {
-            self.band_cols
+            self.stop_step_cols
         } else {
             self.cols
         }
@@ -298,13 +298,13 @@ mod tests {
     fn width_adjustment_uses_directional_inexact_magnitudes() {
         let inexact = WidthStep {
             cols: 10,
-            band_cols: 11,
+            stop_step_cols: 11,
             exact: false,
             view_cols: 200,
         };
         let exact = WidthStep {
             cols: 2,
-            band_cols: 1,
+            stop_step_cols: 1,
             exact: true,
             view_cols: 200,
         };
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(
             adjust_target_cols(75, WidthAdjust::Narrower, inexact, 24),
             NonZeroU16::new(64),
-            "a ceiling-sized Zellij shrink clears the upward stop band",
+            "a Zellij shrink uses the ceiling-sized native step",
         );
         assert_eq!(
             adjust_target_cols(30, WidthAdjust::Narrower, inexact, 24),

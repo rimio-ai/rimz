@@ -46,10 +46,9 @@ struct WidthControl {
     steps_issued: u8,
     in_flight: Option<IssuedStep>,
     learned_step: Option<u16>,
-    /// Backend-native step estimate that seeds the stop band and survives retargeting.
+    /// Backend-native step estimate that seeds nearest-width tolerance and survives retargeting.
     native_step: Option<NonZeroU16>,
     retried_no_progress: bool,
-    reverse_issued: bool,
     reverse_max_distance: Option<u16>,
     idle_at: Option<u16>,
     traces: VecDeque<WidthTransition>,
@@ -64,7 +63,6 @@ impl WidthControl {
             learned_step: None,
             native_step: None,
             retried_no_progress: false,
-            reverse_issued: false,
             reverse_max_distance: None,
             idle_at: None,
             traces: VecDeque::new(),
@@ -79,7 +77,6 @@ impl WidthControl {
         self.steps_issued = 0;
         self.learned_step = None;
         self.retried_no_progress = false;
-        self.reverse_issued = false;
         self.reverse_max_distance = None;
         self.idle_at = None;
         self.traces.clear();
@@ -105,7 +102,6 @@ impl WidthControl {
         self.steps_issued = 0;
         self.in_flight = None;
         self.retried_no_progress = false;
-        self.reverse_issued = false;
         self.reverse_max_distance = None;
         self.idle_at = None;
     }
@@ -149,7 +145,6 @@ impl WidthControl {
             self.steps_issued = 0;
             self.in_flight = None;
             self.retried_no_progress = false;
-            self.reverse_issued = false;
             self.reverse_max_distance = None;
             self.idle_at = None;
         }
@@ -164,11 +159,8 @@ impl WidthControl {
                 });
                 self.in_flight = None;
                 self.retried_no_progress = false;
-                if self.reverse_issued {
-                    if self
-                        .reverse_max_distance
-                        .is_some_and(|distance| own_cols.abs_diff(target_cols) <= distance)
-                    {
+                if let Some(max_distance) = self.reverse_max_distance {
+                    if own_cols.abs_diff(target_cols) <= max_distance {
                         self.idle_at = Some(own_cols);
                         self.traces.push_back(WidthTransition::Idle {
                             at: own_cols,
@@ -176,7 +168,6 @@ impl WidthControl {
                         });
                         return None;
                     }
-                    self.reverse_issued = false;
                     self.reverse_max_distance = None;
                 }
                 if width_step_regressed(
@@ -184,7 +175,6 @@ impl WidthControl {
                     u64::from(own_cols),
                     u64::from(target_cols),
                 ) {
-                    self.reverse_issued = true;
                     self.reverse_max_distance = Some(step.width_before.abs_diff(target_cols));
                 }
             } else if now.saturating_duration_since(step.at) < FEEDBACK_TIMEOUT {
@@ -352,7 +342,7 @@ impl WidthController {
             }
         };
         let adjustment_cols = step.adjustment_cols(dir);
-        self.convergence.seed_native_step(step.band_cols);
+        self.convergence.seed_native_step(step.stop_step_cols);
         let Some(view_cols) = NonZeroU16::new(step.view_cols) else {
             diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
                 trigger,
@@ -696,7 +686,7 @@ impl WidthController {
             .sidebar_width_step(&self.runtime, &self.session_name, pane, floor)
             .ok()?;
         let view_cols = NonZeroU16::new(step.view_cols)?;
-        self.convergence.seed_native_step(step.band_cols);
+        self.convergence.seed_native_step(step.stop_step_cols);
         self.current_view_cols = Some(view_cols.get());
         let target = match floor {
             Some(_) => crate::sidebar::width_target::adopt(&self.runtime, self.width, view_cols),

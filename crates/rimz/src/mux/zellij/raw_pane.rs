@@ -216,8 +216,8 @@ pub(super) fn repairable_nested_work_pane_ids(
 
 /// Whether a kept sidebar pane sits off the layout's dock: outside the
 /// full-height left column, nested beside a tiled pane that intrudes into its
-/// column band, or — when `width_target` is proven — outside the upward stop
-/// band for its live per-view target. Unknown geometry never reads off-spec.
+/// column band, or — when `width_target` is proven — outside the nearest-width
+/// tolerance for its live per-view target. Unknown geometry never reads off-spec.
 pub(super) fn sidebar_geometry_off_spec(
     pane: &PaneTopologyPane,
     panes: &[PaneTopologyPane],
