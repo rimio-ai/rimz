@@ -502,8 +502,8 @@ RimZ seeds Zellij's `permissions.kdl` cache for its own embedded plugin so the f
 | Permission | What it buys |
 | --- | --- |
 | `ReadApplicationState` | The pane, tab, session, and client manifests. |
-| `RunCommands` | The `rimz sidebar wake` fork. |
-| `Reconfigure` | Runtime mouse options and the optional focus keybind, applied without writing `config.kdl`. |
+| `RunCommands` | The `rimz sidebar wake`, `rimz sidebar focus`, and `rimz pane zoom` forks. |
+| `Reconfigure` | Runtime mouse options and the optional focus and zoom keybinds, applied without writing `config.kdl`. |
 | `ChangeApplicationState` | The mechanical fullscreen toggle for the host-selected pane id. |
 
 The plugin artifact path is canonicalized because Zellij keys the grant on the exact string. The security boundary is in [security.md](../guide/security.md#the-zellij-presence-plugin).
