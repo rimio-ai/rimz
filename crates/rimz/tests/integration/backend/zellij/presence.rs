@@ -861,7 +861,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
             rimz_bin: room_bin,
             converge: true,
             focus_key: Some("Alt+p".to_owned()),
-            zoom_key: Some("Alt+z".to_owned()),
+            zoom_key: Some("Alt+g".to_owned()),
             focus_follows_mouse: false,
             mouse_click_through: true,
         })
@@ -1033,7 +1033,7 @@ fn room_key_presses_from_different_cwd_reach_the_plugin() {
             rimz_bin: rimz_shim,
             converge: false,
             focus_key: Some("Alt+p".to_owned()),
-            zoom_key: Some("Alt+z".to_owned()),
+            zoom_key: Some("Alt+g".to_owned()),
             focus_follows_mouse: false,
             mouse_click_through: true,
         })
@@ -1102,7 +1102,7 @@ fn room_key_presses_from_different_cwd_reach_the_plugin() {
 
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     let zoom_line = loop {
-        client.press_alt('z');
+        client.press_alt('g');
         std::thread::sleep(Duration::from_millis(150));
 
         let lines = poke_lines(&poke_log);
@@ -1111,7 +1111,7 @@ fn room_key_presses_from_different_cwd_reach_the_plugin() {
         }
         if Instant::now() > deadline {
             panic!(
-                "Alt+z never piped pane zoom through the presence plugin; log: {:?}",
+                "Alt+g never piped pane zoom through the presence plugin; log: {:?}",
                 poke_lines(&poke_log)
             );
         }

@@ -63,7 +63,7 @@ fn config() -> EngineConfig {
 fn reconfigure_config() -> EngineConfig {
     EngineConfig {
         focus_key: Some("Alt+p".to_owned()),
-        zoom_key: Some("Alt+z".to_owned()),
+        zoom_key: Some("Alt+g".to_owned()),
         focus_follows_mouse: Some(false),
         mouse_click_through: Some(true),
         ..config()

@@ -794,7 +794,7 @@ mod tests {
         let lines = help_body_rows(
             &theme,
             Some("Alt+p"),
-            Some("Ctrl+g"),
+            Some("Alt+g"),
             &SidebarKeys::default(),
         );
         let text = |line: &Line<'_>| {
@@ -815,6 +815,6 @@ mod tests {
             .expect("zoom chord row");
 
         assert!(sidebar.contains("alt p"), "{sidebar}");
-        assert!(zoom.contains("ctrl g"), "{zoom}");
+        assert!(zoom.contains("alt g"), "{zoom}");
     }
 }

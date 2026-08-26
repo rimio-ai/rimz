@@ -424,8 +424,8 @@ fn presence_plugin_identity_renders_expressible_fields() {
         Case {
             session: "rimz-test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
-            mutate: |opts| opts.zoom_key = Some("Alt+z".to_owned()),
-            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true,zoom_key=Alt+z",
+            mutate: |opts| opts.zoom_key = Some("Alt+g".to_owned()),
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true,zoom_key=Alt+g",
         },
         Case {
             session: "rimz-test",

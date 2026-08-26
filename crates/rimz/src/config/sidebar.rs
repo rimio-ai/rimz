@@ -30,7 +30,7 @@ pub struct SidebarConfig {
     pub focus_key: String,
     /// The global multiplexer chord that toggles fullscreen for the focused
     /// work pane. When the sidebar is focused, RimZ selects a working sibling
-    /// first so chrome is never fullscreened. Default `Alt+z`; set empty or
+    /// first so chrome is never fullscreened. Default `Alt+g`; set empty or
     /// `off` to disable it.
     pub zoom_key: String,
     /// Sidebar motion key bindings. Each string is a space-separated list of
@@ -81,7 +81,7 @@ fn default_focus_key() -> String {
 }
 
 fn default_zoom_key() -> String {
-    "Alt+z".to_owned()
+    "Alt+g".to_owned()
 }
 
 /// Sidebar movement and width key bindings. Action keys stay fixed; these

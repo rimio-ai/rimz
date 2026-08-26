@@ -2187,7 +2187,7 @@ fn sidebar_fields_parse_defaults_and_reject_zero() {
     );
     assert_eq!(
         SidebarConfig::key_label(&defaults.sidebar.zoom_key),
-        Some("Alt+z")
+        Some("Alt+g")
     );
 
     let config = load_no_fragments(&write(
