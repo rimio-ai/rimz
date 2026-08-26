@@ -52,7 +52,7 @@ fn live_work_boundary_resize_is_audited() {
         .expect("work pane");
     server.tmux(&["split-window", "-h", "-t", work.pane_id.raw(), "sleep 600"]);
     server.wait_for_panes(session, 3);
-    thread::sleep(Duration::from_millis(600));
+    thread::sleep(Duration::from_millis(1_200));
     let audit_pane = list_session_panes(&server, session)
         .into_iter()
         .find(|pane| pane.pane_id != sidebar && pane.pane_id != work.pane_id)

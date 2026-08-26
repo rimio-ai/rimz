@@ -13,12 +13,8 @@ const SUBSCRIPTION_COMMAND: &str = concat!(
     ",#{pane_floating_flag}\"\n",
 );
 const SEED_COMMAND: &str = concat!(
-    "list-panes -a -F \"rimz-presence-seed:#{pane_id}",
+    "list-panes -s -F \"rimz-presence-seed:#{pane_id}",
     ",#{window_id}",
-    ",#{s/,/_/g:pane_current_command}",
-    ",#{pane_active}",
-    ",#{s/,/_/g:pane_title}",
-    ",#{pane_floating_flag}",
     ",#{pane_left}",
     ",#{pane_width}",
     ",#{window_width}\"\n",
@@ -39,10 +35,6 @@ pub enum ControlLine {
     SeedPane {
         pane: String,
         window: String,
-        command: Option<String>,
-        active: bool,
-        title: Option<String>,
-        floating: bool,
         x: u64,
         width: u64,
         window_width: u64,
@@ -81,8 +73,8 @@ pub struct TmuxLayoutPane {
 /// subscription, and surfaces typed presence changes. Writable keeps tmux
 /// 3.7 `send-keys` usable when this watch is the sole attached client in a
 /// headless session; safety lives in the stdin allowlist, which writes only the
-/// subscription command. Poll stays truth — a dropped stream loses only latency,
-/// never correctness, and the consumer respawns it.
+/// subscription and geometry-seed commands. Poll stays truth — a dropped stream
+/// loses only latency, never correctness, and the consumer respawns it.
 pub struct PresenceWatch {
     child: std::process::Child,
     lines: std::io::Lines<std::io::BufReader<std::process::ChildStdout>>,
@@ -208,14 +200,10 @@ fn classify_control_line(line: &str) -> ControlLine {
 
 fn parse_seed(line: &str) -> Option<ControlLine> {
     let value = line.strip_prefix("rimz-presence-seed:")?;
-    let mut fields = value.splitn(9, ',');
+    let mut fields = value.splitn(5, ',');
     Some(ControlLine::SeedPane {
         pane: nonempty(fields.next()?)?,
         window: nonempty(fields.next()?)?,
-        command: nonempty(fields.next()?),
-        active: fields.next()?.trim() == "1",
-        title: nonempty(fields.next()?),
-        floating: fields.next()?.trim() == "1",
         x: fields.next()?.trim().parse().ok()?,
         width: fields.next()?.trim().parse().ok()?,
         window_width: fields.next()?.trim().parse().ok()?,
@@ -398,14 +386,10 @@ mod tests {
                 },
             ),
             (
-                "rimz-presence-seed:%2,@1,claude,1,rimz,0,55,79,213",
+                "rimz-presence-seed:%2,@1,55,79,213",
                 ControlLine::SeedPane {
                     pane: "%2".to_owned(),
                     window: "@1".to_owned(),
-                    command: Some("claude".to_owned()),
-                    active: true,
-                    title: Some("rimz".to_owned()),
-                    floating: false,
                     x: 55,
                     width: 79,
                     window_width: 213,
