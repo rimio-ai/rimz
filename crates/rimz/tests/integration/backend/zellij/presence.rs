@@ -146,7 +146,7 @@ pub(in crate::backend::zellij) fn seed_presence_permissions(xdg: &Path, wasm: &P
     std::fs::write(
         cache_dir.join("permissions.kdl"),
         format!(
-            "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n    Reconfigure\n}}\n",
+            "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n    Reconfigure\n    ChangeApplicationState\n}}\n",
             wasm.display(),
         ),
     )
@@ -997,7 +997,7 @@ fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
 }
 
 #[test]
-fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
+fn room_key_presses_from_different_cwd_reach_the_plugin() {
     require_zellij!();
     let Some(wasm) = presence_wasm_artifact() else {
         eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
@@ -1033,7 +1033,7 @@ fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
             rimz_bin: rimz_shim,
             converge: false,
             focus_key: Some("Alt+p".to_owned()),
-            zoom_key: None,
+            zoom_key: Some("Alt+z".to_owned()),
             focus_follows_mouse: false,
             mouse_click_through: true,
         })
@@ -1098,5 +1098,30 @@ fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
     assert!(
         !focus_exec_log.contains("unexpected argument"),
         "real rimz clap rejected the plugin focus argv: {focus_exec_log}",
+    );
+
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let zoom_line = loop {
+        client.press_alt('z');
+        std::thread::sleep(Duration::from_millis(150));
+
+        let lines = poke_lines(&poke_log);
+        if let Some(line) = lines.into_iter().find(|line| line.contains("pane zoom")) {
+            break line;
+        }
+        if Instant::now() > deadline {
+            panic!(
+                "Alt+z never piped pane zoom through the presence plugin; log: {:?}",
+                poke_lines(&poke_log)
+            );
+        }
+    };
+    assert!(
+        zoom_line.contains(&format!("--session-name {name}")),
+        "zoom pipe should target the pressing session; got {zoom_line:?}",
+    );
+    assert!(
+        zoom_line.contains("--mux zellij"),
+        "zoom pipe should force the Zellij backend; got {zoom_line:?}",
     );
 }
