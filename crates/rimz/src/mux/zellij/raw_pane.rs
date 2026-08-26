@@ -13,6 +13,12 @@ pub(super) fn is_sidebar_pane(pane: &PaneTopologyPane) -> bool {
     !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_CHROME_TITLE)
 }
 
+pub(super) fn tab_fullscreen_active(panes: &[PaneTopologyPane], tab_position: u64) -> bool {
+    panes
+        .iter()
+        .any(|pane| pane.tab_position == tab_position && pane.is_fullscreen)
+}
+
 pub(super) fn leftmost_live_work_pane(
     panes: &[PaneTopologyPane],
     tab_position: u64,

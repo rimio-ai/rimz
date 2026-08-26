@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, MuxBackend, NamedKey, PaneListOptions,
-    PaneReadConsistency, SplitPaneOptions, SplitPlacement, SplitTarget, ZellijBackend,
+    PaneReadConsistency, SidebarLiveness, SplitPaneOptions, SplitPlacement, SplitTarget,
+    ZellijBackend,
 };
 use tempfile::TempDir;
 
@@ -126,6 +127,14 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
         },
         "working sibling fullscreen",
     );
+    write_topology_cache_from_list_panes(xdg, &opts.workspace_id, &name);
+    let mut liveness = SidebarLiveness::default();
+    liveness.claimed_panes.insert(sidebar_pane.clone());
+    let report = backend
+        .reconcile_sidebars(&opts, &liveness)
+        .expect("reconcile fullscreen tab");
+    assert_eq!(report.misdocked, 0, "fullscreen geometry is not a misdock");
+    assert_eq!(report.redocked, 0, "fullscreen geometry is not repaired");
 
     let output = env
         .rimz()

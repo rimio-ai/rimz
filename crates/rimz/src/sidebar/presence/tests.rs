@@ -51,6 +51,7 @@ fn topology_pane(
     crate::mux::zellij::pane_topology::PaneTopologyPane {
         id,
         is_plugin: false,
+        is_fullscreen: false,
         is_held: false,
         exited: false,
         is_suppressed: false,
@@ -491,6 +492,7 @@ fn announced_snapshot_is_sanitized_before_diff_and_persist() {
         .push(crate::mux::zellij::pane_topology::PaneTopologyPane {
             id: 7,
             is_plugin: false,
+            is_fullscreen: false,
             is_held: false,
             exited: false,
             is_suppressed: false,

@@ -43,6 +43,25 @@ fn write_zellij_topology_for_view(runtime: &RuntimePaths, view_cols: u16) {
     write_zellij_topology_for_view_at(runtime, view_cols, crate::sidebar::timing::unix_now_ms());
 }
 
+fn write_zellij_fullscreen_topology(runtime: &RuntimePaths, active: bool) -> u64 {
+    let mut cache = match crate::sidebar::cache::read_pane_topology_cache(runtime, "rimz-test") {
+        Some(cache) => cache,
+        None => {
+            write_zellij_topology(runtime);
+            crate::sidebar::cache::read_pane_topology_cache(runtime, "rimz-test")
+                .expect("topology cache")
+        }
+    };
+    cache.produced_at_ms = cache
+        .produced_at_ms
+        .saturating_add(1)
+        .max(crate::sidebar::timing::unix_now_ms());
+    cache.panes[1].is_fullscreen = active;
+    crate::sidebar::cache::write_pane_topology_cache(runtime, &cache)
+        .expect("write fullscreen topology");
+    cache.produced_at_ms
+}
+
 fn write_zellij_topology_for_view_at(runtime: &RuntimePaths, view_cols: u16, produced_at_ms: u64) {
     write_zellij_topology_panes(runtime, 80, Some(view_cols), produced_at_ms);
 }
@@ -58,6 +77,7 @@ fn write_zellij_topology_panes(
     let pane = |id, pane_x, pane_columns, title: &str| PaneTopologyPane {
         id,
         is_plugin: false,
+        is_fullscreen: false,
         is_held: false,
         exited: false,
         is_suppressed: false,
@@ -106,6 +126,45 @@ fn one_target_converges_from_both_directions_and_none_stays_idle() {
 
     let mut control = WidthControl::new(None);
     assert_eq!(control.decide(60, now), None);
+}
+
+#[test]
+fn fullscreen_hold_ignores_width_changes_until_topology_releases() {
+    let now = Instant::now();
+    let mut control = WidthControl::new(Some(target(72)));
+
+    assert!(!control.observe_fullscreen(true, 200));
+    assert!(control.is_fullscreen_held());
+    assert!(!control.needs_adjustment(200));
+    assert_eq!(control.decide(200, now), None);
+    control.rearm();
+    assert!(control.is_fullscreen_held());
+
+    assert!(control.observe_fullscreen(false, 200));
+    assert!(!control.is_fullscreen_held());
+    assert_eq!(control.decide(200, now), Some((200, 72)));
+}
+
+#[test]
+fn fullscreen_hold_never_arms_idle_retry_and_clear_resumes_convergence() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    let diag = crate::diag::DiagSink::disabled();
+    let held_at_ms = write_zellij_fullscreen_topology(&runtime, true);
+
+    controller.backstop(Some(200), Some(1), Some(held_at_ms), &diag);
+    assert!(controller.convergence.is_fullscreen_held());
+    assert!(!controller.convergence.in_flight());
+    assert_eq!(controller.idle_retry_deadline, None);
+
+    controller.idle_retry_deadline = Some(Instant::now() - IDLE_RETRY);
+    controller.backstop(Some(200), Some(1), Some(held_at_ms), &diag);
+    assert_eq!(controller.idle_retry_deadline, None);
+    assert!(!controller.convergence.in_flight());
+
+    let released_at_ms = write_zellij_fullscreen_topology(&runtime, false);
+    controller.backstop(Some(200), Some(1), Some(released_at_ms), &diag);
+    assert!(!controller.convergence.is_fullscreen_held());
+    assert!(controller.convergence.in_flight());
 }
 
 #[test]
@@ -350,7 +409,10 @@ fn parked_controller_repicks_a_changed_viewport_on_idle_retry() {
         crate::sidebar::width_target::resolve(&runtime, crate::mux::SidebarWidth::default(), None)
             .share;
     controller.convergence.learned_step = Some(16);
-    controller.convergence.idle_at = Some(32);
+    controller.convergence.idle = Some(WidthIdle {
+        at: 32,
+        reason: WidthIdleReason::ReachedTolerance,
+    });
 
     write_zellij_topology_for_view(&runtime, 319);
     controller.idle_retry_deadline = Some(Instant::now() - Duration::from_millis(1));
@@ -551,7 +613,10 @@ fn idle_off_spec_controller_retries_after_the_backstop_deadline() {
     let diag = crate::diag::DiagSink::disabled();
 
     controller.backstop(Some(50), Some(1), None, &diag);
-    controller.convergence.idle_at = Some(83);
+    controller.convergence.idle = Some(WidthIdle {
+        at: 83,
+        reason: WidthIdleReason::NoProgress,
+    });
     controller.idle_retry_deadline = Some(Instant::now() - Duration::from_millis(1));
 
     controller.backstop(Some(83), Some(1), Some(u64::MAX), &diag);

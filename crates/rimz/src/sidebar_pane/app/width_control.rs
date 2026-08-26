@@ -25,6 +25,13 @@ enum WidthIdleReason {
     ReverseParked,
     NoProgress,
     StepBudget,
+    FullscreenHeld,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WidthIdle {
+    at: u16,
+    reason: WidthIdleReason,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,7 +57,7 @@ struct WidthControl {
     native_step: Option<NonZeroU16>,
     retried_no_progress: bool,
     reverse_max_distance: Option<u16>,
-    idle_at: Option<u16>,
+    idle: Option<WidthIdle>,
     traces: VecDeque<WidthTransition>,
 }
 
@@ -64,7 +71,7 @@ impl WidthControl {
             native_step: None,
             retried_no_progress: false,
             reverse_max_distance: None,
-            idle_at: None,
+            idle: None,
             traces: VecDeque::new(),
         }
     }
@@ -78,7 +85,9 @@ impl WidthControl {
         self.learned_step = None;
         self.retried_no_progress = false;
         self.reverse_max_distance = None;
-        self.idle_at = None;
+        if !self.is_fullscreen_held() {
+            self.idle = None;
+        }
         self.traces.clear();
     }
 
@@ -91,7 +100,12 @@ impl WidthControl {
     }
 
     fn is_idle(&self) -> bool {
-        self.idle_at.is_some()
+        self.idle.is_some()
+    }
+
+    fn is_fullscreen_held(&self) -> bool {
+        self.idle
+            .is_some_and(|idle| idle.reason == WidthIdleReason::FullscreenHeld)
     }
 
     fn in_flight(&self) -> bool {
@@ -99,11 +113,33 @@ impl WidthControl {
     }
 
     fn rearm(&mut self) {
+        if self.is_fullscreen_held() {
+            return;
+        }
         self.steps_issued = 0;
         self.in_flight = None;
         self.retried_no_progress = false;
         self.reverse_max_distance = None;
-        self.idle_at = None;
+        self.idle = None;
+    }
+
+    fn observe_fullscreen(&mut self, active: bool, own_cols: u16) -> bool {
+        if active {
+            self.steps_issued = 0;
+            self.in_flight = None;
+            self.retried_no_progress = false;
+            self.reverse_max_distance = None;
+            self.idle = Some(WidthIdle {
+                at: own_cols,
+                reason: WidthIdleReason::FullscreenHeld,
+            });
+            return false;
+        }
+        if self.is_fullscreen_held() {
+            self.idle = None;
+            return true;
+        }
+        false
     }
 
     fn stop_step(&self) -> u16 {
@@ -113,6 +149,9 @@ impl WidthControl {
     }
 
     fn needs_adjustment(&self, own_cols: u16) -> bool {
+        if self.is_fullscreen_held() {
+            return false;
+        }
         self.target.is_some_and(|target| {
             sidebar_width_off_spec(
                 u64::from(own_cols),
@@ -138,15 +177,18 @@ impl WidthControl {
         }
         let target_cols = self.target?.get();
 
-        if let Some(idle_at) = self.idle_at {
-            if idle_at == own_cols {
+        if let Some(idle) = self.idle {
+            if idle.reason == WidthIdleReason::FullscreenHeld {
+                return None;
+            }
+            if idle.at == own_cols {
                 return None;
             }
             self.steps_issued = 0;
             self.in_flight = None;
             self.retried_no_progress = false;
             self.reverse_max_distance = None;
-            self.idle_at = None;
+            self.idle = None;
         }
 
         if let Some(step) = self.in_flight {
@@ -161,7 +203,10 @@ impl WidthControl {
                 self.retried_no_progress = false;
                 if let Some(max_distance) = self.reverse_max_distance {
                     if own_cols.abs_diff(target_cols) <= max_distance {
-                        self.idle_at = Some(own_cols);
+                        self.idle = Some(WidthIdle {
+                            at: own_cols,
+                            reason: WidthIdleReason::ReverseParked,
+                        });
                         self.traces.push_back(WidthTransition::Idle {
                             at: own_cols,
                             reason: WidthIdleReason::ReverseParked,
@@ -181,7 +226,10 @@ impl WidthControl {
                 return None;
             } else if self.retried_no_progress {
                 self.in_flight = None;
-                self.idle_at = Some(own_cols);
+                self.idle = Some(WidthIdle {
+                    at: own_cols,
+                    reason: WidthIdleReason::NoProgress,
+                });
                 self.traces.push_back(WidthTransition::Idle {
                     at: own_cols,
                     reason: WidthIdleReason::NoProgress,
@@ -194,7 +242,10 @@ impl WidthControl {
         }
 
         if !self.needs_adjustment(own_cols) {
-            self.idle_at = Some(own_cols);
+            self.idle = Some(WidthIdle {
+                at: own_cols,
+                reason: WidthIdleReason::ReachedTolerance,
+            });
             self.traces.push_back(WidthTransition::Idle {
                 at: own_cols,
                 reason: WidthIdleReason::ReachedTolerance,
@@ -202,7 +253,10 @@ impl WidthControl {
             return None;
         }
         if self.steps_issued >= MAX_STEPS {
-            self.idle_at = Some(own_cols);
+            self.idle = Some(WidthIdle {
+                at: own_cols,
+                reason: WidthIdleReason::StepBudget,
+            });
             self.traces.push_back(WidthTransition::Idle {
                 at: own_cols,
                 reason: WidthIdleReason::StepBudget,
@@ -235,6 +289,7 @@ pub(super) struct WidthController {
     current_view_cols: Option<u16>,
     last_siblings: Option<usize>,
     structural_at_ms: Option<u64>,
+    fullscreen_observed_at_ms: Option<u64>,
     idle_retry_deadline: Option<Instant>,
     baseline_probe_deadline: Option<Instant>,
     classification_deadline: Option<Instant>,
@@ -261,6 +316,7 @@ impl WidthController {
             current_view_cols: None,
             last_siblings: None,
             structural_at_ms: None,
+            fullscreen_observed_at_ms: None,
             idle_retry_deadline: None,
             baseline_probe_deadline,
             classification_deadline: None,
@@ -443,6 +499,7 @@ impl WidthController {
                         WidthIdleReason::ReverseParked => SidebarWidthSettleOutcome::ReverseParked,
                         WidthIdleReason::NoProgress => SidebarWidthSettleOutcome::NoProgress,
                         WidthIdleReason::StepBudget => SidebarWidthSettleOutcome::StepBudget,
+                        WidthIdleReason::FullscreenHeld => continue,
                     };
                     diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthSettle {
                         settled_cols: at,
@@ -491,6 +548,11 @@ impl WidthController {
         diag: &DiagSink,
     ) {
         let now = Instant::now();
+        if let (Some(cols), Some(observed_at_ms)) = (measured_cols, panes_observed_at_ms) {
+            if self.sync_fullscreen_hold(cols, observed_at_ms) {
+                self.observe(cols, SidebarWidthControlTrigger::Backstop, diag);
+            }
+        }
         if let Some(siblings) = sibling_count {
             let previous = self.last_siblings.replace(siblings);
             if previous.is_some_and(|previous| previous != siblings)
@@ -544,6 +606,8 @@ impl WidthController {
         if let Some(cols) = measured_cols {
             if self.classification_deadline.is_some() {
                 self.idle_retry_deadline = None;
+            } else if self.convergence.is_fullscreen_held() {
+                self.idle_retry_deadline = None;
             } else if self.convergence.is_idle() {
                 let deadline = self.idle_retry_deadline.get_or_insert(now + IDLE_RETRY);
                 if now >= *deadline {
@@ -558,6 +622,28 @@ impl WidthController {
                 self.idle_retry_deadline = None;
             }
         }
+    }
+
+    fn sync_fullscreen_hold(&mut self, measured_cols: u16, observed_at_ms: u64) -> bool {
+        if self.mux != MuxName::Zellij
+            || self
+                .fullscreen_observed_at_ms
+                .is_some_and(|current| observed_at_ms <= current)
+        {
+            return false;
+        }
+        let Some(pane) = self.own_pane.as_ref() else {
+            return false;
+        };
+        let Ok(Some(active)) = crate::mux::backend_for(self.mux).sidebar_fullscreen_active(
+            &self.runtime,
+            &self.session_name,
+            pane,
+        ) else {
+            return false;
+        };
+        self.fullscreen_observed_at_ms = Some(observed_at_ms);
+        self.convergence.observe_fullscreen(active, measured_cols)
     }
 
     fn capture_classification_baseline(&mut self, measured_cols: u16, diag: &DiagSink) -> bool {

@@ -351,6 +351,7 @@ mod shell {
         RawStablePaneFields {
             id: pane.id,
             is_plugin: pane.is_plugin,
+            is_fullscreen: pane.is_fullscreen,
             is_suppressed: pane.is_suppressed,
             is_floating: pane.is_floating,
             exited: pane.exited,
