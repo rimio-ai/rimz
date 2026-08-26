@@ -16,7 +16,6 @@ pub mod pane_topology;
 mod parse;
 mod presence;
 mod raw_pane;
-pub(crate) use raw_pane::tab_view_cols;
 mod reap;
 mod session;
 mod sidebar;

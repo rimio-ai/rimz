@@ -52,7 +52,7 @@ pub enum ControlLine {
     LayoutChange {
         window: String,
         window_width: u64,
-        panes: Vec<TmuxLayoutPane>,
+        panes: Vec<(String, u64, u64)>,
     },
     WindowPaneChanged {
         window: String,
@@ -64,13 +64,6 @@ pub enum ControlLine {
     },
     Nudge,
     Ignore,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TmuxLayoutPane {
-    pub id: String,
-    pub x: u64,
-    pub width: u64,
 }
 
 /// A live tmux control-mode presence stream — the tmux fast path for pane
@@ -280,7 +273,7 @@ fn parse_layout_change(line: &str) -> Option<ControlLine> {
     })
 }
 
-fn layout_geometry(layout: &str) -> Option<(u64, Vec<TmuxLayoutPane>)> {
+fn layout_geometry(layout: &str) -> Option<(u64, Vec<(String, u64, u64)>)> {
     let (_, tree) = layout.split_once(',')?;
     let mut parser = LayoutParser {
         input: tree.as_bytes(),
@@ -294,7 +287,7 @@ fn layout_geometry(layout: &str) -> Option<(u64, Vec<TmuxLayoutPane>)> {
 struct LayoutParser<'a> {
     input: &'a [u8],
     pos: usize,
-    panes: Vec<TmuxLayoutPane>,
+    panes: Vec<(String, u64, u64)>,
 }
 
 impl LayoutParser<'_> {
@@ -311,11 +304,7 @@ impl LayoutParser<'_> {
             b',' => {
                 self.pos += 1;
                 let pane = self.parse_number()?;
-                self.panes.push(TmuxLayoutPane {
-                    id: format!("%{pane}"),
-                    x,
-                    width,
-                });
+                self.panes.push((format!("%{pane}"), x, width));
             }
             _ => return None,
         }
@@ -483,18 +472,7 @@ mod tests {
             ControlLine::LayoutChange {
                 window: "@1".to_owned(),
                 window_width: 208,
-                panes: vec![
-                    TmuxLayoutPane {
-                        id: "%1".to_owned(),
-                        x: 0,
-                        width: 104,
-                    },
-                    TmuxLayoutPane {
-                        id: "%2".to_owned(),
-                        x: 105,
-                        width: 103,
-                    },
-                ],
+                panes: vec![("%1".to_owned(), 0, 104), ("%2".to_owned(), 105, 103)],
             }
         );
         assert_eq!(
@@ -504,21 +482,9 @@ mod tests {
             Some((
                 200,
                 vec![
-                    TmuxLayoutPane {
-                        id: "%3".to_owned(),
-                        x: 0,
-                        width: 100,
-                    },
-                    TmuxLayoutPane {
-                        id: "%4".to_owned(),
-                        x: 0,
-                        width: 100,
-                    },
-                    TmuxLayoutPane {
-                        id: "%5".to_owned(),
-                        x: 101,
-                        width: 99,
-                    },
+                    ("%3".to_owned(), 0, 100),
+                    ("%4".to_owned(), 0, 100),
+                    ("%5".to_owned(), 101, 99),
                 ],
             ))
         );

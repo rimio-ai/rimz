@@ -7,7 +7,7 @@ fn project_apply(
     line: ControlLine,
     seeding: bool,
 ) -> Vec<SidebarEvent> {
-    project_presence(state.apply(line, seeding))
+    project_presence(state.apply(line, seeding).0)
 }
 
 fn sub(pane: &str, window: &str, command: Option<&str>, active: bool) -> ControlLine {
@@ -74,11 +74,7 @@ fn layout(window: &str, window_width: u64, panes: &[(&str, u64, u64)]) -> Contro
         window_width,
         panes: panes
             .iter()
-            .map(|(id, x, width)| TmuxLayoutPane {
-                id: (*id).to_owned(),
-                x: *x,
-                width: *width,
-            })
+            .map(|(id, x, width)| ((*id).to_owned(), *x, *width))
             .collect(),
     }
 }
@@ -89,6 +85,7 @@ fn seed_updates_roster_without_events() {
     assert!(
         roster
             .apply(sub("%1", "@1", Some("zsh"), true), true)
+            .0
             .is_empty()
     );
     assert_eq!(
@@ -489,7 +486,7 @@ fn layout_audits_only_stable_work_boundary_moves() {
                 layout("@7", 213, &[("%1", 0, 55), ("%2", 55, 79), ("%3", 134, 79)],),
                 true,
             )
-            .boundary_move
+            .1
             .is_none()
     );
 
@@ -502,7 +499,7 @@ fn layout_audits_only_stable_work_boundary_moves() {
         false,
     );
     assert_eq!(
-        moved.boundary_move,
+        moved.1,
         Some(DiagEvent::WorkPaneBoundaryMoved {
             view_id: ViewId::new_unchecked("@7"),
             view_cols: 213,
@@ -535,7 +532,7 @@ fn layout_audits_only_stable_work_boundary_moves() {
                 ),
                 false,
             )
-            .boundary_move
+            .1
             .is_none()
     );
     assert!(
@@ -548,13 +545,13 @@ fn layout_audits_only_stable_work_boundary_moves() {
                 ),
                 false,
             )
-            .boundary_move
+            .1
             .is_none()
     );
     assert!(
         state
             .apply(layout("@7", 214, &[("%1", 0, 56), ("%2", 56, 158)]), false,)
-            .boundary_move
+            .1
             .is_none()
     );
 }
