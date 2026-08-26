@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 
 use rimz::harness::budget::BudgetParkRequest;
-use rimz::mux::{NamedKey, backend_for};
+use rimz::mux::{NamedKey, press_pane_key};
 
 use super::Ctx;
 
@@ -27,8 +27,7 @@ pub fn run_budget_park(request: BudgetParkRequest) -> Result<()> {
         rimz::harness::budget::read_ledger(store.runtime_paths(), &request.kind, &request.agent_id)
             .and_then(|ledger| ledger.parked.map(|park| park.at_cost))
     });
-    let interrupted =
-        backend_for(request.pane_id.mux()).send_key(&request.pane_id, NamedKey::Escape);
+    let interrupted = press_pane_key(&request.pane_id, NamedKey::Escape);
 
     for record in rimz::harness::run::list(store.paths())? {
         if record.kind != request.kind
