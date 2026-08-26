@@ -22,7 +22,7 @@ pub mod zellij;
 pub use capabilities::{drops_desktop_osc, lists_full_cmdline, view_kind, wraps_osc_passthrough};
 pub use command::CommandSpec;
 pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
-pub use focus_key::{RoomKeyAction, RoomKeyBinding};
+pub use focus_key::RoomKeyBinding;
 pub(crate) use keys::paste_payload;
 pub use keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, UnknownKey};
 pub(crate) use reconcile::{
@@ -850,17 +850,6 @@ pub trait MuxBackend: Send + Sync {
         pane: &PaneId,
         min_observed_at_ms: Option<u64>,
     ) -> Result<WidthStep>;
-    /// Report whether the pane's view is held by backend-native fullscreen.
-    /// `None` means the backend has no fullscreen topology observation.
-    fn sidebar_fullscreen_active(
-        &self,
-        runtime: &crate::store::RuntimePaths,
-        session: &str,
-        pane: &PaneId,
-    ) -> Result<Option<bool>> {
-        let _ = (runtime, session, pane);
-        Ok(None)
-    }
     /// Move one sidebar pane toward an absolute target. Zellij performs one
     /// native relative step; tmux can apply the target exactly.
     fn nudge_sidebar_width(
@@ -1030,11 +1019,6 @@ pub fn type_into_pane(pane: &PaneId, text: &str) -> Result<()> {
 /// Paste bracketed text into one pane using its owning backend.
 pub fn paste_into_pane(pane: &PaneId, text: &str) -> Result<()> {
     backend_for(pane.mux()).paste_text(pane, text)
-}
-
-/// Press one named key in a pane using its owning backend.
-pub fn press_pane_key(pane: &PaneId, key: NamedKey) -> Result<()> {
-    backend_for(pane.mux()).send_key(pane, key)
 }
 
 /// Run `spec` once for its version string and memoize it in `cache`.

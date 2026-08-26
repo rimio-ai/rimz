@@ -8,7 +8,7 @@ use crate::agents::AgentState;
 use crate::message::{
     AutoCompact, MessageBody, MessageDraft, MessageRecord, MessageSender, Recipient,
 };
-use crate::mux::{NamedKey, paste_into_pane, press_pane_key, type_into_pane};
+use crate::mux::{NamedKey, backend_for, paste_into_pane, type_into_pane};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
 
@@ -212,7 +212,7 @@ fn write_batch(
         // arriving within 8 ms into a paste burst and suppresses Enter for
         // another 120 ms; wait for that state to flush before submitting.
         send.wait_before_submit(head.body);
-        press_pane_key(pane_id, NamedKey::Enter)?;
+        backend_for(pane_id.mux()).send_key(pane_id, NamedKey::Enter)?;
     }
     Ok(PaneWrite::Sent)
 }

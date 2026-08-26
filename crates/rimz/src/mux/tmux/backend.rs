@@ -369,6 +369,7 @@ impl MuxBackend for TmuxBackend {
                 .window_width(pane.raw())
                 .and_then(|cols| u16::try_from(cols).ok())
                 .unwrap_or(0),
+            fullscreen_active: None,
         })
     }
 

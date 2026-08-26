@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 /// reliably deliver are supported; `Cmd` is intentionally absent because the
 /// terminal emulator swallows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FocusChord {
+pub(crate) struct FocusChord {
     modifier: Modifier,
     key: char,
 }
@@ -22,7 +22,7 @@ enum Modifier {
 impl FocusChord {
     /// Parse a `Mod+key` (or `Mod-key`) chord. Unsupported shapes return
     /// `None` so room birth can warn and skip the binding.
-    pub fn parse(raw: &str) -> Option<Self> {
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
         let raw = raw.trim();
         let (modifier, key) = raw.split_once(['+', '-'])?;
         let modifier = match modifier.trim().to_ascii_lowercase().as_str() {
@@ -39,7 +39,7 @@ impl FocusChord {
     }
 
     /// tmux root-table key spec: `M-p` / `C-p`.
-    pub fn to_tmux(self) -> String {
+    pub(crate) fn to_tmux(self) -> String {
         let prefix = match self.modifier {
             Modifier::Alt => 'M',
             Modifier::Ctrl => 'C',
@@ -48,30 +48,22 @@ impl FocusChord {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RoomKeyAction {
-    /// Focus the sidebar, or return to work when it is already focused.
-    FocusSidebar,
-    /// Toggle fullscreen with sidebar-aware target selection.
-    ZoomPane,
-}
-
 /// A resolved room-key binding. Room identity is not baked in — a tmux root
 /// binding resolves the pressing session at keypress (`#{session_name}`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoomKeyBinding {
     pub(crate) chord: FocusChord,
-    action: RoomKeyAction,
     program: PathBuf,
+    args: Vec<String>,
 }
 
 impl RoomKeyBinding {
-    /// Resolve an action and configured chord against the absolute RimZ binary.
-    pub fn resolve(action: RoomKeyAction, chord: &str, rimz_bin: &Path) -> Option<Self> {
+    /// Resolve a command and configured chord against the absolute RimZ binary.
+    pub fn resolve(chord: &str, rimz_bin: &Path, args: &[&str]) -> Option<Self> {
         Some(Self {
             chord: FocusChord::parse(chord)?,
-            action,
             program: rimz_bin.to_path_buf(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
         })
     }
 
@@ -79,12 +71,7 @@ impl RoomKeyBinding {
     /// keypress and forcing tmux because the child runs off-server.
     pub fn tmux_run_shell_command(&self) -> String {
         let mut argv = vec![self.program.to_string_lossy().into_owned()];
-        match self.action {
-            RoomKeyAction::FocusSidebar => {
-                argv.extend(["sidebar", "focus", "--toggle"].map(str::to_owned));
-            }
-            RoomKeyAction::ZoomPane => argv.extend(["pane", "zoom"].map(str::to_owned)),
-        }
+        argv.extend(self.args.iter().cloned());
         argv.extend(["--session-name", "#{session_name}", "--mux", "tmux"].map(str::to_owned));
         argv.iter()
             .map(String::as_str)
@@ -123,9 +110,9 @@ mod tests {
     #[test]
     fn tmux_commands_target_the_pressing_session_and_force_the_backend() {
         let focus = RoomKeyBinding::resolve(
-            RoomKeyAction::FocusSidebar,
             "Alt+p",
             Path::new("/usr/bin/rimz"),
+            &["sidebar", "focus", "--toggle"],
         )
         .expect("focus binding");
         assert_eq!(focus.chord.to_tmux(), "M-p");
@@ -135,9 +122,8 @@ mod tests {
              '#{session_name}' '--mux' 'tmux'"
         );
 
-        let zoom =
-            RoomKeyBinding::resolve(RoomKeyAction::ZoomPane, "Alt+z", Path::new("/usr/bin/rimz"))
-                .expect("zoom binding");
+        let zoom = RoomKeyBinding::resolve("Alt+z", Path::new("/usr/bin/rimz"), &["pane", "zoom"])
+            .expect("zoom binding");
         assert_eq!(
             zoom.tmux_run_shell_command(),
             "'/usr/bin/rimz' 'pane' 'zoom' '--session-name' '#{session_name}' '--mux' 'tmux'"
@@ -148,9 +134,9 @@ mod tests {
     fn unparseable_chord_resolves_to_none() {
         assert_eq!(
             RoomKeyBinding::resolve(
-                RoomKeyAction::FocusSidebar,
                 "nonsense",
-                Path::new("/usr/bin/rimz")
+                Path::new("/usr/bin/rimz"),
+                &["sidebar", "focus", "--toggle"],
             ),
             None
         );

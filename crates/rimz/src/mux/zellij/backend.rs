@@ -754,40 +754,8 @@ impl MuxBackend for ZellijBackend {
             stop_step_cols,
             exact: false,
             view_cols: u16::try_from(view_cols).unwrap_or(0),
+            fullscreen_active: Some(tab_fullscreen_active(&cache.panes, tab_position)),
         })
-    }
-
-    fn sidebar_fullscreen_active(
-        &self,
-        runtime: &RuntimePaths,
-        session: &str,
-        pane: &PaneId,
-    ) -> Result<Option<bool>> {
-        ensure_pane_backend(pane, MuxName::Zellij)?;
-        let pane_id = ZellijPaneId::try_from(pane)
-            .ok()
-            .and_then(ZellijPaneId::terminal_id)
-            .ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("target pane `{pane}` has no numeric topology id"),
-            })?;
-        let Some(cache) = Self::fresh_cached_topology(
-            runtime,
-            session,
-            crate::sidebar::timing::unix_now_ms(),
-            None,
-        ) else {
-            return Ok(None);
-        };
-        let Some(tab_position) = cache
-            .panes
-            .iter()
-            .find(|candidate| !candidate.is_plugin && candidate.id == pane_id)
-            .map(|candidate| candidate.tab_position)
-        else {
-            return Ok(None);
-        };
-        Ok(Some(tab_fullscreen_active(&cache.panes, tab_position)))
     }
 
     fn nudge_sidebar_width(

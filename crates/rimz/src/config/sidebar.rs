@@ -58,14 +58,10 @@ impl Default for SidebarConfig {
 }
 
 impl SidebarConfig {
-    /// The focus-sidebar chord to register and display, or `None` when the user
-    /// disabled it (empty / `off` / `none`).
-    pub fn focus_key_label(&self) -> Option<&str> {
-        enabled_key_label(&self.focus_key)
-    }
-
-    pub fn zoom_key_label(&self) -> Option<&str> {
-        enabled_key_label(&self.zoom_key)
+    /// A configured room chord to register and display, or `None` when the
+    /// user disabled it (empty / `off` / `none`).
+    pub fn key_label<'a>(&self, key: &'a str) -> Option<&'a str> {
+        enabled_key_label(key)
     }
 
     pub fn afk_after_ms(&self) -> u64 {
