@@ -180,6 +180,10 @@ fn zellij_boundary_move_is_emitted_only_for_stable_work_topology() {
     sidebar_resized.panes[1].pane_x = Some(56);
     sidebar_resized.panes[1].pane_columns = Some(46);
     assert!(derive_work_boundary_moves(&incoming, &sidebar_resized).is_empty());
+
+    let mut sidebar_moved = incoming.clone();
+    sidebar_moved.panes[0].pane_x = Some(1);
+    assert!(derive_work_boundary_moves(&incoming, &sidebar_moved).is_empty());
 }
 
 #[test]
