@@ -19,15 +19,7 @@ fn select<'a>(
         .collect::<Vec<_>>();
     let mut cohorts = team_cohorts
         .iter()
-        .filter(|cohort| {
-            worktree.is_none_or(|worktree| {
-                cohort.channel == worktree
-                    || cohort
-                        .members
-                        .iter()
-                        .any(|agent| rimz::harness::target::agent_in_worktree(agent, worktree))
-            })
-        })
+        .filter(|cohort| worktree.is_none_or(|worktree| matches_worktree(cohort, worktree)))
         .cloned()
         .collect::<Vec<_>>();
     if cohorts.is_empty() {
@@ -66,6 +58,14 @@ fn select<'a>(
         );
     }
     bail!("team `{team}` has live cohorts in {lanes}; select one with `-w <worktree>`")
+}
+
+pub(super) fn matches_worktree(cohort: &TeamCohort<'_>, worktree: &str) -> bool {
+    cohort.channel == worktree
+        || cohort
+            .members
+            .iter()
+            .any(|agent| rimz::harness::target::agent_in_worktree(agent, worktree))
 }
 
 pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) -> Result<()> {

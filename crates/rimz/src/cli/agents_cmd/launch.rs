@@ -484,10 +484,9 @@ fn launch_resume_layout(
         .and_then(|name| teams.0.get(name))
         .and_then(|team| team.leader.as_deref());
     if in_place {
-        let mut out = render::out();
-        report_cohort_resume(&mut out, &plan)?;
-        write_launch_hints(
-            &mut out,
+        write_resume_receipt(
+            &mut render::out(),
+            &plan,
             team_name.as_deref(),
             channel.as_deref(),
             launch_batch.identities(),
@@ -515,10 +514,9 @@ fn launch_resume_layout(
         },
     )?;
     if !in_place {
-        let mut out = render::out();
-        report_cohort_resume(&mut out, &plan)?;
-        write_launch_hints(
-            &mut out,
+        write_resume_receipt(
+            &mut render::out(),
+            &plan,
             team_name.as_deref(),
             channel.as_deref(),
             launch_batch.identities(),
@@ -680,33 +678,69 @@ fn write_launch_receipt(
             render::paint(render::palette::muted(), "starting")
         )?;
     }
-    write_launch_hints(w, team, channel, identities, leader)
+    write_launch_hints(
+        w,
+        team,
+        channel,
+        identities.first().map(launch_identity_handle),
+        leader,
+    )
 }
 
 fn launch_identity_handle(identity: &AgentLaunchIdentity) -> &str {
-    identity
-        .launch
-        .role
-        .as_deref()
-        .or_else(|| identity.name_explicit.then_some(identity.name.as_str()))
-        .unwrap_or(&identity.name)
+    identity.launch.role.as_deref().unwrap_or(&identity.name)
+}
+
+fn resume_hint_handle<'a>(
+    plan: &'a rimz::harness::plan::CohortResumePlan,
+    fresh_identities: &'a [AgentLaunchIdentity],
+) -> Option<&'a str> {
+    match plan.seeds.first()? {
+        rimz::harness::plan::CohortSeed::Resume(agent) => agent
+            .role
+            .as_deref()
+            .or(agent.name.as_deref())
+            .or(agent.profile.as_deref())
+            .or(Some(agent.kind.as_str())),
+        rimz::harness::plan::CohortSeed::Fresh => {
+            fresh_identities.first().map(launch_identity_handle)
+        }
+    }
 }
 
 fn write_launch_hints(
     w: &mut impl Write,
     team: Option<&str>,
     channel: Option<&str>,
-    identities: &[AgentLaunchIdentity],
+    fallback_handle: Option<&str>,
     leader: Option<&str>,
 ) -> Result<()> {
     if let (Some(team), Some(channel)) = (team, channel) {
         writeln!(w, "Check: rimz teams show {team}#{channel}")?;
     }
-    if let Some(handle) = leader.or_else(|| identities.first().map(launch_identity_handle)) {
+    if let Some(handle) = leader.or(fallback_handle) {
         let lane = channel.map_or_else(String::new, |channel| format!("#{channel}"));
         writeln!(w, "Reach: rimz message @{handle}{lane} '<text>'")?;
     }
     Ok(())
+}
+
+fn write_resume_receipt(
+    w: &mut impl Write,
+    plan: &rimz::harness::plan::CohortResumePlan,
+    team: Option<&str>,
+    channel: Option<&str>,
+    fresh_identities: &[AgentLaunchIdentity],
+    leader: Option<&str>,
+) -> Result<()> {
+    report_cohort_resume(w, plan)?;
+    write_launch_hints(
+        w,
+        team,
+        channel,
+        resume_hint_handle(plan, fresh_identities),
+        leader,
+    )
 }
 
 fn report_cohort_resume(
@@ -906,6 +940,26 @@ mod tests {
         assert!(output.contains("launched @worker (/repo)"));
         assert!(!output.contains("Check:"));
         assert!(output.contains("Reach: rimz message @worker '<text>'"));
+    }
+
+    #[test]
+    fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
+        let mut agent = test_agent("sess-planner");
+        agent.name = Some("stable-haven".to_owned());
+        agent.role = Some("planner".to_owned());
+        let plan = rimz::harness::plan::CohortResumePlan {
+            seeds: vec![rimz::harness::plan::CohortSeed::Resume(Box::new(agent))],
+            cwd: Some(PathBuf::from("/repo")),
+            channel: Some("feat-x".to_owned()),
+            fresh: Vec::new(),
+            launch_group: None,
+        };
+
+        assert_eq!(resume_hint_handle(&plan, &[]), Some("planner"));
+        let mut output = Vec::new();
+        write_resume_receipt(&mut output, &plan, None, Some("feat-x"), &[], None).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
     }
 
     #[test]
