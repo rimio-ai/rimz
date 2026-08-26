@@ -113,7 +113,7 @@ fn narrower_after_an_exact_pin_issues_a_resize() {
     let now = Instant::now();
     let step = crate::mux::WidthStep {
         cols: 10,
-        band_cols: 11,
+        stop_step_cols: 11,
         exact: false,
         view_cols: 213,
     };
@@ -125,7 +125,7 @@ fn narrower_after_an_exact_pin_issues_a_resize() {
     )
     .expect("narrower target");
     let mut control = WidthControl::new(Some(target(64)));
-    control.seed_native_step(step.band_cols);
+    control.seed_native_step(step.stop_step_cols);
 
     control.retarget(Some(narrowed));
 
@@ -812,7 +812,7 @@ fn upward_crossing_inside_the_band_parks_without_a_reverse() {
     assert_eq!(control.decide(60, now), Some((60, 80)));
 
     assert_eq!(control.decide(85, now + Duration::from_millis(10)), None);
-    assert!(!control.reverse_issued);
+    assert!(control.reverse_max_distance.is_none());
     assert_eq!(
         control.take_trace(),
         Some(WidthTransition::StepIssued {
@@ -845,7 +845,7 @@ fn regressed_step_reverses_once_then_parks() {
         control.decide(70, now + Duration::from_millis(10)),
         Some((70, 80)),
     );
-    assert!(control.reverse_issued);
+    assert!(control.reverse_max_distance.is_some());
 
     assert_eq!(control.decide(83, now + Duration::from_millis(20)), None);
     assert_eq!(control.decide(83, now + FEEDBACK_TIMEOUT * 2), None);
@@ -919,13 +919,13 @@ fn reverse_step_that_improves_but_stays_below_target_keeps_converging() {
         control.decide(70, now + Duration::from_millis(10)),
         Some((70, 80)),
     );
-    assert!(control.reverse_issued);
+    assert!(control.reverse_max_distance.is_some());
 
     assert_eq!(
         control.decide(75, now + Duration::from_millis(20)),
         Some((75, 80)),
     );
-    assert!(!control.reverse_issued);
+    assert!(control.reverse_max_distance.is_none());
     assert_eq!(
         control.traces.back(),
         Some(&WidthTransition::StepIssued {

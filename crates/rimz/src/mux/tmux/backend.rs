@@ -354,7 +354,7 @@ impl MuxBackend for TmuxBackend {
         // The window width comes from this live tmux query, so it cannot predate a caller's floor.
         Ok(WidthStep {
             cols: SIDEBAR_RESIZE_STEP_COLS,
-            band_cols: 1,
+            stop_step_cols: 1,
             exact: true,
             view_cols: self
                 .window_width(pane.raw())
