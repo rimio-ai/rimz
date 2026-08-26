@@ -314,17 +314,18 @@ fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'st
 }
 
 /// The `?` popup: a which-key style block with action keys, status filters, and
-/// the standalone sidebar-focus chord.
+/// the room-scoped focus and zoom chords.
 pub(super) fn help_lines(
     theme: &Theme,
     focus_key: Option<&str>,
+    zoom_key: Option<&str>,
     keys: &SidebarKeys,
     width: usize,
 ) -> Vec<Line<'static>> {
     const TITLE: &str = "help";
     const MIN_FRAME_WIDTH: usize = 22;
 
-    let rows = help_body_rows(theme, focus_key, keys);
+    let rows = help_body_rows(theme, focus_key, zoom_key, keys);
     if width < MIN_FRAME_WIDTH {
         return rows
             .into_iter()
@@ -347,6 +348,7 @@ pub(super) fn help_lines(
 fn help_body_rows(
     theme: &Theme,
     focus_key: Option<&str>,
+    zoom_key: Option<&str>,
     keys: &SidebarKeys,
 ) -> Vec<Line<'static>> {
     let movement = |key: String, label| {
@@ -493,16 +495,23 @@ fn help_body_rows(
         theme,
         vec![("keys", keys_section), ("filter", filter_section)],
     );
-    if let Some(key) = focus_key {
+    let room_keys = [
+        (focus_key, GlyphRole::KeysSidebar, "sidebar"),
+        (zoom_key, GlyphRole::KeysFocus, "zoom"),
+    ];
+    if room_keys.iter().any(|(key, _, _)| key.is_some()) {
         lines.push(Line::default());
-        let entry = key_entry(
-            theme,
-            Some(key_icon(theme, GlyphRole::KeysSidebar)),
-            focus_chord_label(key),
-            "sidebar",
-        );
-        let key_w = layout::text_width(&entry.key);
-        lines.push(Line::from(render_entry(theme, entry, key_w)).style(theme.body()));
+        for (key, role, label) in room_keys {
+            let Some(key) = key else { continue };
+            let entry = key_entry(
+                theme,
+                Some(key_icon(theme, role)),
+                focus_chord_label(key),
+                label,
+            );
+            let key_w = layout::text_width(&entry.key);
+            lines.push(Line::from(render_entry(theme, entry, key_w)).style(theme.body()));
+        }
     }
     lines
 }
@@ -765,7 +774,7 @@ mod tests {
     #[test]
     fn help_shows_width_chords_and_remapped_filters() {
         let theme = Theme::fixed(false);
-        let text = help_body_rows(&theme, None, &SidebarKeys::default())
+        let text = help_body_rows(&theme, None, None, &SidebarKeys::default())
             .iter()
             .flat_map(|line| line.spans.iter())
             .map(|span| span.content.as_ref())
@@ -777,5 +786,25 @@ mod tests {
         assert!(text.contains("done"));
         assert!(text.contains("A"));
         assert!(text.contains("all"));
+    }
+
+    #[test]
+    fn help_shows_configured_room_chords() {
+        let theme = Theme::fixed(false);
+        let text = help_body_rows(
+            &theme,
+            Some("Alt+p"),
+            Some("Ctrl+g"),
+            &SidebarKeys::default(),
+        )
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+        assert!(text.contains("alt p"));
+        assert!(text.contains("sidebar"));
+        assert!(text.contains("ctrl g"));
+        assert!(text.contains("zoom"));
     }
 }
