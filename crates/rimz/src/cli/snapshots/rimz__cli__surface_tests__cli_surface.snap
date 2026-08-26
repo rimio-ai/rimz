@@ -914,6 +914,8 @@ rimz help pane send
 
 rimz help pane split
 
+rimz help pane zoom
+
 rimz help ping
 
 rimz help pricing-refresh [hidden]
@@ -1578,6 +1580,8 @@ rimz pane help send
 
 rimz pane help split
 
+rimz pane help zoom
+
 rimz pane list
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
@@ -1605,6 +1609,15 @@ rimz pane split
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz pane zoom
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session-name <SESSION_NAME>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
