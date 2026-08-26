@@ -130,6 +130,7 @@ impl SidebarWidthIntentTrigger {
 pub enum SidebarWidthIntentVerdict {
     Accepted,
     RejectedFloor,
+    RejectedFullscreen,
     RejectedNoStep,
 }
 
@@ -138,6 +139,7 @@ impl SidebarWidthIntentVerdict {
         match self {
             Self::Accepted => "accepted",
             Self::RejectedFloor => "rejected-floor",
+            Self::RejectedFullscreen => "rejected-fullscreen",
             Self::RejectedNoStep => "rejected-no-step",
         }
     }

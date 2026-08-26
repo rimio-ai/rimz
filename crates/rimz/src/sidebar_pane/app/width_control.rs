@@ -363,20 +363,30 @@ impl WidthController {
     }
 
     pub(super) fn adjust(&mut self, own_cols: u16, dir: WidthAdjust, diag: &DiagSink) {
-        if self.convergence.is_fullscreen_held() {
-            return;
-        }
-        let Some(pane) = self.own_pane.as_ref() else {
-            return;
+        let trigger = match dir {
+            WidthAdjust::Narrower => SidebarWidthIntentTrigger::Narrower,
+            WidthAdjust::Wider => SidebarWidthIntentTrigger::Wider,
         };
         let pending_cols = self.convergence.target().map(NonZeroU16::get);
         let base_cols = match dir {
             WidthAdjust::Narrower => pending_cols.map_or(own_cols, |target| target.min(own_cols)),
             WidthAdjust::Wider => pending_cols.map_or(own_cols, |target| target.max(own_cols)),
         };
-        let trigger = match dir {
-            WidthAdjust::Narrower => SidebarWidthIntentTrigger::Narrower,
-            WidthAdjust::Wider => SidebarWidthIntentTrigger::Wider,
+        if self.convergence.is_fullscreen_held() {
+            diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
+                trigger,
+                own_cols,
+                base_cols,
+                view_cols: self.current_view_cols.unwrap_or(0),
+                step_cols: None,
+                step_exact: false,
+                target_cols: None,
+                verdict: SidebarWidthIntentVerdict::RejectedFullscreen,
+            });
+            return;
+        }
+        let Some(pane) = self.own_pane.as_ref() else {
+            return;
         };
         let step = match crate::mux::backend_for(self.mux).sidebar_width_step(
             &self.runtime,
