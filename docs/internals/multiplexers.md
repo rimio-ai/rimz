@@ -222,7 +222,7 @@ Native observations then resolve it. The exact unchanged pre-action client map i
 
 The sidebar's in-pane keys fire only when the sidebar pane is focused, so a room-scoped chord (`[sidebar] focus_key`, default `Alt+p`) reaches it from any pane. The keystroke lands in whatever pane is focused, so the multiplexer intercepts it; both backends run `rimz sidebar focus --toggle`, which focuses this session's `rimz-sidebar` pane or returns to a deterministic working sibling, and only when one unique fresh client view proves the sidebar is current. An unavailable or distinct view returns a non-mutating ambiguity error.
 
-The smart-zoom chord (`[sidebar] zoom_key`, default `Alt+z`) runs `rimz pane zoom`. With one unique attached-client focus it toggles fullscreen for the focused work pane. If that pane is sidebar chrome, RimZ resolves a non-chrome sibling in the same view, records and applies the user focus intent, then fullscreens the sibling. No sibling leaves the view unchanged.
+The smart-zoom chord (`[sidebar] zoom_key`, default `Alt+g`) runs `rimz pane zoom`. With one unique attached-client focus it toggles fullscreen for the focused work pane. If that pane is sidebar chrome, RimZ resolves a non-chrome sibling in the same view, records and applies the user focus intent, then fullscreens the sibling. No sibling leaves the view unchanged.
 
 Both chords are parsed once by [`FocusChord`](../../crates/rimz/src/mux/focus_key.rs) (`Alt` or `Ctrl`, with `M-`/`C-` and `-`/`+` separators). `Alt` is the default because it survives the terminal, Zellij's locked mode, and tmux's prefix; `off` or empty registers nothing. Registration is best-effort at session birth, so a convenience key never blocks a room.
 

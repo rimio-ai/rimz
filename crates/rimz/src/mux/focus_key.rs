@@ -122,7 +122,7 @@ mod tests {
              '#{session_name}' '--mux' 'tmux'"
         );
 
-        let zoom = RoomKeyBinding::resolve("Alt+z", Path::new("/usr/bin/rimz"), &["pane", "zoom"])
+        let zoom = RoomKeyBinding::resolve("Alt+g", Path::new("/usr/bin/rimz"), &["pane", "zoom"])
             .expect("zoom binding");
         assert_eq!(
             zoom.tmux_run_shell_command(),

@@ -466,7 +466,7 @@ fn runtime_reconfigure_kdl_combines_mouse_options_and_room_keybinds() {
     let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
         plugin_id: Some(42),
         focus_key: Some("Alt+p"),
-        zoom_key: Some("Alt+z"),
+        zoom_key: Some("Alt+g"),
         focus_follows_mouse: Some(false),
         mouse_click_through: Some(true),
     })
@@ -474,7 +474,7 @@ fn runtime_reconfigure_kdl_combines_mouse_options_and_room_keybinds() {
 
     assert!(kdl.starts_with("focus_follows_mouse false\nmouse_click_through true\nkeybinds {\n"));
     assert!(kdl.contains("bind \"Alt p\""));
-    assert!(kdl.contains("bind \"Alt z\""));
+    assert!(kdl.contains("bind \"Alt g\""));
     assert!(kdl.contains("name \"rimz:focus_sidebar\""));
     assert!(kdl.contains("name \"rimz:zoom_pane\""));
     assert_eq!(kdl.matches("MessagePluginId 42").count(), 4);
@@ -559,14 +559,14 @@ fn room_keybinds_kdl_targets_plugin_id_in_normal_and_locked_modes() {
         }),
         Some(FocusChord {
             modifier: ChordModifier::Alt,
-            key: 'z',
+            key: 'g',
         }),
         42,
     )
     .expect("keybinds");
 
     assert_eq!(kdl.matches("bind \"Alt p\"").count(), 2);
-    assert_eq!(kdl.matches("bind \"Alt z\"").count(), 2);
+    assert_eq!(kdl.matches("bind \"Alt g\"").count(), 2);
     assert_eq!(kdl.matches("MessagePluginId 42").count(), 4);
     assert_eq!(kdl.matches("name \"rimz:focus_sidebar\"").count(), 2);
     assert_eq!(kdl.matches("name \"rimz:zoom_pane\"").count(), 2);

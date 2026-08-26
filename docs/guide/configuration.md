@@ -19,7 +19,7 @@ rimz config set harness.smart_compact 200k     # compact before a message once c
 rimz config set harness.idle_compact auto      # compact warm idle contexts while work may return
 rimz config set notifications.triggers '["waiting", "failed"]'   # which rows raise a banner
 rimz config set sidebar.focus_key "Alt+p"      # the chord that jumps to the sidebar from any pane
-rimz config set sidebar.zoom_key "Alt+z"       # smart fullscreen zoom that skips sidebar chrome
+rimz config set sidebar.zoom_key "Alt+g"       # smart fullscreen zoom that skips sidebar chrome
 rimz config set timezone "America/New_York"    # transcript times, scheduling, and the "today" cutoff
 ```
 
@@ -299,7 +299,7 @@ timezone = "America/New_York"
 
 [sidebar]
 focus_key = "Alt+p"
-zoom_key = "Alt+z"
+zoom_key = "Alt+g"
 afk_after_secs = 900
 trunk = "develop"
 spend_window = "session"
@@ -327,7 +327,7 @@ inactive_after_secs = 3600
 archive_after_secs = 86400
 ```
 
-`timezone` is an optional IANA zone for displayed transcript times, wall-clock scheduling, and the `"today"` spend cutoff; unset or unknown uses the system local zone. `focus_key` is the global multiplexer chord that focuses the sidebar from any pane and toggles back to your last working pane; both backends bind it at session birth, the default is `Alt+p`, and `""` or `off` registers nothing. `zoom_key` toggles fullscreen for the focused work pane; when the sidebar is focused it first selects a working sibling in that view, so the sidebar is never fullscreened. Its default is `Alt+z`, and `""` or `off` disables it. `afk_after_secs` sets the input-idle window before the footer shows `zᶻ idle` on tmux, adding `· Nm` after the first minute; Zellij reports attach state only, so it shows `zᶻ away` on full detach regardless of this value, and the default is 900 seconds (15 minutes). `trunk` is a preferred comparison branch for the worktree header's git stats, falling back to `main` → `master` → the remote default when it does not resolve.
+`timezone` is an optional IANA zone for displayed transcript times, wall-clock scheduling, and the `"today"` spend cutoff; unset or unknown uses the system local zone. `focus_key` is the global multiplexer chord that focuses the sidebar from any pane and toggles back to your last working pane; both backends bind it at session birth, the default is `Alt+p`, and `""` or `off` registers nothing. `zoom_key` toggles fullscreen for the focused work pane; when the sidebar is focused it first selects a working sibling in that view, so the sidebar is never fullscreened. Its default is `Alt+g`, and `""` or `off` disables it. `afk_after_secs` sets the input-idle window before the footer shows `zᶻ idle` on tmux, adding `· Nm` after the first minute; Zellij reports attach state only, so it shows `zᶻ away` on full detach regardless of this value, and the default is 900 seconds (15 minutes). `trunk` is a preferred comparison branch for the worktree header's git stats, falling back to `main` → `master` → the remote default when it does not resolve.
 
 `[agents.attention]` tunes attention timing: `active_grace_secs` bounds how much silence an open working span adds to the root session's estimated active time (three minutes by default), `stalled_after_secs` is when a silent running agent escalates to the actionable `!` bucket (30 minutes by default), `tool_repeat_warn_after` marks a consecutive identical-tool run with `⟲` (3 calls), `tool_repeat_attention_after` escalates that run to `!` (20 calls), `inactive_after_secs` is when a card leaves hot work (one hour, the prompt-cache boundary, so a cold card reads as cold), and `archive_after_secs` is when a card parks below hot and warm work (24 hours by default). Set `archive_after_secs` greater than `inactive_after_secs`; a lower value is lifted to the first second after the inactive window. The `[theme.display]` knobs that share this area (render cadence, sizing, `scrollbar`, and `card_density`) are theme settings; see [theme.md → Display](./theme.md#display).
 
