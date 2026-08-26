@@ -54,7 +54,7 @@ rimz agents attribution --md         # credit the lane's agents in a PR footnote
 rimz agents restart @coder           # bounce in place and resume the session
 rimz agents resume '#docs'           # restore every closed place in one lane
 rimz teams                           # configured teams and their live instances
-rimz teams show forge                # resolved roles, validation, and live members
+rimz teams show forge#feat-x         # resolved roles, validation, and one live cohort
 rimz teams forge -w feat-x           # launch one configured cohort in a worktree
 rimz teams resume forge              # reopen a configured team cohort
 rimz teams focus|restart|stop forge  # drive one live team cohort

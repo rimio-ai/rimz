@@ -5,11 +5,12 @@ use anyhow::{Result, bail};
 use super::super::{GlobalFlags, render};
 use super::list::{LiveMember, RoleReport, TeamReport};
 
-pub(super) fn run(name: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn run(name: &str, lane: Option<&str>, json: bool, globals: &GlobalFlags) -> Result<()> {
     let reports = super::list::load_catalog(globals)?;
-    let Some(report) = reports
+    let Some(mut report) = reports
         .iter()
         .find(|report| report.name == name && report.defined)
+        .cloned()
     else {
         let valid = reports
             .iter()
@@ -26,13 +27,16 @@ pub(super) fn run(name: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
             valid.join(", ")
         );
     };
-    if json {
-        return render::json_pretty(report);
+    if let Some(lane) = lane {
+        report.instances.retain(|instance| instance.channel == lane);
     }
-    write_report(&mut render::out(), report)
+    if json {
+        return render::json_pretty(&report);
+    }
+    write_report(&mut render::out(), &report, lane)
 }
 
-fn write_report(w: &mut impl Write, report: &TeamReport) -> Result<()> {
+fn write_report(w: &mut impl Write, report: &TeamReport, lane: Option<&str>) -> Result<()> {
     writeln!(
         w,
         "{}",
@@ -78,7 +82,17 @@ fn write_report(w: &mut impl Write, report: &TeamReport) -> Result<()> {
     }
     roles.render(w)?;
 
-    if !report.instances.is_empty() {
+    if report.instances.is_empty() && lane.is_some() {
+        writeln!(w)?;
+        writeln!(
+            w,
+            "{}",
+            render::paint(
+                render::palette::muted(),
+                &format!("no live instance in #{}", lane.unwrap_or_default())
+            )
+        )?;
+    } else if !report.instances.is_empty() {
         writeln!(w)?;
         writeln!(
             w,
@@ -188,7 +202,7 @@ mod tests {
             }],
         };
         let mut output = Vec::new();
-        write_report(&mut output, &report).unwrap();
+        write_report(&mut output, &report, None).unwrap();
         let output = String::from_utf8(output).unwrap();
 
         assert!(output.contains("planner,coder+reviewer"));
@@ -197,5 +211,26 @@ mod tests {
         assert!(output.contains("$0.25"));
         assert!(output.contains("rimz teams launch forge -w <worktree>"));
         assert!(output.contains("rimz teams resume forge"));
+    }
+
+    #[test]
+    fn human_show_answers_when_a_selected_lane_is_not_live() {
+        let report = TeamReport {
+            name: "forge".to_owned(),
+            defined: true,
+            source: None,
+            layout: Some("planner".to_owned()),
+            leader: Some("planner".to_owned()),
+            roles: Vec::new(),
+            valid: true,
+            error: None,
+            instances: Vec::new(),
+        };
+        let mut output = Vec::new();
+
+        write_report(&mut output, &report, Some("ended-lane")).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("no live instance in #ended-lane"));
     }
 }

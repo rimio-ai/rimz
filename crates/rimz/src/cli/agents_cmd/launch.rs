@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use super::*;
 use crate::cli::ctx::Ctx;
-use crate::cli::{machine_config, report_unknown_config_keys, require_agents_fragments};
+use crate::cli::{machine_config, render, report_unknown_config_keys, require_agents_fragments};
 
 use super::placement::{PlacementErrors, PlacementRequest};
 
@@ -317,7 +317,7 @@ pub(super) fn launch_layout(
         PlacementRequest {
             placement,
             mux,
-            cwd,
+            cwd: cwd.clone(),
             title,
             panes,
             sidebar,
@@ -333,7 +333,22 @@ pub(super) fn launch_layout(
                 same_pane: "running the agent in the current pane",
             },
         },
-    )
+    )?;
+    if !in_place {
+        let leader = team_name
+            .as_deref()
+            .and_then(|name| teams.0.get(name))
+            .and_then(|team| team.leader.as_deref());
+        write_launch_receipt(
+            &mut render::out(),
+            team_name.as_deref(),
+            room_channel.as_deref(),
+            &cwd,
+            launch_batch.identities(),
+            leader,
+        )?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -464,8 +479,20 @@ fn launch_resume_layout(
             fallback_channel: channel.as_deref(),
         },
     )?;
+    let leader = team_name
+        .as_deref()
+        .and_then(|name| teams.0.get(name))
+        .and_then(|team| team.leader.as_deref());
     if in_place {
-        report_cohort_resume(&plan);
+        let mut out = render::out();
+        report_cohort_resume(&mut out, &plan)?;
+        write_launch_hints(
+            &mut out,
+            team_name.as_deref(),
+            channel.as_deref(),
+            launch_batch.identities(),
+            leader,
+        )?;
     }
     super::placement::execute(
         backend,
@@ -488,7 +515,15 @@ fn launch_resume_layout(
         },
     )?;
     if !in_place {
-        report_cohort_resume(&plan);
+        let mut out = render::out();
+        report_cohort_resume(&mut out, &plan)?;
+        write_launch_hints(
+            &mut out,
+            team_name.as_deref(),
+            channel.as_deref(),
+            launch_batch.identities(),
+            leader,
+        )?;
     }
     Ok(())
 }
@@ -607,26 +642,97 @@ fn cohort_resume_subject(spec: &str, scope: Option<&str>) -> String {
     }
 }
 
-fn report_cohort_resume(plan: &rimz::harness::plan::CohortResumePlan) {
+fn write_launch_receipt(
+    w: &mut impl Write,
+    team: Option<&str>,
+    channel: Option<&str>,
+    cwd: &Path,
+    identities: &[AgentLaunchIdentity],
+    leader: Option<&str>,
+) -> Result<()> {
+    let subject = match (team, identities) {
+        (Some(team), _) => team.to_owned(),
+        (None, [identity]) => format!("@{}", identity.name),
+        (None, identities) => format!("{} agents", identities.len()),
+    };
+    let lane = channel.map_or_else(String::new, |channel| format!(" in #{channel}"));
+    let cwd = rimz::worktree::normalize_path_lexical(cwd);
+    let cwd = render::home_relative(&cwd.display().to_string());
+    writeln!(w, "launched {subject}{lane} ({cwd})")?;
+
+    let handle_width = identities
+        .iter()
+        .map(|identity| launch_identity_handle(identity).len() + 1)
+        .max()
+        .unwrap_or(0);
+    let kind_width = identities
+        .iter()
+        .map(|identity| identity.kind.as_str().len())
+        .max()
+        .unwrap_or(0);
+    for identity in identities {
+        let handle = format!("@{:<handle_width$}", launch_identity_handle(identity));
+        let kind = format!("{:<kind_width$}", identity.kind.as_str());
+        writeln!(
+            w,
+            "  {}  {kind}  {}",
+            render::paint(render::palette::identity(identity.kind.as_str()), &handle),
+            render::paint(render::palette::muted(), "starting")
+        )?;
+    }
+    write_launch_hints(w, team, channel, identities, leader)
+}
+
+fn launch_identity_handle(identity: &AgentLaunchIdentity) -> &str {
+    identity
+        .launch
+        .role
+        .as_deref()
+        .or_else(|| identity.name_explicit.then_some(identity.name.as_str()))
+        .unwrap_or(&identity.name)
+}
+
+fn write_launch_hints(
+    w: &mut impl Write,
+    team: Option<&str>,
+    channel: Option<&str>,
+    identities: &[AgentLaunchIdentity],
+    leader: Option<&str>,
+) -> Result<()> {
+    if let (Some(team), Some(channel)) = (team, channel) {
+        writeln!(w, "Check: rimz teams show {team}#{channel}")?;
+    }
+    if let Some(handle) = leader.or_else(|| identities.first().map(launch_identity_handle)) {
+        let lane = channel.map_or_else(String::new, |channel| format!("#{channel}"));
+        writeln!(w, "Reach: rimz message @{handle}{lane} '<text>'")?;
+    }
+    Ok(())
+}
+
+fn report_cohort_resume(
+    w: &mut impl Write,
+    plan: &rimz::harness::plan::CohortResumePlan,
+) -> Result<()> {
     let mut fresh = plan.fresh.iter();
     for seed in &plan.seeds {
         match seed {
             rimz::harness::plan::CohortSeed::Resume(agent) => {
                 let name = agent.name.as_deref().unwrap_or("unnamed");
-                let _ = writeln!(
-                    std::io::stderr(),
+                writeln!(
+                    w,
                     "resumed {}:{} ({})",
                     agent.kind.as_str(),
                     name,
                     agent.agent_id
-                );
+                )?;
             }
             rimz::harness::plan::CohortSeed::Fresh => {
                 let label = fresh.next().map_or("agent", String::as_str);
-                let _ = writeln!(std::io::stderr(), "started fresh {label}");
+                writeln!(w, "started fresh {label}")?;
             }
         }
     }
+    Ok(())
 }
 
 pub(super) fn interactive_permission_mode_from_flags(
@@ -751,6 +857,56 @@ pub(super) fn validate_resolved_launch_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn team_launch_receipt_names_startup_and_next_actions() {
+        let mut identities = [
+            launch_identity("claude", "planner"),
+            launch_identity("codex", "coder"),
+        ];
+        identities[0].launch.role = Some("planner".to_owned());
+        identities[1].launch.role = Some("coder".to_owned());
+        let mut output = Vec::new();
+
+        write_launch_receipt(
+            &mut output,
+            Some("forge"),
+            Some("feat-x"),
+            Path::new("/repo-worktrees/feat-x"),
+            &identities,
+            Some("planner"),
+        )
+        .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("launched forge in #feat-x (/repo-worktrees/feat-x)"));
+        assert!(output.contains("@planner"));
+        assert!(output.contains("claude"));
+        assert!(output.contains("starting"));
+        assert!(output.contains("Check: rimz teams show forge#feat-x"));
+        assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
+    }
+
+    #[test]
+    fn plain_launch_receipt_uses_the_first_member_without_a_team_check() {
+        let identities = [launch_identity("codex", "worker")];
+        let mut output = Vec::new();
+
+        write_launch_receipt(
+            &mut output,
+            None,
+            None,
+            Path::new("/repo"),
+            &identities,
+            None,
+        )
+        .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("launched @worker (/repo)"));
+        assert!(!output.contains("Check:"));
+        assert!(output.contains("Reach: rimz message @worker '<text>'"));
+    }
 
     #[test]
     fn resume_in_the_lane_directory_stays_in_the_origin_pane() {
@@ -907,5 +1063,17 @@ mod tests {
 
     fn test_agent(id: &str) -> AgentState {
         rimz::testkit::agent_state("codex", id, jiff::Timestamp::UNIX_EPOCH)
+    }
+
+    fn launch_identity(kind: &str, name: &str) -> AgentLaunchIdentity {
+        AgentLaunchIdentity {
+            kind: AgentKind::new_unchecked(kind),
+            agent_id: AgentSessionId::from(format!("launch-{name}")),
+            name: name.to_owned(),
+            name_explicit: false,
+            launch: rimz::agents::LaunchParams::default(),
+            run_id: None,
+            prompt: None,
+        }
     }
 }

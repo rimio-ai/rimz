@@ -96,6 +96,7 @@ rimz agents claude --worktree "Take another approach."
 ```
 
 The bare spec and `launch` verb are equivalent: use whichever reads better in a command chain.
+Fresh launches that open a new pane or tab print the minted handles as `starting` and a copy-ready `Reach` command; in-place launches replace the command pane directly and print no receipt.
 
 When a RimZ-launched agent runs this command, each new agent is an independent top-level peer with its own sidebar row. `[agents] max-chain-length` bounds successive agent-to-agent launches (three by default); an over-limit command refuses before it creates launch state. Agents that want a parented, one-prompt child with the safe flags implied use the agent-only [`rimz subagents`](./subagents.md) doorway instead. Only that doorway creates a subagent relationship, and a subagent cannot launch agents or subagents.
 
