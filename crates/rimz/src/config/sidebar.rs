@@ -60,21 +60,16 @@ impl Default for SidebarConfig {
 impl SidebarConfig {
     /// A configured room chord to register and display, or `None` when the
     /// user disabled it (empty / `off` / `none`).
-    pub fn key_label<'a>(&self, key: &'a str) -> Option<&'a str> {
-        enabled_key_label(key)
+    pub(crate) fn key_label(key: &str) -> Option<&str> {
+        let key = key.trim();
+        if key.is_empty() || key.eq_ignore_ascii_case("off") || key.eq_ignore_ascii_case("none") {
+            return None;
+        }
+        Some(key)
     }
 
     pub fn afk_after_ms(&self) -> u64 {
         u64::from(self.afk_after_secs.get()) * 1_000
-    }
-}
-
-fn enabled_key_label(key: &str) -> Option<&str> {
-    let key = key.trim();
-    if key.is_empty() || key.eq_ignore_ascii_case("off") || key.eq_ignore_ascii_case("none") {
-        None
-    } else {
-        Some(key)
     }
 }
 

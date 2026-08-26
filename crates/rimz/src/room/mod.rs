@@ -343,16 +343,14 @@ impl RoomContext {
                 .ok()?
                 .room_bin,
             converge: false,
-            focus_key: self
-                .machine_config
-                .sidebar
-                .key_label(&self.machine_config.sidebar.focus_key)
-                .map(str::to_owned),
-            zoom_key: self
-                .machine_config
-                .sidebar
-                .key_label(&self.machine_config.sidebar.zoom_key)
-                .map(str::to_owned),
+            focus_key: crate::config::SidebarConfig::key_label(
+                &self.machine_config.sidebar.focus_key,
+            )
+            .map(str::to_owned),
+            zoom_key: crate::config::SidebarConfig::key_label(
+                &self.machine_config.sidebar.zoom_key,
+            )
+            .map(str::to_owned),
             focus_follows_mouse: self.machine_config.zellij.focus_follows_mouse,
             mouse_click_through: self.machine_config.zellij.mouse_click_through,
         })
@@ -380,16 +378,12 @@ impl RoomContext {
         for (name, label, args) in [
             (
                 "focus_key",
-                self.machine_config
-                    .sidebar
-                    .key_label(&self.machine_config.sidebar.focus_key),
+                crate::config::SidebarConfig::key_label(&self.machine_config.sidebar.focus_key),
                 &["sidebar", "focus", "--toggle"][..],
             ),
             (
                 "zoom_key",
-                self.machine_config
-                    .sidebar
-                    .key_label(&self.machine_config.sidebar.zoom_key),
+                crate::config::SidebarConfig::key_label(&self.machine_config.sidebar.zoom_key),
                 &["pane", "zoom"][..],
             ),
         ] {
