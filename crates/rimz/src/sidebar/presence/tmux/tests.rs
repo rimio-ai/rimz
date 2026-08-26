@@ -74,7 +74,11 @@ fn layout(window: &str, window_width: u64, panes: &[(&str, u64, u64)]) -> Contro
         window_width,
         panes: panes
             .iter()
-            .map(|(id, x, width)| ((*id).to_owned(), *x, *width))
+            .map(|(id, x, width)| TmuxLayoutPane {
+                id: (*id).to_owned(),
+                x: *x,
+                width: *width,
+            })
             .collect(),
     }
 }

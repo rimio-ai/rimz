@@ -15,7 +15,7 @@ mod parse;
 mod presence;
 mod window;
 
-pub use presence::{ControlLine, PresenceWatch};
+pub use presence::{ControlLine, PresenceWatch, TmuxLayoutPane};
 
 use std::path::{Path, PathBuf};
 

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diag::record::{DiagEvent, WorkPaneBoundaryMove};
 use crate::ids::{MuxName, PaneId, ViewId};
-use crate::mux::tmux::ControlLine;
+use crate::mux::tmux::{ControlLine, TmuxLayoutPane};
 use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::sidebar::presence::projector::{
     PaneEventEligibility, PaneObservation, PresencePaneRole, PresenceTransition,
@@ -273,11 +273,11 @@ impl TmuxPresenceState {
         &mut self,
         window: &str,
         window_width: u64,
-        panes: Vec<(String, u64, u64)>,
+        panes: Vec<TmuxLayoutPane>,
     ) -> (Vec<PresenceTransition>, Option<DiagEvent>) {
         let present = panes
             .iter()
-            .map(|(pane, _, _)| pane.clone())
+            .map(|pane| pane.id.clone())
             .collect::<BTreeSet<_>>();
         let previous = self
             .panes
@@ -287,7 +287,7 @@ impl TmuxPresenceState {
             .collect::<BTreeMap<_, _>>();
         let next = panes
             .iter()
-            .map(|(pane, x, width)| (pane.clone(), (*x, *width)))
+            .map(|pane| (pane.id.clone(), (pane.x, pane.width)))
             .collect::<BTreeMap<_, _>>();
         let boundary_move = self
             .window_widths
@@ -328,19 +328,22 @@ impl TmuxPresenceState {
                 })
             });
         self.window_widths.insert(window.to_owned(), window_width);
-        for (pane, x, width) in &panes {
-            let entry = self.panes.entry(pane.clone()).or_insert_with(|| PaneEntry {
-                window: window.to_owned(),
-                command: None,
-                active: false,
-                overlay_suppressed: false,
-                is_sidebar: false,
-                floating: false,
-                x: None,
-                width: None,
-            });
-            entry.x = Some(*x);
-            entry.width = Some(*width);
+        for pane in &panes {
+            let entry = self
+                .panes
+                .entry(pane.id.clone())
+                .or_insert_with(|| PaneEntry {
+                    window: window.to_owned(),
+                    command: None,
+                    active: false,
+                    overlay_suppressed: false,
+                    is_sidebar: false,
+                    floating: false,
+                    x: None,
+                    width: None,
+                });
+            entry.x = Some(pane.x);
+            entry.width = Some(pane.width);
         }
         let has_floating = self
             .panes
