@@ -283,7 +283,7 @@ allowed-imports = [
     "store",
     "workspace",
 ]
-surface-budget = 245
+surface-budget = 246
 
 [[module]]
 path = "crates/rimz/src/mux/mount_proof.rs"
