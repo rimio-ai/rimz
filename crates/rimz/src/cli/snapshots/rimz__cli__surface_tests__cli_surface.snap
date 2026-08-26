@@ -2315,6 +2315,7 @@ rimz teams show (aliases: inspect)
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
+    -w, --worktree <NAME>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz teams stop
