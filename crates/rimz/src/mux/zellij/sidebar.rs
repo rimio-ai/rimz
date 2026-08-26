@@ -17,7 +17,9 @@ use super::{
     ZellijBackend,
 };
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::mux::width::{sidebar_width_off_spec, width_undershot, zellij_resize_stop_step_cols};
+use crate::mux::width::{
+    sidebar_width_off_spec, width_step_regressed, zellij_resize_stop_step_cols,
+};
 use crate::mux::{
     DaemonView, MuxBackend, MuxErr, PaneReadConsistency, PresencePluginOptions, Result,
     SessionLiveness, SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
@@ -937,8 +939,8 @@ impl ZellijBackend {
             }
             // Defensive only: the ceiling stop estimate bounds Zellij's real
             // lattice, but reverse once if a future backend delta exceeds it.
-            let undershot =
-                last_cols.is_some_and(|last_cols| width_undershot(last_cols, cols, target_cols));
+            let regressed = last_cols
+                .is_some_and(|last_cols| width_step_regressed(last_cols, cols, target_cols));
             let grow = cols < target_cols;
             let no_progress =
                 last_cols
@@ -990,7 +992,7 @@ impl ZellijBackend {
                 break;
             }
             resized = true;
-            reverse_spent = undershot;
+            reverse_spent = regressed;
         }
 
         (floor, resized)

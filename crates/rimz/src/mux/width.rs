@@ -251,15 +251,14 @@ pub fn client_size_from_env() -> Option<(u16, u16)> {
         .and_then(parse_client_size)
 }
 
-/// Whether a live sidebar can move closer to the smallest reachable width at
-/// or above the canonical target.
+/// Whether one native step toward the target would land strictly closer.
 pub(crate) fn sidebar_width_off_spec(cols: u64, canonical_cols: u64, step_cols: u64) -> bool {
-    cols < canonical_cols || cols >= canonical_cols.saturating_add(step_cols.max(1))
+    cols.abs_diff(canonical_cols) > step_cols.max(1) / 2
 }
 
-/// Whether a shrink step crossed from the target's upper side to below it.
-pub(crate) fn width_undershot(before: u64, after: u64, target: u64) -> bool {
-    before >= target && after < target
+/// Whether a native step landed farther from the target than it started.
+pub(crate) fn width_step_regressed(before: u64, after: u64, target: u64) -> bool {
+    after.abs_diff(target) > before.abs_diff(target)
 }
 
 /// The nominal target increment for one Zellij resize keypress.
@@ -451,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_width_repair_uses_the_upward_reachable_band() {
+    fn sidebar_width_repair_uses_the_nearest_reachable_band() {
         // Exact backends retain only exact equality.
         assert!(!sidebar_width_off_spec(72, 72, 1));
         assert!(sidebar_width_off_spec(71, 72, 1));
@@ -461,16 +460,16 @@ mod tests {
         // steps, so the stop band reserves the wider spacing.
         let step = zellij_resize_stop_step_cols(213);
         assert_eq!(step, 11);
-        assert!(sidebar_width_off_spec(63, 64, step));
-        assert!(!sidebar_width_off_spec(64, 64, step));
-        assert!(!sidebar_width_off_spec(74, 64, step));
-        assert!(sidebar_width_off_spec(75, 64, step));
+        assert!(!sidebar_width_off_spec(52, 54, step));
+        assert!(!sidebar_width_off_spec(49, 54, step));
+        assert!(sidebar_width_off_spec(48, 54, step));
+        assert!(sidebar_width_off_spec(63, 54, step));
+        assert!(!sidebar_width_off_spec(59, 54, step));
+        assert!(sidebar_width_off_spec(60, 54, step));
 
         // Regression: the default 25% target is 54, between reachable widths
-        // 53 and 64. The upper width must be a fixed point.
-        assert!(sidebar_width_off_spec(53, 54, step));
-        assert!(!sidebar_width_off_spec(64, 54, step));
-        assert!(sidebar_width_off_spec(65, 54, step));
+        // 53 and 64. A pane born one column below target must stay put.
+        assert!(!sidebar_width_off_spec(53, 54, step));
 
         // Regression: a full Zellij step and one tmux keypress both propagate.
         assert!(sidebar_width_off_spec(
@@ -491,12 +490,13 @@ mod tests {
     }
 
     #[test]
-    fn width_undershot_only_classifies_downward_target_crossings() {
-        assert!(width_undershot(76, 53, 64));
-        assert!(width_undershot(64, 63, 64));
-        assert!(!width_undershot(53, 76, 64));
-        assert!(!width_undershot(76, 71, 64));
-        assert!(!width_undershot(48, 55, 64));
+    fn width_step_regression_compares_target_distance() {
+        assert!(width_step_regressed(76, 50, 64));
+        assert!(width_step_regressed(53, 76, 64));
+        assert!(!width_step_regressed(76, 53, 64));
+        assert!(!width_step_regressed(76, 71, 64));
+        assert!(!width_step_regressed(48, 55, 64));
+        assert!(!width_step_regressed(53, 75, 64));
     }
 
     #[test]
