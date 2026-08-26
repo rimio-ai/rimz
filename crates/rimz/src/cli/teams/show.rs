@@ -6,8 +6,8 @@ use super::super::{GlobalFlags, render};
 use super::list::{LiveMember, RoleReport, TeamReport};
 
 pub(super) fn run(name: &str, lane: Option<&str>, json: bool, globals: &GlobalFlags) -> Result<()> {
-    let reports = super::list::load_catalog(globals)?;
-    let Some(mut report) = reports
+    let reports = super::list::load_catalog(globals, lane)?;
+    let Some(report) = reports
         .iter()
         .find(|report| report.name == name && report.defined)
         .cloned()
@@ -27,9 +27,6 @@ pub(super) fn run(name: &str, lane: Option<&str>, json: bool, globals: &GlobalFl
             valid.join(", ")
         );
     };
-    if let Some(lane) = lane {
-        report.instances.retain(|instance| instance.channel == lane);
-    }
     if json {
         return render::json_pretty(&report);
     }

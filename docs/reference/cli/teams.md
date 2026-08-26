@@ -37,7 +37,7 @@ rimz teams show forge --json
 
 `show` and its `inspect` alias name the best-effort definition source, layout, leader, and validation result, then list each resolved role's profile or kind, model, effort, mode, and prompt files.
 Live instances include the lane, member handle and status, context fill, and tracked session cost.
-Use `team#worktree` or `-w NAME` to narrow the live section to one lane; an ended or not-yet-live lane reports that no instance is live and still exits successfully.
+Use `team#worktree` or `-w NAME` to narrow the live section by exact lane or member worktree; an ended or not-yet-live lane reports that no instance is live and still exits successfully.
 The report ends with copy-ready launch and resume forms.
 
 ## Launch a team

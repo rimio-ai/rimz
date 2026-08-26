@@ -66,14 +66,17 @@ pub(super) struct LiveMember {
 }
 
 pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
-    let reports = load_catalog(globals)?;
+    let reports = load_catalog(globals, None)?;
     if json {
         return render::json_pretty(&reports);
     }
     write_catalog(&mut render::out(), &reports)
 }
 
-pub(super) fn load_catalog(globals: &GlobalFlags) -> Result<Vec<TeamReport>> {
+pub(super) fn load_catalog(
+    globals: &GlobalFlags,
+    worktree: Option<&str>,
+) -> Result<Vec<TeamReport>> {
     let ctx = Ctx::open(globals)?;
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
     report_unknown_config_keys(&machine)?;
@@ -96,6 +99,7 @@ pub(super) fn load_catalog(globals: &GlobalFlags) -> Result<Vec<TeamReport>> {
         &snapshot.agents,
         &audit.agents,
         &prices,
+        worktree,
         |name| team_source(&ctx.workspace.project_root, name),
     ))
 }
@@ -121,9 +125,10 @@ fn build_catalog(
     agents: &[AgentState],
     audit_agents: &[AgentState],
     prices: &rimz::agents::PriceBook,
+    worktree: Option<&str>,
     source: impl Fn(&str) -> Option<String>,
 ) -> Vec<TeamReport> {
-    let live = live_instances(agents, audit_agents, prices);
+    let live = live_instances(agents, audit_agents, prices, worktree);
     let mut reports = teams
         .0
         .iter()
@@ -304,8 +309,14 @@ fn live_instances(
     agents: &[AgentState],
     audit_agents: &[AgentState],
     prices: &rimz::agents::PriceBook,
+    worktree: Option<&str>,
 ) -> BTreeMap<String, Vec<LiveInstance>> {
-    let cohorts = rimz::harness::target::team_cohorts(agents);
+    let cohorts = rimz::harness::target::team_cohorts(agents)
+        .into_iter()
+        .filter(|cohort| {
+            worktree.is_none_or(|worktree| super::cohort::matches_worktree(cohort, worktree))
+        })
+        .collect::<Vec<_>>();
     let live_ids = cohorts
         .iter()
         .flat_map(|cohort| cohort.members.iter().map(|agent| agent.agent_id.clone()))
@@ -535,6 +546,7 @@ mod tests {
             &[agent],
             &[],
             &rimz::agents::PriceBook::default(),
+            None,
             |_| Some("/tmp/team.toml".to_owned()),
         );
 
@@ -581,6 +593,7 @@ mod tests {
             &[agent.clone()],
             &[agent],
             &rimz::agents::PriceBook::default(),
+            None,
             |_| None,
         );
 
@@ -598,6 +611,7 @@ mod tests {
             &[],
             &[],
             &rimz::agents::PriceBook::default(),
+            None,
             |_| None,
         );
 
@@ -641,6 +655,7 @@ mod tests {
             &[],
             &[],
             &rimz::agents::PriceBook::default(),
+            None,
             |_| None,
         );
         let mut rendered = Vec::new();
@@ -676,5 +691,34 @@ mod tests {
                 .unwrap()
                 .contains("No installed teams")
         );
+    }
+
+    #[test]
+    fn catalog_filter_matches_an_exact_lane_or_member_worktree() {
+        let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), team())]));
+        let mut agent = AgentState::stub("claude", "sess-planner", AgentStatus::Running);
+        agent.team = Some("forge".to_owned());
+        agent.role = Some("planner".to_owned());
+        agent.channel = None;
+        agent.worktree_path = Some("/repo-worktrees/feat-x".to_owned());
+        let build = |filter| {
+            build_catalog(
+                &teams,
+                &ProfilesConfig::default(),
+                &CommandsConfig::default(),
+                std::slice::from_ref(&agent),
+                &[],
+                &rimz::agents::PriceBook::default(),
+                filter,
+                |_| None,
+            )
+        };
+
+        assert_eq!(build(Some("feat-x"))[0].instances[0].channel, "feat-x");
+        assert_eq!(
+            build(Some("/repo-worktrees/feat-x"))[0].instances[0].channel,
+            "feat-x"
+        );
+        assert!(build(Some("other"))[0].instances.is_empty());
     }
 }
