@@ -41,6 +41,14 @@ enum TeamsSubcmd {
             add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
         )]
         name: String,
+        /// Scope live instances to one worktree or lane.
+        #[arg(
+            long,
+            short = 'w',
+            value_name = "NAME",
+            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
+        )]
+        worktree: Option<String>,
         /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
@@ -138,18 +146,26 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
                 list::run(args.json, globals)
             }
         },
-        Some(TeamsSubcmd::Show { name, json }) => show::run(&name, json, globals),
+        Some(TeamsSubcmd::Show {
+            name,
+            worktree,
+            json,
+        }) => {
+            let (name, worktree) = team_lane(name, worktree)?;
+            show::run(&name, worktree.as_deref(), json, globals)
+        }
         Some(TeamsSubcmd::List { json }) => list::run(json, globals),
         Some(TeamsSubcmd::Launch(args)) => {
             launch_team(args.name, args.prompt, args.launch, globals)
         }
         Some(TeamsSubcmd::Resume(args)) => {
-            ensure_defined(&args.name, globals)?;
+            let (name, worktree) = team_lane(args.name, args.worktree)?;
+            ensure_defined(&name, globals)?;
             agents_cmd::run(
                 agents_cmd::AgentsArgs::from_launch(agents_cmd::AgentLaunchArgs {
-                    spec: Some(args.name),
+                    spec: Some(name),
                     cohort: agents_cmd::CohortLaunchArgs {
-                        worktree: args.worktree,
+                        worktree,
                         resume: true,
                         bg: args.bg,
                         ..Default::default()
@@ -160,20 +176,20 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
             )
         }
         Some(TeamsSubcmd::Stop(args)) => {
-            ensure_defined(&args.name, globals)?;
-            cohort::stop(&args.name, args.worktree.as_deref(), globals)
+            let (name, worktree) = team_lane(args.name, args.worktree)?;
+            ensure_defined(&name, globals)?;
+            cohort::stop(&name, worktree.as_deref(), globals)
         }
         Some(TeamsSubcmd::Focus(args)) => {
-            let teams = ensure_defined(&args.name, globals)?;
-            let leader = teams
-                .0
-                .get(&args.name)
-                .and_then(|team| team.leader.as_deref());
-            cohort::focus(&args.name, args.worktree.as_deref(), leader, globals)
+            let (name, worktree) = team_lane(args.name, args.worktree)?;
+            let teams = ensure_defined(&name, globals)?;
+            let leader = teams.0.get(&name).and_then(|team| team.leader.as_deref());
+            cohort::focus(&name, worktree.as_deref(), leader, globals)
         }
         Some(TeamsSubcmd::Restart(args)) => {
-            ensure_defined(&args.name, globals)?;
-            cohort::restart(&args.name, args.worktree.as_deref(), globals)
+            let (name, worktree) = team_lane(args.name, args.worktree)?;
+            ensure_defined(&name, globals)?;
+            cohort::restart(&name, worktree.as_deref(), globals)
         }
         Some(TeamsSubcmd::Install(args)) => install::run(args),
     }
@@ -182,9 +198,14 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
 fn launch_team(
     name: String,
     prompt: Option<String>,
-    launch: agents_cmd::CohortLaunchArgs,
+    mut launch: agents_cmd::CohortLaunchArgs,
     globals: &GlobalFlags,
 ) -> Result<()> {
+    let (name, worktree) = team_lane(name, launch.worktree)?;
+    if worktree.is_some() && launch.channel.is_some() {
+        bail!("--channel cannot be used with team#worktree addressing");
+    }
+    launch.worktree = worktree;
     ensure_defined(&name, globals)?;
     agents_cmd::run(
         agents_cmd::AgentsArgs::from_launch(agents_cmd::AgentLaunchArgs {
@@ -195,6 +216,19 @@ fn launch_team(
         }),
         globals,
     )
+}
+
+fn team_lane(name: String, worktree: Option<String>) -> Result<(String, Option<String>)> {
+    let Some((team, lane)) = name.split_once('#') else {
+        return Ok((name, worktree));
+    };
+    if lane.is_empty() {
+        bail!("expected a worktree or lane after `#` in `{name}`");
+    }
+    if worktree.is_some() {
+        bail!("worktree given twice; use either `team#worktree` or `-w/--worktree`");
+    }
+    Ok((team.to_owned(), Some(lane.to_owned())))
 }
 
 fn reject_launch_flags_without_name(
@@ -318,5 +352,51 @@ mod tests {
             reject_launch_flags_without_name(&args.prompt, &args.launch).expect_err("missing team");
 
         assert!(error.to_string().contains("require a team name"));
+    }
+
+    #[test]
+    fn fused_team_lane_feeds_the_canonical_worktree_argument() {
+        let show = parse_teams(&["rimz", "show", "forge#feat-x"]);
+        let stop = parse_teams(&["rimz", "stop", "forge#feat-x"]);
+        let resume = parse_teams(&["rimz", "resume", "forge#feat-x"]);
+        let bare = parse_teams(&["rimz", "forge#feat-x", "ship"]);
+
+        let Some(TeamsSubcmd::Show { name, worktree, .. }) = show.command else {
+            panic!("show verb");
+        };
+        assert_eq!(
+            team_lane(name, worktree).unwrap(),
+            ("forge".to_owned(), Some("feat-x".to_owned()))
+        );
+        let Some(TeamsSubcmd::Stop(args)) = stop.command else {
+            panic!("stop verb");
+        };
+        assert_eq!(
+            team_lane(args.name, args.worktree).unwrap().1.as_deref(),
+            Some("feat-x")
+        );
+        let Some(TeamsSubcmd::Resume(args)) = resume.command else {
+            panic!("resume verb");
+        };
+        assert_eq!(
+            team_lane(args.name, args.worktree).unwrap().1.as_deref(),
+            Some("feat-x")
+        );
+        assert_eq!(
+            team_lane(bare.name.unwrap(), bare.launch.worktree)
+                .unwrap()
+                .1
+                .as_deref(),
+            Some("feat-x")
+        );
+    }
+
+    #[test]
+    fn fused_team_lane_rejects_missing_and_duplicate_lanes() {
+        let missing = team_lane("forge#".to_owned(), None).unwrap_err();
+        assert!(missing.to_string().contains("after `#`"));
+
+        let duplicate = team_lane("forge#feat-x".to_owned(), Some("other".to_owned())).unwrap_err();
+        assert!(duplicate.to_string().contains("given twice"));
     }
 }

@@ -29,12 +29,15 @@ Unknown fields print a warning, are ignored, and can be removed with `rimz setup
 
 ```sh
 rimz teams show forge
+rimz teams show forge#feat-rate-limits
+rimz teams show forge -w feat-rate-limits
 rimz teams inspect forge
 rimz teams show forge --json
 ```
 
 `show` and its `inspect` alias name the best-effort definition source, layout, leader, and validation result, then list each resolved role's profile or kind, model, effort, mode, and prompt files.
 Live instances include the lane, member handle and status, context fill, and tracked session cost.
+Use `team#worktree` or `-w NAME` to narrow the live section to one lane; an ended or not-yet-live lane reports that no instance is live and still exits successfully.
 The report ends with copy-ready launch and resume forms.
 
 ## Launch a team
@@ -42,6 +45,7 @@ The report ends with copy-ready launch and resume forms.
 ```sh
 rimz teams forge
 rimz teams launch forge
+rimz teams launch forge#feat-rate-limits "add rate limiting"
 rimz teams forge -w feat-rate-limits "add rate limiting"
 rimz teams forge --channel triage
 rimz teams forge --from-pr 91 --bg
@@ -50,6 +54,8 @@ rimz teams forge --from-pr 91 --bg
 The bare-name form and `launch` verb accept a configured team name and send an optional trailing prompt to its configured leader.
 It uses the same launch and relaunch-reconciliation path as `rimz agents <team>`, including worktree creation, channel placement, pull-request checkout, and existing-cohort focus or recovery.
 When an agent launches a team, its members are top-level peers rather than children of the caller.
+After opening the panes, a fresh launch prints the minted member handles as `starting` and copy-ready `Check` and `Reach` commands.
+Members report their live status asynchronously, so `rimz teams show team#worktree` remains the source of truth rather than the receipt.
 
 `rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend.
 `rimz agents` sets what an agent is — model, effort, prompts, permission posture, name, pane placement, supervised runs.
@@ -74,20 +80,22 @@ Put stable role-specific choices in the team definition.
 
 ```sh
 rimz teams resume forge
+rimz teams resume forge#feat-rate-limits
 rimz teams resume forge -w feat-rate-limits
 rimz teams resume forge -w --bg
 ```
 
 `resume` reopens the newest matching closed cohort with the same identity, directory, and lane from durable state.
 Current role profiles supply the launch configuration.
-`-w NAME` limits selection to one worktree, while bare `-w` uses the current worktree.
+`team#worktree` and `-w NAME` limit selection to one worktree, while bare `-w` uses the current worktree.
+Use either the fused form or `-w`, not both.
 `--bg` leaves focus where it is.
 
 ## Drive a live team
 
 ```sh
 rimz teams focus forge
-rimz teams stop forge
+rimz teams stop forge#feat-rate-limits
 rimz teams restart forge
 rimz teams stop forge -w feat-rate-limits
 ```
@@ -97,7 +105,7 @@ rimz teams stop forge -w feat-rate-limits
 `restart` relaunches every live member in declared role order, resuming its provider session where supported.
 
 When one team has live cohorts in several lanes, RimZ prefers the cohort in the current lane.
-From outside those lanes, select one with `-w NAME`.
+From outside those lanes, select one with `team#worktree` or `-w NAME`; use either form, not both.
 
 ## Install a team bundle
 
