@@ -2182,11 +2182,11 @@ fn sidebar_fields_parse_defaults_and_reject_zero() {
     );
     assert_eq!(defaults.sidebar.afk_after_ms(), 15 * 60 * 1_000);
     assert_eq!(
-        defaults.sidebar.key_label(&defaults.sidebar.focus_key),
+        SidebarConfig::key_label(&defaults.sidebar.focus_key),
         Some("Alt+p")
     );
     assert_eq!(
-        defaults.sidebar.key_label(&defaults.sidebar.zoom_key),
+        SidebarConfig::key_label(&defaults.sidebar.zoom_key),
         Some("Alt+z")
     );
 
@@ -2214,7 +2214,7 @@ fn sidebar_fields_parse_defaults_and_reject_zero() {
     assert_eq!(config.sidebar.afk_after_secs.get(), 60);
     assert_eq!(config.sidebar.afk_after_ms(), 60_000);
     assert_eq!(config.sidebar.focus_key, "Alt+x");
-    assert_eq!(config.sidebar.key_label(&config.sidebar.zoom_key), None);
+    assert_eq!(SidebarConfig::key_label(&config.sidebar.zoom_key), None);
 
     assert!(
         load_no_fragments(&write(&dir, "[sidebar]\nafk_after_secs = 0\n")).is_err(),

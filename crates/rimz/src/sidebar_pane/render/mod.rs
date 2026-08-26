@@ -133,7 +133,8 @@ fn draw_into(
         draw_help_overlay(
             frame,
             theme.as_ref(),
-            snapshot.sidebar.key_label(&snapshot.sidebar.focus_key),
+            crate::config::SidebarConfig::key_label(&snapshot.sidebar.focus_key),
+            crate::config::SidebarConfig::key_label(&snapshot.sidebar.zoom_key),
             &snapshot.sidebar.keys,
             area,
             (top_height, bottom_height),
@@ -179,6 +180,7 @@ fn draw_help_overlay(
     frame: &mut Frame<'_>,
     theme: &Theme,
     focus_key: Option<&str>,
+    zoom_key: Option<&str>,
     keys: &crate::config::SidebarKeys,
     area: Rect,
     chrome_heights: (usize, usize),
@@ -204,7 +206,7 @@ fn draw_help_overlay(
         return;
     }
 
-    let lines = help_lines(theme, focus_key, keys, usize::from(area.width));
+    let lines = help_lines(theme, focus_key, zoom_key, keys, usize::from(area.width));
     let box_w = lines
         .iter()
         .map(|line| line.width())
