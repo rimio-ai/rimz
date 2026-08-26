@@ -378,7 +378,7 @@ pub struct SessionOptions {
 /// bare integer in `ZELLIJ_PANE_ID` (normalized as `terminal_<id>`), tmux the
 /// full raw id (`%<n>`) in `TMUX_PANE`. The one place the env→id mapping lives —
 /// the renderer and reload both resolve through here.
-pub fn pane_from_env_value(mux: MuxName, raw_env: &str) -> PaneId {
+pub(in crate::mux) fn pane_from_env_value(mux: MuxName, raw_env: &str) -> PaneId {
     match mux {
         MuxName::Zellij => raw_env
             .parse::<u64>()
@@ -1019,6 +1019,11 @@ pub fn type_into_pane(pane: &PaneId, text: &str) -> Result<()> {
 /// Paste bracketed text into one pane using its owning backend.
 pub fn paste_into_pane(pane: &PaneId, text: &str) -> Result<()> {
     backend_for(pane.mux()).paste_text(pane, text)
+}
+
+/// Press one named key in a pane using its owning backend.
+pub fn press_pane_key(pane: &PaneId, key: NamedKey) -> Result<()> {
+    backend_for(pane.mux()).send_key(pane, key)
 }
 
 /// Run `spec` once for its version string and memoize it in `cache`.

@@ -13,7 +13,7 @@ use serde::Deserialize;
 use super::{Ctx, GlobalFlags, resolve_open_ask};
 use rimz::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
 use rimz::ids::AskId;
-use rimz::mux::{backend_for, paste_into_pane, type_into_pane};
+use rimz::mux::{paste_into_pane, press_pane_key, type_into_pane};
 use rimz::transcript::{AskAnswer, AskQuestion, TranscriptEntry, TranscriptKind};
 use rimz::utils::time::{DurationUnit, parse_duration_units};
 
@@ -107,9 +107,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         pacer.tick();
         let result = match step {
             AnswerStep::Text(text) => type_into_pane(&target.pane_id, &text),
-            AnswerStep::Key(key) => {
-                backend_for(target.pane_id.mux()).send_key(&target.pane_id, key)
-            }
+            AnswerStep::Key(key) => press_pane_key(&target.pane_id, key),
             AnswerStep::Paste(text) => paste_into_pane(&target.pane_id, &text),
         };
         if let Err(err) = result {
