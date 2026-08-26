@@ -83,6 +83,16 @@ fn layout(window: &str, window_width: u64, panes: &[(&str, u64, u64)]) -> Contro
     }
 }
 
+fn seed_geometry(pane: &str, window: &str, x: u64, width: u64, window_width: u64) -> ControlLine {
+    ControlLine::SeedPane {
+        pane: pane.to_owned(),
+        window: window.to_owned(),
+        x,
+        width,
+        window_width,
+    }
+}
+
 #[test]
 fn seed_updates_roster_without_events() {
     let mut roster = TmuxPresenceState::default();
@@ -116,6 +126,24 @@ fn new_pane_emits_open_and_focus_when_active() {
                 unfocused: Vec::new(),
             },
         ]
+    );
+}
+
+#[test]
+fn layout_geometry_does_not_register_a_pane_before_its_subscription() {
+    let mut state = TmuxPresenceState::default();
+    state.apply(seed_geometry("%1", "@1", 0, 100, 100), true);
+    assert!(state.panes.is_empty());
+
+    state.apply(layout("@1", 100, &[("%1", 0, 49), ("%2", 50, 50)]), false);
+    assert!(!state.panes.contains_key("%2"));
+    assert!(state.geometry.contains_key("%2"));
+    assert_eq!(
+        project_apply(&mut state, sub("%2", "@1", Some("claude"), false), false),
+        vec![SidebarEvent::PaneOpened {
+            pane_id: pane_id("%2"),
+            command: Some("claude".to_owned()),
+        }],
     );
 }
 

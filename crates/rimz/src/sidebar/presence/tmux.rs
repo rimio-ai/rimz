@@ -14,6 +14,7 @@ pub(crate) struct TmuxPresenceState {
     current_window: BTreeMap<String, String>,
     pending_unfocused: BTreeMap<String, String>,
     window_widths: BTreeMap<String, u64>,
+    geometry: BTreeMap<String, PaneGeometry>,
 }
 
 #[derive(Clone)]
@@ -24,8 +25,12 @@ struct PaneEntry {
     overlay_suppressed: bool,
     is_sidebar: bool,
     floating: bool,
-    x: Option<u64>,
-    width: Option<u64>,
+}
+
+struct PaneGeometry {
+    window: String,
+    x: u64,
+    width: u64,
 }
 
 struct SubscriptionUpdate {
@@ -68,27 +73,11 @@ impl TmuxPresenceState {
             ControlLine::SeedPane {
                 pane,
                 window,
-                command,
-                active,
-                title,
-                floating,
                 x,
                 width,
                 window_width,
             } => {
-                self.seed_pane(
-                    SubscriptionUpdate {
-                        pane,
-                        window,
-                        command,
-                        active,
-                        title,
-                        floating,
-                    },
-                    x,
-                    width,
-                    window_width,
-                );
+                self.seed_geometry(pane, window, x, width, window_width);
                 (Vec::new(), None)
             }
             ControlLine::WindowClosed { window } => (self.close_window(&window), None),
@@ -108,28 +97,17 @@ impl TmuxPresenceState {
         }
     }
 
-    fn seed_pane(&mut self, update: SubscriptionUpdate, x: u64, width: u64, window_width: u64) {
-        let is_sidebar = update
-            .title
-            .as_deref()
-            .is_some_and(|value| value.trim() == SIDEBAR_CHROME_TITLE);
-        let overlay_suppressed =
-            is_sidebar || update.title.is_none() && update.command.as_deref() == Some("rimz");
-        self.window_widths
-            .insert(update.window.clone(), window_width);
-        self.panes.insert(
-            update.pane,
-            PaneEntry {
-                window: update.window,
-                command: update.command,
-                active: update.active,
-                overlay_suppressed,
-                is_sidebar,
-                floating: update.floating,
-                x: Some(x),
-                width: Some(width),
-            },
-        );
+    fn seed_geometry(
+        &mut self,
+        pane: String,
+        window: String,
+        x: u64,
+        width: u64,
+        window_width: u64,
+    ) {
+        self.window_widths.insert(window.clone(), window_width);
+        self.geometry
+            .insert(pane, PaneGeometry { window, x, width });
     }
 
     fn apply_subscription(
@@ -151,9 +129,6 @@ impl TmuxPresenceState {
         let suppress_overlay = is_sidebar || title.is_none() && command.as_deref() == Some("rimz");
         let role = pane_role(suppress_overlay, is_sidebar);
         let old = self.panes.get(&pane).cloned();
-        let (x, width) = old
-            .as_ref()
-            .map_or((None, None), |entry| (entry.x, entry.width));
         let current = PaneObservation {
             pane_id: pane_id(&pane),
             view: window.clone(),
@@ -195,8 +170,6 @@ impl TmuxPresenceState {
                 overlay_suppressed: suppress_overlay,
                 is_sidebar,
                 floating,
-                x,
-                width,
             },
         );
         events
@@ -254,6 +227,8 @@ impl TmuxPresenceState {
 
     fn close_window(&mut self, window: &str) -> Vec<PresenceTransition> {
         self.window_widths.remove(window);
+        self.geometry
+            .retain(|_, geometry| geometry.window != window);
         let closed = self
             .panes
             .iter()
@@ -280,10 +255,10 @@ impl TmuxPresenceState {
             .map(|pane| pane.id.clone())
             .collect::<BTreeSet<_>>();
         let previous = self
-            .panes
+            .geometry
             .iter()
-            .filter(|(_, entry)| entry.window == window && !entry.floating)
-            .filter_map(|(pane, entry)| Some((pane.clone(), (entry.x?, entry.width?))))
+            .filter(|(_, geometry)| geometry.window == window)
+            .map(|(pane, geometry)| (pane.clone(), (geometry.x, geometry.width)))
             .collect::<BTreeMap<_, _>>();
         let next = panes
             .iter()
@@ -298,10 +273,8 @@ impl TmuxPresenceState {
                 let mut sidebars = self.panes.iter().filter(|(_, entry)| {
                     entry.window == window && !entry.floating && entry.is_sidebar
                 });
-                let (sidebar, sidebar_entry) = sidebars.next()?;
-                if sidebars.next().is_some()
-                    || next.get(sidebar).map(|(_, width)| *width) != sidebar_entry.width
-                {
+                let (sidebar, _) = sidebars.next()?;
+                if sidebars.next().is_some() || previous.get(sidebar) != next.get(sidebar) {
                     return None;
                 }
                 let moves = previous
@@ -328,22 +301,17 @@ impl TmuxPresenceState {
                 })
             });
         self.window_widths.insert(window.to_owned(), window_width);
+        self.geometry
+            .retain(|pane, geometry| geometry.window != window || present.contains(pane.as_str()));
         for pane in &panes {
-            let entry = self
-                .panes
-                .entry(pane.id.clone())
-                .or_insert_with(|| PaneEntry {
+            self.geometry.insert(
+                pane.id.clone(),
+                PaneGeometry {
                     window: window.to_owned(),
-                    command: None,
-                    active: false,
-                    overlay_suppressed: false,
-                    is_sidebar: false,
-                    floating: false,
-                    x: None,
-                    width: None,
-                });
-            entry.x = Some(pane.x);
-            entry.width = Some(pane.width);
+                    x: pane.x,
+                    width: pane.width,
+                },
+            );
         }
         let has_floating = self
             .panes
