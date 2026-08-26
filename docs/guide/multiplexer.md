@@ -24,6 +24,8 @@ One thing more happens on Zellij: RimZ seeds a permission grant for the presence
 
 `rimz config init --print` lists every room option RimZ applies, with its default. Nothing outside the room changes, so undoing RimZ is closing the room.
 
+RimZ also binds `Alt+z` as a room-only smart zoom on both backends: it toggles fullscreen for the focused work pane, but when the sidebar holds focus it first moves to a working sibling and fullscreens that instead. Configure `[sidebar] zoom_key` to change or disable it. On Zellij 0.44, plugin-routed room keys may pause briefly while they dispatch; rebinding smart zoom to `Ctrl+g` also shadows Zellij's locked-mode escape chord, so choose that only when another chord still reaches Zellij modes.
+
 ### Room overrides in RimZ config
 
 The `[zellij]` and `[tmux]` tables in `~/.config/rimz/config.toml` tune the room-scoped settings, and `[mux] default` picks the backend when both are installed:
@@ -93,8 +95,6 @@ session_serialization false            // prefer clean session births over held 
 `pane_frames true` draws a titled border around each pane so you can always see which one holds focus, the single most useful upgrade for a multi-agent layout. RimZ enforces its room's own mouse behavior, so your personal `focus_follows_mouse` and `mouse_click_through` settings no longer break single-click sidebar jumps.
 
 Inside a RimZ room, opening a new pane splits the focused pane along its longer visual edge, and closing that pane returns the space to its split sibling.
-
-RimZ also binds `Alt+z` as a room-only smart zoom: it toggles fullscreen for the focused work pane, but when the sidebar holds focus it first moves to a working sibling and fullscreens that instead. Configure `[sidebar] zoom_key` to change or disable it. Rebinding it to `Ctrl+g` shadows Zellij's locked-mode escape chord, so choose that only when another chord still reaches Zellij modes. Zellij 0.44 may pause briefly while plugin-routed room keys dispatch.
 
 ### Alt chords in locked mode
 
