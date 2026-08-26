@@ -210,20 +210,6 @@ pub fn select_sidebar_pane<'a>(
     panes.iter().find(|pane| pane.is_rimz_sidebar())
 }
 
-/// Pick a non-chrome pane from the sidebar's view. Older pane listings may not
-/// carry view ids; in that case any working pane is a safe fallback.
-pub fn working_sibling_in_tab<'a>(panes: &'a [PaneRef], sidebar: &PaneId) -> Option<&'a PaneRef> {
-    let sidebar_view = panes
-        .iter()
-        .find(|pane| &pane.pane_id == sidebar)?
-        .view_id
-        .as_ref();
-    panes
-        .iter()
-        .filter(|pane| &pane.pane_id != sidebar && !pane.is_rimz_sidebar())
-        .find(|pane| sidebar_view.is_none() || pane.view_id.as_ref() == sidebar_view)
-}
-
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -287,19 +273,5 @@ mod tests {
 
         assert!(select_sidebar_pane(&panes, &[Some("tab_1".to_owned())]).is_none());
         assert!(select_sidebar_pane(&[], &[]).is_none());
-    }
-
-    #[test]
-    fn working_sibling_stays_in_the_sidebar_view() {
-        let panes = vec![
-            pane("terminal_1", "tab_1", Some(SIDEBAR_CHROME_TITLE)),
-            pane("terminal_2", "tab_2", Some("codex")),
-            pane("terminal_3", "tab_1", Some("claude")),
-        ];
-
-        let sibling = working_sibling_in_tab(&panes, &panes[0].pane_id).expect("work sibling");
-        assert_eq!(sibling.pane_id.as_str(), "zellij:terminal_3");
-        let missing = PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_9");
-        assert!(working_sibling_in_tab(&panes, &missing).is_none());
     }
 }

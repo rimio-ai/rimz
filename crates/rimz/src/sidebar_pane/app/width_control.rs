@@ -635,11 +635,15 @@ impl WidthController {
         let Some(pane) = self.own_pane.as_ref() else {
             return false;
         };
-        let Ok(Some(active)) = crate::mux::backend_for(self.mux).sidebar_fullscreen_active(
+        let Ok(step) = crate::mux::backend_for(self.mux).sidebar_width_step(
             &self.runtime,
             &self.session_name,
             pane,
+            None,
         ) else {
+            return false;
+        };
+        let Some(active) = step.fullscreen_active else {
             return false;
         };
         self.fullscreen_observed_at_ms = Some(observed_at_ms);

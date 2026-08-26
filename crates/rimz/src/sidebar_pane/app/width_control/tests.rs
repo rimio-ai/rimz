@@ -175,6 +175,7 @@ fn narrower_after_an_exact_pin_issues_a_resize() {
         stop_step_cols: 11,
         exact: false,
         view_cols: 213,
+        fullscreen_active: None,
     };
     let narrowed = crate::mux::width::adjust_target_cols(
         64,

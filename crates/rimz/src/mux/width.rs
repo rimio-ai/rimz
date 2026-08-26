@@ -32,6 +32,9 @@ pub struct WidthStep {
     /// Full width of the pane's view, or zero when the backend cannot resolve
     /// geometry for this request.
     pub view_cols: u16,
+    /// Whether the latest backend topology holds this view in fullscreen.
+    /// `None` when the backend does not expose that observation.
+    pub fullscreen_active: Option<bool>,
 }
 
 impl WidthStep {
@@ -301,12 +304,14 @@ mod tests {
             stop_step_cols: 11,
             exact: false,
             view_cols: 200,
+            fullscreen_active: None,
         };
         let exact = WidthStep {
             cols: 2,
             stop_step_cols: 1,
             exact: true,
             view_cols: 200,
+            fullscreen_active: None,
         };
 
         assert_eq!(

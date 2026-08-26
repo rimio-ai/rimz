@@ -133,7 +133,7 @@ fn draw_into(
         draw_help_overlay(
             frame,
             theme.as_ref(),
-            snapshot.sidebar.focus_key_label(),
+            snapshot.sidebar.key_label(&snapshot.sidebar.focus_key),
             &snapshot.sidebar.keys,
             area,
             (top_height, bottom_height),

@@ -1227,7 +1227,16 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
     let target = if toggle && on_sidebar {
         // The toggle-back target: a working pane in the sidebar's own tab. This
         // is stateless; the Zellij plugin path tracks the precise prior pane.
-        rimz::pane::working_sibling_in_tab(&listing.panes, &sidebar)
+        let sidebar_view = listing
+            .panes
+            .iter()
+            .find(|pane| pane.pane_id == sidebar)
+            .and_then(|pane| pane.view_id.as_ref());
+        listing
+            .panes
+            .iter()
+            .filter(|pane| pane.pane_id != sidebar && !pane.is_rimz_sidebar())
+            .find(|pane| sidebar_view.is_none() || pane.view_id.as_ref() == sidebar_view)
             .map(|pane| pane.pane_id.clone())
     } else {
         Some(sidebar)

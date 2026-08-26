@@ -346,12 +346,12 @@ impl RoomContext {
             focus_key: self
                 .machine_config
                 .sidebar
-                .focus_key_label()
+                .key_label(&self.machine_config.sidebar.focus_key)
                 .map(str::to_owned),
             zoom_key: self
                 .machine_config
                 .sidebar
-                .zoom_key_label()
+                .key_label(&self.machine_config.sidebar.zoom_key)
                 .map(str::to_owned),
             focus_follows_mouse: self.machine_config.zellij.focus_follows_mouse,
             mouse_click_through: self.machine_config.zellij.mouse_click_through,
@@ -377,21 +377,24 @@ impl RoomContext {
 
     fn register_room_keys(&self) {
         let rimz_bin = crate::proc::rimz_exe();
-        for (name, label, action) in [
+        for (name, label, args) in [
             (
                 "focus_key",
-                self.machine_config.sidebar.focus_key_label(),
-                crate::mux::RoomKeyAction::FocusSidebar,
+                self.machine_config
+                    .sidebar
+                    .key_label(&self.machine_config.sidebar.focus_key),
+                &["sidebar", "focus", "--toggle"][..],
             ),
             (
                 "zoom_key",
-                self.machine_config.sidebar.zoom_key_label(),
-                crate::mux::RoomKeyAction::ZoomPane,
+                self.machine_config
+                    .sidebar
+                    .key_label(&self.machine_config.sidebar.zoom_key),
+                &["pane", "zoom"][..],
             ),
         ] {
             let Some(label) = label else { continue };
-            let Some(binding) = crate::mux::RoomKeyBinding::resolve(action, label, &rimz_bin)
-            else {
+            let Some(binding) = crate::mux::RoomKeyBinding::resolve(label, &rimz_bin, args) else {
                 tracing::warn!(
                     key = name,
                     value = label,

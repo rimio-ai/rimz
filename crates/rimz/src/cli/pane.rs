@@ -621,7 +621,17 @@ fn zoom(
         .find(|pane| pane.pane_id == focused)
         .is_some_and(PaneRef::is_rimz_sidebar)
     {
-        let Some(sibling) = rimz::pane::working_sibling_in_tab(&listing.panes, &focused) else {
+        let sidebar_view = listing
+            .panes
+            .iter()
+            .find(|pane| pane.pane_id == focused)
+            .and_then(|pane| pane.view_id.as_ref());
+        let Some(sibling) = listing
+            .panes
+            .iter()
+            .filter(|pane| pane.pane_id != focused && !pane.is_rimz_sidebar())
+            .find(|pane| sidebar_view.is_none() || pane.view_id.as_ref() == sidebar_view)
+        else {
             writeln!(
                 render::err(),
                 "rimz: sidebar is the only pane in its view; nothing to zoom"
