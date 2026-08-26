@@ -256,10 +256,8 @@ fn derive_work_boundary_moves(
         if old.keys().ne(new.keys()) {
             continue;
         }
-        let Some(view_cols) = crate::mux::zellij::tab_view_cols(&existing.panes, tab_position)
-            .filter(|old_view| {
-                Some(*old_view) == crate::mux::zellij::tab_view_cols(&incoming.panes, tab_position)
-            })
+        let Some(view_cols) = zellij_view_cols(&existing.panes, tab_position)
+            .filter(|old_view| Some(*old_view) == zellij_view_cols(&incoming.panes, tab_position))
         else {
             continue;
         };
@@ -306,6 +304,21 @@ fn derive_work_boundary_moves(
         }
     }
     events
+}
+
+fn zellij_view_cols(panes: &[PaneTopologyPane], tab_position: u64) -> Option<u64> {
+    let mut extents = panes
+        .iter()
+        .filter(|pane| {
+            pane.tab_position == tab_position
+                && !pane.is_plugin
+                && !pane.is_suppressed
+                && !pane.is_floating
+        })
+        .filter_map(|pane| pane.pane_x?.checked_add(pane.pane_columns?));
+    let first = extents.next()?;
+    let second = extents.next()?;
+    Some(extents.fold(first.max(second), u64::max))
 }
 
 fn derive_zellij_transitions(

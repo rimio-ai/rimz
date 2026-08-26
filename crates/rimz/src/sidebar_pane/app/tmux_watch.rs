@@ -76,11 +76,11 @@ fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerEle
                     let now = Instant::now();
                     let deadline = seed_deadline.get_or_insert(now + SEED_WINDOW);
                     let seeding = now < *deadline;
-                    let update = state.apply(line, seeding);
-                    if let Some(event) = update.boundary_move.clone() {
+                    let (transitions, boundary_move) = state.apply(line, seeding);
+                    if let Some(event) = boundary_move {
                         diag.emit(event);
                     }
-                    for event in project_presence(update) {
+                    for event in project_presence(transitions) {
                         let _ =
                             crate::sidebar::wakeup::broadcast(runtime, Some(session_name), event);
                     }

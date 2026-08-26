@@ -78,7 +78,7 @@ pub(super) fn parse_new_pane_id(stdout: &str) -> Option<ZellijPaneId> {
 /// Floating, suppressed, and plugin panes do not define the tab's view width.
 /// A single pane cannot prove the viewport: the sidebar is materialized first,
 /// so that shape is a mid-layout snapshot whose extent is only the sidebar's.
-pub(crate) fn tab_view_cols(panes: &[PaneTopologyPane], tab_position: u64) -> Option<u64> {
+pub(super) fn tab_view_cols(panes: &[PaneTopologyPane], tab_position: u64) -> Option<u64> {
     let mut extents = panes
         .iter()
         .filter(|pane| pane.tab_position == tab_position && pane.is_terminal())
