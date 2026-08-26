@@ -235,6 +235,17 @@ fn severity_table_pins_conditional_and_regression_categories() {
             learned_step: Some(10),
             outcome: SidebarWidthSettleOutcome::FeedbackLearned,
         },
+        DiagEvent::WorkPaneBoundaryMoved {
+            view_id: ViewId::new_unchecked("1"),
+            view_cols: 213,
+            moves: vec![WorkPaneBoundaryMove {
+                pane: pane("terminal_2"),
+                from_x: 55,
+                from_cols: 79,
+                to_x: 55,
+                to_cols: 47,
+            }],
+        },
         health_alert(10, Some(20)),
         link_alert(LinkTier::Good, Some(42), 0, 10, Some(40_000)),
         tick_budget_breach(TickLoop::CacheRefresh, 20, Some(8_000)),
@@ -328,6 +339,30 @@ fn sidebar_width_trace_round_trips() {
     assert_eq!(
         serde_json::from_value::<DiagEvent>(encoded).expect("decode width intent"),
         event
+    );
+}
+
+#[test]
+fn work_pane_boundary_move_round_trips_and_keys_by_tab() {
+    let event = DiagEvent::WorkPaneBoundaryMoved {
+        view_id: ViewId::new_unchecked("tab_3"),
+        view_cols: 213,
+        moves: vec![WorkPaneBoundaryMove {
+            pane: pane("terminal_2"),
+            from_x: 55,
+            from_cols: 79,
+            to_x: 55,
+            to_cols: 47,
+        }],
+    };
+
+    let encoded = serde_json::to_value(&event).expect("encode boundary move");
+    assert_eq!(encoded["kind"], "work_pane_boundary_moved");
+    assert_eq!(encoded["moves"][0]["to_cols"], 47);
+    assert_eq!(event.identity_key(), "work_pane_boundary_moved:tab_3");
+    assert_eq!(
+        serde_json::from_value::<DiagEvent>(encoded).expect("decode boundary move"),
+        event,
     );
 }
 

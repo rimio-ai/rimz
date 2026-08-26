@@ -5,7 +5,7 @@
 //! fencing and publication, presence stamping, plugin telemetry, and event
 //! mapping. A stale writer returns before any accepted-wake side effect.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::diag::DiagSink;
 use crate::diag::plugin_presence::{PluginPresenceSample, WASM_PAGE_BYTES};
-use crate::diag::record::DiagEvent;
-use crate::ids::{MuxName, PaneId};
+use crate::diag::record::{DiagEvent, WorkPaneBoundaryMove};
+use crate::ids::{MuxName, PaneId, ViewId};
 use crate::mux::zellij::pane_topology::{
     PaneTopologyCache, PaneTopologyPane, TopologyWriter, ZellijPaneId,
 };
@@ -152,7 +152,22 @@ pub fn ingest_zellij_wake(
             &cache,
             wake.reason == ZellijWakeReason::Announced,
         );
+        let boundary_moves = existing
+            .as_ref()
+            .map(|existing| derive_work_boundary_moves(existing, &cache))
+            .unwrap_or_default();
         write_pane_topology_cache(runtime, &cache).map_err(ZellijWakeError::TopologyWrite)?;
+        if !boundary_moves.is_empty() {
+            let diag = DiagSink::under(
+                state.root.clone(),
+                state.workspace_id.clone(),
+                &incoming.session_name,
+                None,
+            );
+            for event in boundary_moves {
+                diag.emit(event);
+            }
+        }
         accepted_topology = Some(cache);
         if let Some(existing) = existing.as_ref()
             && incoming.writer != existing.writer
@@ -210,6 +225,87 @@ pub fn ingest_zellij_wake(
         }
     }
     Ok(ZellijWakeOutcome::Accepted(project_presence(transitions)))
+}
+
+fn derive_work_boundary_moves(
+    existing: &PaneTopologyCache,
+    incoming: &PaneTopologyCache,
+) -> Vec<DiagEvent> {
+    let tabs = existing
+        .panes
+        .iter()
+        .chain(&incoming.panes)
+        .filter(|pane| pane.is_live_terminal())
+        .map(|pane| pane.tab_position)
+        .collect::<BTreeSet<_>>();
+    let mut events = Vec::new();
+
+    for tab_position in tabs {
+        let old = existing
+            .panes
+            .iter()
+            .filter(|pane| pane.tab_position == tab_position && pane.is_live_terminal())
+            .map(|pane| (pane.id, pane))
+            .collect::<BTreeMap<_, _>>();
+        let new = incoming
+            .panes
+            .iter()
+            .filter(|pane| pane.tab_position == tab_position && pane.is_live_terminal())
+            .map(|pane| (pane.id, pane))
+            .collect::<BTreeMap<_, _>>();
+        if old.keys().ne(new.keys()) {
+            continue;
+        }
+        let Some(view_cols) = crate::mux::zellij::tab_view_cols(&existing.panes, tab_position)
+            .filter(|old_view| {
+                Some(*old_view) == crate::mux::zellij::tab_view_cols(&incoming.panes, tab_position)
+            })
+        else {
+            continue;
+        };
+        let mut sidebars = old
+            .values()
+            .copied()
+            .filter(|pane| topology_pane_is_sidebar(pane));
+        let Some(sidebar) = sidebars.next() else {
+            continue;
+        };
+        if sidebars.next().is_some()
+            || new
+                .get(&sidebar.id)
+                .is_none_or(|pane| pane.pane_columns != sidebar.pane_columns)
+        {
+            continue;
+        }
+        let moves = old
+            .into_iter()
+            .filter(|(_, pane)| !topology_pane_is_sidebar(pane))
+            .filter_map(|(id, pane)| {
+                let next = new.get(&id)?;
+                let (from_x, from_cols, to_x, to_cols) = (
+                    pane.pane_x?,
+                    pane.pane_columns?,
+                    next.pane_x?,
+                    next.pane_columns?,
+                );
+                ((from_x, from_cols) != (to_x, to_cols)).then(|| WorkPaneBoundaryMove {
+                    pane: PaneId::from(pane.native_id()),
+                    from_x,
+                    from_cols,
+                    to_x,
+                    to_cols,
+                })
+            })
+            .collect::<Vec<_>>();
+        if !moves.is_empty() {
+            events.push(DiagEvent::WorkPaneBoundaryMoved {
+                view_id: ViewId::new_unchecked(tab_position.to_string()),
+                view_cols,
+                moves,
+            });
+        }
+    }
+    events
 }
 
 fn derive_zellij_transitions(

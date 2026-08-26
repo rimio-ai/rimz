@@ -67,6 +67,16 @@ fn topology_pane(
     }
 }
 
+fn with_geometry(
+    mut pane: crate::mux::zellij::pane_topology::PaneTopologyPane,
+    x: u64,
+    cols: u64,
+) -> crate::mux::zellij::pane_topology::PaneTopologyPane {
+    pane.pane_x = Some(x);
+    pane.pane_columns = Some(cols);
+    pane
+}
+
 fn wake(reason: ZellijWakeReason) -> ZellijWake {
     ZellijWake {
         reason,
@@ -92,6 +102,84 @@ fn paths() -> (tempfile::TempDir, StatePaths, RuntimePaths) {
     state.ensure_dirs().expect("state dirs");
     runtime.ensure_dirs().expect("runtime dirs");
     (dir, state, runtime)
+}
+
+fn boundary_topology(produced_at_ms: u64) -> PaneTopologyCache {
+    let mut cache = topology(produced_at_ms, Some(writer(1, 100)));
+    cache.panes = vec![
+        with_geometry(topology_pane(1, 1, SIDEBAR_CHROME_TITLE), 0, 55),
+        with_geometry(topology_pane(2, 1, "architect"), 55, 79),
+        with_geometry(topology_pane(3, 1, "work"), 134, 79),
+    ];
+    cache
+}
+
+#[test]
+fn zellij_boundary_move_is_emitted_only_for_stable_work_topology() {
+    let (_dir, state, runtime) = paths();
+    let existing = boundary_topology(unix_now_ms());
+    write_pane_topology_cache(&runtime, &existing).expect("seed topology");
+    let mut incoming = existing.clone();
+    incoming.produced_at_ms += 1;
+    incoming.panes[1].pane_columns = Some(47);
+    incoming.panes[2].pane_x = Some(102);
+    incoming.panes[2].pane_columns = Some(111);
+    let mut announced = wake(ZellijWakeReason::Alive);
+    announced.topology = Some(incoming.clone());
+    let log_path = DiagSink::under(
+        state.root.clone(),
+        state.workspace_id.clone(),
+        "rimz-test",
+        None,
+    )
+    .log_path()
+    .expect("diagnostic path");
+
+    assert_eq!(
+        ingest_zellij_wake(&state, &runtime, &announced).unwrap(),
+        ZellijWakeOutcome::Accepted(Vec::new()),
+    );
+    let records = std::fs::read_to_string(log_path).expect("boundary diagnostic");
+    let envelope: crate::diag::record::DiagEnvelope =
+        serde_json::from_str(records.lines().next().expect("diagnostic record"))
+            .expect("decode diagnostic");
+    assert_eq!(
+        envelope.event,
+        DiagEvent::WorkPaneBoundaryMoved {
+            view_id: crate::ids::ViewId::new_unchecked("1"),
+            view_cols: 213,
+            moves: vec![
+                WorkPaneBoundaryMove {
+                    pane: zellij_pane("terminal_2"),
+                    from_x: 55,
+                    from_cols: 79,
+                    to_x: 55,
+                    to_cols: 47,
+                },
+                WorkPaneBoundaryMove {
+                    pane: zellij_pane("terminal_3"),
+                    from_x: 134,
+                    from_cols: 79,
+                    to_x: 102,
+                    to_cols: 111,
+                },
+            ],
+        },
+    );
+
+    let mut reflow = incoming.clone();
+    reflow.panes[2].pane_columns = Some(112);
+    assert!(derive_work_boundary_moves(&incoming, &reflow).is_empty());
+
+    let mut pane_closed = incoming.clone();
+    pane_closed.panes.pop();
+    assert!(derive_work_boundary_moves(&incoming, &pane_closed).is_empty());
+
+    let mut sidebar_resized = incoming.clone();
+    sidebar_resized.panes[0].pane_columns = Some(56);
+    sidebar_resized.panes[1].pane_x = Some(56);
+    sidebar_resized.panes[1].pane_columns = Some(46);
+    assert!(derive_work_boundary_moves(&incoming, &sidebar_resized).is_empty());
 }
 
 #[test]

@@ -3,6 +3,108 @@
 use super::support::*;
 
 #[test]
+fn live_work_boundary_resize_is_audited() {
+    require_tmux!();
+
+    let env = Env::new();
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    let session = "boundary-audit";
+    server
+        .backend
+        .ensure_session(&session_opts(
+            session,
+            env.workspace_id.clone(),
+            &env.project_root,
+            &env.project_root,
+            Some((213, 60)),
+        ))
+        .expect("ensure session");
+    for (name, value) in [
+        ("XDG_STATE_HOME", env.state_root()),
+        ("XDG_RUNTIME_DIR", env.runtime_root.clone()),
+        ("XDG_CONFIG_HOME", env.config_root()),
+        ("HOME", env.home_root.clone()),
+        ("RIMZ_BIN", env.rimz_bin().to_path_buf()),
+    ] {
+        server.tmux(&[
+            "set-environment",
+            "-t",
+            session,
+            name,
+            value.to_str().expect("utf8 test path"),
+        ]);
+    }
+    let opts = SidebarPaneOptions {
+        workspace_id: env.workspace_id.clone(),
+        project_root: env.project_root.clone(),
+        cwd: env.project_root.clone(),
+        ..sidebar_opts(session, env.rimz_bin().to_path_buf(), Some(213))
+    };
+    server
+        .backend
+        .open_sidebar(&opts, None)
+        .expect("open sidebar");
+    let sidebar = wait_for_sidebar_pane(&server, session, None);
+    wait_for_sidebar_heartbeat(&env);
+    let work = list_session_panes(&server, session)
+        .into_iter()
+        .find(|pane| pane.pane_id != sidebar)
+        .expect("work pane");
+    server.tmux(&["split-window", "-h", "-t", work.pane_id.raw(), "sleep 600"]);
+    server.wait_for_panes(session, 3);
+    thread::sleep(Duration::from_millis(600));
+    let audit_pane = list_session_panes(&server, session)
+        .into_iter()
+        .find(|pane| pane.pane_id != sidebar && pane.pane_id != work.pane_id)
+        .expect("right work pane")
+        .pane_id;
+
+    let resize = |width: &str| {
+        server.tmux(&["resize-pane", "-t", audit_pane.raw(), "-x", width]);
+        thread::sleep(Duration::from_millis(150));
+    };
+    let width = server
+        .display(audit_pane.raw(), "#{pane_width}")
+        .parse::<u64>()
+        .expect("work width");
+    resize(&width.saturating_sub(5).to_string());
+    resize(&width.saturating_sub(10).to_string());
+
+    let state =
+        rimz::StatePaths::under(env.workspace_id.clone(), &env.state_root()).expect("state paths");
+    let diag = rimz::diag::DiagSink::under(
+        state.root.clone(),
+        state.workspace_id.clone(),
+        session,
+        None,
+    );
+    let path = diag.log_path().expect("diagnostic path");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let records = loop {
+        let records = std::fs::read_to_string(&path).unwrap_or_default();
+        if records.contains("work_pane_boundary_moved") {
+            break records;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "tmux boundary resize did not reach diagnostics: {records}",
+        );
+        thread::sleep(Duration::from_millis(25));
+    };
+    let moves = records
+        .lines()
+        .filter_map(|line| serde_json::from_str::<rimz::diag::record::DiagEnvelope>(line).ok())
+        .filter(|record| {
+            matches!(
+                record.event,
+                rimz::diag::record::DiagEvent::WorkPaneBoundaryMoved { .. }
+            )
+        })
+        .count();
+    assert_eq!(moves, 1, "expected one rate-limited boundary record");
+}
+
+#[test]
 fn sidebar_reload_keeps_mouse_capture_alive() {
     require_tmux!();
     let env = Env::new();

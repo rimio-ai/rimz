@@ -7,7 +7,7 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{AgentKind, AgentSessionId, PaneId, SidebarInstanceId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, SidebarInstanceId, ViewId, WorkspaceId};
 use crate::remote::link::LinkTier;
 
 const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
@@ -189,6 +189,15 @@ impl SidebarWidthSettleOutcome {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkPaneBoundaryMove {
+    pub pane: PaneId,
+    pub from_x: u64,
+    pub from_cols: u64,
+    pub to_x: u64,
+    pub to_cols: u64,
+}
+
 impl RendererExitCause {
     fn as_str(self) -> &'static str {
         match self {
@@ -358,6 +367,11 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         learned_step: Option<u16>,
         outcome: SidebarWidthSettleOutcome,
+    },
+    WorkPaneBoundaryMoved {
+        view_id: ViewId,
+        view_cols: u64,
+        moves: Vec<WorkPaneBoundaryMove>,
     },
     TickBudgetBreach {
         tick_loop: TickLoop,
@@ -580,6 +594,7 @@ impl DiagEvent {
             | Self::SidebarWidthIntent { .. }
             | Self::SidebarWidthNudge { .. }
             | Self::SidebarWidthSettle { .. }
+            | Self::WorkPaneBoundaryMoved { .. }
             | Self::FetchFoldStats { .. }
             | Self::PaneCarryRefuted { .. }
             | Self::GateRelease { .. }
@@ -634,6 +649,7 @@ impl DiagEvent {
             Self::SidebarWidthIntent { .. } => "sidebar_width_intent",
             Self::SidebarWidthNudge { .. } => "sidebar_width_nudge",
             Self::SidebarWidthSettle { .. } => "sidebar_width_settle",
+            Self::WorkPaneBoundaryMoved { .. } => "work_pane_boundary_moved",
             Self::TickBudgetBreach { .. } => "tick_budget_breach",
             Self::FetchFoldStats { .. } => "fetch_fold_stats",
             Self::ToolLoopEscalated { .. } => "tool_loop_escalated",
@@ -756,6 +772,9 @@ impl DiagEvent {
                 self.kind_name(),
                 outcome.as_str()
             ),
+            Self::WorkPaneBoundaryMoved { view_id, .. } => {
+                format!("{}:{view_id}", self.kind_name())
+            }
             Self::TickBudgetBreach {
                 tick_loop,
                 since_ms,
@@ -1124,6 +1143,13 @@ impl DiagEvent {
                 "sidebar width settled at {settled_cols}; learned step {learned_step:?}; {}",
                 outcome.as_str()
             ),
+            Self::WorkPaneBoundaryMoved {
+                view_id,
+                view_cols,
+                moves,
+            } => {
+                format!("work pane boundary moved in view {view_id} at {view_cols} cols: {moves:?}")
+            }
             Self::TickBudgetBreach {
                 tick_loop,
                 over_ticks,

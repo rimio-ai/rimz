@@ -12,6 +12,17 @@ const SUBSCRIPTION_COMMAND: &str = concat!(
     ",#{s/,/_/g:pane_title}",
     ",#{pane_floating_flag}\"\n",
 );
+const SEED_COMMAND: &str = concat!(
+    "list-panes -a -F \"rimz-presence-seed:#{pane_id}",
+    ",#{window_id}",
+    ",#{s/,/_/g:pane_current_command}",
+    ",#{pane_active}",
+    ",#{s/,/_/g:pane_title}",
+    ",#{pane_floating_flag}",
+    ",#{pane_left}",
+    ",#{pane_width}",
+    ",#{window_width}\"\n",
+);
 
 /// A tmux control-mode line carrying pane-presence information.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,12 +35,24 @@ pub enum ControlLine {
         title: Option<String>,
         floating: bool,
     },
+    SeedPane {
+        pane: String,
+        window: String,
+        command: Option<String>,
+        active: bool,
+        title: Option<String>,
+        floating: bool,
+        x: u64,
+        width: u64,
+        window_width: u64,
+    },
     WindowClosed {
         window: String,
     },
     LayoutChange {
         window: String,
-        panes: Vec<String>,
+        window_width: u64,
+        panes: Vec<TmuxLayoutPane>,
     },
     WindowPaneChanged {
         window: String,
@@ -41,6 +64,13 @@ pub enum ControlLine {
     },
     Nudge,
     Ignore,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TmuxLayoutPane {
+    pub id: String,
+    pub x: u64,
+    pub width: u64,
 }
 
 /// A live tmux control-mode presence stream — the tmux fast path for pane
@@ -101,6 +131,11 @@ impl PresenceWatch {
             let _ = child.wait();
             return Err(err);
         }
+        if let Err(err) = stdin.write_all(SEED_COMMAND.as_bytes()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(err);
+        }
         let stdout = match child.stdout.take() {
             Some(stdout) => stdout,
             None => {
@@ -146,6 +181,9 @@ impl Drop for PresenceWatch {
 /// is forwarded as a realtime focus overlay, and topology notifications that
 /// lack identity stay as a producer-verification nudge.
 fn classify_control_line(line: &str) -> ControlLine {
+    if line.starts_with("rimz-presence-seed:") {
+        return parse_seed(line).unwrap_or(ControlLine::Ignore);
+    }
     let verb = line.split_whitespace().next().unwrap_or_default();
     match verb {
         "%subscription-changed" => parse_subscription(line).unwrap_or(ControlLine::Ignore),
@@ -165,6 +203,22 @@ fn classify_control_line(line: &str) -> ControlLine {
         "%window-add" | "%unlinked-window-add" | "%sessions-changed" => ControlLine::Nudge,
         _ => ControlLine::Ignore,
     }
+}
+
+fn parse_seed(line: &str) -> Option<ControlLine> {
+    let value = line.strip_prefix("rimz-presence-seed:")?;
+    let mut fields = value.splitn(9, ',');
+    Some(ControlLine::SeedPane {
+        pane: nonempty(fields.next()?)?,
+        window: nonempty(fields.next()?)?,
+        command: nonempty(fields.next()?),
+        active: fields.next()?.trim() == "1",
+        title: nonempty(fields.next()?),
+        floating: fields.next()?.trim() == "1",
+        x: fields.next()?.trim().parse().ok()?,
+        width: fields.next()?.trim().parse().ok()?,
+        window_width: fields.next()?.trim().parse().ok()?,
+    })
 }
 
 fn parse_subscription(line: &str) -> Option<ControlLine> {
@@ -218,49 +272,54 @@ fn parse_layout_change(line: &str) -> Option<ControlLine> {
     (fields.next()? == "%layout-change").then_some(())?;
     let window = fields.next()?;
     let layout = fields.next()?;
-    let panes = layout_pane_ids(layout)?;
+    let (window_width, panes) = layout_geometry(layout)?;
     Some(ControlLine::LayoutChange {
         window: window.to_owned(),
+        window_width,
         panes,
     })
 }
 
-fn layout_pane_ids(layout: &str) -> Option<Vec<String>> {
+fn layout_geometry(layout: &str) -> Option<(u64, Vec<TmuxLayoutPane>)> {
     let (_, tree) = layout.split_once(',')?;
     let mut parser = LayoutParser {
         input: tree.as_bytes(),
         pos: 0,
         panes: Vec::new(),
     };
-    parser.parse_cell()?;
-    (parser.pos == parser.input.len()).then_some(parser.panes)
+    let window_width = parser.parse_cell()?;
+    (parser.pos == parser.input.len()).then_some((window_width, parser.panes))
 }
 
 struct LayoutParser<'a> {
     input: &'a [u8],
     pos: usize,
-    panes: Vec<String>,
+    panes: Vec<TmuxLayoutPane>,
 }
 
 impl LayoutParser<'_> {
-    fn parse_cell(&mut self) -> Option<()> {
-        self.parse_number()?;
+    fn parse_cell(&mut self) -> Option<u64> {
+        let width = self.parse_number()?;
         self.consume(b'x')?;
         self.parse_number()?;
         self.consume(b',')?;
-        self.parse_number()?;
+        let x = self.parse_number()?;
         self.consume(b',')?;
         self.parse_number()?;
         match self.peek()? {
-            b'{' | b'[' => self.parse_group(),
+            b'{' | b'[' => self.parse_group()?,
             b',' => {
                 self.pos += 1;
                 let pane = self.parse_number()?;
-                self.panes.push(format!("%{pane}"));
-                Some(())
+                self.panes.push(TmuxLayoutPane {
+                    id: format!("%{pane}"),
+                    x,
+                    width,
+                });
             }
-            _ => None,
+            _ => return None,
         }
+        Some(width)
     }
 
     fn parse_group(&mut self) -> Option<()> {
@@ -338,6 +397,20 @@ mod tests {
                 },
             ),
             (
+                "rimz-presence-seed:%2,@1,claude,1,rimz,0,55,79,213",
+                ControlLine::SeedPane {
+                    pane: "%2".to_owned(),
+                    window: "@1".to_owned(),
+                    command: Some("claude".to_owned()),
+                    active: true,
+                    title: Some("rimz".to_owned()),
+                    floating: false,
+                    x: 55,
+                    width: 79,
+                    window_width: 213,
+                },
+            ),
+            (
                 "%subscription-changed rimz-presence $0 @1 1 %2 : %2,@1,,0,",
                 ControlLine::Subscription {
                     pane: "%2".to_owned(),
@@ -409,14 +482,45 @@ mod tests {
             ),
             ControlLine::LayoutChange {
                 window: "@1".to_owned(),
-                panes: vec!["%1".to_owned(), "%2".to_owned()],
+                window_width: 208,
+                panes: vec![
+                    TmuxLayoutPane {
+                        id: "%1".to_owned(),
+                        x: 0,
+                        width: 104,
+                    },
+                    TmuxLayoutPane {
+                        id: "%2".to_owned(),
+                        x: 105,
+                        width: 103,
+                    },
+                ],
             }
         );
         assert_eq!(
-            layout_pane_ids(
+            layout_geometry(
                 "aabb,200x60,0,0{100x60,0,0[100x30,0,0,3,100x29,0,31,4],99x60,101,0,5}"
             ),
-            Some(vec!["%3".to_owned(), "%4".to_owned(), "%5".to_owned()])
+            Some((
+                200,
+                vec![
+                    TmuxLayoutPane {
+                        id: "%3".to_owned(),
+                        x: 0,
+                        width: 100,
+                    },
+                    TmuxLayoutPane {
+                        id: "%4".to_owned(),
+                        x: 0,
+                        width: 100,
+                    },
+                    TmuxLayoutPane {
+                        id: "%5".to_owned(),
+                        x: 101,
+                        width: 99,
+                    },
+                ],
+            ))
         );
     }
 }
