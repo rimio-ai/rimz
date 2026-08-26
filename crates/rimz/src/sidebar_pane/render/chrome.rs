@@ -496,8 +496,8 @@ fn help_body_rows(
         vec![("keys", keys_section), ("filter", filter_section)],
     );
     let room_keys = [
-        (focus_key, GlyphRole::KeysSidebar, "sidebar"),
-        (zoom_key, GlyphRole::KeysFocus, "zoom"),
+        (focus_key, Some(GlyphRole::KeysSidebar), "sidebar"),
+        (zoom_key, None, "zoom"),
     ];
     if room_keys.iter().any(|(key, _, _)| key.is_some()) {
         lines.push(Line::default());
@@ -505,7 +505,7 @@ fn help_body_rows(
             let Some(key) = key else { continue };
             let entry = key_entry(
                 theme,
-                Some(key_icon(theme, role)),
+                role.map(|role| key_icon(theme, role)),
                 focus_chord_label(key),
                 label,
             );
@@ -791,20 +791,30 @@ mod tests {
     #[test]
     fn help_shows_configured_room_chords() {
         let theme = Theme::fixed(false);
-        let text = help_body_rows(
+        let lines = help_body_rows(
             &theme,
             Some("Alt+p"),
             Some("Ctrl+g"),
             &SidebarKeys::default(),
-        )
-        .iter()
-        .flat_map(|line| line.spans.iter())
-        .map(|span| span.content.as_ref())
-        .collect::<String>();
+        );
+        let text = |line: &Line<'_>| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        };
+        let sidebar = lines
+            .iter()
+            .map(text)
+            .find(|line| line.contains("sidebar"))
+            .expect("sidebar chord row");
+        let zoom = lines
+            .iter()
+            .map(text)
+            .find(|line| line.contains("zoom"))
+            .expect("zoom chord row");
 
-        assert!(text.contains("alt p"));
-        assert!(text.contains("sidebar"));
-        assert!(text.contains("ctrl g"));
-        assert!(text.contains("zoom"));
+        assert!(sidebar.contains("alt p"), "{sidebar}");
+        assert!(zoom.contains("ctrl g"), "{zoom}");
     }
 }
