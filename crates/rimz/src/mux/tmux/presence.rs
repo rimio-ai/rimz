@@ -23,6 +23,7 @@ const SEED_COMMAND: &str = concat!(
     ",#{pane_width}",
     ",#{window_width}\"\n",
 );
+type LayoutGeometry = (u64, Vec<(String, u64, u64)>);
 
 /// A tmux control-mode line carrying pane-presence information.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -273,7 +274,7 @@ fn parse_layout_change(line: &str) -> Option<ControlLine> {
     })
 }
 
-fn layout_geometry(layout: &str) -> Option<(u64, Vec<(String, u64, u64)>)> {
+fn layout_geometry(layout: &str) -> Option<LayoutGeometry> {
     let (_, tree) = layout.split_once(',')?;
     let mut parser = LayoutParser {
         input: tree.as_bytes(),
