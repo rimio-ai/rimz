@@ -96,10 +96,12 @@ pub(super) fn load_catalog(
         &effective.teams,
         &effective.profiles,
         &machine.agents.commands,
-        &snapshot.agents,
-        &audit.agents,
-        &prices,
-        worktree,
+        LiveCatalog {
+            agents: &snapshot.agents,
+            audit_agents: &audit.agents,
+            prices: &prices,
+            worktree,
+        },
         |name| team_source(&ctx.workspace.project_root, name),
     ))
 }
@@ -122,13 +124,15 @@ fn build_catalog(
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    agents: &[AgentState],
-    audit_agents: &[AgentState],
-    prices: &rimz::agents::PriceBook,
-    worktree: Option<&str>,
+    live_catalog: LiveCatalog<'_>,
     source: impl Fn(&str) -> Option<String>,
 ) -> Vec<TeamReport> {
-    let live = live_instances(agents, audit_agents, prices, worktree);
+    let live = live_instances(
+        live_catalog.agents,
+        live_catalog.audit_agents,
+        live_catalog.prices,
+        live_catalog.worktree,
+    );
     let mut reports = teams
         .0
         .iter()
@@ -161,6 +165,13 @@ fn build_catalog(
     }
     reports.sort_by(|left, right| left.name.cmp(&right.name));
     reports
+}
+
+struct LiveCatalog<'a> {
+    agents: &'a [AgentState],
+    audit_agents: &'a [AgentState],
+    prices: &'a rimz::agents::PriceBook,
+    worktree: Option<&'a str>,
 }
 
 fn definition_report(
@@ -543,10 +554,12 @@ mod tests {
             &teams,
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
-            &[agent],
-            &[],
-            &rimz::agents::PriceBook::default(),
-            None,
+            LiveCatalog {
+                agents: &[agent],
+                audit_agents: &[],
+                prices: &rimz::agents::PriceBook::default(),
+                worktree: None,
+            },
             |_| Some("/tmp/team.toml".to_owned()),
         );
 
@@ -590,10 +603,12 @@ mod tests {
             &TeamsConfig(BTreeMap::from([("forge".to_owned(), team())])),
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
-            &[agent.clone()],
-            &[agent],
-            &rimz::agents::PriceBook::default(),
-            None,
+            LiveCatalog {
+                agents: &[agent.clone()],
+                audit_agents: &[agent],
+                prices: &rimz::agents::PriceBook::default(),
+                worktree: None,
+            },
             |_| None,
         );
 
@@ -608,10 +623,12 @@ mod tests {
             &TeamsConfig(BTreeMap::from([("broken".to_owned(), broken)])),
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
-            &[],
-            &[],
-            &rimz::agents::PriceBook::default(),
-            None,
+            LiveCatalog {
+                agents: &[],
+                audit_agents: &[],
+                prices: &rimz::agents::PriceBook::default(),
+                worktree: None,
+            },
             |_| None,
         );
 
@@ -652,10 +669,12 @@ mod tests {
             &TeamsConfig(BTreeMap::from([("forge".to_owned(), team())])),
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
-            &[],
-            &[],
-            &rimz::agents::PriceBook::default(),
-            None,
+            LiveCatalog {
+                agents: &[],
+                audit_agents: &[],
+                prices: &rimz::agents::PriceBook::default(),
+                worktree: None,
+            },
             |_| None,
         );
         let mut rendered = Vec::new();
@@ -706,10 +725,12 @@ mod tests {
                 &teams,
                 &ProfilesConfig::default(),
                 &CommandsConfig::default(),
-                std::slice::from_ref(&agent),
-                &[],
-                &rimz::agents::PriceBook::default(),
-                filter,
+                LiveCatalog {
+                    agents: std::slice::from_ref(&agent),
+                    audit_agents: &[],
+                    prices: &rimz::agents::PriceBook::default(),
+                    worktree: filter,
+                },
                 |_| None,
             )
         };
