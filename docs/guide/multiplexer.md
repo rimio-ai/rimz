@@ -94,6 +94,8 @@ session_serialization false            // prefer clean session births over held 
 
 Inside a RimZ room, opening a new pane splits the focused pane along its longer visual edge, and closing that pane returns the space to its split sibling.
 
+RimZ also binds `Alt+z` as a room-only smart zoom: it toggles fullscreen for the focused work pane, but when the sidebar holds focus it first moves to a working sibling and fullscreens that instead. Configure `[sidebar] zoom_key` to change or disable it. Rebinding it to `Ctrl+g` shadows Zellij's locked-mode escape chord, so choose that only when another chord still reaches Zellij modes. Zellij 0.44 may pause briefly while plugin-routed room keys dispatch.
+
 ### Alt chords in locked mode
 
 RimZ opens its room in Zellij's locked mode, which hands every keystroke straight to the focused pane, so an agent's TUI gets your typing until you press `Ctrl+g` for a Zellij mode. That is what you want almost always, and it puts Zellij's own shortcuts one extra keypress away. A `locked` keybinds block keeps the chords you use constantly reachable while everything else still flows to the agent; the block merges with Zellij's defaults, so nothing else changes.

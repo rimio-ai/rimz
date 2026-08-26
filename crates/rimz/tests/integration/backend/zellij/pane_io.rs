@@ -96,6 +96,58 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
         }),
         "out-of-session focus targeted the wrong session or pane:\n{log}",
     );
+
+    let sidebar_pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{sidebar_id}"));
+    client.press_alt_until('h', &sidebar_pane, "sidebar before smart zoom");
+    let output = env
+        .rimz()
+        .env("XDG_RUNTIME_DIR", xdg)
+        .env("XDG_CACHE_HOME", xdg)
+        .env("TMPDIR", xdg)
+        .env("RIMZ_ZELLIJ_BIN", &shim)
+        .args(["--mux", "zellij", "pane", "zoom", "--session-name", &name])
+        .bounded_output()
+        .expect("rimz pane zoom");
+    assert!(
+        output.status.success(),
+        "rimz pane zoom failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    client.wait_until_focused(&work_pane, "work pane selected by smart zoom");
+    poll_until(
+        Duration::from_secs(5),
+        || Ok(expect_list_panes(xdg, &name)),
+        |snapshot| {
+            snapshot
+                .panes
+                .iter()
+                .any(|pane| pane.id == work_id && pane.is_fullscreen)
+        },
+        "working sibling fullscreen",
+    );
+
+    let output = env
+        .rimz()
+        .env("XDG_RUNTIME_DIR", xdg)
+        .env("XDG_CACHE_HOME", xdg)
+        .env("TMPDIR", xdg)
+        .env("RIMZ_ZELLIJ_BIN", &shim)
+        .args(["--mux", "zellij", "pane", "zoom", "--session-name", &name])
+        .bounded_output()
+        .expect("rimz pane unzoom");
+    assert!(
+        output.status.success(),
+        "rimz pane unzoom failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    poll_until(
+        Duration::from_secs(5),
+        || Ok(expect_list_panes(xdg, &name)),
+        |snapshot| snapshot.panes.iter().all(|pane| !pane.is_fullscreen),
+        "working pane unzoomed",
+    );
 }
 #[test]
 fn split_pane_injects_env_vars() {

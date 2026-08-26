@@ -348,6 +348,11 @@ impl RoomContext {
                 .sidebar
                 .focus_key_label()
                 .map(str::to_owned),
+            zoom_key: self
+                .machine_config
+                .sidebar
+                .zoom_key_label()
+                .map(str::to_owned),
             focus_follows_mouse: self.machine_config.zellij.focus_follows_mouse,
             mouse_click_through: self.machine_config.zellij.mouse_click_through,
         })
@@ -370,20 +375,33 @@ impl RoomContext {
         }
     }
 
-    fn register_focus_key(&self) {
-        let Some(label) = self.machine_config.sidebar.focus_key_label() else {
-            return;
-        };
+    fn register_room_keys(&self) {
         let rimz_bin = crate::proc::rimz_exe();
-        let Some(binding) = crate::mux::FocusKeyBinding::resolve(label, &rimz_bin) else {
-            tracing::warn!(
-                focus_key = label,
-                "ignoring invalid [sidebar] focus_key; expected e.g. Alt+p"
-            );
-            return;
-        };
-        if let Err(err) = self.backend.register_focus_key(&binding) {
-            tracing::debug!(error = %err, "registering the focus-sidebar keybind failed");
+        for (name, label, action) in [
+            (
+                "focus_key",
+                self.machine_config.sidebar.focus_key_label(),
+                crate::mux::RoomKeyAction::FocusSidebar,
+            ),
+            (
+                "zoom_key",
+                self.machine_config.sidebar.zoom_key_label(),
+                crate::mux::RoomKeyAction::ZoomPane,
+            ),
+        ] {
+            let Some(label) = label else { continue };
+            let Some(binding) = crate::mux::RoomKeyBinding::resolve(action, label, &rimz_bin)
+            else {
+                tracing::warn!(
+                    key = name,
+                    value = label,
+                    "ignoring invalid [sidebar] key; expected e.g. Alt+p"
+                );
+                continue;
+            };
+            if let Err(err) = self.backend.register_room_key(&binding) {
+                tracing::debug!(key = name, error = %err, "registering room keybind failed");
+            }
         }
     }
 

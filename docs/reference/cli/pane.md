@@ -10,6 +10,7 @@ rimz pane capture zellij:terminal_4 --lines 80                                # 
 rimz pane capture sidebar --lines 80                                           # read this view's sidebar
 rimz pane send @codex#auth-refresh --key ctrl-u --enter -- "cargo xtask test" # clear line, type, run
 rimz pane focus tmux:%3
+rimz pane zoom --session-name rimz-myrepo-a1b2c3
 rimz pane split
 rimz pane detach
 ```
@@ -27,6 +28,8 @@ rimz pane detach
 The agent labels are a best-effort overlay folded from the workspace snapshot, so a pane the multiplexer has handed back to a shell reads `process`; the tab grouping always works, even with no snapshot reachable. `--json` emits the tab tree with a per-pane `kind` of `"agent"`, `"process"`, or `"sidebar"`, plus `command`, `cwd`, and `pid`, an `agent` object for agent panes, and `"self": true` on the calling pane.
 
 `capture` prints visible pane text and changes nothing. `send` types literal text and named keys in order — the write your keyboard would make. `focus` moves attention. These three target a pane id, an agent address, or the literal `sidebar`; `sidebar` resolves the sidebar in the caller's own view first, then the focused tab's sidebar, then any sidebar in the session. Pane ids choose their own backend (`tmux:%3` uses tmux, `zellij:terminal_4` uses Zellij) instead of the ambient session. Named keys are `enter`, `escape`, `tab`, `shift-tab`, `backspace`, the four arrows, `ctrl-c`, `ctrl-d`, and `ctrl-u`, with aliases like `return`, `esc`, `backtab`, and `bs`.
+
+`zoom` toggles fullscreen for the pane held by the session's one unambiguous attached-client view. When that pane is the sidebar, it focuses a working sibling in the same tab and fullscreens that pane instead; a sidebar-only tab is left unchanged. The configured `[sidebar] zoom_key` invokes this same command.
 
 `split` opens a shell beside the current pane along its longer visual edge, matching the room's native new-pane behavior. `detach` detaches the attached client; the session keeps running in the background and comes back on the next attach.
 

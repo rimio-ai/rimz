@@ -14,7 +14,10 @@ mod shell {
         Effect, Engine, EngineConfig, Host, ProjectedClientFocus, ProjectedPaneId,
     };
     use rimz_presence_zellij::policy::{self, PaneFields, RawStablePaneFields};
-    use rimz_presence_zellij::wire::{self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, RETIRE_PIPE};
+    use rimz_presence_zellij::wire::{
+        self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, RETIRE_PIPE, TOGGLE_FULLSCREEN_PIPE,
+        ZOOM_PANE_PIPE,
+    };
     use zellij_tile::prelude::*;
 
     #[derive(Default)]
@@ -67,6 +70,7 @@ mod shell {
                 PermissionType::ReadApplicationState,
                 PermissionType::RunCommands,
                 PermissionType::Reconfigure,
+                PermissionType::ChangeApplicationState,
             ];
             request_permission(&permissions);
             subscribe(&subscribed_events());
@@ -80,6 +84,7 @@ mod shell {
                 plugin_build: configuration.get("plugin_build").cloned(),
                 plugin_config: configuration.get("plugin_config").cloned(),
                 focus_key: configuration.get("focus_key").cloned(),
+                zoom_key: configuration.get("zoom_key").cloned(),
                 focus_follows_mouse: wire::parse_configuration_bool(
                     configuration.get("focus_follows_mouse").map(String::as_str),
                 ),
@@ -195,6 +200,14 @@ mod shell {
                 execute(engine.on_focus_sidebar_pipe());
                 return false;
             }
+            if pipe_message.name == ZOOM_PANE_PIPE {
+                execute(engine.on_zoom_pane_pipe());
+                return false;
+            }
+            if pipe_message.name == TOGGLE_FULLSCREEN_PIPE {
+                execute(engine.on_toggle_fullscreen_pipe(pipe_message.payload.as_deref()));
+                return false;
+            }
             if pipe_message.name == DUMP_TOPOLOGY_PIPE {
                 let host = ShellHost {
                     commands: self.commands,
@@ -243,6 +256,13 @@ mod shell {
                 Effect::Resubscribe => subscribe(&subscribed_events()),
                 Effect::SetTimeout(delay_ms) => set_timeout(delay_ms as f64 / 1_000.0),
                 Effect::ListClients => list_clients(),
+                Effect::TogglePaneFullscreen(pane) => {
+                    let pane = match pane {
+                        ProjectedPaneId::Terminal(id) => PaneId::Terminal(id),
+                        ProjectedPaneId::Plugin(id) => PaneId::Plugin(id),
+                    };
+                    toggle_pane_id_fullscreen(pane);
+                }
             }
         }
     }

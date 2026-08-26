@@ -328,6 +328,7 @@ impl ZellijBackend {
             ),
             converge: false,
             focus_key: machine_config.sidebar.focus_key_label().map(str::to_owned),
+            zoom_key: machine_config.sidebar.zoom_key_label().map(str::to_owned),
             focus_follows_mouse: mux_config.zellij.focus_follows_mouse,
             mouse_click_through: mux_config.zellij.mouse_click_through,
         };

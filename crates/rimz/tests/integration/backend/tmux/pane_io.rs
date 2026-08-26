@@ -3,6 +3,28 @@
 use super::support::*;
 
 #[test]
+fn fullscreen_toggle_targets_the_requested_pane() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    server.ensure_with_shell("zoom");
+    server.tmux(&["split-window", "-d", "-t", "zoom", "sleep", "60"]);
+    assert_eq!(list_session_panes(&server, "zoom").len(), 2);
+    let pane = list_session_panes(&server, "zoom")[0].pane_id.clone();
+
+    server
+        .backend
+        .toggle_fullscreen(&pane, Some("zoom"))
+        .expect("zoom pane");
+    assert_eq!(server.display("zoom", "#{window_zoomed_flag}"), "1");
+
+    server
+        .backend
+        .toggle_fullscreen(&pane, Some("zoom"))
+        .expect("unzoom pane");
+    assert_eq!(server.display("zoom", "#{window_zoomed_flag}"), "0");
+}
+
+#[test]
 fn split_pane_injects_env_vars() {
     require_tmux!();
     let server = TmuxServer::new();

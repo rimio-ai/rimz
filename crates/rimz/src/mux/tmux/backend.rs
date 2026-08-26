@@ -343,6 +343,15 @@ impl MuxBackend for TmuxBackend {
         ])
     }
 
+    fn toggle_fullscreen(&self, pane: &PaneId, session: Option<&str>) -> Result<()> {
+        let _ = session;
+        ensure_pane_backend(pane, MuxName::Tmux)?;
+        self.cmd()
+            .args(["resize-pane", "-Z", "-t", pane.raw()])
+            .run()
+            .map(|_| ())
+    }
+
     fn sidebar_width_step(
         &self,
         _runtime: &crate::store::RuntimePaths,
@@ -394,7 +403,7 @@ impl MuxBackend for TmuxBackend {
             .map(|_| ())
     }
 
-    fn register_focus_key(&self, binding: &super::super::FocusKeyBinding) -> Result<()> {
+    fn register_room_key(&self, binding: &super::super::RoomKeyBinding) -> Result<()> {
         // Root keytable (`-n`): the chord fires from any pane in the server, and
         // `run-shell -b` runs the focus command off the server so the pane never
         // blocks. The binding is server-global, so the command resolves the

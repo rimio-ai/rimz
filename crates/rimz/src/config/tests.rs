@@ -2181,6 +2181,8 @@ fn sidebar_fields_parse_defaults_and_reject_zero() {
         DEFAULT_AFK_AFTER_SECS
     );
     assert_eq!(defaults.sidebar.afk_after_ms(), 15 * 60 * 1_000);
+    assert_eq!(defaults.sidebar.focus_key_label(), Some("Alt+p"));
+    assert_eq!(defaults.sidebar.zoom_key_label(), Some("Alt+z"));
 
     let config = load_no_fragments(&write(
         &dir,
@@ -2189,7 +2191,8 @@ fn sidebar_fields_parse_defaults_and_reject_zero() {
          trunk = \"develop\"\n\
          spend_window = \"session\"\n\
          afk_after_secs = 60\n\
-         focus_key = \"Alt+x\"\n",
+         focus_key = \"Alt+x\"\n\
+         zoom_key = \"off\"\n",
     ))
     .expect("load");
     assert_eq!(config.sidebar.trunk.as_deref(), Some("develop"));
@@ -2205,6 +2208,7 @@ fn sidebar_fields_parse_defaults_and_reject_zero() {
     assert_eq!(config.sidebar.afk_after_secs.get(), 60);
     assert_eq!(config.sidebar.afk_after_ms(), 60_000);
     assert_eq!(config.sidebar.focus_key, "Alt+x");
+    assert_eq!(config.sidebar.zoom_key_label(), None);
 
     assert!(
         load_no_fragments(&write(&dir, "[sidebar]\nafk_after_secs = 0\n")).is_err(),

@@ -63,7 +63,7 @@ fn seed_presence_permissions_merges_partial_node_and_preserves_foreign_nodes() {
     .parse()
     .expect("parse starting permissions");
 
-    assert!(!ensure_presence_permissions_document(&mut document, key));
+    assert!(ensure_presence_permissions_document(&mut document, key));
     document.fmt();
     document
         .to_string()
@@ -75,7 +75,12 @@ fn seed_presence_permissions_merges_partial_node_and_preserves_foreign_nodes() {
     );
     assert_eq!(
         permission_children(&document, key),
-        ["ReadApplicationState", "RunCommands", "Reconfigure"]
+        [
+            "ReadApplicationState",
+            "RunCommands",
+            "Reconfigure",
+            "ChangeApplicationState"
+        ]
     );
 }
 
@@ -415,6 +420,12 @@ fn presence_plugin_identity_renders_expressible_fields() {
             rimz_bin: "/home/user/.cargo/bin/rimz",
             mutate: |opts| opts.focus_key = Some("Alt+p".to_owned()),
             expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true,focus_key=Alt+p",
+        },
+        Case {
+            session: "rimz-test",
+            rimz_bin: "/home/user/.cargo/bin/rimz",
+            mutate: |opts| opts.zoom_key = Some("Alt+z".to_owned()),
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true,zoom_key=Alt+z",
         },
         Case {
             session: "rimz-test",

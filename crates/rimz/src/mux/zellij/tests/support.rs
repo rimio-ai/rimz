@@ -83,6 +83,7 @@ pub(crate) fn presence_opts(session_name: &str, rimz_bin: &str) -> PresencePlugi
         rimz_bin: PathBuf::from(rimz_bin),
         converge: false,
         focus_key: None,
+        zoom_key: None,
         focus_follows_mouse: false,
         mouse_click_through: true,
     }

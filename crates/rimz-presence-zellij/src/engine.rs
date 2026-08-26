@@ -38,6 +38,8 @@ pub enum Effect {
     SetTimeout(u64),
     /// Ask Zellij to deliver focused client panes via `Event::ListClients`.
     ListClients,
+    /// Toggle fullscreen for the host-selected pane id.
+    TogglePaneFullscreen(ProjectedPaneId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -499,6 +501,7 @@ pub struct EngineConfig {
     pub plugin_build: Option<String>,
     pub plugin_config: Option<String>,
     pub focus_key: Option<String>,
+    pub zoom_key: Option<String>,
     pub focus_follows_mouse: Option<bool>,
     pub mouse_click_through: Option<bool>,
 }
@@ -750,6 +753,25 @@ impl Engine {
         effects
     }
 
+    pub fn on_zoom_pane_pipe(&mut self) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
+        let mut effects = Vec::new();
+        self.run_zoom_pane(&mut effects);
+        effects
+    }
+
+    pub fn on_toggle_fullscreen_pipe(&mut self, payload: Option<&str>) -> Vec<Effect> {
+        if self.retired || !self.granted {
+            return Vec::new();
+        }
+        wire::fullscreen_pane(payload)
+            .map(Effect::TogglePaneFullscreen)
+            .into_iter()
+            .collect()
+    }
+
     pub fn on_dump_topology_pipe(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
         let mut effects = Vec::new();
         if self.retired {
@@ -977,6 +999,7 @@ impl Engine {
         let config = wire::RuntimeReconfigure {
             plugin_id: self.config.plugin_id,
             focus_key: self.config.focus_key.as_deref(),
+            zoom_key: self.config.zoom_key.as_deref(),
             focus_follows_mouse: self.config.focus_follows_mouse,
             mouse_click_through: self.config.mouse_click_through,
         };
@@ -991,6 +1014,15 @@ impl Engine {
             return;
         }
         effects.push(Effect::RunCommand(wire::focus_sidebar_argv(
+            &self.wake_context(),
+        )));
+    }
+
+    fn run_zoom_pane(&self, effects: &mut Vec<Effect>) {
+        if !self.granted {
+            return;
+        }
+        effects.push(Effect::RunCommand(wire::zoom_pane_argv(
             &self.wake_context(),
         )));
     }
