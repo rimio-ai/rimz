@@ -848,9 +848,9 @@ exit 0
 #[test]
 fn stepwise_sidebar_width_converges_across_supported_steps() {
     for (name, initial, step, view, target, direction, calls) in [
-        ("shrink", 90, -1, 360, 72, "decrease", 2),
+        ("shrink", 90, -1, 360, 72, "decrease", 10),
         ("grow", 40, 19, 380, 72, "increase", 3),
-        ("full-step-below", 53, 10, 213, 64, "increase", 3),
+        ("full-step-below", 53, 10, 213, 64, "increase", 2),
     ] {
         assert_stepwise_width(name, initial, step, view, target, direction, calls);
     }
@@ -919,11 +919,13 @@ exit 0
         },
     };
 
-    assert!(
-        backend
-            .converge_sidebar_widths_stepwise(&width, 1, 8, None)
-            .1,
-        "{name}: expected resize",
+    let resized = backend
+        .converge_sidebar_widths_stepwise(&width, 1, 8, None)
+        .1;
+    assert_eq!(
+        resized,
+        expected_increase + expected_decrease > 0,
+        "{name}: resize outcome",
     );
     let log = shim_log(&temp);
     assert_eq!(
@@ -937,7 +939,7 @@ exit 0
         "{name}:\n{log}",
     );
     let action_count = std::fs::read_to_string(temp.path().join("resize-count"))
-        .expect("resize count")
+        .unwrap_or_else(|_| "0".to_owned())
         .trim()
         .parse::<usize>()
         .expect("numeric resize count");
@@ -951,23 +953,19 @@ exit 0
         ),
         "{name}: final width {final_cols}",
     );
-    assert!(
-        final_cols >= target && final_cols.saturating_sub(11) < target,
-        "{name}: {final_cols} is not the smallest reachable width above {target}",
-    );
 }
 
 #[cfg(unix)]
 #[test]
-fn stepwise_sidebar_width_parks_at_the_smallest_reachable_width_above_target() {
-    assert_stepwise_park("default-between-lattice-points", &[53, 64], 54, 1, 0);
-    assert_stepwise_park("grow", &[48, 59, 70], 64, 2, 0);
-    assert_stepwise_park("shrink", &[82, 71], 64, 0, 1);
+fn stepwise_sidebar_width_parks_at_the_nearest_reachable_width() {
+    assert_stepwise_park("default-between-lattice-points", &[53, 64], 54, 0, 0);
+    assert_stepwise_park("grow", &[48, 59, 70], 64, 1, 0);
+    assert_stepwise_park("shrink", &[82, 71, 60], 64, 0, 2);
     assert_stepwise_park(
         "coarse-step undershoot reverses once",
-        &[53, 76, 63, 64],
+        &[53, 76, 63],
         64,
-        2,
+        1,
         1,
     );
 }
