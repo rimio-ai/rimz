@@ -318,6 +318,75 @@ fn sidebar_widths_converge_after_resize_new_tab_and_shared_target() {
     );
 }
 
+#[test]
+fn sidebar_widths_agree_across_tabs_after_a_pinned_retarget() {
+    require_zellij!();
+
+    const VIEW_COLS: u16 = 213;
+    const VIEW_ROWS: u16 = 60;
+
+    let room = LiveZellijSession::new("nearest-width");
+    let xdg = room.path();
+    let name = room.name().to_owned();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let mut sidebar = sidebar_opts(&name, cwd.path(), stub, VIEW_COLS);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &sidebar);
+    backend.open_sidebar(&sidebar, None).expect("open sidebar");
+    wait_for_pane_count(xdg, &name, 2);
+    let _client = AttachedClient::attach(&room, VIEW_COLS, VIEW_ROWS);
+
+    let native_step = u64::from(VIEW_COLS).div_ceil(20);
+    let initial_target = sidebar.target.cols(Some(VIEW_COLS)).get();
+    converge_each_sidebar_with_nudges(&backend, xdg, &name, initial_target, native_step);
+    let settled = sidebar_columns_by_tab(xdg, &name)
+        .into_values()
+        .next()
+        .expect("birth sidebar");
+    let target_cols = u16::try_from(settled + 2).expect("pinned target fits u16");
+    sidebar.target = rimz::mux::SidebarTarget {
+        share: rimz::mux::WidthPermille::from_cols(
+            std::num::NonZeroU16::new(target_cols).expect("nonzero target"),
+            std::num::NonZeroU16::new(VIEW_COLS).expect("nonzero view"),
+        ),
+        max_cols: sidebar.target.max_cols,
+        pinned: true,
+    };
+
+    converge_each_sidebar_with_nudges(&backend, xdg, &name, target_cols, native_step);
+    backend
+        .open_tab(&TabOptions {
+            title: "retargeted".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    name: None,
+                }])],
+            },
+            focus: true,
+            dock_sidebar: true,
+            sidebar: sidebar.clone(),
+        })
+        .expect("open retargeted tab");
+    wait_for_tab_count(xdg, &name, 2);
+    converge_each_sidebar_with_nudges(&backend, xdg, &name, target_cols, native_step);
+
+    let widths: Vec<_> = sidebar_columns_by_tab(xdg, &name).into_values().collect();
+    let spread = widths.iter().max().expect("widest sidebar")
+        - widths.iter().min().expect("narrowest sidebar");
+    assert!(
+        widths
+            .iter()
+            .all(|width| width.abs_diff(u64::from(target_cols)) * 2 <= native_step),
+        "nearest-reachable convergence overshot target {target_cols}: {widths:?}",
+    );
+    assert!(
+        spread <= 3,
+        "nearest-reachable convergence left cross-tab widths {widths:?}",
+    );
+}
+
 fn converge_each_sidebar_with_nudges(
     backend: &ZellijBackend,
     xdg: &std::path::Path,
@@ -337,8 +406,7 @@ fn converge_each_sidebar_with_nudges(
         let pending: Vec<_> = sidebars
             .into_iter()
             .filter(|pane| {
-                pane.pane_columns < u64::from(target_cols)
-                    || pane.pane_columns >= u64::from(target_cols).saturating_add(step_cols.max(1))
+                pane.pane_columns.abs_diff(u64::from(target_cols)) > step_cols.max(1) / 2
             })
             .collect();
         if pending.is_empty() {

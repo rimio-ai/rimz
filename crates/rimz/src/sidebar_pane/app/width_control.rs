@@ -10,7 +10,7 @@ use crate::diag::record::{
 };
 use crate::ids::{MuxName, PaneId};
 use crate::mux::WidthAdjust;
-use crate::mux::width::{sidebar_width_off_spec, width_undershot};
+use crate::mux::width::{sidebar_width_off_spec, width_step_regressed};
 use crate::{RuntimePaths, diag::DiagSink};
 use tracing::{debug, warn};
 
@@ -50,6 +50,7 @@ struct WidthControl {
     native_step: Option<NonZeroU16>,
     retried_no_progress: bool,
     reverse_issued: bool,
+    reverse_max_distance: Option<u16>,
     idle_at: Option<u16>,
     traces: VecDeque<WidthTransition>,
 }
@@ -64,6 +65,7 @@ impl WidthControl {
             native_step: None,
             retried_no_progress: false,
             reverse_issued: false,
+            reverse_max_distance: None,
             idle_at: None,
             traces: VecDeque::new(),
         }
@@ -78,6 +80,7 @@ impl WidthControl {
         self.learned_step = None;
         self.retried_no_progress = false;
         self.reverse_issued = false;
+        self.reverse_max_distance = None;
         self.idle_at = None;
         self.traces.clear();
     }
@@ -103,6 +106,7 @@ impl WidthControl {
         self.in_flight = None;
         self.retried_no_progress = false;
         self.reverse_issued = false;
+        self.reverse_max_distance = None;
         self.idle_at = None;
     }
 
@@ -146,6 +150,7 @@ impl WidthControl {
             self.in_flight = None;
             self.retried_no_progress = false;
             self.reverse_issued = false;
+            self.reverse_max_distance = None;
             self.idle_at = None;
         }
 
@@ -160,7 +165,10 @@ impl WidthControl {
                 self.in_flight = None;
                 self.retried_no_progress = false;
                 if self.reverse_issued {
-                    if own_cols >= target_cols {
+                    if self
+                        .reverse_max_distance
+                        .is_some_and(|distance| own_cols.abs_diff(target_cols) <= distance)
+                    {
                         self.idle_at = Some(own_cols);
                         self.traces.push_back(WidthTransition::Idle {
                             at: own_cols,
@@ -169,13 +177,15 @@ impl WidthControl {
                         return None;
                     }
                     self.reverse_issued = false;
+                    self.reverse_max_distance = None;
                 }
-                if width_undershot(
+                if width_step_regressed(
                     u64::from(step.width_before),
                     u64::from(own_cols),
                     u64::from(target_cols),
                 ) {
                     self.reverse_issued = true;
+                    self.reverse_max_distance = Some(step.width_before.abs_diff(target_cols));
                 }
             } else if now.saturating_duration_since(step.at) < FEEDBACK_TIMEOUT {
                 return None;
