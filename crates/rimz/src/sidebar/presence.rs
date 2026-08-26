@@ -269,9 +269,9 @@ fn derive_work_boundary_moves(
             continue;
         };
         if sidebars.next().is_some()
-            || new
-                .get(&sidebar.id)
-                .is_none_or(|pane| pane.pane_columns != sidebar.pane_columns)
+            || new.get(&sidebar.id).is_none_or(|pane| {
+                (pane.pane_x, pane.pane_columns) != (sidebar.pane_x, sidebar.pane_columns)
+            })
         {
             continue;
         }
@@ -307,6 +307,8 @@ fn derive_work_boundary_moves(
 }
 
 fn zellij_view_cols(panes: &[PaneTopologyPane], tab_position: u64) -> Option<u64> {
+    // A single pane is a mid-layout snapshot during sidebar birth, not proof
+    // of the viewport, so require two extents before accepting the maximum.
     let mut extents = panes
         .iter()
         .filter(|pane| {

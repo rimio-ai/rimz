@@ -1138,6 +1138,7 @@ fn classify_diagnostic(
         | DiagEvent::SidebarWidthIntent { .. }
         | DiagEvent::SidebarWidthNudge { .. }
         | DiagEvent::SidebarWidthSettle { .. }
+        | DiagEvent::WorkPaneBoundaryMoved { .. }
         | DiagEvent::FetchFoldStats { .. }
         | DiagEvent::ToolLoopEscalated { .. }
         | DiagEvent::ProducerElected { .. }
@@ -1169,7 +1170,6 @@ fn classify_diagnostic(
         | DiagEvent::DuplicatePaneId { .. }
         | DiagEvent::ForeignSessionPane { .. }
         | DiagEvent::GhostSessionBind { .. }
-        | DiagEvent::WorkPaneBoundaryMoved { .. }
         | DiagEvent::MixedBuildWriters { .. }
         | DiagEvent::RendererPanic { .. }
         | DiagEvent::RendererSignalDeath { .. }

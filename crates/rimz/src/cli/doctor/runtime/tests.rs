@@ -2,7 +2,7 @@ use super::*;
 use rimz::diag::record::{
     AnomalyKind, DiagEnvelope, DiagEvent, EventsSig, FetchFoldCause, FetchFoldCauseStats,
     FrameStamp, HostedCarryDropReason, LocalSessionBindRejectReason, ObserveRole, PaneDropEvidence,
-    PaneDropViewEvidence, TickLoop,
+    PaneDropViewEvidence, TickLoop, WorkPaneBoundaryMove,
 };
 use rimz::remote::link::LinkTier;
 
@@ -642,6 +642,21 @@ fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
                 agent_id: "sess-loop".into(),
                 tool: "Bash".to_owned(),
                 count: 20,
+            },
+            model::DoctorState::Expected,
+            model::DoctorImpact::Info,
+        ),
+        (
+            DiagEvent::WorkPaneBoundaryMoved {
+                view_id: rimz::ids::ViewId::new_unchecked("@1"),
+                view_cols: 213,
+                moves: vec![WorkPaneBoundaryMove {
+                    pane: rimz::PaneId::from_parts(rimz::MuxName::Tmux, "%2"),
+                    from_x: 55,
+                    from_cols: 79,
+                    to_x: 55,
+                    to_cols: 47,
+                }],
             },
             model::DoctorState::Expected,
             model::DoctorImpact::Info,
