@@ -169,8 +169,13 @@ fn fullscreen_hold_never_arms_idle_retry_and_clear_resumes_convergence() {
 
 #[test]
 fn fullscreen_hold_rejects_width_intent_without_pinning_the_room_share() {
-    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
-    let diag = crate::diag::DiagSink::disabled();
+    let (dir, runtime, mut controller) = controller(MuxName::Zellij);
+    let diag = crate::diag::DiagSink::under(
+        dir.path().to_path_buf(),
+        runtime.workspace_id.clone(),
+        "rimz-test",
+        None,
+    );
     let held_at_ms = write_zellij_fullscreen_topology(&runtime, true);
 
     controller.backstop(Some(200), Some(1), Some(held_at_ms), &diag);
@@ -178,6 +183,22 @@ fn fullscreen_hold_rejects_width_intent_without_pinning_the_room_share() {
 
     assert!(controller.convergence.is_fullscreen_held());
     assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    let text = std::fs::read_to_string(diag.log_path().expect("diagnostic path"))
+        .expect("fullscreen rejection diagnostic");
+    let event = serde_json::from_str::<crate::diag::record::DiagEnvelope>(
+        text.lines().next().expect("diagnostic event"),
+    )
+    .expect("diagnostic envelope")
+    .event;
+    assert!(matches!(
+        event,
+        crate::diag::record::DiagEvent::SidebarWidthIntent {
+            trigger: SidebarWidthIntentTrigger::Wider,
+            base_cols: 200,
+            verdict: SidebarWidthIntentVerdict::RejectedFullscreen,
+            ..
+        }
+    ));
 }
 
 #[test]
