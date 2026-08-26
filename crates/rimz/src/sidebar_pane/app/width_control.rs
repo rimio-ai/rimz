@@ -363,6 +363,9 @@ impl WidthController {
     }
 
     pub(super) fn adjust(&mut self, own_cols: u16, dir: WidthAdjust, diag: &DiagSink) {
+        if self.convergence.is_fullscreen_held() {
+            return;
+        }
         let Some(pane) = self.own_pane.as_ref() else {
             return;
         };
@@ -623,6 +626,8 @@ impl WidthController {
     }
 
     fn sync_fullscreen_hold(&mut self, measured_cols: u16, observed_at_ms: u64) -> bool {
+        // tmux width probes spawn a subprocess and currently expose no zoom
+        // observation. Revisit this guard if WidthStep gains that signal there.
         if self.mux != MuxName::Zellij
             || self
                 .fullscreen_observed_at_ms

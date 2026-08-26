@@ -168,6 +168,40 @@ fn fullscreen_hold_never_arms_idle_retry_and_clear_resumes_convergence() {
 }
 
 #[test]
+fn fullscreen_hold_rejects_width_intent_without_pinning_the_room_share() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    let diag = crate::diag::DiagSink::disabled();
+    let held_at_ms = write_zellij_fullscreen_topology(&runtime, true);
+
+    controller.backstop(Some(200), Some(1), Some(held_at_ms), &diag);
+    controller.adjust(200, WidthAdjust::Wider, &diag);
+
+    assert!(controller.convergence.is_fullscreen_held());
+    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+}
+
+#[test]
+fn fullscreen_hold_cancels_pending_classification_across_structural_change() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = crate::diag::DiagSink::disabled();
+    controller.last_siblings = Some(1);
+    controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+    controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+    assert!(controller.classification_deadline.is_some());
+
+    let held_at_ms = write_zellij_fullscreen_topology(&runtime, true);
+    controller.classification_deadline = Some(Instant::now());
+    controller.backstop(Some(200), Some(2), Some(held_at_ms), &diag);
+
+    assert!(controller.convergence.is_fullscreen_held());
+    assert_eq!(controller.classification_deadline, None);
+    assert_eq!(controller.classification_resize_at_ms, None);
+    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert!(!controller.convergence.in_flight());
+}
+
+#[test]
 fn narrower_after_an_exact_pin_issues_a_resize() {
     let now = Instant::now();
     let step = crate::mux::WidthStep {
