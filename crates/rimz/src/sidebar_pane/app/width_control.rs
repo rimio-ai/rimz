@@ -548,10 +548,10 @@ impl WidthController {
         diag: &DiagSink,
     ) {
         let now = Instant::now();
-        if let (Some(cols), Some(observed_at_ms)) = (measured_cols, panes_observed_at_ms) {
-            if self.sync_fullscreen_hold(cols, observed_at_ms) {
-                self.observe(cols, SidebarWidthControlTrigger::Backstop, diag);
-            }
+        if let (Some(cols), Some(observed_at_ms)) = (measured_cols, panes_observed_at_ms)
+            && self.sync_fullscreen_hold(cols, observed_at_ms)
+        {
+            self.observe(cols, SidebarWidthControlTrigger::Backstop, diag);
         }
         if let Some(siblings) = sibling_count {
             let previous = self.last_siblings.replace(siblings);
@@ -604,9 +604,7 @@ impl WidthController {
             }
         }
         if let Some(cols) = measured_cols {
-            if self.classification_deadline.is_some() {
-                self.idle_retry_deadline = None;
-            } else if self.convergence.is_fullscreen_held() {
+            if self.classification_deadline.is_some() || self.convergence.is_fullscreen_held() {
                 self.idle_retry_deadline = None;
             } else if self.convergence.is_idle() {
                 let deadline = self.idle_retry_deadline.get_or_insert(now + IDLE_RETRY);
