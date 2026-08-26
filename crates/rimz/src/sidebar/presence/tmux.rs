@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::ids::{MuxName, PaneId};
-use crate::mux::tmux::ControlLine;
+use crate::diag::record::{DiagEvent, WorkPaneBoundaryMove};
+use crate::ids::{MuxName, PaneId, ViewId};
+use crate::mux::tmux::{ControlLine, TmuxLayoutPane};
 use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::sidebar::presence::projector::{
     PaneEventEligibility, PaneObservation, PresencePaneRole, PresenceTransition,
@@ -12,6 +13,7 @@ pub(crate) struct TmuxPresenceState {
     panes: BTreeMap<String, PaneEntry>,
     current_window: BTreeMap<String, String>,
     pending_unfocused: BTreeMap<String, String>,
+    window_widths: BTreeMap<String, u64>,
 }
 
 #[derive(Clone)]
@@ -22,6 +24,36 @@ struct PaneEntry {
     overlay_suppressed: bool,
     is_sidebar: bool,
     floating: bool,
+    x: Option<u64>,
+    width: Option<u64>,
+}
+
+pub(crate) struct TmuxPresenceUpdate {
+    transitions: Vec<PresenceTransition>,
+    pub(crate) boundary_move: Option<DiagEvent>,
+}
+
+impl TmuxPresenceUpdate {
+    fn transitions(transitions: Vec<PresenceTransition>) -> Self {
+        Self {
+            transitions,
+            boundary_move: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.transitions.is_empty() && self.boundary_move.is_none()
+    }
+}
+
+impl IntoIterator for TmuxPresenceUpdate {
+    type Item = PresenceTransition;
+    type IntoIter = std::vec::IntoIter<PresenceTransition>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.transitions.into_iter()
+    }
 }
 
 struct SubscriptionUpdate {
@@ -34,7 +66,7 @@ struct SubscriptionUpdate {
 }
 
 impl TmuxPresenceState {
-    pub(crate) fn apply(&mut self, line: ControlLine, seeding: bool) -> Vec<PresenceTransition> {
+    pub(crate) fn apply(&mut self, line: ControlLine, seeding: bool) -> TmuxPresenceUpdate {
         match line {
             ControlLine::Subscription {
                 pane,
@@ -43,7 +75,7 @@ impl TmuxPresenceState {
                 active,
                 title,
                 floating,
-            } => self.apply_subscription(
+            } => TmuxPresenceUpdate::transitions(self.apply_subscription(
                 SubscriptionUpdate {
                     pane,
                     window,
@@ -53,18 +85,74 @@ impl TmuxPresenceState {
                     floating,
                 },
                 seeding,
-            ),
-            ControlLine::WindowClosed { window } => self.close_window(&window),
-            ControlLine::LayoutChange { window, panes } => self.apply_layout(&window, panes),
+            )),
+            ControlLine::SeedPane {
+                pane,
+                window,
+                command,
+                active,
+                title,
+                floating,
+                x,
+                width,
+                window_width,
+            } => {
+                self.seed_pane(
+                    SubscriptionUpdate {
+                        pane,
+                        window,
+                        command,
+                        active,
+                        title,
+                        floating,
+                    },
+                    x,
+                    width,
+                    window_width,
+                );
+                TmuxPresenceUpdate::transitions(Vec::new())
+            }
+            ControlLine::WindowClosed { window } => {
+                TmuxPresenceUpdate::transitions(self.close_window(&window))
+            }
+            ControlLine::LayoutChange {
+                window,
+                window_width,
+                panes,
+            } => self.apply_layout(&window, window_width, panes),
             ControlLine::WindowPaneChanged { window, pane } => {
-                self.window_pane_changed(window, pane, seeding)
+                TmuxPresenceUpdate::transitions(self.window_pane_changed(window, pane, seeding))
             }
             ControlLine::SessionWindowChanged { session, window } => {
-                self.switch_window(session, window, seeding)
+                TmuxPresenceUpdate::transitions(self.switch_window(session, window, seeding))
             }
-            ControlLine::Nudge => vec![PresenceTransition::Nudge],
-            ControlLine::Ignore => Vec::new(),
+            ControlLine::Nudge => TmuxPresenceUpdate::transitions(vec![PresenceTransition::Nudge]),
+            ControlLine::Ignore => TmuxPresenceUpdate::transitions(Vec::new()),
         }
+    }
+
+    fn seed_pane(&mut self, update: SubscriptionUpdate, x: u64, width: u64, window_width: u64) {
+        let is_sidebar = update
+            .title
+            .as_deref()
+            .is_some_and(|value| value.trim() == SIDEBAR_CHROME_TITLE);
+        let overlay_suppressed =
+            is_sidebar || update.title.is_none() && update.command.as_deref() == Some("rimz");
+        self.window_widths
+            .insert(update.window.clone(), window_width);
+        self.panes.insert(
+            update.pane,
+            PaneEntry {
+                window: update.window,
+                command: update.command,
+                active: update.active,
+                overlay_suppressed,
+                is_sidebar,
+                floating: update.floating,
+                x: Some(x),
+                width: Some(width),
+            },
+        );
     }
 
     fn apply_subscription(
@@ -86,6 +174,9 @@ impl TmuxPresenceState {
         let suppress_overlay = is_sidebar || title.is_none() && command.as_deref() == Some("rimz");
         let role = pane_role(suppress_overlay, is_sidebar);
         let old = self.panes.get(&pane).cloned();
+        let (x, width) = old
+            .as_ref()
+            .map_or((None, None), |entry| (entry.x, entry.width));
         let current = PaneObservation {
             pane_id: pane_id(&pane),
             view: window.clone(),
@@ -127,6 +218,8 @@ impl TmuxPresenceState {
                 overlay_suppressed: suppress_overlay,
                 is_sidebar,
                 floating,
+                x,
+                width,
             },
         );
         events
@@ -183,6 +276,7 @@ impl TmuxPresenceState {
     }
 
     fn close_window(&mut self, window: &str) -> Vec<PresenceTransition> {
+        self.window_widths.remove(window);
         let closed = self
             .panes
             .iter()
@@ -198,8 +292,82 @@ impl TmuxPresenceState {
             .collect()
     }
 
-    fn apply_layout(&mut self, window: &str, panes: Vec<String>) -> Vec<PresenceTransition> {
-        let present = panes.into_iter().collect::<BTreeSet<_>>();
+    fn apply_layout(
+        &mut self,
+        window: &str,
+        window_width: u64,
+        panes: Vec<TmuxLayoutPane>,
+    ) -> TmuxPresenceUpdate {
+        let present = panes
+            .iter()
+            .map(|pane| pane.id.clone())
+            .collect::<BTreeSet<_>>();
+        let previous = self
+            .panes
+            .iter()
+            .filter(|(_, entry)| entry.window == window && !entry.floating)
+            .filter_map(|(pane, entry)| Some((pane.clone(), (entry.x?, entry.width?))))
+            .collect::<BTreeMap<_, _>>();
+        let next = panes
+            .iter()
+            .map(|pane| (pane.id.clone(), (pane.x, pane.width)))
+            .collect::<BTreeMap<_, _>>();
+        let boundary_move = self
+            .window_widths
+            .get(window)
+            .copied()
+            .filter(|prior_width| *prior_width == window_width && previous.keys().eq(next.keys()))
+            .and_then(|_| {
+                let mut sidebars = self.panes.iter().filter(|(_, entry)| {
+                    entry.window == window && !entry.floating && entry.is_sidebar
+                });
+                let (sidebar, sidebar_entry) = sidebars.next()?;
+                if sidebars.next().is_some()
+                    || next.get(sidebar).map(|(_, width)| *width) != sidebar_entry.width
+                {
+                    return None;
+                }
+                let moves = previous
+                    .iter()
+                    .filter(|(pane, _)| pane.as_str() != sidebar)
+                    .filter_map(|(pane, (from_x, from_cols))| {
+                        let (to_x, to_cols) = next.get(pane)?;
+                        ((*from_x, *from_cols) != (*to_x, *to_cols)).then(|| WorkPaneBoundaryMove {
+                            pane: pane_id(pane),
+                            from_x: *from_x,
+                            from_cols: *from_cols,
+                            to_x: *to_x,
+                            to_cols: *to_cols,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                if moves.is_empty() {
+                    return None;
+                }
+                Some(DiagEvent::WorkPaneBoundaryMoved {
+                    view_id: ViewId::new_unchecked(window),
+                    view_cols: window_width,
+                    moves,
+                })
+            });
+        self.window_widths.insert(window.to_owned(), window_width);
+        for pane in &panes {
+            let entry = self
+                .panes
+                .entry(pane.id.clone())
+                .or_insert_with(|| PaneEntry {
+                    window: window.to_owned(),
+                    command: None,
+                    active: false,
+                    overlay_suppressed: false,
+                    is_sidebar: false,
+                    floating: false,
+                    x: None,
+                    width: None,
+                });
+            entry.x = Some(pane.x);
+            entry.width = Some(pane.width);
+        }
         let has_floating = self
             .panes
             .values()
@@ -227,7 +395,10 @@ impl TmuxPresenceState {
         if has_floating {
             events.push(PresenceTransition::IncompleteLayout);
         }
-        events
+        TmuxPresenceUpdate {
+            transitions: events,
+            boundary_move,
+        }
     }
 
     fn switch_window(
@@ -401,6 +572,21 @@ mod tests {
         ControlLine::WindowPaneChanged {
             window: window.to_owned(),
             pane: pane.to_owned(),
+        }
+    }
+
+    fn layout(window: &str, window_width: u64, panes: &[(&str, u64, u64)]) -> ControlLine {
+        ControlLine::LayoutChange {
+            window: window.to_owned(),
+            window_width,
+            panes: panes
+                .iter()
+                .map(|(id, x, width)| TmuxLayoutPane {
+                    id: (*id).to_owned(),
+                    x: *x,
+                    width: *width,
+                })
+                .collect(),
         }
     }
 
@@ -743,14 +929,7 @@ mod tests {
         project_apply(&mut roster, sub("%2", "@1", Some("claude"), false), true);
         project_apply(&mut roster, sub("%3", "@2", Some("codex"), false), true);
         assert_eq!(
-            project_apply(
-                &mut roster,
-                ControlLine::LayoutChange {
-                    window: "@1".to_owned(),
-                    panes: vec!["%1".to_owned()],
-                },
-                false
-            ),
+            project_apply(&mut roster, layout("@1", 100, &[("%1", 0, 100)]), false),
             vec![SidebarEvent::PaneClosed {
                 pane_id: pane_id("%2"),
             }]
@@ -766,14 +945,7 @@ mod tests {
         project_apply(&mut roster, sub("%1", "@1", Some("zsh"), false), true);
         project_apply(&mut roster, floating_sub("%2", "@1", Some("codex")), true);
         assert_eq!(
-            project_apply(
-                &mut roster,
-                ControlLine::LayoutChange {
-                    window: "@1".to_owned(),
-                    panes: vec!["%1".to_owned()],
-                },
-                false,
-            ),
+            project_apply(&mut roster, layout("@1", 100, &[("%1", 0, 100)]), false,),
             vec![SidebarEvent::PanesChanged],
         );
         assert!(roster.panes.contains_key("%1"));
@@ -790,14 +962,7 @@ mod tests {
         // is absent from the layout string too but must survive, so the event
         // names only `%2` and appends a nudge for the floating-pane poll.
         assert_eq!(
-            project_apply(
-                &mut roster,
-                ControlLine::LayoutChange {
-                    window: "@1".to_owned(),
-                    panes: vec!["%1".to_owned()],
-                },
-                false,
-            ),
+            project_apply(&mut roster, layout("@1", 100, &[("%1", 0, 100)]), false,),
             vec![
                 SidebarEvent::PaneClosed {
                     pane_id: pane_id("%2"),
@@ -816,6 +981,88 @@ mod tests {
         assert_eq!(
             project_apply(&mut roster, ControlLine::Nudge, false),
             vec![SidebarEvent::PanesChanged]
+        );
+    }
+
+    #[test]
+    fn layout_audits_only_stable_work_boundary_moves() {
+        let mut state = TmuxPresenceState::default();
+        state.apply(sidebar_sub("%1", "@7", false), true);
+        state.apply(sub("%2", "@7", Some("architect"), false), true);
+        state.apply(sub("%3", "@7", Some("zsh"), false), true);
+        assert!(
+            state
+                .apply(
+                    layout("@7", 213, &[("%1", 0, 55), ("%2", 55, 79), ("%3", 134, 79)],),
+                    true,
+                )
+                .boundary_move
+                .is_none()
+        );
+
+        let moved = state.apply(
+            layout(
+                "@7",
+                213,
+                &[("%1", 0, 55), ("%2", 55, 47), ("%3", 102, 111)],
+            ),
+            false,
+        );
+        assert_eq!(
+            moved.boundary_move,
+            Some(DiagEvent::WorkPaneBoundaryMoved {
+                view_id: ViewId::new_unchecked("@7"),
+                view_cols: 213,
+                moves: vec![
+                    WorkPaneBoundaryMove {
+                        pane: pane_id("%2"),
+                        from_x: 55,
+                        from_cols: 79,
+                        to_x: 55,
+                        to_cols: 47,
+                    },
+                    WorkPaneBoundaryMove {
+                        pane: pane_id("%3"),
+                        from_x: 134,
+                        from_cols: 79,
+                        to_x: 102,
+                        to_cols: 111,
+                    },
+                ],
+            }),
+        );
+
+        assert!(
+            state
+                .apply(
+                    layout(
+                        "@7",
+                        214,
+                        &[("%1", 0, 55), ("%2", 55, 47), ("%3", 102, 112)],
+                    ),
+                    false,
+                )
+                .boundary_move
+                .is_none()
+        );
+        assert!(
+            state
+                .apply(
+                    layout(
+                        "@7",
+                        214,
+                        &[("%1", 0, 56), ("%2", 56, 46), ("%3", 102, 112)],
+                    ),
+                    false,
+                )
+                .boundary_move
+                .is_none()
+        );
+        assert!(
+            state
+                .apply(layout("@7", 214, &[("%1", 0, 56), ("%2", 56, 158)]), false,)
+                .boundary_move
+                .is_none()
         );
     }
 }

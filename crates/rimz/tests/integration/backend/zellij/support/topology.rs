@@ -35,19 +35,14 @@ impl ListedPane {
     }
 }
 
-fn write_topology_cache(
-    xdg: &Path,
-    workspace_id: &WorkspaceId,
-    session: &str,
-    snapshot: &PaneSnapshot,
-) {
+fn topology_cache(session: &str, snapshot: &PaneSnapshot) -> PaneTopologyCache {
     let fallback_positions: BTreeMap<u64, u64> = snapshot
         .tab_ids()
         .into_iter()
         .enumerate()
         .map(|(position, id)| (id, u64::try_from(position).unwrap_or(u64::MAX)))
         .collect();
-    let topology = PaneTopologyCache {
+    PaneTopologyCache {
         session_name: session.to_owned(),
         produced_at_ms: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -63,7 +58,16 @@ fn write_topology_cache(
             .iter()
             .map(|pane| pane.topology(&fallback_positions))
             .collect(),
-    };
+    }
+}
+
+fn write_topology_cache(
+    xdg: &Path,
+    workspace_id: &WorkspaceId,
+    session: &str,
+    snapshot: &PaneSnapshot,
+) {
+    let topology = topology_cache(session, snapshot);
     let path = xdg
         .join("rimz")
         .join(workspace_id.as_str())
@@ -72,6 +76,13 @@ fn write_topology_cache(
         .expect("create topology parent");
     rimz::store::atomic::write_temp_then_rename_cache_compact(&path, &topology)
         .expect("write topology cache");
+}
+
+pub(in crate::backend::zellij) fn topology_cache_from_list_panes(
+    xdg: &Path,
+    session: &str,
+) -> PaneTopologyCache {
+    topology_cache(session, &PaneSnapshot::expect(xdg, session))
 }
 
 pub(in crate::backend::zellij) fn write_topology_cache_from_list_panes(

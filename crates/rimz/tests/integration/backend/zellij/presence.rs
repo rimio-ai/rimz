@@ -10,6 +10,123 @@ use crate::common::{CommandTimeoutExt, ZellijNamespace};
 
 use super::support::*;
 
+#[test]
+fn live_work_boundary_resize_is_audited() {
+    require_zellij!();
+
+    const VIEW_COLS: u16 = 213;
+    let room = LiveZellijSession::new("boundary-audit");
+    let xdg = room.path();
+    let name = room.name().to_owned();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let sidebar = sidebar_opts(&name, cwd.path(), stub, VIEW_COLS);
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &sidebar);
+    backend.open_sidebar(&sidebar, None).expect("open sidebar");
+    wait_for_pane_count(xdg, &name, 2);
+    let _client = AttachedClient::attach(&room, VIEW_COLS, 60);
+    backend
+        .open_tab(&TabOptions {
+            title: "audit".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![
+                    tiled_column(vec![PaneCmd {
+                        argv: vec!["sleep".to_owned(), "600".to_owned()],
+                        name: Some("architect".to_owned()),
+                    }]),
+                    tiled_column(vec![PaneCmd {
+                        argv: vec!["sleep".to_owned(), "600".to_owned()],
+                        name: Some("work".to_owned()),
+                    }]),
+                ],
+            },
+            focus: true,
+            dock_sidebar: true,
+            sidebar: sidebar.clone(),
+        })
+        .expect("open audit tab");
+    let before = wait_for_named_work_pane_count(xdg, &name, "audit", 2);
+    let state = rimz::StatePaths::under(sidebar.workspace_id.clone(), xdg).expect("state paths");
+    let runtime =
+        rimz::RuntimePaths::under(sidebar.workspace_id.clone(), xdg).expect("runtime paths");
+    state.ensure_dirs().expect("state dirs");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let mut baseline = topology_cache_from_list_panes(xdg, &name);
+    let writer = rimz::sidebar::cache::read_pane_topology_cache(&runtime, &name)
+        .and_then(|cache| cache.writer);
+    baseline.writer = writer.clone();
+    rimz::sidebar::presence::ingest_zellij_wake(
+        &state,
+        &runtime,
+        &rimz::sidebar::presence::ZellijWake {
+            reason: rimz::sidebar::presence::ZellijWakeReason::Alive,
+            session_name: Some(name.clone()),
+            pane_id: None,
+            active_tab: None,
+            focus_generation: None,
+            focus_clients: Vec::new(),
+            topology: Some(baseline),
+            telemetry: None,
+        },
+    )
+    .expect("ingest baseline topology");
+
+    let target = format!("terminal_{}", before[0].id);
+    let output = ZellijNamespace::command_at(xdg)
+        .args([
+            "--session",
+            &name,
+            "action",
+            "resize",
+            "decrease",
+            "right",
+            "--pane-id",
+            &target,
+        ])
+        .bounded_output()
+        .expect("resize work boundary");
+    assert!(
+        output.status.success(),
+        "resize work boundary failed: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    wait_for_named_work_pane_state(xdg, &name, "audit", 2, |after| after != &before);
+    let mut incoming = topology_cache_from_list_panes(xdg, &name);
+    incoming.writer = writer;
+    rimz::sidebar::presence::ingest_zellij_wake(
+        &state,
+        &runtime,
+        &rimz::sidebar::presence::ZellijWake {
+            reason: rimz::sidebar::presence::ZellijWakeReason::Alive,
+            session_name: Some(name.clone()),
+            pane_id: None,
+            active_tab: None,
+            focus_generation: None,
+            focus_clients: Vec::new(),
+            topology: Some(incoming),
+            telemetry: None,
+        },
+    )
+    .expect("ingest moved topology");
+
+    let diag =
+        rimz::diag::DiagSink::under(state.root.clone(), state.workspace_id.clone(), &name, None);
+    let records = std::fs::read_to_string(diag.log_path().expect("diagnostic path"))
+        .expect("boundary diagnostic");
+    let moves = records
+        .lines()
+        .filter_map(|line| serde_json::from_str::<rimz::diag::record::DiagEnvelope>(line).ok())
+        .filter(|record| {
+            matches!(
+                record.event,
+                rimz::diag::record::DiagEvent::WorkPaneBoundaryMoved { .. }
+            )
+        })
+        .count();
+    assert_eq!(moves, 1, "expected one boundary audit record: {records}");
+}
+
 /// The presence-plugin wasm `cargo xtask build-plugin` produces, honoring
 /// `CARGO_TARGET_DIR`. `None` self-skips the live plugin test — CI's
 /// build-plugin gate runs before the suite, so the artifact is present there.

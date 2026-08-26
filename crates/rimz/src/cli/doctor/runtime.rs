@@ -1169,6 +1169,7 @@ fn classify_diagnostic(
         | DiagEvent::DuplicatePaneId { .. }
         | DiagEvent::ForeignSessionPane { .. }
         | DiagEvent::GhostSessionBind { .. }
+        | DiagEvent::WorkPaneBoundaryMoved { .. }
         | DiagEvent::MixedBuildWriters { .. }
         | DiagEvent::RendererPanic { .. }
         | DiagEvent::RendererSignalDeath { .. }

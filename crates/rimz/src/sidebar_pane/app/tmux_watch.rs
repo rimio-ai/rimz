@@ -20,6 +20,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::RuntimePaths;
+use crate::diag::DiagSink;
 use crate::ids::MuxName;
 use crate::mux::tmux::{PresenceWatch, managed_server_socket_path};
 use crate::sidebar::ProducerElectionTracker;
@@ -57,6 +58,8 @@ fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerEle
         }
         match PresenceWatch::attach(&control_socket, session_name) {
             Ok(mut watch) => {
+                let diag =
+                    DiagSink::for_workspace(runtime.workspace_id.clone(), session_name, None);
                 crate::sidebar::cache::write_presence_stamp(
                     runtime,
                     MuxName::Tmux,
@@ -73,7 +76,11 @@ fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerEle
                     let now = Instant::now();
                     let deadline = seed_deadline.get_or_insert(now + SEED_WINDOW);
                     let seeding = now < *deadline;
-                    for event in project_presence(state.apply(line, seeding)) {
+                    let update = state.apply(line, seeding);
+                    if let Some(event) = update.boundary_move.clone() {
+                        diag.emit(event);
+                    }
+                    for event in project_presence(update) {
                         let _ =
                             crate::sidebar::wakeup::broadcast(runtime, Some(session_name), event);
                     }
