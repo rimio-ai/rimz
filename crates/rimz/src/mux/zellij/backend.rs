@@ -693,6 +693,15 @@ impl MuxBackend for ZellijBackend {
         spec.arg(target).run().map(|_| ())
     }
 
+    fn toggle_fullscreen(&self, pane: &PaneId, session: Option<&str>) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Zellij)?;
+        let session = session.ok_or_else(|| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: "fullscreen toggle requires a session name".to_owned(),
+        })?;
+        self.broadcast_presence_pipe(session, super::PRESENCE_TOGGLE_FULLSCREEN_PIPE, pane.raw())
+    }
+
     fn sidebar_width_step(
         &self,
         runtime: &RuntimePaths,

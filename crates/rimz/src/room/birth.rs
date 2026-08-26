@@ -161,7 +161,7 @@ impl RoomContext {
 
         let sidebar = self.sidebar_options(&cwd, resume.tabs.clone(), refresh_ms);
 
-        self.register_focus_key();
+        self.register_room_keys();
 
         let background_view = background_view.as_ref();
         let daemon = background_view.map(|options| &options.view);

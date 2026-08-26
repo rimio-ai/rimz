@@ -54,6 +54,7 @@ fn config() -> EngineConfig {
         plugin_build: Some("wasm-build".to_owned()),
         plugin_config: Some("config-hash".to_owned()),
         focus_key: None,
+        zoom_key: None,
         focus_follows_mouse: None,
         mouse_click_through: None,
     }
@@ -62,10 +63,54 @@ fn config() -> EngineConfig {
 fn reconfigure_config() -> EngineConfig {
     EngineConfig {
         focus_key: Some("Alt+p".to_owned()),
+        zoom_key: Some("Alt+z".to_owned()),
         focus_follows_mouse: Some(false),
         mouse_click_through: Some(true),
         ..config()
     }
+}
+
+#[test]
+fn zoom_pipe_runs_the_host_command_after_permission() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    assert!(engine.on_zoom_pane_pipe().is_empty());
+
+    grant(&mut engine, 1, &host);
+    assert_eq!(
+        engine.on_zoom_pane_pipe(),
+        vec![Effect::RunCommand(strings(&[
+            "/bin/rimz",
+            "pane",
+            "zoom",
+            "--session-name",
+            "session-1",
+            "--mux",
+            "zellij",
+        ]))]
+    );
+}
+
+#[test]
+fn fullscreen_pipe_only_projects_a_valid_host_selected_pane_after_permission() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    assert!(
+        engine
+            .on_toggle_fullscreen_pipe(Some("terminal_7"))
+            .is_empty()
+    );
+
+    grant(&mut engine, 1, &host);
+    assert_eq!(
+        engine.on_toggle_fullscreen_pipe(Some("terminal_7")),
+        vec![Effect::TogglePaneFullscreen(ProjectedPaneId::Terminal(7))]
+    );
+    assert!(
+        engine
+            .on_toggle_fullscreen_pipe(Some("not-a-pane"))
+            .is_empty()
+    );
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -906,6 +951,7 @@ fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
         vec![Effect::Unsubscribe]
     );
     assert!(same_id.on_focus_sidebar_pipe().is_empty());
+    assert!(same_id.on_zoom_pane_pipe().is_empty());
     assert!(same_id.on_timer(KEEPALIVE_MS, &host).is_empty());
     assert!(
         same_id
@@ -928,6 +974,7 @@ fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
     assert_eq!(reasons(&effects), vec!["alive"]);
     assert!(run_commands(&effects)[0].contains(&"--topology".to_owned()));
     assert!(!same_id.on_focus_sidebar_pipe().is_empty());
+    assert!(!same_id.on_zoom_pane_pipe().is_empty());
     assert_eq!(
         same_id.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":40}"#)),
         vec![Effect::Unsubscribe],

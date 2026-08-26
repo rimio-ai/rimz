@@ -37,7 +37,7 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`width.rs`](../../crates/rimz/src/mux/width.rs) | Sidebar sizing: share resolution, native steps, and target spellings. |
 | [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | Destructive teardown and guarded process sweep shared by `rimz reset` and attended auto-reset. |
 | [`domain.rs`](../../crates/rimz/src/mux/domain.rs) | `ProcessDomain`: the guard every heuristic process kill passes. |
-| [`focus_key.rs`](../../crates/rimz/src/mux/focus_key.rs) | Parsing the `[sidebar] focus_key` chord both backends bind. |
+| [`focus_key.rs`](../../crates/rimz/src/mux/focus_key.rs) | Parsing and rendering the `[sidebar] focus_key` and `zoom_key` chords both backends bind. |
 | [`keys.rs`](../../crates/rimz/src/mux/keys.rs) | Named key presses and bracketed-paste markers. |
 | [`capabilities.rs`](../../crates/rimz/src/mux/capabilities.rs) | Static backend facts, such as whether a view is a tab or a window. |
 | [`binaries.rs`](../../crates/rimz/src/mux/binaries.rs) | PATH and live-server binary probes for `rimz doctor`. |
@@ -94,7 +94,7 @@ Selection is stable across worktrees: every worktree of one repository resolves 
 | Pane inventory | `list_panes`, `cached_pane_roster`, `client_view` | See [reading the room](#reading-the-room). |
 | Pane I/O | `capture_pane`, `send_keys`, `send_key`, `paste_text` | `paste_text` wraps one bracketed paste and converts logical newlines to CR; the submit Enter follows separately as a keystroke. |
 | Structure | `split_pane`, `open_tab`, `rename_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. `rename_tab` addresses the view through one pane anchor. |
-| Focus and geometry | `focus_pane`, `sidebar_width_step`, `nudge_sidebar_width`, `record_sidebar_width_default`, `register_focus_key` | |
+| Focus and geometry | `focus_pane`, `toggle_fullscreen`, `sidebar_width_step`, `nudge_sidebar_width`, `record_sidebar_width_default`, `register_room_key` | |
 | Health | `probe_session_health`, `ensure_clean_session`, `reconcile_sidebars`, `purge_resurrection_cache`, `resurrection_cache_paths`, `session_accepts_agent_close` | Several default to a no-op because they answer a Zellij-only question. |
 | Presence | `ensure_presence_plugin` | Zellij-only; tmux inherits the no-op default because its control-mode watch already pushes. |
 
@@ -218,16 +218,18 @@ Every attached-client jump is wrapped in a two-phase global intent. `Requested` 
 
 Native observations then resolve it. The exact unchanged pre-action client map is fenced after the short presentation window and yields unknown rather than snapping selection back to stale evidence. A target observation confirms the intent, a different pane supersedes it, and client replacement, detach, session replacement, or pane closure invalidates it. This separation matters on Zellij, where `action focus-pane-id` can move the visible pane and routed input without a causally matching `ListClients` update.
 
-### The focus key
+### Room keys
 
 The sidebar's in-pane keys fire only when the sidebar pane is focused, so a room-scoped chord (`[sidebar] focus_key`, default `Alt+p`) reaches it from any pane. The keystroke lands in whatever pane is focused, so the multiplexer intercepts it; both backends run `rimz sidebar focus --toggle`, which focuses this session's `rimz-sidebar` pane or returns to a deterministic working sibling, and only when one unique fresh client view proves the sidebar is current. An unavailable or distinct view returns a non-mutating ambiguity error.
 
-The chord is parsed once by [`FocusChord`](../../crates/rimz/src/mux/focus_key.rs) (`Alt` or `Ctrl`, with `M-`/`C-` and `-`/`+` separators). `Alt` is the default because it survives the terminal, Zellij's locked mode, and tmux's prefix; `off` or empty registers nothing. Registration is best-effort at session birth, so a convenience key never blocks a room.
+The smart-zoom chord (`[sidebar] zoom_key`, default `Alt+z`) runs `rimz pane zoom`. With one unique attached-client focus it toggles fullscreen for the focused work pane. If that pane is sidebar chrome, RimZ resolves a non-chrome sibling in the same view, records and applies the user focus intent, then fullscreens the sibling. No sibling leaves the view unchanged.
+
+Both chords are parsed once by [`FocusChord`](../../crates/rimz/src/mux/focus_key.rs) (`Alt` or `Ctrl`, with `M-`/`C-` and `-`/`+` separators). `Alt` is the default because it survives the terminal, Zellij's locked mode, and tmux's prefix; `off` or empty registers nothing. Registration is best-effort at session birth, so a convenience key never blocks a room.
 
 The two backends bind it differently, because a tmux binding and a Zellij binding reach a pane differently:
 
 - **tmux** binds a server-global root-table key that bakes in no room identity and resolves the pressing pane's session at keypress.
-- **Zellij** routes through the presence plugin. RimZ passes the chord in the plugin's load configuration and the plugin binds it, once it holds the `Reconfigure` grant, to a runtime-only `MessagePluginId` action that messages its own plugin id. That reaches the exact loaded instance from any pane, leaves the user's `config.kdl` unchanged, and resets when the session ends. A user who declines `Reconfigure` can bind the same pipe by hand.
+- **Zellij** routes through the presence plugin. RimZ passes both chords in the plugin's load configuration and the plugin installs them in one runtime `Reconfigure`, each as a `MessagePluginId` action to its own instance. The focus pipe runs the hidden sidebar toggle; the zoom pipe runs the public pane command. This leaves the user's `config.kdl` unchanged and resets when the session ends.
 
 ## One sidebar per view
 
@@ -434,7 +436,7 @@ The crate splits along the wasm boundary, which is what makes it testable.
 
 `engine`, `policy`, and `wire` contain no `zellij-tile` type, so they compile and unit-test on the host target inside the ordinary workspace test run. `zellij-tile` is a wasm-only dependency, since its shims call extern host functions that exist only inside Zellij's plugin host.
 
-The engine returns effects rather than performing them: `RunCommand`, `HideSelf`, `Reconfigure`, `CloseSelf`, `Unsubscribe`, `Resubscribe`, `SetTimeout`, `ListClients`. Every decision is therefore a pure function from event to effect list, and the shell stays a projection layer.
+The engine returns effects rather than performing them: `RunCommand`, `HideSelf`, `Reconfigure`, `TogglePaneFullscreen`, `CloseSelf`, `Unsubscribe`, `Resubscribe`, `SetTimeout`, `ListClients`. Every decision is therefore a pure function from event to effect list, and the shell stays a projection layer.
 
 Inside the engine, one canonical pane map is the single source of truth. Reducers retain partial manifests, patch event enrichment in place, and publish panes in deterministic tab and key order.
 
@@ -500,6 +502,7 @@ RimZ seeds Zellij's `permissions.kdl` cache for its own embedded plugin so the f
 | `ReadApplicationState` | The pane, tab, session, and client manifests. |
 | `RunCommands` | The `rimz sidebar wake` fork. |
 | `Reconfigure` | Runtime mouse options and the optional focus keybind, applied without writing `config.kdl`. |
+| `ChangeApplicationState` | The mechanical fullscreen toggle for the host-selected pane id. |
 
 The plugin artifact path is canonicalized because Zellij keys the grant on the exact string. The security boundary is in [security.md](../guide/security.md#the-zellij-presence-plugin).
 

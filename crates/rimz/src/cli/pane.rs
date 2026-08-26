@@ -2,6 +2,9 @@
 
 mod bandwidth;
 
+use std::collections::HashSet;
+use std::io::Write;
+
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
@@ -88,6 +91,13 @@ enum PaneSubcmd {
         #[arg(long)]
         pane_process_start: Option<String>,
     },
+    /// Toggle fullscreen for the focused work pane. If the sidebar is focused,
+    /// focus and fullscreen a working sibling instead.
+    Zoom {
+        /// Session to inspect. Defaults to the cwd's workspace session.
+        #[arg(long)]
+        session_name: Option<String>,
+    },
     /// Split off a new pane in the current view.
     Split,
     /// Detach the attached client from a session; the session keeps running in
@@ -148,6 +158,11 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
                 }
             };
             focus(&*backend, &target.pane, &session_name, pane_process_start)
+        }
+        PaneSubcmd::Zoom { session_name } => {
+            let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+            let backend = rimz::mux::backend_for(mux);
+            zoom(&*backend, globals, session_name)
         }
         PaneSubcmd::Split => {
             let mux = rimz::mux::auto_detect_backend(globals.mux)?;
@@ -570,6 +585,69 @@ fn focus(
         Default::default(),
     )?;
     Ok(())
+}
+
+fn zoom(
+    backend: &dyn MuxBackend,
+    globals: &GlobalFlags,
+    session_name: Option<String>,
+) -> Result<()> {
+    let session_name = resolve_session_name(globals, session_name)?;
+    let listing = backend
+        .list_panes(PaneListOptions {
+            session_name: Some(session_name.clone()),
+            ..Default::default()
+        })
+        .context("listing panes for zoom")?;
+    let view = backend
+        .client_view(rimz::mux::ClientFocusOptions {
+            session_name: Some(session_name.clone()),
+            ..Default::default()
+        })
+        .context("sampling attached client focus for zoom")?;
+    let live = listing
+        .panes
+        .iter()
+        .map(|pane| pane.pane_id.clone())
+        .collect::<HashSet<_>>();
+    let focused =
+        rimz::mux::ClientView::unique_live_focus(&view.clients, &view.viewed_panes, &live)
+            .ok_or_else(|| {
+                anyhow::anyhow!("pane zoom requires one attached client focused on one live pane")
+            })?;
+    let target = if listing
+        .panes
+        .iter()
+        .find(|pane| pane.pane_id == focused)
+        .is_some_and(PaneRef::is_rimz_sidebar)
+    {
+        let Some(sibling) = rimz::pane::working_sibling_in_tab(&listing.panes, &focused) else {
+            writeln!(
+                render::err(),
+                "rimz: sidebar is the only pane in its view; nothing to zoom"
+            )?;
+            return Ok(());
+        };
+        let workspace = rimz::room::session::workspace_record_for_session(&session_name)?
+            .ok_or_else(|| anyhow::anyhow!("pane zoom requires a managed RimZ room session"))?;
+        let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id)?;
+        rimz::sidebar::focus_anchor::execute_action(
+            backend,
+            &runtime,
+            &session_name,
+            sibling.pane_id.clone(),
+            rimz::sidebar::focus_anchor::FocusOrigin::User,
+            None,
+            Default::default(),
+        )
+        .context("focusing working pane before zoom")?;
+        &sibling.pane_id
+    } else {
+        &focused
+    };
+    backend
+        .toggle_fullscreen(target, Some(&session_name))
+        .context("toggling pane fullscreen")
 }
 
 fn validate_pane_not_reused(

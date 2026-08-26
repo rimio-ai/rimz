@@ -25,8 +25,12 @@ use crate::store::{atomic, paths};
 const EMBEDDED_PRESENCE_PLUGIN: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/rimz-presence-zellij.wasm"));
 const PRESENCE_PLUGIN_FILE: &str = "rimz-presence-zellij.wasm";
-const PRESENCE_PLUGIN_BASE_PERMISSIONS: [&str; 3] =
-    ["ReadApplicationState", "RunCommands", "Reconfigure"];
+const PRESENCE_PLUGIN_BASE_PERMISSIONS: [&str; 4] = [
+    "ReadApplicationState",
+    "RunCommands",
+    "Reconfigure",
+    "ChangeApplicationState",
+];
 static PRESENCE_PLUGIN_BUILD: LazyLock<String> =
     LazyLock::new(|| crate::build_id::of_bytes(EMBEDDED_PRESENCE_PLUGIN));
 
@@ -170,10 +174,9 @@ fn presence_plugin_identity(opts: &super::super::PresencePluginOptions) -> Prese
     } else {
         "false"
     });
-    // The focus chord the plugin binds at load. Grammar validation and the
-    // user-facing warning live in `cli::register_focus_key` (it runs for both
-    // backends); here we only guard the plugin-config separators and let the
-    // plugin's own parser skip anything malformed.
+    // Room chords the plugin binds at load. Grammar validation and user-facing
+    // warnings happen at room birth for both backends; here we only guard the
+    // plugin-config separators.
     if let Some(focus_key) = opts.focus_key.as_deref() {
         if focus_key.contains([',', '=']) {
             tracing::debug!(
@@ -183,6 +186,17 @@ fn presence_plugin_identity(opts: &super::super::PresencePluginOptions) -> Prese
         } else {
             configuration.push_str(",focus_key=");
             configuration.push_str(focus_key);
+        }
+    }
+    if let Some(zoom_key) = opts.zoom_key.as_deref() {
+        if zoom_key.contains([',', '=']) {
+            tracing::debug!(
+                zoom_key,
+                "zoom_key contains a plugin-configuration separator; the Zellij zoom keybind is disabled",
+            );
+        } else {
+            configuration.push_str(",zoom_key=");
+            configuration.push_str(zoom_key);
         }
     }
     // Pipe-launched identities are background plugins. Changing this marker
@@ -426,7 +440,7 @@ impl ZellijBackend {
         Ok(())
     }
 
-    fn broadcast_presence_pipe(
+    pub(super) fn broadcast_presence_pipe(
         &self,
         session_name: &str,
         pipe_name: &str,

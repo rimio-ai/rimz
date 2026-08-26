@@ -53,8 +53,9 @@ Notification handlers run a command of your choosing when a row needs attention 
 On Zellij, RimZ loads a small presence plugin into each session so the sidebar learns pane layout by push, and a tab switch lands back on your work instead of the sidebar ([internals](../internals/multiplexers.md#the-zellij-presence-plugin)). Zellij normally prompts before a plugin gets permissions; RimZ seeds that grant ahead of load, keyed to the exact plugin path it materializes, so the first attach is not interrupted. The grant covers:
 
 - **Access Zellij state**: the plugin watches pane and tab shape.
-- **Run commands**: it runs the RimZ-owned `rimz sidebar wake` and `rimz sidebar focus` calls, and nothing else.
-- **Reconfigure**: it applies the room's mouse options and, if you set one, binds the [focus key](./configuration.md#sidebar-rendering), both at runtime without writing your `config.kdl`.
+- **Run commands**: it runs the RimZ-owned `rimz sidebar wake`, `rimz sidebar focus`, and `rimz pane zoom` calls, and nothing else.
+- **Reconfigure**: it applies the room's mouse options and binds the configured [room keys](./configuration.md#sidebar-rendering), both at runtime without writing your `config.kdl`.
+- **Change application state**: it applies a host-selected pane's mechanical fullscreen toggle; sidebar-aware target selection stays in the host command.
 - **Start web server**: added only when `[web] enabled`, so `rimz web open` can share a running session.
 
 The vendored plugin is reproducibly built from the checked-in source on the repository's pinned Rust toolchain. Its source digest, wasm digest, and producing toolchain are committed beside it; every vendored embed verifies the wasm checksum, and CI rebuilds the source with that toolchain and requires byte-for-byte equality.

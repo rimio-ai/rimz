@@ -433,6 +433,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         rimz_bin: rimz_shim,
         converge: false,
         focus_key: None,
+        zoom_key: None,
         focus_follows_mouse: false,
         mouse_click_through: true,
     };
@@ -567,6 +568,7 @@ fn presence_identity_transition_keeps_global_background_updates() {
         rimz_bin: crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz")),
         converge: false,
         focus_key: None,
+        zoom_key: None,
         focus_follows_mouse: false,
         mouse_click_through: true,
     };
@@ -859,6 +861,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
             rimz_bin: room_bin,
             converge: true,
             focus_key: Some("Alt+p".to_owned()),
+            zoom_key: Some("Alt+z".to_owned()),
             focus_follows_mouse: false,
             mouse_click_through: true,
         })
@@ -1030,6 +1033,7 @@ fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
             rimz_bin: rimz_shim,
             converge: false,
             focus_key: Some("Alt+p".to_owned()),
+            zoom_key: None,
             focus_follows_mouse: false,
             mouse_click_through: true,
         })

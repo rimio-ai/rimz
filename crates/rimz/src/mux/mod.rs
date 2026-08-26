@@ -22,7 +22,7 @@ pub mod zellij;
 pub use capabilities::{drops_desktop_osc, lists_full_cmdline, view_kind, wraps_osc_passthrough};
 pub use command::CommandSpec;
 pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
-pub use focus_key::FocusKeyBinding;
+pub use focus_key::{RoomKeyAction, RoomKeyBinding};
 pub(crate) use keys::paste_payload;
 pub use keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, UnknownKey};
 pub(crate) use reconcile::{
@@ -634,6 +634,8 @@ pub struct PresencePluginOptions {
     /// instead — the Zellij key has to route through the plugin because a plain
     /// keybind cannot focus a pane by id.
     pub focus_key: Option<String>,
+    /// The smart-zoom chord (`[sidebar] zoom_key`) bound by the plugin.
+    pub zoom_key: Option<String>,
     /// Runtime mouse options the Zellij presence plugin re-applies through
     /// `reconfigure`, where booleans are absolute instead of CLI-XORed with the
     /// user's `config.kdl`.
@@ -834,6 +836,10 @@ pub trait MuxBackend: Send + Sync {
     /// `ZELLIJ_SESSION_NAME` resolve it. tmux ignores the session because pane
     /// ids are server-global.
     fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()>;
+    /// Toggle fullscreen for `pane`. tmux addresses it directly; Zellij sends
+    /// the selected id to the presence plugin because an out-of-pane CLI
+    /// fullscreen action does not affect the attached client.
+    fn toggle_fullscreen(&self, pane: &PaneId, session: Option<&str>) -> Result<()>;
     /// Report the backend-native step one sidebar width keypress represents.
     /// Reject cached geometry older than `min_observed_at_ms`; a backend whose
     /// geometry read is always live may ignore the floor.
@@ -856,14 +862,10 @@ pub trait MuxBackend: Send + Sync {
     /// Record the absolute target inherited by sidebars born later in the
     /// session. Zellij layouts read the room override directly.
     fn record_sidebar_width_default(&self, session: &str, cols: u16) -> Result<()>;
-    /// Register the chord that focuses the sidebar from any pane — the
-    /// `[sidebar] focus_key` toggle. tmux binds it as a root-table `bind-key`
-    /// whose command resolves the pressing session at keypress, so one
-    /// server-global binding serves every room; Zellij routes it through the
-    /// presence plugin ([`MuxBackend::ensure_presence_plugin`]), so its default
-    /// is a no-op here. Best-effort: a convenience key never blocks a room from
-    /// opening.
-    fn register_focus_key(&self, binding: &FocusKeyBinding) -> Result<()> {
+    /// Register a room-wide chord. tmux binds it in the root table; Zellij
+    /// routes it through the presence plugin, so its default is a no-op here.
+    /// Best-effort: a convenience key never blocks a room from opening.
+    fn register_room_key(&self, binding: &RoomKeyBinding) -> Result<()> {
         let _ = binding;
         Ok(())
     }

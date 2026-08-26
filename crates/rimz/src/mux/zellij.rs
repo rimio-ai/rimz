@@ -108,6 +108,10 @@ const PRESENCE_BOOT_PIPE: &str = "rimz_presence_boot";
 /// publish. Keep in sync with `crates/rimz-presence-zellij/src/wire.rs`.
 const PRESENCE_TOPOLOGY_PIPE: &str = "rimz:dump_topology";
 
+/// Pipe name carrying a host-selected pane id to the presence plugin's
+/// mechanical fullscreen toggle.
+const PRESENCE_TOGGLE_FULLSCREEN_PIPE: &str = "rimz:toggle_fullscreen";
+
 /// Pipe name that tells stale presence-plugin instances to close themselves.
 /// Keep in sync with `crates/rimz-presence-zellij/src/wire.rs`.
 const PRESENCE_RETIRE_PIPE: &str = "rimz:retire";

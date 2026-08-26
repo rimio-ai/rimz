@@ -417,6 +417,30 @@ fn focus_sidebar_argv_uses_zellij_mux_and_optional_session() {
 }
 
 #[test]
+fn zoom_pane_argv_uses_zellij_mux_and_optional_session() {
+    assert_eq!(
+        zoom_pane_argv(&ctx()),
+        strings(&[
+            "/bin/rimz",
+            "pane",
+            "zoom",
+            "--session-name",
+            "session-1",
+            "--mux",
+            "zellij",
+        ]),
+    );
+    assert_eq!(
+        zoom_pane_argv(&WakeContext {
+            rimz_bin: None,
+            workspace_id: None,
+            session_name: None,
+        }),
+        strings(&["rimz", "pane", "zoom", "--mux", "zellij"]),
+    );
+}
+
+#[test]
 fn parses_boolean_load_configuration() {
     assert_eq!(parse_configuration_bool(Some("true")), Some(true));
     assert_eq!(parse_configuration_bool(Some("false")), Some(false));
@@ -437,10 +461,11 @@ fn runtime_reconfigure_kdl_emits_mouse_options_without_focus_key() {
 }
 
 #[test]
-fn runtime_reconfigure_kdl_combines_mouse_options_and_focus_keybind() {
+fn runtime_reconfigure_kdl_combines_mouse_options_and_room_keybinds() {
     let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
         plugin_id: Some(42),
         focus_key: Some("Alt+p"),
+        zoom_key: Some("Alt+z"),
         focus_follows_mouse: Some(false),
         mouse_click_through: Some(true),
     })
@@ -448,8 +473,10 @@ fn runtime_reconfigure_kdl_combines_mouse_options_and_focus_keybind() {
 
     assert!(kdl.starts_with("focus_follows_mouse false\nmouse_click_through true\nkeybinds {\n"));
     assert!(kdl.contains("bind \"Alt p\""));
+    assert!(kdl.contains("bind \"Alt z\""));
     assert!(kdl.contains("name \"rimz:focus_sidebar\""));
-    assert_eq!(kdl.matches("MessagePluginId 42").count(), 2);
+    assert!(kdl.contains("name \"rimz:zoom_pane\""));
+    assert_eq!(kdl.matches("MessagePluginId 42").count(), 4);
     assert!(!kdl.contains("MessagePlugin \""));
     assert!(!kdl.contains("plugin_url"));
 }
@@ -509,18 +536,39 @@ fn focus_chord_rejects_malformed_shapes() {
 }
 
 #[test]
-fn focus_keybind_kdl_targets_plugin_id_in_normal_and_locked_modes() {
-    let kdl = focus_keybind_kdl(
-        FocusChord {
+fn fullscreen_payload_parses_terminal_and_plugin_ids() {
+    assert_eq!(
+        fullscreen_pane(Some("terminal_7")),
+        Some(policy::ClientPaneId::Terminal(7))
+    );
+    assert_eq!(
+        fullscreen_pane(Some("plugin_9")),
+        Some(policy::ClientPaneId::Plugin(9))
+    );
+    assert_eq!(fullscreen_pane(Some("terminal_nope")), None);
+    assert_eq!(fullscreen_pane(None), None);
+}
+
+#[test]
+fn room_keybinds_kdl_targets_plugin_id_in_normal_and_locked_modes() {
+    let kdl = room_keybinds_kdl(
+        Some(FocusChord {
             modifier: ChordModifier::Alt,
             key: 'p',
-        },
+        }),
+        Some(FocusChord {
+            modifier: ChordModifier::Alt,
+            key: 'z',
+        }),
         42,
-    );
+    )
+    .expect("keybinds");
 
     assert_eq!(kdl.matches("bind \"Alt p\"").count(), 2);
-    assert_eq!(kdl.matches("MessagePluginId 42").count(), 2);
+    assert_eq!(kdl.matches("bind \"Alt z\"").count(), 2);
+    assert_eq!(kdl.matches("MessagePluginId 42").count(), 4);
     assert_eq!(kdl.matches("name \"rimz:focus_sidebar\"").count(), 2);
+    assert_eq!(kdl.matches("name \"rimz:zoom_pane\"").count(), 2);
     assert!(kdl.contains("normal {"));
     assert!(kdl.contains("locked {"));
     assert!(!kdl.contains("MessagePlugin \""));
@@ -528,14 +576,16 @@ fn focus_keybind_kdl_targets_plugin_id_in_normal_and_locked_modes() {
 }
 
 #[test]
-fn focus_keybind_kdl_formats_ctrl_chords() {
-    let kdl = focus_keybind_kdl(
-        FocusChord {
+fn room_keybinds_kdl_formats_ctrl_chords() {
+    let kdl = room_keybinds_kdl(
+        None,
+        Some(FocusChord {
             modifier: ChordModifier::Ctrl,
             key: 's',
-        },
+        }),
         7,
-    );
+    )
+    .expect("keybinds");
 
     assert_eq!(kdl.matches("bind \"Ctrl s\"").count(), 2);
     assert!(kdl.contains("MessagePluginId 7"));

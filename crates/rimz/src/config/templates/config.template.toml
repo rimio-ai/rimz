@@ -55,8 +55,9 @@
 ## when = { kind = ["waiting"], worktree = ["feat/*"], handle = ["@planner"] }
 
 [sidebar]
-# Sidebar behavior: focus keybind, motion keybinds, spend headline window, and worktree comparison target.
+# Sidebar behavior: room keybinds, motion keybinds, spend headline window, and worktree comparison target.
 # focus_key = "Alt+p"                 # global chord to focus the sidebar (toggle); "" or "off" to disable
+# zoom_key = "Alt+z"                  # global smart-zoom chord; zooms a work pane, never the sidebar
 # afk_after_secs = 900                # input-idle seconds before the AFK badge (tmux only); default 15 min
 # spend_window = "session"            # cockpit & provider headline window: "session", "24h", or "today"
 ## trunk = "develop"                  # optional preferred branch for worktree comparison stats

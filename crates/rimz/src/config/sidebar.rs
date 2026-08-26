@@ -28,6 +28,11 @@ pub struct SidebarConfig {
     /// Default `Alt+p`; set empty or `off` to register nothing and leave your
     /// keybinds untouched.
     pub focus_key: String,
+    /// The global multiplexer chord that toggles fullscreen for the focused
+    /// work pane. When the sidebar is focused, RimZ selects a working sibling
+    /// first so chrome is never fullscreened. Default `Alt+z`; set empty or
+    /// `off` to disable it.
+    pub zoom_key: String,
     /// Sidebar motion key bindings. Each string is a space-separated list of
     /// chords; the first chord is the one the help overlay displays.
     pub keys: SidebarKeys,
@@ -44,6 +49,7 @@ impl Default for SidebarConfig {
             spend_window: Default::default(),
             trunk: None,
             focus_key: default_focus_key(),
+            zoom_key: default_zoom_key(),
             keys: SidebarKeys::default(),
             afk_after_secs: NonZeroU32::new(DEFAULT_AFK_AFTER_SECS)
                 .expect("non-zero default afk window"),
@@ -55,16 +61,24 @@ impl SidebarConfig {
     /// The focus-sidebar chord to register and display, or `None` when the user
     /// disabled it (empty / `off` / `none`).
     pub fn focus_key_label(&self) -> Option<&str> {
-        let key = self.focus_key.trim();
-        if key.is_empty() || key.eq_ignore_ascii_case("off") || key.eq_ignore_ascii_case("none") {
-            None
-        } else {
-            Some(key)
-        }
+        enabled_key_label(&self.focus_key)
+    }
+
+    pub fn zoom_key_label(&self) -> Option<&str> {
+        enabled_key_label(&self.zoom_key)
     }
 
     pub fn afk_after_ms(&self) -> u64 {
         u64::from(self.afk_after_secs.get()) * 1_000
+    }
+}
+
+fn enabled_key_label(key: &str) -> Option<&str> {
+    let key = key.trim();
+    if key.is_empty() || key.eq_ignore_ascii_case("off") || key.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(key)
     }
 }
 
@@ -73,6 +87,10 @@ impl SidebarConfig {
 /// Zellij's locked mode; the user can rebind or disable it.
 fn default_focus_key() -> String {
     "Alt+p".to_owned()
+}
+
+fn default_zoom_key() -> String {
+    "Alt+z".to_owned()
 }
 
 /// Sidebar movement and width key bindings. Action keys stay fixed; these

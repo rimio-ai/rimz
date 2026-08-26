@@ -33,6 +33,8 @@ pub(in crate::backend::zellij) struct ListedPane {
     pub(in crate::backend::zellij) is_suppressed: bool,
     #[serde(default)]
     pub(in crate::backend::zellij) is_floating: bool,
+    #[serde(default)]
+    pub(in crate::backend::zellij) is_fullscreen: bool,
     pub(in crate::backend::zellij) tab_id: u64,
     #[serde(default)]
     pub(in crate::backend::zellij) tab_position: Option<u64>,

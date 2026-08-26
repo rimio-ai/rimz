@@ -12,6 +12,13 @@ use crate::policy::{self, PaneFields};
 /// pane, since a Zellij keybind cannot focus a pane by id on its own.
 pub const FOCUS_SIDEBAR_PIPE: &str = "rimz:focus_sidebar";
 
+/// Pipe message name for the sidebar-aware smart-zoom keybind.
+pub const ZOOM_PANE_PIPE: &str = "rimz:zoom_pane";
+
+/// Host-to-plugin pipe carrying the already-selected pane id for a mechanical
+/// fullscreen toggle.
+pub const TOGGLE_FULLSCREEN_PIPE: &str = "rimz:toggle_fullscreen";
+
 /// Pipe message name the host backend sends when it needs a topology cache
 /// newer than a local mutation. The plugin publishes one immediate `alive` wake
 /// carrying the current topology payload; the host writes the cache and stamp
@@ -45,6 +52,17 @@ pub fn publishes_topology(argv: &[String]) -> bool {
 
 pub fn retire_generation(payload: Option<&str>) -> Option<policy::TopologyWriter> {
     serde_json::from_str(payload?).ok()
+}
+
+pub fn fullscreen_pane(payload: Option<&str>) -> Option<policy::ClientPaneId> {
+    let raw = payload?.trim();
+    if let Some(id) = raw.strip_prefix("terminal_") {
+        return id.parse().ok().map(policy::ClientPaneId::Terminal);
+    }
+    raw.strip_prefix("plugin_")?
+        .parse()
+        .ok()
+        .map(policy::ClientPaneId::Plugin)
 }
 
 /// The modifier half of a focus-key chord.
@@ -85,20 +103,35 @@ impl FocusChord {
     }
 }
 
-/// Runtime keybind KDL binding `chord` to a pipe that targets this plugin
-/// instance by id, in normal and locked modes. Binding by `plugin_id`
-/// (`MessagePluginId`) reaches the exact loaded instance; a url+configuration
-/// bind would also have to match the instance's initial cwd, which a keypress
-/// from another pane does not.
-pub fn focus_keybind_kdl(chord: FocusChord, plugin_id: u32) -> String {
-    let key = kdl_string(&focus_key_label(chord));
-    let pipe = kdl_string(FOCUS_SIDEBAR_PIPE);
-    let bind = format!(
-        "bind {key} {{\n            MessagePluginId {plugin_id} {{\n                name {pipe}\n            }}\n        }}"
-    );
-    format!(
-        "keybinds {{\n    normal {{\n        {bind}\n    }}\n    locked {{\n        {bind}\n    }}\n}}\n"
-    )
+/// Runtime keybind KDL targeting this plugin instance by id in normal and
+/// locked modes. One fragment carries every configured room key so one
+/// `Reconfigure` installs them atomically.
+pub fn room_keybinds_kdl(
+    focus: Option<FocusChord>,
+    zoom: Option<FocusChord>,
+    plugin_id: u32,
+) -> Option<String> {
+    let bindings = [(focus, FOCUS_SIDEBAR_PIPE), (zoom, ZOOM_PANE_PIPE)]
+        .into_iter()
+        .filter_map(|(chord, pipe)| chord.map(|chord| (chord, pipe)))
+        .collect::<Vec<_>>();
+    if bindings.is_empty() {
+        return None;
+    }
+    let mut kdl = String::from("keybinds {\n");
+    for mode in ["normal", "locked"] {
+        kdl.push_str(&format!("    {mode} {{\n"));
+        for (chord, pipe) in &bindings {
+            let key = kdl_string(&focus_key_label(*chord));
+            let pipe = kdl_string(pipe);
+            kdl.push_str(&format!(
+                "        bind {key} {{\n            MessagePluginId {plugin_id} {{\n                name {pipe}\n            }}\n        }}\n"
+            ));
+        }
+        kdl.push_str("    }\n");
+    }
+    kdl.push_str("}\n");
+    Some(kdl)
 }
 
 fn focus_key_label(chord: FocusChord) -> String {
@@ -130,6 +163,7 @@ fn kdl_string(value: &str) -> String {
 pub struct RuntimeReconfigure<'a> {
     pub plugin_id: Option<u32>,
     pub focus_key: Option<&'a str>,
+    pub zoom_key: Option<&'a str>,
     pub focus_follows_mouse: Option<bool>,
     pub mouse_click_through: Option<bool>,
 }
@@ -150,10 +184,14 @@ pub fn runtime_reconfigure_kdl(config: &RuntimeReconfigure<'_>) -> Option<String
     if let Some(value) = config.mouse_click_through {
         push_bool_option_kdl(&mut kdl, "mouse_click_through", value);
     }
-    if let Some(chord) = config.focus_key.and_then(FocusChord::parse)
-        && let Some(plugin_id) = config.plugin_id
+    if let Some(plugin_id) = config.plugin_id
+        && let Some(keybinds) = room_keybinds_kdl(
+            config.focus_key.and_then(FocusChord::parse),
+            config.zoom_key.and_then(FocusChord::parse),
+            plugin_id,
+        )
     {
-        kdl.push_str(&focus_keybind_kdl(chord, plugin_id));
+        kdl.push_str(&keybinds);
     }
     (!kdl.is_empty()).then_some(kdl)
 }
@@ -396,6 +434,21 @@ pub fn focus_sidebar_argv(ctx: &WakeContext<'_>) -> Vec<String> {
         "sidebar".to_owned(),
         "focus".to_owned(),
         "--toggle".to_owned(),
+    ];
+    if let Some(session_name) = ctx.session_name {
+        argv.push("--session-name".to_owned());
+        argv.push(session_name.to_owned());
+    }
+    argv.push("--mux".to_owned());
+    argv.push("zellij".to_owned());
+    argv
+}
+
+pub fn zoom_pane_argv(ctx: &WakeContext<'_>) -> Vec<String> {
+    let mut argv = vec![
+        ctx.rimz_bin.unwrap_or("rimz").to_owned(),
+        "pane".to_owned(),
+        "zoom".to_owned(),
     ];
     if let Some(session_name) = ctx.session_name {
         argv.push("--session-name".to_owned());
