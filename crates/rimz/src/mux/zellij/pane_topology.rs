@@ -242,6 +242,8 @@ pub struct PaneTopologyPane {
     #[serde(default)]
     pub is_plugin: bool,
     #[serde(default)]
+    pub is_fullscreen: bool,
+    #[serde(default)]
     pub is_held: bool,
     #[serde(default)]
     pub exited: bool,
@@ -334,6 +336,7 @@ mod tests {
         PaneTopologyPane {
             id,
             is_plugin: false,
+            is_fullscreen: false,
             is_held: false,
             exited: false,
             is_suppressed: false,

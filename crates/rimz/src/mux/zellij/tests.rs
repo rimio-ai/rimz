@@ -1,7 +1,7 @@
 use super::*;
 
 #[cfg(unix)]
-use super::backend::reconcile_pane;
+use super::backend::{off_spec_sidebars, reconcile_pane};
 pub(crate) mod support;
 
 #[cfg(unix)]
@@ -170,6 +170,7 @@ fn terminal_pane(
     PaneTopologyPane {
         id,
         is_plugin: false,
+        is_fullscreen: false,
         is_held: false,
         exited: false,
         is_suppressed: false,
@@ -184,6 +185,18 @@ fn terminal_pane(
         pane_pid: None,
         terminal_command: None,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn fullscreen_tabs_hold_sidebar_geometry_reconcile() {
+    let sidebar = terminal_pane(1, 0, 200, 0, crate::pane::SIDEBAR_CHROME_TITLE);
+    let mut work = terminal_pane(2, 0, 120, 80, "zsh");
+    let panes = [sidebar.clone(), work.clone()];
+    assert_eq!(off_spec_sidebars(&panes, &[], None), vec![(0, 1)]);
+
+    work.is_fullscreen = true;
+    assert!(off_spec_sidebars(&[sidebar, work], &[], None).is_empty());
 }
 
 #[cfg(unix)]

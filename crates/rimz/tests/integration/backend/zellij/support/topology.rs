@@ -15,6 +15,7 @@ impl ListedPane {
         PaneTopologyPane {
             id: self.id,
             is_plugin: self.is_plugin,
+            is_fullscreen: self.is_fullscreen,
             is_held: self.is_held,
             exited: self.exited,
             is_suppressed: self.is_suppressed,

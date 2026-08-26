@@ -850,6 +850,17 @@ pub trait MuxBackend: Send + Sync {
         pane: &PaneId,
         min_observed_at_ms: Option<u64>,
     ) -> Result<WidthStep>;
+    /// Report whether the pane's view is held by backend-native fullscreen.
+    /// `None` means the backend has no fullscreen topology observation.
+    fn sidebar_fullscreen_active(
+        &self,
+        runtime: &crate::store::RuntimePaths,
+        session: &str,
+        pane: &PaneId,
+    ) -> Result<Option<bool>> {
+        let _ = (runtime, session, pane);
+        Ok(None)
+    }
     /// Move one sidebar pane toward an absolute target. Zellij performs one
     /// native relative step; tmux can apply the target exactly.
     fn nudge_sidebar_width(

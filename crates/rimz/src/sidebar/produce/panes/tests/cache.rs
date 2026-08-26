@@ -181,6 +181,7 @@ fn producer_verification_trusts_event_carried_topology_without_topology_floor() 
             panes: vec![crate::mux::zellij::pane_topology::PaneTopologyPane {
                 id: 7,
                 is_plugin: false,
+                is_fullscreen: false,
                 is_held: false,
                 exited: false,
                 is_suppressed: false,

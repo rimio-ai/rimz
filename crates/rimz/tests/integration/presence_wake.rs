@@ -243,6 +243,7 @@ impl WakeEnv {
                 PaneTopologyPane {
                     id: 6,
                     is_plugin: false,
+                    is_fullscreen: false,
                     is_held: false,
                     exited: false,
                     is_suppressed: false,
@@ -260,6 +261,7 @@ impl WakeEnv {
                 PaneTopologyPane {
                     id: 7,
                     is_plugin: false,
+                    is_fullscreen: false,
                     is_held: false,
                     exited: false,
                     is_suppressed: false,
@@ -310,6 +312,7 @@ impl WakeEnv {
                 .map(|(id, tab_position, tab_name)| PaneTopologyPane {
                     id: *id,
                     is_plugin: false,
+                    is_fullscreen: false,
                     is_held: false,
                     exited: false,
                     is_suppressed: false,

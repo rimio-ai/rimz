@@ -16,6 +16,7 @@ fn pane(id: u32) -> PaneFields {
     PaneFields {
         id,
         is_plugin: false,
+        is_fullscreen: false,
         is_suppressed: false,
         is_floating: false,
         exited: false,

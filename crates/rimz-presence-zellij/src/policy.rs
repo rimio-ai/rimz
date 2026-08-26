@@ -37,6 +37,8 @@ pub const KEEPALIVE_MS: u64 = 60_000;
 pub struct PaneFields {
     pub id: u32,
     pub is_plugin: bool,
+    #[serde(default)]
+    pub is_fullscreen: bool,
     pub is_suppressed: bool,
     pub is_floating: bool,
     pub exited: bool,
@@ -66,6 +68,7 @@ pub struct PaneFields {
 pub struct RawStablePaneFields<'a> {
     pub id: u32,
     pub is_plugin: bool,
+    pub is_fullscreen: bool,
     pub is_suppressed: bool,
     pub is_floating: bool,
     pub exited: bool,
@@ -83,6 +86,7 @@ impl<'a> RawStablePaneFields<'a> {
         Self {
             id: pane.id,
             is_plugin: pane.is_plugin,
+            is_fullscreen: pane.is_fullscreen,
             is_suppressed: pane.is_suppressed,
             is_floating: pane.is_floating,
             exited: pane.exited,
@@ -159,6 +163,7 @@ impl PaneFields {
         Self {
             id: stable.id,
             is_plugin: stable.is_plugin,
+            is_fullscreen: stable.is_fullscreen,
             is_suppressed: stable.is_suppressed,
             is_floating: stable.is_floating,
             exited: stable.exited,

@@ -121,6 +121,7 @@ fn pane(id: u32) -> PaneFields {
     PaneFields {
         id,
         is_plugin: false,
+        is_fullscreen: false,
         is_suppressed: false,
         is_floating: false,
         exited: false,
@@ -168,6 +169,7 @@ fn raw_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>) -> u64 {
                 policy::RawStablePaneFields {
                     id: pane.id,
                     is_plugin: pane.is_plugin,
+                    is_fullscreen: pane.is_fullscreen,
                     is_suppressed: pane.is_suppressed,
                     is_floating: pane.is_floating,
                     exited: pane.exited,

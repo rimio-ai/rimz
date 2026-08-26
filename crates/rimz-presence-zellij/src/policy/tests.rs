@@ -5,6 +5,7 @@ fn pane(id: u32) -> PaneFields {
     PaneFields {
         id,
         is_plugin: false,
+        is_fullscreen: false,
         is_suppressed: false,
         is_floating: false,
         exited: false,
@@ -50,6 +51,14 @@ fn raw_stable_hash_ignores_titles_but_tracks_stable_fields() {
         raw_hash_from_tabs(&base),
         raw_hash_from_tabs(&tabs(vec![resized])),
         "geometry changes are stable pane state",
+    );
+
+    let mut fullscreen = pane(1);
+    fullscreen.is_fullscreen = true;
+    assert_ne!(
+        raw_hash_from_tabs(&base),
+        raw_hash_from_tabs(&tabs(vec![fullscreen])),
+        "fullscreen transitions must republish topology",
     );
 }
 

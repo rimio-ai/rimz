@@ -14,7 +14,7 @@ use super::parse::{
 };
 use super::raw_pane::{
     floating_panes_in_anchor_view, is_daemon_host_pane, is_sidebar_pane, sidebar_geometry_off_spec,
-    tab_view_cols,
+    tab_fullscreen_active, tab_view_cols,
 };
 use super::sidebar::DockOutcome;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
@@ -63,6 +63,8 @@ pub(super) struct RawListedPane {
     #[serde(default)]
     pub(super) is_plugin: bool,
     #[serde(default)]
+    is_fullscreen: bool,
+    #[serde(default)]
     is_held: bool,
     #[serde(default)]
     exited: bool,
@@ -94,6 +96,7 @@ impl From<RawListedPane> for PaneTopologyPane {
         Self {
             id: pane.id,
             is_plugin: pane.is_plugin,
+            is_fullscreen: pane.is_fullscreen,
             is_held: pane.is_held,
             exited: pane.exited,
             is_suppressed: pane.is_suppressed,
@@ -754,6 +757,39 @@ impl MuxBackend for ZellijBackend {
         })
     }
 
+    fn sidebar_fullscreen_active(
+        &self,
+        runtime: &RuntimePaths,
+        session: &str,
+        pane: &PaneId,
+    ) -> Result<Option<bool>> {
+        ensure_pane_backend(pane, MuxName::Zellij)?;
+        let pane_id = ZellijPaneId::try_from(pane)
+            .ok()
+            .and_then(ZellijPaneId::terminal_id)
+            .ok_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("target pane `{pane}` has no numeric topology id"),
+            })?;
+        let Some(cache) = Self::fresh_cached_topology(
+            runtime,
+            session,
+            crate::sidebar::timing::unix_now_ms(),
+            None,
+        ) else {
+            return Ok(None);
+        };
+        let Some(tab_position) = cache
+            .panes
+            .iter()
+            .find(|candidate| !candidate.is_plugin && candidate.id == pane_id)
+            .map(|candidate| candidate.tab_position)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(tab_fullscreen_active(&cache.panes, tab_position)))
+    }
+
     fn nudge_sidebar_width(
         &self,
         session: &str,
@@ -1269,7 +1305,7 @@ pub(super) fn reconcile_pane(pane: &PaneTopologyPane) -> Option<ReconcilePane> {
     })
 }
 
-fn off_spec_sidebars(
+pub(super) fn off_spec_sidebars(
     panes: &[PaneTopologyPane],
     closing: &[PaneId],
     width_target: Option<crate::mux::SidebarTarget>,
@@ -1279,6 +1315,7 @@ fn off_spec_sidebars(
         .iter()
         .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
         .filter(|pane| !closing.contains(&pane.id))
+        .filter(|pane| !tab_fullscreen_active(panes, pane.tab_position))
         .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, width_target))
         .map(|pane| (pane.tab_position, pane.id))
         .collect()
