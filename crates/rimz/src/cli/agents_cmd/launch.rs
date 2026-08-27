@@ -673,7 +673,7 @@ fn write_launch_receipt(
         let identity_handle = launch_identity_handle(identity);
         let handle = format!("@{:<handle_width$}", launch_identity_handle(identity));
         let kind = format!("{:<kind_width$}", identity.kind.as_str());
-        let leader_marker = if receipt_leader == Some(identity_handle) {
+        let leader_marker = if identities.len() > 1 && receipt_leader == Some(identity_handle) {
             render::paint(render::palette::muted(), "  · leader")
         } else {
             String::new()
@@ -942,7 +942,7 @@ mod tests {
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("launched @worker (/repo)"));
         assert!(!output.contains("Check:"));
-        assert!(output.contains("· leader"));
+        assert!(!output.contains("· leader"));
         assert!(output.contains("Reach: rimz message @worker '<text>'"));
     }
 

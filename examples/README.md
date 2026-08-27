@@ -50,7 +50,7 @@ cp -r examples/teams/forge ~/.agents/teams/
 
 `rimz teams install forge --force` replaces files in a same-named installed directory; the plain install preserves it. Entries in `~/.config/rimz/agents.toml` override fragment entries with the same names.
 
-Launch with `rimz teams launch forge`; the lifecycle grammar lives in the [teams CLI reference](../docs/reference/cli/teams.md). Each role answers to `@planner`, `@coder`, or `@reviewer`.
+Launch with `rimz teams forge`; the lifecycle grammar lives in the [teams CLI reference](../docs/reference/cli/teams.md). Each role answers to `@planner`, `@coder`, or `@reviewer`.
 
 The `claude` and `codex` CLIs must be on `PATH`. The profiles in `team.toml` pin models (`fable`, `opus`) and Codex feature flags; adjust them there to taste. The coder's PR step expects a `pr` skill and falls back to plain `gh` or `tea` without it.
 
