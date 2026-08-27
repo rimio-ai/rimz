@@ -390,6 +390,7 @@ pub(super) struct ZellijSocket {
 pub(super) enum SessionHealth {
     Ok,
     Stuck { fix: String },
+    Unresponsive { fix: String },
 }
 
 /// Live sidebar sessions that share this workspace. More than one risks a

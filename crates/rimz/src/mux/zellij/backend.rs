@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use super::super::mount_proof::{prove_sidebar_mount, sidebar_build_identity};
-use super::ZellijBackend;
 use super::layout::{TempLayoutFile, render_background_view_layout, render_tab_layout};
 use super::pane_topology::{PaneTopologyCache, PaneTopologyPane, ZellijPaneId};
 use super::parse::{
@@ -17,6 +16,7 @@ use super::raw_pane::{
     tab_fullscreen_active, tab_view_cols,
 };
 use super::sidebar::DockOutcome;
+use super::{ZellijBackend, health_probe_timeout};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
@@ -226,6 +226,25 @@ impl ZellijBackend {
             program: "zellij".to_owned(),
             reason: format!("parsing `list-panes --all --json`: {err}"),
         })
+    }
+
+    fn live_session_health(&self, name: &str) -> SessionHealth {
+        let probe = || self.raw_listed_panes(name, health_probe_timeout());
+        if probe().is_ok() {
+            return SessionHealth::Healthy;
+        }
+        match probe() {
+            Ok(_) => SessionHealth::Healthy,
+            Err(err) => {
+                tracing::warn!(
+                    session = %name,
+                    tags.operation = "zellij.session_health",
+                    error = &err as &dyn std::error::Error,
+                    "live zellij room did not answer the native health probe",
+                );
+                SessionHealth::Unresponsive
+            }
+        }
     }
 
     pub(super) fn authoritative_pane_listing(
@@ -922,8 +941,7 @@ impl MuxBackend for ZellijBackend {
             SessionLiveness::Absent => SessionHealth::Healthy,
             // `attach --create` would resurrect a serialized, suspended layout.
             SessionLiveness::Exited => SessionHealth::Stuck,
-            // `list-sessions` liveness is the attach gate truth; attach live rooms as-is.
-            SessionLiveness::Live => SessionHealth::Healthy,
+            SessionLiveness::Live => self.live_session_health(name),
         })
     }
 
@@ -933,11 +951,11 @@ impl MuxBackend for ZellijBackend {
         daemon: Option<&DaemonView>,
     ) -> Result<SessionHealth> {
         let state = self.session_state(&opts.session_name);
-        // A live room is trusted from `list-sessions` alone: attach as-is, never
-        // inspect panes. A stale topology cache is not evidence the room is
-        // stuck.
+        // A stale topology cache is not evidence that a live room is stuck, but
+        // a direct native listing must answer before attach. Its payload is not
+        // used as topology truth here.
         if matches!(state, SessionLiveness::Live) {
-            return Ok(SessionHealth::Healthy);
+            return Ok(self.live_session_health(&opts.session_name));
         }
         // Absent → first birth; Exited → delete and rebirth from the layout so
         // the room comes up clean and RUNNING (with serialization off, a rebirth

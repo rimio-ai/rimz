@@ -11,36 +11,61 @@ use tempfile::TempDir;
 use crate::common::{CommandTimeoutExt, Env, ROOM_WORKFLOW_TIMEOUT};
 
 #[test]
-fn uninspectable_live_zellij_room_attaches_as_is() {
+fn unresponsive_live_zellij_room_fails_fast_and_is_preserved() {
+    assert_unresponsive_live_room_is_preserved(None);
+}
+
+#[test]
+fn timed_out_live_zellij_room_fails_fast_and_is_preserved() {
+    assert_unresponsive_live_room_is_preserved(Some("60"));
+}
+
+fn assert_unresponsive_live_room_is_preserved(list_panes_sleep: Option<&str>) {
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
     let shim = FakeZellij::new();
 
-    let output = env
-        .rimz()
-        .args(["--mux", "zellij", "start", "--no-attach"])
+    let mut command = env.rimz();
+    command
+        .args(["--mux", "zellij", "start"])
         .env("PATH", shim.bin_dir.path())
         .env("RIMZ_ZELLIJ_BIN", &shim.bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
-        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250")
-        // The uninspectable room legitimately holds `start` for the full
-        // pre-attach topology ceiling before attaching as-is, so keep the outer
-        // test bound roomy while shortening the fake-shim probe.
+        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "100");
+    if let Some(sleep) = list_panes_sleep {
+        command.env("RIMZ_TEST_ZELLIJ_LIST_PANES_SLEEP", sleep);
+    }
+    let output = command
         .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
         .expect("run rimz start");
 
-    assert!(output.status.success(), "live room should attach as-is");
+    assert!(
+        !output.status.success(),
+        "an unresponsive live room must fail before attach",
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !stderr.contains("No terminal is available to confirm"),
-        "live room should not reach reset, got: {stderr}"
+        stderr.contains(&workspace.session_name) && stderr.contains("rimz reset"),
+        "error should name the room and recovery command, got: {stderr}",
     );
 
     let lines = read_trace_lines(&shim.log, Duration::from_millis(200));
+    let probe_attempts = lines
+        .iter()
+        .filter(|line| line.contains("action\tlist-panes"))
+        .count();
+    assert!(
+        probe_attempts >= 2,
+        "the native pane probe should retry once: {lines:?}",
+    );
+    assert!(
+        !lines.iter().any(|line| line.starts_with("attach")),
+        "the attach child must not run: {lines:?}",
+    );
     assert!(
         !lines.iter().any(|line| line.contains("delete-session")),
-        "an uninspectable live room must be preserved: {lines:?}"
+        "an unresponsive live room must be preserved: {lines:?}",
     );
 }
 
@@ -108,6 +133,7 @@ fn named_attach_preserves_recorded_room_owner() {
         .env("RIMZ_ZELLIJ_BIN", &shim.bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
         .bounded_output()
         .expect("run rimz attach");
 
@@ -261,6 +287,13 @@ if [ "$1" = "list-sessions" ]; then
 fi
 
 if [ "$1" = "--session" ] && [ "$3" = "action" ] && [ "$4" = "list-panes" ]; then
+  if [ -n "$RIMZ_TEST_ZELLIJ_LIST_PANES_SLEEP" ]; then
+    exec /bin/sleep "$RIMZ_TEST_ZELLIJ_LIST_PANES_SLEEP"
+  fi
+  if [ -n "$RIMZ_TEST_ZELLIJ_LIST_PANES" ]; then
+    printf '%s\n' "$RIMZ_TEST_ZELLIJ_LIST_PANES"
+    exit 0
+  fi
   printf 'simulated wedged list-panes\n' >&2
   exit 5
 fi
