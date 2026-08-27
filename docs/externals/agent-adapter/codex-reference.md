@@ -23,6 +23,7 @@ Re-fetch these pages — and, for the app-server, re-run the schema generators �
 | App-server README + schema generation | <https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md> |
 | App-server daemon lifecycle + PID backend | <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/README.md>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/lib.rs>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/backend/pid.rs>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/update_loop.rs> |
 | App-server control socket WebSocket transport | <https://github.com/openai/codex/pull/21843> |
+| Automatic session titles + session index | <https://github.com/openai/codex/pull/40492>, <https://github.com/openai/codex/blob/main/codex-rs/rollout/src/session_index.rs> |
 | TUI paste-burst heuristic | <https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/paste_burst.rs>, <https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/chat_composer.rs> |
 | Rollout/session JSONL + `auth.json` shape | open-source `codex-rs` types — <https://github.com/openai/codex> |
 | OAuth usage endpoint | Codex credential-file traffic; no public schema page |
@@ -261,7 +262,7 @@ Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `seco
 { "id": "thr_123", "preview": "Create a TUI", "name": "TUI prototype", "updatedAt": 1730831111 }
 ```
 
-RimZ reads `thread/read` by the hook `session_id`, then uses `thread/list` as the documented list-summary fallback to fill missing thread metadata, matching by `id` or `sessionId`. `preview` maps to `AgentContext.session_preview` and wins the Codex card's description line; `name` maps to `AgentContext.session_name` as the thread-name fallback when no preview exists.
+RimZ reads `thread/read` by the hook `session_id`, then uses `thread/list` as the documented list-summary fallback to fill missing thread metadata, matching by `id` or `sessionId`. `name` maps to `AgentContext.session_name` and wins the Codex card's description line; `preview` maps to `AgentContext.session_preview` as the fallback when no name exists.
 
 **The token-usage gap.** The app-server does **not** expose token / context-window usage read-only — it rides only the live `thread/tokenUsage/updated` notification behind a subscribing `thread/resume`. So Codex's context gauge is sourced from the rollout transcript below, not the app-server.
 
@@ -280,6 +281,16 @@ A non-exhaustive map of the broader surface, for future wiring. Generate the exa
 ### Connection ladder
 
 Client connection preference (broker → daemon → cold-spawn) and the refresh trigger are in [adapter_codex.md → Context and transcript](../../internals/agents/adapter_codex.md#context-and-transcript).
+
+## Session index JSONL
+
+Codex CLI 0.150.0 and newer stores automatic session titles in `$CODEX_HOME/session_index.jsonl` (default `~/.codex/session_index.jsonl`). The file is append-only: a session can receive a provisional name from its first prompt and a generated short title seconds later, so the newest valid row for an `id` is authoritative. Malformed rows do not invalidate other entries.
+
+```json
+{ "id": "thr_123", "thread_name": "TUI prototype", "updated_at": "2026-07-10T12:34:56Z" }
+```
+
+RimZ reads this durable index during the inline local-context pass, including `PostToolUse`, so a generated title reaches the card during the same turn without waiting for the throttled app-server enrichment. The app-server `name` remains a converging second source for the same `AgentContext.session_name` field.
 
 ## Rollout transcript JSONL
 
