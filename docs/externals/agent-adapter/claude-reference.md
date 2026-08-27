@@ -89,7 +89,7 @@ Per-event decision control rides `hookSpecificOutput` (or, for the post-* and st
 ### Exit codes
 
 - **0** — success; stdout is parsed as the JSON above. For `UserPromptSubmit`, `UserPromptExpansion`, and `SessionStart`, plain stdout is injected as context Claude can read; for other events it goes to the debug log.
-- **2** — blocking error; stdout and any JSON are ignored, stderr is fed back to Claude (e.g. `PreToolUse` blocks the call, `UserPromptSubmit` rejects the prompt, `Stop` prevents stopping).
+- **2** — blocking error; stdout and any JSON are ignored, stderr is fed back to Claude (e.g. `PreToolUse` blocks the call, `UserPromptSubmit` rejects the prompt, `Stop` prevents stopping). Exit 2 still blocks when stdout looks like JSON but fails the decision schema; a malformed success payload cannot downgrade the blocking exit.
 - **other** — non-blocking error; a `<hook> hook error` notice plus the first stderr line surfaces and execution continues.
 
 ### Hooks RimZ wires
@@ -98,7 +98,7 @@ These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/adapt
 
 | Event | Fires | Event-specific input | RimZ channel |
 | --- | --- | --- | --- |
-| `SessionStart` | session begins or resumes | `source` (`startup`\|`resume`\|`clear`\|`compact`), `model`, `session_title` | lifecycle |
+| `SessionStart` | session begins or resumes | `source` (`startup`\|`resume`\|`clear`\|`compact`\|`fork`), `model`, `session_title` | lifecycle |
 | `UserPromptSubmit` | prompt submitted, before processing | `prompt` | lifecycle |
 | `PreToolUse` | before a tool call (can block) | `tool_name`, `tool_input` | lifecycle proof-of-work, or blocking when `tool_name` is `ExitPlanMode` / `AskUserQuestion` |
 | `PostToolUse` | after a tool call succeeds | `tool_name`, `tool_input`, `tool_response` | lifecycle (silent; audit/enrichment) |
@@ -159,6 +159,7 @@ The complete upstream set. ✓ marks what RimZ wires today; the rest is availabl
 | `TeammateIdle` | an agent-team teammate is about to idle | |
 | `InstructionsLoaded` | a `CLAUDE.md` / rules file is loaded | |
 | `ConfigChange` | a config file changes mid-session | |
+| `DirectoryAdded` | a directory is added through `/add-dir` or `--add-dir` | |
 | `CwdChanged` | the working directory changes | |
 | `FileChanged` | a watched file changes on disk | |
 | `WorktreeCreate` | a worktree is being created | |
@@ -177,7 +178,7 @@ Claude captures the command's stdio rather than attaching it to the terminal. Cl
 
 **Update triggers.** The command runs after each new assistant message, after `/compact`, on a permission-mode change, and on a vim-mode toggle (debounced 300ms; an in-flight run is cancelled when a new update arrives). `refreshInterval` (seconds, min 1) adds a fixed timer for idle/time-based segments.
 
-**Full schema** (the verbatim upstream example):
+**Full schema** (the upstream example with verified additions):
 
 ```json
 {
@@ -212,6 +213,7 @@ Claude captures the command's stdio rather than attaching it to the terminal. Cl
     "total_lines_added": 156,
     "total_lines_removed": 23
   },
+  "costBasis": "managed",
   "context_window": {
     "total_input_tokens": 15500,
     "total_output_tokens": 1200,
@@ -229,6 +231,8 @@ Claude captures the command's stdio rather than attaching it to the terminal. Cl
   "effort": {
     "level": "high"
   },
+  "fast_mode_state": "on",
+  "fast_mode_disabled_reason": null,
   "thinking": {
     "enabled": true
   },
@@ -277,6 +281,7 @@ Claude captures the command's stdio rather than attaching it to the terminal. Cl
 | `cost.total_duration_ms` | wall-clock time since session start |
 | `cost.total_api_duration_ms` | time spent waiting on API responses |
 | `cost.total_lines_added`, `cost.total_lines_removed` | lines changed |
+| `costBasis` | price table used for the most recent request on the current model: `list`\|`managed`\|`unknown`; overwritten per request, absent until pricing occurs, and consumers should treat absence as `list` |
 | `context_window.total_input_tokens`, `total_output_tokens` | tokens in the current context window (current, not cumulative, since v2.1.132); RimZ skips them — `current_usage` carries the same window, split by component |
 | `context_window.context_window_size` | max window in tokens (200000 default; 1000000 for extended-context models) |
 | `context_window.used_percentage`, `remaining_percentage` | pre-calculated context fill (from input-side tokens only) |
@@ -285,7 +290,7 @@ Claude captures the command's stdio rather than attaching it to the terminal. Cl
 | `effort.level` | reasoning effort (`low`\|`medium`\|`high`\|`xhigh`\|`max`); reflects live value including mid-session `/effort` changes; Ultracode is not a distinct level and reports as `xhigh`; absent when unsupported |
 | `thinking.enabled` | whether extended thinking is on |
 | `rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}` | 5h/7d window fill (0–100) and reset (Unix epoch seconds) |
-| `session_id`, `session_name` | session id; custom name from `--name` / `/rename` (absent if unset) |
+| `session_id`, `session_name` | session id; custom name from `--name` / `/rename`, otherwise the AI-generated session title when one exists |
 | `prompt_id` | current user-prompt UUID, shared with hook and OpenTelemetry correlation; absent until first input (v2.1.196+) |
 | `transcript_path` | conversation transcript path |
 | `version` | Claude Code version |
@@ -293,13 +298,16 @@ Claude captures the command's stdio rather than attaching it to the terminal. Cl
 | `vim.mode` | `NORMAL`\|`INSERT`\|`VISUAL`\|`VISUAL LINE` when vim mode is on |
 | `agent.name` | agent name under `--agent` |
 | `pr.{number,url,review_state}` | open PR for the branch; `review_state` ∈ `approved`\|`pending`\|`changes_requested`\|`draft` |
+| `pr.kind` | `"mr"` for a GitLab merge request (conventionally displayed as `!N`); absent for GitHub pull requests |
+| `fast_mode_state` | fast-mode availability: `on`\|`cooldown`\|`off` |
+| `fast_mode_disabled_reason` | optional reason fast mode is not currently available |
 | `worktree.{name,path,branch,original_cwd,original_branch}` | active `--worktree` session details |
 
-**Absence vs null.** `session_name`, `prompt_id`, `workspace.git_worktree`, `workspace.repo`, `effort`, `vim`, `agent`, `pr`, `worktree` are *absent* unless their feature is active; `rate_limits` appears only for Claude.ai Pro/Max after the first API response, and each window may be absent independently. `context_window.current_usage` is `null` before the first API call and again after `/compact` until the next call; `used_percentage` / `remaining_percentage` may be `null` early in a session. RimZ's parser treats every field as optional and tolerates unknown keys.
+**Absence vs null.** `session_name`, `prompt_id`, `workspace.git_worktree`, `workspace.repo`, `effort`, `vim`, `agent`, `pr`, `worktree`, `costBasis`, and the fast-mode fields are *absent* until their data exists; `rate_limits` appears only for Claude.ai Pro/Max after the first API response, and each window may be absent independently. `context_window.current_usage` is `null` before the first API call and again after `/compact` until the next call; `used_percentage` / `remaining_percentage` may be `null` early in a session. RimZ's parser treats every field as optional and tolerates unknown keys.
 
-**`subagentStatusLine`.** A separate command (`"subagentStatusLine": { "type": "command", "command": "…" }`) renders each subagent row in the agent panel, replacing the default `name · description · token count` body with whatever the script prints. The command runs once per refresh tick with **all visible subagent rows as a single JSON object on stdin**. The input includes the [common hook fields](#common-input) plus `columns` (usable row width) and a `tasks` array, each task carrying `id`, `name`, `type`, `status`, `description`, `label`, `startTime`, `tokenCount`, `tokenSamples`, and `cwd`. Write one JSON line to stdout per row to override: `{"id": "<task id>", "content": "<row body>"}`. The `content` string is rendered as-is, including ANSI escape codes and OSC 8 hyperlinks. Omit a task's `id` to keep its default rendering; emit an empty `content` to hide the row. The same trust and `disableAllHooks` gates that apply to `statusLine` apply here. Plugins can ship a default `subagentStatusLine` in their `settings.json`.
+**`subagentStatusLine`.** A separate command (`"subagentStatusLine": { "type": "command", "command": "…" }`) renders each subagent row in the agent panel, replacing the default `name · description · token count` body with whatever the script prints. The command runs once per refresh tick with **all visible subagent rows as a single JSON object on stdin**. The input includes the [common hook fields](#common-input) plus `columns` (usable row width) and a `tasks` array, each task carrying `id`, `name`, `type`, `status`, `description`, `label`, `model`, `effort`, `startTime`, `tokenCount`, `tokenSamples`, and `cwd`. Write one JSON line to stdout per row to override: `{"id": "<task id>", "content": "<row body>"}`. The `content` string is rendered as-is, including ANSI escape codes and OSC 8 hyperlinks. Omit a task's `id` to keep its default rendering; emit an empty `content` to hide the row. The same trust and `disableAllHooks` gates that apply to `statusLine` apply here. Plugins can ship a default `subagentStatusLine` in their `settings.json`.
 
-RimZ wraps this command like the session `statusLine` and harvests each task's `description`, `tokenCount`, and `startTime` (keyed by `id`, the child `agent_id`) into a per-subagent sidecar the sidebar folds onto the child's row. The common `transcript_path` names the parent transcript; RimZ derives the child's sibling `subagents/agent-<id>.jsonl` and incrementally prices its per-request usage for the exact display-only child cost. It overrides no rows, so Claude's own panel renders unchanged. The harvest path is [`subagent_statusline.rs`](../../../crates/rimz/src/agents/adapters/claude/subagent_statusline.rs); the sidebar projection is in [sidebar.md](../../internals/sidebar/sidebar.md).
+RimZ wraps this command like the session `statusLine` and harvests each task's `model`, `effort`, `description`, `tokenCount`, and `startTime` (keyed by `id`, the child `agent_id`) into a per-subagent sidecar the sidebar folds onto the child's row. The common `transcript_path` names the parent transcript; RimZ derives the child's sibling `subagents/agent-<id>.jsonl` and incrementally prices its per-request usage for the exact display-only child cost. It overrides no rows, so Claude's own panel renders unchanged. The harvest path is [`subagent_statusline.rs`](../../../crates/rimz/src/agents/adapters/claude/subagent_statusline.rs); the sidebar projection is in [sidebar.md](../../internals/sidebar/sidebar.md).
 
 ## Agent view
 
@@ -313,11 +321,35 @@ Claude Code's remote-control host is `claude remote-control --spawn worktree`. R
 
 In Claude Code 2.1.209, an attached remote session forks an SDK child shaped as `<claude-version-bin> --print --sdk-url … --session-id cse_…`. The child and its hook helpers inherit `CLAUDE_CODE_ENVIRONMENT_KIND=bridge` and a non-empty `CLAUDE_CODE_SESSION_ACCESS_TOKEN`; the latter is session-ingress authentication and must remain private. The SDK child also inherits globally installed Claude hooks even though the long-lived host itself is infrastructure.
 
-Version gates RimZ enforces: remote control exists at Claude Code ≥ 2.1.51; Claude Code 2.1.128+ recognizes `disableRemoteControl: true`; API-key auth disables remote control at ≥ 2.1.157 when `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `apiKeyHelper`, or matching keys in settings `env` are active; Claude Code ≥ 2.1.196 also rejects `ANTHROPIC_BASE_URL` values other than `https://api.anthropic.com` and the Bedrock, Vertex, and Foundry provider modes. An unknown `claude --version` applies only the version-independent `disableRemoteControl` gate and warns rather than guessing.
+Version gates RimZ enforces: remote control exists at Claude Code ≥ 2.1.51; Claude Code 2.1.128+ recognizes `disableRemoteControl: true`; API-key auth disables remote control at ≥ 2.1.157 when `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `apiKeyHelper`, or matching keys in settings `env` are active; long-lived setup tokens supplied through `CLAUDE_CODE_OAUTH_TOKEN` or settings `env` are blocked at the same gate because they can make model requests but cannot establish Remote Control; Claude Code ≥ 2.1.196 also rejects `ANTHROPIC_BASE_URL` values other than `https://api.anthropic.com` and the Bedrock, Vertex, and Foundry provider modes. Remote Control requires a full-scope session from `claude auth login`, and API keys are unsupported. An unknown `claude --version` applies only the version-independent `disableRemoteControl` gate and warns rather than guessing.
 
 `remoteControlAtStartup: true` auto-enables remote control for ordinary Claude pane sessions; `false` disables auto-connect and an absent value follows the organization's default. RimZ reads an explicit `true` to light the provider dashboard's `⇅ rc` flag even when the RimZ daemon-host toggle is off; `disableRemoteControl: true` suppresses the auto flag. `$CLAUDE_CODE_REMOTE` marks remote web sessions, not local host readiness.
 
 RimZ's remote-control preflight and badge read the user-level Claude `settings.json`, or the file named by `RIMZ_CLAUDE_SETTINGS` in tests and controlled environments. Claude Code also folds managed, local, and project settings; RimZ currently treats those tiers as upstream runtime policy and leaves their merge to Claude Code.
+
+## Project storage and managed pricing
+
+`CLAUDE_CODE_PROJECT_DIR_NAME` replaces the default flattened absolute-workspace name for the active `projects/<bucket>` transcript directory. It is intended for hosts that give each session its own Claude config directory and need a short per-project bucket name.
+
+Claude Code 2.1.243 added `modelPricing` to machine managed settings. Managed settings live in `/etc/claude-code/managed-settings.json` on Linux/WSL, `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, and `C:\Program Files\ClaudeCode\managed-settings.json` on Windows; JSON fragments in the adjacent `managed-settings.d/` directory merge alphabetically. The recovered schema is:
+
+```jsonc
+{
+  "modelPricing": {
+    "multiplier": 0.8, // optional, > 0 and <= 1
+    "overrides": {
+      "claude-sonnet-4-6": {
+        "input": 3.0,
+        "output": 15.0,
+        "cacheRead": 0.3,
+        "cacheWrite": 3.75
+      }
+    }
+  }
+}
+```
+
+The four override rates are required USD-per-million-token values in `0..=10000`; `cacheWrite` prices both cache-write durations. A matching row is charged exactly as written before the optional multiplier, without fast-mode or long-context surcharges. Keys use the model ids Claude Code itself prices, including first-party and Bedrock forms. These values affect Claude's `/cost`, statusline, SDK `total_cost_usd`, `--max-budget-usd`, and OpenTelemetry cost estimates; they are estimates rather than invoices, and `/model` continues to show list-price labels.
 
 ## Auth surface
 
@@ -325,9 +357,9 @@ RimZ's remote-control preflight and badge read the user-level Claude `settings.j
 
 | Field | Meaning |
 | --- | --- |
-| `logged_in` | whether a login is present |
-| `auth_method` | login type; `apiKey` is unmetered, anything else metered |
-| `subscription_type` | plan tier (`max`, `pro`, …) → the account `plan` label |
+| `loggedIn` | whether a login is present |
+| `authMethod` | login type; `apiKey` is unmetered, anything else metered |
+| `subscriptionType` | plan tier (`max`, `pro`, …) → the account `plan` label |
 
 [`oauth_usage.rs`](../../../crates/rimz/src/agents/adapters/claude/oauth_usage.rs) reads `~/.claude/.credentials.json` (macOS may hold the same JSON in the `Claude Code-credentials` Keychain item) and uses the root `claudeAiOauth` object:
 
@@ -394,4 +426,4 @@ Older Claude sessions, or sessions whose hooks were installed after the failure,
 {"type": "system", "subtype": "turn_duration", "timestamp": "2026-06-04T02:56:32.923Z"}
 ```
 
-[`detect_turn_error`](../../../crates/rimz/src/agents/adapters/claude/statusline.rs) reads the flagged assistant entry off the bounded tail on each statusline push as the backstop. It classifies labels containing "spend limit" as spend-limit paused, labels containing "usage limit", "session limit", "rate limit", "quota", or "too many requests" as rate-limit paused, transient server/transport labels ("overloaded", "server is busy", "server error", "internal server error", "service unavailable", "bad gateway", "gateway timeout", "stalled", "timed out", "timeout", "connection error", "connection closed", "connection reset", "connection lost", "socket hang up", "broken pipe", "econnreset", "mid-response", "mid-stream", or "network error") as the backoff paused class, and other API-error labels as failed; the decision rule and the internal mapping are [adapter_claude.md → Turn-death marker](../../internals/agents/adapter_claude.md#turn-death-marker). Reverse-engineered like the rest of this section; no source URL to pin.
+[`detect_turn_error`](../../../crates/rimz/src/agents/adapters/claude/statusline.rs) reads the flagged assistant entry off the bounded tail on each statusline push as the backstop. It classifies labels containing "spend limit" as spend-limit paused, labels containing "usage limit", "session limit", "rate limit", "quota", or "too many requests" as rate-limit paused, transient server/transport labels ("overloaded", "server is busy", "server error", "internal server error", "service unavailable", "bad gateway", "gateway timeout", "no response from api", "stalled", "timed out", "timeout", "connection error", "connection closed", "connection reset", "connection lost", "socket hang up", "broken pipe", "econnreset", "mid-response", "mid-stream", or "network error") as the backoff paused class, and other API-error labels as failed; the decision rule and the internal mapping are [adapter_claude.md → Turn-death marker](../../internals/agents/adapter_claude.md#turn-death-marker). Reverse-engineered like the rest of this section; no source URL to pin.
