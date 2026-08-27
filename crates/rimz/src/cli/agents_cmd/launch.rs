@@ -669,15 +669,22 @@ fn write_launch_receipt(
         .max()
         .unwrap_or(0);
     for identity in identities {
+        let identity_handle = launch_identity_handle(identity);
         let handle = format!("@{:<handle_width$}", launch_identity_handle(identity));
         let kind = format!("{:<kind_width$}", identity.kind.as_str());
+        let leader_marker = if leader == Some(identity_handle) {
+            render::paint(render::palette::muted(), "  · leader")
+        } else {
+            String::new()
+        };
         writeln!(
             w,
-            "  {}  {kind}  {}",
+            "  {}  {kind}  {}{leader_marker}",
             render::paint(render::palette::identity(identity.kind.as_str()), &handle),
             render::paint(render::palette::muted(), "starting")
         )?;
     }
+    writeln!(w)?;
     write_launch_hints(
         w,
         team,
@@ -900,7 +907,7 @@ mod tests {
         ];
         identities[0].launch.role = Some("planner".to_owned());
         identities[1].launch.role = Some("coder".to_owned());
-        let mut output = Vec::new();
+        let mut output = anstream::StripStream::new(Vec::new());
 
         write_launch_receipt(
             &mut output,
@@ -912,13 +919,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("launched forge in #feat-x (/repo-worktrees/feat-x)"));
-        assert!(output.contains("@planner"));
-        assert!(output.contains("claude"));
-        assert!(output.contains("starting"));
-        assert!(output.contains("Check: rimz teams show forge#feat-x"));
-        assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
+        insta::assert_snapshot!(String::from_utf8(output.into_inner()).unwrap());
     }
 
     #[test]

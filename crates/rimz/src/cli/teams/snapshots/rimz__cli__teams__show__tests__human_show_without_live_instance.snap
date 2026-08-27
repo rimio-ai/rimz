@@ -1,0 +1,18 @@
+---
+source: crates/rimz/src/cli/teams/show.rs
+expression: "rendered(&report(Vec::new()), Some(\"ended-lane\"))"
+---
+forge
+  source:     /tmp/.agents/teams/forge/team.toml
+  layout:     planner,coder+reviewer
+  leader:     planner
+  validation: ready
+
+  ROLE     PROFILE  KIND    MODEL  EFFORT  MODE
+  planner  claude   claude  fable  high    auto
+  (prompt stack: rimz teams show forge --json)
+
+no live instance in #ended-lane
+
+Launch: rimz teams forge -w <worktree>
+Resume: rimz teams resume forge
