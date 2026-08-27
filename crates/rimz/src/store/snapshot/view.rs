@@ -510,6 +510,9 @@ impl SidebarSnapshot {
                 if agent.model.is_none() {
                     agent.model = context.model;
                 }
+                if agent.effort.is_none() {
+                    agent.effort = context.effort;
+                }
                 agent.subagent_description = context.description;
                 agent.subagent_cost_usd = context.cost_usd;
                 agent.subagent_started_at = context.started_at;

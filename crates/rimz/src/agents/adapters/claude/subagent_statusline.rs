@@ -25,8 +25,8 @@ pub(crate) struct SubagentStatuslinePayload {
 }
 
 /// One child row. `name`, `status`, `label`, `cwd`, and `tokenSamples` are
-/// carried by the upstream payload but RimZ ignores them; `type`, `description`,
-/// `tokenCount`, and `startTime` are the four it paints.
+/// carried by the upstream payload but RimZ ignores them; `type`, `model`,
+/// `effort`, `description`, `tokenCount`, and `startTime` are painted.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct SubagentTask {
@@ -38,6 +38,9 @@ struct SubagentTask {
     /// for fork agents that carry no `agent_type` in `SubagentStart`.
     #[serde(rename = "type")]
     r#type: Option<String>,
+    /// Model and reasoning effort for the running task.
+    model: Option<String>,
+    effort: Option<String>,
     /// What the parent asked the child to do.
     description: Option<String>,
     /// `startTime`. The unit is unpinned upstream, so it is held as a raw value
@@ -64,7 +67,8 @@ impl SubagentStatuslinePayload {
                     agent_id,
                     context: SubagentContext {
                         agent_type: task.r#type.filter(|t| !t.is_empty()),
-                        model: None,
+                        model: task.model.filter(|model| !model.is_empty()),
+                        effort: task.effort.filter(|effort| !effort.is_empty()),
                         description: task.description.filter(|d| !d.is_empty()),
                         token_count: task.token_count.as_ref().and_then(value_as_u64),
                         cost_usd: None,
@@ -137,6 +141,8 @@ mod tests {
                 {
                     "id": "child-1",
                     "type": "Explore",
+                    "model": "claude-opus-4-6",
+                    "effort": "high",
                     "status": "running",
                     "description": "locate the render seam",
                     "startTime": 1_700_000_000,
@@ -154,6 +160,8 @@ mod tests {
         assert_eq!(obs.len(), 2);
         assert_eq!(obs[0].agent_id, "child-1");
         assert_eq!(obs[0].context.agent_type.as_deref(), Some("Explore"));
+        assert_eq!(obs[0].context.model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(obs[0].context.effort.as_deref(), Some("high"));
         assert_eq!(
             obs[0].context.description.as_deref(),
             Some("locate the render seam")
@@ -178,6 +186,8 @@ mod tests {
         let obs = observe(json!({ "tasks": [{ "id": "child-1" }] }));
         assert_eq!(obs.len(), 1);
         assert_eq!(obs[0].context.agent_type, None);
+        assert_eq!(obs[0].context.model, None);
+        assert_eq!(obs[0].context.effort, None);
         assert_eq!(obs[0].context.description, None);
         assert_eq!(obs[0].context.token_count, None);
         assert_eq!(obs[0].context.started_at, None);
