@@ -12,8 +12,9 @@
 //! id). Upstream overrides: `--session-dir` / `PI_CODING_AGENT_SESSION_DIR`;
 //! the `PI_AGENT_DIR` env honored here is RimZ's own comma-separated test
 //! override, not a pi variable. Upstream shapes are mirrored in
-//! `docs/externals/agent-adapter/pi-reference.md`. JSONL shape (one entry per
-//! assistant turn):
+//! `docs/externals/agent-adapter/pi-reference.md`. Usage appears on assistant
+//! and tool-result messages and at the top level of compaction and branch
+//! summary entries. Assistant entries also carry durable tool-call counts:
 //! ```json
 //! { "type": "message",
 //!   "timestamp": "2026-01-01T10:00:00.000Z",
@@ -56,6 +57,8 @@ struct PiEntry {
     entry_type: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     message: Option<PiMessage>,
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
+    usage: Option<PiUsage>,
 }
 
 #[derive(Deserialize)]
@@ -82,6 +85,12 @@ struct PiMessage {
     role: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     model: Option<String>,
+    #[serde(
+        rename = "responseModel",
+        default,
+        deserialize_with = "deserialize_optional_string_lossy"
+    )]
+    response_model: Option<String>,
     #[serde(default, deserialize_with = "deserialize_pi_content")]
     content: Vec<PiContentBlock>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
@@ -180,14 +189,12 @@ pub(crate) fn pi_config_dir() -> PathBuf {
 /// that origin so appended usage entries keep their workspace scope without
 /// re-reading the header.
 ///
-/// Accepts only lines where `"type":"message"` (or `type` is absent) and
-/// `message.role == "assistant"`. A present non-negative
-/// `message.usage.cost.total` is authoritative; otherwise token-bearing rows
-/// are priced through `prices`. Any excess of `totalTokens` over the itemized
-/// parts is folded into output so sparse records still contribute their full
-/// reported total.
-/// Lines without both `"usage"` and `"message"` keywords are skipped before
-/// deserialization.
+/// Counts assistant and tool-result message usage plus top-level compaction and
+/// branch-summary usage. A present non-negative `usage.cost.total` is
+/// authoritative; otherwise token-bearing assistant rows are priced through
+/// `prices`. Any excess of `totalTokens` over the itemized parts is folded into
+/// output so sparse records still contribute their full reported total. Lines
+/// without a `"usage"` keyword are skipped before deserialization.
 pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from_offset = resume.map_or(0, |cursor| cursor.offset);
     let mut state: PiSpendState = resume.map(SpendCursor::state_as).unwrap_or_default();
@@ -209,22 +216,31 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceB
             state.cwd = origin_path(header.cwd.as_deref());
             continue;
         }
-        if !line.contains(r#""usage""#) || !line.contains(r#""message""#) {
+        if !line.contains(r#""usage""#) {
             continue;
         }
         let Ok(entry) = serde_json::from_str::<PiEntry>(line) else {
             continue;
         };
-        if entry.entry_type.as_deref().is_some_and(|t| t != "message") {
-            continue;
-        }
-        let Some(msg) = entry.message else { continue };
-        if msg.role.as_deref() != Some("assistant") {
-            continue;
-        }
-        let Some(usage) = msg.usage.as_ref() else {
-            continue;
+        let (usage, model, content) = match entry.entry_type.as_deref() {
+            Some("message") | None => {
+                let Some(message) = entry.message.as_ref() else {
+                    continue;
+                };
+                match message.role.as_deref() {
+                    Some("assistant") => (
+                        message.usage.as_ref(),
+                        message.response_model.as_ref().or(message.model.as_ref()),
+                        Some(message.content.as_slice()),
+                    ),
+                    Some("toolResult") => (message.usage.as_ref(), None, None),
+                    _ => continue,
+                }
+            }
+            Some("compaction" | "branch_summary") => (entry.usage.as_ref(), None, None),
+            _ => continue,
         };
+        let Some(usage) = usage else { continue };
         let Some(ts) = entry.timestamp.as_deref() else {
             continue;
         };
@@ -261,7 +277,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceB
             // A model that consumed no tokens is not evidence the price book is
             // missing an entry, so an empty turn never joins the unknown chase —
             // and prices to zero either way.
-            None => match msg.model.as_deref() {
+            None => match model.map(String::as_str) {
                 Some(model) if token_total > 0 => {
                     price_split(prices, model, split, ts_secs, &mut unknown_models).unwrap_or(0.0)
                 }
@@ -272,14 +288,14 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceB
             continue;
         }
         let mut cached = CachedEntry {
-            model: msg.model.clone(),
+            model: model.cloned(),
             ..CachedEntry::new(ts_secs, cost, &split)
         };
         // Pi's durable session shape records each call once on the assistant
         // message as a `toolCall` content block. Hook `tool_call` events are
         // extension traffic and do not appear as separate durable session rows.
-        for name in msg
-            .content
+        for name in content
+            .unwrap_or_default()
             .iter()
             .filter(|block| block.kind.as_deref() == Some("toolCall"))
             .filter_map(|block| block.name.as_deref())
@@ -336,6 +352,31 @@ mod tests {
         );
         assert!(entries[0].message_id.is_none());
         assert!(!entries[0].is_sidechain);
+    }
+
+    #[test]
+    fn counts_every_upstream_usage_source() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        for line in [
+            r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","model":"requested-model","responseModel":"response-model","usage":{"input":100,"cost":{"total":0.1}}}}"#,
+            r#"{"type":"message","timestamp":"2026-06-02T10:01:00.000Z","message":{"role":"toolResult","usage":{"output":20,"cost":{"total":0.2}}}}"#,
+            r#"{"type":"compaction","timestamp":"2026-06-02T10:02:00.000Z","usage":{"cacheRead":30,"cost":{"total":0.3}}}"#,
+            r#"{"type":"branch_summary","timestamp":"2026-06-02T10:03:00.000Z","usage":{"cacheWrite":40,"cost":{"total":0.4}}}"#,
+        ] {
+            writeln!(f, "{line}").unwrap();
+        }
+
+        let entries = parse_pi_spend(&path, None, &prices()).entries;
+
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].model.as_deref(), Some("response-model"));
+        assert!(entries[1..].iter().all(|entry| entry.model.is_none()));
+        assert_eq!(entries.iter().map(|entry| entry.cost_usd).sum::<f64>(), 1.0);
+        assert_eq!(entries[1].output, 20);
+        assert_eq!(entries[2].cache_read, 30);
+        assert_eq!(entries[3].cache_write, 40);
     }
 
     #[test]
@@ -400,11 +441,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("session.jsonl");
         let mut f = std::fs::File::create(&path).unwrap();
-        // A non-assistant role, a non-`message` type, and zero/negative costs
-        // each disqualify a usage line — none reach the entry list.
+        // An unsupported role/type, a tool result without usage, and empty or
+        // negative costs each disqualify a line — none reach the entry list.
         for line in [
             r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"user","usage":{"cost":{"total":1.0}}}}"#,
             r#"{"type":"tool_call","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","usage":{"cost":{"total":1.0}}}}"#,
+            r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"toolResult"}}"#,
             r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","usage":{"cost":{"total":0.0}}}}"#,
             r#"{"type":"message","timestamp":"2026-06-02T11:00:00.000Z","message":{"role":"assistant","usage":{"cost":{"total":-1.0}}}}"#,
         ] {

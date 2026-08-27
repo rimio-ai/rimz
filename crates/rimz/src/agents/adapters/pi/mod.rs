@@ -317,9 +317,13 @@ impl crate::agents::capabilities::CoreCapability for PiAdapter {
             spend: Some(super::SpendFixture {
                 session_id: "sess-1",
                 file_name: "2026-06-02T10-00-00-000Z_sess-1.jsonl",
-                body: super::SpendFixtureBody::Jsonl(
+                body: super::SpendFixtureBody::Jsonl(concat!(
                     r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","model":"gpt-5","usage":{"input":100,"output":50,"cost":{"total":0.42}}}}"#,
-                ),
+                    "\n",
+                    r#"{"type":"message","timestamp":"2026-06-02T10:01:00.000Z","message":{"role":"toolResult","usage":{"output":10,"cost":{"total":0.08}}}}"#,
+                    "\n",
+                    r#"{"type":"compaction","timestamp":"2026-06-02T10:02:00.000Z","usage":{"output":20,"cost":{"total":0.12}}}"#,
+                )),
             }),
             ..super::AdapterConformance::default()
         }
