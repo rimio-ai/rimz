@@ -1637,6 +1637,43 @@ fn established_mux_disconnect_reconnects() {
 }
 
 #[test]
+fn established_remote_session_loss_reconnects() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    std::fs::write(
+        &plan,
+        format!("{}\n0\n", rimz::remote::REMOTE_SESSION_LOST_EXIT),
+    )
+    .expect("write plan");
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_SLEEP_MS", "80")
+        .env("RIMZ_REMOTE_GATETIME_MS", "20")
+        .bounded_output()
+        .expect("run rimz remote connect --attach");
+
+    assert!(
+        out.status.success(),
+        "lost remote session reattaches\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        main_invocation_count(&log),
+        2,
+        "the lost remote session is reattached once"
+    );
+    assert_eq!(
+        master_invocation_count(&log),
+        1,
+        "reattach reuses the healthy SSH connection"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("remote session on dev-box disconnected")
+    );
+}
+
+#[test]
 fn ctrl_c_during_remote_setup_prompt_stops_without_reconnecting() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");

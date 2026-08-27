@@ -455,6 +455,9 @@ pub(super) fn fatal_session_message(
             "your rimz and {host}'s rimz differ by a major version; upgrade required — \
              `rimz remote setup {setup_hint}` upgrades the remote"
         ),
+        rimz::remote::REMOTE_SESSION_LOST_EXIT => {
+            format!("remote session on {host} ended before it could settle; not reconnecting")
+        }
         _ => {
             let message = format!("ssh to {host} exited with status {code}; not reconnecting");
             match summary {

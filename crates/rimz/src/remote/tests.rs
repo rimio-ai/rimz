@@ -940,6 +940,22 @@ fn attached_exit_uses_control_liveness_instead_of_mux_status() {
     assert_eq!(settle(false, true), Verdict::Retry);
     assert_eq!(settle(true, false), Verdict::Fatal { code: 1 });
     assert_eq!(
+        ReconnectState::default().settle(Some(REMOTE_SESSION_LOST_EXIT), true, Some((true, true)),),
+        Verdict::Reattach
+    );
+    assert_eq!(
+        ReconnectState::default()
+            .settle(Some(REMOTE_SESSION_LOST_EXIT), true, Some((false, true)),),
+        Verdict::Retry
+    );
+    assert_eq!(
+        ReconnectState::default()
+            .settle(Some(REMOTE_SESSION_LOST_EXIT), true, Some((true, false)),),
+        Verdict::Fatal {
+            code: REMOTE_SESSION_LOST_EXIT
+        }
+    );
+    assert_eq!(
         ReconnectState::default().settle(Some(REMOTE_VERSION_SKEW_EXIT), true, Some((true, true)),),
         Verdict::Fatal {
             code: REMOTE_VERSION_SKEW_EXIT
