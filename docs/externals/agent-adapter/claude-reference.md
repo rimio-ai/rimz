@@ -54,7 +54,7 @@ Every hook receives these fields on stdin (some are event- or context-gated):
 }
 ```
 
-`prompt_id` correlates hook callbacks with the statusline and OpenTelemetry events for one user prompt. `permission_mode` and `effort` are not present on every event; `effort` rides events with a tool-use context (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`) when the model supports the parameter. RimZ parses around `permission_mode` without consuming it — the upstream still sends it; the agent model derives the turn phase from tool events instead. `agent_id` / `agent_type` appear only with `--agent` or inside a subagent. The transcript is written asynchronously and can lag the in-memory conversation at hook time; `Stop` and `SubagentStop` provide `last_assistant_message` for the just-finished response.
+`prompt_id` correlates hook callbacks with the statusline and OpenTelemetry events for one user prompt. `permission_mode` and `effort` are not present on every event; `effort` rides events with a tool-use context (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`) when the model supports the parameter. RimZ parses around `permission_mode` without consuming it — the upstream still sends it; the agent model derives the turn phase from tool events instead. `agent_id` appears only inside a subagent. `agent_type` accompanies it there, or appears alone on the main thread of a `--agent` session. The transcript is written asynchronously and can lag the in-memory conversation at hook time; `Stop` and `SubagentStop` provide `last_assistant_message` for the just-finished response.
 
 ### Decision and output schema
 
@@ -349,7 +349,7 @@ Claude Code 2.1.243 added `modelPricing` to machine managed settings. Managed se
 }
 ```
 
-The four override rates are required USD-per-million-token values in `0..=10000`; `cacheWrite` prices both cache-write durations. A matching row is charged exactly as written before the optional multiplier, without fast-mode or long-context surcharges. Keys use the model ids Claude Code itself prices, including first-party and Bedrock forms. These values affect Claude's `/cost`, statusline, SDK `total_cost_usd`, `--max-budget-usd`, and OpenTelemetry cost estimates; they are estimates rather than invoices, and `/model` continues to show list-price labels.
+The four override rates are required USD-per-million-token values in `0..=10000`; `cacheWrite` prices both cache-write durations. A matching row uses the explicit rates and then compounds the optional multiplier; fast-mode and US-data-residency surcharges are not added to override rows. Keys use the model ids Claude Code itself prices, including first-party and Bedrock forms. These values affect Claude's `/cost`, statusline, SDK `total_cost_usd`, `--max-budget-usd`, and OpenTelemetry cost estimates; they are estimates rather than invoices, and `/model` continues to show list-price labels.
 
 ## Auth surface
 
