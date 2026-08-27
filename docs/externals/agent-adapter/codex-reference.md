@@ -4,7 +4,7 @@
 
 This is the single home for the **Codex upstream protocol surface** RimZ binds to — the hook events and their decision schema, the `notify` channel, the app-server JSON-RPC API, the rollout transcript, the auth file, and the local-OAuth usage endpoint. It is a hand-maintained mirror of OpenAI's published docs, the open-source `codex-rs` types, and the credential-file surfaces Codex itself uses, kept for fast lookup and pinned to the source URLs below. The [`CodexAdapter`](../../../crates/rimz/src/agents/adapters/codex/mod.rs) adapter and the [`codex::app_server`](../../../crates/rimz/src/agents/adapters/codex/app_server.rs) client are the only code that reads this surface.
 
-Refresh baseline: Codex CLI **0.144.1** and the OpenAI Codex docs/source available on **2026-07-10**. Generated app-server details below come from `codex app-server generate-json-schema` on that release; the method index also calls out newer `main`-branch additions where stated.
+Refresh baseline: Codex CLI **0.150.1** and the OpenAI Codex docs/source available on **2026-08-27**. Generated app-server details below come from `codex app-server generate-json-schema` on that release; the method index also calls out newer `main`-branch additions where stated.
 
 Coverage is **depth on what RimZ wires, breadth as an index**: the events, app-server methods, and rollout fields the code actually parses or emits are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists.
 
@@ -15,6 +15,7 @@ Re-fetch these pages — and, for the app-server, re-run the schema generators �
 | Surface | Source |
 | --- | --- |
 | Hooks reference (events, payloads, decision schema, trust) | <https://learn.chatgpt.com/docs/hooks> |
+| Version-pinned hook event enum and runtime dispatch | <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/protocol/src/protocol.rs>, <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/core/src/hook_runtime.rs> |
 | Hook executor (cwd/env semantics) | <https://github.com/openai/codex/blob/main/codex-rs/hooks/src/engine/command_runner.rs> |
 | Config reference (`notify`, credential store, `[tui]` notifications) | <https://learn.chatgpt.com/docs/config-file/config-reference> |
 | Advanced config (`notify` payload) | <https://learn.chatgpt.com/docs/config-file/config-advanced> |
@@ -25,7 +26,7 @@ Re-fetch these pages — and, for the app-server, re-run the schema generators �
 | App-server control socket WebSocket transport | <https://github.com/openai/codex/pull/21843> |
 | Automatic session titles + session index | <https://github.com/openai/codex/pull/40492>, <https://github.com/openai/codex/blob/main/codex-rs/rollout/src/session_index.rs> |
 | TUI paste-burst heuristic | <https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/paste_burst.rs>, <https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/chat_composer.rs> |
-| Rollout/session JSONL + `auth.json` shape | open-source `codex-rs` types — <https://github.com/openai/codex> |
+| Rollout/session JSONL policy, filenames, compression + `auth.json` shape | open-source `codex-rs` types — <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/rollout/src/policy.rs>, <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/rollout/src/rollout_file_name.rs>, <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/rollout/src/compression.rs> |
 | OAuth usage endpoint | Codex credential-file traffic; no public schema page |
 
 The app-server protocol has no published version string; the canonical, version-exact schema is generated from the Codex binary itself:
@@ -37,7 +38,7 @@ codex app-server generate-json-schema --out DIR  # JSON Schema bundle
 
 ## TUI paste-burst handling
 
-Codex treats two or more plain characters arriving less than 8 ms apart as a suspected paste burst (`PASTE_BURST_CHAR_INTERVAL`). A release build flushes the buffered burst after 60 ms of inactivity (`PASTE_BURST_ACTIVE_IDLE_TIMEOUT`), while Enter received during the burst or within the following 120 ms (`PASTE_ENTER_SUPPRESS_WINDOW`) is appended as a literal newline instead of submitting. A bracketed paste clears the burst state through the explicit paste handler. RimZ's raw-typed command path therefore needs a temporal gap before its separate submit keystroke; the bracketed-paste prompt path does not.
+Codex treats a run of plain characters arriving at most 8 ms apart as a suspected paste burst (`PASTE_BURST_CHAR_INTERVAL`). A release build flushes the buffered burst after 8 ms of inactivity on non-Windows systems and 60 ms on Windows (`PASTE_BURST_ACTIVE_IDLE_TIMEOUT`), while Enter received during the burst or within the following 120 ms (`PASTE_ENTER_SUPPRESS_WINDOW`) is appended as a literal newline instead of submitting. A bracketed paste clears the burst state through the explicit paste handler. RimZ's raw-typed command path therefore needs a temporal gap before its separate submit keystroke; the bracketed-paste prompt path does not.
 
 ## Session resume and fork
 
@@ -45,9 +46,9 @@ Codex treats two or more plain characters arriving less than 8 ms apart as a sus
 
 ## Hooks
 
-Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. RimZ's [`CodexAdapter`](../../../crates/rimz/src/agents/adapters/codex/mod.rs) `INSTALLED_EVENTS` constant is the source of truth for the wired set; the native-event → RimZ status mapping is the [adapter_codex.md → Hooks and lifecycle](../../internals/agents/adapter_codex.md#hooks-and-lifecycle).
+Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. RimZ's [`CodexAdapter`](../../../crates/rimz/src/agents/adapters/codex/mod.rs) `CODEX_HOOKS` catalog is the source of truth for the wired set; the native-event → RimZ status mapping is the [adapter_codex.md → Hooks and lifecycle](../../internals/agents/adapter_codex.md#hooks-and-lifecycle).
 
-**Execution.** Matching groups from every active hook source run, and multiple matching command handlers for one event start concurrently. A hook command runs with the **session cwd** as working directory and the **spawning process's environment** (`command_runner.rs`: no `env_clear`, per-handler overlays only). Since 0.137 a plain TUI launch routes hooks through the shared per-user app-server daemon, so the hook child's parent — and its environment — is the daemon's, not the pane's; the mux-stamped identity pin never arrives via env, and RimZ recovers it from the in-pane process instead ([adapter.md → Hooks resolve the room they live in](../../internals/agents/adapter.md#hooks-resolve-the-room-they-live-in)).
+**Execution.** Matching groups from every active hook source run, and multiple matching handlers for one event start concurrently. A hook command runs with the **session cwd** as working directory. Codex 0.149 and newer clear the child's live environment, replay the environment snapshot captured when the session hook runtime was created, apply the handler's `env` overlay, then scrub non-inheritable credential variables. Since 0.137 a plain TUI launch routes hooks through the shared per-user app-server daemon, so the hook child's parent is the daemon, not the pane; RimZ therefore treats the parent PID as daemon-owned and recovers pane identity from the in-pane process ([adapter.md → Hooks resolve the room they live in](../../internals/agents/adapter.md#hooks-resolve-the-room-they-live-in)).
 
 ### Config shape
 
@@ -65,9 +66,9 @@ timeout = 30
 statusMessage = "Checking Bash command"
 ```
 
-`matcher` is a regex over the tool name (or source, for `SessionStart`). Default `timeout` is **600** seconds.
+`matcher` is a regex over the tool name (or source/reason for lifecycle events). Default `timeout` is **600** seconds, except `SessionEnd` and `Interrupt`, which default to one second and clamp configured values to at most three seconds.
 
-Only `type = "command"` runs today. `prompt` and `agent` handlers are parsed and skipped, and `async = true` command handlers are also skipped. `UserPromptSubmit` and `Stop` ignore `matcher`; the installed RimZ groups omit it for those events.
+`type = "command"` and `type = "mcp_tool"` run in 0.150.1. A command with `async = true` runs in the background and cannot apply control effects; MCP-tool handlers are synchronous. `prompt` and `agent` handlers are still parsed and skipped. `UserPromptSubmit`, `Stop`, and `Interrupt` ignore `matcher`; the installed RimZ groups omit it for those events.
 
 ### Trust state
 
@@ -82,7 +83,7 @@ A fresh `rimz hooks install` — or any change to the installed command — is t
 
 ### Common input
 
-Every hook receives:
+Turn-scoped and ordinary lifecycle hooks receive this common envelope:
 
 ```json
 {
@@ -96,7 +97,7 @@ Every hook receives:
 }
 ```
 
-RimZ parses around `permission_mode` without consuming it — the upstream still sends it; the agent model derives the turn phase from tool events instead.
+`SessionEnd` is the exception: it carries only `session_id`, `transcript_path`, `cwd`, `hook_event_name`, and `reason`. RimZ parses around `permission_mode` without consuming it — the upstream still sends it on the other hooks; the agent model derives the turn phase from tool events instead.
 
 Codex 0.144.4 also stamps optional `agent_id` and `agent_type` on `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, and `PostCompact` when the hook fires inside a child thread. A usable child observation has a non-empty `agent_id` distinct from the root `session_id`. Hooks expose neither the V2 generated nickname nor the canonical task path, and they carry no child token usage or assignment prompt; those are rollout/app-server data.
 
@@ -112,12 +113,14 @@ Codex 0.144.4 also stamps optional `agent_id` and `agent_type` on `UserPromptSub
 | `PostToolUse` | after tool output is produced | `turn_id`, `tool_name`, `tool_use_id`, `tool_input`, `tool_response`; `request_user_input` returns its id-keyed answers map | ✓ |
 | `SubagentStop` | a subagent stops | `turn_id`, `agent_id`, `agent_type`, `agent_transcript_path`, `stop_hook_active`, `last_assistant_message` | ✓ |
 | `Stop` | turn completes | `turn_id`, `stop_hook_active`, `last_assistant_message` | ✓ |
+| `Interrupt` | root turn is interrupted, after the rollout is flushed | `turn_id`; common `model` and `permission_mode` fields | ✓ |
 | `PreCompact` | before conversation compaction | `turn_id`, `trigger` (`manual`\|`auto`) | ✓ |
 | `PostCompact` | after compaction | `turn_id`, `trigger` | ✓ |
+| `SessionEnd` | root session runtime shuts down, including idle app-server unload | `reason` (currently always `other`); no `model`, `permission_mode`, or `turn_id` | — |
 
-Codex has **no `SessionEnd`, `Notification`, or dedicated plan-approval hook**. The client-side plan gate is derived from the rollout after the ordinary `Stop` hook; its wire shape is in [Plan mode, approval, and questions](#plan-mode-approval-and-questions). Compaction uses `PreCompact` as the opener; `PostCompact` closes with a known trigger, and a `SessionStart` with `source = "compact"` can still arrive as triggerless close evidence when `PostCompact` is missed. Codex 0.145 and newer deliver that compact start under a successor session id whose rollout `forked_from_id` names the predecessor; RimZ stamps the link as `compacted_from` and promotes the continuation on the same pane and CLI process.
+Codex 0.150.1 has **no `Notification` or dedicated plan-approval hook**. `Interrupt` and `SessionEnd` are root-only. RimZ installs `Interrupt` because it is direct turn-settle evidence, but deliberately leaves `SessionEnd` unwired: app-server idle unload runs the same shutdown path, so that event does not prove the pane or interactive session ended. The client-side plan gate is derived from the rollout after the ordinary `Stop` hook; its wire shape is in [Plan mode, approval, and questions](#plan-mode-approval-and-questions). Compaction uses `PreCompact` as the opener; `PostCompact` closes with a known trigger, and a `SessionStart` with `source = "compact"` can still arrive as triggerless close evidence when `PostCompact` is missed. Codex 0.145 and newer deliver that compact start under a successor session id whose rollout `forked_from_id` names the predecessor; RimZ stamps the link as `compacted_from` and promotes the continuation on the same pane and CLI process.
 
-Hook tool names are not the same vocabulary as rollout function-call names. The current hook contract reports canonical `Bash`, `apply_patch`, and `mcp__server__tool` names; `apply_patch` matcher aliases include `Edit` and `Write`. Hook interception remains partial: simple shell calls, `apply_patch`, and MCP calls are covered, while unified-exec, web search, and other non-shell/non-MCP paths are not a complete enforcement boundary. Current rollouts can still record `exec_command`, `apply_patch`, `update_plan`, and `request_user_input`, with older or compatibility traces mentioning `shell` / `local_shell`. RimZ reads the payload's actual `tool_name`, treats `request_user_input` as the only blocking `PreToolUse` question tool, and treats `update_plan` as ordinary non-blocking progress state.
+Hook tool names are not the same vocabulary as rollout function-call names. The current hook contract reports canonical `Bash`, `apply_patch`, and `mcp__server__tool` names; `apply_patch` matcher aliases include `Edit` and `Write`. In 0.150.1 both simple and unified-exec command launches emit `PreToolUse` as `Bash`, and unified-exec completion (including a final `write_stdin` poll) emits the matching `PostToolUse`. Hook interception remains partial: web search and other non-hooked paths are not a complete enforcement boundary. Current rollouts can still record `exec_command`, `apply_patch`, `update_plan`, and `request_user_input`, with older or compatibility traces mentioning `shell` / `local_shell`. RimZ reads the payload's actual `tool_name`, treats `request_user_input` as the only blocking `PreToolUse` question tool, and treats `update_plan` as ordinary non-blocking progress state.
 
 **Observed registration quirks:** on Codex 0.144.1, opening a plain TUI reached the idle prompt without firing `SessionStart`; the hook rode the first submitted prompt immediately before `UserPromptSubmit`, and `/clear` provided no reliable `SessionStart(source = "clear")` observation despite that documented source value. Codex 0.144.5 now fires `SessionStart` on `/new` / conversation switch before the first `UserPromptSubmit`. Codex 0.145 changes `/compact` from an in-session continuation to a successor id: `SessionStart(source = "compact")` carries the successor while its rollout header carries `forked_from_id = <predecessor>`. RimZ still reads rollout `session_meta.payload.forked_from_id` for lineage: absent means a fresh `/clear` / `/new` root, present means a fork, and the compact hook distinguishes the compact successor from `/side` and `/btw` forks. RimZ's handling is in the [adapter_codex.md → Session registration](../../internals/agents/adapter_codex.md#session-registration-and-launch-quirks); re-verify these observations against an installed release on each refresh.
 
@@ -141,6 +144,9 @@ For reference, Codex's common-control and block shapes:
 
 // PostToolUse / Stop / SubagentStop — block
 { "decision": "block", "reason": "string" }
+
+// Interrupt — warning text only
+{ "systemMessage": "string" }
 ```
 
 **Exit codes.** Exit `0` with JSON processes the output; exit `0` with no output continues; exit `2` is a blocking failure (stderr read as the reason/message). The neutral path RimZ takes is empty stdout, exit 0. Exact bytes are the inline goldens in [`codex/mod.rs`](../../../crates/rimz/src/agents/adapters/codex/mod.rs).
@@ -185,7 +191,7 @@ Codex has no statusline, so RimZ reads its rich context out of band from the **a
 
 The updater waits five minutes before its first pass and one hour between later passes. Each pass runs the standalone installer and compares the updater's executable identity with the managed target. When they differ, it restarts a running app-server from the managed target and then replaces its own process image with that binary. `codex remote-control stop` stops only the app-server, and `start` preserves a live updater; that pair therefore does not repair updater skew. `codex app-server daemon bootstrap --remote-control` serializes the transition under the provider lifecycle lock, restarts the app-server, stops the existing updater, and starts a new updater from the managed target.
 
-The 0.144.4 PID backend considers a recorded process active when `kill(pid, 0)` succeeds and its `ps` start time still matches. A zombie therefore remains active: `start` waits ten seconds for the absent control socket, while `stop` signals the zombie, waits a 60-second grace period, attempts `SIGKILL`, and reaches its 70-second timeout because signals cannot settle a dead child that its parent has not reaped. RimZ repairs only this proven state: the socket is absent; both structured PID records still match; the app-server is the updater's sole zombie child; both processes belong to the current user; and the updater executable and argv resolve inside the managed standalone install. It sends `SIGTERM` to that updater, waits up to two seconds for both identities to disappear, then retries the Codex control command once. Every ambiguous observation preserves the native Codex failure.
+The 0.144.4 PID backend considered a recorded process active when `kill(pid, 0)` succeeded and its `ps` start time still matched. A zombie therefore remained active: `start` waited ten seconds for the absent control socket, while `stop` signalled the zombie, waited a 60-second grace period, attempted `SIGKILL`, and reached its 70-second timeout because signals cannot settle a dead child that its parent has not reaped. The 0.145 prerelease line added a non-blocking `waitpid` while stopping an app-server child started by a previous updater; 0.150.1 retains that native reaping path. RimZ keeps its narrowly proven repair for older releases: the socket is absent; both structured PID records still match; the app-server is the updater's sole zombie child; both processes belong to the current user; and the updater executable and argv resolve inside the managed standalone install. It sends `SIGTERM` to that updater, waits up to two seconds for both identities to disappear, then retries the Codex control command once. Every ambiguous observation preserves the native Codex failure.
 
 The protocol is organized around three primitives: an **Item** (atomic input/output unit with a `started` → optional `delta` → `completed` lifecycle), a **Turn** (the items from one unit of agent work), and a **Thread** (the durable session container).
 
@@ -243,7 +249,7 @@ The reaper queries the per-user daemon **specifically** (never a cold-spawn, who
 }
 ```
 
-Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and reported window lengths render from `windowDurationMins`. Codex declares one product-level exception: when an authoritative response reports another window but omits the 5-hour duration, RimZ keeps the 5-hour slot visible as an unlimited `∞` bar. `rateLimits` remains the backward-compatible single-bucket view; `rateLimitsByLimitId` carries newer multi-bucket data. The optional `credits` object is mapped by the shared Codex credit rule: `overageLimitReached: true` means exhausted in older payloads, `unlimited: true` means usable with unknown remaining balance, numeric/string `balance` means remaining USD, and `hasCredits: false` means disabled. The 0.144.1 generated schema requires only `hasCredits` and `unlimited` in `CreditsSnapshot`; RimZ tolerates the older fields and unknown shapes without dropping valid windows. `rateLimitResetCredits.availableCount` maps to the authoritative dashboard count; every valid `expiresAt` among `available` detail rows is retained, and the earliest remains the summary expiry.
+Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and reported window lengths render from `windowDurationMins`. Codex declares one product-level exception: when an authoritative response reports another window but omits the 5-hour duration, RimZ keeps the 5-hour slot visible as an unlimited `∞` bar. `rateLimits` remains the backward-compatible single-bucket view; `rateLimitsByLimitId` carries newer multi-bucket data. The optional `credits` object is mapped by the shared Codex credit rule: `overageLimitReached: true` means exhausted in older payloads, `unlimited: true` means usable with unknown remaining balance, numeric/string `balance` means remaining USD, and `hasCredits: false` means disabled. The 0.150.1 generated schema requires `hasCredits` and `unlimited` in `CreditsSnapshot` and carries nullable `balance`; RimZ tolerates the older fields and unknown shapes without dropping valid windows. `rateLimitResetCredits.availableCount` maps to the authoritative dashboard count; every valid `expiresAt` among `available` detail rows is retained, and the earliest remains the summary expiry.
 
 **`model/list`** (`{ "includeHidden": true }`) → the session model's display name. The payload also carries `defaultReasoningEffort`, but RimZ does not map it to row effort because it is a catalog default/recommendation, not the current session's live value.
 
@@ -270,7 +276,7 @@ RimZ reads `thread/read` by the hook `session_id`, then uses `thread/list` as th
 
 A non-exhaustive map of the broader surface, for future wiring. Generate the exact, version-pinned schema with `codex app-server generate-json-schema`.
 
-- **Thread**: `thread/start`, `thread/resume`, `thread/fork`, `thread/archive`, `thread/name/set`, `thread/goal/{set,get,clear}`, `thread/compact/start`, `thread/rollback`, `thread/inject_items`, `thread/metadata/update`; current `main` also documents experimental `thread/turns/list`, while 0.144.1 does not generate it.
+- **Thread**: `thread/start`, `thread/resume`, `thread/fork`, `thread/archive`, `thread/name/set`, `thread/goal/{set,get,clear}`, `thread/compact/start`, `thread/rollback`, `thread/inject_items`, `thread/metadata/update`; 0.150.1 also includes experimental paginated `thread/turns/list` and `thread/items/list`.
 - **Turn**: `turn/start`, `turn/steer`, `turn/interrupt`; `review/start`.
 - **Account / auth**: `account/read`, `account/login/{start,cancel}`, `account/logout`, `account/rateLimits/read`, `account/usage/read`, `account/rateLimitResetCredit/consume`.
 - **Tools / exec / fs**: `command/exec` (+ `write`/`resize`/`terminate`), `process/{spawn,writeStdin,resizePty,kill}`, `fs/{readFile,writeFile,createDirectory,getMetadata,readDirectory,remove,copy,watch,unwatch}`, `mcpServer/*`.
@@ -294,7 +300,9 @@ RimZ reads this durable index during the inline local-context pass, including `P
 
 ## Rollout transcript JSONL
 
-Codex writes one rollout file per session — its session log — at `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session_id>.jsonl`, and moves archived rollouts into the sibling `~/.codex/archived_sessions/` tree. The format is defined by the open-source `codex-rs` types (no standalone published schema; the path tree and event shapes are the **official source**, linked above). Rollout events feed RimZ's context gauge, supervised-run streaming, plan approval, and the local turn-settle markers:
+Codex writes a session rollout at `~/.codex/sessions/YYYY/MM/DD/rollout-<timestamp>-<thread_id>[_<rollout_id>].jsonl` and moves archived rollouts into the flat sibling `~/.codex/archived_sessions/` directory. The optional rollout id appears when a reverted thread keeps its stable thread id but writes a new rollout; filename fallback selects the newest matching timestamp and UUIDv7 rollout id. The format is defined by the open-source `codex-rs` types (no standalone published schema; the path tree and event shapes are the **official source**, linked above).
+
+Codex 0.150's non-ephemeral TUI sessions default to **Paginated** history. In Legacy mode, visible text is persisted as `event_msg` / `user_message` and `agent_message`; in Paginated mode those legacy message records are omitted and the same visible turns are persisted as `event_msg` / `item_completed` `UserMessage` and `AgentMessage` items. `response_item` records persist independently in both modes, so they are transport/history records rather than a second visible-message source. Plan, sleep, and completed subagent-activity items are policy exceptions that can persist in both modes. Rollout events feed RimZ's context gauge, supervised-run streaming, plan approval, and the local turn-settle markers:
 
 ```jsonc
 // V2 session metadata; forked_from_id appears on user-created forks
@@ -320,8 +328,25 @@ Codex writes one rollout file per session — its session log — at `~/.codex/s
 // model and reasoning effort
 { "type": "turn_context", "payload": { "model": "gpt-5.5-codex", "effort": "xhigh" } }
 
-// assistant stream message
+// Legacy visible assistant message
 { "type": "event_msg", "payload": { "type": "agent_message", "message": "..." } }
+
+// Paginated visible user message; non-text inputs are skipped
+{ "type": "event_msg", "payload": { "type": "item_completed", "turn_id": "turn-1",
+    "item": { "type": "UserMessage", "content": [
+      { "type": "text", "text": "prompt", "text_elements": [] },
+      { "type": "image", "image_url": "data:..." }
+    ] } } }
+
+// Paginated visible assistant message; the content tag is capitalized upstream
+{ "type": "event_msg", "payload": { "type": "item_completed", "turn_id": "turn-1",
+    "item": { "type": "AgentMessage", "content": [
+      { "type": "Text", "text": "assistant update" }
+    ] } } }
+
+// Persisted in both history modes; developer/system transport is not visible transcript text
+{ "type": "response_item", "payload": { "type": "message", "role": "developer",
+    "content": [{ "type": "input_text", "text": "hidden instruction" }] } }
 
 // provider turn error — accepted variants, classified through the app-server TurnError vocabulary
 { "timestamp": "2026-06-11T07:18:00.000Z",
@@ -357,7 +382,9 @@ Codex writes one rollout file per session — its session log — at `~/.codex/s
                "completed_at": "2026-07-07T14:12:00.000Z" } }
 ```
 
-Codex carries the window directly (`model_context_window`); RimZ derives occupancy from the bounded `last_token_usage` reading. For a child this value is current context/request usage, not lifetime spend. `session_meta.payload.forked_from_id` carries fork lineage for `/side` / `/btw` / `/fork`; a parentless head is a fresh root such as `/clear` / `/new`. `thread_source = "subagent"` or the structured `source.subagent.thread_spawn` object positively identifies a child; `forked_from_id` alone still identifies user forks and is not child proof. The direct V2 fields supply nickname, root-relative task path, role, immediate parent, and version, with the structured spawn fields as tolerant fallbacks. Fork and subagent rollouts copy the parent's historical token-count records into a single timestamp second before appending their own work, so spend readers retain that cumulative prefix as a baseline and suppress it as billable usage. `last_token_usage` also feeds the card's per-call composition: `cached_input_tokens` is the `◌` cache-read figure, `cache_write_input_tokens` is the `◍` cache-write figure, `input_tokens − cached_input_tokens − cache_write_input_tokens` is the `↘` fresh input (`input_tokens` includes both cache slices), and `output_tokens` is the `↗`. Codex 0.145 introduced `cache_write_input_tokens`, sourced from Responses `input_tokens_details.cache_write_tokens`; older rollouts omit it, automatic cache population reports `0`, and explicit prompt caching can report a nonzero write that renders as `◍`. `agent_message.message` is the main-thread assistant text RimZ emits as `rimz agents <spec> -p --stream` / `rimz agents wait --stream` progress; duplicate `response_item` rows are ignored for streaming. Error records use the app-server `TurnError` vocabulary generated by `codex app-server generate-json-schema --out DIR`, while observed rollout files write the field as `codex_error_info` and multiword values in snake_case. RimZ accepts both spellings: usage-limit kinds pause for a rate limit, server-overload and internal-server-error kinds pause for the backoff class, and other known variants fail the row. The rollout value `other` is an upstream catch-all that can accompany a real transient failure, including the observed 503 record above, so it and unrecognized kinds defer to label classification. Label fallback maps "spend limit" to the spend-limit paused class; "usage limit", "session limit", "rate limit", "quota", "too many requests", and HTTP 429 map to the rate-limit paused class; "at capacity", "high demand", and HTTP 5xx map to the overload backoff class. Observed Codex 0.142.x serving-capacity failures render `⚠ Selected model is at capacity. Please try a different model.` in the TUI only; observed usage-limit failures render `■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage … try again at 6:35 AM.` in the TUI only. Both shapes leave the rollout resting on `event_msg` / `task_complete` with `last_agent_message: null`, no `error` field, no `Stop` hook, and no app-server `thread/read` error field; upstream issue threads include openai/codex #22277, #19579, #28507, and #29760. RimZ matches limit keywords without relying on their ornament, but requires the observed `⚠` banner for transient server/transport text so ordinary agent output cannot impersonate a provider warning. Observed interrupted turns render `event_msg` / `turn_aborted` with `reason: "interrupted"` on Esc and `/clear` of a running turn, and no `Stop` hook; RimZ treats any resting `turn_aborted` reason as an interrupted marker and lets a later live record clear it. The field → internal mapping, date-tree walk (`RIMZ_CODEX_SESSIONS` overrides the root), and self-clear rule are in [adapter_codex.md → Context and transcript](../../internals/agents/adapter_codex.md#context-and-transcript).
+Codex carries the window directly (`model_context_window`); RimZ derives occupancy from the bounded `last_token_usage` reading. For a child this value is current context/request usage, not lifetime spend. `session_meta.payload.forked_from_id` carries fork lineage for `/side` / `/btw` / `/fork`; a parentless head is a fresh root such as `/clear` / `/new`. `thread_source = "subagent"` or the structured `source.subagent.thread_spawn` object positively identifies a child; `forked_from_id` alone still identifies user forks and is not child proof. The direct V2 fields supply nickname, root-relative task path, role, immediate parent, and version, with the structured spawn fields as tolerant fallbacks. Fork and subagent rollouts copy the parent's historical token-count records into a single timestamp second before appending their own work, so spend readers retain that cumulative prefix as a baseline and suppress it as billable usage. `last_token_usage` also feeds the card's per-call composition: `cached_input_tokens` is the `◌` cache-read figure, `cache_write_input_tokens` is the `◍` cache-write figure, `input_tokens − cached_input_tokens − cache_write_input_tokens` is the `↘` fresh input (`input_tokens` includes both cache slices), and `output_tokens` is the `↗`. Codex 0.145 introduced `cache_write_input_tokens`, sourced from Responses `input_tokens_details.cache_write_tokens`; older rollouts omit it, automatic cache population reports `0`, and explicit prompt caching can report a nonzero write that renders as `◍`. Legacy `agent_message.message` and paginated `AgentMessage.content[].text` are the main-thread assistant text RimZ emits as `rimz agents <spec> -p --stream` / `rimz agents wait --stream` progress; `response_item` rows are ignored for visible streaming. Error records use the app-server `TurnError` vocabulary generated by `codex app-server generate-json-schema --out DIR`, while observed rollout files write the field as `codex_error_info` and multiword values in snake_case. RimZ accepts both spellings: usage-limit kinds pause for a rate limit, server-overload and internal-server-error kinds pause for the backoff class, and other known variants fail the row. The rollout value `other` is an upstream catch-all that can accompany a real transient failure, including the observed 503 record above, so it and unrecognized kinds defer to label classification. Label fallback maps "spend limit" to the spend-limit paused class; "usage limit", "session limit", "rate limit", "quota", "too many requests", and HTTP 429 map to the rate-limit paused class; "at capacity", "high demand", and HTTP 5xx map to the overload backoff class. Observed Codex 0.142.x serving-capacity failures render `⚠ Selected model is at capacity. Please try a different model.` in the TUI only; observed usage-limit failures render `■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage … try again at 6:35 AM.` in the TUI only. Both shapes leave the rollout resting on `event_msg` / `task_complete` with `last_agent_message: null`, no `error` field, no `Stop` hook, and no app-server `thread/read` error field; upstream issue threads include openai/codex #22277, #19579, #28507, and #29760. RimZ matches limit keywords without relying on their ornament, but requires the observed `⚠` banner for transient server/transport text so ordinary agent output cannot impersonate a provider warning. Observed interrupted turns render `event_msg` / `turn_aborted` with `reason: "interrupted"` on Esc and `/clear` of a running turn; Codex 0.150.1 flushes the rollout before firing its root-only `Interrupt` hook, while RimZ retains the resting-record fallback for older versions and lets a later live record clear it. The field → internal mapping, date-tree walk (`RIMZ_CODEX_SESSIONS` overrides the root), and self-clear rule are in [adapter_codex.md → Context and transcript](../../internals/agents/adapter_codex.md#context-and-transcript).
+
+Upstream can transparently read compressed `.jsonl.zst` rollouts. Writing them is guarded by the `local_thread_store_compression` feature, which is `UnderDevelopment` and default-off in 0.150.1; RimZ therefore keeps `.jsonl` as its supported discovery and spend surface until compression becomes a shipped default.
 
 ### Plan mode, approval, and questions
 
@@ -401,7 +428,7 @@ Codex stores credentials according to `cli_auth_credentials_store = "file" | "ke
 | `tokens.access_token` present | ChatGPT login → **metered** (plan tier filled by live app-server context or the OAuth usage response) |
 | `tokens.account_id` present, non-empty | explicit ChatGPT account identity copied to `AgentAccount.account_id`, the `ChatGPT-Account-Id` request header, and OAuth cache ownership |
 
-When no auth file exists, RimZ runs `codex login status` so keyring-backed logins still appear with the correct metered/unmetered posture. The command prints one line per auth mode: `Logged in using ChatGPT` (metered by subscription windows), `Logged in using an API key - <masked>` and `Logged in using Amazon Bedrock API key` (token/AWS-billed, so unmetered), `Logged in using access token` and `Logged in using personal access token` (logged in, metering unknown), or `Not logged in`. It reports login kind but no plan tier or token, so the plan rides the app-server (`account/rateLimits/read` `planType`) and direct OAuth usage remains available only when Codex exposes a file token. The semantics are in [adapter_codex.md → Account and balance](../../internals/agents/adapter_codex.md#account-and-balance).
+When no auth file exists, RimZ runs `codex login status` so keyring-backed logins still appear with the correct metered/unmetered posture. The command prints one line per auth mode: `Logged in using ChatGPT` (metered by subscription windows); `Logged in using an API key - <masked>`, `Logged in using Amazon Bedrock API key`, and `Logged in using Amazon Bedrock AWS access keys` (token/AWS-billed, so unmetered); `Logged in using access token`, `Logged in using personal access token`, and `Logged in using workload identity` (logged in, metering unknown); or `Not logged in`. It reports login kind but no plan tier or token, so the plan rides the app-server (`account/rateLimits/read` `planType`) and direct OAuth usage remains available only when Codex exposes a file token. The semantics are in [adapter_codex.md → Account and balance](../../internals/agents/adapter_codex.md#account-and-balance).
 
 [`oauth_usage.rs`](../../../crates/rimz/src/agents/adapters/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage probe. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`; the same trimmed explicit field identifies the idle `AgentAccount` and the successful usage observation, so a stale preflight read cannot assign fetched facts to the wrong cache owner. RimZ does not decode JWT claims for identity.
 
