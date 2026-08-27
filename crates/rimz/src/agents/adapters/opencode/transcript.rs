@@ -505,6 +505,68 @@ mod tests {
     }
 
     #[test]
+    fn full_reads_follow_timestamps_while_incremental_reads_follow_rowids() {
+        let (_dir, path) = create_db();
+        insert_message(
+            &path,
+            "msg-newer",
+            "ses-main",
+            2_000,
+            r#"{"role":"assistant","time":{"created":2000,"completed":2100},"finish":"stop"}"#,
+        );
+        insert_part(
+            &path,
+            "part-newer",
+            "msg-newer",
+            "ses-main",
+            2_001,
+            r#"{"type":"text","text":"newer by timestamp"}"#,
+        );
+        insert_message(
+            &path,
+            "msg-imported",
+            "ses-main",
+            1_000,
+            r#"{"role":"assistant","time":{"created":1000,"completed":1100},"finish":"stop"}"#,
+        );
+        insert_part(
+            &path,
+            "part-imported",
+            "msg-imported",
+            "ses-main",
+            1_001,
+            r#"{"type":"text","text":"older timestamp, higher rowid"}"#,
+        );
+        let session_id = AgentSessionId::from("ses-main");
+
+        let messages = read_messages(&path, Some(&session_id)).unwrap();
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            ["older timestamp, higher rowid", "newer by timestamp"]
+        );
+
+        assert_eq!(position(&path, Some(&session_id)).unwrap().get(), 2);
+        let page = read_assistant_page(
+            &path,
+            Some(&session_id),
+            crate::agents::transcript::TranscriptPosition::START,
+        )
+        .unwrap();
+        assert_eq!(
+            page.messages,
+            ["newer by timestamp", "older timestamp, higher rowid"]
+        );
+        assert_eq!(page.next.get(), 2);
+        assert_eq!(
+            last_assistant_message(&path, &session_id).as_deref(),
+            Some("older timestamp, higher rowid")
+        );
+    }
+
+    #[test]
     fn normalized_conversation_and_spend_produce_one_history_turn() {
         let (_dir, path) = create_db();
         insert_message(
