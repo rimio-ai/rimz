@@ -1,7 +1,8 @@
 //! OpenCode hook adapter.
 //!
-//! OpenCode loads TypeScript plugins in-process inside each embedded server.
-//! RimZ ships one plugin (`plugin.ts`) that shells out to
+//! OpenCode loads TypeScript plugins in-process. RimZ ships one plugin
+//! (`plugin.ts`) that reads session and model context through the in-process
+//! client, then shells out to
 //! `rimz hooks feed --source opencode`, posts a RimZ-owned snake_case payload
 //! on stdin. Current permission and question prompts arrive through
 //! `permission.asked` and `question.asked` bus events; the compatibility
@@ -18,7 +19,6 @@
 pub(crate) mod account;
 mod database;
 pub(crate) mod payloads;
-pub mod server;
 pub(crate) mod spend;
 mod transcript;
 
@@ -42,10 +42,8 @@ use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::pricing::PriceBook;
 use super::{
-    AgentContext, AgentErr, AgentLifecycleObservation, HookOutput, HookRouting,
-    LifecycleRefreshCtx, RefreshSpawn, RefreshTrigger, Result, SessionContextInput,
-    SessionContextRefresh, SubagentIdentity, optional_payload_string, resolve_subagent_identity,
-    sanitize_user_prompt,
+    AgentContext, AgentErr, AgentLifecycleObservation, HookOutput, HookRouting, Result,
+    SubagentIdentity, optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
@@ -159,7 +157,7 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "authoritative per-session SQLite message spend sum, reconciled at each turn boundary",
     },
     rich_context: ConcernCoverage::Wired {
-        via: "embedded server /config/providers + /session over plugin serverUrl",
+        via: "in-process plugin client session metadata + model catalog",
     },
     hook_install: ConcernCoverage::Wired {
         via: "~/.config/opencode/plugin/rimz.ts",
@@ -370,6 +368,7 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
             HookRouting::session(parsed.session_id.clone().map(Into::into))
                 .with_worktree(optional_payload_string(payload, &["worktree_path", "cwd"])),
         );
+        decoded.set_observed_context(self.observe_context(self.spec().kind, payload));
         let questions = if event_name == "question_ask" {
             super::question::questions(payload, super::question::PreviewPolicy::None)
                 .unwrap_or_default()
@@ -566,56 +565,21 @@ impl crate::agents::capabilities::TranscriptCapability for OpencodeAdapter {
 }
 
 impl crate::agents::capabilities::ContextCapability for OpencodeAdapter {
-    fn context_refresh_spawn(
-        &self,
-        trigger: RefreshTrigger<'_>,
-        ctx: &LifecycleRefreshCtx<'_>,
-    ) -> Option<RefreshSpawn> {
-        let RefreshTrigger::Hook(event_name) = trigger else {
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
+        let parsed = payloads::parse_payload(payload);
+        if parsed.session_name.is_none()
+            && parsed.model_display_name.is_none()
+            && parsed.agent_version.is_none()
+        {
             return None;
+        }
+        let context = AgentContext {
+            session_name: parsed.session_name,
+            model_display_name: parsed.model_display_name,
+            agent_version: parsed.agent_version,
+            ..AgentContext::new(source, Timestamp::now())
         };
-        if !matches!(
-            event_name,
-            "session_created" | "chat_message" | "session_idle" | "session_error"
-        ) {
-            return None;
-        }
-        ctx.server_url.filter(|url| !url.is_empty())?;
-        let args = crate::agents::refresh_context_argv(self.spec().kind, ctx);
-        Some(RefreshSpawn { args })
-    }
-
-    /// OpenCode's embedded server owns session name, model display name, and
-    /// version; the plugin envelope owns everything else. The server read is
-    /// throttled on the record's own rich stamp.
-    fn refresh_session_context(
-        &self,
-        input: &SessionContextInput<'_>,
-    ) -> Option<SessionContextRefresh> {
-        let observed = server::refresh_rich_context(
-            input.server_url?,
-            input.session_id,
-            input.model,
-            input.prior.map(|record| &record.context),
-            input.prior.and_then(|record| record.rich_observed_at),
-            Timestamp::now(),
-        )?;
-        Some(SessionContextRefresh {
-            observed: Some(observed),
-            ..SessionContextRefresh::default()
-        })
-    }
-
-    fn merge_session_context(
-        &self,
-        record: &mut crate::store::agent_context::AgentContextRecord,
-        observed: &AgentContext,
-    ) -> bool {
-        if !server::merge_rich_context(&mut record.context, observed) {
-            return false;
-        }
-        record.rich_observed_at = Some(observed.observed_at);
-        true
+        super::ContextObservation::new(parsed.session_id?, context)
     }
 }
 
