@@ -91,12 +91,13 @@ fn active_time_op(
             LifecycleSignal::TurnStarted
             | LifecycleSignal::ToolUsed { .. }
             | LifecycleSignal::Compacting
-            | LifecycleSignal::CompactionEnded { .. },
+            | LifecycleSignal::CompactionEnded { failed: false, .. },
         ) => Some(ActiveTimeOp::Progress),
         Some(
             LifecycleSignal::AwaitingInput { .. }
             | LifecycleSignal::TurnEnded { .. }
             | LifecycleSignal::TurnInterrupted
+            | LifecycleSignal::CompactionEnded { failed: true, .. }
             | LifecycleSignal::Ended
             | LifecycleSignal::Lost,
         ) => Some(ActiveTimeOp::Stop),
@@ -169,8 +170,18 @@ mod tests {
             ),
             (LifecycleSignal::Compacting, Some(ActiveTimeOp::Progress)),
             (
-                LifecycleSignal::CompactionEnded { auto: None },
+                LifecycleSignal::CompactionEnded {
+                    auto: None,
+                    failed: false,
+                },
                 Some(ActiveTimeOp::Progress),
+            ),
+            (
+                LifecycleSignal::CompactionEnded {
+                    auto: Some(false),
+                    failed: true,
+                },
+                Some(ActiveTimeOp::Stop),
             ),
             (LifecycleSignal::Ended, Some(ActiveTimeOp::Stop)),
             (LifecycleSignal::Lost, Some(ActiveTimeOp::Stop)),

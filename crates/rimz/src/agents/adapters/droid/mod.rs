@@ -299,7 +299,10 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
         let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
         let signal = match event_name {
             "SessionStart" => match session_start.as_ref().map(|start| &start.source) {
-                Some(SessionSource::Compact) => LifecycleSignal::CompactionEnded { auto: None },
+                Some(SessionSource::Compact) => LifecycleSignal::CompactionEnded {
+                    auto: None,
+                    failed: false,
+                },
                 Some(_) => LifecycleSignal::Registered,
                 None => return Ok(decoded),
             },

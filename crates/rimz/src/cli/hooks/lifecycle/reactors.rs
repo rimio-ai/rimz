@@ -126,7 +126,10 @@ mod tests {
                 native_key: None,
             },
             LifecycleSignal::Compacting,
-            LifecycleSignal::CompactionEnded { auto: None },
+            LifecycleSignal::CompactionEnded {
+                auto: None,
+                failed: false,
+            },
             LifecycleSignal::Ended,
             LifecycleSignal::Lost,
         ]

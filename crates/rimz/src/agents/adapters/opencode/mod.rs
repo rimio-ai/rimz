@@ -467,7 +467,10 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
                 native_key: None,
             }),
             "session_compacting" => Some(LifecycleSignal::Compacting),
-            "session_compacted" => Some(LifecycleSignal::CompactionEnded { auto: None }),
+            "session_compacted" => Some(LifecycleSignal::CompactionEnded {
+                auto: None,
+                failed: false,
+            }),
             "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
             "SubagentStop" => Some(LifecycleSignal::SubagentStopped {
                 errored: payloads::errored(&parsed),

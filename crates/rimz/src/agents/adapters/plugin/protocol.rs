@@ -227,6 +227,7 @@ impl CanonicalEvent {
             Self::CompactionEnd { trigger } => NormalizedCanonicalEvent::lifecycle(
                 LifecycleSignal::CompactionEnded {
                     auto: trigger.map(|trigger| matches!(trigger, CompactionTrigger::Auto)),
+                    failed: false,
                 },
                 true,
             ),

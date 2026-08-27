@@ -75,7 +75,10 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
         });
     }
     for auto in [None, Some(false), Some(true)] {
-        signals.push(LifecycleSignal::CompactionEnded { auto });
+        signals.push(LifecycleSignal::CompactionEnded {
+            auto,
+            failed: false,
+        });
     }
     for errored in [false, true] {
         signals.push(LifecycleSignal::SubagentStopped { errored });

@@ -222,7 +222,10 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
             "PostCompact",
             &json!({"sessionId":"s1","source":"manual"})
         ),
-        LifecycleSignal::CompactionEnded { auto: Some(false) }
+        LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: false,
+        }
     );
 }
 

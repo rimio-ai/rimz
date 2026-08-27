@@ -206,7 +206,18 @@ mod tests {
         };
         assert!(DELIVERY_CHECKPOINT.contains(&turn_end));
         assert!(DELIVERY_CHECKPOINT.contains(&LifecycleSignal::TurnInterrupted));
-        assert!(DELIVERY_CHECKPOINT.contains(&LifecycleSignal::CompactionEnded { auto: None }));
+        assert!(
+            DELIVERY_CHECKPOINT.contains(&LifecycleSignal::CompactionEnded {
+                auto: None,
+                failed: false,
+            })
+        );
+        assert!(
+            DELIVERY_CHECKPOINT.contains(&LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: true,
+            })
+        );
         assert!(!DELIVERY_CHECKPOINT.contains(&LifecycleSignal::TurnStarted));
         assert!(
             CONDITION_CHECKPOINT.contains(&LifecycleSignal::AwaitingInput {

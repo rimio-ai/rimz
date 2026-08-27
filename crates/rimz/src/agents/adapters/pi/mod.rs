@@ -155,7 +155,7 @@ const PI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "answer_plan questionnaire choreography",
     },
     compaction: ConcernCoverage::Wired {
-        via: "session_before_compact/session_compact",
+        via: "session_before_compact/session_compact/session_compact_failed",
     },
     subagents: ConcernCoverage::Wired {
         via: "child pi sessions self-identify through RimZ process-lineage markers and feed lifecycle keyed by their own session id",
@@ -269,6 +269,7 @@ const PI_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle( "thinking_level_select", r#"{"session_id":"sess-1","effort":"high"}"#),
     HookEventSpec::lifecycle( "session_before_compact", r#"{"session_id":"sess-1"}"#),
     HookEventSpec::lifecycle( "session_compact", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::lifecycle( "session_compact_failed", r#"{"session_id":"sess-1","compaction_reason":"manual"}"#),
     HookEventSpec::lifecycle( "session_shutdown", r#"{"session_id":"sess-1"}"#).session_ended(),
     HookEventSpec::lifecycle( "subagent_started", r#"{"session_id":"sess-1","cwd":"/work/project","subagent_id":"run-1#0","subagent_label":"scout","subagent_source":"pi-session"}"#),
     HookEventSpec::lifecycle( "subagent_stopped", r#"{"session_id":"sess-1","cwd":"/work/project","subagent_id":"run-1#0","subagent_label":"scout","subagent_source":"pi-session","errored":true,"total_tokens":1200}"#),
@@ -443,6 +444,14 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
                     .compaction_reason
                     .as_ref()
                     .and_then(payloads::PiCompactionReason::auto_flag),
+                failed: false,
+            }),
+            "session_compact_failed" => Some(LifecycleSignal::CompactionEnded {
+                auto: parsed
+                    .compaction_reason
+                    .as_ref()
+                    .and_then(payloads::PiCompactionReason::auto_flag),
+                failed: true,
             }),
             "session_shutdown" => Some(LifecycleSignal::Ended),
             _ => None,

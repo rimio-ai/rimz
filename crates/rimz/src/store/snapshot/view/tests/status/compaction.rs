@@ -53,7 +53,10 @@ fn compact_incident(with_side_fork: bool) -> SidebarSnapshot {
         2,
         "SessionStart",
         "continuation",
-        LifecycleSignal::CompactionEnded { auto: None },
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        },
         |observation| {
             observation.origin = Some(crate::agents::SessionOrigin::Forked);
             observation.compacted_from = Some("predecessor".into());
@@ -205,7 +208,10 @@ fn compaction_end_stays_orthogonal_to_display_status() {
             "codex",
             "PostCompact",
             "auto",
-            LifecycleSignal::CompactionEnded { auto: Some(true) },
+            LifecycleSignal::CompactionEnded {
+                auto: Some(true),
+                failed: false,
+            },
         ),
     ])
     .remove(0)
@@ -231,7 +237,10 @@ fn compaction_end_stays_orthogonal_to_display_status() {
             "codex",
             "PostCompact",
             "manual",
-            LifecycleSignal::CompactionEnded { auto: Some(false) },
+            LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: false,
+            },
         ),
     ])
     .remove(0)
@@ -267,7 +276,10 @@ fn compaction_end_stays_orthogonal_to_display_status() {
             "codex",
             "PostCompact",
             "successful-manual",
-            LifecycleSignal::CompactionEnded { auto: Some(false) },
+            LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: false,
+            },
         ),
     ])
     .remove(0)

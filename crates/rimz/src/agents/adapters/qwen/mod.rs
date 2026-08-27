@@ -609,7 +609,10 @@ fn lifecycle_signal(
     match event_name {
         "SessionStart" => Some(
             if parse_session_start(payload).source == SessionSource::Compact {
-                LifecycleSignal::CompactionEnded { auto: None }
+                LifecycleSignal::CompactionEnded {
+                    auto: None,
+                    failed: false,
+                }
             } else {
                 LifecycleSignal::Registered
             },
@@ -672,6 +675,7 @@ fn lifecycle_signal(
         "PreCompact" => Some(LifecycleSignal::Compacting),
         "PostCompact" => Some(LifecycleSignal::CompactionEnded {
             auto: parse_compact(payload).trigger.auto_flag(),
+            failed: false,
         }),
         "SessionEnd" => Some(LifecycleSignal::Ended),
         _ => None,

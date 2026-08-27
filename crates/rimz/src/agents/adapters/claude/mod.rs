@@ -962,7 +962,10 @@ fn map_claude_lifecycle_signal(
         "SessionStart" => {
             let p = parts.session_start.as_ref()?;
             Some(match p.source {
-                SessionSource::Compact => LifecycleSignal::CompactionEnded { auto: None },
+                SessionSource::Compact => LifecycleSignal::CompactionEnded {
+                    auto: None,
+                    failed: false,
+                },
                 _ => LifecycleSignal::Registered,
             })
         }
@@ -1025,6 +1028,7 @@ fn map_claude_lifecycle_signal(
                 .post_compact
                 .as_ref()
                 .and_then(|p| p.trigger.auto_flag()),
+            failed: false,
         }),
         "SessionEnd" => Some(LifecycleSignal::Ended),
         _ => None,

@@ -658,6 +658,7 @@ fn lifecycle_signal(
                 Some("manual") => Some(false),
                 _ => None,
             },
+            failed: false,
         },
         "SessionEnd" => LifecycleSignal::Ended,
         "StopFailure" | "PermissionDenied" | "PreToolUse" => return None,
