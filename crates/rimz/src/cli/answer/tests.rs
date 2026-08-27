@@ -118,7 +118,7 @@ fn menu_only_actions_name_the_agent_pane() {
 }
 
 #[test]
-fn ask_id_resolution_preserves_root_and_subagent_scopes() {
+fn ask_id_resolution_includes_waiting_subagents_in_every_scope() {
     let now = jiff::Timestamp::from_second(1_000).unwrap();
     let ask_id = AskId::parse("ask_0123456789abcdef").unwrap();
     let mut child = rimz::testkit::agent_state("codex", "child", now);
@@ -138,17 +138,14 @@ fn ask_id_resolution_preserves_root_and_subagent_scopes() {
         now,
     );
 
-    assert!(
-        crate::cli::resolve_open_ask(&snapshot, ask_id.as_str(), None, true)
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(
-        crate::cli::resolve_open_ask(&snapshot, ask_id.as_str(), None, false)
-            .unwrap()
-            .unwrap()
-            .agent_id
-            .as_str(),
-        "child"
-    );
+    for awaiting_only in [true, false] {
+        assert_eq!(
+            crate::cli::resolve_open_ask(&snapshot, ask_id.as_str(), None, awaiting_only)
+                .unwrap()
+                .unwrap()
+                .agent_id
+                .as_str(),
+            "child"
+        );
+    }
 }
