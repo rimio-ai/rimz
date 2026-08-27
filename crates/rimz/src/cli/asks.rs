@@ -142,6 +142,7 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
             })
         })
         .map(|agent| view_for_agent(store.paths(), agent, &snapshot.agents, &peers))
+        .filter_map(Result::transpose)
         .collect::<Result<Vec<_>>>()?;
     views.sort_by_key(|view| view.detail.open.since);
 
@@ -179,7 +180,8 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
             rimz::harness::target::agent_handle(agent, &peers, true)
         );
     }
-    let view = view_for_agent(store.paths(), agent, &snapshot.agents, &peers)?;
+    let view = view_for_agent(store.paths(), agent, &snapshot.agents, &peers)?
+        .ok_or_else(|| anyhow::anyhow!("ask `{target}` has no live root agent"))?;
     if json {
         return render::json_pretty(&AskJsonView::from(&view));
     }
@@ -246,27 +248,19 @@ fn view_for_agent(
     agent: &AgentState,
     agents: &[AgentState],
     peers: &[&AgentState],
-) -> Result<OpenAskView> {
+) -> Result<Option<OpenAskView>> {
     let detail = read_open_ask(paths, agent)?
         .ok_or_else(|| anyhow::anyhow!("agent is not asking anything"))?;
     let (handle, name) = if agent.is_provider_subagent() {
         let parent_kind = agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind);
-        let parent = agent.parent_agent_id.as_ref().and_then(|parent_id| {
+        let Some(parent) = agent.parent_agent_id.as_ref().and_then(|parent_id| {
             agents.iter().find(|candidate| {
                 &candidate.kind == parent_kind && &candidate.agent_id == parent_id
             })
-        });
-        let handle = parent
-            .map(|parent| rimz::harness::target::agent_handle(parent, peers, true))
-            .unwrap_or_else(|| {
-                format!(
-                    "@{}",
-                    agent
-                        .parent_agent_id
-                        .as_deref()
-                        .unwrap_or(agent.agent_id.as_str())
-                )
-            });
+        }) else {
+            return Ok(None);
+        };
+        let handle = rimz::harness::target::agent_handle(parent, peers, true);
         (handle, Some(subagent_name(agent)))
     } else {
         (
@@ -274,7 +268,7 @@ fn view_for_agent(
             None,
         )
     };
-    Ok(OpenAskView {
+    Ok(Some(OpenAskView {
         agent: AskAgentView {
             handle,
             name,
@@ -282,7 +276,7 @@ fn view_for_agent(
             channel: rimz::harness::target::agent_channel(agent),
         },
         detail,
-    })
+    }))
 }
 
 impl AskAgentView {

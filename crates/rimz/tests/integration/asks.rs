@@ -745,6 +745,50 @@ fn subagent_ask_lists_with_parent_and_answers_through_parent_pane() {
     assert!(sent.contains("send-keys -l -t %7 -- 1"), "{sent}");
 }
 
+#[test]
+fn subagent_ask_without_a_live_parent_has_no_routable_handle() {
+    let env = Env::new();
+    let payload = json!({
+        "hook_event_name": "PermissionRequest",
+        "session_id": "missing-parent",
+        "agent_id": "orphan-child",
+        "tool_name": "Bash",
+        "tool_input": { "command": "cargo test" },
+    });
+    assert!(
+        env.run_hook("claude", &payload.to_string())
+            .status
+            .success()
+    );
+    let snapshot = env.snapshot_json();
+    let ask_id = snapshot["agents"][0]["open_ask"]["id"]
+        .as_str()
+        .expect("orphan ask id");
+
+    let listed = env
+        .rimz()
+        .args(["asks", "--json"])
+        .bounded_output()
+        .expect("list asks");
+    assert!(listed.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&listed.stdout).unwrap(),
+        json!([])
+    );
+
+    let shown = env
+        .rimz()
+        .args(["asks", "show", ask_id])
+        .bounded_output()
+        .expect("show orphan ask");
+    assert!(!shown.status.success());
+    assert!(
+        String::from_utf8_lossy(&shown.stderr).contains("has no live root agent"),
+        "{}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn answer_confirmable_claude_menu_actions_reach_bound_pane() {
