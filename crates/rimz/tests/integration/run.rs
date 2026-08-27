@@ -1162,6 +1162,7 @@ fn spawn_verifying_print(
         .env("RIMZ_TEST_PANE_LIST", pane_fixture)
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", trace_log)
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
         .env("ZELLIJ_PANE_ID", "1")
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
