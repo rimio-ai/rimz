@@ -132,7 +132,7 @@ pub(super) fn run(
             }
         };
 
-        guard
+        let handoff_guard = guard
             .take()
             .context("session picker lost its terminal guard")?
             .handoff_keep_screen()
@@ -171,7 +171,7 @@ pub(super) fn run(
                 },
             })
         })();
-        rimz::tui::finish_handoff(MouseCapture::Stdout, Screen::Alternate);
+        drop(handoff_guard);
         let (target, outcome) = launched?;
         guard = Some(
             TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Alternate)
