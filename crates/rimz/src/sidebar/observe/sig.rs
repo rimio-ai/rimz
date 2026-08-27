@@ -34,6 +34,7 @@ pub struct RowSig {
     pub pane_process_start: Option<jiff::Timestamp>,
     pub group_key: String,
     pub watched: WatchedValues,
+    pub attention_status: Option<String>,
     pub sub_agent_ids: Vec<String>,
 }
 
@@ -188,6 +189,9 @@ pub fn extract_sig(
                     group_key: group.key.clone(),
                     model: row.model().map(ToOwned::to_owned),
                 },
+                attention_status: row
+                    .attention_status()
+                    .map(|status| status.as_str().to_owned()),
                 sub_agent_ids: row
                     .sub_agents()
                     .iter()
