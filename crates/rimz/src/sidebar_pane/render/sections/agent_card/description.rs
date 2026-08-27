@@ -94,10 +94,11 @@ pub(super) fn description_line(
     Line::from(trim_spans_to_width(left, width))
 }
 
-/// The line-2 description: rich session/thread name, then rich preview, then
-/// launch or adapter description, task, first prompt, and latest prompt. Codex
-/// maps app-server `name` to the rich name and `preview` to the rich preview,
-/// so its concrete order is thread name → thread preview. The
+/// The line-2 description: a rich session/thread name that does not merely
+/// prefix the prompt, then rich preview, launch or adapter description, task,
+/// first prompt, and latest prompt. Codex maps app-server `name` to the rich
+/// name and `preview` to the rich preview, so its concrete order is thread name
+/// → thread preview. The
 /// activity-bound `task` clears on idle, so the set-once first prompt keeps an
 /// unnamed session stably labelled until it earns richer metadata. `None` when
 /// the session has nothing to show — the caller skips blank idle cards or

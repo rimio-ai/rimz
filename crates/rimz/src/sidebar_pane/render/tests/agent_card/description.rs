@@ -64,15 +64,15 @@ fn line_two_uses_launch_description_before_task_and_prompt() {
 #[test]
 fn line_two_rich_context_replaces_launch_description() {
     let mut preview = agent(
-        "codex-1",
-        "codex",
+        "claude-1",
+        "claude",
         AgentStatus::Running,
         Some("/repo/main"),
         Some("main"),
         Some("db migrate"),
     );
     preview.description = Some("port auth".to_owned());
-    let mut preview_context = codex_context(fixed_now());
+    let mut preview_context = claude_context(fixed_now());
     preview_context.session_preview = Some("thread preview".to_owned());
     preview_context.session_name = Some("thread name".to_owned());
     preview.context = Some(preview_context);
@@ -83,15 +83,15 @@ fn line_two_rich_context_replaces_launch_description() {
     assert!(!rendered.contains("port auth"));
 
     let mut named = agent(
-        "codex-1",
-        "codex",
+        "claude-1",
+        "claude",
         AgentStatus::Running,
         Some("/repo/main"),
         Some("main"),
         Some("db migrate"),
     );
     named.description = Some("port auth".to_owned());
-    let mut named_context = codex_context(fixed_now());
+    let mut named_context = claude_context(fixed_now());
     named_context.session_preview = Some("thread preview".to_owned());
     named_context.session_name = None;
     named.context = Some(named_context);

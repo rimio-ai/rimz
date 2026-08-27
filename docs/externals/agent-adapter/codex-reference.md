@@ -284,10 +284,10 @@ Client connection preference (broker → daemon → cold-spawn) and the refresh 
 
 ## Session index JSONL
 
-Codex CLI 0.150.0 and newer stores automatic session titles in `$CODEX_HOME/session_index.jsonl` (default `~/.codex/session_index.jsonl`). The file is append-only: a session can receive a provisional name from its first prompt and a generated short title seconds later, so the newest valid row for an `id` is authoritative. Malformed rows do not invalidate other entries.
+Codex CLI 0.150.0 and newer stores automatic session titles in `$CODEX_HOME/session_index.jsonl` (default `~/.codex/session_index.jsonl`). The `id` is the rollout session UUID carried as the hook `session_id`. The file is append-only: its provisional row is the whitespace-normalized first prompt truncated to at most 36 characters, followed seconds later by a generated short title when title generation succeeds. Some sessions retain only the provisional row, so RimZ suppresses prompt-prefix names at display. The newest valid row for an `id` remains authoritative, and malformed rows do not invalidate other entries.
 
 ```json
-{ "id": "thr_123", "thread_name": "TUI prototype", "updated_at": "2026-07-10T12:34:56Z" }
+{ "id": "01900000-0000-7000-8000-000000000000", "thread_name": "TUI prototype", "updated_at": "2026-07-10T12:34:56.123456789Z" }
 ```
 
 RimZ reads this durable index during the inline local-context pass, including `PostToolUse`, so a generated title reaches the card during the same turn without waiting for the throttled app-server enrichment. The app-server `name` remains a converging second source for the same `AgentContext.session_name` field.
