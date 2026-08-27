@@ -150,11 +150,8 @@ fn question_detail_carries_the_rpiv_preview_policy() {
     }
 }
 
-/// The mixed-kind payload is `fc1573069 test(pi): cover mixed questionnaire
-/// answers` — every rpiv answer kind in one result, which is what the pane
-/// actually sends back for a multi-question ask.
 #[test]
-fn native_answer_detail_maps_every_rpiv_answer_kind() {
+fn native_answer_detail_maps_rpiv_2_answer_kinds() {
     let answers = decode(
         "tool_execution_end",
         &json!({
@@ -212,11 +209,6 @@ fn native_answer_detail_maps_every_rpiv_answer_kind() {
             AskAnswer {
                 question: Some("Name?".to_owned()),
                 chosen: vec!["Canary".to_owned()],
-                note: None,
-            },
-            AskAnswer {
-                question: Some("Discuss?".to_owned()),
-                chosen: vec!["Chat about this".to_owned()],
                 note: None,
             },
             AskAnswer {
@@ -285,22 +277,25 @@ fn answer_plan_drives_single_multi_and_free_text() {
         ]
     );
 
-    // Free text lives one row past the last option.
-    assert_eq!(
-        plan(
-            ask_question(2, false, false),
-            AskReply {
-                picks: vec![],
-                text: Some("Use a canary".to_owned()),
-            },
-        ),
-        vec![
-            AnswerStep::Key(NamedKey::Down),
-            AnswerStep::Key(NamedKey::Down),
-            AnswerStep::Paste("Use a canary".to_owned()),
-            AnswerStep::Key(NamedKey::Enter),
-        ]
-    );
+    // Every question shape carries the free-text row after its options.
+    for (multi_select, has_option_previews) in [(false, false), (true, false), (false, true)] {
+        assert_eq!(
+            plan(
+                ask_question(2, multi_select, has_option_previews),
+                AskReply {
+                    picks: vec![],
+                    text: Some("Use a canary".to_owned()),
+                },
+            ),
+            vec![
+                AnswerStep::Key(NamedKey::Down),
+                AnswerStep::Key(NamedKey::Down),
+                AnswerStep::Paste("Use a canary".to_owned()),
+                AnswerStep::Key(NamedKey::Enter),
+            ],
+            "multi_select={multi_select}, has_option_previews={has_option_previews}",
+        );
+    }
 
     // Multi-select toggles in ascending order, then walks to submit.
     assert_eq!(
@@ -316,6 +311,7 @@ fn answer_plan_drives_single_multi_and_free_text() {
             AnswerStep::Key(NamedKey::Down),
             AnswerStep::Key(NamedKey::Down),
             AnswerStep::Text(" ".to_owned()),
+            AnswerStep::Key(NamedKey::Down),
             AnswerStep::Key(NamedKey::Down),
             AnswerStep::Key(NamedKey::Down),
             AnswerStep::Key(NamedKey::Enter),
@@ -353,24 +349,7 @@ fn answer_plan_drives_single_multi_and_free_text() {
 }
 
 #[test]
-fn answer_plan_rejects_unavailable_or_mismatched_answers() {
-    for question in [ask_question(2, true, false), ask_question(2, false, true)] {
-        let error = PiAdapter
-            .answer_plan(
-                AskKind::Question,
-                &[question],
-                &[AskReply {
-                    picks: vec![],
-                    text: Some("Custom".to_owned()),
-                }],
-            )
-            .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("suppresses the `Type something.` row")
-        );
-    }
+fn answer_plan_rejects_mismatched_answers() {
     assert!(
         PiAdapter
             .answer_plan(AskKind::Question, &[ask_question(2, false, false)], &[])

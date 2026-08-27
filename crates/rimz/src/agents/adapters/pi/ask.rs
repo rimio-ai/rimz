@@ -45,7 +45,6 @@ pub(super) fn answer_detail(payload: &Value) -> Option<Vec<AskAnswer>> {
                 "option" | "custom" => {
                     vec![answer.answer.as_deref().and_then(non_empty)?]
                 }
-                "chat" => vec!["Chat about this".to_owned()],
                 "multi" => answer
                     .selected
                     .unwrap_or_default()
@@ -93,12 +92,6 @@ pub(super) fn answer_plan(
             ));
         }
         if let Some(text) = answer.text.as_ref() {
-            if question.multi_select || question.has_option_previews {
-                return Err(AnswerPlanErr::Invalid(
-                    "pi suppresses the `Type something.` row for preview-carrying and multi-select questions"
-                        .to_owned(),
-                ));
-            }
             steps.extend(std::iter::repeat_n(
                 AnswerStep::Key(NamedKey::Down),
                 question.options.len(),
@@ -137,7 +130,7 @@ pub(super) fn answer_plan(
             }
             steps.extend(std::iter::repeat_n(
                 AnswerStep::Key(NamedKey::Down),
-                question.options.len() - current,
+                question.options.len() + 1 - current,
             ));
             steps.push(AnswerStep::Key(NamedKey::Enter));
         } else {
