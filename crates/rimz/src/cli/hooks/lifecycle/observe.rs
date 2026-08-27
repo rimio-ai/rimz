@@ -22,6 +22,7 @@ pub(super) fn record_lifecycle_observation(
     }
     if observation.usage.context_window.is_none()
         && let Some(model) = observation.launch.model.as_deref()
+        && context_window_is_unset(store, agent.spec().kind, observation.agent_id.as_ref())
     {
         let prices =
             rimz::agents::pricing::cached_book(&store.runtime_paths().shared_pricing_cache_path());
@@ -38,6 +39,24 @@ pub(super) fn record_lifecycle_observation(
         observation,
         globals,
     ))
+}
+
+fn context_window_is_unset(
+    store: &Store,
+    kind: &str,
+    agent_id: Option<&rimz::ids::AgentSessionId>,
+) -> bool {
+    let Some(agent_id) = agent_id else {
+        return false;
+    };
+    let Ok(snapshot) = store.snapshot_cached() else {
+        return false;
+    };
+    snapshot
+        .agents
+        .iter()
+        .find(|state| state.kind.as_str() == kind && state.agent_id == *agent_id)
+        .is_none_or(|state| state.usage.context_window.is_none())
 }
 
 pub(super) fn record_derived_lifecycle_observation(
