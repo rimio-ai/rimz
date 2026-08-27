@@ -5,7 +5,7 @@
 
 #[test]
 #[cfg(unix)]
-fn extension_tracks_settled_boundary_cost_and_child_lineage() {
+fn extension_tracks_settled_boundary_spend_and_child_lineage() {
     if std::process::Command::new("node")
         .arg("--version")
         .output()
@@ -19,9 +19,9 @@ fn extension_tracks_settled_boundary_cost_and_child_lineage() {
     // reads the host package's exported `VERSION` to gate on it: 0.80.4+
     // forwards `agent_end` as enrichment and waits for native `agent_settled`,
     // while older releases emit `agent_settled` themselves on `agent_end`.
-    // Both paths must accumulate cost on `turn_end`, clear it on shutdown, and
-    // stop child rows at the same settled boundary.
-    run_extension_harness("0.80.6", "agent_end", "agent_settled");
+    // Both paths must accumulate every upstream usage source, clear cost on
+    // shutdown, and stop child rows at the same settled boundary.
+    run_extension_harness("0.84.3", "agent_end", "agent_settled");
     run_extension_harness("0.80.3", "agent_settled", "agent_end");
 }
 
@@ -140,13 +140,37 @@ handlers.get("tool_execution_end")({{
   isError: false,
 }}, ctx);
 handlers.get("turn_end")({{
-  usage: {{
-    input: 10,
-    output: 5,
-    cacheRead: 3,
-    cacheWrite: 2,
-    totalTokens: 20,
-    cost: {{ total: 0.25 }},
+  message: {{
+    role: "assistant",
+    usage: {{
+      input: 10,
+      output: 5,
+      cacheRead: 3,
+      cacheWrite: 2,
+      totalTokens: 20,
+      cost: {{ total: 0.25 }},
+    }},
+  }},
+  toolResults: [{{
+    role: "toolResult",
+    usage: {{ output: 1, cost: {{ total: 0.05 }} }},
+  }}],
+}}, ctx);
+handlers.get("session_tree")({{
+  summaryEntry: {{
+    type: "branch_summary",
+    usage: {{ output: 2, cost: {{ total: 0.15 }} }},
+  }},
+}}, ctx);
+handlers.get("session_compact")({{
+  reason: "manual",
+  willRetry: false,
+  compactionEntry: {{
+    type: "compaction",
+    usage: {{
+      input: 10,
+      cost: {{ total: 0.10 }},
+    }},
   }},
 }}, ctx);
 handlers.get("agent_end")({{
@@ -206,7 +230,7 @@ const readPayloads = async () => {{
 }};
 
 let payloads = [];
-const expectedPayloads = hasNativeSettled ? 17 : 16;
+const expectedPayloads = hasNativeSettled ? 18 : 17;
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
   if (payloads.length >= expectedPayloads) break;
@@ -231,7 +255,7 @@ if (!boundary) {{
 if (absentEvent in byEvent) {{
   throw new Error(`unexpected ${{absentEvent}} forwarded for this pi version`);
 }}
-if (boundary.total_cost_usd !== 0.25) {{
+if (Math.abs(boundary.total_cost_usd - 0.55) > 1e-9) {{
   throw new Error(`boundary cost was ${{boundary.total_cost_usd}}`);
 }}
 if (boundary.input_tokens !== 10 || boundary.cache_write_input_tokens !== 2) {{
