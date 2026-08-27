@@ -12,8 +12,8 @@ use crate::store::atomic;
 
 use super::super::hook_types::HookEventSpec;
 use super::{
-    CODEX_HOOK_TIMEOUT_SECS, CODEX_HOOKS, CODEX_INTERRUPT_HOOK_TIMEOUT_SECS, HOOKS_TABLE,
-    RIMZ_BLOCK, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER,
+    CODEX_HOOK_TIMEOUT_SECS, CODEX_HOOKS, HOOKS_TABLE, RIMZ_BLOCK, RIMZ_HOOK_COMMAND,
+    RIMZ_HOOK_MARKER,
 };
 
 pub(super) static MANAGED_INTEGRATION: CodexManagedIntegration = CodexManagedIntegration;
@@ -112,7 +112,7 @@ fn install_candidate(path: &Path) -> Result<(toml::Table, Vec<String>)> {
 
     let mut installed = Vec::new();
     for hook in CODEX_HOOKS {
-        insert_rimz_hook_group(&mut root, hook.event, hook.matcher);
+        insert_rimz_hook_group(&mut root, hook);
         installed.push(hook.event.to_owned());
     }
 
@@ -251,7 +251,8 @@ fn render_table(table: &toml::Table) -> Result<String> {
     })
 }
 
-fn insert_rimz_hook_group(root: &mut toml::Table, event: &str, matcher: Option<&str>) {
+fn insert_rimz_hook_group(root: &mut toml::Table, hook: &HookEventSpec) {
+    let event = hook.event;
     let hooks = root
         .entry(HOOKS_TABLE.to_owned())
         .or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -282,11 +283,7 @@ fn insert_rimz_hook_group(root: &mut toml::Table, event: &str, matcher: Option<&
     );
     handler.insert(
         "timeout".to_owned(),
-        toml::Value::Integer(if event == "Interrupt" {
-            CODEX_INTERRUPT_HOOK_TIMEOUT_SECS
-        } else {
-            CODEX_HOOK_TIMEOUT_SECS
-        }),
+        toml::Value::Integer(hook.timeout_secs.unwrap_or(CODEX_HOOK_TIMEOUT_SECS)),
     );
     handler.insert(
         "statusMessage".to_owned(),
@@ -294,7 +291,7 @@ fn insert_rimz_hook_group(root: &mut toml::Table, event: &str, matcher: Option<&
     );
 
     let mut group = toml::Table::new();
-    if let Some(matcher) = matcher {
+    if let Some(matcher) = hook.matcher {
         group.insert(
             "matcher".to_owned(),
             toml::Value::String(matcher.to_owned()),
