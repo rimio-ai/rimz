@@ -222,7 +222,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceB
         let Ok(entry) = serde_json::from_str::<PiEntry>(line) else {
             continue;
         };
-        let (usage, model, content) = match entry.entry_type.as_deref() {
+        let (usage, model, blocks) = match entry.entry_type.as_deref() {
             Some("message") | None => {
                 let Some(message) = entry.message.as_ref() else {
                     continue;
@@ -294,7 +294,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceB
         // Pi's durable session shape records each call once on the assistant
         // message as a `toolCall` content block. Hook `tool_call` events are
         // extension traffic and do not appear as separate durable session rows.
-        for name in content
+        for name in blocks
             .unwrap_or_default()
             .iter()
             .filter(|block| block.kind.as_deref() == Some("toolCall"))
