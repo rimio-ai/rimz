@@ -41,6 +41,59 @@ fn remote_lineage_reap_kills_only_the_matching_attached_client() {
     assert!(!same.timed_out, "same lineage: {same:?}");
 }
 
+#[test]
+fn supervised_remote_wrapper_distinguishes_session_loss_from_detach() {
+    require_zellij!();
+
+    let killed = LiveZellijSession::new("remote-loss");
+    let cwd = tempfile::tempdir().expect("session cwd");
+    killed.create_plain_background(cwd.path(), "600");
+    let mut killed_client = AttachedClient::attach_remote_wrapper(&killed, 120, 40);
+    wait_for_client_count(killed.path(), killed.name(), 1, &mut killed_client);
+
+    killed
+        .backend()
+        .kill_session(killed.name())
+        .expect("kill remote session");
+    let killed_status = wait_for_client_exit(&mut killed_client, "killed remote session");
+    assert_eq!(
+        killed_status.exit_code(),
+        rimz::remote::REMOTE_SESSION_LOST_EXIT as u32,
+        "lost session exits through the reconnect sentinel; output: {:?}",
+        String::from_utf8_lossy(&killed_client.output_bytes())
+    );
+
+    let detached = LiveZellijSession::new("remote-detach");
+    detached.create_plain_background(cwd.path(), "600");
+    let mut detached_client = AttachedClient::attach_remote_wrapper(&detached, 120, 40);
+    wait_for_client_count(detached.path(), detached.name(), 1, &mut detached_client);
+
+    detached_client.press_detach();
+    let detached_status = wait_for_client_exit(&mut detached_client, "explicit detach");
+    assert!(
+        detached_status.success(),
+        "detach preserves zero; output: {:?}",
+        String::from_utf8_lossy(&detached_client.output_bytes())
+    );
+    assert_eq!(
+        detached
+            .backend()
+            .session_liveness(detached.name())
+            .expect("detached session liveness"),
+        rimz::mux::SessionLiveness::Live
+    );
+}
+
+fn wait_for_client_exit(client: &mut AttachedClient, label: &str) -> portable_pty::ExitStatus {
+    poll_until(
+        SPAWN_TIMEOUT,
+        || Ok(client.exit_status()),
+        Option::is_some,
+        label,
+    )
+    .expect("client exit status")
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn wait_for_attached_lineage_client(pid: u32, session: &str, lineage: &str) {
     poll_until(

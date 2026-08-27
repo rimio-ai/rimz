@@ -391,9 +391,10 @@ allowed-imports = [
     "update",
 ]
 # Remote failure presentation needs typed access to the path sentinel, target
-# path, and retained recovery error; keeping these private forced string
-# dispatch and dummy-frame construction across the library/binary boundary.
-surface-budget = 175
+# path, retained recovery error, and supervised-attach marker; keeping these
+# private forced string dispatch, dummy-frame construction, or duplicated wire
+# names across the library/binary boundary.
+surface-budget = 176
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"

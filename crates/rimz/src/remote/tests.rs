@@ -14,6 +14,7 @@ fn attach_plan(
     SshAttachPlan::new(SshAttachOptions {
         target: parse(target),
         lineage: "0123456789abcdef".to_owned(),
+        supervised: true,
         force_version: false,
         no_resume,
         mux,
@@ -650,6 +651,7 @@ fn ssh_attach_plan_exports_client_size_when_present() {
     let plan = SshAttachPlan::new(SshAttachOptions {
         target: parse("dev-box:query-engine"),
         lineage: "0123456789abcdef".to_owned(),
+        supervised: true,
         force_version: false,
         no_resume: false,
         mux: None,
@@ -690,6 +692,10 @@ fn ssh_attach_plan_marks_retries_only() {
             )),
             "every attempt carries the local RimZ version: {snippet}"
         );
+        assert!(
+            snippet.contains("export RIMZ_REMOTE_SUPERVISED=1;"),
+            "every supervised attempt is marked: {snippet}"
+        );
     }
     assert!(
         !attended.args.last().unwrap().contains(REMOTE_RECONNECT_ENV),
@@ -703,6 +709,25 @@ fn ssh_attach_plan_marks_retries_only() {
             .contains("export RIMZ_REMOTE_RECONNECT=1;"),
         "retry snippet marks an unattended reconnect"
     );
+}
+
+#[test]
+fn ssh_attach_plan_leaves_one_shot_attaches_unsupervised() {
+    let plan = SshAttachPlan::new(SshAttachOptions {
+        target: parse("dev-box:query-engine"),
+        lineage: "0123456789abcdef".to_owned(),
+        supervised: false,
+        force_version: false,
+        no_resume: false,
+        mux: None,
+        term: TermPlan::Keep,
+        truecolor: false,
+        client_size: None,
+    });
+
+    let snippet = plan.initial().plain().args.pop().expect("snippet");
+    assert!(snippet.contains("export RIMZ_REMOTE_LINEAGE="));
+    assert!(!snippet.contains("RIMZ_REMOTE_SUPERVISED"));
 }
 
 #[test]

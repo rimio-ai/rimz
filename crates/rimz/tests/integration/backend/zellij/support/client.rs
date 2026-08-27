@@ -22,6 +22,7 @@ enum AttachMode {
     Normal,
     Create,
     ExactLineage(String),
+    RemoteWrapper,
 }
 
 pub(in crate::backend::zellij) struct AttachedClient {
@@ -88,6 +89,14 @@ impl AttachedClient {
             rows,
             AttachMode::ExactLineage(lineage.to_owned()),
         )
+    }
+
+    pub(in crate::backend::zellij) fn attach_remote_wrapper(
+        session: &LiveZellijSession,
+        cols: u16,
+        rows: u16,
+    ) -> Self {
+        Self::spawn(session, cols, rows, AttachMode::RemoteWrapper)
     }
 
     fn spawn(session: &LiveZellijSession, cols: u16, rows: u16, mode: AttachMode) -> Self {
@@ -396,6 +405,17 @@ impl AttachedClient {
         self.process.writer.flush().expect("flush alt key");
     }
 
+    pub(in crate::backend::zellij) fn press_detach(&mut self) {
+        self.process
+            .writer
+            .write_all(&[0x0f, b'd'])
+            .expect("write detach key sequence");
+        self.process
+            .writer
+            .flush()
+            .expect("flush detach key sequence");
+    }
+
     pub(in crate::backend::zellij) fn go_to_tab(&mut self, tab: u8) {
         assert!((1..=9).contains(&tab), "test helper supports tabs 1-9");
         self.process
@@ -466,7 +486,11 @@ fn spawn_process_at(
             pixel_height: 0,
         })
         .expect("openpty");
-    let mut command = CommandBuilder::new("zellij");
+    let program = match mode {
+        AttachMode::RemoteWrapper => crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz")),
+        _ => PathBuf::from("zellij"),
+    };
+    let mut command = CommandBuilder::new(program);
     crate::common::ZellijNamespace::pin_pty_at(xdg, &mut command);
     if let AttachMode::ExactLineage(lineage) = mode {
         command.env(rimz::remote::REMOTE_LINEAGE_ENV, lineage);
@@ -475,6 +499,11 @@ fn spawn_process_at(
         AttachMode::Normal => command.args(["attach", name]),
         AttachMode::Create | AttachMode::ExactLineage(_) => {
             command.args(["attach", "--create", name])
+        }
+        AttachMode::RemoteWrapper => {
+            command.env(rimz::remote::REMOTE_LINEAGE_ENV, "0123456789abcdef");
+            command.env(rimz::remote::REMOTE_SUPERVISED_ENV, "1");
+            command.args(["attach", "--zellij", "--attach", name])
         }
     };
     let child = pair

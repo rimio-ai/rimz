@@ -245,6 +245,7 @@ impl RemoteConnect {
         Ok(SshAttachPlan::new(SshAttachOptions {
             target: self.target.clone(),
             lineage: local_remote_lineage(&self.target)?,
+            supervised: self.reconnect,
             force_version: self.force_version,
             no_resume: self.no_resume,
             mux: self.mux,
