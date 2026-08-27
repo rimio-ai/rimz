@@ -432,6 +432,13 @@ pub trait TranscriptCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait ContextCapability: CoreCapability {
+    /// Resolve a model's exact context capacity from the shared price book.
+    /// Lifecycle ingestion calls this only when the provider payload did not
+    /// already report a window, so native signals retain precedence.
+    fn context_window_for_model(&self, _model: &str, _prices: &PriceBook) -> Option<u64> {
+        None
+    }
+
     /// Translate a raw out-of-band context payload into the normalized
     /// [`AgentContext`]. The transport is the adapter's business: Claude parses
     /// the statusline JSON it is handed on stdin. Returns `None` when the

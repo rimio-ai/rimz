@@ -685,6 +685,10 @@ impl crate::agents::capabilities::TranscriptCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
+    fn context_window_for_model(&self, model: &str, prices: &PriceBook) -> Option<u64> {
+        context_window_for(model, prices)
+    }
+
     fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
         // Claude's transport is the statusline JSON blob. Tolerant parse: any
         // non-object payload yields `None` rather than an error.
@@ -1091,7 +1095,7 @@ fn build_claude_observation(
     // marker-less hook leaves it `None` so the established window carries
     // forward. The gauge percentage is derived downstream from the folded
     // window, never baked here against a guessed denominator.
-    let context_window = context_window_for(model.as_deref());
+    let context_window = extended_context_window(model.as_deref());
     let mut observation =
         AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
     observation.parent_agent_id = parent_agent_id;
@@ -1246,11 +1250,19 @@ impl TranscriptUsage {
 /// model from a 1M model whose payload dropped the marker. Returning `None`
 /// keeps the last established window (and the 200k spec default applies
 /// when none was ever seen), so the gauge never downgrades a 1M agent to 200k.
-fn context_window_for(model: Option<&str>) -> Option<u64> {
+fn extended_context_window(model: Option<&str>) -> Option<u64> {
     const EXTENDED: u64 = 1_000_000;
     model
         .filter(|model| model.contains("[1m]"))
         .map(|_| EXTENDED)
+}
+
+fn context_window_for(model: &str, prices: &PriceBook) -> Option<u64> {
+    extended_context_window(Some(model)).or_else(|| {
+        prices
+            .exact_price(model)
+            .and_then(|price| price.max_input_tokens)
+    })
 }
 
 /// Derive context-window usage from the tail of a Claude transcript JSONL.
