@@ -52,7 +52,7 @@ pub use self::app_server::{app_server_due, merge_app_server_context};
 #[cfg(test)]
 use self::install::{
     has_rimz_hook_command, hooks_installed_at, install_into, snake_event_token, uninstall_from,
-    untrusted_hook_events_at,
+    untrusted_hook_events_at, untrusted_preflight_hook_events_at,
 };
 use self::payloads::{
     CodexChildIdentity, CodexCommon, CodexPermissionRequest, CodexPostCompact, CodexPostToolUse,
@@ -399,7 +399,8 @@ const CODEX_HOOKS: &[HookEventSpec] = &[
     .progress(),
     HookEventSpec::lifecycle("Stop", r#"{"session_id":"sess-1"}"#).progress(),
     HookEventSpec::lifecycle("Interrupt", r#"{"session_id":"sess-1","turn_id":"turn-1"}"#)
-        .progress(),
+        .progress()
+        .optional_for_preflight(),
     HookEventSpec::blocking(
         "PermissionRequest",
         r#"{"session_id":"sess-1","tool_name":"shell"}"#,

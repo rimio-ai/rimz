@@ -868,7 +868,7 @@ pub fn preflight_hooks(
     if !adapter.hooks_installed() {
         return Err(HookPreflightErr::HooksMissing);
     }
-    let untrusted = adapter.untrusted_installed_hooks();
+    let untrusted = adapter.untrusted_preflight_hooks();
     if !untrusted.is_empty() {
         return Err(HookPreflightErr::HooksUntrusted {
             hooks: untrusted.join(", "),

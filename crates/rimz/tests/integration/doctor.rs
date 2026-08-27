@@ -13,7 +13,7 @@ use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::store::event::{
     EventEnvelope, LastDeathMarker, MessageEventMethod, SessionDeathAgent, SessionDeathCause,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::common::Env;
 use std::ffi::OsString;
@@ -202,6 +202,21 @@ fn doctor_json_reports_agent_hook_install_and_trust_states() {
         "not_installed",
         "claude is still unwired"
     );
+
+    let env = Env::new();
+    let stub_dir = stub_agent_binaries(&env, &["codex"]);
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &stub_dir)
+            .output()
+            .expect("spawn"),
+    );
+    let codex = hook(report["hooks"].as_array().expect("hooks array"), "codex");
+    assert_eq!(codex["status"]["state"], "installed_untrusted");
+    assert_eq!(codex["status"]["events"], json!(["Interrupt"]));
 
     let env = Env::new();
     let stub_dir = stub_agent_binaries(&env, &["codex", "claude"]);
@@ -937,6 +952,14 @@ fn diag_log_path(env: &Env) -> PathBuf {
 /// Append `[hooks.state]` trust entries for every RimZ-installed codex event,
 /// key-shaped exactly as Codex writes them after the user trusts via /hooks.
 fn trust_codex_hooks(env: &Env) {
+    trust_codex_hooks_except(env, None);
+}
+
+fn trust_codex_preflight_hooks(env: &Env) {
+    trust_codex_hooks_except(env, Some("interrupt"));
+}
+
+fn trust_codex_hooks_except(env: &Env, excluded: Option<&str>) {
     let config = env.agent_config_path("codex");
     let mut text = std::fs::read_to_string(&config).expect("read codex config");
     for token in [
@@ -952,6 +975,9 @@ fn trust_codex_hooks(env: &Env) {
         "pre_compact",
         "post_compact",
     ] {
+        if Some(token) == excluded {
+            continue;
+        }
         text.push_str(&format!(
             "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
             config.display(),

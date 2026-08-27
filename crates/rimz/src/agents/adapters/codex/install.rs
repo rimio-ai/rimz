@@ -10,6 +10,7 @@ use crate::agents::{
 };
 use crate::store::atomic;
 
+use super::super::hook_types::HookEventSpec;
 use super::{
     CODEX_HOOK_TIMEOUT_SECS, CODEX_HOOKS, CODEX_INTERRUPT_HOOK_TIMEOUT_SECS, HOOKS_TABLE,
     RIMZ_BLOCK, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER,
@@ -47,6 +48,12 @@ impl ManagedIntegration for CodexManagedIntegration {
     fn untrusted_installed_hooks(&self) -> Vec<String> {
         codex_config_path()
             .map(|path| untrusted_hook_events_at(&path))
+            .unwrap_or_default()
+    }
+
+    fn untrusted_preflight_hooks(&self) -> Vec<String> {
+        codex_config_path()
+            .map(|path| untrusted_preflight_hook_events_at(&path))
             .unwrap_or_default()
     }
 }
@@ -169,6 +176,14 @@ pub(super) fn managed_artifacts_at(path: &Path) -> bool {
 /// mismatch is Codex's to re-flag, and mirroring its hash algorithm would
 /// couple RimZ to an upstream internal.
 pub(super) fn untrusted_hook_events_at(path: &Path) -> Vec<String> {
+    untrusted_hook_events(path, |_| true)
+}
+
+pub(super) fn untrusted_preflight_hook_events_at(path: &Path) -> Vec<String> {
+    untrusted_hook_events(path, |hook| hook.required_for_preflight)
+}
+
+fn untrusted_hook_events(path: &Path, include: impl Fn(&HookEventSpec) -> bool) -> Vec<String> {
     let Ok(root) = read_existing_table(path) else {
         return Vec::new();
     };
@@ -179,6 +194,7 @@ pub(super) fn untrusted_hook_events_at(path: &Path) -> Vec<String> {
         .and_then(toml::Value::as_table);
     CODEX_HOOKS
         .iter()
+        .filter(|hook| include(hook))
         .filter(|hook| has_rimz_hook_command(&root, hook.event))
         .filter(|hook| {
             let needle = format!(":{}:", snake_event_token(hook.event));

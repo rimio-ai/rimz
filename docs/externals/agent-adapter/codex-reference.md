@@ -79,7 +79,7 @@ Codex requires the user to review and trust each non-managed hook definition bef
 trusted_hash = "sha256:…"
 ```
 
-A fresh `rimz hooks install` — or any change to the installed command — is therefore a wired-but-dead channel until the user trusts it inside Codex. RimZ detects the gap presence-only (`untrusted_hook_events_at` matches installed events against the state keys by token; the hash algorithm stays Codex's), and `rimz start`/`rimz doctor` surface the fix ([adapter_codex.md → Hooks and lifecycle](../../internals/agents/adapter_codex.md#hooks-and-lifecycle)).
+A fresh `rimz hooks install` — or any change to the installed command — is therefore a wired-but-dead channel until the user trusts it inside Codex. RimZ detects the gap presence-only (`untrusted_hook_events_at` matches installed events against the state keys by token; the hash algorithm stays Codex's), and `rimz start`/`rimz doctor` surface the fix ([adapter_codex.md → Hooks and lifecycle](../../internals/agents/adapter_codex.md#hooks-and-lifecycle)). `Interrupt` is the forward-compatible exception to preflight gating: Codex before 0.150 silently ignores that unknown installed key and can never write its trust state, while RimZ still settles the turn from the durable rollout fallback. Doctor continues to report the missing trust as an advisory for versions that do expose the event.
 
 ### Common input
 
