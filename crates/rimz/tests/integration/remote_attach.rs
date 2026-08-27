@@ -1169,16 +1169,29 @@ fn supervised_connect_restores_tty_and_resets_emulator_after_retry() {
 }
 
 #[test]
-fn supervised_clean_exit_resets_emulator() {
+fn supervised_clean_exit_resets_dirty_emulator() {
+    const DIRTY_EMULATOR: &str = "\x1b[?1006h\x1b[?1003h";
+
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let pair = remote_connect_pty();
     let mut cmd = remote_connect_pty_command(&env, &log);
     cmd.env("RIMZ_TEST_SSH_RAW_TTY", "1");
+    cmd.env("RIMZ_TEST_SSH_STDOUT", DIRTY_EMULATOR);
 
     let (output, settings) = run_pty_command(pair, cmd);
 
     assert_eq!(main_invocation_count(&log), 1, "one attach: {output}");
+    let enabled_at = output
+        .find(DIRTY_EMULATOR)
+        .expect("foreground client enables mouse reporting");
+    let reset_at = output
+        .rfind(rimz::remote::tty::EMULATOR_RESET)
+        .expect("supervisor resets the emulator");
+    assert!(
+        enabled_at < reset_at,
+        "the reset follows the dirty child output: {output:?}"
+    );
     assert_eq!(
         output.matches(rimz::remote::tty::EMULATOR_RESET).count(),
         1,
