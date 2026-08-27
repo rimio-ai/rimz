@@ -40,13 +40,6 @@ impl SpendingSource {
             .collect()
     }
 
-    /// Select the first matching path from the first tree that has a match.
-    /// This models stores such as OpenCode's preferred primary database and
-    /// sorted per-channel fallback without teaching discovery provider names.
-    pub fn first(trees: Vec<SpendingSourceTree>) -> Self {
-        Self::Group(SpendingSourceGroup::first(trees))
-    }
-
     pub(crate) fn fingerprint(&self) -> Vec<u8> {
         let mut fingerprint = Vec::new();
         match self {
@@ -74,35 +67,14 @@ impl SpendingSource {
 #[derive(Clone, Debug)]
 pub struct SpendingSourceGroup {
     trees: Vec<SpendingSourceTree>,
-    selection: GroupSelection,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum GroupSelection {
-    AllRelativeFirst,
-    FirstPath,
 }
 
 impl SpendingSourceGroup {
     fn all(trees: Vec<SpendingSourceTree>) -> Self {
-        Self {
-            trees,
-            selection: GroupSelection::AllRelativeFirst,
-        }
-    }
-
-    fn first(trees: Vec<SpendingSourceTree>) -> Self {
-        Self {
-            trees,
-            selection: GroupSelection::FirstPath,
-        }
+        Self { trees }
     }
 
     fn encode(&self, fingerprint: &mut Vec<u8>) {
-        fingerprint.push(match self.selection {
-            GroupSelection::AllRelativeFirst => 0,
-            GroupSelection::FirstPath => 1,
-        });
         encode_usize(fingerprint, self.trees.len());
         for tree in &self.trees {
             tree.encode(fingerprint);
@@ -112,13 +84,7 @@ impl SpendingSourceGroup {
     fn complete_files(&self) -> Vec<PathBuf> {
         let mut by_relative = BTreeMap::<PathBuf, PathBuf>::new();
         for tree in &self.trees {
-            let tree_files = tree.complete_relative_files();
-            if matches!(self.selection, GroupSelection::FirstPath)
-                && let Some(relative) = tree_files.first()
-            {
-                return vec![tree.root.join(relative)];
-            }
-            for relative in tree_files {
+            for relative in tree.complete_relative_files() {
                 by_relative
                     .entry(relative.clone())
                     .or_insert_with(|| tree.root.join(relative));
@@ -319,7 +285,6 @@ struct ExactState {
 }
 
 struct GroupState {
-    selection: GroupSelection,
     trees: Vec<TreeState>,
 }
 
@@ -551,7 +516,6 @@ impl From<SpendingSource> for SourceState {
         match source {
             SpendingSource::Exact(path) => Self::Exact(ExactState { path, known: None }),
             SpendingSource::Group(group) => Self::Group(GroupState {
-                selection: group.selection,
                 trees: group
                     .trees
                     .into_iter()
@@ -668,11 +632,6 @@ impl GroupState {
             let mut tree_files = Vec::new();
             collect_active_files(Path::new(""), &tree.root, &mut tree_files);
             tree_files.sort();
-            if matches!(self.selection, GroupSelection::FirstPath)
-                && let Some(relative) = tree_files.first()
-            {
-                return vec![tree.declaration.root.join(relative)];
-            }
             for relative in tree_files {
                 by_relative
                     .entry(relative.clone())

@@ -69,24 +69,47 @@ pub(super) fn auth_path() -> Option<PathBuf> {
 
 fn file_in_dir(dir: &Path) -> Option<PathBuf> {
     let primary = dir.join("opencode.db");
-    if primary.is_file() {
-        return Some(primary);
-    }
-
-    let mut candidates = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(is_channel_filename)
-        })
+    let mut candidates = primary
+        .is_file()
+        .then_some(primary.clone())
+        .into_iter()
+        .chain(
+            std::fs::read_dir(dir)
+                .ok()?
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.is_file()
+                        && path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(is_channel_filename)
+                }),
+        )
         .collect::<Vec<_>>();
-    candidates.sort();
-    candidates.into_iter().next()
+    candidates.sort_by(|left, right| {
+        let left_primary = left == &primary;
+        let right_primary = right == &primary;
+        right_primary
+            .cmp(&left_primary)
+            .then_with(|| left.cmp(right))
+    });
+    candidates
+        .into_iter()
+        .filter_map(|path| logical_stat(&path).map(|stat| (path, logical_mtime(stat))))
+        .fold(None, |selected, candidate| match selected {
+            Some((_, selected_mtime)) if candidate.1 <= selected_mtime => selected,
+            _ => Some(candidate),
+        })
+        .map(|(path, _)| path)
+}
+
+fn logical_mtime(stat: TranscriptStat) -> (i64, u32) {
+    stat.companion
+        .map(|companion| {
+            (stat.mtime_secs, stat.mtime_nanos).max((companion.mtime_secs, companion.mtime_nanos))
+        })
+        .unwrap_or((stat.mtime_secs, stat.mtime_nanos))
 }
 
 fn is_channel_filename(name: &str) -> bool {
@@ -100,14 +123,6 @@ fn is_channel_filename(name: &str) -> bool {
         && channel
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-}
-
-pub(super) fn is_channel_relative(path: &Path) -> bool {
-    path.components().count() == 1
-        && path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(is_channel_filename)
 }
 
 pub(super) fn open_readonly(path: &Path) -> Option<Connection> {
@@ -243,21 +258,49 @@ mod tests {
     }
 
     #[test]
-    fn discovery_prefers_primary_then_sorted_channel_database() {
+    fn discovery_selects_the_most_recent_logical_database() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("opencode-beta.db"), "").unwrap();
-        std::fs::write(dir.path().join("opencode-alpha.db"), "").unwrap();
+        let primary = dir.path().join("opencode.db");
+        let alpha = dir.path().join("opencode-alpha.db");
+        let beta = dir.path().join("opencode-beta.db");
+        std::fs::write(&primary, "").unwrap();
+        std::fs::write(&alpha, "").unwrap();
+        std::fs::write(&beta, "").unwrap();
+        set_mtime(&primary, 100);
+        set_mtime(&alpha, 200);
+        set_mtime(&beta, 200);
         assert_eq!(
             file_in_dir(dir.path()).unwrap().file_name().unwrap(),
             "opencode-alpha.db"
         );
-        std::fs::write(dir.path().join("opencode.db"), "").unwrap();
+
+        set_mtime(&primary, 200);
         assert_eq!(
             file_in_dir(dir.path()).unwrap().file_name().unwrap(),
             "opencode.db"
         );
+
+        set_mtime(&primary, 300);
+        set_mtime(&alpha, 100);
+        let alpha_wal = dir.path().join("opencode-alpha.db-wal");
+        std::fs::write(&alpha_wal, "").unwrap();
+        set_mtime(&alpha_wal, 400);
+        assert_eq!(
+            file_in_dir(dir.path()).unwrap().file_name().unwrap(),
+            "opencode-alpha.db"
+        );
+
         std::fs::write(dir.path().join("opencode-bad!.db"), "").unwrap();
         assert!(!is_channel_filename("opencode-bad!.db"));
+    }
+
+    fn set_mtime(path: &Path, seconds: u64) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+            .unwrap();
     }
 
     #[test]
