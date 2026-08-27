@@ -108,6 +108,10 @@ pub struct Pricing {
     /// Cost per cache-creation input token.
     #[serde(default)]
     pub cache_create: f64,
+    /// Optional cost per 1-hour cache-creation token. When absent, Anthropic's
+    /// standard 2x-input rate applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_create_1h: Option<f64>,
     /// Whether `cache_read` came from source data rather than the input-rate
     /// default. Kept for cache compatibility with ccusage's pricing shape.
     #[serde(default)]
@@ -144,6 +148,7 @@ impl Pricing {
             output: 0.0,
             cache_read: 0.0,
             cache_create: 0.0,
+            cache_create_1h: None,
             cache_read_explicit: false,
             input_above_200k: None,
             output_above_200k: None,
@@ -186,10 +191,15 @@ impl Pricing {
             cache_read,
             fast,
         } = split;
-        let cache_1h_cost = self.input * CACHE_CREATE_1H_INPUT_MULTIPLIER;
-        let cache_1h_above = self
-            .input_above_200k
-            .map(|cost| cost * CACHE_CREATE_1H_INPUT_MULTIPLIER);
+        let cache_1h_cost = self
+            .cache_create_1h
+            .unwrap_or(self.input * CACHE_CREATE_1H_INPUT_MULTIPLIER);
+        let cache_1h_above = if self.cache_create_1h.is_some() {
+            None
+        } else {
+            self.input_above_200k
+                .map(|cost| cost * CACHE_CREATE_1H_INPUT_MULTIPLIER)
+        };
         let multiplier = if fast { self.fast_multiplier } else { 1.0 };
         let cost = if let Some(threshold) = self.long_context_threshold {
             let request_input = input
@@ -241,6 +251,11 @@ impl Default for Pricing {
 #[derive(Clone, Debug, Default)]
 pub struct PriceBook {
     entries: HashMap<String, Pricing>,
+    /// Optional base rows retained for fuzzy lookup when an exact-only overlay
+    /// replaces entries without lending those rates to related model ids.
+    fuzzy_entries: Option<Arc<HashMap<String, Pricing>>>,
+    /// Construction identity used by provider-local derived-book memos.
+    identity: Arc<()>,
     /// Memoizes [`PriceBook::fuzzy`]'s boundary-aware scan, keyed by the trimmed
     /// lookup name, so a model that misses the exact-match map pays the linear
     /// scan once rather than on every per-entry `price` call across a spend
@@ -258,6 +273,8 @@ impl PriceBook {
         let entries = embedded::load();
         Self {
             entries,
+            fuzzy_entries: None,
+            identity: Arc::default(),
             fuzzy_cache: Arc::default(),
         }
     }
@@ -267,8 +284,34 @@ impl PriceBook {
         let entries = embedded::parse(json);
         Self {
             entries,
+            fuzzy_entries: None,
+            identity: Arc::default(),
             fuzzy_cache: Arc::default(),
         }
+    }
+
+    pub(crate) fn derive_with_exact_overrides(
+        &self,
+        mut map: impl FnMut(Pricing) -> Pricing,
+        overrides: impl IntoIterator<Item = (String, Pricing)>,
+    ) -> Self {
+        let base_entries = self
+            .entries
+            .iter()
+            .map(|(model, price)| (model.clone(), map(*price)))
+            .collect::<HashMap<_, _>>();
+        let mut entries = base_entries.clone();
+        entries.extend(overrides);
+        Self {
+            entries,
+            fuzzy_entries: Some(Arc::new(base_entries)),
+            identity: Arc::default(),
+            fuzzy_cache: Arc::default(),
+        }
+    }
+
+    pub(crate) fn identity(&self) -> Arc<()> {
+        Arc::clone(&self.identity)
     }
 
     #[cfg(test)]
@@ -297,6 +340,8 @@ impl PriceBook {
         }
         Self {
             entries,
+            fuzzy_entries: None,
+            identity: Arc::default(),
             fuzzy_cache: Arc::default(),
         }
     }
@@ -343,7 +388,7 @@ impl PriceBook {
     fn fuzzy(&self, model: &str) -> Option<Pricing> {
         let want = normalize(model);
         let mut best: Option<(usize, Pricing)> = None;
-        for (key, price) in &self.entries {
+        for (key, price) in self.fuzzy_entries.as_deref().unwrap_or(&self.entries) {
             let key_norm = normalize(key);
             if prefix_at_boundary(&want, &key_norm)
                 && best.is_none_or(|(len, _)| key_norm.len() > len)
