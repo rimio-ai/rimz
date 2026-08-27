@@ -124,13 +124,14 @@ fn write_report(w: &mut impl Write, report: &TeamReport, lane: Option<&str>) -> 
         live.render(w)?;
     }
 
-    writeln!(w)?;
     if report.instances.is_empty() {
+        writeln!(w)?;
         writeln!(w, "Launch: rimz teams {} -w <worktree>", report.name)?;
         writeln!(w, "Resume: rimz teams resume {}", report.name)?;
         return Ok(());
     }
     if let Some((handle, channel)) = live_target(report) {
+        writeln!(w)?;
         writeln!(
             w,
             "Reach: rimz message @{}#{} '<text>'",
@@ -272,6 +273,7 @@ mod tests {
             let output = rendered(&report, lane);
             assert!(!output.contains("Reach:"));
             assert!(!output.contains("Focus:"));
+            assert!(!output.ends_with("\n\n"));
         }
     }
 }
