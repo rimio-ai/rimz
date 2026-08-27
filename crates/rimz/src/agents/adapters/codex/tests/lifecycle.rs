@@ -672,6 +672,7 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
     let ctx = crate::agents::LocalContextRefreshCtx {
         agent_id: "sess-1",
         model_hint: Some("gpt-5"),
+        prior_session_name: None,
         current_transcript_path: None,
         prior_transcript_path: Some(&path),
         prior_transcript_stat: None,
@@ -705,4 +706,65 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
             )
             .is_none()
     );
+}
+
+#[test]
+fn generated_session_title_reaches_activity_description_on_post_tool_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("session_index.jsonl"),
+        "{\"id\":\"sess-1\",\"thread_name\":\"Draft a migration plan\"}\n\
+         {malformed}\n\
+         {\"id\":\"foreign\",\"thread_name\":\"Ignore this title\"}\n\
+         {\"id\":\"sess-1\",\"thread_name\":\"Plan database migration\"}\n",
+    )
+    .unwrap();
+    let transcript_path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &transcript_path,
+        "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\"}}\n",
+    )
+    .unwrap();
+    let transcript_path = transcript_path.to_string_lossy().into_owned();
+    let transcript_stat =
+        crate::agents::TranscriptStat::from_path(std::path::Path::new(&transcript_path)).unwrap();
+    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let ctx = crate::agents::LocalContextRefreshCtx {
+        agent_id: "sess-1",
+        model_hint: Some("gpt-5"),
+        prior_session_name: None,
+        current_transcript_path: None,
+        prior_transcript_path: Some(&transcript_path),
+        prior_transcript_stat: Some(&transcript_stat),
+        prior_spend_fold: None,
+        shared_pricing_cache_path: &pricing_cache_path,
+    };
+
+    let refresh = refresh_local_context_under(&ctx, Some(dir.path())).unwrap();
+    assert_eq!(
+        refresh.transcript_path.as_deref(),
+        Some(transcript_path.as_str())
+    );
+    assert_eq!(refresh.transcript_stat, Some(transcript_stat));
+    let mut context =
+        crate::agents::AgentContext::new("codex", jiff::Timestamp::from_second(1_000).unwrap());
+    context.session_preview = Some("Draft a migration plan".to_owned());
+    refresh.context.apply(&mut context, CodexAdapter.spec());
+
+    assert_eq!(
+        crate::agents::state::select_activity_description(
+            Some(&context),
+            None,
+            None,
+            Some("Draft a migration plan"),
+            Some("latest prompt"),
+        ),
+        Some("Plan database migration")
+    );
+
+    let unchanged_ctx = crate::agents::LocalContextRefreshCtx {
+        prior_session_name: Some("Plan database migration"),
+        ..ctx
+    };
+    assert!(refresh_local_context_under(&unchanged_ctx, Some(dir.path())).is_none());
 }

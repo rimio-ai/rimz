@@ -387,8 +387,8 @@ impl Default for AgentCard {
 }
 
 impl AgentCard {
-    /// One-line activity label for CLI and sidebar rows: rich session preview,
-    /// rich session name, launch description, live task, first prompt, then
+    /// One-line activity label for CLI and sidebar rows: rich session name,
+    /// rich session preview, launch description, live task, first prompt, then
     /// latest prompt.
     pub fn activity_description(&self) -> Option<&str> {
         select_activity_description(

@@ -269,6 +269,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
     let ctx = LocalContextRefreshCtx {
         agent_id: "session-1",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: None,
         prior_transcript_path: None,
         prior_transcript_stat: None,
@@ -410,6 +411,7 @@ fn completed_usage_replaces_mid_turn_scalar_and_estimates_missing_cost() {
     let ctx = LocalContextRefreshCtx {
         agent_id: "session-1",
         model_hint: Some("grok-4.5"),
+        prior_session_name: None,
         current_transcript_path: None,
         prior_transcript_path: None,
         prior_transcript_stat: None,

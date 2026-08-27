@@ -61,6 +61,7 @@ impl ChangedSessionRefreshFixture {
         let ctx = crate::agents::LocalContextRefreshCtx {
             agent_id: &self.session_id,
             model_hint: None,
+            prior_session_name: None,
             current_transcript_path: Some(transcript),
             prior_transcript_path: Some(transcript),
             prior_transcript_stat: None,

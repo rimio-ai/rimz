@@ -87,13 +87,14 @@ pub struct AgentContext {
     pub source: String,
     /// Human-readable session or provider thread name. Claude fills this from
     /// the user-set session name (`--name` / `/rename`); Codex fills it from
-    /// app-server thread `name`. Absent until named, so a renderer prefers it
-    /// over the task definition only when present.
+    /// its local session index and app-server thread `name`. Absent until named,
+    /// so a renderer prefers it over the task definition only when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
     /// Short provider-owned thread summary. Codex fills this from app-server
     /// `thread/read` / `thread/list` `preview`, and Kimi uses the `state.json`
-    /// title. Renderers prefer it for the activity description when present.
+    /// title. Renderers use it for the activity description when no session
+    /// name is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_preview: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -319,6 +320,7 @@ pub enum LocalTokenPatch {
 /// Fields one local transcript, rollout, or telemetry refresh may update.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LocalContextPatch {
+    pub session_name: FieldPatch<String>,
     pub session_preview: FieldPatch<String>,
     pub model_id: FieldPatch<String>,
     pub model_display_name: FieldPatch<String>,
@@ -344,6 +346,7 @@ impl LocalContextPatch {
         let prior_model_display_name = context.model_display_name.clone();
         let prior_tokens = context.tokens.clone();
 
+        self.session_name.apply(&mut context.session_name);
         self.session_preview.apply(&mut context.session_preview);
         self.model_id.apply(&mut context.model_id);
         self.model_display_name

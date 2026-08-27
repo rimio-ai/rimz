@@ -882,6 +882,7 @@ fn statusline_health_suppresses_otel_and_replacement_restores_it() {
     let ctx = LocalContextRefreshCtx {
         agent_id: "session-fixture",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: None,
         prior_transcript_path: otel.to_str(),
         prior_transcript_stat: None,

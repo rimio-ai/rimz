@@ -32,6 +32,7 @@ fn refresh<'a>(
         &LocalContextRefreshCtx {
             agent_id: "session-1",
             model_hint: None,
+            prior_session_name: None,
             current_transcript_path: Some(path.to_str().unwrap()),
             prior_transcript_path: Some(path.to_str().unwrap()),
             prior_transcript_stat: prior_stat,

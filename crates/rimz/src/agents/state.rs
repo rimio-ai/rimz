@@ -859,8 +859,8 @@ impl AgentState {
         state
     }
 
-    /// One-line activity label for CLI and sidebar rows: rich session preview,
-    /// rich session name, launch description, live task, first prompt, then
+    /// One-line activity label for CLI and sidebar rows: rich session name,
+    /// rich session preview, launch description, live task, first prompt, then
     /// latest prompt.
     pub fn activity_description(&self) -> Option<&str> {
         select_activity_description(
@@ -1077,11 +1077,11 @@ pub(crate) fn select_activity_description<'a>(
     prompt: Option<&'a str>,
 ) -> Option<&'a str> {
     context
-        .and_then(|context| context.session_preview.as_deref())
+        .and_then(|context| context.session_name.as_deref())
         .filter(|value| usable_description(value))
         .or_else(|| {
             context
-                .and_then(|context| context.session_name.as_deref())
+                .and_then(|context| context.session_preview.as_deref())
                 .filter(|value| usable_description(value))
         })
         .or_else(|| description.filter(|value| usable_description(value)))

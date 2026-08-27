@@ -200,9 +200,9 @@ fn activity_description_prefers_rich_context_then_fallbacks() {
         ..AgentContext::new("codex", Timestamp::from_second(1_000).unwrap())
     });
 
-    assert_eq!(agent.activity_description(), Some("thread preview"));
-    agent.context.as_mut().unwrap().session_preview = None;
     assert_eq!(agent.activity_description(), Some("thread name"));
+    agent.context.as_mut().unwrap().session_name = None;
+    assert_eq!(agent.activity_description(), Some("thread preview"));
     agent.context = None;
     assert_eq!(agent.activity_description(), Some("launch label"));
     agent.description = None;

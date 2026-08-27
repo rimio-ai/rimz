@@ -600,6 +600,7 @@ fn refresh_publishes_the_state_title_as_session_preview() {
     let ctx = LocalContextRefreshCtx {
         agent_id: "s1",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: None,
         prior_transcript_path: None,
         prior_transcript_stat: None,
@@ -653,6 +654,7 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
     let ctx = LocalContextRefreshCtx {
         agent_id: "s1",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: None,
         prior_transcript_path: None,
         prior_transcript_stat: None,
@@ -793,6 +795,7 @@ fn wire_without_usage_emits_fresh_sentinel() {
     let ctx = LocalContextRefreshCtx {
         agent_id: "s1",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: None,
         prior_transcript_path: None,
         prior_transcript_stat: None,
@@ -992,6 +995,7 @@ fn live_cost_prices_the_full_file_outside_the_bounded_tail() {
     let ctx = LocalContextRefreshCtx {
         agent_id: "s1",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: None,
         prior_transcript_path: Some(path.to_str().unwrap()),
         prior_transcript_stat: None,
@@ -1093,6 +1097,7 @@ fn refresh_triggers_seed_and_stat_gate_the_stable_transcript_path() {
     let ctx = LocalContextRefreshCtx {
         agent_id: "s1",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: None,
         prior_transcript_path: Some(&path_text),
         prior_transcript_stat: None,

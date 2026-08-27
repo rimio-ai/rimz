@@ -322,6 +322,30 @@ fn local_session_preview_updates_only_when_the_refresh_has_one() {
 }
 
 #[test]
+fn name_only_local_refresh_preserves_transcript_gate() {
+    let (_dir, runtime) = runtime();
+    let observed_at = observed_at();
+    let mut prior = codex_record(observed_at);
+    prior.transcript_path = Some("/tmp/rollout.jsonl".to_owned());
+    prior.transcript_stat = Some(stat());
+    write_record(&runtime, &prior).unwrap();
+
+    let mut refresh = LocalContextRefresh::sparse();
+    refresh.context.session_name = FieldPatch::Set("Generated title".to_owned());
+    refresh.transcript_path.clone_from(&prior.transcript_path);
+    refresh.transcript_stat = prior.transcript_stat;
+    merge_local_context(&runtime, spec("codex"), "sess-1", refresh, observed_at).unwrap();
+
+    let merged = read_one(&runtime, "codex", "sess-1").unwrap();
+    assert_eq!(
+        merged.context.session_name.as_deref(),
+        Some("Generated title")
+    );
+    assert_eq!(merged.transcript_path, prior.transcript_path);
+    assert_eq!(merged.transcript_stat, prior.transcript_stat);
+}
+
+#[test]
 fn codex_local_refresh_overwrites_turn_error_marker() {
     let (_dir, runtime) = runtime();
     let observed_at = Timestamp::from_second(1_700_000_000).unwrap();
