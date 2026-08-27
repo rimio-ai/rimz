@@ -338,9 +338,7 @@ const CODEX_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     turn_started: HookCoverage::Native {
         event: "UserPromptSubmit",
     },
-    turn_ended: HookCoverage::Native {
-        event: "Stop / Interrupt",
-    },
+    turn_ended: HookCoverage::Native { event: "Stop" },
     tool_used: HookCoverage::Native {
         event: "PostToolUse",
     },
