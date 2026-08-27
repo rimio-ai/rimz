@@ -193,7 +193,7 @@ Each agent is a small stacked card. Its anatomy and meter grammar are drawn in [
 A row is base identity plus one card payload: [`AgentCard`](../../../crates/rimz/src/store/snapshot/row.rs) for lifecycle and context fields, or [`ProcessCard`](../../../crates/rimz/src/store/snapshot/row.rs) for command and process metrics. Three projection rules are not evident from the field catalog.
 
 - The renderer prefers the rich `context` blob over the coarse scalars, but prefers `row.effort` over `context.effort`.
-- Codex line 2 reads the app-server thread preview then name, while other agents fall through session name, task, then prompt, so a row keeps a label once the turn ends.
+- Line 2 reads the session name first, then the provider thread preview, task, and prompt; Codex's automatic title therefore replaces its first-message preview once generated.
 - The display preferences ride `SidebarSnapshot.sidebar`.
 
 The status projection is pinned in [`view/tests/status/`](../../../crates/rimz/src/store/snapshot/view/tests/status) and [`project/tests/`](../../../crates/rimz/src/store/snapshot/project/tests).
