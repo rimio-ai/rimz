@@ -350,9 +350,9 @@ fn codex_sessions_root() -> Option<PathBuf> {
 
 /// Locate the rollout JSONL for a Codex session by its `session_id`. Codex
 /// writes one file per session at
-/// `~/.codex/sessions/YYYY/MM/DD/rollout-*-{session_id}.jsonl`, so the walk
-/// descends the date hierarchy newest-first, then checks the flat sibling
-/// `archived_sessions/` directory.
+/// `~/.codex/sessions/YYYY/MM/DD/rollout-*-{session_id}[_rollout_id].jsonl`,
+/// so the walk descends the date hierarchy newest-first, then checks the flat
+/// sibling `archived_sessions/` directory.
 pub(super) fn find_session_transcript(session_id: &str) -> Option<PathBuf> {
     let sessions = codex_sessions_root()?;
     find_session_transcript_under(&sessions, session_id).or_else(|| {
@@ -378,15 +378,8 @@ pub(super) fn resting_interruption(session_id: &str) -> Option<Timestamp> {
 /// day-directory budget so a hook never stalls on a large active history.
 pub(super) fn find_session_transcript_under(root: &Path, session_id: &str) -> Option<PathBuf> {
     const DAY_BUDGET: usize = 16;
-    let needle = format!("{session_id}.jsonl");
-    if let Ok(entries) = fs::read_dir(root) {
-        for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|file_type| file_type.is_file())
-                && entry.file_name().to_string_lossy().ends_with(&needle)
-            {
-                return Some(entry.path());
-            }
-        }
+    if let Some(path) = newest_session_rollout_in(root, session_id) {
+        return Some(path);
     }
     let mut budget = DAY_BUDGET;
     for year in sorted_subdirs_desc(root) {
@@ -396,18 +389,45 @@ pub(super) fn find_session_transcript_under(root: &Path, session_id: &str) -> Op
                     return None;
                 }
                 budget -= 1;
-                let Ok(entries) = fs::read_dir(&day) else {
-                    continue;
-                };
-                for entry in entries.flatten() {
-                    if entry.file_name().to_string_lossy().ends_with(&needle) {
-                        return Some(entry.path());
-                    }
+                if let Some(path) = newest_session_rollout_in(&day, session_id) {
+                    return Some(path);
                 }
             }
         }
     }
     None
+}
+
+fn newest_session_rollout_in(dir: &Path, session_id: &str) -> Option<PathBuf> {
+    fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_file()))
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            rollout_filename_matches_session(&name, session_id).then_some((name, entry.path()))
+        })
+        .max_by(|left, right| left.0.cmp(&right.0))
+        .map(|(_, path)| path)
+}
+
+fn rollout_filename_matches_session(name: &str, session_id: &str) -> bool {
+    let Some(core) = name
+        .strip_prefix("rollout-")
+        .and_then(|name| name.strip_suffix(".jsonl"))
+    else {
+        return false;
+    };
+    let Some(ids) = core.get(20..) else {
+        return false;
+    };
+    if core.as_bytes().get(19) != Some(&b'-') {
+        return false;
+    }
+    let Some(suffix) = ids.strip_prefix(session_id) else {
+        return false;
+    };
+    suffix.is_empty() || suffix.strip_prefix('_').is_some_and(|id| !id.is_empty())
 }
 
 fn sorted_subdirs_desc(path: &Path) -> Vec<PathBuf> {

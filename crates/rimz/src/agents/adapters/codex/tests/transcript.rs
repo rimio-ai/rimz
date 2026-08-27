@@ -1381,6 +1381,31 @@ fn find_session_transcript_walks_codex_date_hierarchy() {
 }
 
 #[test]
+fn find_session_transcript_prefers_newest_reverted_rollout() {
+    let dir = tempfile::tempdir().unwrap();
+    let day_dir = dir.path().join("2026").join("05").join("26");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let base = day_dir.join("rollout-2026-05-26T21-57-38-sess-abc.jsonl");
+    let older_revert = day_dir
+        .join("rollout-2026-05-26T21-58-00-sess-abc_019d0000-0000-7000-8000-000000000001.jsonl");
+    let newest_revert = day_dir
+        .join("rollout-2026-05-26T21-58-00-sess-abc_019d0000-0000-7000-8000-000000000002.jsonl");
+    for path in [&base, &older_revert, &newest_revert] {
+        std::fs::write(path, "{}\n").unwrap();
+    }
+    std::fs::write(
+        day_dir.join("rollout-2026-05-26T21-59-00-sess-abc-extra.jsonl"),
+        "{}\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        find_session_transcript_under(dir.path(), "sess-abc").as_deref(),
+        Some(newest_revert.as_path())
+    );
+}
+
+#[test]
 fn find_session_transcript_falls_back_to_flat_archive() {
     let dir = tempfile::tempdir().unwrap();
     let sessions = dir.path().join("sessions");
