@@ -1379,13 +1379,13 @@ fn finish_run(store: &rimz::Store, record: &mut RunRecord) {
 fn trust_codex_hooks(env: &Env) {
     let config = env.agent_config_path("codex");
     let mut text = std::fs::read_to_string(&config).expect("read codex config");
+    // Leave forward-compatible Interrupt advisory to exercise preflight.
     for token in [
         "session_start",
         "user_prompt_submit",
         "subagent_start",
         "subagent_stop",
         "stop",
-        "interrupt",
         "permission_request",
         "pre_tool_use",
         "post_tool_use",

@@ -401,3 +401,18 @@ fn untrusted_hooks_report_by_trust_state() {
         assert_eq!(untrusted_hook_events_at(&path), expected, "{label}");
     }
 }
+
+#[test]
+fn interrupt_trust_is_advisory_for_preflight() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    install_into(&path).unwrap();
+    for event in EXPECTED_EVENTS {
+        if *event != "Interrupt" {
+            trust_event(&path, &snake_event_token(event));
+        }
+    }
+
+    assert_eq!(untrusted_hook_events_at(&path), ["Interrupt"]);
+    assert!(untrusted_preflight_hook_events_at(&path).is_empty());
+}

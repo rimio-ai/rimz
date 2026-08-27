@@ -45,6 +45,10 @@ pub trait ManagedIntegration: Sync {
     fn untrusted_installed_hooks(&self) -> Vec<String> {
         Vec::new()
     }
+
+    fn untrusted_preflight_hooks(&self) -> Vec<String> {
+        self.untrusted_installed_hooks()
+    }
 }
 
 enum ManagedSourceBackend {

@@ -430,6 +430,7 @@ pub(crate) struct HookEventSpec {
     pub(crate) matcher: Option<&'static str>,
     pub(crate) lifecycle_fallback: bool,
     pub(crate) synchronous: bool,
+    pub(crate) required_for_preflight: bool,
     progress: bool,
     session_ended: bool,
     #[cfg(test)]
@@ -445,6 +446,7 @@ impl HookEventSpec {
             matcher: None,
             lifecycle_fallback: true,
             synchronous: false,
+            required_for_preflight: true,
             progress: false,
             session_ended: false,
             #[cfg(test)]
@@ -464,6 +466,7 @@ impl HookEventSpec {
             matcher: None,
             lifecycle_fallback: false,
             synchronous: false,
+            required_for_preflight: true,
             progress: false,
             session_ended: false,
             #[cfg(test)]
@@ -480,6 +483,11 @@ impl HookEventSpec {
 
     pub(crate) const fn synchronous(mut self) -> Self {
         self.synchronous = true;
+        self
+    }
+
+    pub(crate) const fn optional_for_preflight(mut self) -> Self {
+        self.required_for_preflight = false;
         self
     }
 

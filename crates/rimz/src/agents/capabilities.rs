@@ -197,6 +197,14 @@ pub trait InstallationCapability: CoreCapability {
         self.managed_integration()
             .map_or_else(Vec::new, ManagedIntegration::untrusted_installed_hooks)
     }
+
+    /// Untrusted installed hooks that must be live before a hook-driven
+    /// operation starts. Defaults to every untrusted hook; adapters may leave
+    /// a forward-compatible hook advisory when a durable fallback exists.
+    fn untrusted_preflight_hooks(&self) -> Vec<String> {
+        self.managed_integration()
+            .map_or_else(Vec::new, ManagedIntegration::untrusted_preflight_hooks)
+    }
 }
 
 #[doc(hidden)]
