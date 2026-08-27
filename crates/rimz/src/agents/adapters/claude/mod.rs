@@ -605,11 +605,20 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
                 build_claude_observation(payload, &parts, signal, agent_id, parent_agent_id);
             if observation.parent_agent_id.is_none()
                 && matches!(observation.signal, LifecycleSignal::Registered)
-                && parts.session_start.as_ref().is_some_and(|start| {
-                    matches!(start.source, SessionSource::Startup | SessionSource::Clear)
-                })
             {
-                observation.origin = Some(SessionOrigin::Fresh);
+                observation.origin =
+                    parts
+                        .session_start
+                        .as_ref()
+                        .and_then(|start| match start.source {
+                            SessionSource::Startup | SessionSource::Clear => {
+                                Some(SessionOrigin::Fresh)
+                            }
+                            SessionSource::Fork => Some(SessionOrigin::Forked),
+                            SessionSource::Resume
+                            | SessionSource::Compact
+                            | SessionSource::Unknown => None,
+                        });
             }
             decoded.attach_lifecycle(observation);
         }
