@@ -228,6 +228,17 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
     assert_eq!(root.agent_id.as_deref(), Some("sess-root"));
     assert_eq!(root.parent_agent_id, None);
 
+    let agent_mode_root = hook_lifecycle(
+        &ClaudeAdapter,
+        "UserPromptSubmit",
+        &json!({
+            "session_id": "sess-agent-mode",
+            "agent_type": "code-reviewer",
+        }),
+    );
+    assert_eq!(agent_mode_root.agent_id.as_deref(), Some("sess-agent-mode"));
+    assert_eq!(agent_mode_root.parent_agent_id, None);
+
     assert!(
         hook_observation(
             &ClaudeAdapter,
