@@ -25,7 +25,7 @@ use rimz::remote::recovery::{
 };
 use rimz::remote::{RemoteTarget, SshAttachAttempt, SshAttachPlan};
 
-use super::outage_ui::{OutageUi, PANEL_TICK, UiEvent, release_handoff_screen};
+use super::outage_ui::{HandoffScreen, OutageUi, PANEL_TICK, UiEvent};
 
 const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(200);
 const CONTROL_MASTER_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
@@ -90,7 +90,7 @@ pub(super) struct LinkSupervisor {
     stop: AtomicBool,
     outage: Option<OutageState>,
     master: Option<MasterGuard>,
-    held_alt: bool,
+    held_screen: Option<rimz::tui::TerminalModeGuard>,
     host: String,
 }
 
@@ -109,7 +109,7 @@ impl LinkSupervisor {
             stop: AtomicBool::new(false),
             outage: None,
             master: None,
-            held_alt: false,
+            held_screen: None,
             host,
         };
         let mut ui = OutageUi::auto(ConnectStage::Initial, &supervisor.host);
@@ -130,9 +130,12 @@ impl LinkSupervisor {
             &mut ui,
             Some(&supervisor.stop),
         )? {
-            WaitOutcome::Connected { master, held_alt } => {
+            WaitOutcome::Connected {
+                master,
+                held_screen,
+            } => {
                 supervisor.master = Some(master);
-                supervisor.held_alt = held_alt;
+                supervisor.held_screen = held_screen;
                 Ok(Some(supervisor))
             }
             WaitOutcome::NeedsInteractive => Ok(Some(supervisor)),
@@ -169,9 +172,12 @@ impl LinkSupervisor {
             &mut ui,
             Some(&self.stop),
         )? {
-            WaitOutcome::Connected { master, held_alt } => {
+            WaitOutcome::Connected {
+                master,
+                held_screen,
+            } => {
                 self.master = Some(master);
-                self.held_alt = held_alt;
+                self.held_screen = held_screen;
                 Ok(true)
             }
             WaitOutcome::Interrupted => Ok(false),
@@ -196,9 +202,7 @@ impl LinkSupervisor {
     }
 
     fn release_screen(&mut self) {
-        if std::mem::take(&mut self.held_alt) {
-            release_handoff_screen();
-        }
+        drop(self.held_screen.take());
     }
 }
 
@@ -236,7 +240,7 @@ pub(super) fn supervise_remote(
         internet_probe_for_wait(&initial_ui),
         dial_plan.as_ref(),
     );
-    let (mut ready_master, mut held_alt) = match wait_for_master(
+    let (mut ready_master, mut held_screen) = match wait_for_master(
         plan,
         control_path,
         dial_plan.as_ref(),
@@ -245,8 +249,11 @@ pub(super) fn supervise_remote(
         &mut initial_ui,
         Some(&stop),
     )? {
-        WaitOutcome::Connected { master, held_alt } => (Some(master), held_alt),
-        WaitOutcome::NeedsInteractive => (None, false),
+        WaitOutcome::Connected {
+            master,
+            held_screen,
+        } => (Some(master), held_screen),
+        WaitOutcome::NeedsInteractive => (None, None),
         WaitOutcome::Interrupted => return Ok(()),
     };
     let mut outage = None;
@@ -274,7 +281,7 @@ pub(super) fn supervise_remote(
         } else {
             plan.retry()
         }
-        .with_mark(held_alt && !rimz::tui::no_color());
+        .with_mark(held_screen.is_some() && !rimz::tui::no_color());
         first_attempt = false;
         let spec = probe.attach_spec(&attempt);
         if replacement {
@@ -289,9 +296,7 @@ pub(super) fn supervise_remote(
             confirmed_master,
         );
         guard.restore();
-        if std::mem::take(&mut held_alt) {
-            release_handoff_screen();
-        }
+        let mut handoff = HandoffScreen::take(&mut held_screen);
         let mut outcome = outcome?;
         outcome.established |= confirmed_master;
         if outcome
@@ -299,6 +304,7 @@ pub(super) fn supervise_remote(
             .as_deref()
             .is_some_and(|stderr| rimz::remote::attach_interrupted(outcome.status.code(), stderr))
         {
+            handoff.release();
             guard.reset_emulator();
             return Ok(());
         }
@@ -318,6 +324,7 @@ pub(super) fn supervise_remote(
         }
         let retry_cause = if outcome.killed_zombie {
             drop(ready_master.take());
+            handoff.release();
             guard.reset_emulator();
             let _ = writeln!(
                 std::io::stderr().lock(),
@@ -328,30 +335,32 @@ pub(super) fn supervise_remote(
         } else {
             match reconnect.settle(outcome.status.code(), outcome.established, attach_evidence) {
                 Verdict::CleanExit => {
+                    handoff.release();
                     if outcome.stderr.is_some() {
                         let _ = writeln!(std::io::stderr().lock(), "rimz: detached from {host}");
                     }
                     return Ok(());
                 }
                 Verdict::Fatal { code } => {
+                    let message = fatal_session_message(
+                        code,
+                        host,
+                        target.remote_path(),
+                        setup_hint,
+                        summary.as_deref(),
+                    );
+                    handoff.hold_failure(&message);
                     guard.reset_emulator();
-                    bail!(
-                        "{}",
-                        fatal_session_message(
-                            code,
-                            host,
-                            target.remote_path(),
-                            setup_hint,
-                            summary.as_deref()
-                        )
-                    )
+                    bail!("{message}")
                 }
                 Verdict::Retry => {
                     drop(ready_master.take());
+                    handoff.release();
                     guard.reset_emulator();
                     RetryCause::Dropped
                 }
                 Verdict::Reattach => {
+                    handoff.release();
                     guard.reset_emulator();
                     let detail = summary
                         .as_deref()
@@ -402,10 +411,10 @@ pub(super) fn supervise_remote(
         )? {
             WaitOutcome::Connected {
                 master,
-                held_alt: next_held_alt,
+                held_screen: next_held_screen,
             } => {
                 ready_master = Some(master);
-                held_alt = next_held_alt;
+                held_screen = next_held_screen;
             }
             WaitOutcome::Interrupted => {
                 return Ok(());
@@ -644,7 +653,10 @@ fn dial_with_timeout(plan: &DialPlan, timeout: Duration) -> bool {
 }
 
 enum WaitOutcome {
-    Connected { master: MasterGuard, held_alt: bool },
+    Connected {
+        master: MasterGuard,
+        held_screen: Option<rimz::tui::TerminalModeGuard>,
+    },
     NeedsInteractive,
     Interrupted,
 }
@@ -741,11 +753,11 @@ fn wait_for_master(
                 let frame = outage
                     .panel
                     .frame(outage.elapsed(), FooterPhase::Connecting);
-                let held_alt = ui.handoff(&frame)?;
+                let held_screen = ui.handoff(&frame)?;
                 ui.report_reattached();
                 return Ok(WaitOutcome::Connected {
                     master: guard,
-                    held_alt,
+                    held_screen,
                 });
             }
         }

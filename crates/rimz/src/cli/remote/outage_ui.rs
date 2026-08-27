@@ -194,21 +194,21 @@ impl OutageUi {
         };
         let rows = failure_rows(headline, details, &rimz::tui::captured_log_lines());
         panel.draw_rows(&rows)?;
-        panel.wait_for_keypress()?;
+        wait_for_keypress()?;
         self.release()
     }
 
-    pub(super) fn handoff(&mut self, frame: &RecoveryFrame) -> io::Result<bool> {
+    pub(super) fn handoff(
+        &mut self,
+        frame: &RecoveryFrame,
+    ) -> io::Result<Option<TerminalModeGuard>> {
         match std::mem::replace(&mut self.state, UiState::Released) {
-            UiState::Panel(panel) => {
-                panel.handoff(frame)?;
-                Ok(true)
-            }
+            UiState::Panel(panel) => panel.handoff(frame).map(Some),
             UiState::PlainLines => {
                 self.state = UiState::PlainLines;
-                Ok(false)
+                Ok(None)
             }
-            UiState::PendingPanel | UiState::Released => Ok(false),
+            UiState::PendingPanel | UiState::Released => Ok(None),
         }
     }
 }
@@ -223,7 +223,7 @@ fn panel_allowed(
 }
 
 struct OutagePanel {
-    guard: Option<TerminalModeGuard>,
+    guard: TerminalModeGuard,
     frame_index: usize,
     last_layout: Option<PanelLayout>,
 }
@@ -231,14 +231,14 @@ struct OutagePanel {
 impl OutagePanel {
     fn new() -> io::Result<Self> {
         Ok(Self {
-            guard: Some(TerminalModeGuard::enable(
+            guard: TerminalModeGuard::enable(
                 // Ghostty and xterm.js both translate wheel motion into arrow
                 // keys on an alternate screen without mouse reporting. Keep
                 // reports enabled while the panel drains input and through the
                 // attach handoff so scroll momentum cannot reach the new pane.
                 MouseCapture::Stdout,
                 Screen::Alternate,
-            )?),
+            )?,
             frame_index: 0,
             last_layout: None,
         })
@@ -304,23 +304,12 @@ impl OutagePanel {
         Ok(UiEvent::Continue)
     }
 
-    fn wait_for_keypress(&self) -> io::Result<()> {
-        loop {
-            let Event::Key(key) = event::read()? else {
-                continue;
-            };
-            if key.kind == KeyEventKind::Press {
-                return Ok(());
-            }
-        }
-    }
-
-    fn release(mut self) -> io::Result<()> {
-        drop(self.guard.take());
+    fn release(self) -> io::Result<()> {
+        drop(self);
         Ok(())
     }
 
-    fn handoff(mut self, frame: &RecoveryFrame) -> io::Result<()> {
+    fn handoff(mut self, frame: &RecoveryFrame) -> io::Result<TerminalModeGuard> {
         let rows = attaching_rows(frame, '→');
         self.draw_rows(&rows)?;
         if let Some(layout) = self.last_layout {
@@ -332,10 +321,18 @@ impl OutagePanel {
             )?;
             stdout.flush()?;
         }
-        if let Some(guard) = self.guard.take() {
-            guard.handoff_keep_screen()?;
+        self.guard.handoff_keep_screen()
+    }
+}
+
+fn wait_for_keypress() -> io::Result<()> {
+    loop {
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind == KeyEventKind::Press {
+            return Ok(());
         }
-        Ok(())
     }
 }
 
@@ -548,8 +545,55 @@ fn success_detail(row: &rimz::remote::recovery::StageFrame) -> String {
     row.detail.clone()
 }
 
-pub(super) fn release_handoff_screen() {
-    rimz::tui::finish_handoff(MouseCapture::Stdout, Screen::Alternate);
+pub(super) struct HandoffScreen {
+    guard: Option<TerminalModeGuard>,
+}
+
+impl HandoffScreen {
+    pub(super) fn take(held_screen: &mut Option<TerminalModeGuard>) -> Self {
+        Self {
+            guard: held_screen.take(),
+        }
+    }
+
+    pub(super) fn release(&mut self) {
+        drop(self.guard.take());
+    }
+
+    pub(super) fn hold_failure(&mut self, headline: &str) {
+        let Some(guard) = self.guard.take() else {
+            return;
+        };
+        if write_handoff_failure(headline).is_err() {
+            drop(guard);
+            return;
+        }
+        let Ok(guard) = guard.resume_handoff() else {
+            return;
+        };
+        let _ = wait_for_keypress();
+        drop(guard);
+    }
+}
+
+fn write_handoff_failure(headline: &str) -> io::Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    queue!(stdout, Print("\n"), SetAttribute(Attribute::Bold))?;
+    if !no_color() {
+        queue!(stdout, SetForegroundColor(Color::Red))?;
+    }
+    queue!(
+        stdout,
+        Print(format!("✗ {headline}")),
+        ResetColor,
+        SetAttribute(Attribute::Reset),
+        Print("\n\n"),
+        SetAttribute(Attribute::Dim),
+        Print("press any key to exit"),
+        SetAttribute(Attribute::Reset),
+        Print("\n")
+    )?;
+    stdout.flush()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

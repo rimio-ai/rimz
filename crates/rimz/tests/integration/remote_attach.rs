@@ -10,8 +10,8 @@ use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use nix::sys::termios::{self, InputFlags, LocalFlags, OutputFlags, Termios};
@@ -903,6 +903,120 @@ fn established_interactive_fallback_failure_stays_fatal() {
         "{stderr}"
     );
     assert!(!stderr.contains("link to dev-box lost"), "{stderr}");
+}
+
+#[test]
+fn fatal_attach_holds_the_remote_error_until_a_keypress() {
+    const REMOTE_DETAIL: &str =
+        "REMOTE DETAIL: room startup failed\nREMOTE DETAIL: run rimz doctor\n";
+
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    std::fs::write(&plan, "1\n").expect("write ssh plan");
+
+    let pair = remote_connect_pty();
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.env("RIMZ_TEST_SSH_PLAN", &plan);
+    cmd.env("RIMZ_TEST_SSH_STDOUT", REMOTE_DETAIL);
+    cmd.env("RIMZ_REMOTE_GATETIME_MS", "5000");
+    cmd.env("RIMZ_REMOTE_GRACE_MS", "0");
+    cmd.env("RIMZ_REMOTE_MIN_DISPLAY_MS", "100");
+
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
+    drop(pair.slave);
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let reader_output = Arc::clone(&output);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut chunk = [0_u8; 1024];
+        while let Ok(count) = reader.read(&mut chunk) {
+            if count == 0 {
+                break;
+            }
+            reader_output
+                .lock()
+                .expect("lock pty output")
+                .extend_from_slice(&chunk[..count]);
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("take pty writer");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot =
+            String::from_utf8_lossy(&output.lock().expect("lock pty output")).into_owned();
+        if snapshot.contains("press any key to exit") {
+            break;
+        }
+        assert!(
+            child.try_wait().expect("poll remote connect").is_none(),
+            "remote connect exited before holding the fatal screen: {snapshot:?}"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "fatal screen did not show its keypress hint: {snapshot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(
+        child
+            .try_wait()
+            .expect("poll held remote connect")
+            .is_none(),
+        "remote connect is blocked for the keypress"
+    );
+    let held_output =
+        String::from_utf8_lossy(&output.lock().expect("lock pty output")).into_owned();
+    assert!(
+        held_output.contains("REMOTE DETAIL: room startup failed")
+            && held_output.contains("REMOTE DETAIL: run rimz doctor"),
+        "{held_output:?}"
+    );
+    assert!(
+        held_output.contains("\x1b[?1049h"),
+        "the recovery panel handed off an alternate screen: {held_output:?}"
+    );
+    assert!(
+        !held_output.contains("\x1b[?1049l"),
+        "the alternate screen stays visible before the keypress: {held_output:?}"
+    );
+
+    writer.write_all(b"x").expect("send hold keypress");
+    writer.flush().expect("flush hold keypress");
+    drop(writer);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll remote connect") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    drop(pair.master);
+    reader_thread.join().expect("join pty reader");
+    let final_output =
+        String::from_utf8_lossy(&output.lock().expect("lock pty output")).into_owned();
+    let status = status.unwrap_or_else(|| panic!("remote connect timed out: {final_output:?}"));
+    assert!(!status.success(), "fatal attach exits nonzero");
+
+    let detail = final_output.find("REMOTE DETAIL").expect("remote detail");
+    let hint = final_output
+        .find("press any key to exit")
+        .expect("keypress hint");
+    let leave = final_output
+        .find("\x1b[?1049l")
+        .expect("leave alternate screen");
+    let report = final_output
+        .rfind("not reconnecting")
+        .expect("fatal scrollback report");
+    assert!(
+        detail < hint && hint < leave && leave < report,
+        "fatal screen is held, then restored before the scrollback report: {final_output:?}"
+    );
 }
 
 #[test]

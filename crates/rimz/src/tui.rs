@@ -344,8 +344,9 @@ impl TerminalModeGuard {
     /// the current screen or dropping mouse reporting. The successor paints
     /// over the held frame and takes ownership of terminal modes; keeping mouse
     /// capture armed closes the alternate-screen gap in which terminals turn a
-    /// residual wheel tick into an arrow key for the successor.
-    pub fn handoff_keep_screen(mut self) -> io::Result<()> {
+    /// residual wheel tick into an arrow key for the successor. The returned
+    /// guard retains cleanup ownership and restores the terminal when dropped.
+    pub fn handoff_keep_screen(mut self) -> io::Result<Self> {
         if self.screen == Screen::Alternate {
             execute!(io::stdout(), terminal::EnableLineWrap, cursor::Show)?;
         }
@@ -359,8 +360,29 @@ impl TerminalModeGuard {
         if let Some(hook) = hook {
             panic::set_hook(hook);
         }
-        std::mem::forget(self);
-        Ok(())
+        Ok(self)
+    }
+
+    /// Resume a handed-off terminal long enough to read input before restoring
+    /// the screen and mouse mode preserved by [`Self::handoff_keep_screen`].
+    pub fn resume_handoff(mut self) -> io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        let mouse = self.mouse;
+        let screen = self.screen;
+        let saved_hook = Arc::new(Mutex::new(Some(panic::take_hook())));
+        let hook_for_panic = Arc::clone(&saved_hook);
+        panic::set_hook(Box::new(move |info| {
+            restore_terminal(mouse, screen);
+            if let Some(previous) = hook_for_panic
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+            {
+                previous(info);
+            }
+        }));
+        self.saved_hook = Some(saved_hook);
+        Ok(self)
     }
 }
 
@@ -407,12 +429,6 @@ pub(crate) fn restore_terminal(mouse: MouseCapture, screen: Screen) {
     }
     let _ = terminal::disable_raw_mode();
     end_log_capture_flush();
-}
-
-/// Complete a terminal handoff whose guard preserved the active screen and
-/// mouse mode. Cleanup remains best-effort because the successor already ran.
-pub fn finish_handoff(mouse: MouseCapture, screen: Screen) {
-    restore_terminal(mouse, screen);
 }
 
 #[cfg(test)]

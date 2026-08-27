@@ -13,6 +13,7 @@
 //! records stdin, and `$RIMZ_TEST_SSH_STDIN_LOG` receives the recorded bytes.
 //! `$RIMZ_TEST_SSH_SUSPEND` stops the visible client until its process group
 //! receives `SIGCONT`, exercising the launcher's job-control mirror.
+//! `$RIMZ_TEST_SSH_STDOUT` supplies the visible attach's remote output.
 //! `$RIMZ_TEST_SSH_STDERR` supplies the visible attach's diagnostic output.
 //! `$RIMZ_TEST_SSH_MASTER_PLAN` scripts background ControlMaster failures and
 //! `$RIMZ_TEST_SSH_MASTER_STDERR` supplies their diagnostic output.
@@ -81,6 +82,13 @@ fn main() {
     publish_control_master_if_requested(&argv);
     wait_for_probe_if_requested(&log_path);
     record_and_enter_raw_tty_if_requested();
+    if let Ok(stdout) = env::var("RIMZ_TEST_SSH_STDOUT") {
+        let mut stream = std::io::stdout().lock();
+        stream
+            .write_all(stdout.as_bytes())
+            .expect("write attach stdout");
+        stream.flush().expect("flush attach stdout");
+    }
     if let Ok(stderr) = env::var("RIMZ_TEST_SSH_STDERR") {
         let mut stream = std::io::stderr().lock();
         stream
