@@ -253,7 +253,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
 fn opencode_observes_rich_context_from_plugin_envelopes() {
     let output = hook_output(
         &OpencodeAdapter,
-        "session_idle",
+        "session_updated",
         &json!({
             "session_id": "ses_1",
             "session_name": "Fix OpenCode metadata",
@@ -276,6 +276,7 @@ fn opencode_observes_rich_context_from_plugin_envelopes() {
         observation.context.agent_version.as_deref(),
         Some("1.18.23")
     );
+    assert!(output.lifecycle().is_none());
 
     assert!(
         hook_output(
@@ -681,6 +682,8 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("question.replied"));
     assert!(PLUGIN_SOURCE.contains("question.rejected"));
     assert!(PLUGIN_SOURCE.contains("session.deleted"));
+    assert!(PLUGIN_SOURCE.contains("session.updated"));
+    assert!(PLUGIN_SOURCE.contains("DEFAULT_SESSION_TITLE"));
     assert!(PLUGIN_SOURCE.contains("plan_proposed"));
     assert!(PLUGIN_SOURCE.contains("agents.get(sessionID) === \"plan\""));
     assert!(PLUGIN_SOURCE.contains("Promise.allSettled"));

@@ -75,7 +75,9 @@ fn file_in_dir(dir: &Path) -> Option<PathBuf> {
         .into_iter()
         .chain(
             std::fs::read_dir(dir)
-                .ok()?
+                .ok()
+                .into_iter()
+                .flatten()
                 .filter_map(|entry| entry.ok())
                 .map(|entry| entry.path())
                 .filter(|path| {
@@ -292,6 +294,10 @@ mod tests {
 
         std::fs::write(dir.path().join("opencode-bad!.db"), "").unwrap();
         assert!(!is_channel_filename("opencode-bad!.db"));
+        assert_eq!(
+            file_in_dir(dir.path()).unwrap().file_name().unwrap(),
+            "opencode-alpha.db"
+        );
     }
 
     fn set_mtime(path: &Path, seconds: u64) {

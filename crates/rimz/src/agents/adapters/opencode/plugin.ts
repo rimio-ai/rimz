@@ -33,6 +33,8 @@ type Envelope = Record<string, unknown> & {
 
 const RIMZ = process.env.RIMZ_BIN || "rimz";
 const RIMZ_ARGS = ["hooks", "feed", "--source", "opencode"];
+const DEFAULT_SESSION_TITLE =
+  /^(?:New session|Child session) - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 export const RimzPlugin: Plugin = async (input) => {
   const children = new Map<string, string>();
@@ -113,19 +115,29 @@ export const RimzPlugin: Plugin = async (input) => {
     return spawnRimz(payload, false);
   }
 
-  async function refreshSessionInfo(sessionID: string): Promise<void> {
+  async function refreshSessionInfo(sessionID: string): Promise<boolean> {
     const client = input.client as any;
-    if (typeof client?.session?.get !== "function") return;
+    if (typeof client?.session?.get !== "function") return false;
     try {
       const res: any = await client.session.get({ path: { id: sessionID } });
+      if (!roots.has(sessionID)) return false;
       const session = res?.data ?? res;
-      const title = typeof session?.title === "string" ? session.title : undefined;
+      const title =
+        typeof session?.title === "string" && !DEFAULT_SESSION_TITLE.test(session.title)
+          ? session.title
+          : undefined;
       const version = typeof session?.version === "string" ? session.version : undefined;
-      if (title !== undefined || version !== undefined) {
-        sessions.set(sessionID, { title, version });
-      }
+      const prior = sessions.get(sessionID);
+      const next = {
+        title: title ?? prior?.title,
+        version: version ?? prior?.version,
+      };
+      if (next.title === prior?.title && next.version === prior?.version) return false;
+      sessions.set(sessionID, next);
+      return true;
     } catch {
-      // best-effort: session metadata remains absent until a later boundary retries
+      // best-effort: session metadata remains absent until a later event retries
+      return false;
     }
   }
 
@@ -133,10 +145,10 @@ export const RimzPlugin: Plugin = async (input) => {
   // input-side tokens only (input + cache, never output), so the divisor is the
   // model's max *input* tokens — the uniform context-window meaning across
   // agents. OpenCode carries no window on a message, so resolve it from the
-  // server's own model catalog: prefer models.dev `Model.limit.input`, falling
+  // OpenCode's own model catalog: prefer models.dev `Model.limit.input`, falling
   // back to the total `Model.limit.context` for a model that lists no separate
   // input cap. Key it `${providerID}/${modelID}` and by bare model id. The
-  // catalog is static per server launch, so fetch it once; a failed or empty
+  // catalog is static per plugin launch, so fetch it once; a failed or empty
   // read clears the memo so a later event retries, and until it resolves the
   // field is simply omitted (the Rust fallback covers Claude).
   let catalogPromise: Promise<Map<string, CatalogEntry>> | undefined;
@@ -283,8 +295,17 @@ export const RimzPlugin: Plugin = async (input) => {
           return;
         }
         roots.add(sessionID);
-        await refreshSessionInfo(sessionID);
+        void refreshSessionInfo(sessionID);
         send(base("session_created", sessionID, { cwd: info.directory }));
+        return;
+      }
+
+      if (type === "session.updated") {
+        const info = properties.info || {};
+        const sessionID = info.id;
+        if (typeof sessionID !== "string" || !roots.has(sessionID)) return;
+        const changed = await refreshSessionInfo(sessionID);
+        if (changed && roots.has(sessionID)) send(base("session_updated", sessionID));
         return;
       }
 
@@ -293,7 +314,7 @@ export const RimzPlugin: Plugin = async (input) => {
         if (typeof sessionID !== "string") return;
         const parentID = children.get(sessionID);
         if (!parentID) roots.add(sessionID);
-        if (!parentID) await refreshSessionInfo(sessionID);
+        if (!parentID) void refreshSessionInfo(sessionID);
         send(base(parentID ? "SubagentStop" : "session_idle", sessionID, {
           parent_session_id: parentID,
           plan_proposed: !parentID && agents.get(sessionID) === "plan" ? true : undefined,
@@ -307,12 +328,12 @@ export const RimzPlugin: Plugin = async (input) => {
         const error = properties.error || {};
         const parentID = children.get(sessionID);
         if (!parentID) roots.add(sessionID);
-        if (!parentID) await refreshSessionInfo(sessionID);
+        if (!parentID) void refreshSessionInfo(sessionID);
         send(base(parentID ? "SubagentStop" : "session_error", sessionID, {
           parent_session_id: parentID,
           is_error: true,
           error_class: error.name || error.type,
-          error_message: error.data?.message ?? error.message,
+          error_message: error.data?.message,
         }));
         return;
       }

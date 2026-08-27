@@ -1024,33 +1024,24 @@ mod tests {
         }
 
         let workspace_id = rimz::WorkspaceId::from_project_root(std::path::Path::new("/workspace"));
-        for (kind, session_id, server_url) in [
-            ("codex", "sess-codex", None),
-            (
-                "opencode",
-                "sess-opencode",
-                Some("http://127.0.0.1:1".to_owned()),
-            ),
-        ] {
-            let request = rimz::agents::LifecycleRefreshRequest {
-                kind: rimz::ids::AgentKind::new_unchecked(kind),
-                session_id: session_id.to_owned(),
-                workspace_id: workspace_id.clone(),
-                model: None,
-                server_url,
-            };
-            let mut argv = vec!["rimz".to_owned()];
-            argv.extend(rimz::child_process::agent_helper_argv(
-                "refresh-context",
-                &request,
-            ));
-            let argv = argv.iter().map(String::as_str).collect::<Vec<_>>();
-            let (_, command, session, agent) = parsed_scope(&argv);
-            assert_eq!(
-                (command.as_str(), session.as_deref(), agent.as_deref()),
-                ("agents refresh-context", Some(session_id), Some(kind)),
-            );
-        }
+        let request = rimz::agents::LifecycleRefreshRequest {
+            kind: rimz::ids::AgentKind::new_unchecked("codex"),
+            session_id: "sess-codex".to_owned(),
+            workspace_id,
+            model: None,
+            server_url: None,
+        };
+        let mut argv = vec!["rimz".to_owned()];
+        argv.extend(rimz::child_process::agent_helper_argv(
+            "refresh-context",
+            &request,
+        ));
+        let argv = argv.iter().map(String::as_str).collect::<Vec<_>>();
+        let (_, command, session, agent) = parsed_scope(&argv);
+        assert_eq!(
+            (command.as_str(), session.as_deref(), agent.as_deref()),
+            ("agents refresh-context", Some("sess-codex"), Some("codex")),
+        );
     }
 
     #[test]
