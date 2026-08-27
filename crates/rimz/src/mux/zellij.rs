@@ -46,10 +46,13 @@ pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 44, 0);
 /// without moving any attached client.
 const MIN_NO_FOCUS_ZELLIJ_VERSION: (u32, u32, u32) = (0, 45, 0);
 
-/// Per-attempt bound for the pre-attach health probe.
+/// Total budget for the pre-attach responsiveness verdict.
 const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// Runtime pre-attach health-probe bound. Tests may set
+/// Pause between failed native responsiveness probes.
+const HEALTH_PROBE_RETRY_DELAY: Duration = Duration::from_millis(250);
+
+/// Runtime pre-attach responsiveness budget. Tests may set
 /// `RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS` to shorten fake-shim wait paths.
 fn health_probe_timeout() -> Duration {
     let Some(value) =
@@ -285,11 +288,28 @@ pub struct ZellijBackend {
     /// mutation while exercising topology dump pipes.
     #[cfg(test)]
     presence_plugin_path: Option<PathBuf>,
+    /// Test-only responsiveness budget override.
+    #[cfg(test)]
+    health_probe_timeout: Option<Duration>,
 }
 
 impl ZellijBackend {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn health_probe_timeout(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(timeout) = self.health_probe_timeout {
+            return timeout;
+        }
+        health_probe_timeout()
+    }
+
+    #[cfg(test)]
+    fn with_health_probe_timeout_for_test(mut self, timeout: Duration) -> Self {
+        self.health_probe_timeout = Some(timeout);
+        self
     }
 
     /// Pin every Zellij command this backend runs to `dir` as the full XDG,

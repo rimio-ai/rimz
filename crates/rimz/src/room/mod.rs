@@ -240,21 +240,26 @@ impl RoomContext {
     }
 
     /// Probe a selected backend before first-run config can construct final context.
-    pub fn session_is_healthy_live(mux: MuxName, session_name: &str) -> bool {
+    /// Refuses an unresponsive live session immediately; other live verdicts
+    /// are returned for reuse by the birth gate, while absent and exited
+    /// sessions return `None`.
+    pub fn preflight_live_session(
+        mux: MuxName,
+        session_name: &str,
+    ) -> Result<Option<SessionHealth>> {
         let backend = crate::mux::backend_for(mux);
-        Self::probe_healthy_live(backend.as_ref(), session_name)
-    }
-
-    fn probe_healthy_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
-        let exists = backend
-            .list_sessions()
-            .map(|sessions| sessions.iter().any(|name| name == session_name))
-            .unwrap_or(false);
-        exists
-            && matches!(
-                backend.probe_session_health(session_name),
-                Ok(SessionHealth::Healthy)
-            )
+        if !backend
+            .list_sessions()?
+            .iter()
+            .any(|candidate| candidate == session_name)
+        {
+            return Ok(None);
+        }
+        let health = backend.probe_session_health(session_name)?;
+        if health == SessionHealth::Unresponsive {
+            return Err(unresponsive_error(session_name));
+        }
+        Ok(Some(health))
     }
 
     /// Inspect previous incarnation state without mutating it.
@@ -423,6 +428,14 @@ impl RoomContext {
             sidebar: self.sidebar_options(&self.workspace.worktree_root, Vec::new(), refresh_ms),
         }
     }
+}
+
+fn unresponsive_error(session_name: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "The '{session_name}' Zellij room is live but not responding to Zellij control commands.\n\
+         Attaching could open a black screen, so RimZ left the room untouched.\n\
+         Run `rimz doctor` to inspect it or `rimz reset` to rebuild it (destructive; prompts first).",
+    )
 }
 
 fn recorded_room_bin(workspace_id: &WorkspaceId) -> PathBuf {

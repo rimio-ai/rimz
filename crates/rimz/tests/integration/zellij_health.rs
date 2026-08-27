@@ -51,21 +51,25 @@ fn assert_unresponsive_live_room_is_preserved(list_panes_sleep: Option<&str>) {
     );
 
     let lines = read_trace_lines(&shim.log, Duration::from_millis(200));
-    let probe_attempts = lines
-        .iter()
-        .filter(|line| line.contains("action\tlist-panes"))
-        .count();
-    assert!(
-        probe_attempts >= 2,
-        "the native pane probe should retry once: {lines:?}",
-    );
     assert!(
         !lines.iter().any(|line| line.starts_with("attach")),
         "the attach child must not run: {lines:?}",
     );
     assert!(
+        !lines.iter().any(|line| line.contains("action\tlist-tabs")),
+        "best-effort room launches must not run before the health refusal: {lines:?}",
+    );
+    assert!(
         !lines.iter().any(|line| line.contains("delete-session")),
         "an unresponsive live room must be preserved: {lines:?}",
+    );
+    assert!(
+        env.read_events().iter().all(|event| !matches!(
+            event.kind(),
+            rimz::store::event::EventKind::SessionDeath(_)
+                | rimz::store::event::EventKind::SessionRebirth
+        )),
+        "a live room must not be recorded as dead or reborn",
     );
 }
 
@@ -83,6 +87,7 @@ fn attach_retries_transient_zellij_session_listing_before_default_mux_fallback()
         .env("RIMZ_ZELLIJ_BIN", &shim.bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_FAIL_ONCE", &fail_once)
         .bounded_output()
         .expect("run rimz attach");

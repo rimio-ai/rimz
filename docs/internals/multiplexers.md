@@ -333,11 +333,11 @@ Birth branches on the session's liveness, as reported by `zellij list-sessions`:
 
 | Liveness | Branch |
 | --- | --- |
-| Live | Before attach, a bounded direct `list-panes` probe must prove the session's control plane responds. A responsive session already carries its sidebar and owns every resize and split since. A trusted sidebar heartbeat makes `open_sidebar` a no-op; a stale heartbeat rebuilds only an inspected live room, and an uninspectable one is left untouched. |
+| Live | Before attach, a bounded direct `list-panes` probe must prove the session's control plane responds. A responsive session already carries its sidebar and owns every resize and split since. Separately, sidebar launch trusts a fresh heartbeat; after a stale heartbeat it rebuilds only a room whose presence topology can be inspected and otherwise leaves the sidebar untouched. |
 | `Exited` (`EXITED - attach to resurrect`) | Clean rebirth: delete, then create from the layout. With serialization off this state stops being minted, but the branch stays as defence for sessions serialized before the flag landed. |
 | Absent | First birth: create from the layout. |
 
-A session can remain in Zellij's live roster while its per-session Screen actor no longer answers control commands. RimZ classifies that state separately from a safely rebuildable exited session: it refuses to attach before entering the alternate screen, preserves the room and its panes, and directs the user to inspect with `rimz doctor` or explicitly rebuild with `rimz reset`. tmux needs no equivalent per-session probe because its session roster and pane queries share one server event loop.
+A session can remain in Zellij's live roster while its per-session Screen actor no longer answers control commands. RimZ retries native pane queries within one eight-second total budget and classifies the session separately from a safely rebuildable exited session when none succeeds: it refuses to attach before entering the alternate screen, preserves the room and its panes, and directs the user to inspect with `rimz doctor` or explicitly rebuild with `rimz reset`. tmux needs no equivalent per-session probe because its session roster and pane queries share one server event loop.
 
 ### Room options and the CLI XOR problem
 

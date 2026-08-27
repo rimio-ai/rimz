@@ -144,7 +144,7 @@ fn readonly_attach_relies_on_the_broadcast_ttyd_input_boundary() {
 #[test]
 fn live_session_that_fails_native_probe_is_unresponsive() {
     let room = TestRoom::new();
-    let (temp, shim) = zellij_shim(
+    let (_temp, shim) = zellij_shim(
         r#"#!/bin/sh
 dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
 if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
@@ -157,19 +157,16 @@ exit 0
 
     let health = room
         .backend(&shim)
+        .with_health_probe_timeout_for_test(Duration::from_millis(50))
         .ensure_clean_session(&room.sidebar_options(120), None)
         .expect("classify live session");
 
     assert_eq!(health, SessionHealth::Unresponsive);
-    assert_eq!(
-        command_count(&shim_log(&temp), "action list-panes --all --json"),
-        2,
-    );
 }
 
 #[cfg(unix)]
 #[test]
-fn live_session_native_probe_retries_a_transient_failure() {
+fn live_session_native_probe_accepts_success_before_deadline() {
     let room = TestRoom::new();
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
@@ -187,6 +184,7 @@ exit 0
 
     let health = room
         .backend(&shim)
+        .with_health_probe_timeout_for_test(Duration::from_millis(500))
         .ensure_clean_session(&room.sidebar_options(120), None)
         .expect("classify live session");
 
