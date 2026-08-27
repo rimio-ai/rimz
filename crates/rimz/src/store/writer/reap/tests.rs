@@ -339,7 +339,9 @@ fn interrupted_replacement_bypasses_roster_and_replays_durably() {
         "payload": { "type": "turn_aborted", "reason": "interrupted" }
     });
     std::fs::write(
-        rollouts.path().join("rollout-interrupted.jsonl"),
+        rollouts
+            .path()
+            .join("rollout-2026-06-26T00-00-00-interrupted.jsonl"),
         format!("{record}\n"),
     )
     .expect("write interrupted rollout");
