@@ -1231,6 +1231,7 @@ fn is_transient_server_error(lower: &str) -> bool {
         || lower.contains("service unavailable")
         || lower.contains("bad gateway")
         || lower.contains("gateway timeout")
+        || lower.contains("no response from api")
         || lower.contains("stalled")
         || lower.contains("timed out")
         || lower.contains("timeout")
@@ -1686,6 +1687,10 @@ mod tests {
                 TurnErrorClass::PausedRateLimit,
             ),
             ("API Error: Server Error", TurnErrorClass::PausedOverloaded),
+            (
+                "API Error: No response from API",
+                TurnErrorClass::PausedOverloaded,
+            ),
             (
                 "API Error: Response stalled mid-stream. The response above may be incomplete.",
                 TurnErrorClass::PausedOverloaded,
