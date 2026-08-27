@@ -163,11 +163,12 @@ pub enum LifecycleSignal {
     Compacting,
     /// Context compaction finished or failed
     /// (Claude/Codex `PostCompact`, Claude/Codex `SessionStart` with
-    /// `source = "compact"`, Pi `session_compact`). The transient compacting
-    /// head lifts here when one is open. When the provider reports the trigger,
-    /// automatic compaction resumes the interrupted turn and manual `/compact`
-    /// rests to idle. A provider with no trigger bit preserves the prior state.
-    /// A failed close only lifts the transient head and preserves status.
+    /// `source = "compact"`, Pi `session_compact`/`session_compact_failed`). The
+    /// transient compacting head lifts here when one is open. When the provider
+    /// reports the trigger, automatic compaction resumes the interrupted turn
+    /// and manual `/compact` rests to idle. A provider with no trigger bit
+    /// preserves the prior state. A failed close only lifts the transient head
+    /// and preserves status.
     CompactionEnded {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         auto: Option<bool>,

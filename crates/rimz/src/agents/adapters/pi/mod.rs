@@ -177,7 +177,7 @@ const PI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "extension context usage (row gauge + AgentContext.tokens)",
     },
     realtime_cost: ConcernCoverage::Wired {
-        via: "extension cumulative-cost push reconciled to the authoritative turn-end session-transcript spend sum",
+        via: "extension four-source cumulative-cost push reconciled to authoritative session-transcript spend",
     },
     rich_context: ConcernCoverage::Wired {
         via: "extension envelopes on every value-changing event, including throttled streaming updates and resume hydration",
@@ -204,7 +204,7 @@ const PI_USER_COVERAGE: UserCoverage = UserCoverage {
         note: "pi pushes context fill, the token split, and the running dollar as they change",
     },
     history: CapabilityLevel::Full {
-        note: "past sessions read end to end, carrying pi's own per-turn tokens and dollars",
+        note: "past sessions carry pi's complete tokens and dollars",
     },
     account: CapabilityLevel::Full {
         note: "login and plan with the backing provider's windows, their fill, reset, and credits",
@@ -254,8 +254,8 @@ const PI_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     },
 };
 
-/// Everything the extension wires, in `pi.on(...)` registration order. Selector
-/// and context-update records remain lifecycle-classified enrichment markers.
+/// Everything the extension forwards to RimZ, in `pi.on(...)` registration
+/// order. Accumulation-only subscriptions such as `session_tree` stay private.
 const PI_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle( "session_start", r#"{"session_id":"sess-1"}"#).progress(),
     HookEventSpec::lifecycle( "before_agent_start", r#"{"session_id":"sess-1","prompt":"fix auth"}"#).progress(),
