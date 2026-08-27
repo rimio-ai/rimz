@@ -87,7 +87,7 @@ pub(super) fn run(args: InstallArgs) -> Result<()> {
 
     let mut out = render::out();
     writeln!(out, "installed {name} at {}", dir.display())?;
-    writeln!(out, "launch with: rimz teams launch {name} -w <worktree>")?;
+    writeln!(out, "launch with: rimz teams {name} -w <worktree>")?;
     Ok(())
 }
 
