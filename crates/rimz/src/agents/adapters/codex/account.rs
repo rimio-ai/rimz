@@ -163,12 +163,14 @@ fn probe_login_status_with(command: &mut Command) -> AccountProbe {
 /// Map `codex login status` output onto a probe outcome. Codex prints one line
 /// per auth mode (`run_login_status`): `Logged in using ChatGPT` (a metered
 /// subscription), `Logged in using an API key - <masked>` and `Logged in using
-/// Amazon Bedrock API key` (token/AWS-billed, so unmetered by subscription
-/// windows), `Logged in using access token` / `Logged in using personal access
-/// token` (logged in, metering unknown — the dashboard infers it from window
-/// presence), or `Not logged in`. Any other recognized `Logged in using …` mode
-/// is authoritatively logged in with unknown metering rather than a retried
-/// `Unavailable`; only output with no recognizable login line is transient.
+/// Amazon Bedrock API key` / `Logged in using Amazon Bedrock AWS access keys`
+/// (token/AWS-billed, so unmetered by subscription windows), `Logged in using
+/// access token` / `Logged in using personal access token` / `Logged in using
+/// workload identity` (logged in, metering unknown — the dashboard infers it
+/// from window presence), or `Not logged in`. Any other recognized `Logged in
+/// using …` mode is authoritatively logged in with unknown metering rather
+/// than a retried `Unavailable`; only output with no recognizable login line
+/// is transient.
 fn parse_login_status(text: &str) -> AccountProbe {
     let normalized = text.trim().to_ascii_lowercase();
     let mut metered = None;
@@ -182,7 +184,10 @@ fn parse_login_status(text: &str) -> AccountProbe {
         };
         metered = Some(if mode == "chatgpt" {
             Some(true)
-        } else if mode.starts_with("an api key") || mode.starts_with("amazon bedrock api key") {
+        } else if mode.starts_with("an api key")
+            || mode.starts_with("amazon bedrock api key")
+            || mode.starts_with("amazon bedrock aws access keys")
+        {
             Some(false)
         } else {
             None
@@ -318,7 +323,7 @@ mod tests {
 
     #[test]
     fn parses_cli_login_status_for_keyring_credentials() {
-        // Strings mirror Codex `run_login_status` output verbatim (0.144.1).
+        // Strings mirror Codex `run_login_status` output verbatim (0.150.1).
         let account = found(
             parse_login_status("Logged in using ChatGPT\n"),
             "keyring ChatGPT login",
@@ -336,6 +341,18 @@ mod tests {
             "keyring Bedrock API login",
         );
         assert_eq!(account.metered, Some(false));
+
+        let account = found(
+            parse_login_status("Logged in using Amazon Bedrock AWS access keys\n"),
+            "keyring Bedrock access-key login",
+        );
+        assert_eq!(account.metered, Some(false));
+
+        let account = found(
+            parse_login_status("Logged in using workload identity\n"),
+            "workload-identity login",
+        );
+        assert_eq!(account.metered, None);
 
         // `AuthMode::AgentIdentity` prints "access token", not "agent identity".
         let account = found(
