@@ -20,6 +20,13 @@ pub(super) fn record_lifecycle_observation(
             *detail = decoded.ask_detail().map(ToOwned::to_owned);
         }
     }
+    if observation.usage.context_window.is_none()
+        && let Some(model) = observation.launch.model.as_deref()
+    {
+        let prices =
+            rimz::agents::pricing::cached_book(&store.runtime_paths().shared_pricing_cache_path());
+        observation.usage.context_window = agent.context_window_for_model(model, &prices);
+    }
     attach_agent_owner(ingress_owner, &mut observation);
     attach_agent_pane(&mut observation);
     correlate_subagent_observation(workspace, store, agent, &mut observation);

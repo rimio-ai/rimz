@@ -54,6 +54,39 @@ fn transcript_tail_drives_context_window_and_tokens() {
 }
 
 #[test]
+fn price_book_resolves_native_context_capacity_without_overriding_marker() {
+    let prices = crate::agents::pricing::PriceBook::from_litellm_json(
+        r#"{
+            "claude-opus-native": {
+                "input_cost_per_token": 0.000015,
+                "output_cost_per_token": 0.000075,
+                "max_input_tokens": 1000000
+            },
+            "claude-sonnet-native": {
+                "input_cost_per_token": 0.000003,
+                "output_cost_per_token": 0.000015,
+                "max_input_tokens": 200000
+            }
+        }"#,
+    );
+
+    assert_eq!(
+        ClaudeAdapter.context_window_for_model("claude-opus-native", &prices),
+        Some(1_000_000)
+    );
+    assert_eq!(
+        ClaudeAdapter.context_window_for_model("claude-sonnet-native[1m]", &prices),
+        Some(1_000_000),
+        "the provider marker wins without requiring an exact price row"
+    );
+    assert_eq!(
+        ClaudeAdapter.context_window_for_model("claude-unknown", &prices),
+        None,
+        "the definition's 200k default remains the unknown-model fallback"
+    );
+}
+
+#[test]
 fn stop_hook_reads_turn_error_from_the_transcript_path() {
     // End-to-end over the real file path: the statusline payload names the
     // transcript, the adapter reads its bounded tail, and the verified
