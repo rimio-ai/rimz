@@ -589,6 +589,7 @@ pub enum SessionSource {
     Resume,
     Clear,
     Compact,
+    Fork,
     #[serde(other)]
     Unknown,
 }
@@ -645,6 +646,8 @@ mod tests {
         // Enums fall back to Unknown for unrecognised upstream values.
         let compact: SessionSource = serde_json::from_str(r#""compact""#).unwrap();
         assert_eq!(compact, SessionSource::Compact);
+        let fork: SessionSource = serde_json::from_str(r#""fork""#).unwrap();
+        assert_eq!(fork, SessionSource::Fork);
         let unknown: SessionSource = serde_json::from_str(r#""brandNewSource""#).unwrap();
         assert_eq!(unknown, SessionSource::Unknown);
         let auto: CompactTrigger = serde_json::from_str(r#""auto""#).unwrap();

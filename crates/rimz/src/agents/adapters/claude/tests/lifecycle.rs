@@ -417,6 +417,11 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             LifecycleSignal::Registered,
             Some(SessionOrigin::Fresh),
         ),
+        (
+            "fork",
+            LifecycleSignal::Registered,
+            Some(SessionOrigin::Forked),
+        ),
         ("future", LifecycleSignal::Registered, None),
     ] {
         let obs = hook_lifecycle(
