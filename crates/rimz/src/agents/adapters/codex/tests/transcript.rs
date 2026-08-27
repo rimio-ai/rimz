@@ -1364,9 +1364,8 @@ fn refresh_prices_each_request_before_cumulative_input_crosses_long_tier() {
 
 #[test]
 fn find_session_transcript_walks_codex_date_hierarchy() {
-    // Codex shards rollouts under `YYYY/MM/DD/`; the locator finds a file
-    // whose name ends with `{session_id}.jsonl` regardless of how deep the
-    // shard is.
+    // Codex shards canonical rollout filenames under `YYYY/MM/DD/`; the
+    // locator walks that hierarchy regardless of how deep the shard is.
     let dir = tempfile::tempdir().unwrap();
     let day_dir = dir.path().join("2026").join("05").join("26");
     std::fs::create_dir_all(&day_dir).unwrap();

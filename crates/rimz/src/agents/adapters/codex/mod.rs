@@ -280,7 +280,7 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     session_end: ConcernCoverage::Partial {
         via: "pane liveness + rollup reaper",
-        gap: "SessionEnd hook fires on idle unload; cleared on a snapshot tick, not at session exit",
+        gap: "SessionEnd hook left unwired (fires on idle unload); cleared on a snapshot tick, not at session exit",
     },
     idle_notification: ConcernCoverage::Partial {
         via: "turn-end + request_user_input + stall window",
@@ -338,7 +338,9 @@ const CODEX_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     turn_started: HookCoverage::Native {
         event: "UserPromptSubmit",
     },
-    turn_ended: HookCoverage::Native { event: "Stop" },
+    turn_ended: HookCoverage::Native {
+        event: "Stop / Interrupt",
+    },
     tool_used: HookCoverage::Native {
         event: "PostToolUse",
     },
@@ -359,7 +361,7 @@ const CODEX_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     },
     ended: HookCoverage::Derived {
         via: "pane liveness + rollup reaper",
-        gap: "SessionEnd hook fires on idle unload; cleared on a snapshot tick, not at session exit",
+        gap: "SessionEnd hook left unwired (fires on idle unload); cleared on a snapshot tick, not at session exit",
     },
     lost: HookCoverage::Derived {
         via: "rimz exec wrapper",
