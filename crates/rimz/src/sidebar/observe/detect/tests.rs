@@ -3,9 +3,13 @@ use super::super::sig::{
     WatchedValues, extract_sig,
 };
 use super::*;
+use crate::agents::{AgentStatus, TurnPhase};
 use crate::sidebar::events::EventStore;
+use crate::sidebar::test_support::{activity_row, worktree_group};
 use crate::sidebar::timing::OBSERVE_WARMUP;
-use crate::store::snapshot::SidebarWorktreeKind;
+use crate::store::snapshot::{
+    SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeKind,
+};
 use crate::{SpendTally, SpendWindow, WorkspaceId};
 
 fn sig(at_ms: u64, rows: Vec<RowSig>) -> FrameSig {
@@ -15,7 +19,7 @@ fn sig(at_ms: u64, rows: Vec<RowSig>) -> FrameSig {
             .entry(row.group_key.clone())
             .or_insert_with(|| (Vec::new(), BTreeMap::new()));
         row_ids.push(row.row_id.clone());
-        if let Some(status) = row.watched.status.as_ref() {
+        if let Some(status) = row.attention_status.as_ref() {
             *status_counts.entry(status.clone()).or_default() += 1;
         }
     }
@@ -75,6 +79,7 @@ fn row_with_status(id: &str, pane: &str, group: &str, status: &str) -> RowSig {
             group_key: group.to_owned(),
             model: Some("sonnet".to_owned()),
         },
+        attention_status: Some(status.to_owned()),
         sub_agent_ids: Vec::new(),
     }
 }
@@ -305,6 +310,59 @@ fn single_frame_invariants_fire_without_warmup() {
         &draft.kind,
         AnomalyKind::FramelessRows { rows } if rows == &vec!["a".to_owned()]
     )));
+}
+
+#[test]
+fn provider_child_attention_matches_declared_status_count() {
+    let now = jiff::Timestamp::now();
+    let path = std::path::Path::new("/repo");
+    let mut parent = activity_row(true, Some(AgentStatus::Idle), now, path);
+    parent
+        .as_agent_mut()
+        .expect("agent row")
+        .sub_agents
+        .push(SidebarSubAgent {
+            id: "child".to_owned(),
+            name: "Explore".to_owned(),
+            provider_native: true,
+            status: AgentStatus::Waiting,
+            phase: TurnPhase::Idle,
+            task: None,
+            model: None,
+            effort: None,
+            description: None,
+            total_tokens: None,
+            cost_usd: None,
+            elapsed_secs: None,
+            started_at: None,
+            last_activity: now,
+            registered_at: None,
+        });
+    let mut group = worktree_group(path, vec![parent]);
+    group.status_counts = vec![SidebarStatusCount {
+        status: AgentStatus::Waiting,
+        count: 1,
+    }];
+    let mut snapshot =
+        SidebarSnapshot::build(WorkspaceId::from_project_root(path), Vec::new(), now);
+    snapshot.panes_produced_at_ms = Some(1);
+    snapshot.worktree_groups = vec![group];
+    let frame = extract_sig(
+        &snapshot,
+        &PulledFrameSig::from_snapshot(&snapshot),
+        &EventStore::default(),
+        0,
+        0,
+        0,
+    );
+    assert_eq!(frame.rows[0].watched.status.as_deref(), Some("idle"));
+    assert_eq!(frame.rows[0].attention_status.as_deref(), Some("waiting"));
+
+    assert_lacks_kind(
+        &Observer::default().observe(frame),
+        "status_count_mismatch",
+        "provider-child attention must use the declared tally status",
+    );
 }
 
 #[test]

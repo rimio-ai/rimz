@@ -148,7 +148,7 @@ impl Observer {
         for group in &sig.groups {
             let mut tallied = BTreeMap::<String, usize>::new();
             for row in rows_by_group.get(group.key.as_str()).into_iter().flatten() {
-                if let Some(status) = row.watched.status.as_ref() {
+                if let Some(status) = row.attention_status.as_ref() {
                     *tallied.entry(status.clone()).or_default() += 1;
                 }
             }
