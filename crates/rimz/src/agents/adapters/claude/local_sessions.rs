@@ -39,6 +39,7 @@ struct ClaudeSessionRecord {
 struct DiscoveryKey {
     config_dirs: Vec<PathBuf>,
     workspaces: Vec<PathBuf>,
+    project_dir_name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -71,6 +72,7 @@ pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
     let key = DiscoveryKey {
         config_dirs: claude_config_dirs(),
         workspaces: normalized_workspace_inputs(workspaces),
+        project_dir_name: project_directory_name_override(),
     };
     if key.config_dirs.is_empty() || key.workspaces.is_empty() {
         return Vec::new();
@@ -84,10 +86,18 @@ impl ClaudeDiscoverySnapshot {
             let mut catalog = Vec::new();
             for config_dir in &key.config_dirs {
                 for workspace in &key.workspaces {
-                    let project_dir = config_dir
-                        .join("projects")
-                        .join(project_directory_name(workspace));
-                    collect_catalog(config_dir, workspace, &project_dir, topology, &mut catalog);
+                    for project in
+                        project_directory_names_from(workspace, key.project_dir_name.as_deref())
+                    {
+                        let project_dir = config_dir.join("projects").join(project);
+                        collect_catalog(
+                            config_dir,
+                            workspace,
+                            &project_dir,
+                            topology,
+                            &mut catalog,
+                        );
+                    }
                 }
             }
             catalog
@@ -202,6 +212,7 @@ pub(super) fn discover_under(config_dir: &Path, workspace: &Path) -> Vec<LocalSe
     let key = DiscoveryKey {
         config_dirs: vec![config_dir.to_path_buf()],
         workspaces: normalized_workspace_inputs(&[workspace]),
+        project_dir_name: None,
     };
     if key.workspaces.is_empty() {
         return Vec::new();
@@ -223,7 +234,12 @@ pub(super) fn conversation_present(session_id: &AgentSessionId, cwd: &Path) -> O
     if config_dirs.is_empty() {
         return None;
     }
-    Some(conversation_present_under(&config_dirs, session_id, cwd))
+    Some(conversation_present_under_with(
+        &config_dirs,
+        session_id,
+        cwd,
+        project_directory_name_override().as_deref(),
+    ))
 }
 
 fn conversation_present_under(
@@ -231,12 +247,24 @@ fn conversation_present_under(
     session_id: &AgentSessionId,
     cwd: &Path,
 ) -> bool {
+    conversation_present_under_with(config_dirs, session_id, cwd, None)
+}
+
+fn conversation_present_under_with(
+    config_dirs: &[PathBuf],
+    session_id: &AgentSessionId,
+    cwd: &Path,
+    project_dir_name: Option<&str>,
+) -> bool {
     let workspace = crate::worktree::normalize_path_lexical(cwd);
-    let project = project_directory_name(&workspace);
     let file = format!("{}.jsonl", session_id.as_str());
     config_dirs.iter().any(|config_dir| {
-        fs::metadata(config_dir.join("projects").join(&project).join(&file))
-            .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+        project_directory_names_from(&workspace, project_dir_name)
+            .into_iter()
+            .any(|project| {
+                fs::metadata(config_dir.join("projects").join(project).join(&file))
+                    .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+            })
     })
 }
 
@@ -329,6 +357,25 @@ pub(super) fn project_directory_name(workspace: &Path) -> String {
             }
         })
         .collect()
+}
+
+pub(super) fn project_directory_names(workspace: &Path) -> Vec<String> {
+    let project_dir_name = project_directory_name_override();
+    project_directory_names_from(workspace, project_dir_name.as_deref())
+}
+
+fn project_directory_name_override() -> Option<String> {
+    std::env::var("CLAUDE_CODE_PROJECT_DIR_NAME")
+        .ok()
+        .filter(|value| !value.is_empty())
+}
+
+fn project_directory_names_from(workspace: &Path, override_name: Option<&str>) -> Vec<String> {
+    let flattened = project_directory_name(workspace);
+    match override_name.filter(|name| !name.is_empty() && *name != flattened) {
+        Some(name) => vec![name.to_owned(), flattened],
+        None => vec![flattened],
+    }
 }
 
 #[cfg(test)]
@@ -490,6 +537,7 @@ mod tests {
         let key = DiscoveryKey {
             config_dirs: vec![temp.path().to_path_buf()],
             workspaces: vec![workspace],
+            project_dir_name: None,
         };
         let start = Instant::now();
         let mut snapshot = ClaudeDiscoverySnapshot::default();
@@ -529,6 +577,7 @@ mod tests {
         let key = DiscoveryKey {
             config_dirs: vec![config_dir.clone()],
             workspaces: vec![first.clone(), second.clone()],
+            project_dir_name: None,
         };
         let start = Instant::now();
         let mut snapshot = ClaudeDiscoverySnapshot::default();
@@ -587,5 +636,87 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn project_directory_override_precedes_the_flattened_fallback() {
+        assert_eq!(
+            project_directory_names_from(Path::new("/repo/main"), Some("short-name")),
+            ["short-name", "-repo-main"]
+        );
+        assert_eq!(
+            project_directory_names_from(Path::new("/repo/main"), Some("")),
+            ["-repo-main"]
+        );
+        assert_eq!(
+            project_directory_names_from(Path::new("/repo/main"), Some("-repo-main")),
+            ["-repo-main"]
+        );
+    }
+
+    #[test]
+    fn override_bucket_discovery_keeps_transcript_cwd_authoritative() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = PathBuf::from("/workspace/first");
+        let second = PathBuf::from("/workspace/second");
+        let shared = temp.path().join("projects/shared");
+        write_session(
+            &shared,
+            "11111111-1111-4111-8111-111111111111",
+            &[r#"{"timestamp":"2025-01-01T00:00:00Z","cwd":"/workspace/first"}"#],
+        );
+        write_session(
+            &shared,
+            "22222222-2222-4222-8222-222222222222",
+            &[r#"{"timestamp":"2025-01-02T00:00:00Z","cwd":"/workspace/second"}"#],
+        );
+        let key = DiscoveryKey {
+            config_dirs: vec![temp.path().to_path_buf()],
+            workspaces: vec![first.clone(), second.clone()],
+            project_dir_name: Some("shared".to_owned()),
+        };
+
+        let observations = ClaudeDiscoverySnapshot::default().refresh(key, Instant::now());
+        assert_eq!(observations.len(), 2);
+        assert!(observations.iter().any(|observation| {
+            observation.session_id == "11111111-1111-4111-8111-111111111111"
+                && observation.workspace == first
+        }));
+        assert!(observations.iter().any(|observation| {
+            observation.session_id == "22222222-2222-4222-8222-222222222222"
+                && observation.workspace == second
+        }));
+    }
+
+    #[test]
+    fn conversation_presence_checks_override_and_flattened_buckets() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dirs = vec![temp.path().to_path_buf()];
+        let workspace = Path::new("/repo/main");
+        let override_id = AgentSessionId::from("11111111-1111-4111-8111-111111111111");
+        let fallback_id = AgentSessionId::from("22222222-2222-4222-8222-222222222222");
+        write_session(
+            &temp.path().join("projects/short-name"),
+            override_id.as_str(),
+            &[r#"{"type":"user"}"#],
+        );
+        write_session(
+            &temp.path().join("projects/-repo-main"),
+            fallback_id.as_str(),
+            &[r#"{"type":"user"}"#],
+        );
+
+        assert!(conversation_present_under_with(
+            &config_dirs,
+            &override_id,
+            workspace,
+            Some("short-name")
+        ));
+        assert!(conversation_present_under_with(
+            &config_dirs,
+            &fallback_id,
+            workspace,
+            Some("short-name")
+        ));
     }
 }

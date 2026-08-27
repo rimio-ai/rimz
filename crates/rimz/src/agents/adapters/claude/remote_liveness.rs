@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::local_sessions::project_directory_name;
+use super::local_sessions::project_directory_names;
 use super::spend::claude_config_dirs;
 
 const POINTER_FILE: &str = "bridge-pointer.json";
@@ -35,10 +35,22 @@ struct BridgePointer {
 
 /// Every config root's pointer for `project_root`, in discovery order.
 fn pointer_paths(project_root: &Path) -> Vec<PathBuf> {
-    let project = project_directory_name(project_root);
-    claude_config_dirs()
-        .into_iter()
-        .map(|config| config.join("projects").join(&project).join(POINTER_FILE))
+    pointer_paths_under(&claude_config_dirs(), project_root, project_directory_names)
+}
+
+fn pointer_paths_under(
+    config_dirs: &[PathBuf],
+    project_root: &Path,
+    names: impl FnOnce(&Path) -> Vec<String>,
+) -> Vec<PathBuf> {
+    let projects = names(project_root);
+    config_dirs
+        .iter()
+        .flat_map(|config| {
+            projects
+                .iter()
+                .map(|project| config.join("projects").join(project).join(POINTER_FILE))
+        })
         .collect()
 }
 
@@ -151,6 +163,21 @@ mod tests {
             probe_with(dir.path(), |_: u32, _: Option<&str>| true),
             HostLiveness::Unknown,
             "an unseen project root has no pointer to read",
+        );
+    }
+
+    #[test]
+    fn pointer_paths_follow_override_then_flattened_bucket_order() {
+        let config = PathBuf::from("/config");
+        let paths = pointer_paths_under(&[config], Path::new("/repo/main"), |_| {
+            vec!["short-name".to_owned(), "-repo-main".to_owned()]
+        });
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("/config/projects/short-name/bridge-pointer.json"),
+                PathBuf::from("/config/projects/-repo-main/bridge-pointer.json"),
+            ]
         );
     }
 }
