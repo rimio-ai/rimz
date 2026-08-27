@@ -1,0 +1,10 @@
+---
+source: crates/rimz/src/cli/agents_cmd/launch.rs
+expression: "String::from_utf8(output.into_inner()).unwrap()"
+---
+launched forge in #feat-x (/repo-worktrees/feat-x)
+  @planner   claude  starting  · leader
+  @coder     codex   starting
+
+Check: rimz teams show forge#feat-x
+Reach: rimz message @planner#feat-x '<text>'

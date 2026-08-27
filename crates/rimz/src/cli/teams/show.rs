@@ -42,7 +42,14 @@ fn write_report(w: &mut impl Write, report: &TeamReport, lane: Option<&str>) -> 
     let mut definition = render::KeyVals::new().indent(2);
     definition.push(
         "source",
-        render::cell(report.source.as_deref().unwrap_or("-")).dash(),
+        render::cell(
+            report
+                .source
+                .as_deref()
+                .map(render::home_relative)
+                .unwrap_or_else(|| "-".to_owned()),
+        )
+        .dash(),
     );
     definition.push(
         "layout",
@@ -69,15 +76,25 @@ fn write_report(w: &mut impl Write, report: &TeamReport, lane: Option<&str>) -> 
     definition.render(w)?;
     writeln!(w)?;
 
-    let mut roles = render::Table::new([
-        "ROLE", "PROFILE", "KIND", "MODEL", "EFFORT", "MODE", "PROMPT",
-    ])
-    .indent(2)
-    .max_width(render::terminal_columns(120));
+    let mut roles = render::Table::new(["ROLE", "PROFILE", "KIND", "MODEL", "EFFORT", "MODE"])
+        .indent(2)
+        .max_width(render::terminal_columns(120));
     for role in &report.roles {
         roles.row(role_cells(role));
     }
     roles.render(w)?;
+    if report.roles.iter().any(|role| {
+        role.system_prompt_file.is_some() || !role.append_system_prompt_files.is_empty()
+    }) {
+        writeln!(
+            w,
+            "  {}",
+            render::paint(
+                render::palette::muted(),
+                &format!("(prompt stack: rimz teams show {} --json)", report.name)
+            )
+        )?;
+    }
 
     if report.instances.is_empty() && lane.is_some() {
         writeln!(w)?;
@@ -108,23 +125,42 @@ fn write_report(w: &mut impl Write, report: &TeamReport, lane: Option<&str>) -> 
     }
 
     writeln!(w)?;
-    writeln!(w, "Launch: rimz teams launch {} -w <worktree>", report.name)?;
-    writeln!(w, "Resume: rimz teams resume {}", report.name)?;
+    if report.instances.is_empty() {
+        writeln!(w, "Launch: rimz teams {} -w <worktree>", report.name)?;
+        writeln!(w, "Resume: rimz teams resume {}", report.name)?;
+        return Ok(());
+    }
+    if let Some((handle, channel)) = reach_target(report, lane) {
+        writeln!(
+            w,
+            "Reach: rimz message @{}#{} '<text>'",
+            handle.trim_start_matches('@'),
+            channel
+        )?;
+    }
+    writeln!(w, "Focus: rimz teams focus {}", report.name)?;
     Ok(())
 }
 
-fn role_cells(role: &RoleReport) -> [render::Cell; 7] {
-    let prompt = role
-        .system_prompt_file
+fn reach_target<'a>(report: &'a TeamReport, lane: Option<&str>) -> Option<(&'a str, &'a str)> {
+    if report.instances.len() != 1 && lane.is_none() {
+        return None;
+    }
+    let instance = report.instances.first()?;
+    let member = report
+        .leader
         .as_deref()
-        .map(|path| path.display().to_string())
-        .into_iter()
-        .collect::<Vec<_>>();
-    let prompt = if prompt.is_empty() {
-        "-".to_owned()
-    } else {
-        prompt.join(" ")
-    };
+        .and_then(|leader| {
+            instance
+                .members
+                .iter()
+                .find(|member| member.handle.trim_start_matches('@') == leader)
+        })
+        .or_else(|| instance.members.first())?;
+    Some((&member.handle, &instance.channel))
+}
+
+fn role_cells(role: &RoleReport) -> [render::Cell; 6] {
     [
         render::cell(&role.role).fg(render::palette::accent()),
         render::cell(&role.profile),
@@ -132,7 +168,6 @@ fn role_cells(role: &RoleReport) -> [render::Cell; 7] {
         render::cell(role.model.as_deref().unwrap_or("-")).dash(),
         render::cell(role.effort.as_deref().unwrap_or("-")).dash(),
         render::cell(role.mode.as_deref().unwrap_or("-")).dash(),
-        render::cell(prompt).dash(),
     ]
 }
 
@@ -140,7 +175,7 @@ fn member_cells(channel: &str, member: &LiveMember) -> [render::Cell; 5] {
     [
         render::cell(format!("#{channel}")).fg(render::palette::meta()),
         render::cell(&member.handle).fg(render::palette::identity(&member.kind)),
-        render::cell(&member.status),
+        render::cell(member.status.as_str()).fg(render::status::agent(member.status, member.phase)),
         render::cell(
             member
                 .context_fill_pct
@@ -163,14 +198,14 @@ fn member_cells(channel: &str, member: &LiveMember) -> [render::Cell; 5] {
 mod tests {
     use super::*;
     use crate::cli::teams::list::{LiveInstance, RoleReport, TeamReport};
+    use rimz::agents::{AgentStatus, TurnPhase};
     use std::collections::BTreeMap;
 
-    #[test]
-    fn human_show_includes_definition_live_members_and_hints() {
-        let report = TeamReport {
+    fn report(instances: Vec<LiveInstance>) -> TeamReport {
+        TeamReport {
             name: "forge".to_owned(),
             defined: true,
-            source: Some("/home/me/.agents/teams/forge/team.toml".to_owned()),
+            source: Some("/tmp/.agents/teams/forge/team.toml".to_owned()),
             layout: Some("planner,coder+reviewer".to_owned()),
             leader: Some("planner".to_owned()),
             roles: vec![RoleReport {
@@ -181,53 +216,60 @@ mod tests {
                 effort: Some("high".to_owned()),
                 mode: Some("auto".to_owned()),
                 system_prompt_file: Some("planner.md".into()),
-                append_system_prompt_files: Vec::new(),
+                append_system_prompt_files: vec!["consensus.md".into()],
             }],
             valid: true,
             error: None,
-            instances: vec![LiveInstance {
-                channel: "feat-x".to_owned(),
-                state: "running".to_owned(),
-                status_counts: BTreeMap::from([("running".to_owned(), 1)]),
-                members: vec![LiveMember {
-                    handle: "planner".to_owned(),
-                    kind: "claude".to_owned(),
-                    status: "running".to_owned(),
-                    context_fill_pct: Some(42.0),
-                    cost_usd: Some(0.25),
-                }],
-            }],
-        };
-        let mut output = Vec::new();
-        write_report(&mut output, &report, None).unwrap();
-        let output = String::from_utf8(output).unwrap();
+            instances,
+        }
+    }
 
-        assert!(output.contains("planner,coder+reviewer"));
-        assert!(output.contains("#feat-x"));
-        assert!(output.contains("42%"));
-        assert!(output.contains("$0.25"));
-        assert!(output.contains("rimz teams launch forge -w <worktree>"));
-        assert!(output.contains("rimz teams resume forge"));
+    fn live_instance() -> LiveInstance {
+        LiveInstance {
+            channel: "feat-x".to_owned(),
+            state: "running".to_owned(),
+            status_counts: BTreeMap::from([("running".to_owned(), 1)]),
+            members: vec![LiveMember {
+                handle: "@planner".to_owned(),
+                kind: "claude".to_owned(),
+                status: AgentStatus::Running,
+                phase: TurnPhase::Reasoning,
+                context_fill_pct: Some(42.0),
+                cost_usd: Some(0.25),
+            }],
+        }
+    }
+
+    fn rendered(report: &TeamReport, lane: Option<&str>) -> String {
+        let mut output = anstream::StripStream::new(Vec::new());
+        write_report(&mut output, report, lane).unwrap();
+        String::from_utf8(output.into_inner()).unwrap()
+    }
+
+    #[test]
+    fn human_show_with_live_instance() {
+        insta::assert_snapshot!(rendered(&report(vec![live_instance()]), None));
+    }
+
+    #[test]
+    fn human_show_without_live_instance() {
+        insta::assert_snapshot!(rendered(&report(Vec::new()), Some("ended-lane")));
     }
 
     #[test]
     fn human_show_answers_when_a_selected_lane_is_not_live() {
-        let report = TeamReport {
-            name: "forge".to_owned(),
-            defined: true,
-            source: None,
-            layout: Some("planner".to_owned()),
-            leader: Some("planner".to_owned()),
-            roles: Vec::new(),
-            valid: true,
-            error: None,
-            instances: Vec::new(),
-        };
-        let mut output = Vec::new();
-
-        write_report(&mut output, &report, Some("ended-lane")).unwrap();
-
-        let output = String::from_utf8(output).unwrap();
+        let output = rendered(&report(Vec::new()), Some("ended-lane"));
         assert!(output.contains("no live instance in #ended-lane"));
+    }
+
+    #[test]
+    fn human_show_omits_ambiguous_reach_hint() {
+        let mut second = live_instance();
+        second.channel = "feat-y".to_owned();
+
+        let output = rendered(&report(vec![live_instance(), second]), None);
+
+        assert!(!output.contains("Reach:"));
+        assert!(output.contains("Focus: rimz teams focus forge"));
     }
 }

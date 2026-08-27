@@ -1,0 +1,20 @@
+---
+source: crates/rimz/src/cli/teams/show.rs
+expression: "rendered(&report(vec![live_instance()]), None)"
+---
+forge
+  source:     /tmp/.agents/teams/forge/team.toml
+  layout:     planner,coder+reviewer
+  leader:     planner
+  validation: ready
+
+  ROLE     PROFILE  KIND    MODEL  EFFORT  MODE
+  planner  claude   claude  fable  high    auto
+  (prompt stack: rimz teams show forge --json)
+
+Live instances
+  LANE     MEMBER    STATUS   CTX   COST
+  #feat-x  @planner  running  42%  $0.25
+
+Reach: rimz message @planner#feat-x '<text>'
+Focus: rimz teams focus forge

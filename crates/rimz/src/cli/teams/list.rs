@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use super::super::{Ctx, GlobalFlags, render, report_unknown_config_keys};
-use rimz::agents::AgentState;
+use rimz::agents::{AgentState, AgentStatus, TurnPhase};
 use rimz::config::{CommandsConfig, ProfilesConfig, Team, TeamsConfig};
 use rimz::harness::spec::{AgentCell, LayoutSpec};
 use rimz::workspace::WorkspaceResolver;
@@ -58,7 +58,9 @@ pub(super) struct LiveInstance {
 pub(super) struct LiveMember {
     pub handle: String,
     pub kind: String,
-    pub status: String,
+    pub status: AgentStatus,
+    #[serde(skip)]
+    pub phase: TurnPhase,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_fill_pct: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -366,14 +368,22 @@ fn live_instances(
         let state = instance_state(&status_counts).to_owned();
         let members = members
             .iter()
-            .map(|agent| LiveMember {
-                handle: rimz::harness::target::agent_handle(agent, &members, false),
-                kind: agent.kind.to_string(),
-                status: agent.effective_status().as_str().to_owned(),
-                context_fill_pct: agent.context_fill_pct(),
-                cost_usd: effort_by_session
-                    .get(&agent.agent_id)
-                    .and_then(|effort| effort.cost_usd),
+            .map(|agent| {
+                let status = agent.effective_status();
+                LiveMember {
+                    handle: rimz::harness::target::agent_handle(agent, &members, false),
+                    kind: agent.kind.to_string(),
+                    status,
+                    phase: if status == AgentStatus::Running {
+                        agent.phase
+                    } else {
+                        TurnPhase::Idle
+                    },
+                    context_fill_pct: agent.context_fill_pct(),
+                    cost_usd: effort_by_session
+                        .get(&agent.agent_id)
+                        .and_then(|effort| effort.cost_usd),
+                }
             })
             .collect();
         by_team
@@ -534,7 +544,7 @@ mod tests {
                 effort: Some("high".to_owned()),
                 budget: None,
                 system_prompt_file: Some("planner.md".into()),
-                append_system_prompt_files: Vec::new(),
+                append_system_prompt_files: vec!["consensus.md".into()],
                 args: None,
             }],
             leader: Some("planner".to_owned()),
@@ -569,10 +579,15 @@ mod tests {
         assert_eq!(reports[0].instances[0].channel, "feat-x");
         assert_eq!(reports[0].instances[0].members.len(), 1);
         assert_eq!(reports[0].instances[0].state, "working");
+        let json = serde_json::to_value(&reports).unwrap();
+        assert_eq!(json[0]["roles"][0]["system_prompt_file"], "planner.md");
         assert_eq!(
-            serde_json::to_value(&reports).unwrap()[0]["instances"][0]["members"][0]["handle"],
-            "@planner"
+            json[0]["roles"][0]["append_system_prompt_files"],
+            serde_json::json!(["consensus.md"])
         );
+        assert_eq!(json[0]["instances"][0]["members"][0]["handle"], "@planner");
+        assert_eq!(json[0]["instances"][0]["members"][0]["status"], "running");
+        assert!(json[0]["instances"][0]["members"][0].get("phase").is_none());
     }
 
     #[test]
