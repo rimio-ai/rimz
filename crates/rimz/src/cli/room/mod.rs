@@ -525,7 +525,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             context.claim_owner()?;
             birth_managed_room(
                 &mut context,
-                was_live,
                 preflight_health,
                 entry.no_resume(),
                 entry.resume_prompt_mode(),
@@ -545,7 +544,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             context.claim_owner()?;
             birth_managed_room(
                 &mut context,
-                was_live,
                 preflight_health,
                 entry.no_resume(),
                 entry.resume_prompt_mode(),
@@ -560,7 +558,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 RoomContext::from_record(record, machine_config.clone(), mux, RoomSizing::Birth)?;
             birth_managed_room(
                 &mut context,
-                was_live,
                 preflight_health,
                 entry.no_resume(),
                 entry.resume_prompt_mode(),
@@ -584,7 +581,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 )?;
                 birth_managed_room(
                     &mut context,
-                    was_live,
                     preflight_health,
                     entry.no_resume(),
                     entry.resume_prompt_mode(),
@@ -637,7 +633,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
 
 fn birth_managed_room(
     context: &mut RoomContext,
-    was_live: bool,
     preflight_health: Option<rimz::mux::SessionHealth>,
     no_resume: bool,
     resume_prompt: ResumePromptMode,
@@ -645,7 +640,7 @@ fn birth_managed_room(
     background_view: Option<rimz::remote_control::ReadinessSnapshot>,
     cwd: std::path::PathBuf,
 ) -> Result<()> {
-    let rebirth = if was_live {
+    let rebirth = if preflight_health.is_some() {
         NormalRebirth::Live
     } else {
         match context.inspect_rebirth(no_resume) {
