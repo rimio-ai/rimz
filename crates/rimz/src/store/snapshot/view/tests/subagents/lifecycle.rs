@@ -102,13 +102,28 @@ fn waiting_provider_child_lifts_parent_card_attention() {
     let parent = agent("claude", "sess-root", AgentStatus::Idle, 100);
     let child = child_state("sess-root", "child-1", AgentStatus::Waiting, 5);
     let snapshot = room_with_agent_panes(vec![parent, child]);
-    let row = row(&snapshot, "sess-root");
+    let parent_row = row(&snapshot, "sess-root");
 
-    assert_eq!(row.status(), Some(AgentStatus::Idle));
-    assert_eq!(row.attention_status(), Some(AgentStatus::Waiting));
-    assert!(row.attention_score >= 600);
+    assert_eq!(parent_row.status(), Some(AgentStatus::Idle));
+    assert_eq!(parent_row.attention_status(), Some(AgentStatus::Waiting));
+    assert!(parent_row.attention_score >= 600);
     assert!(
         snapshot.worktree_groups[0]
+            .status_counts
+            .iter()
+            .any(|count| count.status == AgentStatus::Waiting && count.count == 1)
+    );
+
+    let encoded = serde_json::to_vec(&snapshot).expect("snapshot serializes");
+    assert!(String::from_utf8_lossy(&encoded).contains("\"provider_native\":true"));
+    let published: SidebarSnapshot =
+        serde_json::from_slice(&encoded).expect("snapshot deserializes");
+    assert_eq!(
+        row(&published, "sess-root").attention_status(),
+        Some(AgentStatus::Waiting)
+    );
+    assert!(
+        published.worktree_groups[0]
             .status_counts
             .iter()
             .any(|count| count.status == AgentStatus::Waiting && count.count == 1)

@@ -581,6 +581,10 @@ fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// A compact summary of a child agent, nested under its parent's row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarSubAgent {
@@ -589,9 +593,9 @@ pub struct SidebarSubAgent {
     /// task definition; falls back to a short degraded id when none was
     /// reported.
     pub name: String,
-    /// Whether this is a provider-native paneless child. Projection-only: the
-    /// serialized child row stays provider-neutral.
-    #[serde(skip)]
+    /// Whether this is a provider-native paneless child. The neutral marker
+    /// survives publication so consumers can lift the child's attention state.
+    #[serde(default, skip_serializing_if = "is_false")]
     pub provider_native: bool,
     pub status: AgentStatus,
     /// The running turn's shape (reasoning / acting), the child's own lifecycle
