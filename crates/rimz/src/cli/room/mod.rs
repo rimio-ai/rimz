@@ -134,17 +134,18 @@ impl RoomEntry<'_> {
         }
     }
 
-    fn workspace_id(&self) -> Option<&WorkspaceId> {
+    /// Keep a failed record lookup distinct from a known missing record because
+    /// only the latter proves a named session is foreign.
+    fn workspace_record_id(&self) -> std::result::Result<Option<&WorkspaceId>, ()> {
         match self {
             Self::Start { workspace, .. }
             | Self::StartDetached { workspace, .. }
-            | Self::AttachCwd { workspace, .. } => Some(&workspace.workspace_id),
-            Self::WebSession { record, .. } => Some(&record.workspace_id),
-            Self::AttachSession { record, .. } => record
-                .as_ref()
-                .ok()
-                .and_then(|record| record.as_ref())
-                .map(|record| &record.workspace_id),
+            | Self::AttachCwd { workspace, .. } => Ok(Some(&workspace.workspace_id)),
+            Self::WebSession { record, .. } => Ok(Some(&record.workspace_id)),
+            Self::AttachSession { record, .. } => match record {
+                Ok(record) => Ok(record.as_ref().map(|record| &record.workspace_id)),
+                Err(_) => Err(()),
+            },
         }
     }
 }
@@ -462,10 +463,16 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     // Capture whether this is a plain reattach *before* `ensure_session`, which on
     // tmux would create the session and erase the distinction. A live room never
     // re-seeds prior agents, and its health verdict is reused by the attach gate.
+    let workspace_record_id = entry.workspace_record_id();
     let preflight_health =
-        RoomContext::preflight_live_session(mux, entry.session_name(), entry.workspace_id())?;
+        RoomContext::preflight_live_session(mux, entry.session_name(), workspace_record_id)?;
     let was_live = preflight_health.is_some();
-    report_version_mismatch_notices(entry.workspace_id(), mux, entry.session_name(), was_live)?;
+    report_version_mismatch_notices(
+        workspace_record_id.ok().flatten(),
+        mux,
+        entry.session_name(),
+        was_live,
+    )?;
 
     let hook_intro_rendered = if matches!(entry, RoomEntry::Start { .. }) && !was_live {
         ensure_detected_agent_hooks(start_attended())?
