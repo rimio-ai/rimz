@@ -146,6 +146,7 @@ supervise_remote
      │                       Verdict::CleanExit → return to the caller
      │                       Verdict::Fatal     → bail with the mapped message
      │                       Verdict::Retry     → back to wait_for_master
+     │                       Verdict::Reattach  → replace the mux client
      │
      └── NeedsInteractive ►  one foreground ssh -t, initial connect only
                              (prompts are usable; a failure there is fatal)
@@ -180,18 +181,21 @@ An attach over a confirmed master pipes and drains SSH stderr instead of letting
 
 | Exit | Evidence | Verdict |
 | --- | --- | --- |
-| `0` | any | `CleanExit` — return to the caller |
+| `0` | any | `CleanExit` — the remote wrapper confirmed the mux session remains live, so return to the caller |
 | `255` with OpenSSH's remote `SIGINT` diagnostic | any | Explicit Ctrl-C — return to the caller without retrying |
 | remote RimZ precondition sentinel (`65`, `66`, `67`, `127`) | any | `Fatal` — surface the specific version, path, or install fix |
+| remote session-loss sentinel (`68`) | established SSH, ControlMaster ended | `Retry` — the attach status is not trusted over SSH liveness |
+| remote session-loss sentinel (`68`) | ControlMaster alive, foreground attach lived past gatetime | `Reattach` — replace the multiplexer client over the existing SSH connection |
+| remote session-loss sentinel (`68`) | no settled attach evidence | `Fatal` — avoid thrashing on a session that ends immediately |
 | `255` | established SSH | `Retry` — enter background recovery |
 | nonzero | established SSH, ControlMaster ended | `Retry` — the attach status is not trusted over SSH liveness |
 | nonzero | ControlMaster alive, foreground attach lived past gatetime | `Reattach` — replace only the multiplexer client over the existing SSH connection |
 | any other code | no settled attach evidence | `Fatal` — an immediate remote room or authentication failure |
 | signal death | any | `Fatal` — something killed `ssh` deliberately |
 
-SSH counts as established once its link probe receives the first ack, once its initial master is confirmed, or once the foreground attach lives past the gatetime (30 seconds by default). The gatetime is also independent evidence that the multiplexer attach ran rather than failing at launch. This split matters because tmux and Zellij may return a nonzero client status when a reload deliberately disconnects an established client: a live ControlMaster makes that a fast reattach, not a false link-loss notification. `ReconnectState` folds transport establishment and consecutive failures across sessions; `settle_zombie_kill` records an intentional kill without classifying its signal exit as fatal.
+SSH counts as established once its link probe receives the first ack, once its initial master is confirmed, or once the foreground attach lives past the gatetime (30 seconds by default). The gatetime is also independent evidence that the multiplexer attach ran rather than failing at launch. tmux reports an involuntary client loss as nonzero, while Zellij may report both that loss and an explicit detach as zero. After a successful supervised remote mux exit, the remote RimZ wrapper checks session liveness: a missing or exited session becomes sentinel `68`, while a live session preserves zero as an intentional detach. A live ControlMaster then makes the sentinel a fast reattach rather than a false link-loss notification. If the liveness query fails, the wrapper preserves zero so it never overrides an intentional detach on uncertain evidence. `ReconnectState` folds transport establishment and consecutive failures across sessions; `settle_zombie_kill` records an intentional kill without classifying its signal exit as fatal.
 
-**Terminal hygiene** wraps every session. `TtyGuard` snapshots local termios at connect, repairs a leftover raw tty at entry, and restores the snapshot after each SSH session. Before every replacement attach, it puts the local tty in raw mode and drains it until quiet. This absorbs DA1, DA2, and XTVERSION replies addressed to the dead SSH generation: a duplicate reply is what tmux passes through to the focused pane as keystrokes after the replacement client has already accepted the stale copy. Ctrl-C ends the drain promptly instead of extending the quiet window. Exit paths and the initial attach never drain, preserving type-ahead for the shell that regains the terminal and input typed while `rimz remote connect` starts. An unclean end also writes the emulator reset string, because `ssh -t` mirrors local tty modes onto the remote pty and a `SIGKILL`ed transport cannot restore terminal-emulator state itself. While any full-screen guard owns the terminal, the tracing writer buffers warnings instead of writing through the frame; the panel can render their cleaned tail, and terminal restore replays the original bytes to stderr.
+**Terminal hygiene** wraps every session. `TtyGuard` snapshots local termios at connect, repairs a leftover raw tty at entry, and restores the snapshot after each SSH session. Before every replacement attach, it puts the local tty in raw mode and drains it until quiet. This absorbs DA1, DA2, and XTVERSION replies addressed to the dead SSH generation: a duplicate reply is what tmux passes through to the focused pane as keystrokes after the replacement client has already accepted the stale copy. Ctrl-C ends the drain promptly instead of extending the quiet window. Exit paths and the initial attach never drain, preserving type-ahead for the shell that regains the terminal and input typed while `rimz remote connect` starts. Every session end writes the emulator reset string after releasing or holding its handoff screen, so mouse, focus, paste, and alternate-screen restoration never depends on the child's cleanup. While any full-screen guard owns the terminal, the tracing writer buffers warnings instead of writing through the frame; the panel can render their cleaned tail, and terminal restore replays the original bytes to stderr.
 
 ## Reconnect pacing and reachability
 
