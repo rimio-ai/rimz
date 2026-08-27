@@ -184,6 +184,8 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 
 `lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, Antigravity, Amp, Kiro), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
 
+Codex 0.150's root-only `Interrupt` hook maps directly to the turn-ended lifecycle kind as an interrupted outcome; older versions retain the rollout `turn_aborted` fallback. Its `SessionEnd` hook is deliberately not installed because idle app-server unload also fires it without ending the pane.
+
 ## Per-agent mappings
 
 The detail for each agent — its full coverage rationale, permission-mode mapping, effort levels, install target, resume/fork surface, and account probing — lives in that agent's mapping doc, with its upstream protocol in the matching external reference. Adding an agent means implementing only its supported workflow capabilities, declaring an `AgentSpec`, and composing one registry definition ([adding an agent](../internals/agents/adapter.md#adding-an-agent)).

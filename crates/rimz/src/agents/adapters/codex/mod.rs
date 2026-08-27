@@ -109,6 +109,7 @@ use crate::transcript::{AskOption, AskQuestion};
 /// Waiting state and return neutral immediately, so the value is a short guard
 /// for local I/O failures rather than an answer window.
 const CODEX_HOOK_TIMEOUT_SECS: i64 = 10;
+const CODEX_INTERRUPT_HOOK_TIMEOUT_SECS: i64 = 1;
 
 /// How stale the app-server-owned half of the sidecar may get before the next
 /// turn-boundary refresh re-reads it. The rollout tail refreshes every pass;
@@ -251,7 +252,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
 
 const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     turn_lifecycle: ConcernCoverage::Wired {
-        via: "SessionStart/UserPromptSubmit/Stop",
+        via: "SessionStart/UserPromptSubmit/Stop/Interrupt",
     },
     permission: ConcernCoverage::Wired {
         via: "PermissionRequest",
@@ -276,7 +277,7 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     session_end: ConcernCoverage::Partial {
         via: "pane liveness + rollup reaper",
-        gap: "no SessionEnd hook; cleared on a snapshot tick, not at session exit",
+        gap: "SessionEnd fires on idle unload; cleared on a snapshot tick, not at session exit",
     },
     idle_notification: ConcernCoverage::Partial {
         via: "turn-end + request_user_input + stall window",
@@ -355,7 +356,7 @@ const CODEX_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     },
     ended: HookCoverage::Derived {
         via: "pane liveness + rollup reaper",
-        gap: "no SessionEnd hook; cleared on a snapshot tick, not at session exit",
+        gap: "SessionEnd fires on idle unload; cleared on a snapshot tick, not at session exit",
     },
     lost: HookCoverage::Derived {
         via: "rimz exec wrapper",
@@ -367,7 +368,7 @@ const CODEX_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
 /// which Codex events RimZ wires and with which matcher, mirroring the Claude
 /// adapter's catalog. `SessionStart` filters to its
 /// lifecycle subtypes; the per-call hooks match everything (`.*`); the
-/// turn-boundary events (`UserPromptSubmit`, `Stop`) carry no matcher.
+/// turn-boundary events (`UserPromptSubmit`, `Stop`, `Interrupt`) carry no matcher.
 /// `UserPromptSubmit` is state signal — it moves the root agent to running and
 /// carries the task. The broad `PreToolUse`/`PostToolUse` hooks fire on every
 /// tool call; they keep the sidebar's enrichment current, with their payload
@@ -397,6 +398,8 @@ const CODEX_HOOKS: &[HookEventSpec] = &[
     .with_matcher(".*")
     .progress(),
     HookEventSpec::lifecycle("Stop", r#"{"session_id":"sess-1"}"#).progress(),
+    HookEventSpec::lifecycle("Interrupt", r#"{"session_id":"sess-1","turn_id":"turn-1"}"#)
+        .progress(),
     HookEventSpec::blocking(
         "PermissionRequest",
         r#"{"session_id":"sess-1","tool_name":"shell"}"#,
@@ -1266,6 +1269,7 @@ fn map_codex_lifecycle_signal(
                 .as_ref()
                 .and_then(|p| p.trigger.auto_flag()),
         }),
+        "Interrupt" => Some(LifecycleSignal::TurnInterrupted),
         _ => None,
     }
 }
