@@ -267,8 +267,11 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
             }),
         ),
     ] {
-        assert!(
-            hook_observation(&ClaudeAdapter, event, &payload).is_none(),
+        let observation = hook_lifecycle(&ClaudeAdapter, event, &payload);
+        assert_eq!(observation.agent_id.as_deref(), Some("child-1"), "{event}");
+        assert_eq!(
+            observation.parent_agent_id.as_deref(),
+            Some("sess-parent"),
             "{event}"
         );
     }
@@ -284,6 +287,31 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
     );
     assert_eq!(root_with_equal_id.agent_id.as_deref(), Some("sess-1"));
     assert_eq!(root_with_equal_id.parent_agent_id, None);
+}
+
+#[test]
+fn subagent_blocking_asks_use_child_identity() {
+    for (event, tool_name, expected_kind) in [
+        ("PermissionRequest", "Bash", AskKind::Permission),
+        ("PreToolUse", "AskUserQuestion", AskKind::Question),
+    ] {
+        let observation = hook_lifecycle(
+            &ClaudeAdapter,
+            event,
+            &json!({
+                "session_id": "sess-parent",
+                "agent_id": "child-1",
+                "tool_name": tool_name,
+                "tool_input": {},
+            }),
+        );
+        assert_eq!(observation.agent_id.as_deref(), Some("child-1"));
+        assert_eq!(observation.parent_agent_id.as_deref(), Some("sess-parent"));
+        assert!(matches!(
+            observation.signal,
+            LifecycleSignal::AwaitingInput { kind, .. } if kind == expected_kind
+        ));
+    }
 }
 
 #[test]

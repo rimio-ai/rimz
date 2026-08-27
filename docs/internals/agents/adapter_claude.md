@@ -58,7 +58,7 @@ Esc can end a child without emitting `SubagentStop`. On the parent's next `PostT
 
 ### In-subagent attribution
 
-Claude stamps `agent_id` on *every* payload fired inside a subagent ([claude-reference.md](../../externals/agent-adapter/claude-reference.md)), so attribution is total: only the `Subagent*` brackets fold to the child's rollup, and any other event carrying a distinct `agent_id` — a backgrounded child's `PreToolUse`/`PostToolUse`, an in-subagent `PreCompact`/`PostCompact` — is dropped at the adapter ([`resolve_root_identity`](../../../crates/rimz/src/agents/mod.rs), logged at `debug!`). The lifecycle channel is bracket-grained for children; per-tool child activity rides the child-keyed activity heartbeat ([model.md → Liveness](./model.md#liveness-and-presence)). The drop is load-bearing for attention: folded onto the parent, a backgrounded child's tool events would advance the parent's `last_activity` past `waiting_since` and release its `waiting` row while the parent is still blocked.
+Claude stamps `agent_id` on *every* payload fired inside a subagent ([claude-reference.md](../../externals/agent-adapter/claude-reference.md)), so attribution is total: `Subagent*` brackets and every other event carrying a distinct `agent_id` — a backgrounded child's `PreToolUse`/`PostToolUse`, an in-subagent `PreCompact`/`PostCompact` — fold to the child's rollup. That child-row boundary is load-bearing for attention: folding a backgrounded child's tool events onto the parent would advance the parent's `last_activity` past `waiting_since` and release its `waiting` row while the parent is still blocked. Malformed identities still quarantine rather than risk the parent.
 
 ## Context and transcript
 
