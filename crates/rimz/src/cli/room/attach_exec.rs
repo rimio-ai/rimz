@@ -43,8 +43,28 @@ pub(super) fn run_attach_action(
                 alternate_scroll_bracket_enabled(
                     std::env::var_os(rimz::remote::OUTER_SCROLL_BRACKET_ENV).as_deref(),
                 ),
-            )
+            )?;
+            if std::env::var_os(rimz::remote::REMOTE_LINEAGE_ENV)
+                .is_some_and(|lineage| !lineage.is_empty())
+            {
+                let liveness = rimz::mux::backend_for(mux)
+                    .session_liveness(session_name)
+                    .ok();
+                if let Some(code) = remote_session_lost_exit(liveness) {
+                    std::process::exit(code);
+                }
+            }
+            Ok(())
         }
+    }
+}
+
+fn remote_session_lost_exit(liveness: Option<rimz::mux::SessionLiveness>) -> Option<i32> {
+    match liveness {
+        Some(rimz::mux::SessionLiveness::Exited | rimz::mux::SessionLiveness::Absent) => {
+            Some(rimz::remote::REMOTE_SESSION_LOST_EXIT)
+        }
+        Some(rimz::mux::SessionLiveness::Live) | None => None,
     }
 }
 
@@ -348,6 +368,22 @@ mod tests {
         assert_eq!(ALTERNATE_SCROLL_SAVE, b"\x1b[?1007s");
         assert_eq!(ALTERNATE_SCROLL_DISABLE, b"\x1b[?1007l");
         assert_eq!(ALTERNATE_SCROLL_RESTORE, b"\x1b[?1007r");
+    }
+
+    #[test]
+    fn remote_session_loss_translates_only_missing_sessions() {
+        use rimz::mux::SessionLiveness;
+
+        assert_eq!(remote_session_lost_exit(Some(SessionLiveness::Live)), None);
+        assert_eq!(
+            remote_session_lost_exit(Some(SessionLiveness::Exited)),
+            Some(rimz::remote::REMOTE_SESSION_LOST_EXIT)
+        );
+        assert_eq!(
+            remote_session_lost_exit(Some(SessionLiveness::Absent)),
+            Some(rimz::remote::REMOTE_SESSION_LOST_EXIT)
+        );
+        assert_eq!(remote_session_lost_exit(None), None);
     }
 
     #[cfg(unix)]

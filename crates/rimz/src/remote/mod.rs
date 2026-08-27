@@ -74,6 +74,10 @@ pub const REMOTE_VERSION_INCOMPATIBLE_EXIT: i32 = 66;
 /// The guarded snippet refused a remote workspace path that does not exist.
 pub const REMOTE_PATH_MISSING_EXIT: i32 = 67;
 
+/// A supervised remote mux client exited successfully, but its session no
+/// longer exists.
+pub const REMOTE_SESSION_LOST_EXIT: i32 = 68;
+
 /// What the part after the `:` names on the remote host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RemoteSpec {
@@ -923,6 +927,8 @@ fn env_ms(key: &str) -> Option<Duration> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
     /// ssh exited 0 — the user detached or the remote room closed cleanly.
+    /// A lost remote session is translated to [`REMOTE_SESSION_LOST_EXIT`]
+    /// before ssh returns.
     CleanExit,
     /// Not worth retrying — auth failure, missing remote rimz, a stuck remote
     /// room, or a deliberate kill. Surface the exit and stop.
