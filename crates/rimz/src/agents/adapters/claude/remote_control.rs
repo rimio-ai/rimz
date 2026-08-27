@@ -19,6 +19,7 @@ pub(crate) const CUSTOM_ENDPOINT_BLOCKS_RC_SINCE: CliVersion = CliVersion::new(2
 const FALLBACK_SETTINGS_PATH: &str = "~/.claude/settings.json";
 const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
 const ANTHROPIC_AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
+const CLAUDE_CODE_OAUTH_TOKEN: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
 const THIRD_PARTY_PROVIDER_VARS: [&str; 3] = [
     "CLAUDE_CODE_USE_BEDROCK",
@@ -88,6 +89,7 @@ pub(crate) struct ClaudeRcSettings {
     pub remote_control_at_startup: bool,
     pub api_key_helper: bool,
     pub env_auth_conflict: bool,
+    pub oauth_token_env: bool,
     pub env_endpoint_conflict: bool,
 }
 
@@ -138,6 +140,13 @@ pub(crate) fn rc_settings_from(root: &Map<String, Value>) -> ClaudeRcSettings {
                         .get(ANTHROPIC_AUTH_TOKEN)
                         .is_some_and(setting_value_present)
             }),
+        oauth_token_env: root
+            .get("env")
+            .and_then(Value::as_object)
+            .is_some_and(|env| {
+                env.get(CLAUDE_CODE_OAUTH_TOKEN)
+                    .is_some_and(setting_value_present)
+            }),
         env_endpoint_conflict: root
             .get("env")
             .and_then(Value::as_object)
@@ -153,8 +162,10 @@ pub(crate) fn pane_auto_enabled(settings: &ClaudeRcSettings, version: Option<Cli
     if !settings.remote_control_at_startup || settings.disable_remote_control {
         return false;
     }
-    let auth_conflict =
-        settings.api_key_helper || settings.env_auth_conflict || launch_env_auth_conflict();
+    let auth_conflict = settings.api_key_helper
+        || settings.env_auth_conflict
+        || settings.oauth_token_env
+        || launch_env_auth_conflict();
     if auth_conflict && version.is_some_and(|found| found >= AUTH_ENV_BLOCKS_RC_SINCE) {
         return false;
     }
@@ -162,7 +173,9 @@ pub(crate) fn pane_auto_enabled(settings: &ClaudeRcSettings, version: Option<Cli
 }
 
 fn launch_env_auth_conflict() -> bool {
-    env_value_present(ANTHROPIC_API_KEY) || env_value_present(ANTHROPIC_AUTH_TOKEN)
+    env_value_present(ANTHROPIC_API_KEY)
+        || env_value_present(ANTHROPIC_AUTH_TOKEN)
+        || env_value_present(CLAUDE_CODE_OAUTH_TOKEN)
 }
 
 fn env_value_present(key: &str) -> bool {
@@ -232,6 +245,7 @@ pub enum Issue {
 pub enum AuthConflictSource {
     ApiKeyEnv,
     AuthTokenEnv,
+    OAuthTokenEnv,
     ApiKeyHelperSetting,
     SettingsEnv,
     EndpointEnv,
@@ -243,6 +257,10 @@ impl std::fmt::Display for AuthConflictSource {
         match self {
             Self::ApiKeyEnv => write!(f, "ANTHROPIC_API_KEY in the launch environment"),
             Self::AuthTokenEnv => write!(f, "ANTHROPIC_AUTH_TOKEN in the launch environment"),
+            Self::OAuthTokenEnv => write!(
+                f,
+                "CLAUDE_CODE_OAUTH_TOKEN in the launch environment or Claude settings env"
+            ),
             Self::ApiKeyHelperSetting => write!(f, "apiKeyHelper in Claude settings"),
             Self::SettingsEnv => write!(
                 f,
@@ -307,9 +325,9 @@ impl std::fmt::Display for Issue {
                 "Claude remote-control is enabled (`[remote_control] claude = true`) but \
                  Claude Code disables remote control with the configured authentication \
                  or API endpoint on this version. Conflicting source(s): {}.\n\n\
-                 Remove those auth sources and use a claude.ai login for remote control, \
-                 then re-run, or set `[remote_control] claude = false` to disable the \
-                 Claude host.",
+                 Unset those environment values or remove them from Claude settings, run \
+                 `claude auth login`, then re-run; or set `[remote_control] claude = false` \
+                 to disable the Claude host.",
                 sources
                     .iter()
                     .map(ToString::to_string)
@@ -340,6 +358,7 @@ pub fn readiness(enabled: bool) -> Readiness {
         settings,
         env_value_present(ANTHROPIC_API_KEY),
         env_value_present(ANTHROPIC_AUTH_TOKEN),
+        env_value_present(CLAUDE_CODE_OAUTH_TOKEN),
         launch_endpoint_conflict(),
         remote_consent::read_consent(),
     ) {
@@ -395,6 +414,7 @@ fn readiness_from(
     settings: ClaudeRcSettings,
     env_api_key: bool,
     env_auth_token: bool,
+    env_oauth_token: bool,
     env_endpoint_conflict: bool,
     consent: Option<(PathBuf, remote_consent::ConsentState)>,
 ) -> Result<Vec<String>, Issue> {
@@ -431,6 +451,9 @@ fn readiness_from(
     }
     if env_auth_token {
         sources.push(AuthConflictSource::AuthTokenEnv);
+    }
+    if env_oauth_token || settings.oauth_token_env {
+        sources.push(AuthConflictSource::OAuthTokenEnv);
     }
     if settings.api_key_helper {
         sources.push(AuthConflictSource::ApiKeyHelperSetting);
@@ -527,6 +550,7 @@ mod tests {
         assert!(settings(json!({ "apiKeyHelper": "op read key" })).api_key_helper);
         assert!(settings(json!({ "env": { "ANTHROPIC_API_KEY": "sk-ant" } })).env_auth_conflict);
         assert!(settings(json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "token" } })).env_auth_conflict);
+        assert!(settings(json!({ "env": { "CLAUDE_CODE_OAUTH_TOKEN": "token" } })).oauth_token_env);
         assert!(
             settings(json!({ "env": { "ANTHROPIC_BASE_URL": "https://gateway.example" } }))
                 .env_endpoint_conflict
@@ -545,7 +569,10 @@ mod tests {
                 "disableRemoteControl": false,
                 "remoteControlAtStartup": false,
                 "apiKeyHelper": "",
-                "env": { "ANTHROPIC_API_KEY": "" }
+                "env": {
+                    "ANTHROPIC_API_KEY": "",
+                    "CLAUDE_CODE_OAUTH_TOKEN": ""
+                }
             })),
             ClaudeRcSettings::default()
         );
@@ -612,6 +639,7 @@ mod tests {
         settings: ClaudeRcSettings,
         env_api_key: bool,
         env_auth_token: bool,
+        env_oauth_token: bool,
     ) -> Result<Vec<String>, Issue> {
         readiness_from(
             version,
@@ -619,6 +647,7 @@ mod tests {
             settings,
             env_api_key,
             env_auth_token,
+            env_oauth_token,
             false,
             consent(remote_consent::ConsentState::Seeded),
         )
@@ -645,6 +674,7 @@ mod tests {
             true,
             true,
             true,
+            true,
             consent(remote_consent::ConsentState::Unseeded),
         );
         assert_eq!(
@@ -665,6 +695,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
                 consent(remote_consent::ConsentState::Refused),
             ),
             Err(Issue::ConsentRefused {
@@ -682,6 +713,7 @@ mod tests {
                 v(215),
                 settings_path(),
                 readiness_settings(),
+                false,
                 false,
                 false,
                 false,
@@ -722,7 +754,7 @@ mod tests {
     #[test]
     fn readiness_blocks_old_versions_and_disabled_settings() {
         assert_eq!(
-            decision(v(50), readiness_settings(), false, false),
+            decision(v(50), readiness_settings(), false, false, false),
             Err(Issue::TooOld {
                 found: CliVersion::new(2, 1, 50)
             })
@@ -733,7 +765,7 @@ mod tests {
             ..readiness_settings()
         };
         assert_eq!(
-            decision(v(173), settings, false, false),
+            decision(v(173), settings, false, false, false),
             Err(Issue::RemoteControlDisabled {
                 settings_path: settings_path()
             })
@@ -747,18 +779,47 @@ mod tests {
             env_auth_conflict: true,
             ..readiness_settings()
         };
-        assert!(decision(v(156), settings.clone(), true, true).is_ok());
+        assert!(decision(v(156), settings.clone(), true, true, true).is_ok());
         assert_eq!(
-            decision(v(157), settings, true, true),
+            decision(v(157), settings, true, true, true),
             Err(Issue::AuthConflict {
                 sources: vec![
                     AuthConflictSource::ApiKeyEnv,
                     AuthConflictSource::AuthTokenEnv,
+                    AuthConflictSource::OAuthTokenEnv,
                     AuthConflictSource::ApiKeyHelperSetting,
                     AuthConflictSource::SettingsEnv,
                 ]
             })
         );
+    }
+
+    #[test]
+    fn readiness_blocks_long_lived_oauth_tokens_from_env_or_settings() {
+        assert_eq!(
+            decision(v(247), readiness_settings(), false, false, true),
+            Err(Issue::AuthConflict {
+                sources: vec![AuthConflictSource::OAuthTokenEnv],
+            })
+        );
+
+        let settings = ClaudeRcSettings {
+            oauth_token_env: true,
+            ..readiness_settings()
+        };
+        assert_eq!(
+            decision(v(247), settings, false, false, false),
+            Err(Issue::AuthConflict {
+                sources: vec![AuthConflictSource::OAuthTokenEnv],
+            })
+        );
+
+        let guidance = Issue::AuthConflict {
+            sources: vec![AuthConflictSource::OAuthTokenEnv],
+        }
+        .to_string();
+        assert!(guidance.contains("CLAUDE_CODE_OAUTH_TOKEN"));
+        assert!(guidance.contains("claude auth login"));
     }
 
     #[test]
@@ -774,6 +835,7 @@ mod tests {
                 settings.clone(),
                 false,
                 false,
+                false,
                 true,
                 consent(remote_consent::ConsentState::Seeded),
             )
@@ -784,6 +846,7 @@ mod tests {
                 v(196),
                 settings_path(),
                 settings,
+                false,
                 false,
                 false,
                 true,
@@ -804,14 +867,14 @@ mod tests {
             api_key_helper: true,
             ..readiness_settings()
         };
-        assert!(decision(None, settings, true, false).is_ok());
+        assert!(decision(None, settings, true, false, true).is_ok());
 
         let settings = ClaudeRcSettings {
             disable_remote_control: true,
             ..readiness_settings()
         };
         assert_eq!(
-            decision(None, settings, false, false),
+            decision(None, settings, false, false, false),
             Err(Issue::RemoteControlDisabled {
                 settings_path: settings_path()
             })
