@@ -277,7 +277,7 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     session_end: ConcernCoverage::Partial {
         via: "pane liveness + rollup reaper",
-        gap: "SessionEnd fires on idle unload; cleared on a snapshot tick, not at session exit",
+        gap: "SessionEnd hook fires on idle unload; cleared on a snapshot tick, not at session exit",
     },
     idle_notification: ConcernCoverage::Partial {
         via: "turn-end + request_user_input + stall window",
@@ -356,7 +356,7 @@ const CODEX_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     },
     ended: HookCoverage::Derived {
         via: "pane liveness + rollup reaper",
-        gap: "SessionEnd fires on idle unload; cleared on a snapshot tick, not at session exit",
+        gap: "SessionEnd hook fires on idle unload; cleared on a snapshot tick, not at session exit",
     },
     lost: HookCoverage::Derived {
         via: "rimz exec wrapper",
