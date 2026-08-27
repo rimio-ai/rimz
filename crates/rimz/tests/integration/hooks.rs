@@ -273,6 +273,55 @@ fn session_start_hooks_write_lifecycle_rows() {
 }
 
 #[test]
+fn claude_price_book_capacity_does_not_replace_an_established_window() {
+    let env = Env::new();
+    let pricing = env.runtime_paths().shared_pricing_cache_path();
+    std::fs::create_dir_all(pricing.parent().unwrap()).unwrap();
+    std::fs::write(
+        pricing,
+        r#"{"schema":4,"models":{"claude-sonnet-native":{"input":0.000003,"output":0.000015,"cache_read":0.0000003,"cache_create":0.00000375,"cache_read_explicit":true,"fast_multiplier":1.0,"max_input_tokens":200000}}}"#,
+    )
+    .unwrap();
+    let transcript = env.project_root.join("claude-native-window.jsonl");
+    std::fs::write(
+        &transcript,
+        r#"{"type":"assistant","message":{"model":"claude-sonnet-native","usage":{"input_tokens":100000,"output_tokens":500}}}"#,
+    )
+    .unwrap();
+    let transcript_path = transcript.to_string_lossy().into_owned();
+
+    for payload in [
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "sess-native-window",
+            "source": "startup",
+            "model": "claude-sonnet-native[1m]",
+            "transcript_path": transcript_path.clone(),
+        }),
+        json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess-native-window",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "src/lib.rs"},
+            "tool_response": {},
+            "transcript_path": transcript_path,
+        }),
+    ] {
+        let output = env.run_hook("claude", &payload.to_string());
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            env.snapshot_json()["agents"][0]["context_window"],
+            1_000_000,
+            "a marker-less event must retain the provider-established capacity"
+        );
+    }
+}
+
+#[test]
 fn kimi_subagent_join_surfaces_children_and_suppresses_child_stops() {
     let env = Env::new();
     let session_id = "session-kimi-parent";
