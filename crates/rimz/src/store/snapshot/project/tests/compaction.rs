@@ -262,7 +262,7 @@ fn failed_compaction_preserves_the_turn_boundary() {
 
     assert_eq!(agents[0].status, AgentStatus::Running);
     assert!(agents[0].compacting_since.is_none());
-    assert_eq!(agents[0].compaction_count, 1);
+    assert_eq!(agents[0].compaction_count, 0);
     assert_eq!(agents[0].turn_started_at, Some(expected_boundary));
 }
 

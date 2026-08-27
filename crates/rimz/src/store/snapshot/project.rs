@@ -779,7 +779,13 @@ fn lifecycle_projection(
     } else {
         None
     };
-    let compaction_count = prior.map_or(0, |p| p.compaction_count) + u32::from(compaction_closed);
+    let completed_compaction = compaction_closed
+        && !matches!(
+            signal,
+            lifecycle::LifecycleSignal::CompactionEnded { failed: true, .. }
+        );
+    let compaction_count =
+        prior.map_or(0, |p| p.compaction_count) + u32::from(completed_compaction);
     let mut tool_calls = prior.map_or_else(BTreeMap::new, |p| p.tool_calls.clone());
     if let lifecycle::LifecycleSignal::ToolUsed {
         name: Some(name), ..

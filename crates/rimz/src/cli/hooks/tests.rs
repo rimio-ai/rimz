@@ -969,7 +969,6 @@ fn pi_compaction_failure_closes_the_active_bracket() {
         serde_json::json!({
             "session_id": "compact-session",
             "compaction_reason": "manual",
-            "will_retry": false,
         }),
     );
 
@@ -981,7 +980,7 @@ fn pi_compaction_failure_closes_the_active_bracket() {
         .unwrap();
     assert_eq!(agent.status, rimz::agents::AgentStatus::Running);
     assert!(agent.compacting_since.is_none());
-    assert_eq!(agent.compaction_count, 1);
+    assert_eq!(agent.compaction_count, 0);
 }
 
 #[test]

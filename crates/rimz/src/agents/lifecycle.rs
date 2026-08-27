@@ -496,7 +496,8 @@ fn map_status(
             }
             other => other.unwrap_or(AgentStatus::Idle),
         },
-        LifecycleSignal::CompactionEnded { failed: true, .. } => {
+        LifecycleSignal::CompactionEnded { failed: true, .. }
+        | LifecycleSignal::CompactionEnded { auto: None, .. } => {
             if prior_status == Some(AgentStatus::Waiting) {
                 AgentStatus::Running
             } else {
@@ -517,16 +518,6 @@ fn map_status(
             Some(AgentStatus::Running) | None => AgentStatus::Idle,
             Some(resting) => resting,
         },
-        LifecycleSignal::CompactionEnded {
-            auto: None,
-            failed: false,
-        } => {
-            if prior_status == Some(AgentStatus::Waiting) {
-                AgentStatus::Running
-            } else {
-                prior_status.unwrap_or(AgentStatus::Idle)
-            }
-        }
         // Handled above.
         LifecycleSignal::Ended | LifecycleSignal::Lost => {
             unreachable!("terminal side-channel signals return early")
