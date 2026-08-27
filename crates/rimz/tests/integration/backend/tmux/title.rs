@@ -11,9 +11,9 @@ fn window_names_keep_literal_hashes() {
 
     server
         .backend
-        .rename_tab(session, &anchor, "#health ✓")
+        .rename_tab(session, &anchor, "#health ready")
         .expect("rename window");
-    assert_eq!(server.window_names(session), ["#health ✓"]);
+    assert_eq!(server.window_names(session), ["#health ready"]);
 
     server
         .backend
