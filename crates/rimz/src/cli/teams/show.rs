@@ -130,20 +130,20 @@ fn write_report(w: &mut impl Write, report: &TeamReport, lane: Option<&str>) -> 
         writeln!(w, "Resume: rimz teams resume {}", report.name)?;
         return Ok(());
     }
-    if let Some((handle, channel)) = reach_target(report, lane) {
+    if let Some((handle, channel)) = live_target(report) {
         writeln!(
             w,
             "Reach: rimz message @{}#{} '<text>'",
             handle.trim_start_matches('@'),
             channel
         )?;
+        writeln!(w, "Focus: rimz teams focus {}#{}", report.name, channel)?;
     }
-    writeln!(w, "Focus: rimz teams focus {}", report.name)?;
     Ok(())
 }
 
-fn reach_target<'a>(report: &'a TeamReport, lane: Option<&str>) -> Option<(&'a str, &'a str)> {
-    if report.instances.len() != 1 && lane.is_none() {
+fn live_target(report: &TeamReport) -> Option<(&str, &str)> {
+    if report.instances.len() != 1 {
         return None;
     }
     let instance = report.instances.first()?;
@@ -266,10 +266,12 @@ mod tests {
     fn human_show_omits_ambiguous_reach_hint() {
         let mut second = live_instance();
         second.channel = "feat-y".to_owned();
+        let report = report(vec![live_instance(), second]);
 
-        let output = rendered(&report(vec![live_instance(), second]), None);
-
-        assert!(!output.contains("Reach:"));
-        assert!(output.contains("Focus: rimz teams focus forge"));
+        for lane in [None, Some("feat-x")] {
+            let output = rendered(&report, lane);
+            assert!(!output.contains("Reach:"));
+            assert!(!output.contains("Focus:"));
+        }
     }
 }

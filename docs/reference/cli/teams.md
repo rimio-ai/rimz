@@ -39,23 +39,23 @@ rimz teams show forge --json
 When a role has system-prompt files, the human report points to `--json`, whose `system_prompt_file` and `append_system_prompt_files` fields expose the complete resolved stack.
 Live instances include the lane, member handle and status, context fill, and tracked session cost.
 Use `team#worktree` or `-w NAME` to narrow the live section by exact lane or member worktree; an ended or not-yet-live lane reports that no instance is live and still exits successfully.
-The report ends with copy-ready launch and resume forms when no instance is live, or reach and focus forms for a live cohort.
+The report ends with copy-ready launch and resume forms when no instance is live, or lane-qualified reach and focus forms when exactly one live cohort is shown.
 
 ## Launch a team
 
 ```sh
 rimz teams forge
-rimz teams launch forge
-rimz teams launch forge#feat-rate-limits "add rate limiting"
+rimz teams forge#feat-rate-limits "add rate limiting"
 rimz teams forge -w feat-rate-limits "add rate limiting"
 rimz teams forge --channel triage
 rimz teams forge --from-pr 91 --bg
+rimz teams launch forge
 ```
 
 The bare-name form and `launch` verb accept a configured team name and send an optional trailing prompt to its configured leader.
 It uses the same launch and relaunch-reconciliation path as `rimz agents <team>`, including worktree creation, channel placement, pull-request checkout, and existing-cohort focus or recovery.
 When an agent launches a team, its members are top-level peers rather than children of the caller.
-After opening the panes, a fresh launch prints the minted member handles as `starting`, marks the configured leader, and includes copy-ready `Check` and `Reach` commands.
+After opening the panes, a fresh launch prints the minted member handles as `starting`, marks the effective leader, and includes copy-ready `Check` and `Reach` commands.
 Members report their live status asynchronously, so `rimz teams show team#worktree` remains the source of truth rather than the receipt.
 
 `rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend.

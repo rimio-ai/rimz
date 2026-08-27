@@ -60,7 +60,7 @@ The plain install preserves a same-named directory in `~/.agents/teams`; pass `-
 Launch the team into an isolated worktree and hand the task to the planner — type into its pane, or message it:
 
 ```sh
-rimz teams launch forge -w feat-complex
+rimz teams forge -w feat-complex
 rimz message @planner#feat-complex "add rate limiting to the ingest API"
 ```
 

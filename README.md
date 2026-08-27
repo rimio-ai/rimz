@@ -160,7 +160,7 @@ rimz agents codex --from-pr 42                 # worktree checked out from a pul
 ```sh
 rimz agents claude:planner,codex:coder -w feat-once   # one-off roles without agents.toml
 rimz teams install forge                              # release-matched shipped team
-rimz teams launch forge -w feat-complex               # planner, coder, reviewer on one feature
+rimz teams forge -w feat-complex                      # planner, coder, reviewer on one feature
 ```
 
 ### Steer the fleet

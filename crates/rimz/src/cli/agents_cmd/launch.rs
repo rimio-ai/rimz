@@ -668,11 +668,12 @@ fn write_launch_receipt(
         .map(|identity| identity.kind.as_str().len())
         .max()
         .unwrap_or(0);
+    let receipt_leader = leader.or_else(|| identities.first().map(launch_identity_handle));
     for identity in identities {
         let identity_handle = launch_identity_handle(identity);
         let handle = format!("@{:<handle_width$}", launch_identity_handle(identity));
         let kind = format!("{:<kind_width$}", identity.kind.as_str());
-        let leader_marker = if leader == Some(identity_handle) {
+        let leader_marker = if receipt_leader == Some(identity_handle) {
             render::paint(render::palette::muted(), "  · leader")
         } else {
             String::new()
@@ -741,6 +742,7 @@ fn write_resume_receipt(
     leader: Option<&str>,
 ) -> Result<()> {
     report_cohort_resume(w, plan)?;
+    writeln!(w)?;
     write_launch_hints(
         w,
         team,
@@ -940,7 +942,36 @@ mod tests {
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("launched @worker (/repo)"));
         assert!(!output.contains("Check:"));
+        assert!(output.contains("· leader"));
         assert!(output.contains("Reach: rimz message @worker '<text>'"));
+    }
+
+    #[test]
+    fn team_launch_receipt_marks_the_implicit_leader() {
+        let identities = [
+            launch_identity("claude", "planner"),
+            launch_identity("codex", "coder"),
+        ];
+        let mut output = anstream::StripStream::new(Vec::new());
+
+        write_launch_receipt(
+            &mut output,
+            Some("forge"),
+            Some("feat-x"),
+            Path::new("/repo-worktrees/feat-x"),
+            &identities,
+            None,
+        )
+        .unwrap();
+
+        let output = String::from_utf8(output.into_inner()).unwrap();
+        let planner = output
+            .lines()
+            .find(|line| line.contains("@planner"))
+            .unwrap();
+        let coder = output.lines().find(|line| line.contains("@coder")).unwrap();
+        assert!(planner.contains("· leader"));
+        assert!(!coder.contains("· leader"));
     }
 
     #[test]
@@ -960,6 +991,7 @@ mod tests {
         let mut output = Vec::new();
         write_resume_receipt(&mut output, &plan, None, Some("feat-x"), &[], None).unwrap();
         let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("\n\nReach:"));
         assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
     }
 

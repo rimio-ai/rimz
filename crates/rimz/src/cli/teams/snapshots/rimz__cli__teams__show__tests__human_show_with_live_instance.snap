@@ -17,4 +17,4 @@ Live instances
   #feat-x  @planner  running  42%  $0.25
 
 Reach: rimz message @planner#feat-x '<text>'
-Focus: rimz teams focus forge
+Focus: rimz teams focus forge#feat-x
