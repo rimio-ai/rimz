@@ -1158,8 +1158,27 @@ fn supervised_connect_restores_tty_and_resets_emulator_after_retry() {
     );
     assert_eq!(
         output.matches(rimz::remote::tty::EMULATOR_RESET).count(),
+        2,
+        "every completed session resets the emulator: {output:?}"
+    );
+    assert_shell_tty(&settings);
+}
+
+#[test]
+fn supervised_clean_exit_resets_emulator() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let pair = remote_connect_pty();
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.env("RIMZ_TEST_SSH_RAW_TTY", "1");
+
+    let (output, settings) = run_pty_command(pair, cmd);
+
+    assert_eq!(main_invocation_count(&log), 1, "one attach: {output}");
+    assert_eq!(
+        output.matches(rimz::remote::tty::EMULATOR_RESET).count(),
         1,
-        "only the dropped session resets the emulator: {output:?}"
+        "the cleanly detached session resets the emulator: {output:?}"
     );
     assert_shell_tty(&settings);
 }
