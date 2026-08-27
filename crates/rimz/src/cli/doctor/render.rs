@@ -566,6 +566,11 @@ fn session_health_cell(tally: &mut Tally, health: &Probe<SessionHealth>) -> Cell
             Health::Alarm,
             format!("stuck (resurrected/suspended panes) — {fix}"),
         ),
+        Probe::Ready(SessionHealth::Unresponsive { fix }) => verdict(
+            tally,
+            Health::Alarm,
+            format!("live but not responding — {fix}"),
+        ),
     }
 }
 

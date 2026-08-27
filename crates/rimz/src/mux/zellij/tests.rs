@@ -16,8 +16,8 @@ use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, Top
 #[cfg(unix)]
 use crate::mux::{
     LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, PaneReadConsistency,
-    ReconcilePaneRole, SidebarLiveness, SidebarPaneOptions, SidebarWidth, SplitDirection,
-    SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthSyncOptions,
+    ReconcilePaneRole, SessionHealth, SidebarLiveness, SidebarPaneOptions, SidebarWidth,
+    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthSyncOptions,
 };
 #[cfg(unix)]
 use crate::sidebar::cache::write_pane_topology_cache;
@@ -138,6 +138,63 @@ fn readonly_attach_relies_on_the_broadcast_ttyd_input_boundary() {
     let spec = ZellijBackend::new().attach_readonly_command("rimz-test");
 
     assert_eq!(spec.args, ["attach", "rimz-test"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn live_session_that_fails_native_probe_is_unresponsive() {
+    let room = TestRoom::new();
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
+case " $* " in
+  *" action list-panes --all --json "*) exit 1 ;;
+esac
+exit 0
+"#,
+    );
+
+    let health = room
+        .backend(&shim)
+        .ensure_clean_session(&room.sidebar_options(120), None)
+        .expect("classify live session");
+
+    assert_eq!(health, SessionHealth::Unresponsive);
+    assert_eq!(
+        command_count(&shim_log(&temp), "action list-panes --all --json"),
+        2,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn live_session_native_probe_retries_a_transient_failure() {
+    let room = TestRoom::new();
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); log="$dir/zellij.log"; marker="$dir/probe-failed"
+printf '%s\n' "$*" >> "$log"
+if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
+case " $* " in
+  *" action list-panes --all --json "*)
+    if [ ! -e "$marker" ]; then : > "$marker"; exit 1; fi
+    printf '[]\n'; exit 0 ;;
+esac
+exit 0
+"#,
+    );
+
+    let health = room
+        .backend(&shim)
+        .ensure_clean_session(&room.sidebar_options(120), None)
+        .expect("classify live session");
+
+    assert_eq!(health, SessionHealth::Healthy);
+    assert_eq!(
+        command_count(&shim_log(&temp), "action list-panes --all --json"),
+        2,
+    );
 }
 
 #[cfg(unix)]

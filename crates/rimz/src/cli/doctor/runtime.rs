@@ -404,14 +404,18 @@ fn collect_session_health(
     session_name: &str,
 ) -> model::Probe<model::SessionHealth> {
     match backend.probe_session_health(session_name) {
-        // `probe_session_health` never returns `Reborn` (it does not mutate), so
-        // the live verdict is just clean-or-stuck.
+        // `probe_session_health` never returns `Reborn` (it does not mutate).
         Ok(SessionHealth::Healthy | SessionHealth::Reborn) => {
             model::Probe::Ready(model::SessionHealth::Ok)
         }
         Ok(SessionHealth::Stuck) => model::Probe::Ready(model::SessionHealth::Stuck {
             fix: "run `rimz reset` to rebuild".to_owned(),
         }),
+        Ok(SessionHealth::Unresponsive) => {
+            model::Probe::Ready(model::SessionHealth::Unresponsive {
+                fix: "run `rimz reset` to rebuild".to_owned(),
+            })
+        }
         Err(err) => model::Probe::Unavailable {
             error: err.to_string(),
         },

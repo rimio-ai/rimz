@@ -224,8 +224,15 @@ impl RoomContext {
         daemon: Option<&DaemonView>,
         recovery: AttendedRecovery,
     ) -> Result<Option<RoomResetReport>> {
-        if self.clean_session(sidebar, daemon)? != SessionHealth::Stuck {
-            return Ok(None);
+        match self.clean_session(sidebar, daemon)? {
+            SessionHealth::Healthy | SessionHealth::Reborn => return Ok(None),
+            SessionHealth::Unresponsive => anyhow::bail!(
+                "The '{}' Zellij room is live but not responding to Zellij control commands.\n\
+                 Attaching could open a black screen, so RimZ left the room untouched.\n\
+                 Run `rimz doctor` to inspect it or `rimz reset` to rebuild it (destructive; prompts first).",
+                self.workspace.session_name,
+            ),
+            SessionHealth::Stuck => {}
         }
         if recovery == AttendedRecovery::RequireExplicitReset {
             anyhow::bail!(
@@ -238,7 +245,7 @@ impl RoomContext {
         let reset = self.reset(false)?;
         match self.clean_session(sidebar, daemon) {
             Ok(SessionHealth::Healthy | SessionHealth::Reborn) => Ok(Some(reset)),
-            Ok(SessionHealth::Stuck) => Err(ResetRecoveryError {
+            Ok(SessionHealth::Stuck | SessionHealth::Unresponsive) => Err(ResetRecoveryError {
                 report: reset,
                 message: "the room is still stuck after a reset; inspect with `rimz doctor`"
                     .to_owned(),
