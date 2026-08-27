@@ -116,6 +116,59 @@ fn unresponsive_foreign_zellij_session_names_native_recovery_and_bypass() {
 }
 
 #[test]
+fn unresponsive_zellij_session_with_unknown_ownership_avoids_destroy_guidance() {
+    let env = Env::new();
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    env.store()
+        .record_room_bin(
+            &workspace,
+            std::env::current_exe().expect("current test binary"),
+            "test".to_owned(),
+        )
+        .expect("record managed room");
+
+    let workspaces = env.state_root().join("rimz/workspaces");
+    let hidden_workspaces = env.state_root().join("rimz/workspaces-hidden");
+    fs::rename(&workspaces, &hidden_workspaces).expect("hide workspace records");
+    fs::write(&workspaces, b"not a directory").expect("block workspace record lookup");
+
+    let shim = FakeZellij::new();
+    let output = env
+        .rimz()
+        .args([
+            "--mux",
+            "zellij",
+            "attach",
+            workspace.session_name.as_str(),
+            "--print",
+        ])
+        .env("PATH", shim.bin_dir.path())
+        .env("RIMZ_ZELLIJ_BIN", &shim.bin)
+        .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
+        .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "100")
+        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .expect("run rimz attach");
+
+    fs::remove_file(&workspaces).expect("remove lookup blocker");
+    fs::rename(&hidden_workspaces, &workspaces).expect("restore workspace records");
+
+    assert!(!output.status.success(), "unresponsive attach must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("could not determine whether this session is managed"),
+        "stderr: {stderr}",
+    );
+    assert!(stderr.contains("rimz doctor"), "stderr: {stderr}");
+    assert!(
+        stderr.contains(&format!("zellij attach '{}'", workspace.session_name)),
+        "stderr: {stderr}",
+    );
+    assert!(!stderr.contains("delete-session"), "stderr: {stderr}");
+    assert!(!stderr.contains("rimz reset"), "stderr: {stderr}");
+}
+
+#[test]
 fn attach_retries_transient_zellij_session_listing_before_default_mux_fallback() {
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");

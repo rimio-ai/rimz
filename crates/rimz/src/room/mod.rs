@@ -242,11 +242,12 @@ impl RoomContext {
     /// Probe a selected backend before first-run config can construct final context.
     /// Refuses an unresponsive live session immediately; other live verdicts
     /// are returned for reuse by the birth gate, while absent and exited
-    /// sessions return `None`.
+    /// sessions return `None`. The nested workspace-record result preserves
+    /// managed, foreign, and unknown ownership for safe recovery guidance.
     pub fn preflight_live_session(
         mux: MuxName,
         session_name: &str,
-        workspace_id: Option<&WorkspaceId>,
+        workspace_record_id: std::result::Result<Option<&WorkspaceId>, ()>,
     ) -> Result<Option<SessionHealth>> {
         let backend = crate::mux::backend_for(mux);
         if !backend
@@ -257,10 +258,10 @@ impl RoomContext {
             return Ok(None);
         }
         let health = backend.probe_session_health(session_name)?;
-        let ownership = if workspace_id.is_some() {
-            SessionOwnership::Managed
-        } else {
-            SessionOwnership::External
+        let ownership = match workspace_record_id {
+            Ok(Some(_)) => SessionOwnership::Managed,
+            Ok(None) => SessionOwnership::External,
+            Err(()) => SessionOwnership::Unknown,
         };
         classify_preflight_health(session_name, ownership, health)
     }
@@ -437,6 +438,7 @@ impl RoomContext {
 enum SessionOwnership {
     Managed,
     External,
+    Unknown,
 }
 
 fn classify_preflight_health(
@@ -458,6 +460,12 @@ fn unresponsive_error(session_name: &str, ownership: SessionOwnership) -> anyhow
             let session_name = shell_quote(session_name);
             format!(
                 "This session is not RimZ-managed. Run `zellij delete-session --force {session_name}` to destroy it without a confirmation prompt, or `zellij attach {session_name}` to bypass RimZ if you insist."
+            )
+        }
+        SessionOwnership::Unknown => {
+            let session_name = shell_quote(session_name);
+            format!(
+                "RimZ could not determine whether this session is managed. Run `rimz doctor` to inspect it, or `zellij attach {session_name}` to bypass RimZ if you choose to attach directly."
             )
         }
     };
@@ -608,5 +616,12 @@ mod tests {
         assert!(external.contains("without a confirmation prompt"));
         assert!(!external.contains("rimz reset"));
         assert!(!external.contains("prompts first"));
+
+        let unknown = unresponsive_error("rimz-demo", SessionOwnership::Unknown).to_string();
+        assert!(unknown.contains("could not determine whether this session is managed"));
+        assert!(unknown.contains("`rimz doctor`"));
+        assert!(unknown.contains("`zellij attach 'rimz-demo'`"));
+        assert!(!unknown.contains("delete-session"));
+        assert!(!unknown.contains("rimz reset"));
     }
 }
