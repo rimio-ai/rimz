@@ -99,10 +99,6 @@ impl RoomContext {
                     (cwd, None, None, None, None, recovery, true)
                 }
             };
-        if matches!(preflight_health, Some(SessionHealth::Unresponsive)) {
-            return Err(super::unresponsive_error(&self.workspace.session_name));
-        }
-
         let pre_existed = match self.backend.list_sessions() {
             Ok(sessions) => sessions
                 .iter()
@@ -243,7 +239,10 @@ impl RoomContext {
         match health {
             SessionHealth::Healthy | SessionHealth::Reborn => return Ok(None),
             SessionHealth::Unresponsive => {
-                return Err(super::unresponsive_error(&self.workspace.session_name));
+                return Err(super::unresponsive_error(
+                    &self.workspace.session_name,
+                    super::SessionOwnership::Managed,
+                ));
             }
             SessionHealth::Stuck => {}
         }
