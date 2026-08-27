@@ -6,6 +6,7 @@ const EXPECTED_EVENTS: &[&str] = &[
     "SubagentStart",
     "SubagentStop",
     "Stop",
+    "Interrupt",
     "PermissionRequest",
     "PreToolUse",
     "PostToolUse",
@@ -27,6 +28,14 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
     // from the stdin payload's `hook_event_name`).
     let text = std::fs::read_to_string(&path).unwrap();
     insta::assert_snapshot!(text, @r###"
+        [[hooks.Interrupt]]
+
+        [[hooks.Interrupt.hooks]]
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
+        statusMessage = "Routing Interrupt through RimZ"
+        timeout = 1
+        type = "command"
+
         [[hooks.PermissionRequest]]
         matcher = ".*"
 

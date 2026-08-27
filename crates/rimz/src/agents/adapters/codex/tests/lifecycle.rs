@@ -124,6 +124,11 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
                 parked_on_background: false,
             }),
         ),
+        (
+            "Interrupt",
+            json!({"session_id":"s","turn_id":"turn-1"}),
+            Some(TurnInterrupted),
+        ),
     ];
     for (event, payload, expected) in cases {
         let signal = hook_observation(&CodexAdapter, event, payload).map(|obs| obs.signal);

@@ -11,8 +11,8 @@ use crate::agents::{
 use crate::store::atomic;
 
 use super::{
-    CODEX_HOOK_TIMEOUT_SECS, CODEX_HOOKS, HOOKS_TABLE, RIMZ_BLOCK, RIMZ_HOOK_COMMAND,
-    RIMZ_HOOK_MARKER,
+    CODEX_HOOK_TIMEOUT_SECS, CODEX_HOOKS, CODEX_INTERRUPT_HOOK_TIMEOUT_SECS, HOOKS_TABLE,
+    RIMZ_BLOCK, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER,
 };
 
 pub(super) static MANAGED_INTEGRATION: CodexManagedIntegration = CodexManagedIntegration;
@@ -266,7 +266,11 @@ fn insert_rimz_hook_group(root: &mut toml::Table, event: &str, matcher: Option<&
     );
     handler.insert(
         "timeout".to_owned(),
-        toml::Value::Integer(CODEX_HOOK_TIMEOUT_SECS),
+        toml::Value::Integer(if event == "Interrupt" {
+            CODEX_INTERRUPT_HOOK_TIMEOUT_SECS
+        } else {
+            CODEX_HOOK_TIMEOUT_SECS
+        }),
     );
     handler.insert(
         "statusMessage".to_owned(),
