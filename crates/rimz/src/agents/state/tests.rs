@@ -191,7 +191,7 @@ fn tool_calls_round_trip_and_default_for_legacy_state() {
 fn activity_description_prefers_rich_context_then_fallbacks() {
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     agent.prompt = Some("latest prompt".to_owned());
-    agent.first_prompt = Some("first prompt".to_owned());
+    agent.first_prompt = Some("first prompt with detail".to_owned());
     agent.task = Some("live task".to_owned());
     agent.description = Some("launch label".to_owned());
     agent.context = Some(AgentContext {
@@ -201,6 +201,10 @@ fn activity_description_prefers_rich_context_then_fallbacks() {
     });
 
     assert_eq!(agent.activity_description(), Some("thread name"));
+    agent.context.as_mut().unwrap().session_name = Some("first\n  prompt".to_owned());
+    assert_eq!(agent.activity_description(), Some("thread preview"));
+    agent.context.as_mut().unwrap().session_name = Some("First prompt".to_owned());
+    assert_eq!(agent.activity_description(), Some("First prompt"));
     agent.context.as_mut().unwrap().session_name = None;
     assert_eq!(agent.activity_description(), Some("thread preview"));
     agent.context = None;
@@ -208,9 +212,25 @@ fn activity_description_prefers_rich_context_then_fallbacks() {
     agent.description = None;
     assert_eq!(agent.activity_description(), Some("live task"));
     agent.task = None;
-    assert_eq!(agent.activity_description(), Some("first prompt"));
+    assert_eq!(
+        agent.activity_description(),
+        Some("first prompt with detail")
+    );
     agent.first_prompt = None;
     assert_eq!(agent.activity_description(), Some("latest prompt"));
+}
+
+#[test]
+fn activity_description_checks_latest_prompt_when_first_prompt_is_absent() {
+    let mut agent = test_agent(AgentStatus::Running, 1_000);
+    agent.prompt = Some("latest prompt with detail".to_owned());
+    agent.context = Some(AgentContext {
+        session_name: Some("latest\tprompt".to_owned()),
+        session_preview: Some("thread preview".to_owned()),
+        ..AgentContext::new("codex", Timestamp::from_second(1_000).unwrap())
+    });
+
+    assert_eq!(agent.activity_description(), Some("thread preview"));
 }
 
 #[test]

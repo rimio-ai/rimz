@@ -859,9 +859,9 @@ impl AgentState {
         state
     }
 
-    /// One-line activity label for CLI and sidebar rows: rich session name,
-    /// rich session preview, launch description, live task, first prompt, then
-    /// latest prompt.
+    /// One-line activity label for CLI and sidebar rows: a rich session name
+    /// that does not merely prefix the prompt, rich session preview, launch
+    /// description, live task, first prompt, then latest prompt.
     pub fn activity_description(&self) -> Option<&str> {
         select_activity_description(
             self.context.as_ref(),
@@ -1069,6 +1069,15 @@ fn looks_like_control_text(value: &str) -> bool {
         .any(|tag| trimmed.starts_with(tag))
 }
 
+fn session_name_is_prompt_prefix(value: &str, prompt: Option<&str>) -> bool {
+    let Some(value) = single_line_description(value) else {
+        return false;
+    };
+    prompt
+        .and_then(single_line_description)
+        .is_some_and(|prompt| prompt.starts_with(&value))
+}
+
 pub(crate) fn select_activity_description<'a>(
     context: Option<&'a AgentContext>,
     description: Option<&'a str>,
@@ -1079,6 +1088,7 @@ pub(crate) fn select_activity_description<'a>(
     context
         .and_then(|context| context.session_name.as_deref())
         .filter(|value| usable_description(value))
+        .filter(|value| !session_name_is_prompt_prefix(value, first_prompt.or(prompt)))
         .or_else(|| {
             context
                 .and_then(|context| context.session_preview.as_deref())
