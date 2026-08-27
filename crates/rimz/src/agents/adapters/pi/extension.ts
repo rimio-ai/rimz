@@ -141,10 +141,15 @@ export default function rimz(pi) {
           name = entry.name;
         }
         const message = entry?.message;
-        if (message?.role !== "assistant") continue;
-        lastUsage = message.usage ?? lastUsage;
-        const messageCost = numberMaybe(message?.usage?.cost?.total);
-        if (messageCost != null && messageCost > 0) cost += messageCost;
+        if (message?.role === "assistant") lastUsage = message.usage ?? lastUsage;
+        const usage =
+          entry?.type === "message" && ["assistant", "toolResult"].includes(message?.role)
+            ? message?.usage
+            : ["compaction", "branch_summary"].includes(entry?.type)
+              ? entry?.usage
+              : undefined;
+        const entryCost = numberMaybe(usage?.cost?.total);
+        if (entryCost != null && entryCost > 0) cost += entryCost;
       }
       if (cost > 0) costBySession.set(id, cost);
       if (lastUsage) recordUsage(id, lastUsage);
@@ -375,12 +380,13 @@ export default function rimz(pi) {
     verdictBySession.delete(id);
   });
   pi.on("turn_end", (ev, ctx) => {
-    const messages = Array.isArray(ev?.messages) ? ev.messages : [];
-    const last = messages.filter((m) => m?.role === "assistant").at(-1);
-    const usage = ev?.usage ?? last?.usage ?? ev?.message?.usage;
     const id = sessionId(ctx);
+    const usage = ev?.message?.usage;
     recordUsage(id, usage);
     addSessionCost(id, usage);
+    for (const toolResult of Array.isArray(ev?.toolResults) ? ev.toolResults : []) {
+      addSessionCost(id, toolResult?.usage);
+    }
     feed("turn_end", ctx, {});
   });
   pi.on("after_provider_response", (ev, ctx) => {
@@ -388,6 +394,9 @@ export default function rimz(pi) {
     feed("after_provider_response", ctx, {});
   });
   pi.on("message_update", (_ev, ctx) => pushMessageUpdate(ctx));
+  pi.on("session_tree", (ev, ctx) =>
+    addSessionCost(sessionId(ctx), ev?.summaryEntry?.usage),
+  );
   pi.on("session_info_changed", (ev, ctx) => {
     const id = sessionId(ctx);
     const name = ev?.session_info?.name ?? ev?.sessionInfo?.name ?? ev?.name;
@@ -415,12 +424,13 @@ export default function rimz(pi) {
       compaction_will_retry: ev?.willRetry,
     }),
   );
-  pi.on("session_compact", (ev, ctx) =>
+  pi.on("session_compact", (ev, ctx) => {
+    addSessionCost(sessionId(ctx), ev?.compactionEntry?.usage);
     feed("session_compact", ctx, {
       compaction_reason: ev?.reason,
       compaction_will_retry: ev?.willRetry,
-    }),
-  );
+    });
+  });
   pi.on("session_compact_failed", (ev, ctx) =>
     feed("session_compact_failed", ctx, {
       compaction_reason: ev?.reason,
