@@ -461,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn native_session_end_removes_context_without_lifecycle_identity() {
+    fn native_child_session_end_keeps_root_context_cleanup_identity() {
         let (_dir, store) = test_store();
         let mut decoded = rimz::agents::definition_by_kind("claude")
             .unwrap()
@@ -474,7 +474,11 @@ mod tests {
             )
             .expect("session end decodes");
         assert!(decoded.ends_session());
-        assert!(decoded.lifecycle().is_none());
+        let observation = decoded
+            .lifecycle()
+            .expect("child session end has lifecycle identity");
+        assert_eq!(observation.agent_id.as_deref(), Some("foreign-child"));
+        assert_eq!(observation.parent_agent_id.as_deref(), Some("root-session"));
         assert_eq!(
             decoded
                 .context_agent_id()
