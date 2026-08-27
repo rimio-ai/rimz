@@ -2,7 +2,9 @@
 
 > This doc mirrors OpenCode ahead of its adapter, the path [pi-reference.md](./pi-reference.md) proved. The mapping onto RimZ's internal types lands beside it with the adapter, under `docs/internals/agents/`: the agent-agnostic boundary, lifecycle, and context read-path is [model.md](../../internals/agents/model.md), and the account, balance, and spend model is [providers.md](../../internals/agents/providers.md). [Mapping feasibility](#mapping-feasibility) below is that work's starting brief.
 
-This is the single home for the **OpenCode upstream protocol surface** a RimZ adapter binds to — the in-process plugin API (hooks, bus events, blocking returns, install surface), the SQLite session store, the server HTTP API, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the opencode.ai docs and the published TypeScript wire types, pinned to the source URLs below. The runtime and storage shapes are live-verified against an installed `opencode` 1.17.9 binary; protocol changes are verified against the `v1.17.18` source tag and the published 1.17.18 SDK/plugin packages (2026-07-10).
+This is the single home for the **OpenCode upstream protocol surface** a RimZ adapter binds to — the in-process plugin API (hooks, bus events, blocking returns, install surface), the SQLite session store, the server HTTP API, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the opencode.ai docs and the published TypeScript wire types, pinned to the source URLs below. Runtime and storage are live-verified against an installed `opencode` 1.18.23 binary; protocol changes are source-verified against the `v1.18.23` tag and matching SDK/plugin packages (2026-08-27).
+
+RimZ's oldest known-good OpenCode release is **1.17.19**. That release first forwards the CLI environment into the TUI worker; RimZ's `RIMZ_BIN` and pane-attribution variables cannot reliably reach the plugin on 1.17.18 and earlier.
 
 Coverage is **depth on what an adapter would wire, breadth as an index**: the hooks, events, store fields, and decision returns an adapter would parse or emit are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists.
 
@@ -21,15 +23,15 @@ Re-fetch these pages to refresh this mirror. The docs publish unversioned and Op
 | CLI (run / serve / attach / auth, flags) | <https://opencode.ai/docs/cli/> |
 | Models and providers (models.dev catalog, variants) | <https://opencode.ai/docs/models/>, <https://opencode.ai/docs/providers/> |
 | Zen (the curated per-token gateway) | <https://opencode.ai/docs/zen/> |
-| Source repo (storage, bus, permission internals) | <https://github.com/anomalyco/opencode/tree/v1.17.18> |
+| Source repo (storage, bus, permission internals) | <https://github.com/anomalyco/opencode/tree/v1.18.23> |
 | Typed wire schemas | npm [`@opencode-ai/plugin`](https://www.npmjs.com/package/@opencode-ai/plugin), [`@opencode-ai/sdk`](https://www.npmjs.com/package/@opencode-ai/sdk) |
 | OpenAPI 3.1 spec | `GET /doc` on a running server |
 
 ## Integration surface — in-process server plugins
 
-OpenCode is client/server even on one machine: every `opencode` TUI launch embeds its own HTTP server on `127.0.0.1` (`--port` defaults to **0** — a random free port per launch) and drives it over HTTP plus an event stream. The integration surface is **TypeScript plugins loaded in-process by that server** (Bun runtime; the published module shape is `PluginModule = { id?, server: Plugin, tui?: never }` — an adapter sets only `server`) — OpenCode ships no out-of-process hook protocol and no statusline. A RimZ adapter is therefore a RimZ-authored plugin that subscribes to bus events and shells out to the `rimz` CLI.
+OpenCode's TUI runs its application in a worker. A stock launch uses in-process worker RPC and starts **no TCP listener**. It calls `Server.listen` only when `--port` or `--hostname` is present, or when mDNS is enabled (including through `config.server.mdns`). The integration surface is a **TypeScript plugin loaded in-process** (Bun runtime; the published module shape is `PluginModule = { id?, server: Plugin, tui?: never }` — an adapter sets only `server`) — OpenCode ships no out-of-process hook protocol and no statusline. A RimZ adapter is therefore a RimZ-authored plugin that subscribes to bus events, reads the always-available in-process client, and shells out to the `rimz` CLI.
 
-> **Divergence — OpenCode owns the native prompts.** OpenCode runs RimZ's plugin in-process, and the plugin runs `rimz` as its child. Current permission and question gates arrive as bus observations after OpenCode opens an awaited native request; RimZ routes attention and leaves the answer in OpenCode's UI. The published legacy `permission.ask` hook still defines a child-stdout decision path, but OpenCode 1.17.18 no longer invokes that hook from its permission service.
+> **Divergence — OpenCode owns the native prompts.** OpenCode runs RimZ's plugin in-process, and the plugin runs `rimz` as its child. Current permission and question gates arrive as bus observations after OpenCode opens an awaited native request; RimZ routes attention and leaves the answer in OpenCode's UI. The published legacy `permission.ask` hook still defines a child-stdout decision path, but OpenCode 1.18.23 does not invoke that hook from its permission service.
 
 Discovery:
 
@@ -46,15 +48,15 @@ A plugin module exports an async factory receiving `PluginInput` and returning i
 
 | Field | Carries |
 | --- | --- |
-| `client` | an `@opencode-ai/sdk` HTTP client already pointed at the owning server |
-| `serverUrl` | the embedded server's base URL — the only in-process place the random port surfaces |
+| `client` | an `@opencode-ai/sdk` client backed by the in-process application fetcher when no TCP server exists; usable in every launch mode |
+| `serverUrl` | the listening server URL when one exists; otherwise the unusable fallback `http://localhost:4096` |
 | `project` / `directory` / `worktree` | project identity, working directory, git worktree root |
 | `$` | Bun shell for spawning children |
 | `experimental_workspace` | workspace-adapter registration (index only) |
 
 ## Plugin hooks
 
-The `Hooks` members an adapter would wire (verbatim from the published 1.17.18 types):
+The `Hooks` members an adapter would wire (verbatim from the published 1.18.23 types):
 
 ```ts
 event?: (input: { event: Event }) => Promise<void>
@@ -65,13 +67,13 @@ event?: (input: { event: Event }) => Promise<void>
 dispose?: () => Promise<void>
 ```
 
-`event` is the firehose — current bus events flow through it as `{ id, type, properties }`. `permission.ask` remains in the compatibility hook type, but the 1.17.18 permission service publishes `permission.asked` without triggering that hook; observe the bus event for current releases. `tool.execute.before` / `tool.execute.after` bracket each tool call and may mutate `args` or rewrite `output` — an adapter only observes. `chat.message` fires per user prompt with the typed message and parts; its `variant` is the model's reasoning variant (`"xhigh"`, …) — the effort surface. `dispose` fires when the owning server shuts down.
+`event` is the firehose — current bus events flow through it as `{ id, type, properties }`. `permission.ask` remains in the compatibility hook type, but the 1.18.23 permission service publishes `permission.asked` without triggering that hook; observe the bus event for current releases. `tool.execute.before` / `tool.execute.after` bracket each tool call and may mutate `args` or rewrite `output` — an adapter only observes. `chat.message` fires per user prompt with the typed message and parts; its `variant` is the model's reasoning variant (`"xhigh"`, …) — the effort surface. `dispose` fires when the owning server shuts down.
 
 Index of the rest: `config`, `auth` (custom provider login flows), `provider`, `tool` (custom tool registration), `tool.definition`, `chat.params`, `chat.headers`, `command.execute.before`, `shell.env`, and the `experimental.*` family (`chat.messages.transform`, `chat.system.transform`, `session.compacting`, `compaction.autocontinue`, `text.complete`).
 
 ## Bus events
 
-The `event` hook and the server event stream carry one tagged union — `{ id, type, properties }`. The catalog below follows the 1.17.18 runtime bridge and `@opencode-ai/sdk/v2` types. The package's legacy `@opencode-ai/sdk` `Event` export still names the old permission event `permission.updated` and omits question events; plugin code must parse the runtime boundary tolerantly until that compatibility union converges.
+The `event` hook and the server event stream carry one tagged union — `{ id, type, properties }`. The catalog below follows the 1.18.23 runtime bridge and `@opencode-ai/sdk/v2` types. The package's legacy `@opencode-ai/sdk` `Event` export still names the old permission event `permission.updated` and omits question events; plugin code must parse the runtime boundary tolerantly until that compatibility union converges.
 
 ### Events an adapter would wire
 
@@ -80,7 +82,7 @@ The `event` hook and the server event stream carry one tagged union — `{ id, t
 | `session.created` | `info: Session` | session registration; a child session carries `parentID` — the subagent signal |
 | `session.updated` | `info: Session` | title, `time.compacting`, revert/share state |
 | `session.idle` | `sessionID` | the turn boundary — the prompt's work completed |
-| `session.error` | `sessionID?`, `error?` | a typed error union at the turn boundary: `ProviderAuthError \| UnknownError \| MessageOutputLengthError \| MessageAbortedError \| ApiError` — an in-band death certificate |
+| `session.error` | `sessionID?`, `error?` | a serialized `{name, data}` error union at the turn boundary: `ProviderAuthError \| UnknownError \| MessageOutputLengthError \| MessageAbortedError \| ApiError \| StructuredOutputError \| ContextOverflowError \| ContentFilterError` — an in-band death certificate |
 | `session.status` | `sessionID`, `status` | `{type:"idle"} \| {type:"busy"} \| {type:"retry", attempt, message, next}` — `retry` is the only place provider throttling surfaces |
 | `session.deleted` | `info: Session` | session removed |
 | `session.compacted` | `sessionID` | compaction completed (trailing) |
@@ -121,7 +123,7 @@ type AssistantMessage = {
   parentID: string                // "msg_…" — the message this one answers
   role: "assistant"
   time: { created: number, completed?: number }
-  error?: ProviderAuthError | UnknownError | MessageOutputLengthError | MessageAbortedError | ApiError
+  error?: { name: string, data: Record<string, unknown> }
   modelID: string, providerID: string
   mode: string
   path: { cwd: string, root: string }
@@ -132,7 +134,7 @@ type AssistantMessage = {
 }
 ```
 
-A live 1.17.9 row additionally carries `agent` ("build", …) and `variant` ("xhigh", …) on the assistant blob — the legacy SDK type lags the wire; parse tolerantly.
+A live row additionally carries `agent` ("build", …) and `variant` ("xhigh", …) on the assistant blob — the legacy SDK type lags the wire; parse tolerantly. Serialized errors use `{name, data}`; human-readable text is `data.message` for every current variant except `MessageOutputLengthError`, which has no message field. A serialized event object does not carry the native `Error.message` as the human text.
 
 ## Native permission and question gates
 
@@ -152,21 +154,21 @@ type PermissionRequest = {
 
 The native UI replies with `once`, `always`, or `reject`, published as `permission.replied`. `GET /permission` lists pending requests and `POST /permission/:requestID/reply` answers one; the older `POST /session/:id/permissions/:permissionID` route remains in the compatibility API.
 
-The published plugin `Hooks` type still contains `permission.ask(input, output)` with `output.status: "ask" | "deny" | "allow"`. OpenCode 1.17.18 does not call it from the permission service, so use `permission.asked` as the current observation contract. RimZ keeps the hook for compatibility with releases that invoke it and leaves its neutral status at `ask`.
+The published plugin `Hooks` type still contains `permission.ask(input, output)` with `output.status: "ask" | "deny" | "allow"`. OpenCode 1.18.23 does not call it from the permission service, so use `permission.asked` as the current observation contract. RimZ keeps the hook for compatibility with releases that invoke it and leaves its neutral status at `ask`.
 
 **Asks are config-dependent.** Permission defaults are permissive — most tools run without asking. The current typed keys include `read`, `edit`, `glob`, `grep`, `list`, `bash`, `task`, `todowrite`, `question`, `webfetch`, `websearch`, `lsp`, `skill`, `doom_loop`, and `external_directory`; tool-specific and wildcard keys are also accepted. Rules may be a single action or a pattern → action map, with the last matching rule winning. `doom_loop` and `external_directory` default to `ask`, `.env` reads are denied by default, and most other permissions default to `allow`.
 
-**Compatibility caveat.** [anomalyco/opencode#19927](https://github.com/anomalyco/opencode/issues/19927) reported first-encounter commands bypassing `permission.ask` and is closed as not planned. The 1.17.18 source has completed that shift: the permission service publishes the bus request and contains no `Plugin.trigger("permission.ask", …)` call. Treat the hook as backward compatibility rather than the current interception point.
+**Compatibility caveat.** [anomalyco/opencode#19927](https://github.com/anomalyco/opencode/issues/19927) reported first-encounter commands bypassing `permission.ask` and is closed as not planned. The 1.18.23 source has completed that shift: the permission service publishes the bus request and contains no `Plugin.trigger("permission.ask", …)` call. Treat the hook as backward compatibility rather than the current interception point.
 
-**The `question` tool.** OpenCode's user-question primitive publishes `question.asked`, then `question.replied` or `question.rejected`. A request contains one or more questions with a full question string, short header, labeled options, and optional multiple/custom-answer flags. `GET /question`, `POST /question/:requestID/reply`, and `POST /question/:requestID/reject` expose the same awaited requests over HTTP. These events and routes are published in the 1.17.18 v2 SDK; the legacy `Event` union omits them.
+**The `question` tool.** OpenCode's user-question primitive publishes `question.asked`, then `question.replied` or `question.rejected`. A request contains one or more questions with a full question string, short header, labeled options, and optional multiple/custom-answer flags. `GET /question`, `POST /question/:requestID/reply`, and `POST /question/:requestID/reject` expose the same awaited requests over HTTP. These events and routes are published in the 1.18.23 v2 SDK; the legacy `Event` union omits them.
 
 ## Server HTTP API (index)
 
-Each TUI launch owns a private server; there is no fixed port and no published discovery surface (no lockfile, no well-known socket) — the one in-process place the port surfaces is the plugin's `serverUrl`. Detached modes exist: `opencode serve` (`--port`, `--hostname`, `--mdns`, `--mdns-domain`, `--cors`), `opencode web`, and `opencode attach <url>` to point a TUI at a running server. Optional HTTP basic auth rides `OPENCODE_SERVER_PASSWORD` (with `OPENCODE_SERVER_USERNAME`, default `opencode`).
+The stock TUI has no TCP server. A listener exists only for an explicit `--port`/`--hostname`, enabled mDNS, or a detached mode: `opencode serve` (`--port`, `--hostname`, `--mdns`, `--mdns-domain`, `--cors`), `opencode web`, and `opencode attach <url>` to point a TUI at a running server. In the stock mode `PluginInput.serverUrl` falls back to `http://localhost:4096`, which is not a discovery address and may be unrelated. `PluginInput.client` remains functional because OpenCode backs it with the in-process application fetcher. The opencode.ai server docs still describe a default hostname/port; the v1.18.23 TUI source is authoritative for the stock launch path. Optional HTTP basic auth rides `OPENCODE_SERVER_PASSWORD` (with `OPENCODE_SERVER_USERNAME`, default `opencode`).
 
-- `GET /global/health` → `{"healthy":true,"version":"1.17.9"}` (live-verified shape) — the version probe.
-- `GET /config/providers` → provider catalog, including `providers[].models` and display `name`; RimZ uses it read-only to map the lifecycle model hint to `model_display_name`.
-- `GET /session/:id` → session metadata, including `title`, `version`, `model`, token/cost aggregates, and timestamps; RimZ uses it read-only for the session title.
+- `GET /global/health` → `{"healthy":true,"version":"1.18.23"}` — the version probe for listening modes.
+- `GET /config/providers` → provider catalog, including `providers[].models` and display `name`; the same method is available through the in-process plugin client.
+- `GET /session/:id` → session metadata, including `title`, `version`, `model`, token/cost aggregates, and timestamps; the same method is available through the in-process plugin client.
 - `GET /event` — the compatibility SSE stream of the bus events above; the v2 SDK also publishes a `/v2/event` subscription surface.
 - `GET /doc` — the OpenAPI 3.1 spec the SDK is generated from; the version-exact method catalog.
 - `GET /permission`, `POST /permission/:requestID/reply`, `GET /question`, `POST /question/:requestID/reply`, and `POST /question/:requestID/reject` expose current native gates.
@@ -176,7 +178,7 @@ Each TUI launch owns a private server; there is no fixed port and no published d
 
 ## Session store — SQLite
 
-OpenCode 1.17 stores sessions in **one SQLite database** — `~/.local/share/opencode/opencode.db` (under the `XDG_DATA_HOME` root; WAL mode, so `-shm` / `-wal` siblings ride along), schema-managed by Drizzle migrations. Earlier releases wrote a flat JSON tree under `storage/`; a live 1.17.9 install leaves only the `storage/migration` marker and `storage/session_diff/<sessionID>.json`, and third-party writeups describing the flat tree are stale. The `message` / `part` compatibility projections remain the simplest transcript read for RimZ, while the current durable model also records ordered `session_message` events, pending `session_input`, and the active `session_context_epoch`.
+OpenCode 1.18.23 selects one WAL-mode SQLite database under `XDG_DATA_HOME/opencode`. `OPENCODE_DB` overrides the path. Otherwise release channels `latest`, `beta`, and `prod` use `opencode.db`; `OPENCODE_DISABLE_CHANNEL_DB=1|true` forces the same file; every other build uses `opencode-<sanitized-channel>.db`. The channel is a build-time constant and defaults to `local`, so a source or desktop build can actively write a channel database while a stale `opencode.db` coexists. Earlier releases wrote a flat JSON tree under `storage/`; third-party writeups describing that tree are stale. The `message` / `part` compatibility projections remain the simplest transcript read for RimZ, while the current durable model also records ordered `session_message` events, pending `session_input`, and the active `session_context_epoch`.
 
 | Table | Key columns (live-verified) |
 | --- | --- |
@@ -187,7 +189,7 @@ OpenCode 1.17 stores sessions in **one SQLite database** — `~/.local/share/ope
 | `session_input` / `session_context_epoch` | admitted/pending prompts and the active context baseline/snapshot |
 | the rest | `project` / `project_directory` (worktree identity), `workspace`, `permission` (per-project ruleset), `todo`, `session_share`, `event` / `event_sequence`, `credential` (v2 integration credential state), `account` / `account_state` / `control_account` (OpenCode-cloud/control-plane login), `data_migration`, `__drizzle_migrations` |
 
-A live assistant `message.data` blob (1.17.9, paths trimmed):
+An assistant `message.data` blob (shape retained in 1.18.23, paths trimmed):
 
 ```jsonc
 {"parentID":"msg_…","role":"assistant","mode":"build","agent":"build","variant":"xhigh",
@@ -231,14 +233,14 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 
 | Surface | Meaning |
 | --- | --- |
-| `opencode -v` | version (`1.17.9` live-verified; `1.17.18` current stable at refresh) |
-| `opencode [project]` | the TUI, embedding its private server (`--port` default 0 — random per launch; `--hostname` default `127.0.0.1`) |
+| `opencode -v` | version (`1.18.23` live-verified at refresh) |
+| `opencode [project]` | the TUI; stock launches use worker RPC with no listener, while `--port`/`--hostname`/mDNS selects a TCP server |
 | `opencode -c` / `--continue`, `-s <id>` / `--session <id>`, `--fork` | resume the newest session / resume by id — the resume-on-rebirth seed / branch into a copy |
 | `opencode run [message…]` | headless one-shot; `--format json`, `--attach`, `--dir`, `--variant`, and `--thinking` cover structured/remote/reasoning modes |
 | `opencode -m/--model <provider/model>` | select the provider model; the adapter passes this flag on interactive launches |
 | `opencode run --variant <level>`, `opencode run --thinking` | headless-run-only reasoning/display flags; unavailable to the interactive pane launch |
-| `opencode --agent <name>` | select the primary agent for the interactive session; `--agent plan` starts in the built-in plan agent (live-verified on 1.17.20) |
-| `opencode --auto` | auto-approve permissions that are not explicitly denied (live-verified on 1.17.20) |
+| `opencode --agent <name>` | select the primary agent for the interactive session; `--agent plan` starts in the built-in plan agent (live-verified on 1.18.23) |
+| `opencode --auto` | auto-approve permissions that are not explicitly denied (live-verified on 1.18.23) |
 | `opencode serve` / `web` / `attach <url>` | detached server / browser UI / point a TUI at a running server; server modes expose mDNS domain and CORS flags |
 | `opencode session list` / `session delete <id>` | list sessions (`--format json`, `--max-count`) / delete one |
 | `opencode agent create` / `agent list`; `opencode models [provider]` | manage agents / inspect the model catalog |
@@ -255,6 +257,7 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 | --- | --- |
 | `XDG_DATA_HOME` / `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` / `XDG_STATE_HOME` | relocate the data root (db, `auth.json`, logs), the config root (config, plugins), caches, and state |
 | `OPENCODE_CONFIG` | explicit config-file path (docs-sourced) |
+| `OPENCODE_DB` / `OPENCODE_DISABLE_CHANNEL_DB` | explicit database path / force the shared `opencode.db` instead of the build-channel database |
 | `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` | HTTP basic auth on the server |
 | `OPENCODE=1` / `OPENCODE_PID` / `AGENT=1` | stamped into the environment of shells and tools OpenCode spawns (repo-sourced; absent from the TUI process's own environ — live-checked), so a child can detect it runs under OpenCode |
 
@@ -279,7 +282,7 @@ The adapter verdict has landed in [adapter_opencode.md](../../internals/agents/a
 
 - **Identity.** The plugin runs inside the server the pane's TUI embeds, so an interactive OpenCode is standalone and stampable — the in-process environment carries the pane id, and pid capture rides the spawned `rimz` child. A session exists only once created (typically at the first prompt), so OpenCode is a `registers_lazily` candidate — the Codex pattern: idle-row synthesis before the first turn, cwd-bind from `Session.directory` ([model.md → The instance lifecycle](../../internals/agents/model.md#the-instance-lifecycle)). A session served by a detached `opencode serve`, reached over `attach`, or driven from the web UI is daemon-routed/remote — the documented remote-agent gap.
 - **Context gauge.** Every assistant message carries the full token split — in-process on `message.updated`, at rest in SQLite — so the gauge rides lifecycle events with no transcript tail. The plugin resolves the context-window divisor for every model family from OpenCode's own model catalog as the model's max input tokens (`Model.limit.input`, falling back to the total `Model.limit.context`; read once per server launch via the in-process `client.config.providers()`), keyed `${providerID}/${modelID}` and stamped onto each lifecycle envelope; a Claude-family local table is the offline fallback when the catalog read is unavailable.
-- **Rich context.** The plugin stamps `serverUrl` onto lifecycle envelopes, so Rust has a real out-of-band read lane to the same embedded server. The hidden `rimz agents refresh-context` helper for OpenCode reads `GET /global/health`, `GET /config/providers`, and `GET /session/:id` after turn boundaries to fill `agent_version`, `model_display_name`, and the session title without blocking the hook. The route is display-only and read-only today; remote control (`POST /session/:id/message`, current permission/question reply routes) stays a separate subsystem.
+- **Rich context.** At root session creation and turn boundaries, the plugin reads `client.session.get` and stamps the session title plus writing OpenCode version onto the lifecycle envelope. Its cached `client.config.providers()` catalog supplies the model display name alongside the context-window divisor. Rust normalizes those envelope fields through the shared payload-observation merge; no TCP server or `serverUrl` is required.
 - **Spend.** The SQLite store is the cost surface: per-message rows supply trailing-window bucketing and origin paths. The adapter opens SQLite read-only against the WAL database. Zero `cost` under a subscription login prices from tokens via [providers.md → Token pricing](../../internals/agents/providers.md#token-pricing) (the Codex rule); a positive `cost` is authoritative (the Pi rule).
 - **Account probe and usage.** `auth.json` distinguishes oauth from API-key credentials per provider — enough for logged-in plus metered/unmetered on the dashboard, the same single account fact Pi's probe documents. The selected OAuth credential also feeds the out-of-band usage probe, which queries the backing provider's own quota endpoint over that token: an `anthropic` credential reuses Claude's Anthropic OAuth usage fetcher, `openai`/`openai-codex` reuse Codex's ChatGPT usage fetcher, and any other provider has no mapped endpoint and returns nothing. OpenCode introduces no endpoint of its own.
 
