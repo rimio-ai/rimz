@@ -120,6 +120,7 @@ fn sub_agents(count: usize, text: &str) -> Vec<SidebarSubAgent> {
         .map(|idx| SidebarSubAgent {
             id: format!("sub-{idx}"),
             name: text.to_owned(),
+            provider_native: true,
             status: AgentStatus::Running,
             phase: crate::agents::TurnPhase::Acting,
             task: Some(text.to_owned()),

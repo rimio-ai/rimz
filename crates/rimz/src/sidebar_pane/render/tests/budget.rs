@@ -23,6 +23,7 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
     SidebarSubAgent {
         id: format!("{parent}-sub-{index}"),
         name: "Explore".to_owned(),
+        provider_native: true,
         status: crate::agents::AgentStatus::Running,
         phase: crate::agents::TurnPhase::Acting,
         task: None,

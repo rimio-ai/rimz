@@ -115,6 +115,30 @@ impl SidebarRow {
         self.as_agent().map(|agent| agent.status)
     }
 
+    /// Status that determines row-level attention. A provider child has no pane
+    /// of its own, so its actionable state lifts the parent card without
+    /// changing the parent's displayed lifecycle status.
+    pub fn attention_status(&self) -> Option<AgentStatus> {
+        let status = self.status()?;
+        if status.is_actionable() {
+            return Some(status);
+        }
+        let children = self.sub_agents();
+        if children
+            .iter()
+            .any(|child| child.provider_native && child.status == AgentStatus::Waiting)
+        {
+            return Some(AgentStatus::Waiting);
+        }
+        if children
+            .iter()
+            .any(|child| child.provider_native && child.status == AgentStatus::Failed)
+        {
+            return Some(AgentStatus::Failed);
+        }
+        Some(status)
+    }
+
     pub fn phase(&self) -> TurnPhase {
         self.as_agent().map_or(TurnPhase::Idle, |agent| agent.phase)
     }
@@ -565,6 +589,10 @@ pub struct SidebarSubAgent {
     /// task definition; falls back to a short degraded id when none was
     /// reported.
     pub name: String,
+    /// Whether this is a provider-native paneless child. Projection-only: the
+    /// serialized child row stays provider-neutral.
+    #[serde(skip)]
+    pub provider_native: bool,
     pub status: AgentStatus,
     /// The running turn's shape (reasoning / acting), the child's own lifecycle
     /// machine output.

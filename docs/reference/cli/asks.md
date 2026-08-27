@@ -14,6 +14,8 @@ rimz asks show ask_0123456789abcdef
 
 The default list follows the current channel. `--all` includes every channel. `show` accepts the current ask id or one agent address.
 
+A provider subagent waiting on a prompt appears as `child-name (via @root)`. Its JSON `agent.handle` is the root pane address and the additive `agent.name` identifies the child. Show or answer that child ask by `ask_id`; RimZ sends the answer to the root pane where the provider surfaced the prompt.
+
 JSON rows have this shape:
 
 ```json

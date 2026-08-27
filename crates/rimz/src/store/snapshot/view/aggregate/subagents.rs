@@ -202,6 +202,7 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
     SidebarSubAgent {
         id: child.agent_id.to_string(),
         name,
+        provider_native: child.is_provider_subagent(),
         status: child.status,
         phase: child.phase,
         task: child.task.clone(),

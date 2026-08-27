@@ -2012,6 +2012,7 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
     SidebarSubAgent {
         id: spec.id.to_owned(),
         name: spec.name.to_owned(),
+        provider_native: true,
         status: spec.status,
         phase: spec.phase,
         task: spec.task.map(ToOwned::to_owned),

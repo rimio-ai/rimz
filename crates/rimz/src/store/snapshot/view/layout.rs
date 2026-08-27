@@ -256,7 +256,7 @@ pub(super) fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
     .filter_map(|status| {
         let count = rows
             .iter()
-            .filter(|row| row.status() == Some(status))
+            .filter(|row| row.attention_status() == Some(status))
             .count();
         (count > 0).then_some(SidebarStatusCount { status, count })
     })
@@ -305,13 +305,14 @@ struct RankFacts<'a> {
 }
 
 fn row_rank_facts(row: &SidebarRow) -> RankFacts<'_> {
+    let status = row.attention_status();
     RankFacts {
         is_process: row.is_process(),
         inactive: row.inactive,
         archived: row.archived,
-        status: row.status(),
+        status,
         score: row.attention_score,
-        factor_milli: score::recovered_time_factor_milli(row.status(), row.attention_score),
+        factor_milli: score::recovered_time_factor_milli(status, row.attention_score),
         last_activity: row.last_activity,
         pane_ordinal: row_ordinal(row),
         cohort: row.launch_cohort(),
