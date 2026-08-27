@@ -28,8 +28,8 @@ pub(super) fn awaiting_prompt_line(animation_phase: u64, width: usize) -> Line<'
 }
 
 /// Line 2 for an agent: the description on its own full-width line. Rich
-/// context metadata wins first; for Codex that is app-server `preview`, then
-/// thread `name`. Named sessions and live task/prompt fallbacks keep the row
+/// context metadata wins first; for Codex that is thread `name`, then app-server
+/// `preview`. Named sessions and live task/prompt fallbacks keep the row
 /// labelled when richer metadata is absent. An idle agent with nothing to show
 /// yet contributes no line; any non-idle empty description falls to an em dash.
 /// A turn that died on a provider API error takes the line over the
@@ -94,10 +94,10 @@ pub(super) fn description_line(
     Line::from(trim_spans_to_width(left, width))
 }
 
-/// The line-2 description: rich preview, then rich session/thread name, then
+/// The line-2 description: rich session/thread name, then rich preview, then
 /// launch or adapter description, task, first prompt, and latest prompt. Codex
-/// maps app-server `preview` to the rich preview and app-server `name` to the
-/// rich name, so its concrete order is thread preview → thread name. The
+/// maps app-server `name` to the rich name and `preview` to the rich preview,
+/// so its concrete order is thread name → thread preview. The
 /// activity-bound `task` clears on idle, so the set-once first prompt keeps an
 /// unnamed session stably labelled until it earns richer metadata. `None` when
 /// the session has nothing to show — the caller skips blank idle cards or

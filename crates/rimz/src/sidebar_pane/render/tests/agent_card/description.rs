@@ -64,44 +64,45 @@ fn line_two_uses_launch_description_before_task_and_prompt() {
 #[test]
 fn line_two_rich_context_replaces_launch_description() {
     let mut preview = agent(
-        "claude-1",
-        "claude",
+        "codex-1",
+        "codex",
         AgentStatus::Running,
         Some("/repo/main"),
         Some("main"),
         Some("db migrate"),
     );
     preview.description = Some("port auth".to_owned());
-    let mut preview_context = claude_context(fixed_now());
+    let mut preview_context = codex_context(fixed_now());
     preview_context.session_preview = Some("thread preview".to_owned());
     preview_context.session_name = Some("thread name".to_owned());
     preview.context = Some(preview_context);
     let rendered = snapshot_to_screen(&snapshot_with(vec![preview]), 44, 15);
 
-    assert!(rendered.contains("thread preview"));
+    assert!(rendered.contains("thread name"));
+    assert!(!rendered.contains("thread preview"));
     assert!(!rendered.contains("port auth"));
 
     let mut named = agent(
-        "claude-1",
-        "claude",
+        "codex-1",
+        "codex",
         AgentStatus::Running,
         Some("/repo/main"),
         Some("main"),
         Some("db migrate"),
     );
     named.description = Some("port auth".to_owned());
-    let mut named_context = claude_context(fixed_now());
-    named_context.session_preview = None;
-    named_context.session_name = Some("thread name".to_owned());
+    let mut named_context = codex_context(fixed_now());
+    named_context.session_preview = Some("thread preview".to_owned());
+    named_context.session_name = None;
     named.context = Some(named_context);
     let rendered = snapshot_to_screen(&snapshot_with(vec![named]), 44, 15);
 
-    assert!(rendered.contains("thread name"));
+    assert!(rendered.contains("thread preview"));
     assert!(!rendered.contains("port auth"));
 }
 
 #[test]
-fn pre_prompt_session_preview_cannot_reshape_a_fresh_card() {
+fn pre_prompt_rich_context_cannot_reshape_a_fresh_card() {
     let mut kimi = agent(
         "kimi-1",
         "kimi",
@@ -113,6 +114,7 @@ fn pre_prompt_session_preview_cannot_reshape_a_fresh_card() {
     let mut context = codex_context(fixed_now());
     context.source = "kimi".to_owned();
     context.session_preview = Some("New Session".to_owned());
+    context.session_name = Some("Automatic title".to_owned());
     context.model_id = None;
     context.model_display_name = None;
     context.effort = None;

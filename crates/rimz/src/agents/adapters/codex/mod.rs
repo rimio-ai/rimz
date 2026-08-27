@@ -19,10 +19,11 @@
 //! The rollout head also feeds [`session_origin`], which lets the sidebar reap a
 //! superseded same-pane session after `/clear` / `/new` without confusing a fork
 //! for a replacement.
-//! Metadata Claude gets from its statusline (rate-limit windows, model display
-//! name, thread preview/name, version) comes from the app-server read-only
-//! methods via [`refresh_app_server_enrichment`], spawned out-of-band by
-//! `rimz agents refresh-context`.
+//! The local session index supplies Codex's automatic thread name inline.
+//! Remaining metadata Claude gets from its statusline (rate-limit windows,
+//! model display name, thread preview, version) comes from the app-server
+//! read-only methods via [`refresh_app_server_enrichment`], spawned out-of-band
+//! by `rimz agents refresh-context`.
 
 pub(crate) mod account;
 pub(crate) mod app_server;
@@ -34,6 +35,7 @@ pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub mod process;
 mod rollout;
+mod session_index;
 pub(crate) mod spend;
 mod transcript;
 
@@ -95,11 +97,11 @@ use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AccountUsageSnapshot, AgentLifecycleObservation, AgentTurnError, AnswerPlanErr, AnswerStep,
-    AskReply, ExtraCredits, HookOutput, HookRouting, LifecycleRefreshCtx, LocalContextRefresh,
-    LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger, ResetCredits, Result, RootIdentity,
-    SessionContextInput, SessionContextRefresh, SubagentIdentity, TranscriptMessage,
-    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    AskReply, ExtraCredits, FieldPatch, HookOutput, HookRouting, LifecycleRefreshCtx,
+    LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger, ResetCredits,
+    Result, RootIdentity, SessionContextInput, SessionContextRefresh, SubagentIdentity,
+    TranscriptMessage, non_empty_trimmed, optional_payload_string, read_transcript_tail,
+    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::transcript::{AskOption, AskQuestion};
 
@@ -286,7 +288,9 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     realtime_cost: ConcernCoverage::Wired {
         via: "rollout tail",
     },
-    rich_context: ConcernCoverage::Wired { via: "app-server" },
+    rich_context: ConcernCoverage::Wired {
+        via: "session index + app-server",
+    },
     hook_install: ConcernCoverage::Wired {
         via: "~/.codex/config.toml",
     },
@@ -738,7 +742,8 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
     /// limits + model need no thread); `UserPromptSubmit`/`Stop` keep it
     /// current. Per-tool events are excluded — an app-server spawn per tool call
     /// is too frequent. Local transcript usage has its own stat-gated inline
-    /// refresh below.
+    /// refresh below, where the local session index also supplies the automatic
+    /// thread name.
     fn context_refresh_spawn(
         &self,
         trigger: RefreshTrigger<'_>,
@@ -827,15 +832,35 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
         {
             return None;
         }
-        refresh_transcript_context(
-            ctx.agent_id,
-            ctx.model_hint,
-            ctx.prior_transcript_path,
-            ctx.prior_transcript_stat,
-            ctx.prior_spend_fold,
-            ctx.shared_pricing_cache_path,
-        )
+        refresh_local_context_under(ctx, app_server::codex_home().as_deref())
     }
+}
+
+fn refresh_local_context_under(
+    ctx: &LocalContextRefreshCtx<'_>,
+    codex_home: Option<&Path>,
+) -> Option<LocalContextRefresh> {
+    let mut refresh = refresh_transcript_context(
+        ctx.agent_id,
+        ctx.model_hint,
+        ctx.prior_transcript_path,
+        ctx.prior_transcript_stat,
+        ctx.prior_spend_fold,
+        ctx.shared_pricing_cache_path,
+    );
+    let session_name = codex_home
+        .and_then(|home| session_index::session_name_under(home, ctx.agent_id))
+        .filter(|name| Some(name.as_str()) != ctx.prior_session_name);
+    let Some(session_name) = session_name else {
+        return refresh;
+    };
+    let enriched = refresh.get_or_insert_with(|| LocalContextRefresh {
+        transcript_path: ctx.prior_transcript_path.map(str::to_owned),
+        transcript_stat: ctx.prior_transcript_stat.copied(),
+        ..LocalContextRefresh::sparse()
+    });
+    enriched.context.session_name = FieldPatch::Set(session_name);
+    refresh
 }
 
 impl crate::agents::capabilities::AccountCapability for CodexAdapter {

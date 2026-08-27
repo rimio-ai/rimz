@@ -272,10 +272,9 @@ fn render_agent_card_context_line_pins_age_not_resource_stats() {
 }
 #[test]
 fn codex_line_two_walks_the_descriptor_precedence_ladder() {
-    // Codex's line-two definition follows a precedence ladder: thread preview >
-    // thread name > task. A present preview wins over both name and task; with
-    // the preview absent the name still beats the task fall-through.
-    let codex_with = |session_name: &str, session_preview: Option<&str>| {
+    // Codex's line-two definition follows a precedence ladder: thread name >
+    // thread preview > task.
+    let codex_with = |session_name: Option<&str>, session_preview: Option<&str>| {
         let mut codex = agent(
             "codex-1",
             "codex",
@@ -285,22 +284,22 @@ fn codex_line_two_walks_the_descriptor_precedence_ladder() {
             Some("db migrate"),
         );
         let mut context = codex_context(fixed_now());
-        context.session_name = Some(session_name.to_owned());
+        context.session_name = session_name.map(str::to_owned);
         context.session_preview = session_preview.map(str::to_owned);
         codex.context = Some(context);
         let snapshot = snapshot_with(vec![codex]);
         snapshot_to_screen(&snapshot, 44, 15)
     };
 
-    // Preview present: it wins over the thread name and the task.
-    let rendered = codex_with("TUI prototype", Some("Create a TUI"));
-    assert!(rendered.contains("Create a TUI"));
-    assert!(!rendered.contains("TUI prototype"));
+    // The generated name wins over the preview and task.
+    let rendered = codex_with(Some("TUI prototype"), Some("Create a TUI"));
+    assert!(rendered.contains("TUI prototype"));
+    assert!(!rendered.contains("Create a TUI"));
     assert!(!rendered.contains("db migrate"));
 
-    // Preview absent: the thread name beats the task fall-through.
-    let rendered = codex_with("TUI prototype", None);
-    assert!(rendered.contains("TUI prototype"));
+    // Without a name, the preview still beats the task fall-through.
+    let rendered = codex_with(None, Some("Create a TUI"));
+    assert!(rendered.contains("Create a TUI"));
     assert!(!rendered.contains("db migrate"));
 }
 #[test]

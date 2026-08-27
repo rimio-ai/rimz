@@ -1451,6 +1451,7 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
     let refresh = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
         agent_id: "conv-1",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: Some(&path_string),
         prior_transcript_path: None,
         prior_transcript_stat: None,
@@ -1464,6 +1465,7 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
     let healed = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
         agent_id: "conv-1",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: Some(&path_string),
         prior_transcript_path: None,
         prior_transcript_stat: refresh.transcript_stat.as_ref(),
@@ -1487,6 +1489,7 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
     let first = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
         agent_id: "conv-1",
         model_hint: Some("cursor/model"),
+        prior_session_name: None,
         current_transcript_path: Some(&path_string),
         prior_transcript_path: None,
         prior_transcript_stat: None,
@@ -1510,6 +1513,7 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
     let interrupted = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
         agent_id: "conv-1",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: Some(&path_string),
         prior_transcript_path: None,
         prior_transcript_stat: first.transcript_stat.as_ref(),
@@ -1548,6 +1552,7 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
     let first = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
         agent_id: "conv-1",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: Some(&path_string),
         prior_transcript_path: None,
         prior_transcript_stat: None,
@@ -1585,6 +1590,7 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
     let rewritten = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
         agent_id: "conv-1",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: Some(&path_string),
         prior_transcript_path: None,
         prior_transcript_stat: Some(&first_stat),

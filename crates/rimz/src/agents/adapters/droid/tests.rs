@@ -373,6 +373,7 @@ fn local_refresh_prices_exact_cache_rows_and_fills_gauge_from_last_call() {
     let ctx = LocalContextRefreshCtx {
         agent_id: "priced",
         model_hint: None,
+        prior_session_name: None,
         current_transcript_path: Some(&transcript_text),
         prior_transcript_path: None,
         prior_transcript_stat: None,
