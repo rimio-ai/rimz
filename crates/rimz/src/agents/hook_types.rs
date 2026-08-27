@@ -430,8 +430,8 @@ pub(crate) struct HookEventSpec {
     pub(crate) matcher: Option<&'static str>,
     pub(crate) lifecycle_fallback: bool,
     pub(crate) synchronous: bool,
-    pub(crate) timeout_secs: Option<i64>,
-    pub(crate) required_for_preflight: bool,
+    pub(super) timeout_secs: Option<i64>,
+    pub(super) required_for_preflight: bool,
     progress: bool,
     session_ended: bool,
     #[cfg(test)]
@@ -489,12 +489,12 @@ impl HookEventSpec {
         self
     }
 
-    pub(crate) const fn with_timeout(mut self, timeout_secs: i64) -> Self {
+    pub(super) const fn with_timeout(mut self, timeout_secs: i64) -> Self {
         self.timeout_secs = Some(timeout_secs);
         self
     }
 
-    pub(crate) const fn optional_for_preflight(mut self) -> Self {
+    pub(super) const fn optional_for_preflight(mut self) -> Self {
         self.required_for_preflight = false;
         self
     }
