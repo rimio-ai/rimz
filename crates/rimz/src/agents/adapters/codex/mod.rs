@@ -300,7 +300,7 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     tool_stats: ConcernCoverage::Partial {
         via: "hook tool names + rollout response items",
-        gap: "live hooks miss unified-exec and web-search calls",
+        gap: "live hooks miss web-search and other non-hooked calls",
     },
     remote_control: ConcernCoverage::Wired {
         via: "pane/background",
