@@ -41,6 +41,13 @@ pub(super) fn sanitize_window_name(raw: &str) -> String {
     raw.replace([':', '.'], "-")
 }
 
+/// The sanitized stored name encoded for a tmux name argument. tmux expands
+/// formats such as `#h` in `new-window -n` and `rename-window`; `##` writes one
+/// literal hash without changing the name read back from tmux.
+pub(super) fn window_name_arg(raw: &str) -> String {
+    sanitize_window_name(raw).replace('#', "##")
+}
+
 impl TmuxBackend {
     /// Attach a RimZ-owned display identity to one pane. Pane user options are
     /// not writable through terminal escape sequences, unlike `pane_title`.
@@ -73,7 +80,7 @@ impl TmuxBackend {
             "rename-window".to_owned(),
             "-t".to_owned(),
             anchor.raw().to_owned(),
-            sanitize_window_name(name),
+            window_name_arg(name),
         ]))
     }
 
@@ -97,7 +104,7 @@ impl TmuxBackend {
                 "-t".to_owned(),
                 session.to_owned(),
                 "-n".to_owned(),
-                sanitize_window_name(name),
+                window_name_arg(name),
                 "-c".to_owned(),
                 cwd.to_string_lossy().into_owned(),
             ])

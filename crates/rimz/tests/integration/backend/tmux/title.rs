@@ -1,6 +1,51 @@
 use super::support::*;
 
 #[test]
+fn window_names_keep_literal_hashes() {
+    require_tmux!();
+
+    let session = "rimz-native-window-name";
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, session, Some((120, 40)));
+    let anchor = PaneId::from_parts(MuxName::Tmux, server.display(session, "#{pane_id}"));
+
+    server
+        .backend
+        .rename_tab(session, &anchor, "#health ✓")
+        .expect("rename window");
+    assert_eq!(server.window_names(session), ["#health ✓"]);
+
+    server
+        .backend
+        .open_tab(&TabOptions {
+            title: "#host#health".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "30".to_owned()],
+                    name: None,
+                }])],
+            },
+            focus: true,
+            dock_sidebar: true,
+            sidebar: sidebar_opts(session, PathBuf::from("/bin/true"), Some(120)),
+        })
+        .expect("open named tab");
+    assert!(
+        server
+            .window_names(session)
+            .iter()
+            .any(|name| name == "#host#health"),
+        "opened window name did not preserve literal hashes: {:?}",
+        server.window_names(session),
+    );
+    assert_eq!(
+        server.display(&format!("{session}:#host#health"), "#{window_name}"),
+        "#host#health",
+        "literal hash names must remain valid tmux targets",
+    );
+}
+
+#[test]
 fn named_layout_pane_drives_the_terminal_title_format() {
     require_tmux!();
 

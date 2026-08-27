@@ -41,7 +41,7 @@ fn existing_session_attach_targets_the_managed_server() {
 }
 
 #[test]
-fn rename_tab_targets_the_anchor_pane_and_sanitizes_the_name() {
+fn rename_tab_targets_the_anchor_pane_and_encodes_the_name() {
     let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
     let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
     let spec = backend
@@ -50,7 +50,7 @@ fn rename_tab_targets_the_anchor_pane_and_sanitizes_the_name() {
 
     assert_eq!(
         verb_args(&spec),
-        ["rename-window", "-t", "%7", "#feat-one-2 ✓"]
+        ["rename-window", "-t", "%7", "##feat-one-2 ✓"]
     );
 }
 
@@ -242,6 +242,14 @@ fn window_name_neutralizes_tmux_target_separators() {
     assert_eq!(sanitize_window_name("run: codex"), "run- codex");
     assert_eq!(sanitize_window_name("feat: split.ci"), "feat- split-ci");
     assert_eq!(sanitize_window_name("plain-name"), "plain-name");
+}
+
+#[test]
+fn window_name_arg_encodes_literal_hashes_after_sanitizing() {
+    use super::window::window_name_arg;
+
+    assert_eq!(window_name_arg("#feat: split.ci##"), "##feat- split-ci####");
+    assert_eq!(window_name_arg("plain-name"), "plain-name");
 }
 
 #[test]
