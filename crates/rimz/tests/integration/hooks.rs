@@ -1985,13 +1985,10 @@ fn codex_subagent_permission_without_parent_frame_stays_metadata_only() {
 }
 
 #[test]
-fn claude_in_subagent_tool_event_does_not_disturb_parent() {
+fn claude_in_subagent_tool_event_folds_onto_child() {
     // Claude stamps `agent_id` on every payload fired inside a subagent, so a
     // backgrounded child's mutating tool arrives on the parent's session with a
-    // foreign id. It must fold to nothing: no lifecycle event appended, no
-    // phantom child row, and — the load-bearing part — the parent's
-    // `last_activity` stays its own (the child-keyed heartbeat carries the
-    // child's progress instead).
+    // foreign id. It must fold onto the child without advancing the parent.
     let env = Env::new();
     let output = env.run_hook(
         "claude",
@@ -2002,6 +1999,7 @@ fn claude_in_subagent_tool_event_does_not_disturb_parent() {
         .expect("payload"),
     );
     assert!(output.status.success());
+    let parent_activity_before = env.snapshot_json()["agents"][0]["last_activity"].clone();
     let lifecycle_events_before = env
         .read_events()
         .iter()
@@ -2030,14 +2028,83 @@ fn claude_in_subagent_tool_event_does_not_disturb_parent() {
         .iter()
         .filter(|event| event.method == "agent.lifecycle")
         .count();
-    assert_eq!(
-        lifecycle_events_after, lifecycle_events_before,
-        "a foreign-child tool event appends no lifecycle event"
-    );
+    assert_eq!(lifecycle_events_after, lifecycle_events_before + 1);
     let parsed = env.snapshot_json();
     let agents = parsed["agents"].as_array().expect("agents array");
-    assert_eq!(agents.len(), 1, "no phantom child row: {agents:?}");
-    assert_eq!(agents[0]["agent_id"], "sess-claude-parent");
+    assert_eq!(agents.len(), 2, "one parent plus one child: {agents:?}");
+    let parent = agents
+        .iter()
+        .find(|agent| agent["agent_id"] == "sess-claude-parent")
+        .expect("parent row");
+    let child = agents
+        .iter()
+        .find(|agent| agent["agent_id"] == "child-1")
+        .expect("child row");
+    assert_eq!(parent["last_activity"], parent_activity_before);
+    assert_eq!(child["status"], "running");
+    assert_eq!(child["parent_agent_id"], "sess-claude-parent");
+}
+
+#[test]
+fn claude_subagent_ask_waits_and_clears_on_the_child() {
+    let env = Env::new();
+    let run = |payload: Value| {
+        let payload = serde_json::to_string(&payload).expect("payload");
+        let output = env.run_hook("claude", &payload);
+        assert_hook_succeeded_neutral("claude", output);
+    };
+
+    run(json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "sess-claude-parent",
+        "tool_name": "AskUserQuestion",
+        "tool_input": { "questions": [{ "question": "which fix shape?" }] },
+    }));
+    let parent_before = env.snapshot_json()["agents"][0].clone();
+
+    run(json!({
+        "hook_event_name": "PermissionRequest",
+        "session_id": "sess-claude-parent",
+        "agent_id": "child-1",
+        "tool_name": "Bash",
+        "tool_input": { "command": "cargo test" },
+    }));
+
+    let parsed = env.snapshot_json();
+    let agents = parsed["agents"].as_array().expect("agents array");
+    assert_eq!(agents.len(), 2, "one parent plus one child: {agents:?}");
+    let parent = agents
+        .iter()
+        .find(|agent| agent["agent_id"] == "sess-claude-parent")
+        .expect("parent row");
+    let child = agents
+        .iter()
+        .find(|agent| agent["agent_id"] == "child-1")
+        .expect("child row");
+    assert_eq!(parent["waiting_since"], parent_before["waiting_since"]);
+    assert_eq!(parent["open_ask"], parent_before["open_ask"]);
+    assert_eq!(child["status"], "waiting");
+    assert!(child["waiting_since"].as_str().is_some());
+    assert_eq!(child["open_ask"]["kind"], "permission");
+    assert_eq!(child["parent_agent_id"], "sess-claude-parent");
+
+    run(json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-claude-parent",
+        "agent_id": "child-1",
+        "tool_name": "Bash",
+    }));
+
+    let parsed = env.snapshot_json();
+    let child = parsed["agents"]
+        .as_array()
+        .expect("agents array")
+        .iter()
+        .find(|agent| agent["agent_id"] == "child-1")
+        .expect("child row");
+    assert_eq!(child["status"], "running");
+    assert!(child["waiting_since"].is_null());
+    assert!(child["open_ask"].is_null());
 }
 
 #[test]
@@ -2075,7 +2142,8 @@ fn waiting_agent_survives_backgrounded_child_tool() {
         "session_id": "sess-claude-parent",
     }));
 
-    // The backgrounded child keeps working while the parent blocks.
+    // The backgrounded child keeps working while the parent blocks. Its event
+    // folds onto a separate child row, so the parent's waiting edge remains.
     run(&json!({
         "hook_event_name": "PostToolUse",
         "session_id": "sess-claude-parent",

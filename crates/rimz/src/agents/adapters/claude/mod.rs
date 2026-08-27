@@ -1017,29 +1017,34 @@ fn resolve_claude_observation_identity(
     payload: &Value,
     parts: &ClaudeLifecycleParts,
 ) -> Option<ObservationIdentity> {
-    match parts.subagent_common() {
-        Some(c) => match resolve_subagent_identity(
-            kind,
-            event_name,
-            c.agent_id.as_deref(),
-            c.common.session_id.as_deref(),
-            payload,
-        ) {
+    let typed_common = parts.subagent_common();
+    let payload_agent_id = optional_payload_string(payload, &["agent_id"]);
+    let payload_session_id = optional_payload_string(payload, &["session_id"]);
+    let child_id = typed_common
+        .and_then(|common| common.agent_id.as_deref())
+        .or(payload_agent_id.as_deref());
+    let parent_id = typed_common
+        .and_then(|common| common.common.session_id.as_deref())
+        .or(payload_session_id.as_deref());
+    let distinct_child = child_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .zip(parent_id.map(str::trim).filter(|value| !value.is_empty()))
+        .is_some_and(|(child, parent)| child != parent);
+
+    if typed_common.is_some() || distinct_child {
+        match resolve_subagent_identity(kind, event_name, child_id, parent_id, payload) {
             SubagentIdentity::Resolved {
                 agent_id,
                 parent_agent_id,
             } => Some((Some(agent_id), Some(parent_agent_id))),
             SubagentIdentity::Quarantined => None,
-        },
-        None => match resolve_root_identity(
-            kind,
-            event_name,
-            optional_payload_string(payload, &["agent_id"]).as_deref(),
-            optional_payload_string(payload, &["session_id"]).as_deref(),
-        ) {
+        }
+    } else {
+        match resolve_root_identity(kind, event_name, child_id, parent_id) {
             RootIdentity::Root { agent_id } => Some((agent_id, None)),
             RootIdentity::ForeignChild => None,
-        },
+        }
     }
 }
 
