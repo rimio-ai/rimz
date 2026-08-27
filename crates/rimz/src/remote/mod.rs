@@ -47,6 +47,10 @@ pub const OUTER_SCROLL_BRACKET_ENV: &str = "RIMZ_OUTER_SCROLL_BRACKET";
 /// can retire an orphaned predecessor before entering the multiplexer.
 pub const REMOTE_LINEAGE_ENV: &str = "RIMZ_REMOTE_LINEAGE";
 
+/// Marks a remote attach whose local process will interpret reconnect exit
+/// sentinels.
+pub const REMOTE_SUPERVISED_ENV: &str = "RIMZ_REMOTE_SUPERVISED";
+
 /// Local client version carried to the remote RimZ for launch-time skew
 /// notices.
 pub const REMOTE_CLIENT_VERSION_ENV: &str = "RIMZ_REMOTE_CLIENT_VERSION";
@@ -308,6 +312,7 @@ pub fn infocmp_program() -> String {
 pub struct SshAttachOptions {
     pub target: RemoteTarget,
     pub lineage: String,
+    pub supervised: bool,
     pub force_version: bool,
     pub no_resume: bool,
     pub mux: Option<MuxName>,
@@ -601,6 +606,9 @@ fn guarded_snippet(
         "export {REMOTE_LINEAGE_ENV}={}; ",
         sh_quote(&options.lineage)
     ));
+    if options.supervised {
+        env_setup.push_str(&format!("export {REMOTE_SUPERVISED_ENV}=1; "));
+    }
     env_setup.push_str(&format!(
         "export {REMOTE_CLIENT_VERSION_ENV}={}; ",
         sh_quote(crate::build_id::VERSION)
@@ -921,7 +929,8 @@ fn env_ms(key: &str) -> Option<Duration> {
 /// What the supervisor does with a finished ssh session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
-    /// ssh exited 0 — the user detached or the remote room closed cleanly.
+    /// ssh exited 0 — the user detached while the remote mux session stayed
+    /// live.
     /// A lost remote session is translated to [`REMOTE_SESSION_LOST_EXIT`]
     /// before ssh returns.
     CleanExit,

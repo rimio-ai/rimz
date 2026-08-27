@@ -44,27 +44,28 @@ pub(super) fn run_attach_action(
                     std::env::var_os(rimz::remote::OUTER_SCROLL_BRACKET_ENV).as_deref(),
                 ),
             )?;
-            if std::env::var_os(rimz::remote::REMOTE_LINEAGE_ENV)
-                .is_some_and(|lineage| !lineage.is_empty())
-            {
-                let liveness = rimz::mux::backend_for(mux)
-                    .session_liveness(session_name)
-                    .ok();
-                if let Some(code) = remote_session_lost_exit(liveness) {
-                    std::process::exit(code);
-                }
+            let supervised = std::env::var_os(rimz::remote::REMOTE_SUPERVISED_ENV)
+                .is_some_and(|marker| !marker.is_empty());
+            let liveness = supervised
+                .then(|| rimz::mux::backend_for(mux).session_liveness(session_name))
+                .and_then(Result::ok);
+            if let Some(code) = remote_session_lost_exit(supervised, liveness) {
+                std::process::exit(code);
             }
             Ok(())
         }
     }
 }
 
-fn remote_session_lost_exit(liveness: Option<rimz::mux::SessionLiveness>) -> Option<i32> {
-    match liveness {
-        Some(rimz::mux::SessionLiveness::Exited | rimz::mux::SessionLiveness::Absent) => {
+fn remote_session_lost_exit(
+    supervised: bool,
+    liveness: Option<rimz::mux::SessionLiveness>,
+) -> Option<i32> {
+    match (supervised, liveness) {
+        (true, Some(rimz::mux::SessionLiveness::Exited | rimz::mux::SessionLiveness::Absent)) => {
             Some(rimz::remote::REMOTE_SESSION_LOST_EXIT)
         }
-        Some(rimz::mux::SessionLiveness::Live) | None => None,
+        _ => None,
     }
 }
 
@@ -374,16 +375,23 @@ mod tests {
     fn remote_session_loss_translates_only_missing_sessions() {
         use rimz::mux::SessionLiveness;
 
-        assert_eq!(remote_session_lost_exit(Some(SessionLiveness::Live)), None);
         assert_eq!(
-            remote_session_lost_exit(Some(SessionLiveness::Exited)),
+            remote_session_lost_exit(true, Some(SessionLiveness::Live)),
+            None
+        );
+        assert_eq!(
+            remote_session_lost_exit(true, Some(SessionLiveness::Exited)),
             Some(rimz::remote::REMOTE_SESSION_LOST_EXIT)
         );
         assert_eq!(
-            remote_session_lost_exit(Some(SessionLiveness::Absent)),
+            remote_session_lost_exit(true, Some(SessionLiveness::Absent)),
             Some(rimz::remote::REMOTE_SESSION_LOST_EXIT)
         );
-        assert_eq!(remote_session_lost_exit(None), None);
+        assert_eq!(remote_session_lost_exit(true, None), None);
+        assert_eq!(
+            remote_session_lost_exit(false, Some(SessionLiveness::Absent)),
+            None
+        );
     }
 
     #[cfg(unix)]

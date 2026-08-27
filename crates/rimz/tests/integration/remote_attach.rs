@@ -709,6 +709,10 @@ fn one_shot_connect_preserves_the_ssh_exit_code_without_dumping_argv() {
         "the outer SSH launcher suppresses a nested remote bracket",
     );
     assert!(
+        !snippet(&shim_invocations(&log)[0]).contains("RIMZ_REMOTE_SUPERVISED"),
+        "one-shot attaches have no sentinel consumer",
+    );
+    assert!(
         !snippet(&shim_invocations(&log)[0]).contains("--outer-scroll-bracket"),
         "older remote CLIs must not receive a new argument",
     );
@@ -1568,6 +1572,12 @@ fn established_link_drop_reconnects_and_notifies_once() {
         "the initial and recovery masters prove both connections"
     );
     assert!(
+        invocations
+            .iter()
+            .all(|invocation| snippet(invocation).contains("RIMZ_REMOTE_SUPERVISED=1")),
+        "every supervised attach marks its remote wrapper: {invocations:?}"
+    );
+    assert!(
         !snippet(&invocations[0]).contains("RIMZ_REMOTE_RECONNECT"),
         "the initial attach stays attended: {:?}",
         invocations[0]
@@ -1622,8 +1632,8 @@ fn established_mux_disconnect_reconnects() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
-    // tmux can return 1 when a reload disconnects its established client;
-    // the replacement attach then detaches cleanly.
+    // A mux client can return nonzero when its server process dies; the
+    // replacement attach then detaches cleanly.
     std::fs::write(&plan, "1\n0\n").expect("write plan");
     let out = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)

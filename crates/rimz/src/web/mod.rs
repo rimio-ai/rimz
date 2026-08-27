@@ -23,7 +23,7 @@ mod ttyd;
 
 pub use gate::{GateAuth, RelayTarget};
 
-const TTYD_AMBIENT_CONTEXT_ENV: [&str; 27] = [
+const TTYD_AMBIENT_CONTEXT_ENV: [&str; 28] = [
     "ZELLIJ",
     "ZELLIJ_PANE_ID",
     "ZELLIJ_SESSION_NAME",
@@ -49,6 +49,7 @@ const TTYD_AMBIENT_CONTEXT_ENV: [&str; 27] = [
     crate::remote::ATTACH_MARK_ENV,
     crate::remote::OUTER_SCROLL_BRACKET_ENV,
     crate::remote::REMOTE_LINEAGE_ENV,
+    crate::remote::REMOTE_SUPERVISED_ENV,
     crate::remote::REMOTE_CLIENT_VERSION_ENV,
     crate::remote::REMOTE_FORCE_VERSION_ENV,
 ];
