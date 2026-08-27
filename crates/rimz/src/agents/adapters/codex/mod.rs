@@ -109,6 +109,9 @@ use crate::transcript::{AskOption, AskQuestion};
 /// Waiting state and return neutral immediately, so the value is a short guard
 /// for local I/O failures rather than an answer window.
 const CODEX_HOOK_TIMEOUT_SECS: i64 = 10;
+/// Codex awaits `Interrupt` inline and defaults it to one second (with a
+/// three-second ceiling), so keep Ctrl-C responsive and let an overrun fall
+/// back to the flushed rollout's `turn_aborted` record.
 const CODEX_INTERRUPT_HOOK_TIMEOUT_SECS: i64 = 1;
 
 /// How stale the app-server-owned half of the sidecar may get before the next
@@ -400,6 +403,7 @@ const CODEX_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle("Stop", r#"{"session_id":"sess-1"}"#).progress(),
     HookEventSpec::lifecycle("Interrupt", r#"{"session_id":"sess-1","turn_id":"turn-1"}"#)
         .progress()
+        .with_timeout(CODEX_INTERRUPT_HOOK_TIMEOUT_SECS)
         .optional_for_preflight(),
     HookEventSpec::blocking(
         "PermissionRequest",
