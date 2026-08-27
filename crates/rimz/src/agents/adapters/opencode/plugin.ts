@@ -12,6 +12,17 @@ type Gauge = {
   cacheWrite?: number;
   total?: number;
   contextWindow?: number;
+  modelDisplayName?: string;
+};
+
+type CatalogEntry = {
+  contextWindow?: number;
+  displayName?: string;
+};
+
+type SessionInfo = {
+  title?: string;
+  version?: string;
 };
 
 type Envelope = Record<string, unknown> & {
@@ -29,6 +40,7 @@ export const RimzPlugin: Plugin = async (input) => {
   const gauge = new Map<string, Gauge>();
   const agents = new Map<string, string>();
   const roots = new Set<string>();
+  const sessions = new Map<string, SessionInfo>();
 
   function cwd(sessionDirectory?: unknown): string {
     if (typeof sessionDirectory === "string" && sessionDirectory.length > 0) {
@@ -43,8 +55,10 @@ export const RimzPlugin: Plugin = async (input) => {
       hook_event_name: hookEventName,
       session_id: sessionID,
       cwd: cwd(extra.cwd),
-      server_url: input.serverUrl ? String(input.serverUrl) : undefined,
+      session_name: sessionID ? sessions.get(sessionID)?.title : undefined,
+      agent_version: sessionID ? sessions.get(sessionID)?.version : undefined,
       model: currentGauge?.model,
+      model_display_name: currentGauge?.modelDisplayName,
       provider_id: currentGauge?.providerID,
       effort: currentGauge?.effort,
       input_tokens: currentGauge?.input,
@@ -95,7 +109,24 @@ export const RimzPlugin: Plugin = async (input) => {
     roots.delete(sessionID);
     gauge.delete(sessionID);
     agents.delete(sessionID);
+    sessions.delete(sessionID);
     return spawnRimz(payload, false);
+  }
+
+  async function refreshSessionInfo(sessionID: string): Promise<void> {
+    const client = input.client as any;
+    if (typeof client?.session?.get !== "function") return;
+    try {
+      const res: any = await client.session.get({ path: { id: sessionID } });
+      const session = res?.data ?? res;
+      const title = typeof session?.title === "string" ? session.title : undefined;
+      const version = typeof session?.version === "string" ? session.version : undefined;
+      if (title !== undefined || version !== undefined) {
+        sessions.set(sessionID, { title, version });
+      }
+    } catch {
+      // best-effort: session metadata remains absent until a later boundary retries
+    }
   }
 
   // The model's context window is the gauge's divisor, and the gauge counts
@@ -108,10 +139,10 @@ export const RimzPlugin: Plugin = async (input) => {
   // catalog is static per server launch, so fetch it once; a failed or empty
   // read clears the memo so a later event retries, and until it resolves the
   // field is simply omitted (the Rust fallback covers Claude).
-  let catalogPromise: Promise<Map<string, number>> | undefined;
+  let catalogPromise: Promise<Map<string, CatalogEntry>> | undefined;
 
-  async function loadCatalog(): Promise<Map<string, number>> {
-    const windows = new Map<string, number>();
+  async function loadCatalog(): Promise<Map<string, CatalogEntry>> {
+    const catalog = new Map<string, CatalogEntry>();
     try {
       // The client may be built with throwOnError on (payload returned directly)
       // or off (wrapped in `{ data }`); accept either shape.
@@ -120,42 +151,50 @@ export const RimzPlugin: Plugin = async (input) => {
       for (const provider of providers) {
         const models = provider.models ?? {};
         for (const modelID of Object.keys(models)) {
-          const limit = models[modelID]?.limit;
+          const model = models[modelID];
+          const limit = model?.limit;
           const cap = limit?.input ?? limit?.context;
-          if (typeof cap === "number" && Number.isFinite(cap) && cap > 0) {
-            windows.set(`${provider.id}/${modelID}`, cap);
-            windows.set(modelID, cap);
+          const contextWindow =
+            typeof cap === "number" && Number.isFinite(cap) && cap > 0 ? cap : undefined;
+          const displayName = typeof model?.name === "string" ? model.name : undefined;
+          if (contextWindow !== undefined || displayName !== undefined) {
+            const entry = { contextWindow, displayName };
+            catalog.set(`${provider.id}/${modelID}`, entry);
+            catalog.set(modelID, entry);
           }
         }
       }
     } catch {
       // best-effort: an unreachable catalog leaves the window to the Rust fallback
     }
-    return windows;
+    return catalog;
   }
 
-  function ensureCatalog(): Promise<Map<string, number>> {
+  function ensureCatalog(): Promise<Map<string, CatalogEntry>> {
     if (!catalogPromise) {
-      catalogPromise = loadCatalog().then((windows) => {
-        if (windows.size === 0) catalogPromise = undefined; // allow a later retry
-        return windows;
+      catalogPromise = loadCatalog().then((catalog) => {
+        if (catalog.size === 0) catalogPromise = undefined; // allow a later retry
+        return catalog;
       });
     }
     return catalogPromise;
   }
 
-  function resolveWindow(sessionID: string, providerID?: string, modelID?: string): void {
+  async function resolveWindow(sessionID: string, providerID?: string, modelID?: string): Promise<void> {
     if (!modelID) return;
-    void ensureCatalog().then((windows) => {
-      const window =
-        (providerID ? windows.get(`${providerID}/${modelID}`) : undefined) ?? windows.get(modelID);
-      const prior = gauge.get(sessionID);
-      if (typeof window !== "number" || !prior || prior.model !== modelID) return;
-      gauge.set(sessionID, { ...prior, contextWindow: window });
+    const catalog = await ensureCatalog();
+    const entry =
+      (providerID ? catalog.get(`${providerID}/${modelID}`) : undefined) ?? catalog.get(modelID);
+    const prior = gauge.get(sessionID);
+    if (!entry || !prior || prior.model !== modelID) return;
+    gauge.set(sessionID, {
+      ...prior,
+      contextWindow: entry.contextWindow,
+      modelDisplayName: entry.displayName,
     });
   }
 
-  function updateGauge(info: any): void {
+  async function updateGauge(info: any): Promise<void> {
     const sessionID = info?.sessionID;
     if (typeof sessionID !== "string" || sessionID.length === 0) {
       return;
@@ -183,8 +222,9 @@ export const RimzPlugin: Plugin = async (input) => {
       effort: info?.variant ?? prior?.effort,
       // keep the resolved window across token updates; re-resolve on a model switch
       contextWindow: prior?.model === model ? prior?.contextWindow : undefined,
+      modelDisplayName: prior?.model === model ? prior?.modelDisplayName : undefined,
     });
-    resolveWindow(sessionID, providerID, model);
+    await resolveWindow(sessionID, providerID, model);
   }
 
   function announceChildModel(sessionID: string): void {
@@ -243,6 +283,7 @@ export const RimzPlugin: Plugin = async (input) => {
           return;
         }
         roots.add(sessionID);
+        await refreshSessionInfo(sessionID);
         send(base("session_created", sessionID, { cwd: info.directory }));
         return;
       }
@@ -252,6 +293,7 @@ export const RimzPlugin: Plugin = async (input) => {
         if (typeof sessionID !== "string") return;
         const parentID = children.get(sessionID);
         if (!parentID) roots.add(sessionID);
+        if (!parentID) await refreshSessionInfo(sessionID);
         send(base(parentID ? "SubagentStop" : "session_idle", sessionID, {
           parent_session_id: parentID,
           plan_proposed: !parentID && agents.get(sessionID) === "plan" ? true : undefined,
@@ -265,11 +307,12 @@ export const RimzPlugin: Plugin = async (input) => {
         const error = properties.error || {};
         const parentID = children.get(sessionID);
         if (!parentID) roots.add(sessionID);
+        if (!parentID) await refreshSessionInfo(sessionID);
         send(base(parentID ? "SubagentStop" : "session_error", sessionID, {
           parent_session_id: parentID,
           is_error: true,
           error_class: error.name || error.type,
-          error_message: error.message,
+          error_message: error.data?.message ?? error.message,
         }));
         return;
       }
@@ -371,6 +414,7 @@ export const RimzPlugin: Plugin = async (input) => {
           childModels.delete(sessionID);
           gauge.delete(sessionID);
           agents.delete(sessionID);
+          sessions.delete(sessionID);
           return;
         }
         void endRoot(sessionID, "deleted");
@@ -384,7 +428,7 @@ export const RimzPlugin: Plugin = async (input) => {
         if (typeof sessionID === "string" && sessionID.length > 0 && typeof agent === "string") {
           agents.set(sessionID, agent);
         }
-        updateGauge(info);
+        await updateGauge(info);
         if (typeof sessionID === "string") announceChildModel(sessionID);
         return;
       }
@@ -392,7 +436,7 @@ export const RimzPlugin: Plugin = async (input) => {
       if (type === "message.part.updated") {
         const part = properties.part || {};
         if (part.type === "step-finish") {
-          updateGauge(part);
+          await updateGauge(part);
           if (typeof part.sessionID === "string") announceChildModel(part.sessionID);
         }
       }
@@ -412,8 +456,9 @@ export const RimzPlugin: Plugin = async (input) => {
           providerID,
           effort: hookInput.variant,
           contextWindow: prior.model === modelID ? prior.contextWindow : undefined,
+          modelDisplayName: prior.model === modelID ? prior.modelDisplayName : undefined,
         });
-        resolveWindow(sessionID, providerID, modelID);
+        await resolveWindow(sessionID, providerID, modelID);
       }
       send(base("chat_message", sessionID, {
         prompt: userMessageText(output.message, output.parts),

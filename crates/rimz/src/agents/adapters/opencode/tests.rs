@@ -250,6 +250,45 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
 }
 
 #[test]
+fn opencode_observes_rich_context_from_plugin_envelopes() {
+    let output = hook_output(
+        &OpencodeAdapter,
+        "session_idle",
+        &json!({
+            "session_id": "ses_1",
+            "session_name": "Fix OpenCode metadata",
+            "model_display_name": "GPT-5.5 Codex",
+            "agent_version": "1.18.23"
+        }),
+    );
+    let observation = output.observed_context().expect("rich context");
+    assert_eq!(observation.agent_id.as_str(), "ses_1");
+    assert_eq!(observation.context.source, "opencode");
+    assert_eq!(
+        observation.context.session_name.as_deref(),
+        Some("Fix OpenCode metadata")
+    );
+    assert_eq!(
+        observation.context.model_display_name.as_deref(),
+        Some("GPT-5.5 Codex")
+    );
+    assert_eq!(
+        observation.context.agent_version.as_deref(),
+        Some("1.18.23")
+    );
+
+    assert!(
+        hook_output(
+            &OpencodeAdapter,
+            "session_idle",
+            &json!({ "session_id": "ses_1" })
+        )
+        .observed_context()
+        .is_none()
+    );
+}
+
+#[test]
 fn opencode_observes_native_questions() {
     let observed = hook_lifecycle(
         &OpencodeAdapter,
@@ -422,80 +461,6 @@ fn opencode_records_native_permission_and_question_answers() {
         .map(<[_]>::to_vec)
         .is_none()
     );
-}
-
-#[test]
-fn opencode_context_refreshes_are_bounded_to_turn_events_with_server_url() {
-    let workspace_id =
-        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/workspace"));
-    let ctx = crate::agents::LifecycleRefreshCtx {
-        agent_id: "sess-1",
-        workspace_id: &workspace_id,
-        model_hint: Some("gpt-5"),
-        server_url: Some("http://127.0.0.1:4096/"),
-    };
-    for event in [
-        "session_created",
-        "chat_message",
-        "session_idle",
-        "session_error",
-    ] {
-        let spawn = OpencodeAdapter
-            .context_refresh_spawn(crate::agents::RefreshTrigger::Hook(event), &ctx)
-            .unwrap_or_else(|| panic!("{event} refreshes"));
-        let request: crate::agents::LifecycleRefreshRequest =
-            serde_json::from_str(&spawn.args[3]).expect("decode refresh request");
-        assert_eq!(request.kind.as_str(), "opencode", "{event}");
-        assert_eq!(request.session_id, "sess-1", "{event}");
-        assert_eq!(request.workspace_id, workspace_id, "{event}");
-        assert_eq!(request.model.as_deref(), Some("gpt-5"), "{event}");
-        assert_eq!(
-            request.server_url.as_deref(),
-            Some("http://127.0.0.1:4096/"),
-            "{event}"
-        );
-    }
-
-    let bare = crate::agents::LifecycleRefreshCtx {
-        agent_id: "sess-1",
-        workspace_id: &workspace_id,
-        model_hint: None,
-        server_url: Some("http://127.0.0.1:4096/"),
-    };
-    assert!(
-        !OpencodeAdapter
-            .context_refresh_spawn(crate::agents::RefreshTrigger::Hook("session_idle"), &bare)
-            .unwrap()
-            .args[3]
-            .contains("gpt-5")
-    );
-    let missing_url = crate::agents::LifecycleRefreshCtx {
-        agent_id: "sess-1",
-        workspace_id: &workspace_id,
-        model_hint: None,
-        server_url: None,
-    };
-    assert!(
-        OpencodeAdapter
-            .context_refresh_spawn(
-                crate::agents::RefreshTrigger::Hook("session_idle"),
-                &missing_url
-            )
-            .is_none()
-    );
-    assert!(
-        OpencodeAdapter
-            .context_refresh_spawn(crate::agents::RefreshTrigger::Tick, &ctx)
-            .is_none()
-    );
-    for event in ["tool_after", "session_compacting", "session_compacted"] {
-        assert!(
-            OpencodeAdapter
-                .context_refresh_spawn(crate::agents::RefreshTrigger::Hook(event), &ctx)
-                .is_none(),
-            "{event}"
-        );
-    }
 }
 
 #[test]
@@ -705,7 +670,10 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("\"hooks\", \"feed\", \"--source\", \"opencode\""));
     assert!(PLUGIN_SOURCE.contains("RIMZ_AGENT_PID"));
     assert!(PLUGIN_SOURCE.contains("RIMZ_BIN"));
-    assert!(PLUGIN_SOURCE.contains("server_url: input.serverUrl"));
+    assert!(PLUGIN_SOURCE.contains("session_name: sessionID ? sessions.get(sessionID)?.title"));
+    assert!(PLUGIN_SOURCE.contains("agent_version: sessionID ? sessions.get(sessionID)?.version"));
+    assert!(PLUGIN_SOURCE.contains("model_display_name: currentGauge?.modelDisplayName"));
+    assert!(!PLUGIN_SOURCE.contains("server_url: input.serverUrl"));
     assert!(PLUGIN_SOURCE.contains("permission.ask"));
     assert!(PLUGIN_SOURCE.contains("permission.asked"));
     assert!(PLUGIN_SOURCE.contains("permission.replied"));
