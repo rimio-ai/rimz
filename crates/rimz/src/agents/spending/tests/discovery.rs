@@ -358,17 +358,6 @@ fn complete_enumeration_preserves_selection_filters_and_symlink_policy() {
             first.join("sessions/keep.jsonl"),
         ]
     );
-
-    let first_path = SpendingSource::first(vec![
-        SpendingSourceTree::new(dir.path().join("missing"), "**/*.jsonl").unwrap(),
-        SpendingSourceTree::new(&second, "**/*.jsonl")
-            .unwrap()
-            .descend_filtered("sessions", sessions_only),
-    ]);
-    assert_eq!(
-        first_path.complete_files(),
-        [second.join("sessions/drop.jsonl")]
-    );
 }
 
 #[test]
@@ -391,14 +380,6 @@ fn source_fingerprint_is_binary_canonical_and_declaration_complete() {
             .filtered("named-filter", filter),
     ]);
     assert_ne!(normalized.fingerprint(), filtered.fingerprint());
-    assert_ne!(
-        normalized.fingerprint(),
-        SpendingSource::first(vec![
-            SpendingSourceTree::new("/tmp/root/sessions", "**/*.jsonl").unwrap(),
-        ])
-        .fingerprint()
-    );
-
     let empty_named_filter = SpendingSource::group(vec![
         SpendingSourceTree::new("/tmp/root/sessions", "**/*.jsonl")
             .unwrap()

@@ -599,18 +599,9 @@ impl crate::agents::capabilities::SpendingCapability for OpencodeAdapter {
     }
 
     fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
-        database::data_dirs()
+        database::files()
             .into_iter()
-            .filter_map(|root| {
-                let primary =
-                    crate::agents::spending::SpendingSourceTree::new(root.clone(), "opencode.db")?;
-                let channels =
-                    crate::agents::spending::SpendingSourceTree::new(root, "opencode-*.db")?
-                        .filtered("opencode-channel", database::is_channel_relative);
-                Some(crate::agents::spending::SpendingSource::first(vec![
-                    primary, channels,
-                ]))
-            })
+            .map(crate::agents::spending::SpendingSource::exact)
             .collect()
     }
 
