@@ -16,7 +16,7 @@ use super::raw_pane::{
     tab_fullscreen_active, tab_view_cols,
 };
 use super::sidebar::DockOutcome;
-use super::{ZellijBackend, health_probe_timeout};
+use super::{HEALTH_PROBE_RETRY_DELAY, ZellijBackend};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
@@ -229,22 +229,40 @@ impl ZellijBackend {
     }
 
     fn live_session_health(&self, name: &str) -> SessionHealth {
-        let probe = || self.raw_listed_panes(name, health_probe_timeout());
-        if probe().is_ok() {
-            return SessionHealth::Healthy;
-        }
-        match probe() {
-            Ok(_) => SessionHealth::Healthy,
-            Err(err) => {
-                tracing::warn!(
-                    session = %name,
-                    tags.operation = "zellij.session_health",
-                    error = &err as &dyn std::error::Error,
-                    "live zellij room did not answer the native health probe",
-                );
-                SessionHealth::Unresponsive
+        self.live_session_health_within(name, self.health_probe_timeout())
+    }
+
+    fn live_session_health_within(&self, name: &str, budget: Duration) -> SessionHealth {
+        let deadline = Instant::now() + budget;
+        let mut remaining = budget;
+        let last_error = loop {
+            match self.raw_listed_panes(name, remaining) {
+                Ok(_) => return SessionHealth::Healthy,
+                Err(err) => {
+                    let Some(wait_budget) = deadline
+                        .checked_duration_since(Instant::now())
+                        .filter(|remaining| !remaining.is_zero())
+                    else {
+                        break err;
+                    };
+                    std::thread::sleep(HEALTH_PROBE_RETRY_DELAY.min(wait_budget));
+                    let Some(next_budget) = deadline
+                        .checked_duration_since(Instant::now())
+                        .filter(|remaining| !remaining.is_zero())
+                    else {
+                        break err;
+                    };
+                    remaining = next_budget;
+                }
             }
-        }
+        };
+        tracing::warn!(
+            session = %name,
+            tags.operation = "zellij.session_health",
+            error = &last_error as &dyn std::error::Error,
+            "live zellij room did not answer the native health probe",
+        );
+        SessionHealth::Unresponsive
     }
 
     pub(super) fn authoritative_pane_listing(

@@ -460,9 +460,10 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
 
     let backend = rimz::mux::backend_for(mux);
     // Capture whether this is a plain reattach *before* `ensure_session`, which on
-    // tmux would create the session and erase the distinction. A healthy live room
-    // re-seeds nothing; only a birth (absent or stuck) resumes prior agents.
-    let was_live = RoomContext::session_is_healthy_live(mux, entry.session_name());
+    // tmux would create the session and erase the distinction. A live room never
+    // re-seeds prior agents, and its health verdict is reused by the attach gate.
+    let preflight_health = RoomContext::preflight_live_session(mux, entry.session_name())?;
+    let was_live = preflight_health.is_some();
     report_version_mismatch_notices(entry.workspace_id(), mux, entry.session_name(), was_live)?;
 
     let hook_intro_rendered = if matches!(entry, RoomEntry::Start { .. }) && !was_live {
@@ -525,6 +526,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             birth_managed_room(
                 &mut context,
                 was_live,
+                preflight_health,
                 entry.no_resume(),
                 entry.resume_prompt_mode(),
                 entry.refresh_ms(),
@@ -544,6 +546,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             birth_managed_room(
                 &mut context,
                 was_live,
+                preflight_health,
                 entry.no_resume(),
                 entry.resume_prompt_mode(),
                 entry.refresh_ms(),
@@ -558,6 +561,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             birth_managed_room(
                 &mut context,
                 was_live,
+                preflight_health,
                 entry.no_resume(),
                 entry.resume_prompt_mode(),
                 entry.refresh_ms(),
@@ -581,6 +585,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 birth_managed_room(
                     &mut context,
                     was_live,
+                    preflight_health,
                     entry.no_resume(),
                     entry.resume_prompt_mode(),
                     entry.refresh_ms(),
@@ -633,6 +638,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
 fn birth_managed_room(
     context: &mut RoomContext,
     was_live: bool,
+    preflight_health: Option<rimz::mux::SessionHealth>,
     no_resume: bool,
     resume_prompt: ResumePromptMode,
     refresh_ms: Option<u16>,
@@ -666,6 +672,7 @@ fn birth_managed_room(
         context.birth(RoomBirth::Normal {
             cwd,
             rebirth,
+            preflight_health,
             background_view,
             refresh_ms,
             recovery: if std::io::stdin().is_terminal() {

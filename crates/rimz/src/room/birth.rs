@@ -39,6 +39,8 @@ pub enum RoomBirth {
     Normal {
         cwd: PathBuf,
         rebirth: NormalRebirth,
+        /// Health already proved for a session that was live before birth.
+        preflight_health: Option<SessionHealth>,
         /// `None` requests no configured background-view launch.
         background_view: Option<ReadinessSnapshot>,
         refresh_ms: Option<u16>,
@@ -75,6 +77,32 @@ pub struct BirthOutcome {
 impl RoomContext {
     /// Execute shared room birth ordering for a normal or supervised caller.
     pub fn birth(&mut self, birth: RoomBirth) -> Result<BirthOutcome> {
+        let (cwd, refresh_ms, rebirth, preflight_health, background_view, recovery, supervised) =
+            match birth {
+                RoomBirth::Normal {
+                    cwd,
+                    rebirth,
+                    preflight_health,
+                    background_view,
+                    refresh_ms,
+                    recovery,
+                } => (
+                    cwd,
+                    refresh_ms,
+                    Some(rebirth),
+                    preflight_health,
+                    background_view,
+                    recovery,
+                    false,
+                ),
+                RoomBirth::Supervised { cwd, recovery } => {
+                    (cwd, None, None, None, None, recovery, true)
+                }
+            };
+        if matches!(preflight_health, Some(SessionHealth::Unresponsive)) {
+            return Err(super::unresponsive_error(&self.workspace.session_name));
+        }
+
         let pre_existed = match self.backend.list_sessions() {
             Ok(sessions) => sessions
                 .iter()
@@ -106,23 +134,6 @@ impl RoomContext {
             }
         }
 
-        let (cwd, refresh_ms, rebirth, background_view, recovery, supervised) = match birth {
-            RoomBirth::Normal {
-                cwd,
-                rebirth,
-                background_view,
-                refresh_ms,
-                recovery,
-            } => (
-                cwd,
-                refresh_ms,
-                Some(rebirth),
-                background_view,
-                recovery,
-                false,
-            ),
-            RoomBirth::Supervised { cwd, recovery } => (cwd, None, None, None, recovery, true),
-        };
         self.backend.ensure_session(&self.session_options(&cwd))?;
         if supervised && pre_existed {
             self.detected_size = None;
@@ -178,7 +189,7 @@ impl RoomContext {
             self.launch_background_view(options);
         }
 
-        let reset = self.ensure_healthy(&sidebar, daemon, recovery)?;
+        let reset = self.ensure_healthy(&sidebar, daemon, recovery, preflight_health)?;
         self.load_presence();
         Ok(BirthOutcome { resume, reset })
     }
@@ -223,15 +234,17 @@ impl RoomContext {
         sidebar: &SidebarPaneOptions,
         daemon: Option<&DaemonView>,
         recovery: AttendedRecovery,
+        preflight_health: Option<SessionHealth>,
     ) -> Result<Option<RoomResetReport>> {
-        match self.clean_session(sidebar, daemon)? {
+        let health = match preflight_health {
+            Some(health) => health,
+            None => self.clean_session(sidebar, daemon)?,
+        };
+        match health {
             SessionHealth::Healthy | SessionHealth::Reborn => return Ok(None),
-            SessionHealth::Unresponsive => anyhow::bail!(
-                "The '{}' Zellij room is live but not responding to Zellij control commands.\n\
-                 Attaching could open a black screen, so RimZ left the room untouched.\n\
-                 Run `rimz doctor` to inspect it or `rimz reset` to rebuild it (destructive; prompts first).",
-                self.workspace.session_name,
-            ),
+            SessionHealth::Unresponsive => {
+                return Err(super::unresponsive_error(&self.workspace.session_name));
+            }
             SessionHealth::Stuck => {}
         }
         if recovery == AttendedRecovery::RequireExplicitReset {

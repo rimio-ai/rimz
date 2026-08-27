@@ -104,6 +104,16 @@ This directory's room is `rimz-rimz-f89e49`. Detach to (re)launch it, or run `ri
 
 Open a fresh terminal window that is not attached to Zellij or tmux, then run `rimz` there.
 
+### Zellij is live but not responding
+
+Zellij can still list a room after that room has stopped answering pane queries. Attaching then opens an alternate screen that cannot draw, so RimZ refuses before attach and leaves every pane untouched. Run `rimz doctor` to confirm the `live but not responding` session-health verdict. If it does not recover, rebuild the room explicitly:
+
+```sh
+rimz reset
+```
+
+Reset is destructive and asks for confirmation before replacing the wedged room; see [Rebuild a wedged room with `rimz reset`](#rebuild-a-wedged-room-with-rimz-reset) for the exact lifecycle and non-interactive flags.
+
 ### Zellij or tmux is missing or too old
 
 RimZ needs Zellij 0.44+ or tmux 3.5+ on the machine, pixel-perfect pets add tmux 3.6+, and Zellij's kitty-graphics capability requires 0.45+. The `MULTIPLEXER` section reports the detected backend and its version against the floor (`zellij floor: ✓ OK (>= 0.44.0 required)`, or `TOO OLD`). Install or upgrade the multiplexer if the row flags it. When both are installed and doctor resolved the one you did not want, pick a backend explicitly with `--zellij`, `--tmux`, or `--mux <name>`.
