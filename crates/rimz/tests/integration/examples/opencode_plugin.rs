@@ -51,6 +51,7 @@ process.env.RIMZ_BIN = {};
 process.env.RIMZ_CAPTURE = {};
 
 const {{ RimzPlugin }} = await import({});
+let sessionReads = 0;
 const plugin = await RimzPlugin({{
   directory: {},
   worktree: {},
@@ -75,9 +76,17 @@ const plugin = await RimzPlugin({{
       }})
     }},
     session: {{
-      get: async (request) => ({{
-        data: {{ title: `Session ${{request.path.id}}`, version: "1.18.23" }},
-      }}),
+      get: async () => {{
+        sessionReads += 1;
+        return {{
+          data: {{
+            title: sessionReads === 1
+              ? "New session - 2026-08-27T05:12:33.123Z"
+              : "Fix OpenCode metadata",
+            version: "1.18.23",
+          }},
+        }};
+      }},
     }},
   }},
 }});
@@ -91,6 +100,9 @@ const createRoot = async () => await plugin.event({{
 const update = async (info) => await plugin.event({{
   event: {{ type: "message.updated", properties: {{ info }} }},
 }});
+const updateSession = async () => await plugin.event({{
+  event: {{ type: "session.updated", properties: {{ info: {{ id: "ses-1" }} }} }},
+}});
 const idle = async () => await plugin.event({{
   event: {{ type: "session.idle", properties: {{ sessionID: "ses-1" }} }},
 }});
@@ -102,6 +114,19 @@ const fail = async () => await plugin.event({{
       error: {{
         name: "ProviderAuthError",
         data: {{ message: "Anthropic credentials expired", providerID: "anthropic" }},
+      }},
+    }},
+  }},
+}});
+const failWithoutMessage = async () => await plugin.event({{
+  event: {{
+    type: "session.error",
+    properties: {{
+      sessionID: "ses-1",
+      error: {{
+        name: "MessageOutputLengthError",
+        message: "MessageOutputLengthError",
+        data: {{}},
       }},
     }},
   }},
@@ -151,10 +176,20 @@ await createRoot();
 const root = (await waitForPayloads(1))[0];
 if (
   root.hook_event_name !== "session_created" ||
-  root.session_name !== "Session ses-1" ||
-  root.agent_version !== "1.18.23"
+  root.session_name !== undefined ||
+  root.agent_version !== undefined
 ) {{
-  throw new Error(`root metadata missing: ${{JSON.stringify(root)}}`);
+  throw new Error(`placeholder metadata leaked: ${{JSON.stringify(root)}}`);
+}}
+
+await updateSession();
+const refreshed = (await waitForPayloads(2))[1];
+if (
+  refreshed.hook_event_name !== "session_updated" ||
+  refreshed.session_name !== "Fix OpenCode metadata" ||
+  refreshed.agent_version !== "1.18.23"
+) {{
+  throw new Error(`updated metadata missing: ${{JSON.stringify(refreshed)}}`);
 }}
 
 await update({{
@@ -172,7 +207,7 @@ await update({{
   tokens: {{ input: 0, output: 0, cache: {{ read: 0, write: 0 }} }},
 }});
 await idle();
-const first = (await waitForPayloads(2))[1];
+const first = (await waitForPayloads(3))[2];
 assertTokens(first, {{
   input_tokens: 2627,
   output_tokens: 8,
@@ -184,7 +219,7 @@ if (first.model !== "gpt-5-mini" || first.effort !== "low") {{
   throw new Error(`zero-only update lost metadata: ${{JSON.stringify(first)}}`);
 }}
 if (
-  first.session_name !== "Session ses-1" ||
+  first.session_name !== "Fix OpenCode metadata" ||
   first.agent_version !== "1.18.23" ||
   first.model_display_name !== "GPT-5 Mini" ||
   first.context_window !== 128000
@@ -193,12 +228,21 @@ if (
 }}
 
 await fail();
-const failed = (await waitForPayloads(3))[2];
+const failed = (await waitForPayloads(4))[3];
 if (
   failed.error_class !== "ProviderAuthError" ||
   failed.error_message !== "Anthropic credentials expired"
 ) {{
   throw new Error(`structured error was not flattened: ${{JSON.stringify(failed)}}`);
+}}
+
+await failWithoutMessage();
+const messageLess = (await waitForPayloads(5))[4];
+if (
+  messageLess.error_class !== "MessageOutputLengthError" ||
+  messageLess.error_message !== undefined
+) {{
+  throw new Error(`message-less error grew fake text: ${{JSON.stringify(messageLess)}}`);
 }}
 
 await update({{
@@ -209,7 +253,7 @@ await update({{
   tokens: {{ input: 23, output: 0, cache: {{ read: 0, write: 0 }}, total: 23 }},
 }});
 await idle();
-const second = (await waitForPayloads(4))[3];
+const second = (await waitForPayloads(6))[5];
 assertTokens(second, {{
   input_tokens: 23,
   output_tokens: 0,
@@ -219,7 +263,7 @@ assertTokens(second, {{
 }});
 
 await createChild();
-const created = (await waitForPayloads(5))[4];
+const created = (await waitForPayloads(7))[6];
 if (
   created.hook_event_name !== "SubagentStart" ||
   created.session_id !== "ses-child" ||
@@ -236,7 +280,7 @@ await update({{
   providerID: "anthropic",
   tokens: {{ input: 100, output: 20, cache: {{ read: 30, write: 0 }}, total: 150 }},
 }});
-const announced = (await waitForPayloads(6))[5];
+const announced = (await waitForPayloads(8))[7];
 if (
   announced.hook_event_name !== "SubagentStart" ||
   announced.session_id !== "ses-child" ||
@@ -267,13 +311,13 @@ await stepFinish({{
   providerID: "openai",
   tokens: {{ input: 40, output: 10, cache: {{ read: 5, write: 0 }}, total: 55 }},
 }});
-const switched = (await waitForPayloads(7))[6];
+const switched = (await waitForPayloads(9))[8];
 if (switched.model !== "gpt-5-mini" || switched.prompt !== undefined) {{
   throw new Error(`unexpected child model switch: ${{JSON.stringify(switched)}}`);
 }}
 await new Promise((resolve) => setTimeout(resolve, 250));
 const finalPayloads = await readPayloads();
-if (finalPayloads.length !== 7) {{
+if (finalPayloads.length !== 9) {{
   throw new Error(`child model was announced more than once: ${{JSON.stringify(finalPayloads)}}`);
 }}
 
@@ -290,11 +334,38 @@ for (const [sessionID, session] of [
     event: {{ type: "session.created", properties: {{ info: {{ id: sessionID }} }} }},
   }});
 }}
-const resilient = await waitForPayloads(9);
-for (const payload of resilient.slice(7)) {{
+const resilient = await waitForPayloads(11);
+for (const payload of resilient.slice(9)) {{
   if (payload.session_name !== undefined || payload.agent_version !== undefined) {{
     throw new Error(`failed session metadata read leaked fields: ${{JSON.stringify(payload)}}`);
   }}
+}}
+
+const stalledPlugin = await RimzPlugin({{
+  directory: {},
+  worktree: {},
+  client: {{
+    config: {{ providers: async () => ({{ providers: [] }}) }},
+    session: {{ get: async () => await new Promise(() => {{}}) }},
+  }},
+}});
+await stalledPlugin.event({{
+  event: {{ type: "session.created", properties: {{ info: {{ id: "ses-stalled" }} }} }},
+}});
+await waitForPayloads(12);
+await stalledPlugin.event({{
+  event: {{ type: "session.idle", properties: {{ sessionID: "ses-stalled" }} }},
+}});
+await waitForPayloads(13);
+await stalledPlugin.event({{
+  event: {{ type: "session.deleted", properties: {{ info: {{ id: "ses-stalled" }} }} }},
+}});
+const stalled = (await waitForPayloads(14)).slice(11);
+if (
+  stalled.map((payload) => payload.hook_event_name).join(",") !==
+  "session_created,session_idle,session_ended"
+) {{
+  throw new Error(`stalled metadata read reordered lifecycle: ${{JSON.stringify(stalled)}}`);
 }}
 "#,
             serde_json::to_string(stub_path.to_str().unwrap()).unwrap(),
@@ -305,6 +376,8 @@ for (const payload of resilient.slice(7)) {{
             serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
             serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
             serde_json::to_string(capture_path.to_str().unwrap()).unwrap(),
+            serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
+            serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
             serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
             serde_json::to_string(dir.path().to_str().unwrap()).unwrap(),
         ),
