@@ -161,7 +161,9 @@ fn resume_prompt_mode(confirm_resume: bool, stdin_is_terminal: bool) -> ResumePr
 /// A start driven by the remote link supervisor's retry loop is unattended:
 /// consent gates fall back to their non-interactive behavior.
 fn start_attended() -> bool {
-    std::io::stdin().is_terminal() && !rimz::remote::reconnect_marked()
+    std::io::stdin().is_terminal()
+        && !std::env::var_os(rimz::remote::REMOTE_RECONNECT_ENV)
+            .is_some_and(|value| !value.is_empty())
 }
 
 pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {

@@ -298,11 +298,6 @@ pub fn ssh_program() -> String {
     std::env::var(SSH_BIN_ENV).unwrap_or_else(|_| "ssh".to_owned())
 }
 
-/// Whether this process was launched by a remote reconnect retry.
-pub fn reconnect_marked() -> bool {
-    std::env::var_os(REMOTE_RECONNECT_ENV).is_some_and(|value| !value.is_empty())
-}
-
 /// The `infocmp` program, honoring the `RIMZ_INFOCMP_BIN` test-shim override.
 pub fn infocmp_program() -> String {
     std::env::var(INFOCMP_BIN_ENV).unwrap_or_else(|_| "infocmp".to_owned())
