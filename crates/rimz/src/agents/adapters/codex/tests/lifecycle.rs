@@ -393,7 +393,7 @@ fn v2_child_rollout_enriches_every_hook_without_parent_transcript_leakage() {
         ),
     )
     .unwrap();
-    let child_path = day_dir.join("rollout-child-thread-1.jsonl");
+    let child_path = day_dir.join("rollout-2026-06-26T00-00-01-child-thread-1.jsonl");
     std::fs::write(
         &child_path,
         concat!(
