@@ -163,7 +163,10 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
             "SessionStart",
             &json!({"session_id": "sess-1", "source": "compact"})
         ),
-        LifecycleSignal::CompactionEnded { auto: None }
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        }
     );
     assert!(
         hook_output(

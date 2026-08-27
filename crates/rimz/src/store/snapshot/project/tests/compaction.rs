@@ -40,6 +40,12 @@ fn compaction_ended(auto: Option<bool>) -> serde_json::Value {
     signal
 }
 
+fn compaction_failed(auto: Option<bool>) -> serde_json::Value {
+    let mut signal = compaction_ended(auto);
+    signal["failed"] = serde_json::Value::Bool(true);
+    signal
+}
+
 fn tool_used() -> serde_json::Value {
     serde_json::json!({ "signal": "tool_used", "mutates": true, "edits": true })
 }
@@ -235,6 +241,26 @@ fn manual_compaction_resumes_success_and_advances_the_turn_boundary() {
 
     assert_eq!(agents[0].status, AgentStatus::Success);
     assert_eq!(agents[0].phase, TurnPhase::Idle);
+    assert!(agents[0].compacting_since.is_none());
+    assert_eq!(agents[0].compaction_count, 1);
+    assert_eq!(agents[0].turn_started_at, Some(expected_boundary));
+}
+
+#[test]
+fn failed_compaction_preserves_the_turn_boundary() {
+    let prompt = lifecycle_at("pi", 1, "before_agent_start", signal("turn_started"));
+    let compact = lifecycle_at("pi", 3, "session_before_compact", signal("compacting"));
+    let failed = lifecycle_at(
+        "pi",
+        4,
+        "session_compact_failed",
+        compaction_failed(Some(false)),
+    );
+    let expected_boundary = prompt.timestamp;
+
+    let agents = reduce_agent_states(&[prompt, compact, failed]);
+
+    assert_eq!(agents[0].status, AgentStatus::Running);
     assert!(agents[0].compacting_since.is_none());
     assert_eq!(agents[0].compaction_count, 1);
     assert_eq!(agents[0].turn_started_at, Some(expected_boundary));

@@ -148,7 +148,34 @@ fn compaction_end_reports_its_cause() {
         }
         assert_eq!(
             observe("session_compact", &payload).signal,
-            LifecycleSignal::CompactionEnded { auto: expected },
+            LifecycleSignal::CompactionEnded {
+                auto: expected,
+                failed: false,
+            },
+            "{reason:?}"
+        );
+    }
+}
+
+#[test]
+fn compaction_failure_reports_its_cause() {
+    for (reason, expected) in [
+        (Some("manual"), Some(false)),
+        (Some("threshold"), Some(true)),
+        (Some("overflow"), Some(true)),
+        (Some("future"), None),
+        (None, None),
+    ] {
+        let mut payload = json!({ "session_id": "sess-1" });
+        if let Some(reason) = reason {
+            payload["compaction_reason"] = json!(reason);
+        }
+        assert_eq!(
+            observe("session_compact_failed", &payload).signal,
+            LifecycleSignal::CompactionEnded {
+                auto: expected,
+                failed: true,
+            },
             "{reason:?}"
         );
     }

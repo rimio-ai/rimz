@@ -421,6 +421,12 @@ export default function rimz(pi) {
       compaction_will_retry: ev?.willRetry,
     }),
   );
+  pi.on("session_compact_failed", (ev, ctx) =>
+    feed("session_compact_failed", ctx, {
+      compaction_reason: ev?.reason,
+      compaction_will_retry: ev?.willRetry,
+    }),
+  );
   pi.on("session_shutdown", (ev, ctx) => {
     // A /reload tears down and re-registers the SAME session id. The feeds are
     // fire-and-forget, so an end signal racing the re-register could hide the

@@ -11,7 +11,10 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
         (
             "SessionStart",
             json!({"session_id":"s","source":"compact"}),
-            Some(CompactionEnded { auto: None }),
+            Some(CompactionEnded {
+                auto: None,
+                failed: false,
+            }),
         ),
         (
             "SessionStart",
@@ -41,22 +44,34 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
         (
             "PostCompact",
             json!({"session_id":"s","trigger":"auto"}),
-            Some(CompactionEnded { auto: Some(true) }),
+            Some(CompactionEnded {
+                auto: Some(true),
+                failed: false,
+            }),
         ),
         (
             "PostCompact",
             json!({"session_id":"s","trigger":"manual"}),
-            Some(CompactionEnded { auto: Some(false) }),
+            Some(CompactionEnded {
+                auto: Some(false),
+                failed: false,
+            }),
         ),
         (
             "PostCompact",
             json!({"session_id":"s","trigger":"future"}),
-            Some(CompactionEnded { auto: None }),
+            Some(CompactionEnded {
+                auto: None,
+                failed: false,
+            }),
         ),
         (
             "PostCompact",
             json!({"session_id":"s"}),
-            Some(CompactionEnded { auto: None }),
+            Some(CompactionEnded {
+                auto: None,
+                failed: false,
+            }),
         ),
         (
             "PreToolUse",

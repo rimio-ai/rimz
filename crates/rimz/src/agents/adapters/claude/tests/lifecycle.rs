@@ -167,19 +167,31 @@ fn compaction_events_map_trigger_to_lifecycle_signals() {
     for (payload, expected) in [
         (
             json!({ "session_id": "sess-1", "trigger": "auto" }),
-            LifecycleSignal::CompactionEnded { auto: Some(true) },
+            LifecycleSignal::CompactionEnded {
+                auto: Some(true),
+                failed: false,
+            },
         ),
         (
             json!({ "session_id": "sess-1", "trigger": "manual" }),
-            LifecycleSignal::CompactionEnded { auto: Some(false) },
+            LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: false,
+            },
         ),
         (
             json!({ "session_id": "sess-1", "trigger": "future" }),
-            LifecycleSignal::CompactionEnded { auto: None },
+            LifecycleSignal::CompactionEnded {
+                auto: None,
+                failed: false,
+            },
         ),
         (
             json!({ "session_id": "sess-1" }),
-            LifecycleSignal::CompactionEnded { auto: None },
+            LifecycleSignal::CompactionEnded {
+                auto: None,
+                failed: false,
+            },
         ),
     ] {
         let obs = hook_lifecycle(&ClaudeAdapter, "PostCompact", &payload);
@@ -414,7 +426,10 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
     for (source, expected_signal, expected_origin) in [
         (
             "compact",
-            LifecycleSignal::CompactionEnded { auto: None },
+            LifecycleSignal::CompactionEnded {
+                auto: None,
+                failed: false,
+            },
             None,
         ),
         (

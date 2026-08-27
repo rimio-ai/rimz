@@ -459,7 +459,10 @@ fn maps_lifecycle_context_background_and_subagents() {
             "SessionStart",
             &json!({"session_id":"s1","source":"compact"})
         ),
-        LifecycleSignal::CompactionEnded { auto: None }
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        }
     );
 }
 

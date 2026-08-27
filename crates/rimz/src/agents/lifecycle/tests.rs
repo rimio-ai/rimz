@@ -248,7 +248,10 @@ fn activity_evidence_reconciles_only_running_and_resting_states() {
                 "tool used before session registered",
             ),
             (
-                LifecycleSignal::CompactionEnded { auto: Some(true) },
+                LifecycleSignal::CompactionEnded {
+                    auto: Some(true),
+                    failed: false,
+                },
                 "auto-compaction resumed a turn",
                 "auto-compaction resumed a turn",
             ),
@@ -400,7 +403,10 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
         let transition = assert_next(
             label,
             Some(prev),
-            LifecycleSignal::CompactionEnded { auto },
+            LifecycleSignal::CompactionEnded {
+                auto,
+                failed: false,
+            },
             expected,
         );
         assert!(transition.compaction_closed, "{label}");
@@ -409,7 +415,10 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
     let resumed = assert_next(
         "auto from idle",
         Some(state(AgentStatus::Idle, TurnPhase::Idle, true)),
-        LifecycleSignal::CompactionEnded { auto: Some(true) },
+        LifecycleSignal::CompactionEnded {
+            auto: Some(true),
+            failed: false,
+        },
         reasoning,
     );
     assert_eq!(
@@ -427,7 +436,10 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
     let ignored = assert_next(
         "unbracketed unknown",
         Some(reasoning),
-        LifecycleSignal::CompactionEnded { auto: None },
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        },
         reasoning,
     );
     assert_eq!(
@@ -442,7 +454,10 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
     let manual = assert_next(
         "unbracketed manual",
         Some(acting),
-        LifecycleSignal::CompactionEnded { auto: Some(false) },
+        LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: false,
+        },
         state(AgentStatus::Idle, TurnPhase::Idle, false),
     );
     assert!(!manual.compaction_closed);
@@ -489,7 +504,10 @@ fn compaction_clears_a_waiting_row_and_preserves_every_other_status() {
     assert_next(
         "manual close after the cleared wait",
         Some(cleared.next),
-        LifecycleSignal::CompactionEnded { auto: Some(false) },
+        LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: false,
+        },
         state(AgentStatus::Idle, TurnPhase::Idle, false),
     );
 
@@ -508,6 +526,57 @@ fn compaction_clears_a_waiting_row_and_preserves_every_other_status() {
         assert_eq!(transition.kind, TransitionKind::Normal, "{label}");
         assert!(!transition.waiting_cleared, "{label}");
     }
+}
+
+#[test]
+fn failed_compaction_closes_the_bracket_without_recording_success() {
+    let acting = state(AgentStatus::Running, TurnPhase::Acting, true);
+    for (label, prior, expected) in [
+        (
+            "running",
+            acting,
+            state(AgentStatus::Running, TurnPhase::Acting, false),
+        ),
+        (
+            "idle",
+            state(AgentStatus::Idle, TurnPhase::Idle, true),
+            state(AgentStatus::Idle, TurnPhase::Idle, false),
+        ),
+        (
+            "success",
+            state(AgentStatus::Success, TurnPhase::Idle, true),
+            state(AgentStatus::Success, TurnPhase::Idle, false),
+        ),
+        (
+            "failure",
+            state(AgentStatus::Failed, TurnPhase::Idle, true),
+            state(AgentStatus::Failed, TurnPhase::Idle, false),
+        ),
+    ] {
+        let transition = assert_next(
+            label,
+            Some(prior),
+            LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: true,
+            },
+            expected,
+        );
+        assert!(transition.compaction_closed, "{label}");
+        assert!(!transition.opened_turn, "{label}");
+    }
+
+    let waiting = assert_next(
+        "waiting",
+        Some(state(AgentStatus::Waiting, TurnPhase::Idle, true)),
+        LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: true,
+        },
+        state(AgentStatus::Running, TurnPhase::Reasoning, false),
+    );
+    assert!(waiting.waiting_cleared);
+    assert!(!waiting.opened_turn);
 }
 
 #[test]
@@ -578,7 +647,10 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
         ),
         (LifecycleSignal::Compacting, "compacting"),
         (
-            LifecycleSignal::CompactionEnded { auto: Some(true) },
+            LifecycleSignal::CompactionEnded {
+                auto: Some(true),
+                failed: false,
+            },
             "compaction_ended",
         ),
         (LifecycleSignal::Ended, "ended"),
@@ -621,10 +693,25 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
     );
     assert_legacy(
         serde_json::json!({ "signal": "compaction_ended" }),
-        LifecycleSignal::CompactionEnded { auto: None },
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        },
     );
     assert_eq!(
-        serde_json::to_value(LifecycleSignal::CompactionEnded { auto: None }).unwrap(),
+        serde_json::to_value(LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        })
+        .unwrap(),
         serde_json::json!({ "signal": "compaction_ended" })
+    );
+    assert_eq!(
+        serde_json::to_value(LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: true,
+        })
+        .unwrap(),
+        serde_json::json!({ "signal": "compaction_ended", "auto": false, "failed": true })
     );
 }

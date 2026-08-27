@@ -535,7 +535,10 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
     );
     assert_eq!(
         compacted.signal,
-        LifecycleSignal::CompactionEnded { auto: None }
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        }
     );
 
     let child = hook_lifecycle(

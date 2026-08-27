@@ -161,15 +161,18 @@ pub enum LifecycleSignal {
     /// the native prompt releases the pane, so it clears a waiting row and the
     /// ask behind it.
     Compacting,
-    /// Context compaction finished or was observed to have finished
+    /// Context compaction finished or failed
     /// (Claude/Codex `PostCompact`, Claude/Codex `SessionStart` with
     /// `source = "compact"`, Pi `session_compact`). The transient compacting
     /// head lifts here when one is open. When the provider reports the trigger,
     /// automatic compaction resumes the interrupted turn and manual `/compact`
     /// rests to idle. A provider with no trigger bit preserves the prior state.
+    /// A failed close only lifts the transient head and preserves status.
     CompactionEnded {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         auto: Option<bool>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        failed: bool,
     },
     /// The session ended (Claude `SessionEnd`/`offline`). The reducer stamps
     /// the durable row while [`step`] preserves its last lifecycle state.
@@ -406,7 +409,10 @@ fn opened_turn(
             && matches!(
                 signal,
                 LifecycleSignal::ToolUsed { .. }
-                    | LifecycleSignal::CompactionEnded { auto: Some(true) }
+                    | LifecycleSignal::CompactionEnded {
+                        auto: Some(true),
+                        failed: false,
+                    }
             ))
 }
 
@@ -489,17 +495,31 @@ fn map_status(
             }
             other => other.unwrap_or(AgentStatus::Idle),
         },
-        LifecycleSignal::CompactionEnded { auto: Some(true) } => {
-            reconcile_activity(prior_status, "auto-compaction resumed a turn", kind)
+        LifecycleSignal::CompactionEnded { failed: true, .. } => {
+            if prior_status == Some(AgentStatus::Waiting) {
+                AgentStatus::Running
+            } else {
+                prior_status.unwrap_or(AgentStatus::Idle)
+            }
         }
-        LifecycleSignal::CompactionEnded { auto: Some(false) } => match prior_status {
+        LifecycleSignal::CompactionEnded {
+            auto: Some(true),
+            failed: false,
+        } => reconcile_activity(prior_status, "auto-compaction resumed a turn", kind),
+        LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: false,
+        } => match prior_status {
             Some(AgentStatus::Waiting) => AgentStatus::Running,
             // A stale running row rests: the manual close proves the user typed
             // at the prompt, and no Stop will end the turn the row remembers.
             Some(AgentStatus::Running) | None => AgentStatus::Idle,
             Some(resting) => resting,
         },
-        LifecycleSignal::CompactionEnded { auto: None } => {
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        } => {
             if prior_status == Some(AgentStatus::Waiting) {
                 AgentStatus::Running
             } else {

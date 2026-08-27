@@ -931,6 +931,60 @@ fn pi_bridge_adopts_an_existing_rich_root_with_the_live_signal() {
 }
 
 #[test]
+fn pi_compaction_failure_closes_the_active_bracket() {
+    let (_dir, store) = hooks_test_store();
+    let adapter = rimz::agents::definition_by_kind("pi").unwrap();
+    feed_pi(
+        &store,
+        adapter,
+        "session_start",
+        pi_session_payload("compact-session"),
+    );
+    feed_pi(
+        &store,
+        adapter,
+        "before_agent_start",
+        serde_json::json!({ "session_id": "compact-session", "prompt": "continue" }),
+    );
+    feed_pi(
+        &store,
+        adapter,
+        "session_before_compact",
+        serde_json::json!({ "session_id": "compact-session", "compaction_reason": "manual" }),
+    );
+
+    let compacting = store.snapshot_cached().unwrap();
+    let agent = compacting
+        .agents
+        .iter()
+        .find(|state| state.agent_id == "compact-session")
+        .unwrap();
+    assert_eq!(agent.status, rimz::agents::AgentStatus::Running);
+    assert!(agent.compacting_since.is_some());
+
+    feed_pi(
+        &store,
+        adapter,
+        "session_compact_failed",
+        serde_json::json!({
+            "session_id": "compact-session",
+            "compaction_reason": "manual",
+            "will_retry": false,
+        }),
+    );
+
+    let failed = store.snapshot_cached().unwrap();
+    let agent = failed
+        .agents
+        .iter()
+        .find(|state| state.agent_id == "compact-session")
+        .unwrap();
+    assert_eq!(agent.status, rimz::agents::AgentStatus::Running);
+    assert!(agent.compacting_since.is_none());
+    assert_eq!(agent.compaction_count, 1);
+}
+
+#[test]
 fn pi_bridge_adoption_preserves_parented_and_foreign_pane_roots() {
     let parent_adapter = hook_definition(Box::leak(Box::new(PiAdoptionTestAdapter {
         pane_id: id("terminal_parent"),

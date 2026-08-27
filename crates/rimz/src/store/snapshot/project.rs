@@ -806,7 +806,7 @@ fn lifecycle_projection(
         && !matches!(next.status, AgentStatus::Running | AgentStatus::Waiting)
         && matches!(
             &signal,
-            lifecycle::LifecycleSignal::CompactionEnded { .. }
+            lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
                 | lifecycle::LifecycleSignal::Registered
         );
     let turn_started_at = if opened_turn || resets_context {

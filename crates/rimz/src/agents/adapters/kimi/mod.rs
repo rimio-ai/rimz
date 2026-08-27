@@ -397,6 +397,7 @@ fn kimi_root_signal(
         "PreCompact" => Some(LifecycleSignal::Compacting),
         "PostCompact" => Some(LifecycleSignal::CompactionEnded {
             auto: parsed.trigger.as_deref().map(|trigger| trigger == "auto"),
+            failed: false,
         }),
         _ => None,
     }
