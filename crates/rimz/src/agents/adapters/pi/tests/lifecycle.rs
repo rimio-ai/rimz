@@ -49,6 +49,16 @@ fn lifecycle_signals_map_every_wired_event() {
         ),
         (
             "tool_execution_end",
+            json!({ "session_id": "sess-1", "tool_call_id": "windows-call", "tool_name": "powershell" }),
+            Some(LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: false,
+                name: Some("powershell".to_owned()),
+                native_key: Some("windows-call".to_owned()),
+            }),
+        ),
+        (
+            "tool_execution_end",
             json!({ "session_id": "sess-1", "tool_name": "read" }),
             Some(LifecycleSignal::ToolUsed {
                 mutates: false,

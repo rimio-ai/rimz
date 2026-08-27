@@ -81,12 +81,13 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
     // subscriptions rather than metering one of its own.
     sub_providers: &[],
     expected_windows: &[],
-    // Pi's built-in tool set: `edit`/`write` edit files; `bash` mutates
-    // without editing, so the reasoning phase survives it. The rpiv
-    // questionnaire extension contributes the one blocking ask tool.
+    // Pi's built-in tool set: `edit`/`write` edit files; the Unix `bash` and
+    // optional Windows `powershell` tools mutate without editing, so the
+    // reasoning phase survives them. The rpiv questionnaire extension
+    // contributes the one blocking ask tool.
     tools: ToolClassification {
         input_key: None,
-        mutating: &["bash", "edit", "write"],
+        mutating: &["bash", "edit", "write", "powershell"],
         editing: &["edit", "write"],
         blocking: &[("ask_user_question", AskKind::Question)],
     },
