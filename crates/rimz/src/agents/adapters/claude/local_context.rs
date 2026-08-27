@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::managed_pricing;
 use super::spend::{claude_config_dirs, parse_claude_spend};
 use crate::agents::pricing;
 use crate::agents::{
@@ -33,6 +34,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         fold = LocalSpendFold::default();
     }
     let prices = pricing::cached_book(ctx.shared_pricing_cache_path);
+    let prices = managed_pricing::overlay(&prices);
     let parsed = parse_claude_spend(&path, fold.cursor.offset, &prices);
     fold.absorb(&parsed.entries);
     fold.cursor = parsed.cursor;

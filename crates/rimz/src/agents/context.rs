@@ -573,8 +573,9 @@ pub struct SubagentUsageCursor {
     /// incomplete and must not be displayed.
     #[serde(default, skip_serializing_if = "is_false")]
     pub unpriced: bool,
-    /// `(mtime, length)` of the price-book cache when this cursor became
-    /// unpriced. A changed fingerprint permits one full replay to heal it.
+    /// Fingerprint of every price source used for this cursor. A changed
+    /// fingerprint forces one full replay so both healed and changed rates
+    /// apply to the cumulative figure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub book_fingerprint: Option<String>,
     /// Last keyed request, retained across statusline ticks so a contiguous

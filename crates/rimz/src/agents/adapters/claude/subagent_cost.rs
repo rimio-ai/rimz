@@ -29,12 +29,11 @@ pub(super) fn advance_cursor(
     let path = subagents_dir(parent_transcript)?.join(filename);
     let len = std::fs::metadata(&path).ok()?.len();
     let transcript_path = path.to_string_lossy().into_owned();
-    let replay_unpriced = prior.is_some_and(|cursor| {
-        cursor.unpriced && cursor.book_fingerprint.as_deref() != book_fingerprint
-    });
+    let pricing_changed =
+        prior.is_some_and(|cursor| cursor.book_fingerprint.as_deref() != book_fingerprint);
     let mut cursor = prior
         .filter(|cursor| {
-            cursor.transcript_path == transcript_path && cursor.offset <= len && !replay_unpriced
+            cursor.transcript_path == transcript_path && cursor.offset <= len && !pricing_changed
         })
         .cloned()
         .unwrap_or(SubagentUsageCursor {
@@ -75,11 +74,7 @@ pub(super) fn advance_cursor(
         fold_entry(&mut cursor, &entry, prices);
     }
     cursor.offset = next_offset;
-    cursor.book_fingerprint = if cursor.unpriced {
-        book_fingerprint.map(str::to_owned)
-    } else {
-        None
-    };
+    cursor.book_fingerprint = book_fingerprint.map(str::to_owned);
     Some(cursor)
 }
 
@@ -472,6 +467,37 @@ mod tests {
 
         assert!(!healed.unpriced);
         assert_eq!(healed.display_cost(), Some(10.0));
+    }
+
+    #[test]
+    fn changed_book_fingerprint_reprices_a_completed_cursor() {
+        let (_dir, parent, child) = session();
+        write_lines(
+            &child,
+            &[line(
+                "msg-1",
+                "req-1",
+                "model-a",
+                json!({"input_tokens": 2}),
+            )],
+        );
+        let cursor = advance(&parent, None);
+        assert_eq!(cursor.display_cost(), Some(2.0));
+
+        let refreshed = PriceBook::from_litellm_json(
+            r#"{"model-a":{"input_cost_per_token":5.0,"output_cost_per_token":1.0}}"#,
+        );
+        let repriced = advance_cursor(
+            &parent,
+            "child-1",
+            Some(&cursor),
+            &refreshed,
+            Some("1700000001:200"),
+        )
+        .unwrap();
+
+        assert_eq!(repriced.display_cost(), Some(10.0));
+        assert_eq!(repriced.book_fingerprint.as_deref(), Some("1700000001:200"));
     }
 
     #[test]

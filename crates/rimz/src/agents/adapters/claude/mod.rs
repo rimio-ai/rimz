@@ -22,6 +22,7 @@ mod ask;
 mod install;
 mod local_context;
 mod local_sessions;
+mod managed_pricing;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub(crate) mod remote_consent;
@@ -723,12 +724,14 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
         book_fingerprint: Option<&str>,
     ) -> Option<super::SubagentUsageCursor> {
         let parent = optional_payload_string(payload, &["transcript_path"])?;
+        let prices = managed_pricing::overlay(prices);
+        let book_fingerprint = managed_pricing::extend_fingerprint(book_fingerprint);
         subagent_cost::advance_cursor(
             Path::new(&parent),
             child_id,
             prior,
-            prices,
-            book_fingerprint,
+            &prices,
+            book_fingerprint.as_deref(),
         )
     }
 
@@ -819,6 +822,11 @@ impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
         transcripts
     }
 
+    fn spend_pricing_is_current(&self, cursor: &crate::agents::spending::SpendCursor) -> bool {
+        cursor.state.as_ref().and_then(Value::as_str)
+            == managed_pricing::fingerprint_current().as_deref()
+    }
+
     /// Current Claude transcripts log no `costUSD`, so each turn is priced
     /// from its `message.usage` through the book; an older transcript's
     /// positive `costUSD` is used verbatim. Lines are independent, so a
@@ -829,7 +837,11 @@ impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
         resume: Option<&crate::agents::spending::SpendCursor>,
         prices: &PriceBook,
     ) -> crate::agents::spending::SpendParse {
-        spend::parse_claude_spend(path, resume.map_or(0, |cursor| cursor.offset), prices)
+        let prices = managed_pricing::overlay(prices);
+        let mut parsed =
+            spend::parse_claude_spend(path, resume.map_or(0, |cursor| cursor.offset), &prices);
+        parsed.cursor.state = managed_pricing::fingerprint_current().map(Value::String);
+        parsed
     }
 }
 

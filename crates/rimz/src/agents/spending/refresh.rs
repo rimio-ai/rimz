@@ -54,7 +54,10 @@ pub(crate) fn refresh_spending_cache(
             .and_then(|origin| normalized_absolute_path(origin));
         let prior_origin = entry.and_then(|entry| entry.origin_path.clone());
         let parse_origin = override_origin.or(prior_origin);
-        let heals = entry.is_some_and(|entry| has_healed_unknown(entry, prices, now_secs));
+        let heals = entry.is_some_and(|entry| {
+            has_healed_unknown(entry, prices, now_secs)
+                || !adapter.spend_pricing_is_current(&entry.cursor)
+        });
         let resume = match refresh_decision(entry, stat, heals, now_secs) {
             RefreshDecision::Unchanged => {
                 let mut changed = false;

@@ -677,6 +677,13 @@ pub trait SpendingCapability: CoreCapability {
             .collect()
     }
 
+    /// Whether the provider-local pricing inputs captured by a cached parse
+    /// still match the current inputs. A false result forces one cold reparse
+    /// even when the transcript bytes are unchanged.
+    fn spend_pricing_is_current(&self, _cursor: &spending::SpendCursor) -> bool {
+        true
+    }
+
     /// Parse one transcript file into cost entries for the spending pass,
     /// resuming from `resume` when given: read only past its offset, restore
     /// any cross-line state it carries, and return entries the cache appends

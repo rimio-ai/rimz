@@ -242,6 +242,7 @@ pub(super) fn conversation_present(session_id: &AgentSessionId, cwd: &Path) -> O
     ))
 }
 
+#[cfg(test)]
 fn conversation_present_under(
     config_dirs: &[PathBuf],
     session_id: &AgentSessionId,
