@@ -868,7 +868,9 @@ pub fn preflight_hooks(
     if !adapter.hooks_installed() {
         return Err(HookPreflightErr::HooksMissing);
     }
-    let untrusted = adapter.untrusted_preflight_hooks();
+    let untrusted = adapter
+        .managed_integration()
+        .map_or_else(Vec::new, ManagedIntegration::untrusted_preflight_hooks);
     if !untrusted.is_empty() {
         return Err(HookPreflightErr::HooksUntrusted {
             hooks: untrusted.join(", "),
