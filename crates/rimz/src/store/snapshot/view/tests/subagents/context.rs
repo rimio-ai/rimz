@@ -21,6 +21,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
             SubagentContext {
                 agent_type: None,
                 model: Some("child-model".to_owned()),
+                effort: Some("high".to_owned()),
                 description: Some("locate the render path".to_owned()),
                 token_count: Some(12_400),
                 cost_usd: Some(0.42),
@@ -33,6 +34,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
             SubagentContext {
                 agent_type: Some("Explore".to_owned()),
                 model: None,
+                effort: None,
                 description: Some("search the store".to_owned()),
                 token_count: Some(5_000),
                 cost_usd: None,
@@ -45,6 +47,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
             SubagentContext {
                 agent_type: Some("SomethingElse".to_owned()),
                 model: Some("sidecar-model".to_owned()),
+                effort: Some("low".to_owned()),
                 description: None,
                 token_count: None,
                 cost_usd: None,
@@ -57,6 +60,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
             SubagentContext {
                 agent_type: None,
                 model: None,
+                effort: None,
                 description: Some("nowhere".to_owned()),
                 token_count: None,
                 cost_usd: None,
@@ -75,6 +79,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
     assert_eq!(child.subagent_cost_usd, Some(0.42));
     assert_eq!(child.subagent_started_at, Some(started));
     assert_eq!(child.model.as_deref(), Some("child-model"));
+    assert_eq!(child.effort.as_deref(), Some("high"));
 
     let fork = rollup_agent(&folded, "fork-1");
     assert_eq!(fork.task.as_deref(), Some("Explore"));
