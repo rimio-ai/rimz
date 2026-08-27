@@ -74,6 +74,48 @@ fn assert_unresponsive_live_room_is_preserved(list_panes_sleep: Option<&str>) {
 }
 
 #[test]
+fn unresponsive_foreign_zellij_session_names_native_recovery_and_bypass() {
+    let env = Env::new();
+    let shim = FakeZellij::new();
+    let session = "someone-elses-session";
+
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "attach", session, "--print"])
+        .env("PATH", shim.bin_dir.path())
+        .env("RIMZ_ZELLIJ_BIN", &shim.bin)
+        .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
+        .env("RIMZ_TEST_SESSION_NAME", session)
+        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "100")
+        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .expect("run rimz attach");
+
+    assert!(!output.status.success(), "unresponsive attach must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not RimZ-managed"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("zellij delete-session --force 'someone-elses-session'"),
+        "stderr: {stderr}",
+    );
+    assert!(
+        stderr.contains("zellij attach 'someone-elses-session'") && stderr.contains("bypass RimZ"),
+        "stderr: {stderr}",
+    );
+    assert!(!stderr.contains("rimz reset"), "stderr: {stderr}");
+    assert!(!stderr.contains("prompts first"), "stderr: {stderr}");
+
+    let lines = read_trace_lines(&shim.log, Duration::from_millis(200));
+    assert!(
+        !lines.iter().any(|line| line.starts_with("attach")),
+        "the bypass is advice, not a command RimZ ran: {lines:?}",
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("delete-session")),
+        "RimZ must not destroy a foreign session: {lines:?}",
+    );
+}
+
+#[test]
 fn attach_retries_transient_zellij_session_listing_before_default_mux_fallback() {
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");

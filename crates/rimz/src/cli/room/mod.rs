@@ -16,7 +16,9 @@ use rimz::room::session::{
     MissingSessionReport, ensure_single_backend_room, pick_mux_for_session, retire_renamed_session,
     session_probe_retry_timeout, session_probe_timeout, workspace_record_for_session,
 };
-use rimz::room::{AttendedRecovery, NormalRebirth, RoomBirth, RoomContext, RoomSizing};
+use rimz::room::{
+    AttendedRecovery, NormalRebirth, RoomBirth, RoomContext, RoomSizing, SessionOwnership,
+};
 use rimz::{RuntimePaths, store::workspace_record::WorkspaceRecord};
 
 use crate::cli::hooks::ensure_detected_agent_hooks;
@@ -145,6 +147,15 @@ impl RoomEntry<'_> {
                 .ok()
                 .and_then(|record| record.as_ref())
                 .map(|record| &record.workspace_id),
+        }
+    }
+
+    fn session_ownership(&self) -> SessionOwnership {
+        match self {
+            Self::AttachSession { record, .. } if !matches!(record, Ok(Some(_))) => {
+                SessionOwnership::External
+            }
+            _ => SessionOwnership::Managed,
         }
     }
 }
@@ -462,7 +473,8 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     // Capture whether this is a plain reattach *before* `ensure_session`, which on
     // tmux would create the session and erase the distinction. A live room never
     // re-seeds prior agents, and its health verdict is reused by the attach gate.
-    let preflight_health = RoomContext::preflight_live_session(mux, entry.session_name())?;
+    let preflight_health =
+        RoomContext::preflight_live_session(mux, entry.session_name(), entry.session_ownership())?;
     let was_live = preflight_health.is_some();
     report_version_mismatch_notices(entry.workspace_id(), mux, entry.session_name(), was_live)?;
 

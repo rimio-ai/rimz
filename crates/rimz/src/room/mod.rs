@@ -43,6 +43,13 @@ pub enum LiveRoomErr {
 
 pub type LiveRoomResult<T> = std::result::Result<T, LiveRoomErr>;
 
+/// Whether the selected session belongs to a RimZ workspace record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionOwnership {
+    Managed,
+    External,
+}
+
 /// Select the configured multiplexer and require this workspace's room to be live.
 pub fn require_live_mux(
     explicit: Option<MuxName>,
@@ -246,6 +253,7 @@ impl RoomContext {
     pub fn preflight_live_session(
         mux: MuxName,
         session_name: &str,
+        ownership: SessionOwnership,
     ) -> Result<Option<SessionHealth>> {
         let backend = crate::mux::backend_for(mux);
         if !backend
@@ -256,10 +264,7 @@ impl RoomContext {
             return Ok(None);
         }
         let health = backend.probe_session_health(session_name)?;
-        if health == SessionHealth::Unresponsive {
-            return Err(unresponsive_error(session_name));
-        }
-        Ok(Some(health))
+        classify_preflight_health(session_name, ownership, health)
     }
 
     /// Inspect previous incarnation state without mutating it.
@@ -430,12 +435,37 @@ impl RoomContext {
     }
 }
 
-fn unresponsive_error(session_name: &str) -> anyhow::Error {
+fn classify_preflight_health(
+    session_name: &str,
+    ownership: SessionOwnership,
+    health: SessionHealth,
+) -> Result<Option<SessionHealth>> {
+    match health {
+        SessionHealth::Healthy => Ok(Some(health)),
+        SessionHealth::Unresponsive => Err(unresponsive_error(session_name, ownership)),
+        SessionHealth::Reborn | SessionHealth::Stuck => Ok(None),
+    }
+}
+
+fn unresponsive_error(session_name: &str, ownership: SessionOwnership) -> anyhow::Error {
+    let recovery = match ownership {
+        SessionOwnership::Managed => "Run `rimz doctor` to inspect it or `rimz reset` to rebuild it (destructive; prompts first).".to_owned(),
+        SessionOwnership::External => {
+            let session_name = shell_quote(session_name);
+            format!(
+                "This session is not RimZ-managed. Run `zellij delete-session --force {session_name}` to destroy it without a confirmation prompt, or `zellij attach {session_name}` to bypass RimZ if you insist."
+            )
+        }
+    };
     anyhow::anyhow!(
         "The '{session_name}' Zellij room is live but not responding to Zellij control commands.\n\
          Attaching could open a black screen, so RimZ left the room untouched.\n\
-         Run `rimz doctor` to inspect it or `rimz reset` to rebuild it (destructive; prompts first).",
+         {recovery}",
     )
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn recorded_room_bin(workspace_id: &WorkspaceId) -> PathBuf {
@@ -530,5 +560,49 @@ mod tests {
         assert_eq!(unavailable.to_string(), expected);
         assert!(std::error::Error::source(&unavailable).is_none());
         assert_eq!(mux.to_string(), MuxErr::NoMuxFound.to_string());
+    }
+
+    #[test]
+    fn preflight_reuses_only_a_healthy_live_verdict() {
+        assert_eq!(
+            classify_preflight_health(
+                "rimz-demo",
+                SessionOwnership::Managed,
+                SessionHealth::Healthy,
+            )
+            .expect("healthy verdict"),
+            Some(SessionHealth::Healthy)
+        );
+        for health in [SessionHealth::Reborn, SessionHealth::Stuck] {
+            assert_eq!(
+                classify_preflight_health("rimz-demo", SessionOwnership::Managed, health)
+                    .expect("non-live verdict"),
+                None
+            );
+        }
+        assert!(
+            classify_preflight_health(
+                "rimz-demo",
+                SessionOwnership::Managed,
+                SessionHealth::Unresponsive,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn unresponsive_recovery_matches_session_ownership() {
+        let managed = unresponsive_error("rimz-demo", SessionOwnership::Managed).to_string();
+        assert!(managed.contains("`rimz reset`"));
+        assert!(managed.contains("prompts first"));
+
+        let external =
+            unresponsive_error("someone else's session", SessionOwnership::External).to_string();
+        assert!(external.contains("not RimZ-managed"));
+        assert!(external.contains("`zellij delete-session --force 'someone else'\\''s session'`"));
+        assert!(external.contains("`zellij attach 'someone else'\\''s session'`"));
+        assert!(external.contains("without a confirmation prompt"));
+        assert!(!external.contains("rimz reset"));
+        assert!(!external.contains("prompts first"));
     }
 }

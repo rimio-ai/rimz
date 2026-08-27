@@ -280,11 +280,12 @@ The one-second settled-resize pass arms only when the measured pane sits outside
 
 ### The pre-attach health gate
 
-`open_sidebar` is best-effort and can be skipped or fail, so it cannot be the only thing standing between the user and a resurrecting attach. The room birth transition runs `ensure_clean_session` as the authoritative gate, immediately before presence load and attach preparation.
+`open_sidebar` is best-effort and can be skipped or fail, so it cannot be the only thing standing between the user and a resurrecting attach. A normal managed entry probes a live session before setup side effects and threads that verdict through birth; when no reusable live verdict exists, birth runs `ensure_clean_session` to create or cleanly rebirth the session. Supervised birth enters through `ensure_clean_session` directly. Both paths must return an attachable verdict before presence load and attach preparation.
 
 | Session state | Gate action | Verdict |
 | --- | --- | --- |
-| Live | Attach as-is, without inspecting panes | `Healthy` |
+| Live and responsive | Preserve the room after a bounded direct pane probe | `Healthy` |
+| Live but unresponsive | Preserve the room and refuse attach | `Unresponsive` |
 | Absent | Birth from the layout | `Reborn` |
 | Exited (Zellij resurrection record) | Delete, then birth from the layout | `Reborn` |
 | Still not live after a rebirth | Nothing further | `Stuck` |
