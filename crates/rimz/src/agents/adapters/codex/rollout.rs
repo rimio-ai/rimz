@@ -311,7 +311,7 @@ fn decode_event<'a>(
         }
         _ => schema_error(payload.error.raw()),
     };
-    let message = payload.message.clone();
+    let mut message = payload.message.clone();
     let kind = match payload_type {
         Some("token_count") => RolloutKind::TokenCount(CodexTokenCount {
             model: payload.model,
@@ -326,14 +326,25 @@ fn decode_event<'a>(
             last_agent_message: payload.last_agent_message,
             error_field_present: payload.error.present(),
         }),
-        Some("item_completed") => RolloutKind::ItemCompleted(CodexItemCompleted {
-            turn_id: payload.turn_id,
-            plan_text: parse_raw::<CompletedItem<'_>>(payload.item.raw()).and_then(|item| {
-                (item.item_type.as_deref() == Some("Plan"))
-                    .then_some(item.text)
-                    .flatten()
-            }),
-        }),
+        Some("item_completed") => {
+            let item = parse_raw::<CompletedItem<'_>>(payload.item.raw()).unwrap_or_default();
+            match item.item_type.as_deref() {
+                Some("UserMessage") => {
+                    message = item.visible_text();
+                    RolloutKind::UserMessage
+                }
+                Some("AgentMessage") => {
+                    message = item.visible_text();
+                    RolloutKind::AgentMessage
+                }
+                _ => RolloutKind::ItemCompleted(CodexItemCompleted {
+                    turn_id: payload.turn_id,
+                    plan_text: (item.item_type.as_deref() == Some("Plan"))
+                        .then_some(item.text)
+                        .flatten(),
+                }),
+            }
+        }
         _ => RolloutKind::Other,
     };
     Some(RolloutRecord {
@@ -452,6 +463,35 @@ struct CompletedItem<'a> {
         deserialize_with = "deserialize_optional_cow_str"
     )]
     item_type: Option<Cow<'a, str>>,
+    #[serde(borrow, default, deserialize_with = "deserialize_optional_cow_str")]
+    text: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    content: Vec<CompletedItemContent<'a>>,
+}
+
+impl CompletedItem<'_> {
+    fn visible_text(&self) -> Option<Cow<'static, str>> {
+        let text = self
+            .content
+            .iter()
+            .filter(|entry| matches!(entry.content_type.as_deref(), Some("text" | "Text")))
+            .filter_map(|entry| entry.text.as_deref())
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!text.is_empty()).then_some(Cow::Owned(text))
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct CompletedItemContent<'a> {
+    #[serde(
+        rename = "type",
+        borrow,
+        default,
+        deserialize_with = "deserialize_optional_cow_str"
+    )]
+    content_type: Option<Cow<'a, str>>,
     #[serde(borrow, default, deserialize_with = "deserialize_optional_cow_str")]
     text: Option<Cow<'a, str>>,
 }

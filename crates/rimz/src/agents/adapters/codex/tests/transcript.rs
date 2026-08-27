@@ -147,6 +147,29 @@ fn parse_transcript_messages_reads_user_assistant_and_timestamps() {
 }
 
 #[test]
+fn parse_transcript_messages_reads_paginated_visible_messages_only() {
+    let rollout = include_str!("fixtures/paginated-rollout.jsonl");
+    let messages = CodexAdapter.parse_transcript_messages(rollout);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].role, TranscriptRole::User);
+    assert_eq!(messages[0].text, "first line\nsecond line");
+    assert_eq!(
+        messages[0].at,
+        Some(
+            "2026-07-18T09:00:01.000Z"
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+        )
+    );
+    assert_eq!(messages[1].role, TranscriptRole::Assistant);
+    assert_eq!(messages[1].text, "assistant update");
+    assert_eq!(
+        CodexAdapter.stream_assistant_messages(rollout),
+        vec!["assistant update"]
+    );
+}
+
+#[test]
 fn turn_error_detector_maps_known_error_shapes() {
     let rate_limit = json!({
         "timestamp": "2026-06-11T07:18:00.000Z",

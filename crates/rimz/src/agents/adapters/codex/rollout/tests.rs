@@ -104,6 +104,30 @@ fn decoder_normalizes_visible_context_usage_and_terminal_facts() {
 }
 
 #[test]
+fn decoder_normalizes_paginated_visible_message_content() {
+    let user = decode_line(
+        br#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"text","text":"one"},{"type":"image","image_url":"ignored"},{"type":"text","text":"two"}]}}}"#,
+    )
+    .unwrap();
+    assert!(matches!(user.kind, RolloutKind::UserMessage));
+    assert_eq!(user.message.as_deref(), Some("one\ntwo"));
+
+    let assistant = decode_line(
+        br#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[{"type":"Text","text":"done"}]}}}"#,
+    )
+    .unwrap();
+    assert!(matches!(assistant.kind, RolloutKind::AgentMessage));
+    assert_eq!(assistant.message.as_deref(), Some("done"));
+
+    let hook = decode_line(
+        br#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"HookPrompt","content":[{"type":"text","text":"hidden"}]}}}"#,
+    )
+    .unwrap();
+    assert!(matches!(hook.kind, RolloutKind::ItemCompleted(_)));
+    assert!(hook.message.is_none());
+}
+
+#[test]
 fn timestamp_normalization_keeps_seconds_and_milliseconds_exact() {
     assert_eq!(
         millis_to_rfc3339(1_767_225_600_000),
