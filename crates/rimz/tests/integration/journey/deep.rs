@@ -1619,6 +1619,7 @@ fn trust_codex_hooks(env: &Env) {
         "subagent_start",
         "subagent_stop",
         "stop",
+        "interrupt",
         "permission_request",
         "pre_tool_use",
         "post_tool_use",
