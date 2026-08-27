@@ -44,9 +44,14 @@ struct LoadedPricing {
 type ManagedPricingMemo = Option<(PathBuf, Vec<FileStamp>, Arc<LoadedPricing>)>;
 type OverlayMemo = Option<(Arc<()>, String, Arc<PriceBook>)>;
 
-static MANAGED_PRICING_MEMO: LazyLock<Mutex<ManagedPricingMemo>> =
-    LazyLock::new(|| Mutex::new(None));
-static OVERLAY_MEMO: LazyLock<Mutex<OverlayMemo>> = LazyLock::new(|| Mutex::new(None));
+#[derive(Default)]
+struct ManagedPricingCache {
+    loaded: Mutex<ManagedPricingMemo>,
+    overlays: Mutex<OverlayMemo>,
+}
+
+static MANAGED_PRICING_CACHE: LazyLock<ManagedPricingCache> =
+    LazyLock::new(ManagedPricingCache::default);
 
 pub(super) enum ManagedPriceBook<'a> {
     Borrowed(&'a PriceBook),
@@ -65,63 +70,73 @@ impl Deref for ManagedPriceBook<'_> {
 }
 
 pub(super) fn overlay(book: &PriceBook) -> ManagedPriceBook<'_> {
-    let loaded = load_managed_pricing();
-    let Some(pricing) = loaded.pricing.as_ref() else {
-        return ManagedPriceBook::Borrowed(book);
-    };
-    let Some(fingerprint) = loaded.fingerprint.as_deref() else {
-        return ManagedPriceBook::Borrowed(book);
-    };
-    let identity = book.identity();
-    let mut memo = OVERLAY_MEMO.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((memo_identity, memo_fingerprint, overlaid)) = memo.as_ref()
-        && Arc::ptr_eq(memo_identity, &identity)
-        && memo_fingerprint == fingerprint
-    {
-        return ManagedPriceBook::Shared(Arc::clone(overlaid));
-    }
-
-    let overlaid = Arc::new(apply(book, pricing));
-    *memo = Some((identity, fingerprint.to_owned(), Arc::clone(&overlaid)));
-    ManagedPriceBook::Shared(overlaid)
+    MANAGED_PRICING_CACHE.overlay(book, &managed_settings_root())
 }
 
 pub(super) fn extend_fingerprint(base: Option<&str>) -> Option<String> {
-    let managed = load_managed_pricing().fingerprint.clone();
-    match (base, managed) {
-        (Some(base), Some(managed)) => Some(format!("{base}|claude-managed:{managed}")),
-        (Some(base), None) => Some(base.to_owned()),
-        (None, Some(managed)) => Some(format!("claude-managed:{managed}")),
-        (None, None) => None,
-    }
+    MANAGED_PRICING_CACHE.extend_fingerprint(base, &managed_settings_root())
 }
 
 pub(super) fn fingerprint_current() -> Option<String> {
-    load_managed_pricing().fingerprint.clone()
+    MANAGED_PRICING_CACHE.fingerprint(&managed_settings_root())
 }
 
-fn load_managed_pricing() -> Arc<LoadedPricing> {
-    let root = managed_settings_root();
-    let files = managed_settings_files(&root);
-    let stamps = file_stamps(&files);
-    let mut memo = MANAGED_PRICING_MEMO
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    if let Some((memo_root, memo_stamps, loaded)) = memo.as_ref()
-        && *memo_root == root
-        && *memo_stamps == stamps
-    {
-        return Arc::clone(loaded);
+impl ManagedPricingCache {
+    fn overlay<'a>(&self, book: &'a PriceBook, root: &Path) -> ManagedPriceBook<'a> {
+        let loaded = self.load(root);
+        let Some(pricing) = loaded.pricing.as_ref() else {
+            return ManagedPriceBook::Borrowed(book);
+        };
+        let Some(fingerprint) = loaded.fingerprint.as_deref() else {
+            return ManagedPriceBook::Borrowed(book);
+        };
+        let identity = book.identity();
+        let mut memo = self.overlays.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((memo_identity, memo_fingerprint, overlaid)) = memo.as_ref()
+            && Arc::ptr_eq(memo_identity, &identity)
+            && memo_fingerprint == fingerprint
+        {
+            return ManagedPriceBook::Shared(Arc::clone(overlaid));
+        }
+
+        let overlaid = Arc::new(apply(book, pricing));
+        *memo = Some((identity, fingerprint.to_owned(), Arc::clone(&overlaid)));
+        ManagedPriceBook::Shared(overlaid)
     }
 
-    let pricing = read_managed_pricing(&files).filter(ManagedPricing::has_effect);
-    let fingerprint = pricing.as_ref().map(|_| fingerprint(&stamps));
-    let loaded = Arc::new(LoadedPricing {
-        pricing,
-        fingerprint,
-    });
-    *memo = Some((root, stamps, Arc::clone(&loaded)));
-    loaded
+    fn extend_fingerprint(&self, base: Option<&str>, root: &Path) -> Option<String> {
+        match (base, self.fingerprint(root)) {
+            (Some(base), Some(managed)) => Some(format!("{base}|claude-managed:{managed}")),
+            (Some(base), None) => Some(base.to_owned()),
+            (None, Some(managed)) => Some(format!("claude-managed:{managed}")),
+            (None, None) => None,
+        }
+    }
+
+    fn fingerprint(&self, root: &Path) -> Option<String> {
+        self.load(root).fingerprint.clone()
+    }
+
+    fn load(&self, root: &Path) -> Arc<LoadedPricing> {
+        let files = managed_settings_files(root);
+        let stamps = file_stamps(&files);
+        let mut memo = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((memo_root, memo_stamps, loaded)) = memo.as_ref()
+            && memo_root == root
+            && *memo_stamps == stamps
+        {
+            return Arc::clone(loaded);
+        }
+
+        let pricing = read_managed_pricing(&files).filter(ManagedPricing::has_effect);
+        let fingerprint = pricing.as_ref().map(|_| fingerprint(&stamps));
+        let loaded = Arc::new(LoadedPricing {
+            pricing,
+            fingerprint,
+        });
+        *memo = Some((root.to_path_buf(), stamps, Arc::clone(&loaded)));
+        loaded
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -365,6 +380,47 @@ mod tests {
             );
         }
         assert_eq!(pricing.multiplier, Some(0.75));
+    }
+
+    #[test]
+    fn load_cache_reuses_and_invalidates_overlays_from_an_injected_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("managed-settings.json");
+        fs::write(
+            &settings,
+            r#"{"modelPricing":{"overrides":{"claude-base":{"input":6,"output":12,"cacheRead":0.6,"cacheWrite":7.5}}}}"#,
+        )
+        .unwrap();
+        let cache = ManagedPricingCache::default();
+        let book = PriceBook::from_litellm_json(
+            r#"{"claude-base":{"input_cost_per_token":0.00001,"output_cost_per_token":0.00002}}"#,
+        );
+
+        let first_fingerprint = cache.fingerprint(dir.path()).unwrap();
+        let ManagedPriceBook::Shared(first) = cache.overlay(&book, dir.path()) else {
+            panic!("managed settings produce an overlay");
+        };
+        assert_eq!(first.exact_price("claude-base").unwrap().input, 0.000006);
+        let ManagedPriceBook::Shared(reused) = cache.overlay(&book, dir.path()) else {
+            panic!("managed settings produce a cached overlay");
+        };
+        assert!(Arc::ptr_eq(&first, &reused));
+        assert_eq!(
+            cache.extend_fingerprint(Some("base"), dir.path()),
+            Some(format!("base|claude-managed:{first_fingerprint}"))
+        );
+
+        fs::write(
+            settings,
+            r#"{"modelPricing":{"overrides":{"claude-base":{"input":16,"output":12,"cacheRead":0.6,"cacheWrite":7.5}}}}"#,
+        )
+        .unwrap();
+        assert_ne!(cache.fingerprint(dir.path()), Some(first_fingerprint));
+        let ManagedPriceBook::Shared(updated) = cache.overlay(&book, dir.path()) else {
+            panic!("changed settings produce a new overlay");
+        };
+        assert!(!Arc::ptr_eq(&first, &updated));
+        assert_eq!(updated.exact_price("claude-base").unwrap().input, 0.000016);
     }
 
     #[test]
