@@ -46,6 +46,8 @@ enum AsksSubcmd {
 #[derive(Clone, Debug, Serialize)]
 struct AskAgentView {
     handle: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     kind: rimz::ids::AgentKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: Option<String>,
@@ -133,14 +135,13 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     let mut views = snapshot
         .agents
         .iter()
-        .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| agent.is_awaiting_input() && agent.open_ask.is_some())
         .filter(|agent| {
             all || channel.is_none_or(|channel| {
                 rimz::harness::target::agent_channel(agent).as_deref() == Some(channel)
             })
         })
-        .map(|agent| view_for_agent(store.paths(), agent, &peers))
+        .map(|agent| view_for_agent(store.paths(), agent, &snapshot.agents, &peers))
         .collect::<Result<Vec<_>>>()?;
     views.sort_by_key(|view| view.detail.open.since);
 
@@ -156,7 +157,7 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
         let question = first_line(&view).to_owned();
         table.row([
             render::cell(view.detail.open.id.as_str()).fg(render::palette::accent()),
-            render::cell(view.agent.handle.as_str()),
+            render::cell(view.agent.display_name()),
             render::cell(view.detail.open.kind.short_label()),
             render::cell(render::age_short(view.detail.open.since, now)),
             render::cell(question),
@@ -178,7 +179,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
             rimz::harness::target::agent_handle(agent, &peers, true)
         );
     }
-    let view = view_for_agent(store.paths(), agent, &peers)?;
+    let view = view_for_agent(store.paths(), agent, &snapshot.agents, &peers)?;
     if json {
         return render::json_pretty(&AskJsonView::from(&view));
     }
@@ -188,7 +189,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
         out,
         "{}  {}  {}",
         render::paint(render::palette::accent(), view.detail.open.id.as_str()),
-        view.agent.handle,
+        view.agent.display_name(),
         render::paint(
             render::palette::muted(),
             &format!(
@@ -243,18 +244,72 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
 fn view_for_agent(
     paths: &rimz::StatePaths,
     agent: &AgentState,
+    agents: &[AgentState],
     peers: &[&AgentState],
 ) -> Result<OpenAskView> {
     let detail = read_open_ask(paths, agent)?
         .ok_or_else(|| anyhow::anyhow!("agent is not asking anything"))?;
+    let (handle, name) = if agent.is_provider_subagent() {
+        let parent_kind = agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind);
+        let parent = agent.parent_agent_id.as_ref().and_then(|parent_id| {
+            agents.iter().find(|candidate| {
+                &candidate.kind == parent_kind && &candidate.agent_id == parent_id
+            })
+        });
+        let handle = parent
+            .map(|parent| rimz::harness::target::agent_handle(parent, peers, true))
+            .unwrap_or_else(|| {
+                format!(
+                    "@{}",
+                    agent
+                        .parent_agent_id
+                        .as_deref()
+                        .unwrap_or(agent.agent_id.as_str())
+                )
+            });
+        (handle, Some(subagent_name(agent)))
+    } else {
+        (
+            rimz::harness::target::agent_handle(agent, peers, true),
+            None,
+        )
+    };
     Ok(OpenAskView {
         agent: AskAgentView {
-            handle: rimz::harness::target::agent_handle(agent, peers, true),
+            handle,
+            name,
             kind: agent.kind.clone(),
             channel: rimz::harness::target::agent_channel(agent),
         },
         detail,
     })
+}
+
+impl AskAgentView {
+    fn display_name(&self) -> String {
+        self.name
+            .as_deref()
+            .map(|name| format!("{name} (via {})", self.handle))
+            .unwrap_or_else(|| self.handle.clone())
+    }
+}
+
+fn subagent_name(agent: &AgentState) -> String {
+    agent
+        .name
+        .as_deref()
+        .filter(|name| agent.name_explicit && !name.is_empty())
+        .or(agent.task.as_deref().filter(|task| !task.is_empty()))
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            let short = agent.agent_id.split('-').next().unwrap_or(&agent.agent_id);
+            let short = short.get(..8).unwrap_or(short);
+            if short.is_empty() {
+                "subagent".to_owned()
+            } else {
+                format!("subagent {short}")
+            }
+        })
 }
 
 fn first_line(view: &OpenAskView) -> &str {

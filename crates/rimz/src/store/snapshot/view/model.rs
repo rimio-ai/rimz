@@ -258,7 +258,10 @@ pub fn lead_unread_row(groups: &[SidebarWorktreeGroup]) -> Option<&SidebarRow> {
         .iter()
         .flat_map(|group| &group.rows)
         .filter(|row| row.unread)
-        .filter(|row| row.status().is_some_and(AgentStatus::is_actionable))
+        .filter(|row| {
+            row.attention_status()
+                .is_some_and(AgentStatus::is_actionable)
+        })
         .min_by_key(|row| row.last_activity)
 }
 
@@ -266,7 +269,7 @@ pub fn lead_unread_row(groups: &[SidebarWorktreeGroup]) -> Option<&SidebarRow> {
 /// walk, and the lead unread row all read this vocabulary: unread rows that need
 /// one look first, then read actionable rows, oldest activity first within each.
 pub fn triage_key(row: &SidebarRow) -> Option<(u8, jiff::Timestamp)> {
-    let status = row.status()?;
+    let status = row.attention_status()?;
     if row.unread && status.needs_a_look() {
         Some((0, row.last_activity))
     } else if !row.unread && status.is_actionable() {
@@ -282,7 +285,12 @@ pub fn actionable_unread_count(groups: &[SidebarWorktreeGroup]) -> usize {
     groups
         .iter()
         .flat_map(|group| &group.rows)
-        .filter(|row| row.unread && row.status().is_some_and(AgentStatus::is_actionable))
+        .filter(|row| {
+            row.unread
+                && row
+                    .attention_status()
+                    .is_some_and(AgentStatus::is_actionable)
+        })
         .count()
 }
 

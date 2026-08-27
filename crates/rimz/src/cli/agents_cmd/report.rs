@@ -722,6 +722,7 @@ mod tests {
                 sub_agents: vec![SidebarSubAgent {
                     id: "child".to_owned(),
                     name: "review".to_owned(),
+                    provider_native: true,
                     status: AgentStatus::Running,
                     phase: TurnPhase::Reasoning,
                     task: None,

@@ -681,6 +681,72 @@ fn answer_question_sends_to_bound_pane_and_timeout_has_distinct_exit() {
 
 #[cfg(unix)]
 #[test]
+fn subagent_ask_lists_with_parent_and_answers_through_parent_pane() {
+    let env = Env::new();
+    let root = serde_json::to_string(&json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "sess-claude-parent",
+    }))
+    .expect("root payload");
+    let root = env.run_installed_hook_in_pane("claude", &root, &[("TMUX_PANE", "%7")]);
+    assert!(root.status.success());
+
+    for payload in [
+        json!({
+            "hook_event_name": "SubagentStart",
+            "session_id": "sess-claude-parent",
+            "agent_id": "child-1",
+            "subagent_type": "Explore",
+        }),
+        json!({
+            "hook_event_name": "PermissionRequest",
+            "session_id": "sess-claude-parent",
+            "agent_id": "child-1",
+            "tool_name": "Bash",
+            "tool_input": { "command": "cargo test" },
+        }),
+    ] {
+        let payload = serde_json::to_string(&payload).expect("child payload");
+        assert!(env.run_hook("claude", &payload).status.success());
+    }
+
+    let output = env
+        .rimz()
+        .args(["asks", "--json"])
+        .bounded_output()
+        .expect("list child ask");
+    assert!(output.status.success());
+    let asks: serde_json::Value = serde_json::from_slice(&output.stdout).expect("asks json");
+    assert_eq!(asks.as_array().unwrap().len(), 1);
+    assert!(
+        asks[0]["agent"]["handle"]
+            .as_str()
+            .is_some_and(|handle| handle.starts_with('@'))
+    );
+    assert_eq!(asks[0]["agent"]["name"], "Explore");
+    let ask_id = asks[0]["ask_id"].as_str().expect("ask id");
+
+    let pane_fixture = env.write_pane_fixture(&[tmux_pane("%7", "claude", &env.project_root)]);
+    let (bin, log) = fake_tmux(&env);
+    let output = env
+        .rimz()
+        .args(["answer", ask_id, "allow", "--no-wait", "--mux", "tmux"])
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_TEST_MUX_LOG", &log)
+        .env("PATH", path_with_front(&bin))
+        .bounded_output()
+        .expect("answer child ask");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let sent = std::fs::read_to_string(&log).expect("tmux trace");
+    assert!(sent.contains("send-keys -l -t %7 -- 1"), "{sent}");
+}
+
+#[cfg(unix)]
+#[test]
 fn answer_confirmable_claude_menu_actions_reach_bound_pane() {
     for (payload, selector, expected_command) in [
         (

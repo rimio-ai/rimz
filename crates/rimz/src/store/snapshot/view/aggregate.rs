@@ -221,7 +221,7 @@ fn stamp_attention(rows: &mut [SidebarRow], now: Timestamp, windows: AttentionWi
             0
         } else {
             score::attention_score(
-                row.status(),
+                row.attention_status(),
                 age_secs,
                 windows.inactive_after_secs,
                 windows.archive_after_secs,

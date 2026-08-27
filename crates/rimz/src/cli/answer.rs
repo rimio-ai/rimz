@@ -68,6 +68,20 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let ask_id = detail.open.id.clone();
     let kind = agent.kind.clone();
     let agent_id = agent.agent_id.clone();
+    let pane_kind = agent
+        .is_provider_subagent()
+        .then(|| {
+            agent
+                .parent_agent_kind
+                .clone()
+                .unwrap_or_else(|| kind.clone())
+        })
+        .unwrap_or_else(|| kind.clone());
+    let pane_agent_id = agent
+        .is_provider_subagent()
+        .then(|| agent.parent_agent_id.clone())
+        .flatten()
+        .unwrap_or_else(|| agent_id.clone());
     let handle = rimz::harness::target::agent_handle(agent, &peers, true);
     let adapter = rimz::agents::definition_by_kind(kind.as_str())
         .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
@@ -100,7 +114,13 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let target = live
         .agent_panes
         .iter()
-        .find(|pane| pane.kind == kind && pane.agent_id.as_ref().is_some_and(|id| id == &agent_id))
+        .find(|pane| {
+            pane.kind == pane_kind
+                && pane
+                    .agent_id
+                    .as_ref()
+                    .is_some_and(|id| id == &pane_agent_id)
+        })
         .unwrap_or_else(|| answer_exit(2, &format!("{handle} has no live bound pane")));
     let mut pacer = rimz::message::send::Pacer::new(rimz::message::message_interval_from_env());
     for step in steps {
