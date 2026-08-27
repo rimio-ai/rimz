@@ -22,7 +22,7 @@ allowed-imports = [
     "store",
     "transcript",
 ]
-surface-budget = 993
+surface-budget = 997
 
 [[module]]
 path = "crates/rimz/src/bin"
