@@ -336,6 +336,7 @@ pub(super) fn supervise_remote(
             match reconnect.settle(outcome.status.code(), outcome.established, attach_evidence) {
                 Verdict::CleanExit => {
                     handoff.release();
+                    guard.reset_emulator();
                     if outcome.stderr.is_some() {
                         let _ = writeln!(std::io::stderr().lock(), "rimz: detached from {host}");
                     }
