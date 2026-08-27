@@ -43,13 +43,6 @@ pub enum LiveRoomErr {
 
 pub type LiveRoomResult<T> = std::result::Result<T, LiveRoomErr>;
 
-/// Whether the selected session belongs to a RimZ workspace record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionOwnership {
-    Managed,
-    External,
-}
-
 /// Select the configured multiplexer and require this workspace's room to be live.
 pub fn require_live_mux(
     explicit: Option<MuxName>,
@@ -253,7 +246,7 @@ impl RoomContext {
     pub fn preflight_live_session(
         mux: MuxName,
         session_name: &str,
-        ownership: SessionOwnership,
+        workspace_id: Option<&WorkspaceId>,
     ) -> Result<Option<SessionHealth>> {
         let backend = crate::mux::backend_for(mux);
         if !backend
@@ -264,6 +257,11 @@ impl RoomContext {
             return Ok(None);
         }
         let health = backend.probe_session_health(session_name)?;
+        let ownership = if workspace_id.is_some() {
+            SessionOwnership::Managed
+        } else {
+            SessionOwnership::External
+        };
         classify_preflight_health(session_name, ownership, health)
     }
 
@@ -433,6 +431,12 @@ impl RoomContext {
             sidebar: self.sidebar_options(&self.workspace.worktree_root, Vec::new(), refresh_ms),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionOwnership {
+    Managed,
+    External,
 }
 
 fn classify_preflight_health(
