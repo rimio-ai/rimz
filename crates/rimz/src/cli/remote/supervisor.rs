@@ -450,7 +450,7 @@ pub(super) fn supervise_remote(
 }
 
 fn offer_remote_session_recreation(host: &str) -> Result<bool> {
-    if !std::io::stdin().is_terminal() {
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Ok(false);
     }
     let mut stderr = std::io::stderr().lock();
