@@ -292,7 +292,7 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
     }
     .occurrences(&child.provider_argv);
 
-    assert_eq!(occurrences.len(), 1, "{:?}", child.provider_argv);
+    assert_eq!(occurrences.len(), 1);
     assert_eq!(
         parse_toml_string_or_raw(&occurrences[0].value),
         SUBAGENT_REMINDER
@@ -372,7 +372,7 @@ fn process_compiler_merges_codex_reminder_by_config_key() {
         };
         let occurrences = matcher.occurrences(&child.provider_argv);
 
-        assert_eq!(occurrences.len(), 1, "{:?}", child.provider_argv);
+        assert_eq!(occurrences.len(), 1);
         assert_eq!(
             parse_toml_string_or_raw(&occurrences[0].value),
             format!("existing\n\n{SUBAGENT_REMINDER}")
@@ -381,26 +381,20 @@ fn process_compiler_merges_codex_reminder_by_config_key() {
             child
                 .provider_argv
                 .windows(2)
-                .any(|args| args == ["-c", "features.multi_agent=false"]),
-            "{:?}",
-            child.provider_argv
+                .any(|args| args == ["-c", "features.multi_agent=false"])
         );
         assert!(
             child
                 .provider_argv
                 .windows(2)
-                .any(|args| args == ["-c", "network_access=\"enabled\""]),
-            "{:?}",
-            child.provider_argv
+                .any(|args| args == ["-c", "network_access=\"enabled\""])
         );
         assert_eq!(
             child
                 .provider_argv
                 .iter()
                 .any(|arg| arg.starts_with("-c=developer_instructions=")),
-            developer_args.len() == 1,
-            "{:?}",
-            child.provider_argv
+            developer_args.len() == 1
         );
     }
 }
