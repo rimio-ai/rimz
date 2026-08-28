@@ -53,6 +53,17 @@ fn tab_status_clear_restores_automatic_rename() {
     assert_eq!(
         server.stdout(&[
             "show-options",
+            "-wq",
+            "-t",
+            anchor.raw(),
+            "automatic-rename",
+        ]),
+        "",
+        "clear must restore the inherited option rather than pinning window-local on",
+    );
+    assert_eq!(
+        server.stdout(&[
+            "show-options",
             "-wqv",
             "-t",
             anchor.raw(),
