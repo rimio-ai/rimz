@@ -50,11 +50,7 @@ pub(super) fn supervised_prompt<'a>(
     request: &'a SupervisedRunRequest,
     adapter: &rimz::agents::AgentDefinition,
 ) -> Cow<'a, str> {
-    if request.subagent
-        && adapter
-            .append_system_text_args(rimz::harness::launch::SUBAGENT_REMINDER)
-            .is_none()
-    {
+    if request.subagent && adapter.append_system_text_channel().is_none() {
         Cow::Owned(format!(
             "{}\n\n{}",
             request.prompt,

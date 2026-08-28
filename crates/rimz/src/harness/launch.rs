@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::capabilities::SystemTextChannel;
 use crate::ids::{AgentKind, RunId, WorkspaceId};
 
 const ENV_BIN: &str = "/usr/bin/env";
@@ -68,11 +69,13 @@ pub const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
 pub(super) const ENV_RTK: &str = "RIMZ_RTK";
 
 pub const SUBAGENT_REMINDER: &str = concat!(
-    "<system_reminder>You are a subagent: a supervised child launched by another agent to ",
+    "<system_reminder>\n",
+    "You are a subagent: a supervised child launched by another agent to ",
     "complete the task you were given. You must not spawn agents or subagents of any kind — do not use ",
     "agent, task, or spawn tools, and do not launch `rimz subagents`, `rimz agents`, or ",
     "`rimz teams`. Do the work yourself with your direct tools and report the result; your final ",
-    "message is returned to your caller when you exit.</system_reminder>"
+    "message is returned to your caller when you exit.\n",
+    "</system_reminder>"
 );
 
 #[derive(Debug, thiserror::Error)]
@@ -574,8 +577,8 @@ fn compile_agent_process_with_extra_env(
     let mut action = request.action.clone();
     if request.subagent {
         adapter.lockdown_subagent_args(action.extra_args_mut());
-        if let Some(append_args) = adapter.append_system_text_args(SUBAGENT_REMINDER) {
-            merge_appended_system_text(action.extra_args_mut(), append_args);
+        if let Some(channel) = adapter.append_system_text_channel() {
+            merge_appended_system_text(action.extra_args_mut(), &channel, SUBAGENT_REMINDER);
         }
     }
     let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
@@ -602,27 +605,56 @@ fn compile_agent_process_with_extra_env(
     })
 }
 
-fn merge_appended_system_text(extra_args: &mut Vec<String>, append_args: Vec<String>) {
-    let mut append_args = append_args.into_iter();
-    let Some(flag) = append_args.next() else {
-        return;
-    };
-    let Some(text) = append_args.next() else {
-        return;
-    };
-    debug_assert!(append_args.next().is_none());
-
-    let matcher = crate::agents::PresetArgMatcher::TextFlag(vec![flag.clone()]);
+fn merge_appended_system_text(
+    extra_args: &mut Vec<String>,
+    channel: &SystemTextChannel,
+    text: &str,
+) {
+    let matcher = channel.matcher();
     let Some(existing) = matcher.occurrences(extra_args).into_iter().last() else {
-        extra_args.extend([flag, text]);
+        if let Some((flag, value)) = render_system_text_channel(channel, text) {
+            extra_args.extend([flag, value]);
+        }
         return;
     };
-    let merged = format!("{}\n\n{text}", existing.value);
+
+    let existing_text = match channel {
+        SystemTextChannel::TextFlag { .. } => existing.value.clone(),
+        SystemTextChannel::ConfigKey { .. } => parse_toml_string_or_raw(&existing.value),
+    };
+    let merged = format!("{existing_text}\n\n{text}");
+    let (single_token_value, separate_value) = match channel {
+        SystemTextChannel::TextFlag { .. } => (merged.clone(), merged),
+        SystemTextChannel::ConfigKey { key, .. } => {
+            let quoted = toml::Value::String(merged).to_string();
+            (quoted.clone(), format!("{key}={quoted}"))
+        }
+    };
     if existing.argv_range.len() == 1 {
-        extra_args[existing.argv_range.start] = format!("{flag}={merged}");
+        let arg = &mut extra_args[existing.argv_range.start];
+        arg.truncate(arg.len() - existing.value.len());
+        arg.push_str(&single_token_value);
     } else {
-        extra_args[existing.argv_range.start + 1] = merged;
+        extra_args[existing.argv_range.start + 1] = separate_value;
     }
+}
+
+fn render_system_text_channel(channel: &SystemTextChannel, text: &str) -> Option<(String, String)> {
+    match channel {
+        SystemTextChannel::TextFlag { flags } => Some((flags.first()?.clone(), text.to_owned())),
+        SystemTextChannel::ConfigKey { flags, key } => Some((
+            flags.first()?.clone(),
+            format!("{key}={}", toml::Value::String(text.to_owned())),
+        )),
+    }
+}
+
+fn parse_toml_string_or_raw(value: &str) -> String {
+    value
+        .parse::<toml::Value>()
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| value.to_owned())
 }
 
 /// Compile one process and resolve managed-account applicability from its final inputs.

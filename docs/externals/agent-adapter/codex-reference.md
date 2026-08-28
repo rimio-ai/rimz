@@ -20,6 +20,7 @@ Re-fetch these pages â€” and, for the app-server, re-run the schema generators â
 | Config reference (`notify`, credential store, `[tui]` notifications) | <https://learn.chatgpt.com/docs/config-file/config-reference> |
 | Advanced config (`notify` payload) | <https://learn.chatgpt.com/docs/config-file/config-advanced> |
 | CLI reference (`resume`, `fork`, `login status`) | <https://learn.chatgpt.com/docs/developer-commands?surface=cli> |
+| CLI `-c` override parser | <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/utils/cli/src/config_override.rs> |
 | App-server API (protocol, methods, notifications) | <https://learn.chatgpt.com/docs/app-server> |
 | App-server README + schema generation | <https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md> |
 | App-server daemon lifecycle + PID backend | <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/README.md>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/lib.rs>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/backend/pid.rs>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/update_loop.rs> |
@@ -43,6 +44,10 @@ Codex treats a run of plain characters arriving at most 8 ms apart as a suspecte
 ## Session resume and fork
 
 `codex resume <id>` reopens a session in place. `codex fork <id>` copies its conversation into a provider-assigned new session id and leaves the source session untouched; the interactive `fork` subcommand accepts no initial prompt, so RimZ opens the fork idle in the source worktree.
+
+## CLI config overrides
+
+Each `-c key=value` or `--config key=value` occurrence overrides the corresponding loaded configuration key for that launch. Codex parses the value as TOML and falls back to a raw string when TOML parsing fails, so callers that need exact string round trips should emit a TOML-quoted value. `developer_instructions` produces developer-role instruction text separate from the user message; it does not have the replacement-file semantics of `model_instructions_file`. A CLI value overrides the same key from `~/.codex/config.toml`.
 
 ## Hooks
 

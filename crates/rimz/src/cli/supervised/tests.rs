@@ -277,7 +277,7 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
 
 #[test]
 fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
-    let request = supervised_request("codex", true);
+    let request = supervised_request("amp", true);
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
@@ -291,26 +291,28 @@ fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
     .expect_err("spec-like prompt");
     assert!(
         err.to_string()
-            .contains("prompt `codex` looks like another spec cell"),
+            .contains("prompt `amp` looks like another spec cell"),
         "{err:#}"
     );
 
-    let adapter = rimz::agents::find_definition("codex").unwrap();
+    let adapter = rimz::agents::find_definition("amp").unwrap();
     let prompt = super::run::supervised_prompt(&request, adapter);
-    assert!(prompt.starts_with("codex\n\n<system_reminder>"));
+    assert!(prompt.starts_with("amp\n\n<system_reminder>\n"));
     assert!(prompt.contains("must not spawn agents or subagents"));
-    assert!(prompt.ends_with("</system_reminder>"));
+    assert!(prompt.ends_with("\n</system_reminder>"));
 
-    let ordinary = supervised_request("codex", false);
-    assert_eq!(super::run::supervised_prompt(&ordinary, adapter), "codex");
+    let ordinary = supervised_request("amp", false);
+    assert_eq!(super::run::supervised_prompt(&ordinary, adapter), "amp");
 }
 
 #[test]
-fn native_append_adapter_keeps_subagent_reminder_out_of_user_prompt() {
-    let request = supervised_request("claude", true);
-    let adapter = rimz::agents::find_definition("claude").unwrap();
+fn native_system_text_adapters_keep_subagent_reminder_out_of_user_prompt() {
+    for kind in ["claude", "codex"] {
+        let request = supervised_request(kind, true);
+        let adapter = rimz::agents::find_definition(kind).unwrap();
 
-    assert_eq!(super::run::supervised_prompt(&request, adapter), "claude");
+        assert_eq!(super::run::supervised_prompt(&request, adapter), kind);
+    }
 }
 
 #[test]

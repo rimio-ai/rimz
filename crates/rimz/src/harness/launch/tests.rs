@@ -27,6 +27,12 @@ fn launch_environment_key_literals_are_stable() {
 }
 
 #[test]
+fn subagent_reminder_has_structural_wrapper_lines() {
+    assert!(SUBAGENT_REMINDER.starts_with("<system_reminder>\n"));
+    assert!(SUBAGENT_REMINDER.ends_with("\n</system_reminder>"));
+}
+
+#[test]
 fn provider_compiler_preserves_action_and_trailing_argument_order() {
     let adapter = crate::agents::find_definition("codex").expect("codex adapter");
     let trailing = vec!["--model".to_owned(), "o3".to_owned()];
@@ -178,6 +184,11 @@ fn process_compiler_locks_down_only_subagent_launches() {
             vec![
                 "-c".to_owned(),
                 "features.multi_agent=false".to_owned(),
+                "-c".to_owned(),
+                format!(
+                    "developer_instructions={}",
+                    toml::Value::String(SUBAGENT_REMINDER.to_owned())
+                ),
                 "--".to_owned(),
                 "inspect".to_owned(),
             ],
@@ -259,6 +270,33 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
             child.provider_argv
         );
     }
+
+    let mut invocation = request(
+        "codex",
+        ExecAction::Launch {
+            prompt: Some("inspect".to_owned()),
+            extra_args: Vec::new(),
+        },
+    );
+    invocation.subagent = true;
+    let child = compile_agent_process(
+        project.path(),
+        crate::config::RtkMode::Auto,
+        &invocation,
+        project.path(),
+    )
+    .expect("codex subagent process");
+    let occurrences = crate::agents::PresetArgMatcher::ConfigKey {
+        flags: vec!["-c".to_owned(), "--config".to_owned()],
+        key: "developer_instructions".to_owned(),
+    }
+    .occurrences(&child.provider_argv);
+
+    assert_eq!(occurrences.len(), 1, "{:?}", child.provider_argv);
+    assert_eq!(
+        parse_toml_string_or_raw(&occurrences[0].value),
+        SUBAGENT_REMINDER
+    );
 }
 
 #[test]
@@ -289,6 +327,82 @@ fn process_compiler_merges_subagent_reminder_into_existing_append_flag() {
         occurrences[0].value,
         format!("existing guidance\n\n{SUBAGENT_REMINDER}")
     );
+}
+
+#[test]
+fn process_compiler_merges_codex_reminder_by_config_key() {
+    let project = tempfile::tempdir().expect("project");
+    for developer_args in [
+        vec![
+            "-c".to_owned(),
+            "developer_instructions=existing".to_owned(),
+        ],
+        vec![
+            "--config".to_owned(),
+            "developer_instructions=\"existing\"".to_owned(),
+        ],
+        vec!["-c=developer_instructions=\"existing\"".to_owned()],
+    ] {
+        let mut profile_args = vec![
+            "-c".to_owned(),
+            "features.multi_agent=false".to_owned(),
+            "-c".to_owned(),
+            "network_access=\"enabled\"".to_owned(),
+        ];
+        profile_args.extend(developer_args.clone());
+        let mut invocation = request(
+            "codex",
+            ExecAction::Launch {
+                prompt: Some("inspect".to_owned()),
+                extra_args: profile_args,
+            },
+        );
+        invocation.subagent = true;
+
+        let child = compile_agent_process(
+            project.path(),
+            crate::config::RtkMode::Auto,
+            &invocation,
+            project.path(),
+        )
+        .expect("codex subagent process");
+        let matcher = crate::agents::PresetArgMatcher::ConfigKey {
+            flags: vec!["-c".to_owned(), "--config".to_owned()],
+            key: "developer_instructions".to_owned(),
+        };
+        let occurrences = matcher.occurrences(&child.provider_argv);
+
+        assert_eq!(occurrences.len(), 1, "{:?}", child.provider_argv);
+        assert_eq!(
+            parse_toml_string_or_raw(&occurrences[0].value),
+            format!("existing\n\n{SUBAGENT_REMINDER}")
+        );
+        assert!(
+            child
+                .provider_argv
+                .windows(2)
+                .any(|args| args == ["-c", "features.multi_agent=false"]),
+            "{:?}",
+            child.provider_argv
+        );
+        assert!(
+            child
+                .provider_argv
+                .windows(2)
+                .any(|args| args == ["-c", "network_access=\"enabled\""]),
+            "{:?}",
+            child.provider_argv
+        );
+        assert_eq!(
+            child
+                .provider_argv
+                .iter()
+                .any(|arg| arg.starts_with("-c=developer_instructions=")),
+            developer_args.len() == 1,
+            "{:?}",
+            child.provider_argv
+        );
+    }
 }
 
 #[test]
