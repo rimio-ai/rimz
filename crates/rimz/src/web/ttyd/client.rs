@@ -341,7 +341,8 @@ waitForTerminal().then(term=>{{
   term.parser.registerOscHandler({session_osc},data=>{{
     const sessionPrefix="rimz-session=";
     if(data.startsWith(sessionPrefix)){{
-      const value=data.slice(sessionPrefix.length);
+      let value=data.slice(sessionPrefix.length);
+      try{{value=decodeURIComponent(value);}}catch(_){{}}
       const url=new URL(window.location.href);
       url.searchParams.delete("arg");
       if(value)url.searchParams.set("room",value);
@@ -983,6 +984,9 @@ mod tests {
         assert!(rendered.contains("const fittedImageRect="));
         assert!(rendered.contains("if(placement.rows>1)"));
         assert!(rendered.contains("const sessionPrefix=\"rimz-session=\""));
+        assert!(rendered.contains(
+            "let value=data.slice(sessionPrefix.length);\n      try{value=decodeURIComponent(value);}catch(_){}"
+        ));
         assert!(rendered.contains("const namePrefix=\"rimz-name=\""));
         assert!(rendered.contains("url.searchParams.delete(\"arg\")"));
         assert!(rendered.contains("url.searchParams.set(\"room\",value)"));
@@ -1111,6 +1115,9 @@ mod tests {
         assert!(rendered.contains("registerOscHandler(52"));
         assert!(rendered.contains("registerOscHandler(7717"));
         assert!(rendered.contains("const sessionPrefix=\"rimz-session=\""));
+        assert!(rendered.contains(
+            "let value=data.slice(sessionPrefix.length);\n      try{value=decodeURIComponent(value);}catch(_){}"
+        ));
         assert!(rendered.contains("const namePrefix=\"rimz-name=\""));
         assert!(rendered.contains("url.searchParams.delete(\"arg\")"));
         assert!(rendered.contains("url.searchParams.set(\"room\",value)"));
