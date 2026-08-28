@@ -140,7 +140,7 @@ fn is_zellij_server_cmdline(cmdline: &str) -> bool {
     path_ends_with_program(program, "zellij") && args.any(|arg| arg == "--server")
 }
 
-pub(crate) fn is_tmux_server_cmdline(cmdline: &str) -> bool {
+pub(super) fn is_tmux_server_cmdline(cmdline: &str) -> bool {
     cmdline.starts_with("tmux: server")
 }
 
