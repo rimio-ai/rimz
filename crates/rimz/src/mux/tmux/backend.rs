@@ -847,7 +847,31 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn rename_tab(&self, _session: &str, anchor: &PaneId, name: &str) -> Result<()> {
-        self.rename_window_command(anchor, name)?
+        let automatic = self
+            .automatic_rename_probe_command(anchor)?
+            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
+            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "1");
+        let command = if automatic {
+            self.rename_window_with_restore_marker_command(anchor, name)?
+        } else {
+            self.rename_window_command(anchor, name)?
+        };
+        command
+            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
+            .map(|_| ())
+    }
+
+    fn clear_tab_status(&self, _session: &str, anchor: &PaneId, name: &str) -> Result<()> {
+        let restore = self
+            .restore_automatic_rename_probe_command(anchor)?
+            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
+            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "on");
+        let command = if restore {
+            self.clear_window_status_and_restore_command(anchor, name)?
+        } else {
+            self.rename_window_command(anchor, name)?
+        };
+        command
             .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
             .map(|_| ())
     }

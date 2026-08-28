@@ -55,6 +55,86 @@ fn rename_tab_targets_the_anchor_pane_and_encodes_the_name() {
 }
 
 #[test]
+fn tab_status_commands_probe_and_remember_automatic_rename() {
+    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
+    let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
+
+    let automatic = backend
+        .automatic_rename_probe_command(&pane)
+        .expect("tmux pane");
+    assert_eq!(
+        verb_args(&automatic),
+        ["display-message", "-p", "-t", "%7", "#{automatic-rename}"]
+    );
+
+    let rename = backend
+        .rename_window_with_restore_marker_command(&pane, "#feat:one.2 ✓")
+        .expect("tmux pane");
+    assert_eq!(
+        verb_args(&rename),
+        [
+            "set-option",
+            "-w",
+            "-t",
+            "%7",
+            "@rimz_restore_automatic_rename",
+            "on",
+            ";",
+            "rename-window",
+            "-t",
+            "%7",
+            "##feat-one-2 ✓",
+        ]
+    );
+}
+
+#[test]
+fn tab_status_clear_commands_probe_and_restore_automatic_rename() {
+    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
+    let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
+
+    let marker = backend
+        .restore_automatic_rename_probe_command(&pane)
+        .expect("tmux pane");
+    assert_eq!(
+        verb_args(&marker),
+        [
+            "show-options",
+            "-wqv",
+            "-t",
+            "%7",
+            "@rimz_restore_automatic_rename",
+        ]
+    );
+
+    let clear = backend
+        .clear_window_status_and_restore_command(&pane, "#feat:one.2")
+        .expect("tmux pane");
+    assert_eq!(
+        verb_args(&clear),
+        [
+            "rename-window",
+            "-t",
+            "%7",
+            "##feat-one-2",
+            ";",
+            "set-option",
+            "-w",
+            "-t",
+            "%7",
+            "automatic-rename",
+            "on",
+            ";",
+            "set-option",
+            "-wu",
+            "-t",
+            "%7",
+            "@rimz_restore_automatic_rename",
+        ]
+    );
+}
+
+#[test]
 fn readonly_attach_blocks_input_and_ignores_viewer_size() {
     let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
     backend

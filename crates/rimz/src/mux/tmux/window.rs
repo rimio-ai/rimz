@@ -7,7 +7,9 @@ use crate::ids::{MuxName, PaneId};
 use crate::mux::{CommandSpec, HostPane, MuxErr, Result, SidebarPaneOptions, ensure_pane_backend};
 
 use super::TmuxBackend;
-use super::options::{RIMZ_TITLE_OPTION, sidebar_serve_command};
+use super::options::{
+    RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION, RIMZ_TITLE_OPTION, sidebar_serve_command,
+};
 use super::parse::parse_new_window_ids;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,13 +76,85 @@ impl TmuxBackend {
         }
     }
 
-    pub(super) fn rename_window_command(&self, anchor: &PaneId, name: &str) -> Result<CommandSpec> {
+    fn rename_window_args(anchor: &PaneId, name: &str) -> Result<Vec<String>> {
         ensure_pane_backend(anchor, MuxName::Tmux)?;
-        Ok(self.cmd().args([
+        Ok(vec![
             "rename-window".to_owned(),
             "-t".to_owned(),
             anchor.raw().to_owned(),
             window_name_arg(name),
+        ])
+    }
+
+    pub(super) fn rename_window_command(&self, anchor: &PaneId, name: &str) -> Result<CommandSpec> {
+        Ok(self.cmd().args(Self::rename_window_args(anchor, name)?))
+    }
+
+    pub(super) fn automatic_rename_probe_command(&self, anchor: &PaneId) -> Result<CommandSpec> {
+        ensure_pane_backend(anchor, MuxName::Tmux)?;
+        Ok(self.cmd().args([
+            "display-message".to_owned(),
+            "-p".to_owned(),
+            "-t".to_owned(),
+            anchor.raw().to_owned(),
+            "#{automatic-rename}".to_owned(),
+        ]))
+    }
+
+    pub(super) fn restore_automatic_rename_probe_command(
+        &self,
+        anchor: &PaneId,
+    ) -> Result<CommandSpec> {
+        ensure_pane_backend(anchor, MuxName::Tmux)?;
+        Ok(self.cmd().args([
+            "show-options".to_owned(),
+            "-wqv".to_owned(),
+            "-t".to_owned(),
+            anchor.raw().to_owned(),
+            RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION.to_owned(),
+        ]))
+    }
+
+    pub(super) fn rename_window_with_restore_marker_command(
+        &self,
+        anchor: &PaneId,
+        name: &str,
+    ) -> Result<CommandSpec> {
+        let rename = Self::rename_window_args(anchor, name)?;
+        Ok(self
+            .cmd()
+            .args([
+                "set-option".to_owned(),
+                "-w".to_owned(),
+                "-t".to_owned(),
+                anchor.raw().to_owned(),
+                RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION.to_owned(),
+                "on".to_owned(),
+                ";".to_owned(),
+            ])
+            .args(rename))
+    }
+
+    pub(super) fn clear_window_status_and_restore_command(
+        &self,
+        anchor: &PaneId,
+        name: &str,
+    ) -> Result<CommandSpec> {
+        let rename = Self::rename_window_args(anchor, name)?;
+        Ok(self.cmd().args(rename).args([
+            ";".to_owned(),
+            "set-option".to_owned(),
+            "-w".to_owned(),
+            "-t".to_owned(),
+            anchor.raw().to_owned(),
+            "automatic-rename".to_owned(),
+            "on".to_owned(),
+            ";".to_owned(),
+            "set-option".to_owned(),
+            "-wu".to_owned(),
+            "-t".to_owned(),
+            anchor.raw().to_owned(),
+            RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION.to_owned(),
         ]))
     }
 

@@ -16,6 +16,7 @@ pub(crate) struct TabRename {
     pub(crate) anchor: PaneId,
     pub(crate) observed_name: String,
     pub(crate) desired_name: String,
+    pub(crate) has_status: bool,
 }
 
 /// Declaration order is the product precedence ladder consumed by `max`.
@@ -82,6 +83,7 @@ pub(crate) fn desired_tab_renames(snapshot: &SidebarSnapshot, frame: &PaneFrame)
                 .iter()
                 .filter_map(|pane| status_by_pane.get(&pane.pane_id).copied())
                 .max();
+            let has_status = status.is_some();
             let base = theme::strip_status_glyph_suffix(observed_name, &snapshot.theme);
             let desired_name = status.map_or_else(
                 || base.to_owned(),
@@ -91,6 +93,7 @@ pub(crate) fn desired_tab_renames(snapshot: &SidebarSnapshot, frame: &PaneFrame)
                 anchor,
                 observed_name: observed_name.clone(),
                 desired_name,
+                has_status,
             })
         })
         .collect()
@@ -187,6 +190,7 @@ mod tests {
 
         assert_eq!(renames[0].desired_name, "#feat !");
         assert_eq!(renames[0].anchor.raw(), "%1");
+        assert!(renames[0].has_status);
     }
 
     #[test]
@@ -199,6 +203,7 @@ mod tests {
 
         assert_eq!(renames[0].observed_name, "my tab ✓");
         assert_eq!(renames[0].desired_name, "my tab");
+        assert!(!renames[0].has_status);
     }
 
     #[test]

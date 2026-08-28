@@ -14,12 +14,13 @@ fn terminal_feature_count(stdout: &str, feature: &str) -> usize {
 }
 
 #[test]
-fn rename_tab_targets_the_anchor_panes_window() {
+fn tab_status_clear_restores_automatic_rename() {
     require_tmux!();
     let server = TmuxServer::new();
     let session = "rimz-rename-tab";
     server.ensure_with_shell(session);
     let anchor = list_session_panes(&server, session)[0].pane_id.clone();
+    assert_eq!(server.display(session, "#{automatic-rename}"), "1");
 
     server
         .backend
@@ -30,6 +31,68 @@ fn rename_tab_targets_the_anchor_panes_window() {
         .expect("rename pane's window");
 
     assert_eq!(server.display(session, "#{window_name}"), "work ?");
+    assert_eq!(server.display(session, "#{automatic-rename}"), "0");
+    assert_eq!(
+        server.stdout(&[
+            "show-options",
+            "-wqv",
+            "-t",
+            anchor.raw(),
+            "@rimz_restore_automatic_rename",
+        ]),
+        "on",
+    );
+
+    server
+        .backend
+        .clear_tab_status(session, &anchor, "work")
+        .expect("clear pane's window status");
+
+    assert_eq!(server.display(session, "#{window_name}"), "work");
+    assert_eq!(server.display(session, "#{automatic-rename}"), "1");
+    assert_eq!(
+        server.stdout(&[
+            "show-options",
+            "-wqv",
+            "-t",
+            anchor.raw(),
+            "@rimz_restore_automatic_rename",
+        ]),
+        "",
+    );
+}
+
+#[test]
+fn tab_status_clear_preserves_an_intentionally_stable_name() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-stable-tab";
+    server.output(&["new-session", "-d", "-s", session, "-n", "stable", "sh"]);
+    assert!(!server.wait_for_panes(session, 1).is_empty());
+    let anchor = list_session_panes(&server, session)[0].pane_id.clone();
+    assert_eq!(server.display(session, "#{automatic-rename}"), "0");
+
+    server
+        .backend
+        .rename_tab(session, &anchor, "stable ?")
+        .expect("rename stable window");
+    server
+        .backend
+        .clear_tab_status(session, &anchor, "stable")
+        .expect("clear stable window status");
+
+    assert_eq!(server.display(session, "#{window_name}"), "stable");
+    assert_eq!(server.display(session, "#{automatic-rename}"), "0");
+    assert_eq!(
+        server.stdout(&[
+            "show-options",
+            "-wqv",
+            "-t",
+            anchor.raw(),
+            "@rimz_restore_automatic_rename",
+        ]),
+        "",
+    );
 }
 
 #[test]

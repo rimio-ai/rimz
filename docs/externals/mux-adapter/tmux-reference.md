@@ -139,7 +139,9 @@ Index: `has-session -t` (pure exit code), `rename-session`, `lock-client`/`lock-
 
 **`run-shell [-bCE] [-c dir] [-d delay] [-t pane] [cmd [arg…]]`** — runs a shell command (`/bin/sh -c`) or with `-C` a tmux command, formats expanded first; blocks the command queue until done unless `-b`; `-E` redirects stderr to stdout (3.6), and 3.7 exposes following arguments as `#{1}`, `#{2}`, and so on. **`wait-for [-L|-S|-U] channel`** — bare form blocks the *client* until another client fires `wait-for -S` on the channel; `-L`/`-U` lock/unlock. The two synchronization verbs scripts get.
 
-Index: `respawn-pane`/`respawn-window [-k] [-c] [-e]` (restart in place — the `remain-on-exit` partner), `resize-pane [-DLRUZTM] [-x -y]` (`-Z` zoom toggle), `resize-window`, `break-pane`, `join-pane`, `move-pane`, `rotate-window`, `link-window`/`unlink-window`, `select-layout` + the five preset layouts, `rename-window`, copy mode and its `send-keys -X` command set, the `choose-tree`/`choose-client`/`choose-buffer` interactive modes, and paste buffers (`set-buffer`, `load-buffer`, `save-buffer`, `paste-buffer`, `show-buffer`, `delete-buffer`).
+**`rename-window [-t window] new-name`** — changes the label and disables that window's `automatic-rename`, just like naming it with `new-window -n`; re-enabling the option lets tmux derive the label from the active pane again.
+
+Index: `respawn-pane`/`respawn-window [-k] [-c] [-e]` (restart in place — the `remain-on-exit` partner), `resize-pane [-DLRUZTM] [-x -y]` (`-Z` zoom toggle), `resize-window`, `break-pane`, `join-pane`, `move-pane`, `rotate-window`, `link-window`/`unlink-window`, `select-layout` + the five preset layouts, copy mode and its `send-keys -X` command set, the `choose-tree`/`choose-client`/`choose-buffer` interactive modes, and paste buffers (`set-buffer`, `load-buffer`, `save-buffer`, `paste-buffer`, `show-buffer`, `delete-buffer`).
 
 ### Option, hook, and environment commands
 
@@ -175,7 +177,7 @@ The format language is tmux's read surface: every `-F` flag, filter, hook comman
 | `session_name` | `#S` | mutable via `rename-session` |
 | `session_id` | `$N` | server-unique |
 | `window_id` | `@N` | the `view_id` grouping key; server-unique, monotonic |
-| `window_name` | window label | sticky once `-n`-named (per-window `automatic-rename` off) — the resume/daemon idempotency key |
+| `window_name` | window label | sticky once `-n`-named or explicitly renamed (per-window `automatic-rename` off) — the resume/daemon idempotency key |
 | `window_index` | position | `renumber-windows` rewrites it; ids never move |
 | `window_width` / `window_height` | cells | the sidebar sizing read |
 | `pane_id` | `%N` | `#D`; server-unique, monotonic; exported as `$TMUX_PANE` |
