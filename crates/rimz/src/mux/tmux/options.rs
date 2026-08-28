@@ -10,6 +10,7 @@ use crate::pane::SIDEBAR_CHROME_TITLE;
 
 pub(super) const SIDEBAR_WIDTH_OPTION: &str = "@rimz_sidebar_cols";
 pub(super) const RIMZ_TITLE_OPTION: &str = "@rimz_title";
+pub(super) const RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION: &str = "@rimz_restore_automatic_rename";
 
 /// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
 /// launch and in-place recovery so the two cannot drift.

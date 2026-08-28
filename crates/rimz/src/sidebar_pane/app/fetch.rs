@@ -552,8 +552,12 @@ impl FetchWorker {
         std::thread::spawn(move || {
             let backend = crate::mux::backend_for(mux);
             for rename in pending {
-                if let Err(err) = backend.rename_tab(&session, &rename.anchor, &rename.desired_name)
-                {
+                let result = if rename.has_status {
+                    backend.rename_tab(&session, &rename.anchor, &rename.desired_name)
+                } else {
+                    backend.clear_tab_status(&session, &rename.anchor, &rename.desired_name)
+                };
+                if let Err(err) = result {
                     tracing::debug!(
                         session = %session,
                         pane = %rename.anchor,

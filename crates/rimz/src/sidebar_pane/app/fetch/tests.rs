@@ -431,6 +431,7 @@ fn tab_name_memo_deduplicates_within_one_pane_observation() {
         anchor: anchor.clone(),
         observed_name: "#feat".to_owned(),
         desired_name: "#feat ?".to_owned(),
+        has_status: true,
     };
     let mut memo = TabNameMemo::default();
 

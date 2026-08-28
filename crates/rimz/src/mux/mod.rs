@@ -985,6 +985,12 @@ pub trait MuxBackend: Send + Sync {
     /// directly, while Zellij resolves the pane's stable tab id before using
     /// its by-id rename action.
     fn rename_tab(&self, session: &str, anchor: &PaneId, name: &str) -> Result<()>;
+    /// Restore the tab's resting name after its status suffix clears. Backends
+    /// with automatic naming re-enable it only when RimZ's status rename
+    /// disabled it; the default is the ordinary rename used by Zellij.
+    fn clear_tab_status(&self, session: &str, anchor: &PaneId, name: &str) -> Result<()> {
+        self.rename_tab(session, anchor, name)
+    }
     /// Close one pane by normalized id. Used by supervised one-shot launches
     /// after their terminal result is recorded; callers treat failure as
     /// best-effort cleanup.
