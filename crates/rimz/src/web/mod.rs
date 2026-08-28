@@ -70,7 +70,7 @@ fn session_sync_osc(target: Option<(&str, &str)>) -> String {
     format!(
         "\x1b]{};rimz-session={}\x07\x1b]{};rimz-name={}\x07",
         TTYD_SESSION_OSC,
-        session,
+        encode_query_value(session),
         TTYD_SESSION_OSC,
         encode_query_value(display_name)
     )
@@ -687,6 +687,14 @@ mod tests {
         assert_eq!(
             session_sync_osc(None),
             "\x1b]7717;rimz-session=\x07\x1b]7717;rimz-name=\x07"
+        );
+    }
+
+    #[test]
+    fn session_sync_osc_percent_encodes_control_bytes() {
+        assert_eq!(
+            session_sync_osc(Some(("evil\x1b]bad", "project"))),
+            "\x1b]7717;rimz-session=evil%1B%5Dbad\x07\x1b]7717;rimz-name=project\x07"
         );
     }
 
