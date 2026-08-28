@@ -983,7 +983,8 @@ pub trait MuxBackend: Send + Sync {
     /// Rename the tab/window containing `anchor`. The pane anchor keeps the
     /// cross-backend seam stable: tmux can address its window through a pane
     /// directly, while Zellij resolves the pane's stable tab id before using
-    /// its by-id rename action.
+    /// its by-id rename action. On an automatically named tmux window, this
+    /// also arms `@rimz_restore_automatic_rename` for [`Self::clear_tab_status`].
     fn rename_tab(&self, session: &str, anchor: &PaneId, name: &str) -> Result<()>;
     /// Restore the tab's resting name after its status suffix clears. Backends
     /// with automatic naming re-enable it only when RimZ's status rename

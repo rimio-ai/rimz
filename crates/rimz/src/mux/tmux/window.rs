@@ -144,11 +144,10 @@ impl TmuxBackend {
         Ok(self.cmd().args(rename).args([
             ";".to_owned(),
             "set-option".to_owned(),
-            "-w".to_owned(),
+            "-wu".to_owned(),
             "-t".to_owned(),
             anchor.raw().to_owned(),
             "automatic-rename".to_owned(),
-            "on".to_owned(),
             ";".to_owned(),
             "set-option".to_owned(),
             "-wu".to_owned(),
