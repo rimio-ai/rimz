@@ -22,7 +22,7 @@ allowed-imports = [
     "store",
     "transcript",
 ]
-surface-budget = 997
+surface-budget = 998
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -613,6 +613,7 @@ surface-budget = 61
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
 allowed-imports = [
+    "agents::capabilities",
     "ids",
     "trust",
 ]
