@@ -18,11 +18,11 @@ pub enum SystemTextChannel {
     ConfigKey { flags: Vec<String>, key: String },
 }
 
-impl SystemTextChannel {
-    pub(crate) fn matcher(&self) -> PresetArgMatcher {
-        match self {
-            Self::TextFlag { flags } => PresetArgMatcher::TextFlag(flags.clone()),
-            Self::ConfigKey { flags, key } => PresetArgMatcher::ConfigKey {
+impl From<&SystemTextChannel> for PresetArgMatcher {
+    fn from(channel: &SystemTextChannel) -> Self {
+        match channel {
+            SystemTextChannel::TextFlag { flags } => Self::TextFlag(flags.clone()),
+            SystemTextChannel::ConfigKey { flags, key } => Self::ConfigKey {
                 flags: flags.clone(),
                 key: key.clone(),
             },

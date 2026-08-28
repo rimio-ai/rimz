@@ -610,7 +610,7 @@ fn merge_appended_system_text(
     channel: &SystemTextChannel,
     text: &str,
 ) {
-    let matcher = channel.matcher();
+    let matcher = crate::agents::PresetArgMatcher::from(channel);
     let Some(existing) = matcher.occurrences(extra_args).into_iter().last() else {
         if let Some((flag, value)) = render_system_text_channel(channel, text) {
             extra_args.extend([flag, value]);
