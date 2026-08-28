@@ -360,6 +360,28 @@ pub(super) fn supervise_remote(
                     guard.reset_emulator();
                     RetryCause::Dropped
                 }
+                Verdict::OfferReattach => {
+                    handoff.release();
+                    guard.reset_emulator();
+                    guard.discard_pending_input();
+                    if !offer_remote_session_recreation(host)? {
+                        if outcome.stderr.is_some() {
+                            let _ =
+                                writeln!(std::io::stderr().lock(), "rimz: detached from {host}");
+                        }
+                        return Ok(());
+                    }
+                    if !attach_evidence.is_some_and(|(control_alive, _)| control_alive) {
+                        drop(ready_master.take());
+                        RetryCause::Dropped
+                    } else {
+                        let _ = writeln!(
+                            std::io::stderr().lock(),
+                            "rimz: recreating the remote session on {host} — reattaching",
+                        );
+                        continue;
+                    }
+                }
                 Verdict::Reattach => {
                     handoff.release();
                     guard.reset_emulator();
@@ -425,6 +447,26 @@ pub(super) fn supervise_remote(
             WaitOutcome::NeedsInteractive => unreachable!("recovery stays in batch mode"),
         }
     }
+}
+
+fn offer_remote_session_recreation(host: &str) -> Result<bool> {
+    if !std::io::stdin().is_terminal() {
+        return Ok(false);
+    }
+    let mut stderr = std::io::stderr().lock();
+    write!(
+        stderr,
+        "remote session on {host} ended — reattach and recreate the room? [Y/n] "
+    )?;
+    stderr.flush()?;
+    drop(stderr);
+
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer)? == 0 {
+        return Ok(false);
+    }
+    let answer = answer.trim();
+    Ok(answer.is_empty() || answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
 enum RetryCause {

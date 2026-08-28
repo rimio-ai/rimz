@@ -942,6 +942,9 @@ pub enum Verdict {
     },
     /// The link dropped on an established session — enter background recovery.
     Retry,
+    /// A settled remote session ended ambiguously — ask before recreating the
+    /// room, then route through the observed SSH state.
+    OfferReattach,
     /// SSH is still healthy, but an established multiplexer client ended
     /// abnormally — attach a replacement over the existing connection.
     Reattach,
@@ -975,6 +978,14 @@ impl ReconnectState {
                 | REMOTE_VERSION_INCOMPATIBLE_EXIT
                 | REMOTE_PATH_MISSING_EXIT),
             ) => Verdict::Fatal { code },
+            Some(REMOTE_SESSION_LOST_EXIT)
+                if evidence.is_some_and(|(_, lived_past_gatetime)| lived_past_gatetime) =>
+            {
+                Verdict::OfferReattach
+            }
+            Some(REMOTE_SESSION_LOST_EXIT) => Verdict::Fatal {
+                code: REMOTE_SESSION_LOST_EXIT,
+            },
             Some(SSH_TRANSPORT_EXIT) if self.established => Verdict::Retry,
             Some(_)
                 if self.established
