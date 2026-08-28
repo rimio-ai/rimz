@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// Launch-scoped provider channel for additive system or developer text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SystemTextChannel {
+    /// A named flag whose value is the text: `--append-system-prompt <text>`.
+    TextFlag { flags: Vec<String> },
+    /// A repeatable config override: `<flag> <key>=<TOML-quoted text>`.
+    ConfigKey { flags: Vec<String>, key: String },
+}
+
+impl SystemTextChannel {
+    pub(crate) fn matcher(&self) -> PresetArgMatcher {
+        match self {
+            Self::TextFlag { flags } => PresetArgMatcher::TextFlag(flags.clone()),
+            Self::ConfigKey { flags, key } => PresetArgMatcher::ConfigKey {
+                flags: flags.clone(),
+                key: key.clone(),
+            },
+        }
+    }
+}
+
 #[doc(hidden)]
 pub trait CoreCapability: Send + Sync {
     /// The adapter's static identity, branding, capabilities, and
@@ -271,9 +292,9 @@ pub trait LaunchCapability: CoreCapability {
     /// native restriction.
     fn lockdown_subagent_args(&self, _extra_args: &mut Vec<String>) {}
 
-    /// Provider argv that appends launch-scoped text to the system prompt.
-    /// The default leaves callers to deliver the text through another channel.
-    fn append_system_text_args(&self, _text: &str) -> Option<Vec<String>> {
+    /// Provider channel for additive launch-scoped system or developer text.
+    /// The default leaves callers to deliver the text through the user prompt.
+    fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
         None
     }
 

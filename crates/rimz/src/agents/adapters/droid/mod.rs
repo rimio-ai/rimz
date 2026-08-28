@@ -267,8 +267,10 @@ impl crate::agents::capabilities::CoreCapability for DroidAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for DroidAdapter {
-    fn append_system_text_args(&self, text: &str) -> Option<Vec<String>> {
-        Some(vec!["--append-system-prompt".to_owned(), text.to_owned()])
+    fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
+        Some(SystemTextChannel::TextFlag {
+            flags: vec!["--append-system-prompt".to_owned()],
+        })
     }
 }
 

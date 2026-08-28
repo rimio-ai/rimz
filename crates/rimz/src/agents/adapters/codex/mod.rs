@@ -683,6 +683,13 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         (configured_model(), configured_reasoning_effort())
     }
 
+    fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
+        Some(SystemTextChannel::ConfigKey {
+            flags: vec!["-c".to_owned(), "--config".to_owned()],
+            key: "developer_instructions".to_owned(),
+        })
+    }
+
     fn lockdown_subagent_args(&self, extra_args: &mut Vec<String>) {
         crate::agents::PresetArgMatcher::ConfigKey {
             flags: vec!["-c".to_owned(), "--config".to_owned()],

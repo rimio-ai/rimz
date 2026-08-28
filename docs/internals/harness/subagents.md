@@ -33,7 +33,7 @@ This is a usability boundary, not a security one — the same launch is expressi
 
 ## Children cannot delegate again
 
-Every prompt launched through `rimz subagents`, including every fanout entry, ends with a `<system_reminder>` telling the child to complete the work directly and not launch more agents. Where the provider exposes a verified native restriction, the exec compiler independently disables its delegation tool after profile arguments and configured environment have been applied:
+Every child launched through `rimz subagents`, including every fanout entry, receives a `<system_reminder>` telling it to complete the work directly and not launch more agents. Where the provider exposes a verified native restriction, the exec compiler independently disables its delegation tool after profile arguments and configured environment have been applied:
 
 | Provider | Process restriction |
 | --- | --- |
@@ -45,7 +45,7 @@ Every prompt launched through `rimz subagents`, including every fanout entry, en
 
 The restriction marker is internal to this doorway. A peer launched with `rimz agents` or as a team member keeps its normal provider tools even when it carries a launch generation.
 
-The launch planner independently rejects any `rimz agents` or `rimz subagents` call whose durable caller is a pane-backed child. That check blocks the child from launching another RimZ process, while the process restriction blocks the provider's native delegation tool. The prompt reminder covers every adapter and states both rules in the child's task context.
+The launch planner independently rejects any `rimz agents` or `rimz subagents` call whose durable caller is a pane-backed child. That check blocks the child from launching another RimZ process, while the process restriction blocks the provider's native delegation tool. The reminder covers every adapter and states both rules in the child's instruction context.
 
 ## What a launch desugars to
 
@@ -63,7 +63,7 @@ The launch planner independently rejects any `rimz agents` or `rimz subagents` c
 
 The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --bg --timeout 30m`, except that the wrapper retains the pane after the one turn finishes. `--wait` leaves that launch unchanged, then passes the minted petname to the shared single-name wait path; `--wait=DURATION` adds a caller-side join deadline without changing the child's timeout.
 
-The no-delegation reminder rides a provider-native append-system-text launch flag for Claude, Qwen, and Droid, after any caller-supplied append text. Adapters without that capability keep the same tag-wrapped reminder at the end of the user prompt. The process compiler owns this choice at the adapter boundary, beside the native delegation lockdown, so preflight and the eventual exec compile the same provider argv.
+The no-delegation reminder rides a provider-native append-system-text launch flag for Claude, Qwen, and Droid, after any caller-supplied append text. Codex receives it through `-c developer_instructions=…`, which produces a developer-role message separate from the user prompt and preserves Codex's built-in instructions. An argv-supplied `developer_instructions` value is composed before the reminder; a value in the user's base `~/.codex/config.toml` is overridden because it is not visible at launch composition time. Adapters without a native system-text channel keep the same tag-wrapped reminder at the end of the user prompt. The process compiler owns this choice at the adapter boundary, beside the native delegation lockdown, so preflight and the eventual exec compile the same provider argv.
 
 ## Pane zones
 

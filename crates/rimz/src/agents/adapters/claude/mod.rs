@@ -454,8 +454,10 @@ impl crate::agents::capabilities::CoreCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
-    fn append_system_text_args(&self, text: &str) -> Option<Vec<String>> {
-        Some(vec!["--append-system-prompt".to_owned(), text.to_owned()])
+    fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
+        Some(SystemTextChannel::TextFlag {
+            flags: vec!["--append-system-prompt".to_owned()],
+        })
     }
 
     fn lockdown_subagent_args(&self, extra_args: &mut Vec<String>) {
