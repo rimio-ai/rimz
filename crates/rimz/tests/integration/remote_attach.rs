@@ -172,6 +172,88 @@ fn run_pty_command(pair: PtyPair, cmd: CommandBuilder) -> (String, Termios) {
     (output, settings)
 }
 
+fn run_pty_prompt_command(
+    pair: PtyPair,
+    cmd: CommandBuilder,
+    prompt: &str,
+    pending_input: Option<&[u8]>,
+    answer: &[u8],
+) -> (String, Termios) {
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
+    let tty_name = pair.master.tty_name().expect("remote connect pty name");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = std::thread::spawn(move || {
+        let mut buffer = [0_u8; 4096];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => return,
+                Ok(read) => reader_output
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .extend_from_slice(&buffer[..read]),
+            }
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("take pty writer");
+    if let Some(pending_input) = pending_input {
+        writer
+            .write_all(pending_input)
+            .expect("write pending pty input");
+        writer.flush().expect("flush pending pty input");
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let saw_prompt = {
+            let output = output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            String::from_utf8_lossy(&output).contains(prompt)
+        };
+        if saw_prompt {
+            break;
+        }
+        assert!(
+            child.try_wait().expect("poll remote connect").is_none(),
+            "remote connect exited before prompt"
+        );
+        assert!(Instant::now() < deadline, "remote connect prompt timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    writer.write_all(answer).expect("write prompt answer");
+    writer.flush().expect("flush prompt answer");
+    drop(writer);
+
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll remote connect") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let settings = read_tty_termios(&tty_name);
+    drop(pair.master);
+    reader_thread.join().expect("join pty reader");
+    let output = String::from_utf8_lossy(
+        &output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+    .into_owned();
+    let status = status.unwrap_or_else(|| panic!("remote connect timed out; output:\n{output}"));
+    assert!(
+        status.success(),
+        "remote connect failed with {status:?}; output:\n{output}"
+    );
+    (output, settings)
+}
+
 fn assert_shell_tty(settings: &Termios) {
     assert!(
         settings.input_flags.contains(InputFlags::ICRNL),
@@ -1679,13 +1761,13 @@ fn established_mux_disconnect_reconnects() {
 }
 
 #[test]
-fn established_remote_session_loss_reconnects() {
+fn noninteractive_remote_session_loss_does_not_recreate() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
     std::fs::write(
         &plan,
-        format!("{}\n0\n", rimz::remote::REMOTE_SESSION_LOST_EXIT),
+        format!("{}\n", rimz::remote::REMOTE_SESSION_LOST_EXIT),
     )
     .expect("write plan");
     let out = remote_connect_command(&env, &log)
@@ -1697,22 +1779,100 @@ fn established_remote_session_loss_reconnects() {
 
     assert!(
         out.status.success(),
-        "lost remote session reattaches\nstderr:\n{}",
+        "lost remote session exits cleanly\nstderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(
         main_invocation_count(&log),
-        2,
-        "the lost remote session is reattached once"
+        1,
+        "noninteractive stdin cannot consent to recreating the room"
     );
     assert_eq!(
         master_invocation_count(&log),
         1,
-        "reattach reuses the healthy SSH connection"
+        "the initial attach uses one healthy SSH connection"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("rimz: detached from dev-box"), "{stderr}");
+    assert!(!stderr.contains("[Y/n]"), "{stderr}");
+}
+
+#[test]
+fn remote_session_loss_prompts_before_recreating() {
+    const PROMPT: &str = "remote session on dev-box ended — reattach and recreate the room? [Y/n]";
+
+    for (pending_input, answer, expected_attaches, accepted) in [
+        (Some(b"n\n".as_slice()), b"\n".as_slice(), 2, true),
+        (None, b"y\n".as_slice(), 2, true),
+        (None, b"n\n".as_slice(), 1, false),
+        (None, b"\x04".as_slice(), 1, false),
+    ] {
+        let env = Env::new();
+        let log = env.project_root.join("ssh-trace.log");
+        let plan = env.project_root.join("ssh-trace.plan");
+        let statuses = if accepted {
+            format!("{}\n0\n", rimz::remote::REMOTE_SESSION_LOST_EXIT)
+        } else {
+            format!("{}\n", rimz::remote::REMOTE_SESSION_LOST_EXIT)
+        };
+        std::fs::write(&plan, statuses).expect("write plan");
+        let mut cmd = remote_connect_pty_command(&env, &log);
+        cmd.env("RIMZ_TEST_SSH_PLAN", &plan);
+        cmd.env("RIMZ_TEST_SSH_SLEEP_MS", "80");
+        cmd.env("RIMZ_REMOTE_GATETIME_MS", "20");
+
+        let (output, settings) =
+            run_pty_prompt_command(remote_connect_pty(), cmd, PROMPT, pending_input, answer);
+
+        assert_eq!(
+            main_invocation_count(&log),
+            expected_attaches,
+            "answer {answer:?}: {output}"
+        );
+        assert!(output.contains(PROMPT), "answer {answer:?}: {output}");
+        if accepted {
+            assert!(output.contains("recreating the remote session"), "{output}");
+        } else {
+            assert!(output.contains("rimz: detached from dev-box"), "{output}");
+        }
+        assert_shell_tty(&settings);
+    }
+}
+
+#[test]
+fn accepted_remote_session_loss_recovers_a_dead_control_master() {
+    const PROMPT: &str = "remote session on dev-box ended — reattach and recreate the room? [Y/n]";
+
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    let master_exit_plan = env.project_root.join("master-exit.plan");
+    std::fs::write(
+        &plan,
+        format!("{}\n0\n", rimz::remote::REMOTE_SESSION_LOST_EXIT),
+    )
+    .expect("write attach plan");
+    std::fs::write(&master_exit_plan, "0\n0\n").expect("write master exit plan");
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.env("RIMZ_TEST_SSH_PLAN", &plan);
+    cmd.env("RIMZ_TEST_SSH_SLEEP_MS", "250");
+    cmd.env("RIMZ_TEST_SSH_MASTER_EXIT_MS", "100");
+    cmd.env("RIMZ_TEST_SSH_MASTER_EXIT_PLAN", &master_exit_plan);
+    cmd.env("RIMZ_REMOTE_GATETIME_MS", "10");
+
+    let (output, settings) = run_pty_prompt_command(remote_connect_pty(), cmd, PROMPT, None, b"\n");
+
+    assert_eq!(main_invocation_count(&log), 2, "{output}");
+    assert_eq!(
+        master_invocation_count(&log),
+        2,
+        "acceptance recovers the ended ControlMaster: {output}"
     );
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("remote session on dev-box disconnected")
+        !output.contains("recreating the remote session"),
+        "the dead-master path must enter transport recovery: {output}"
     );
+    assert_shell_tty(&settings);
 }
 
 #[test]

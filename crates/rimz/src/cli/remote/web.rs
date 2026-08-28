@@ -455,8 +455,12 @@ fn web_exit_action(verdict: rimz::remote::Verdict, host: &str) -> Result<WebExit
     match verdict {
         rimz::remote::Verdict::CleanExit => Ok(WebExitAction::Done),
         rimz::remote::Verdict::Retry => Ok(WebExitAction::Retry),
-        // `settle_web_exit` uses the transport-only classifier, which never
-        // returns the foreground-multiplexer reattach verdict.
+        // Web never runs the supervised attach wrapper that emits the
+        // session-loss sentinel.
+        rimz::remote::Verdict::OfferReattach => {
+            unreachable!("web tunnel cannot offer multiplexer recreation")
+        }
+        // `settle_web_exit` supplies no foreground-multiplexer evidence.
         rimz::remote::Verdict::Reattach => unreachable!("web tunnel cannot request reattach"),
         rimz::remote::Verdict::Fatal { code } => {
             bail!("web tunnel to {host} exited with status {code}; not reconnecting")

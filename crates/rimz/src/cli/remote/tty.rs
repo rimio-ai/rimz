@@ -80,6 +80,15 @@ impl TtyGuard {
             tracing::debug!(error = %err, "local terminal emulator reset failed");
         }
     }
+
+    pub(super) fn discard_pending_input(&self) {
+        if self.saved.is_none() {
+            return;
+        }
+        if let Err(err) = termios::tcflush(io::stdin(), FlushArg::TCIFLUSH) {
+            tracing::debug!(error = %err, "local tty input flush before prompt failed");
+        }
+    }
 }
 
 fn drain_until_quiet(stdin: &impl AsFd, quiet: Duration, max: Duration) {
