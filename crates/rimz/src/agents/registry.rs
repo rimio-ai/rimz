@@ -142,13 +142,15 @@ fn adapter_for_program(
     program: crate::proc::command::EffectiveProgram<'_>,
 ) -> Option<&'static AgentDefinition> {
     let label = crate::proc::command::basename(program.program);
+    let from_launcher = program.program != program.root_program
+        && crate::proc::command::is_launcher(program.root_program);
     all_definitions()
         .find(|adapter| {
             adapter.spec().ambiguous_bin_identity(label).is_none()
                 && adapter_matches_program(adapter, program)
         })
         .or_else(|| {
-            (!program.from_launcher)
+            (!from_launcher)
                 .then(|| adapter_for_comm(program.program))
                 .flatten()
         })
@@ -160,9 +162,11 @@ fn adapter_matches_program(
 ) -> bool {
     let definition = adapter.spec();
     let label = crate::proc::command::basename(program.program);
+    let from_launcher = program.program != program.root_program
+        && crate::proc::command::is_launcher(program.root_program);
     definition.launches_as(label)
-        || (!program.from_launcher && definition.runs_as(label))
-        || (program.from_launcher
+        || (!from_launcher && definition.runs_as(label))
+        || (from_launcher
             && crate::proc::command::agent_script_path_names_kind(program.program, definition.kind))
 }
 

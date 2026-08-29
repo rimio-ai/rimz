@@ -9,12 +9,6 @@ pub(crate) fn program_label(command: &str) -> String {
     basename(effective_program(command)).to_owned()
 }
 
-/// The program at the root of a command, seeing past `sudo` but not through
-/// RimZ or JavaScript launchers.
-pub(crate) fn root_program_label(command: &str) -> Option<&str> {
-    effective_program_and_args(command).map(|(program, _)| basename(program))
-}
-
 /// The command with an absolute program path reduced to a basename: `/usr/bin/cargo
 /// build` reads as `cargo build`, while relative paths like
 /// `target/debug/xtask install-dev` stay verbatim as build-location context.
@@ -115,20 +109,20 @@ fn effective_program(command: &str) -> &str {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct EffectiveProgram<'a> {
     pub(crate) program: &'a str,
-    pub(crate) from_launcher: bool,
+    pub(crate) root_program: &'a str,
 }
 
 pub(crate) fn effective_program_info(command: &str) -> EffectiveProgram<'_> {
     let Some((program, mut tokens)) = effective_program_and_args(command) else {
         return EffectiveProgram {
             program: command,
-            from_launcher: false,
+            root_program: command,
         };
     };
     if let Some(kind) = rimz_exec_kind(program, tokens.clone()) {
         return EffectiveProgram {
             program: kind,
-            from_launcher: false,
+            root_program: program,
         };
     }
     // A JS launcher runs the script named by its first non-flag argument, so the
@@ -138,12 +132,12 @@ pub(crate) fn effective_program_info(command: &str) -> EffectiveProgram<'_> {
     {
         return EffectiveProgram {
             program: script,
-            from_launcher: true,
+            root_program: program,
         };
     }
     EffectiveProgram {
         program,
-        from_launcher: false,
+        root_program: program,
     }
 }
 
@@ -184,7 +178,7 @@ mod tests {
             effective_program_info("node --inspect /usr/bin/codex"),
             EffectiveProgram {
                 program: "/usr/bin/codex",
-                from_launcher: true,
+                root_program: "node",
             }
         );
         assert_eq!(program_label("node /usr/bin/codex"), "codex");

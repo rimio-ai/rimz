@@ -6,9 +6,7 @@ use jiff::Timestamp;
 use super::row::{ProcessCard, ProcessState, RowCard, SidebarRow};
 use crate::agents::registry::command_agent_kind;
 use crate::pane::PaneRef;
-use crate::proc::{
-    command_program_basename, program_label, rimz_exec_worktree_path, root_program_label,
-};
+use crate::proc::{command_program_basename, program_label, rimz_exec_worktree_path};
 
 /// Whether a pane no agent has bound carries enough identity to render a
 /// process row. Foreground display wins, but a spawn command also admits the
@@ -125,7 +123,7 @@ pub fn pane_agent_kind(pane: &PaneRef) -> Option<&'static str> {
         })
 }
 
-pub(crate) fn spawn_command_names_live_root(pane: &PaneRef) -> bool {
+fn spawn_command_names_live_root(pane: &PaneRef) -> bool {
     let Some(command) = pane
         .command
         .as_deref()
@@ -135,7 +133,8 @@ pub(crate) fn spawn_command_names_live_root(pane: &PaneRef) -> bool {
     };
     pane.spawn_command
         .as_deref()
-        .and_then(root_program_label)
+        .map(crate::proc::command::effective_program_info)
+        .map(|program| crate::proc::command::basename(program.root_program))
         .is_some_and(|spawn_program| program_label(command) == spawn_program)
 }
 
