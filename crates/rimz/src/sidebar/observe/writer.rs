@@ -12,7 +12,9 @@ use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::cache::read_snapshot_cache;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::unix_now_ms;
-use crate::sidebar::timing::{OBSERVE_CROSSCHECK_TTL, OBSERVE_DEADPID_CONFIRMATIONS};
+use crate::sidebar::timing::{
+    OBSERVE_CROSSCHECK_TTL, OBSERVE_DEADPID_CONFIRMATIONS, OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS,
+};
 use crate::store::paths::RuntimePaths;
 use jiff::Timestamp;
 
@@ -32,6 +34,7 @@ pub fn spawn(
             latest_roster: None,
             last_crosscheck: Instant::now(),
             dead_pids: DeadPidTracker::default(),
+            hostless_agents: HostedAgentTracker::default(),
         }
         .run(rx);
     })
@@ -48,6 +51,7 @@ struct Writer {
     latest_roster: Option<RosterSig>,
     last_crosscheck: Instant,
     dead_pids: DeadPidTracker,
+    hostless_agents: HostedAgentTracker,
 }
 
 impl Writer {
@@ -102,6 +106,13 @@ impl Writer {
         }
         if crate::proc::process_start(std::process::id()).is_some() {
             for kind in self.dead_pids.check(&roster, crate::proc::process_start) {
+                self.emit_anomaly(AnomalyDraft::from_roster(unix_now_ms(), &roster, kind));
+            }
+            for kind in self.hostless_agents.check(
+                &roster,
+                crate::proc::process_start,
+                &crate::proc::hosted_agent_absent_under_root,
+            ) {
                 self.emit_anomaly(AnomalyDraft::from_roster(unix_now_ms(), &roster, kind));
             }
         }
@@ -219,6 +230,58 @@ struct DeadPidObservation {
     reason: Option<String>,
 }
 
+#[derive(Default)]
+struct HostedAgentTracker {
+    by_pid: BTreeMap<(String, u32), HostedAgentObservation>,
+}
+
+impl HostedAgentTracker {
+    fn check(
+        &mut self,
+        roster: &RosterSig,
+        process_start: fn(u32) -> Option<Timestamp>,
+        hosted_agent_absent: &dyn Fn(&str, u32) -> bool,
+    ) -> Vec<AnomalyKind> {
+        let mut active = BTreeSet::new();
+        let mut anomalies = Vec::new();
+        for row in &roster.rows {
+            let (Some(kind), Some(pid)) = (row.agent_kind.as_deref(), row.pane_pid) else {
+                continue;
+            };
+            if process_start(pid).is_none() {
+                continue;
+            }
+            let key = (row.row_id.clone(), pid);
+            active.insert(key.clone());
+            if !hosted_agent_absent(kind, pid) {
+                self.by_pid.remove(&key);
+                continue;
+            }
+            let observation = self.by_pid.entry(key).or_default();
+            observation.confirmations = observation.confirmations.saturating_add(1);
+            if observation.confirmations >= OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS
+                && !observation.emitted
+            {
+                anomalies.push(AnomalyKind::AgentCardWithoutProcess {
+                    row_id: row.row_id.clone(),
+                    pane_id: row.pane_id.clone(),
+                    pid,
+                    kind: kind.to_owned(),
+                });
+                observation.emitted = true;
+            }
+        }
+        self.by_pid.retain(|key, _| active.contains(key));
+        cap_vec(anomalies)
+    }
+}
+
+#[derive(Default)]
+struct HostedAgentObservation {
+    confirmations: u32,
+    emitted: bool,
+}
+
 fn timestamp_diff_gt(left: Timestamp, right: Timestamp, tolerance: std::time::Duration) -> bool {
     left.as_second().abs_diff(right.as_second()) > tolerance.as_secs()
 }
@@ -240,6 +303,7 @@ mod tests {
                 .map(|(row_id, pane)| RosterRowSig {
                     row_id: row_id.to_owned(),
                     is_agent: true,
+                    agent_kind: Some("claude".to_owned()),
                     pane_id: Some(pane_id(pane).to_string()),
                     pane_pid: None,
                     pane_process_start: None,
@@ -254,6 +318,7 @@ mod tests {
             rows: vec![RosterRowSig {
                 row_id: row_id.to_owned(),
                 is_agent: true,
+                agent_kind: Some("claude".to_owned()),
                 pane_id: Some(pane_id("terminal_1").to_string()),
                 pane_pid: Some(pid),
                 pane_process_start: Some(started_at),
@@ -271,6 +336,15 @@ mod tests {
 
     fn mismatched_process_start(_: u32) -> Option<Timestamp> {
         Some(Timestamp::from_second(100).unwrap())
+    }
+
+    fn check_hosted_agent(
+        tracker: &mut HostedAgentTracker,
+        roster: &RosterSig,
+        process_start: fn(u32) -> Option<Timestamp>,
+        absent: bool,
+    ) -> Vec<AnomalyKind> {
+        tracker.check(roster, process_start, &|_, _| absent)
     }
 
     fn pane_id(raw: &str) -> PaneId {
@@ -362,6 +436,55 @@ mod tests {
             [AnomalyKind::DeadPid { reason, .. }] if reason == "starttime-mismatch"
         ));
         assert!(tracker.check(&roster, mismatched_process_start).is_empty());
+    }
+
+    #[test]
+    fn hostless_agent_requires_confirmations_emits_once_and_re_arms() {
+        let mut tracker = HostedAgentTracker::default();
+        let roster = roster_with_pid("a", 123, Timestamp::from_second(10).unwrap());
+
+        assert!(check_hosted_agent(&mut tracker, &roster, live_process_start, true).is_empty());
+        assert!(check_hosted_agent(&mut tracker, &roster, live_process_start, false).is_empty());
+        assert!(check_hosted_agent(&mut tracker, &roster, live_process_start, true).is_empty());
+        assert!(matches!(
+            check_hosted_agent(&mut tracker, &roster, live_process_start, true).as_slice(),
+            [AnomalyKind::AgentCardWithoutProcess {
+                row_id,
+                pane_id: Some(pane_id),
+                pid: 123,
+                kind,
+            }] if row_id == "a" && pane_id == "zellij:terminal_1" && kind == "claude"
+        ));
+        assert!(check_hosted_agent(&mut tracker, &roster, live_process_start, true).is_empty());
+
+        assert!(check_hosted_agent(&mut tracker, &roster, live_process_start, false).is_empty());
+        assert!(check_hosted_agent(&mut tracker, &roster, live_process_start, true).is_empty());
+        assert_eq!(
+            check_hosted_agent(&mut tracker, &roster, live_process_start, true).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn hostless_agent_ignores_process_rows_pidless_rows_and_dead_pids() {
+        let mut tracker = HostedAgentTracker::default();
+        let mut rows = roster_with_pid("process", 123, Timestamp::from_second(10).unwrap());
+        rows.rows[0].is_agent = false;
+        rows.rows[0].agent_kind = None;
+        rows.rows.push(RosterRowSig {
+            row_id: "pidless".to_owned(),
+            is_agent: true,
+            agent_kind: Some("claude".to_owned()),
+            pane_id: Some(pane_id("terminal_2").to_string()),
+            pane_pid: None,
+            pane_process_start: None,
+        });
+        assert!(check_hosted_agent(&mut tracker, &rows, live_process_start, true).is_empty());
+        assert!(check_hosted_agent(&mut tracker, &rows, live_process_start, true).is_empty());
+
+        let agent = roster_with_pid("agent", 456, Timestamp::from_second(10).unwrap());
+        assert!(check_hosted_agent(&mut tracker, &agent, missing_process_start, true).is_empty());
+        assert!(check_hosted_agent(&mut tracker, &agent, missing_process_start, true).is_empty());
     }
 
     #[test]
