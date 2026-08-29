@@ -117,6 +117,31 @@ fn worktree_new_list_and_remove_round_trip() {
 }
 
 #[test]
+fn worktree_remove_distinguishes_missing_from_unmarked() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+
+    env.rimz()
+        .args(["worktree", "remove", "ghost"])
+        .assert()
+        .failure()
+        .stderr(contains("worktree `ghost` does not exist at"));
+
+    let plain = env.home_root.join("project-worktrees/plain");
+    std::fs::create_dir_all(&plain).expect("create unmarked directory");
+    env.rimz()
+        .args(["worktree", "remove", "plain"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "worktree `plain` is not a RimZ-managed worktree at",
+        ));
+}
+
+#[test]
 fn worktree_sweep_previews_then_removes_only_safe_checkouts() {
     if git_missing() {
         return;

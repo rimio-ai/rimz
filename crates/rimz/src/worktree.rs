@@ -56,6 +56,8 @@ pub enum WorktreeErr {
     InvalidName(String),
     #[error("worktree `{name}` already exists at {path}")]
     Exists { name: String, path: PathBuf },
+    #[error("worktree `{name}` does not exist at {path}")]
+    Missing { name: String, path: PathBuf },
     #[error("worktree `{name}` is not a RimZ-managed worktree at {path}")]
     Unmarked { name: String, path: PathBuf },
     #[error(
@@ -622,10 +624,7 @@ pub fn remove(
 ) -> Result<RemovalOutcome> {
     ensure_repo(repo_root)?;
     let path = worktree_path(repo_root, config, name)?;
-    let marker = read_marker_for_worktree(&path)?.ok_or_else(|| WorktreeErr::Unmarked {
-        name: name.to_owned(),
-        path: path.clone(),
-    })?;
+    let marker = owned_marker(name, &path)?;
     let status = status(&path, &marker)?;
     if !force {
         match protections.assess(&path, status) {
@@ -654,10 +653,7 @@ pub fn resolve_owned(
 ) -> Result<ManagedWorktree> {
     ensure_repo(repo_root)?;
     let path = worktree_path(repo_root, config, name)?;
-    let marker = read_marker_for_worktree(&path)?.ok_or_else(|| WorktreeErr::Unmarked {
-        name: name.to_owned(),
-        path: path.clone(),
-    })?;
+    let marker = owned_marker(name, &path)?;
     let branch = current_branch(&path);
     Ok(ManagedWorktree {
         marker,
@@ -1020,6 +1016,23 @@ pub fn read_marker_for_worktree(path: &Path) -> Result<Option<WorktreeMarker>> {
         Err(err) => return Err(err),
     };
     read_marker_file(&marker)
+}
+
+fn owned_marker(name: &str, path: &Path) -> Result<WorktreeMarker> {
+    if let Some(marker) = read_marker_for_worktree(path)? {
+        return Ok(marker);
+    }
+    Err(if path.exists() {
+        WorktreeErr::Unmarked {
+            name: name.to_owned(),
+            path: path.to_owned(),
+        }
+    } else {
+        WorktreeErr::Missing {
+            name: name.to_owned(),
+            path: path.to_owned(),
+        }
+    })
 }
 
 /// Read a RimZ marker by following the checkout's `.git` metadata only. This
