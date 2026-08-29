@@ -1,7 +1,8 @@
 //! Scheduled loop task core.
 //!
-//! The elected sidebar elder keeps time for loop tasks while a room is open and
-//! fires `rimz loop run <name>`, which drives one configured loop wake-up.
+//! The elected sidebar elder keeps time while a room is open and an opt-in OS
+//! timer runs the same scheduler for roots without one. Both fire
+//! `rimz loop run <name>`, which drives one configured loop wake-up.
 //! Persisted rows compile once into independent action and timing results; a
 //! malformed half remains observable without hiding the valid half.
 //!
@@ -25,8 +26,11 @@ mod overlay_store;
 pub mod run_log;
 pub mod runner;
 pub mod strikes;
+pub mod timer;
 
 pub use fire::last_stamps;
+#[doc(hidden)]
+pub use fire::{TickReport, tick, tick_roots};
 
 /// Executable action encoded by one loop task entry.
 #[derive(Clone, Debug, PartialEq, Eq)]

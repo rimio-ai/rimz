@@ -1,6 +1,13 @@
 use super::super::run_report::{render_record_detail, write_failure_pointer};
 use super::*;
 
+#[test]
+fn room_badge_names_the_external_timer_only_without_a_room() {
+    assert_eq!(room_label_with_timer(false, true), "no room · timer");
+    assert_eq!(room_label_with_timer(false, false), "no room");
+    assert_eq!(room_label_with_timer(true, true), "room open");
+}
+
 fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
     LoopRunRecord {
         task: "wake".to_owned(),

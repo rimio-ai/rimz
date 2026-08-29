@@ -77,7 +77,14 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         entry.root.display()
     )?;
     if !render::room_open(&entry.root) {
-        writeln!(out, "no room is open there; start one with `rimz start`")?;
+        if timer::active() {
+            writeln!(out, "no room is open there; the loop timer will keep time")?;
+        } else {
+            writeln!(
+                out,
+                "no room is open there; start one with `rimz start`, or use `rimz loop timer install` to fire without one"
+            )?;
+        }
     }
     Ok(())
 }
