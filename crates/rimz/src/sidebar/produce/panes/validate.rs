@@ -17,12 +17,14 @@ pub(super) fn frame_publish_verdict(
     if pane_count(fresh) == 0 {
         return PublishVerdict::Reject(FrameRejectReason::Empty);
     }
-    if let Some(own_pane) = own_pane
-        && !frame_contains_pane(fresh, own_pane)
-    {
+    if own_pane_missing(fresh, own_pane) {
         return PublishVerdict::Reject(FrameRejectReason::MissingOwnPane);
     }
     PublishVerdict::Publish
+}
+
+pub(super) fn own_pane_missing(frame: &PaneFrame, own_pane: Option<&PaneId>) -> bool {
+    own_pane.is_some_and(|own_pane| !frame_contains_pane(frame, own_pane))
 }
 
 pub(super) fn shrink_needs_verification(fresh: &PaneFrame, prior: Option<&PaneFrame>) -> bool {

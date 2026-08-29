@@ -10,13 +10,19 @@ use crate::common::CommandTimeoutExt;
 use super::presence::{presence_wasm_artifact, seed_presence_permissions};
 use super::support::*;
 
-fn wait_for_no_serve_processes(session: &str, timeout: Duration) {
+const SELF_CLOSE_WORKSPACE_ID: &str = "ws_0123456789abcdef01234567";
+
+fn wait_for_serve_processes(session: &str, target: usize, timeout: Duration) {
     poll_until(
         timeout,
         || serve_processes_for(session),
-        |count| *count == 0,
-        &format!("sidebar serve process exit for {session}"),
+        |count| *count == target,
+        &format!("{target} sidebar serve processes for {session}"),
     );
+}
+
+fn wait_for_no_serve_processes(session: &str, timeout: Duration) {
+    wait_for_serve_processes(session, 0, timeout);
 }
 
 #[test]
@@ -69,7 +75,7 @@ fn sidebar_self_closes_when_its_tab_empties() {
     ZellijBackend::with_runtime_dir(xdg)
         .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
             session_name: name.clone(),
-            workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id"),
+            workspace_id: WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id"),
             wasm,
             rimz_bin: rimz,
             converge: false,
@@ -86,9 +92,42 @@ fn sidebar_self_closes_when_its_tab_empties() {
 
     let heartbeat_dir = xdg
         .join("rimz")
-        .join("ws_0123456789abcdef01234567")
+        .join(SELF_CLOSE_WORKSPACE_ID)
         .join("heartbeat");
     wait_for_no_sidebar_heartbeat(&heartbeat_dir, Duration::from_secs(15));
+}
+
+#[test]
+fn sidebar_self_closes_when_plugin_roster_omits_its_pane() {
+    with_stale_roster_room("staleclose", 3, |room, name| {
+        wait_for_no_serve_processes(name, Duration::from_secs(15));
+        wait_for_nonplugin_panes(room, 0, Duration::from_secs(20));
+        wait_for_no_sidebar_heartbeat(
+            &room
+                .path()
+                .join("rimz")
+                .join(SELF_CLOSE_WORKSPACE_ID)
+                .join("heartbeat"),
+            Duration::from_secs(15),
+        );
+    });
+}
+
+#[test]
+fn sidebar_keeps_open_with_stale_roster_while_a_sibling_lives() {
+    with_stale_roster_room("stalekeep", 60, |room, name| {
+        std::thread::sleep(Duration::from_secs(8));
+
+        assert!(
+            serve_processes_for(name).expect("scan sidebar serve processes") > 0,
+            "sidebar serve process should remain while its sibling lives",
+        );
+        assert_eq!(
+            session_nonplugin_count(room).expect("list non-plugin panes"),
+            2,
+            "sidebar and live sibling should both remain",
+        );
+    });
 }
 
 #[test]
@@ -182,6 +221,93 @@ fn self_close_layout(session: &str, rimz: &Path, xdg: &Path) -> String {
     )
 }
 
+fn with_stale_roster_room(
+    prefix: &str,
+    sibling_seconds: u64,
+    check: impl FnOnce(&LiveZellijSession, &str),
+) {
+    require_zellij!();
+
+    let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    if !rimz.exists() {
+        eprintln!("rimz binary not built; skipping self-close test");
+        return;
+    }
+
+    let room = LiveZellijSession::new(prefix);
+    let name = room.name().to_owned();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let xdg = room.path();
+    let start_marker = xdg.join("start-sidebar");
+    let layout = stale_roster_layout(&name, &rimz, xdg, &start_marker, sibling_seconds);
+    let layout_path = cwd.path().join("layout.kdl");
+    std::fs::write(&layout_path, layout).expect("write layout");
+
+    let created = room
+        .command()
+        .args(["attach", "--create-background", &name, "options"])
+        .arg("--default-cwd")
+        .arg(cwd.path())
+        .arg("--default-layout")
+        .arg(&layout_path)
+        .bounded_status()
+        .expect("create background session");
+    assert!(created.success(), "create-background failed for {name}");
+    room.wait_until_ready();
+
+    let _client = AttachedClient::attach(&room, 80, 24);
+    wait_for_nonplugin_panes(&room, 2, Duration::from_secs(15));
+    let mut stale_roster = PaneSnapshot::expect(xdg, &name);
+    let sidebar = stale_roster.sidebar().expect("sidebar pane").id;
+    stale_roster.panes.retain(|pane| pane.id != sidebar);
+    let workspace_id = WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id");
+    let _keepalive = stale_topology_keepalive(xdg, &workspace_id, &name, stale_roster);
+
+    std::fs::write(&start_marker, []).expect("release sidebar and sibling");
+    wait_for_serve_processes(&name, 2, Duration::from_secs(15));
+    check(&room, &name);
+}
+
+fn stale_roster_layout(
+    session: &str,
+    rimz: &Path,
+    xdg: &Path,
+    start_marker: &Path,
+    sibling_seconds: u64,
+) -> String {
+    let q = |s: String| serde_json::to_string(&s).expect("kdl escape");
+    let marker = start_marker.display().to_string();
+    let marker = shlex::try_quote(&marker).expect("shell quote marker");
+    let wait = format!("while [ ! -f {marker} ]; do sleep 0.05; done; ");
+    let serve = format!(
+        "{wait}{}",
+        sidebar_serve_command_with_tick(session, rimz, xdg, 2)
+    );
+    let sibling = format!("{wait}exec sleep {sibling_seconds}");
+    format!(
+        r#"layout {{
+    default_tab_template split_direction="vertical" {{
+        pane size="30%" name="rimz-sidebar" {{
+            command "sh"
+            args "-c" {serve}
+            close_on_exit true
+        }}
+        children
+    }}
+    tab name="rimz" {{
+        pane focus=true {{
+            command "sh"
+            args "-c" {sibling}
+            close_on_exit true
+        }}
+    }}
+}}
+"#,
+        serve = q(serve),
+        sibling = q(sibling),
+    )
+}
+
 fn sidebar_serve_command_with_tick(
     session: &str,
     rimz: &Path,
@@ -191,10 +317,11 @@ fn sidebar_serve_command_with_tick(
     format!(
         "HOME={xdg} XDG_CONFIG_HOME={xdg} XDG_STATE_HOME={xdg} XDG_RUNTIME_DIR={xdg} \
          RIMZ_BIN={rimz} \
-         exec {rimz} sidebar serve --mux zellij --workspace-id ws_0123456789abcdef01234567 \
+         exec {rimz} sidebar serve --mux zellij --workspace-id {workspace_id} \
          --session-name {session} --tick-seconds {tick_seconds}",
         xdg = xdg.display(),
         rimz = rimz.display(),
+        workspace_id = SELF_CLOSE_WORKSPACE_ID,
     )
 }
 
