@@ -1,9 +1,11 @@
-//! `rimz loop` — schedule wake-ups and command checks from the room's sidebar elder.
+//! `rimz loop` — schedule wake-ups and command checks from the room elder or
+//! opt-in OS timer.
 //!
 //! The elected sidebar elder keeps time while a room for the task's project is
-//! open and fires `rimz loop run <name>`, which runs an optional shell check and
-//! then drives one configured prompt through either the supervised `agents -p`
-//! seam or the message path to a pinned live session.
+//! open. An opt-in OS timer invokes the same scheduler for roots without one.
+//! Both fire `rimz loop run <name>`, which runs an optional shell check and then
+//! drives one configured prompt through either the supervised `agents -p` seam
+//! or the message path to a pinned live session.
 //!
 //! This handler parses commands, lists room-open and next-fire state, inspects
 //! run history, executes prepared supervised-run or message effects, and owns
@@ -57,6 +59,7 @@ mod run_report;
 #[path = "run.rs"]
 mod run_tasks;
 mod stop;
+mod timer;
 mod watch;
 
 #[derive(Debug, Args)]
@@ -94,6 +97,27 @@ enum LoopSubcmd {
     /// Run one task now. The sidebar elder calls this; humans rarely do.
     #[command(hide = true)]
     Run(NameArgs),
+    /// Run one scheduler pass for roots without an open room.
+    #[command(hide = true)]
+    Tick,
+    /// Manage the machine-wide loop timer.
+    Timer(TimerArgs),
+}
+
+#[derive(Debug, Args)]
+struct TimerArgs {
+    #[command(subcommand)]
+    command: TimerSubcmd,
+}
+
+#[derive(Debug, Subcommand)]
+enum TimerSubcmd {
+    /// Install and start the one-minute user timer.
+    Install,
+    /// Show whether the timer is installed and active.
+    Status,
+    /// Stop and remove the user timer.
+    Remove,
 }
 
 #[derive(Debug, Args)]
@@ -288,6 +312,8 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::Run(args) => {
             run_tasks::run_one(&args.name, LoopRunMode::Scheduled, false, globals)
         }
+        LoopSubcmd::Tick => timer::tick(),
+        LoopSubcmd::Timer(args) => timer::run(args.command),
     }
 }
 

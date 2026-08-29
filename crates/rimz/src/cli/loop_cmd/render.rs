@@ -81,12 +81,13 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     let stats = run_log::stats(&state_home(), &now_zoned);
     let mut blocked_count = 0;
     let mut not_enabled_count = 0;
+    let timer_is_active = timer::active();
     let groups = grouped_tasks(tasks, &arming_entries, &now_zoned);
     for (idx, group) in groups.into_iter().enumerate() {
         if idx > 0 {
             writeln!(out)?;
         }
-        write_root_heading(&mut out, &group.root, group.room_is_open)?;
+        write_root_heading(&mut out, &group.root, group.room_is_open, timer_is_active)?;
         let mut table = ui::Table::new([
             "NAME", "TASK", "SOURCE", "SCHEDULE", "LAST", "STATUS", "COST", "NEXT",
         ])
@@ -219,6 +220,7 @@ fn write_root_heading(
     out: &mut impl Write,
     root: &Path,
     room_is_open: bool,
+    timer_is_active: bool,
 ) -> std::io::Result<()> {
     writeln!(
         out,
@@ -227,7 +229,10 @@ fn write_root_heading(
             ui::palette::header(),
             &ui::home_relative(root.to_string_lossy().as_ref())
         ),
-        ui::paint(room_style(room_is_open), room_label(room_is_open))
+        ui::paint(
+            room_style(room_is_open),
+            room_label_with_timer(room_is_open, timer_is_active)
+        )
     )
 }
 
@@ -241,6 +246,16 @@ fn root_with_room(root: &Path, room_is_open: bool) -> String {
 
 pub(super) fn room_label(room_is_open: bool) -> &'static str {
     if room_is_open { "room open" } else { "no room" }
+}
+
+fn room_label_with_timer(room_is_open: bool, timer_is_active: bool) -> &'static str {
+    if room_is_open {
+        "room open"
+    } else if timer_is_active {
+        "no room · timer"
+    } else {
+        "no room"
+    }
 }
 
 pub(super) fn room_style(room_is_open: bool) -> anstyle::Style {

@@ -12,6 +12,7 @@ use clap::Args;
 use super::GlobalFlags;
 use super::render::fmt_bytes;
 use rimz::disk_usage::{RuntimeStorage, StorageKind, StorageRoot};
+use rimz::harness::schedule::timer::{self as loop_timer, TimerStatus};
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::mux::{self, MuxErr};
 use rimz::store::paths;
@@ -50,6 +51,7 @@ struct Preview<'a> {
     remove_config: bool,
     live_rooms: &'a [LiveRoom],
     hook_agents: &'a [&'static str],
+    loop_timer: &'a TimerStatus,
     keep_binary: bool,
     binaries: &'a [PathBuf],
     project_dirs: &'a [PathBuf],
@@ -74,6 +76,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     let (live_rooms, session_failures) = live_rooms(&workspaces);
     failures.extend(session_failures);
     let hook_agents = managed_hook_agents();
+    let loop_timer = loop_timer::status().unwrap_or(TimerStatus::NotInstalled);
     let binaries = if args.keep_binary {
         Vec::new()
     } else {
@@ -91,6 +94,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
         remove_config,
         live_rooms: &live_rooms,
         hook_agents: &hook_agents,
+        loop_timer: &loop_timer,
         keep_binary: args.keep_binary,
         binaries: &binaries,
         project_dirs: &project_dirs,
@@ -115,6 +119,14 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
             writeln!(stderr, "Hooks: removed {agents}")?;
         }
         Err(err) => failures.push(format!("remove managed hooks: {err}")),
+    }
+
+    match loop_timer::remove() {
+        Ok(report) if report.changed => {
+            writeln!(stderr, "Timer: removed ({})", report.backend.label())?;
+        }
+        Ok(_) => writeln!(stderr, "Timer: none installed")?,
+        Err(err) => failures.push(format!("remove loop timer: {err}")),
     }
 
     remove_roots(
@@ -200,6 +212,15 @@ fn render_preview(preview: Preview<'_>) -> Result<()> {
         writeln!(stderr, "Hooks: none installed")?;
     } else {
         writeln!(stderr, "Hooks: {}", preview.hook_agents.join(", "))?;
+    }
+    match preview.loop_timer {
+        TimerStatus::Installed {
+            backend, active, ..
+        } => {
+            let state = if *active { "active" } else { "inactive" };
+            writeln!(stderr, "Timer: installed ({}; {state})", backend.label())?;
+        }
+        TimerStatus::NotInstalled => writeln!(stderr, "Timer: none installed")?,
     }
     if preview.keep_binary {
         writeln!(stderr, "Binaries: kept (--keep-binary)")?;
