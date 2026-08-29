@@ -574,7 +574,7 @@ allowed-imports = [
     "store::atomic",
     "store::paths",
 ]
-surface-budget = 37
+surface-budget = 36
 
 [[module]]
 path = "crates/rimz/src/harness/ancestry.rs"

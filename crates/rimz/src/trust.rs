@@ -226,14 +226,54 @@ pub fn birth_prompt(project_root: &Path) -> Result<Option<BirthPromptOffer>> {
     birth_prompt_with_roots(project_root, &config_home())
 }
 
-/// Mark the current untrusted surface as declined for the one-time birth prompt.
-pub fn dismiss_birth_prompt(project_root: &Path) -> Result<()> {
-    dismiss_birth_prompt_with_roots(project_root, &config_home())
-}
-
 /// Mark a shown birth prompt as declined using its already-computed surface hash.
 pub fn dismiss_birth_prompt_offer(project_root: &Path, offer: &BirthPromptOffer) -> Result<()> {
     dismiss_birth_prompt_offer_with_roots(project_root, &config_home(), offer)
+}
+
+/// Project roots with a durable trust grant on this machine.
+///
+/// Callers still re-evaluate each root's current trust state before executing
+/// its configuration; this is only the discovery index for roots that have
+/// ever been granted.
+pub fn granted_roots() -> Result<Vec<PathBuf>> {
+    granted_roots_with_config(&config_home())
+}
+
+fn granted_roots_with_config(config_root: &Path) -> Result<Vec<PathBuf>> {
+    let projects_root = PROJECTS_SUBDIR
+        .iter()
+        .fold(config_root.to_path_buf(), |root, part| root.join(part));
+    let entries = match std::fs::read_dir(&projects_root) {
+        Ok(entries) => entries,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(TrustErr::Io {
+                path: projects_root,
+                source,
+            });
+        }
+    };
+    let mut roots = BTreeSet::new();
+    for entry in entries {
+        let path = match entry {
+            Ok(entry) => entry.path().join(TRUST_FILE),
+            Err(err) => {
+                tracing::debug!(error = %err, "skipping unreadable project trust entry");
+                continue;
+            }
+        };
+        match read_trust_record(&path) {
+            Ok(Some(record)) => {
+                roots.insert(record.project_root);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::debug!(path = %path.display(), error = %err, "skipping unreadable project trust record");
+            }
+        }
+    }
+    Ok(roots.into_iter().collect())
 }
 
 pub fn status_with_roots(project_root: &Path, config_root: &Path) -> Result<TrustReport> {
@@ -366,7 +406,7 @@ pub fn birth_prompt_with_roots(
     }))
 }
 
-pub fn dismiss_birth_prompt_with_roots(project_root: &Path, config_root: &Path) -> Result<()> {
+fn dismiss_birth_prompt_with_roots(project_root: &Path, config_root: &Path) -> Result<()> {
     let config_path = project_root.join(CONFIG_REL);
     let Some(config) = read_project_config(&config_path)? else {
         return Ok(());
@@ -1215,6 +1255,29 @@ mod tests {
         let config = tempdir().expect("config root");
         let report = revoke_with_roots(dir.path(), config.path()).expect("revoke");
         assert_eq!(report.state, TrustState::Untrusted);
+    }
+
+    #[test]
+    fn granted_roots_reads_valid_records_and_skips_corrupt_ones() {
+        let first = project_with("[tasks.first]\ncheck = \"true\"\nevery = \"5m\"\n");
+        let second = project_with("[tasks.second]\ncheck = \"true\"\nevery = \"5m\"\n");
+        let config = tempdir().expect("config root");
+        grant_with_roots(first.path(), config.path()).expect("first grant");
+        grant_with_roots(second.path(), config.path()).expect("second grant");
+        let corrupt = trust_record_path(
+            config.path(),
+            &WorkspaceId::from_project_root(Path::new("/corrupt")),
+        );
+        write_bytes_atomically(&corrupt, b"not = [valid").expect("corrupt record");
+
+        assert_eq!(
+            granted_roots_with_config(config.path()).expect("granted roots"),
+            vec![first.path().to_path_buf(), second.path().to_path_buf()]
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>(),
+        );
     }
 
     #[test]
