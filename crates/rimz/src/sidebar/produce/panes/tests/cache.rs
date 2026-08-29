@@ -503,6 +503,53 @@ fn degraded_first_read_publishes_verified_repull_result() {
 }
 
 #[test]
+fn missing_own_pane_controls_authoritative_repull() {
+    for (name, initial_raws, expected_calls, expected_count) in [
+        ("own pane missing", vec!["terminal_2"], 1, 2),
+        ("own pane present", vec!["terminal_9"], 0, 1),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
+            &format!("/tmp/{name}"),
+        ));
+        let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_9");
+        let initial = frame(
+            initial_raws
+                .into_iter()
+                .map(|raw| pane(raw, Some("zsh"), Some("/repo")))
+                .collect(),
+        );
+        let verified = frame(vec![
+            pane("terminal_9", Some("zsh"), Some("/repo")),
+            pane("terminal_2", Some("zsh"), Some("/repo")),
+        ]);
+        let calls = std::cell::Cell::new(0);
+
+        let repulled = confirm_and_carry_with(
+            initial,
+            None,
+            Some(&own),
+            &|enrich_metrics, min_topology_produced_at_ms, authoritative| {
+                assert!(enrich_metrics, "{name}");
+                assert!(min_topology_produced_at_ms.is_some(), "{name}");
+                assert!(authoritative, "{name}");
+                calls.set(calls.get() + 1);
+                Ok(verified.clone())
+            },
+            &crate::diag::DiagSink::disabled(),
+            true,
+            &runtime,
+        )
+        .expect("pane frame confirmation");
+
+        assert_eq!(calls.get(), expected_calls, "{name}");
+        assert_eq!(pane_count(&repulled), expected_count, "{name}");
+    }
+}
+
+#[test]
 fn ambiguous_plain_process_absence_repull_matrix() {
     for (name, verified_keeps_row, expected_row_present) in [
         ("verified row survives", true, true),

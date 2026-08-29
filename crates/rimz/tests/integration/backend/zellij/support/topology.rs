@@ -143,6 +143,30 @@ pub(in crate::backend::zellij) fn topology_cache_mirror(
     }
 }
 
+pub(in crate::backend::zellij) fn stale_topology_keepalive(
+    xdg: &Path,
+    workspace_id: &WorkspaceId,
+    session: &str,
+    snapshot: PaneSnapshot,
+) -> TopologyCacheMirror {
+    write_topology_cache(xdg, workspace_id, session, &snapshot);
+    let xdg = xdg.to_path_buf();
+    let workspace_id = workspace_id.clone();
+    let session = session.to_owned();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let handle = std::thread::spawn(move || {
+        while !thread_stop.load(Ordering::Relaxed) {
+            write_topology_cache(&xdg, &workspace_id, &session, &snapshot);
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    });
+    TopologyCacheMirror {
+        stop,
+        handle: Some(handle),
+    }
+}
+
 pub(in crate::backend::zellij) fn record_known_workspace_session(
     state_root: &Path,
     workspace_id: &WorkspaceId,

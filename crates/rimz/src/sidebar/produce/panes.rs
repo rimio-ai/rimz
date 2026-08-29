@@ -32,7 +32,9 @@ use starts::{
     HostedCarryDrop, carry_hosted_agent_stamps, drop_reused_pid_bindings,
     stamp_hosted_agent_processes, stamp_pane_process_starts,
 };
-use validate::{PublishVerdict, frame_publish_verdict, pane_count, shrink_needs_verification};
+use validate::{
+    PublishVerdict, frame_publish_verdict, own_pane_missing, pane_count, shrink_needs_verification,
+};
 
 /// How a non-producing sidebar waits for the single producer's cache write
 /// before giving up and producing locally. ~200ms total (10 × 20ms).
@@ -821,6 +823,8 @@ fn emit_frame_diagnostics(diag: &crate::diag::DiagSink, events: Vec<DiagEvent>) 
     }
 }
 
+/// Repair incomplete latency frames, using a prefer-authoritative mux read
+/// when the candidate omits the producer's own pane or needs carry verification.
 fn confirm_and_carry_with(
     frame: PaneFrame,
     prior: Option<&PaneFrame>,
@@ -843,7 +847,8 @@ fn confirm_and_carry_with(
     );
     let needs_confirm = !initial.carried.is_empty()
         || initial.ambiguous_loss
-        || shrink_needs_verification(&initial.frame, prior);
+        || shrink_needs_verification(&initial.frame, prior)
+        || own_pane_missing(&initial.frame, own_pane);
     if !needs_confirm {
         emit_carry_expired(diag, &initial);
         return Ok(initial.frame);
