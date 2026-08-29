@@ -20,17 +20,15 @@ use jiff::{SignedDuration, Timestamp, Zoned};
 pub mod arming;
 pub mod catalog;
 mod config_edit;
-pub(crate) mod fire;
+#[doc(hidden)]
+pub mod fire;
 pub mod instances;
 mod overlay_store;
 pub mod run_log;
 pub mod runner;
 pub mod strikes;
-pub mod timer;
 
 pub use fire::last_stamps;
-#[doc(hidden)]
-pub use fire::{TickReport, tick, tick_roots};
 
 /// Executable action encoded by one loop task entry.
 #[derive(Clone, Debug, PartialEq, Eq)]

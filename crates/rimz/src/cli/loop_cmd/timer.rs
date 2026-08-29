@@ -1,7 +1,7 @@
 //! `rimz loop timer` presentation and hidden external tick entry point.
 
 use super::*;
-use rimz::harness::schedule::timer::{self as os_timer, TimerStatus};
+use crate::cli::loop_timer::{self as os_timer, TimerStatus};
 
 pub(super) fn run(command: TimerSubcmd) -> Result<()> {
     match command {
@@ -13,7 +13,7 @@ pub(super) fn run(command: TimerSubcmd) -> Result<()> {
 
 pub(super) fn tick() -> Result<()> {
     let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
-    schedule::tick(&now);
+    os_timer::tick(&now);
     Ok(())
 }
 
@@ -59,10 +59,7 @@ fn status() -> Result<()> {
                 backend.label(),
                 display_path(&exec),
             )?;
-            let uncovered = schedule::tick_roots()
-                .into_iter()
-                .filter(|root| !render::room_open(root))
-                .count();
+            let uncovered = os_timer::uncovered_task_roots();
             writeln!(out, "task roots without a room: {uncovered}")?;
         }
     }
