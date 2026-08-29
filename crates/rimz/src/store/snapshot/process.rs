@@ -6,7 +6,9 @@ use jiff::Timestamp;
 use super::row::{ProcessCard, ProcessState, RowCard, SidebarRow};
 use crate::agents::registry::command_agent_kind;
 use crate::pane::PaneRef;
-use crate::proc::{command_program_basename, program_label, rimz_exec_worktree_path};
+use crate::proc::{
+    command_program_basename, program_label, rimz_exec_worktree_path, root_program_label,
+};
 
 /// Whether a pane no agent has bound carries enough identity to render a
 /// process row. Foreground display wins, but a spawn command also admits the
@@ -101,17 +103,40 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     }
 }
 
+/// Agent identity named by live foreground truth, then a producer-confirmed
+/// hosted process, and finally pane birth argv while its root program is still
+/// live. Birth argv comes last because muxes retain it after an agent returns
+/// to a shell.
 pub fn pane_agent_kind(pane: &PaneRef) -> Option<&'static str> {
-    pane.spawn_command
+    pane.command
         .as_deref()
         .and_then(command_agent_kind)
-        .or_else(|| pane.command.as_deref().and_then(command_agent_kind))
         .or_else(|| {
             pane.hosted_agent_kind
                 .as_ref()
                 .and_then(|kind| crate::agents::spec_by_kind(kind.as_str()))
                 .map(|definition| definition.kind)
         })
+        .or_else(|| {
+            pane.spawn_command
+                .as_deref()
+                .filter(|_| spawn_command_names_live_root(pane))
+                .and_then(command_agent_kind)
+        })
+}
+
+pub(crate) fn spawn_command_names_live_root(pane: &PaneRef) -> bool {
+    let Some(command) = pane
+        .command
+        .as_deref()
+        .filter(|command| !command.is_empty())
+    else {
+        return true;
+    };
+    pane.spawn_command
+        .as_deref()
+        .and_then(root_program_label)
+        .is_some_and(|spawn_program| program_label(command) == spawn_program)
 }
 
 fn display_command(pane: &PaneRef) -> Option<&str> {
@@ -176,6 +201,18 @@ mod tests {
         assert!(!process_is_active("sudo codex"));
         assert!(!process_is_active("zsh"));
         assert!(!process_is_active("nvim src/main.rs"));
+    }
+
+    #[test]
+    fn pane_agent_kind_drops_birth_identity_after_the_root_returns_to_shell() {
+        let mut pane = pane("%1", "zsh", "/repo");
+        pane.spawn_command = Some("/bin/rimz agents exec claude --worktree-path /repo".to_owned());
+
+        assert_eq!(pane_agent_kind(&pane), None);
+        pane.command = Some("rimz".to_owned());
+        assert_eq!(pane_agent_kind(&pane), Some("claude"));
+        pane.command = None;
+        assert_eq!(pane_agent_kind(&pane), Some("claude"));
     }
 
     #[test]

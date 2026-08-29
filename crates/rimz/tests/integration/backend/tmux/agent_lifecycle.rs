@@ -583,10 +583,36 @@ fn failing_close_pane_agent_drops_to_shell() {
         )
         .expect("send shell marker command");
     wait_for_path(&shell_marker, "dropped shell did not run marker command");
+    let live_pane = list_session_panes(&server, &workspace.session_name)
+        .into_iter()
+        .find(|pane| pane.pane_id == pane_id)
+        .expect("clean startup failure should leave the pane open as a shell");
     assert!(
-        list_session_panes(&server, &workspace.session_name)
-            .iter()
-            .any(|pane| pane.pane_id == pane_id),
-        "clean startup failure should leave the pane open as a shell"
+        live_pane
+            .spawn_command
+            .as_deref()
+            .is_some_and(|command| command.contains("agents exec codex")),
+        "tmux should retain the agent wrapper as immutable birth argv: {live_pane:?}",
+    );
+    assert!(
+        live_pane.hosted_agent_kind.is_none(),
+        "the exited agent must leave no hosted-process stamp: {live_pane:?}",
+    );
+
+    let mut snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        workspace.workspace_id,
+        Vec::new(),
+        jiff::Timestamp::now(),
+    );
+    snapshot.wired_kinds = vec!["codex".to_owned()];
+    let snapshot = snapshot.with_live_panes(vec![live_pane.clone()], None);
+    let row = snapshot.rows().next().expect("shell process row");
+    assert!(
+        row.is_process(),
+        "stale birth argv must not synthesize an agent: {row:?}"
+    );
+    assert_eq!(
+        row.name,
+        live_pane.command.as_deref().expect("live shell command")
     );
 }

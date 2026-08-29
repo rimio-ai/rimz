@@ -315,11 +315,10 @@ fn repair_pane_frame(
 }
 
 /// Recover a pane's spawn command from RimZ's supervised agent wrapper when the
-/// mux did not retain one. tmux reports only the foreground program basename
-/// and no spawn command, so a `rimz agents exec <kind>` wrapper pane otherwise
-/// classifies as neither its agent kind nor its worktree. Only an empty spawn
-/// command is filled, and only from a cmdline that classifies as an agent, so a
-/// real foreground is never overwritten.
+/// mux did not retain one. This covers panes born without backend spawn
+/// metadata; tmux otherwise reports its immutable `pane_start_command`. Only an
+/// empty spawn command is filled, and only from a cmdline that classifies as an
+/// agent, so real metadata is never overwritten.
 fn backfill_wrapper_spawn_commands(
     frame: &mut PaneFrame,
     proc_cmdline: &dyn Fn(u32) -> Option<String>,
