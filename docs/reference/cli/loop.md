@@ -1,6 +1,6 @@
 # Loop CLI
 
-`rimz loop` puts agent turns on a clock. A task is a durable schedule: `rimz loop add` writes recurring machine tasks to `loop.toml`, writes project tasks to the repo's `.rimz/config.toml`, and stores one-shots and poll-until deadlines in state. The room's sidebar elder fires tasks while a room for the task's project is open. Nothing fires when no room is open, and `loop remove` deletes the task from whichever store owns it. A task uses `--agent` to spawn one supervised transient pane, `--wake` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action. Why you schedule turns, guard them with watchdogs, and pace them against the provider's window is the [loops guide](../../guide/loops.md).
+`rimz loop` puts agent turns on a clock. A task is a durable schedule: `rimz loop add` writes recurring machine tasks to `loop.toml`, writes project tasks to the repo's `.rimz/config.toml`, and stores one-shots and poll-until deadlines in state. The room's sidebar elder fires tasks while a room for the task's project is open; the optional machine-wide timer fires tasks for roots without one. `loop remove` deletes the task from whichever store owns it. A task uses `--agent` to spawn one supervised transient pane, `--wake` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action. Why you schedule turns, guard them with watchdogs, and pace them against the provider's window is the [loops guide](../../guide/loops.md).
 
 ```sh
 rimz loop add morning --agent claude --prompt "summarize what landed on main overnight" --every weekday --at 07:00
@@ -20,8 +20,17 @@ rimz loop stop pr-watch
 rimz loop list
 rimz loop show pr-watch
 rimz loop logs pr-watch --failed
+rimz loop timer install
+rimz loop timer status
+rimz loop timer remove
 rimz loop remove pr-watch
 ```
+
+## Timer
+
+`rimz loop timer install` installs one user-level one-minute timer: a systemd user timer on Linux or a launchd agent on macOS. Each tick re-reads task configuration, fires due tasks only for roots without an open room, and yields roots with a room to that room's elder. One timer covers every task root; adding or editing a task does not regenerate it. `rimz loop timer status` shows its backend, active state, executable, and the number of task roots it currently covers. `rimz loop timer remove` stops and removes it, and `rimz uninstall` removes it too.
+
+The timer does not bypass the task model. An `--agent` fire births the room through the normal supervised path and leaves it open, after which the elder owns that root's clock. A `--wake` task still needs its pinned live session, a check-only task runs without a room, and an untrusted project task stays blocked. First sight still arms rather than fires, so installing the timer does not replay missed occurrences.
 
 ## Schedule shapes
 

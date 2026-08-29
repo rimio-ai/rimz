@@ -6,9 +6,9 @@
 
 `rimz loop` fires agent work on a clock: a fresh supervised turn, a prompt delivered to an agent that is already running, or a shell command that guards either one.
 
-The design constraint that shapes everything is that **there is no scheduler daemon**. RimZ is a room, and the room already elects one process to do shared work: the sidebar producer, the elder ([state.md § Renderers, the producer, and consumers](../sidebar/state.md#renderers-the-producer-and-consumers)). The elder keeps time for loop tasks on its ordinary data tick. Close the room and the clock stops. That is a deliberate trade: nothing runs when you are not there, and nothing outlives the room you can see.
+The design constraint that shapes everything is that **there is no RimZ scheduler daemon**. RimZ is a room, and the room already elects one process to do shared work: the sidebar producer, the elder ([state.md § Renderers, the producer, and consumers](../sidebar/state.md#renderers-the-producer-and-consumers)). The elder keeps time for loop tasks on its ordinary data tick. Users who need closed-room schedules may opt into one global OS timer, which launches a one-off RimZ tick and exits; it is not a resident RimZ process and it yields every root whose room is open.
 
-Three rules follow from having no daemon, and they explain most of the module.
+Three rules follow from that shared scheduler, and they explain most of the module.
 
 **Arming is not firing.** A task the elder has never seen is recorded with the current time and does *not* fire. Opening a room hours late therefore never replays what was missed, so there is no catch-up storm.
 
@@ -22,7 +22,8 @@ Three rules follow from having no daemon, and they explain most of the module.
 | --- | --- |
 | [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs) | The vocabulary: `TaskAction`, `Schedule` and its parsing, `ParsedSchedule`, due evaluation, next-occurrence calculation, `TaskTiming` display states, and the `TaskShape` compile. |
 | [`schedule/catalog.rs`](../../../crates/rimz/src/harness/schedule/catalog.rs) | The task catalog: the three sources, visible and runnable precedence, source-aware mutation, and scheduled consumption. |
-| [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) | The elder's side: arm-on-first-sight, due planning, `loop-fire.json`, and spawning the detached `rimz loop run <name>`. |
+| [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) | Shared elder/external firing: root ownership, arm-on-first-sight, due planning, `loop-fire.json`, and spawning the detached `rimz loop run <name>`. |
+| [`schedule/timer.rs`](../../../crates/rimz/src/harness/schedule/timer.rs) | systemd user-timer and launchd-agent install, status, removal, and unit rendering. |
 | [`schedule/runner.rs`](../../../crates/rimz/src/harness/schedule/runner.rs) | `TaskFire`: the ordered gate ladder, the run lock, the check, prompt preparation, the prepared effect, and the one terminal history transition. |
 | [`schedule/run_log.rs`](../../../crates/rimz/src/harness/schedule/run_log.rs) | `LoopRunRecord`, `LoopRunResult`, the user-global JSONL history, cost rollups, and the daily-budget gate. |
 | [`schedule/arming.rs`](../../../crates/rimz/src/harness/schedule/arming.rs), [`strikes.rs`](../../../crates/rimz/src/harness/schedule/strikes.rs) | Machine-local overlays: durable enablement, bounded pauses, their effective-last-fire rule, and consecutive failure counts. |
@@ -94,7 +95,7 @@ The arming stamp sets the edge each shape reads, which produces one behaviour wo
 | `Disabled(reason)` | a machine-local manual or strike disable, or a project task not yet enabled here |
 | `Paused(t)` | a bounded machine-local pause whose deadline is still in the future |
 | `Invalid` | the schedule half of the row failed to parse |
-| `Unarmed` | no room has seen it yet |
+| `Unarmed` | neither a room elder nor the external tick has seen it yet |
 | `Upcoming(t)` | the next occurrence, still in the future |
 | `Due(t)` | the next occurrence is at or before now; the elder fires it on its next tick |
 | `NoOccurrence` | parsed, armed, but the shape yields no next time, such as a cron expression whose field combination never matches a real date |
@@ -118,6 +119,12 @@ The plan is a four-way decision per task:
 | stamped, not due | keep the stamp |
 
 State is written before any helper spawns, which is what makes a fire at-most-once per occurrence even when ticks are hot.
+
+### The external tick
+
+`rimz loop timer install` writes one user-level systemd timer on Linux or launchd agent on macOS. Once a minute it invokes the hidden `rimz loop tick`, which enumerates roots from machine and transient task entries plus known workspaces containing project tasks. For each root it derives the same `WorkspaceId` and runtime paths as a room. A fresh sidebar heartbeat makes it skip that root; otherwise it calls the same firing planner with the root explicitly supplied, so a never-opened root does not need a workspace record before its machine task can arm.
+
+The timer is only a clock host. It re-reads configuration every pass, leaves arming, trust, overlap locks, execution, and run history to the existing paths, and exits after one tick. A `Spawn` fire births a room through the supervised-run path and leaves it open, so later external ticks yield to its elder. `Deliver` still requires the pinned live session; check-only work runs bare. A room can be born between the heartbeat check and the state write, creating a one-tick race, but the shared fire stamp and per-task overlap lock remain the duplicate and concurrency defenses already used by hot elder ticks.
 
 The machine-local `loop-arming.json` overlay holds enablement, a bounded pause deadline, and an automatic-disable strike reason without editing durable task definitions. Project keys use `<workspace_id>::<name>` and machine or instance keys use `machine::<name>`, so a same-named task in another checkout never inherits an enable. Enabling writes the anti-replay edge; when a timed pause expires, its deadline becomes the **effective last-fire edge**. Either lift makes the schedule wait for its next occurrence rather than replaying everything missed while held.
 
