@@ -187,7 +187,7 @@ fn spawn_loop_run(runtime: &RuntimePaths, project_root: Option<&Path>, name: &st
         "loop scheduler firing task",
     );
     if let Err(err) = crate::child_process::spawn_detached_rimz(runtime, args, "loop-run") {
-        tracing::debug!(
+        tracing::warn!(
             task = name,
             tags.operation = "loop_fire.spawn",
             error = &err as &dyn std::error::Error,
@@ -462,39 +462,5 @@ mod tests {
             &WorkspaceId::from_project_root(&home),
         );
         assert_eq!(filtered.keys().cloned().collect::<Vec<_>>(), vec!["home"]);
-    }
-
-    #[test]
-    fn external_tick_fires_a_machine_task_without_a_workspace_record() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().join("project");
-        std::fs::create_dir(&root).expect("project root");
-        let runtime = RuntimePaths::under(
-            WorkspaceId::from_project_root(&root),
-            &dir.path().join("runtime"),
-        )
-        .expect("runtime paths");
-        let task = loaded(TaskEntry {
-            check: Some("true".to_owned()),
-            root: root.clone(),
-            every: Some("5m".to_owned()),
-            ..TaskEntry::default()
-        });
-
-        assert!(
-            fire_tasks(
-                &runtime,
-                Some(&root),
-                one(task.clone()),
-                &zdt(2026, 6, 24, 8, 0, 0),
-            )
-            .is_empty(),
-            "first tick arms"
-        );
-        assert_eq!(
-            fire_tasks(&runtime, Some(&root), one(task), &zdt(2026, 6, 24, 8, 5, 0),),
-            vec![NAME.to_owned()],
-        );
-        assert!(runtime.root.join("loop-fire.json").is_file());
     }
 }

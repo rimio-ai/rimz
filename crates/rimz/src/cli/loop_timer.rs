@@ -10,7 +10,6 @@ use rimz::harness::schedule::catalog::TaskCatalog;
 use rimz::ids::WorkspaceId;
 use rimz::store::atomic::write_bytes_atomically;
 use rimz::store::paths::{RuntimePaths, config_home, env_path};
-use rimz::workspace::known_workspaces;
 
 const SYSTEMD_SERVICE: &str = "rimz-loop.service";
 const SYSTEMD_TIMER: &str = "rimz-loop.timer";
@@ -103,6 +102,10 @@ pub(super) fn tick(now: &Zoned) {
         if runtime_is_open(&runtime) {
             continue;
         }
+        if let Err(err) = runtime.ensure_dirs() {
+            tracing::warn!(root = %root.display(), error = %err, "loop tick could not prepare runtime paths");
+            continue;
+        }
         rimz::harness::schedule::fire::fire_due_tasks(&runtime, Some(&root), now);
     }
 }
@@ -125,16 +128,21 @@ fn task_roots() -> BTreeSet<PathBuf> {
         .values()
         .map(|task| task.entry().resolved_root())
         .collect::<BTreeSet<_>>();
-    match known_workspaces() {
-        Ok(workspaces) => roots.extend(workspaces.into_iter().filter_map(|workspace| {
-            let root = workspace.project_root;
-            TaskCatalog::load_lenient(Some(&root))
+    match rimz::trust::granted_roots() {
+        Ok(granted) => roots.extend(granted.into_iter().filter(|root| {
+            TaskCatalog::load_lenient(Some(root))
                 .visible()
                 .values()
-                .any(|task| task.entry().resolved_root() == root)
-                .then_some(root)
+                .any(|task| {
+                    matches!(
+                        task.source(),
+                        rimz::harness::schedule::catalog::TaskSource::Project { .. }
+                    ) && task.entry().resolved_root() == root.as_path()
+                })
         })),
-        Err(err) => tracing::warn!(error = %err, "loop tick could not enumerate project roots"),
+        Err(err) => {
+            tracing::warn!(error = %err, "loop tick could not enumerate trusted project roots")
+        }
     }
     roots
 }
@@ -411,7 +419,7 @@ fn render_systemd_service(exec: &Path) -> String {
 }
 
 fn render_systemd_timer() -> &'static str {
-    "[Unit]\nDescription=Check RimZ loop tasks every minute\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec=1min\nPersistent=false\n\n[Install]\nWantedBy=timers.target\n"
+    "[Unit]\nDescription=Check RimZ loop tasks every minute\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec=1min\nAccuracySec=1s\nPersistent=false\n\n[Install]\nWantedBy=timers.target\n"
 }
 
 fn render_launchd_plist(exec: &Path) -> String {
@@ -474,8 +482,6 @@ fn installed_exec(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rimz::ids::{MuxName, SidebarInstanceId};
-    use rimz::sidebar::heartbeat::SidebarHeartbeat;
 
     #[test]
     fn renders_systemd_units_with_an_escaped_exec_path() {
@@ -485,6 +491,7 @@ mod tests {
             "[Unit]\nDescription=Run due RimZ loop tasks\n\n[Service]\nType=oneshot\nExecStart=\"/opt/RimZ %% build/rimz\" loop tick\n"
         );
         assert!(render_systemd_timer().contains("OnUnitActiveSec=1min"));
+        assert!(render_systemd_timer().contains("AccuracySec=1s"));
         assert!(render_systemd_timer().contains("Persistent=false"));
     }
 
@@ -514,32 +521,5 @@ mod tests {
         assert!(!launchctl_service_absent(
             b"Boot-out failed: 5: Input/output error"
         ));
-    }
-
-    #[test]
-    fn external_tick_recognizes_a_root_with_a_fresh_sidebar() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().join("project");
-        std::fs::create_dir(&root).expect("project root");
-        let workspace_id = WorkspaceId::from_project_root(&root);
-        let runtime = RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime"))
-            .expect("runtime paths");
-        runtime.ensure_dirs().expect("runtime dirs");
-        let instance_id = SidebarInstanceId::new();
-        let heartbeat = SidebarHeartbeat::new(
-            workspace_id,
-            instance_id.clone(),
-            MuxName::Tmux,
-            "session",
-            runtime.sock_dir.join("sidebar.sock"),
-            None,
-        );
-        std::fs::write(
-            runtime.sidebar_heartbeat_path(&instance_id),
-            serde_json::to_vec(&heartbeat).expect("heartbeat json"),
-        )
-        .expect("heartbeat");
-
-        assert!(runtime_is_open(&runtime));
     }
 }

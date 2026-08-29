@@ -19,12 +19,132 @@ use rimz::harness::schedule::arming::{self, Arming};
 use rimz::harness::schedule::run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult};
 use rimz::harness::schedule::runner::RunLockInfo;
 use rimz::harness::schedule::strikes;
-use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::message::{AutoCompact, MessageStatus};
+use rimz::sidebar::heartbeat::SidebarHeartbeat;
 
 #[cfg(unix)]
 use crate::common::write_fake_login_shell;
 use crate::common::{Env, ScrubSessionEnvExt};
+
+#[test]
+fn external_tick_fires_a_machine_task_without_a_workspace_record() {
+    let env = Env::new();
+    let marker = env.project_root.join("machine-tick-ran");
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.machine-tick]\ncheck = \"touch {}\"\nroot = \"{}\"\nevery = \"1m\"\n",
+            marker.display(),
+            env.project_root.display(),
+        ),
+    );
+    let prior = Timestamp::now() - SignedDuration::from_mins(2);
+    write_loop_fire_state(&env, BTreeMap::from([("machine-tick".to_owned(), prior)]));
+    assert!(
+        !env.state_path_for(&env.project_root)
+            .workspace_record
+            .exists()
+    );
+    assert!(!env.runtime_paths().shared_root.exists());
+
+    loop_ok(&env, &["loop", "tick"]);
+
+    wait_for_path(&marker);
+    assert!(env.runtime_paths().shared_root.is_dir());
+}
+
+#[test]
+fn external_tick_discovers_a_trusted_project_without_a_workspace_record() {
+    let env = Env::new();
+    let project = env.home_root.join("never-roomed-project");
+    std::fs::create_dir(&project).expect("project root");
+    let marker = project.join("project-tick-ran");
+    let output = env
+        .rimz()
+        .current_dir(&project)
+        .args([
+            "loop",
+            "add",
+            "project-tick",
+            "--project",
+            "--check",
+            &format!("touch {}", marker.display()),
+            "--every",
+            "1m",
+        ])
+        .output()
+        .expect("add project loop");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        rimz::trust::status_with_roots(&project, &env.config_root())
+            .expect("project trust")
+            .state,
+        rimz::trust::TrustState::Trusted,
+    );
+    assert!(!env.state_path_for(&project).workspace_record.exists());
+    let prior = Timestamp::now() - SignedDuration::from_mins(2);
+    let mut arming = read_loop_arming(&env);
+    arming
+        .get_mut(&project_task_key(&project, "project-tick"))
+        .expect("project arming")
+        .at = Some(prior);
+    write_loop_arming(&env, &arming);
+    write_loop_fire_state_for_root(
+        &env,
+        &project,
+        BTreeMap::from([("project-tick".to_owned(), prior)]),
+    );
+
+    loop_ok(&env, &["loop", "tick"]);
+
+    wait_for_path(&marker);
+}
+
+#[test]
+fn external_tick_yields_a_root_with_a_fresh_sidebar() {
+    let env = Env::new();
+    let marker = env.project_root.join("open-root-tick-ran");
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.open-root]\ncheck = \"touch {}\"\nroot = \"{}\"\nevery = \"1m\"\n",
+            marker.display(),
+            env.project_root.display(),
+        ),
+    );
+    let prior = Timestamp::now() - SignedDuration::from_mins(2);
+    write_loop_fire_state(&env, BTreeMap::from([("open-root".to_owned(), prior)]));
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().expect("runtime dirs");
+    let instance_id = SidebarInstanceId::new();
+    let heartbeat = SidebarHeartbeat::new(
+        env.workspace_id.clone(),
+        instance_id.clone(),
+        MuxName::Tmux,
+        "rimz-test",
+        runtime.sock_dir.join("sidebar.sock"),
+        None,
+    );
+    std::fs::write(
+        runtime.sidebar_heartbeat_path(&instance_id),
+        serde_json::to_vec(&heartbeat).expect("heartbeat json"),
+    )
+    .expect("heartbeat");
+
+    loop_ok(&env, &["loop", "tick"]);
+
+    let stamps: BTreeMap<String, Timestamp> = serde_json::from_slice(
+        &std::fs::read(runtime.root.join("loop-fire.json")).expect("fire state"),
+    )
+    .expect("fire state json");
+    assert_eq!(stamps.get("open-root"), Some(&prior));
+    assert!(!marker.exists());
+}
 
 #[test]
 fn loop_watch_reloads_tasks_without_reprobing_workspace() {
@@ -2121,6 +2241,16 @@ fn read_loop_arming(env: &Env) -> BTreeMap<String, Arming> {
     serde_json::from_str(&text).expect("loop arming")
 }
 
+fn write_loop_arming(env: &Env, entries: &BTreeMap<String, Arming>) {
+    let path = arming::path(&env.state_root());
+    std::fs::create_dir_all(path.parent().expect("arming parent")).expect("mkdir arming parent");
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(entries).expect("arming json"),
+    )
+    .expect("write loop arming");
+}
+
 fn machine_task_key(name: &str) -> String {
     format!("machine::{name}")
 }
@@ -2148,10 +2278,27 @@ fn write_loop_instances(env: &Env, tasks: Tasks) {
 }
 
 fn write_loop_fire_state(env: &Env, stamps: BTreeMap<String, Timestamp>) {
-    let path = env.runtime_paths().root.join("loop-fire.json");
+    write_loop_fire_state_for_root(env, &env.project_root, stamps);
+}
+
+fn write_loop_fire_state_for_root(env: &Env, root: &Path, stamps: BTreeMap<String, Timestamp>) {
+    let workspace_id = WorkspaceId::from_project_root(root);
+    let path = env
+        .runtime_root
+        .join("rimz")
+        .join(workspace_id.as_str())
+        .join("loop-fire.json");
     std::fs::create_dir_all(path.parent().expect("loop fire parent")).expect("mkdir runtime");
     std::fs::write(path, serde_json::to_vec_pretty(&stamps).expect("json"))
         .expect("write loop fire state");
+}
+
+fn wait_for_path(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !path.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(path.exists(), "timed out waiting for {}", path.display());
 }
 
 fn loop_run_lock_path(env: &Env, name: &str) -> std::path::PathBuf {
