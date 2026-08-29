@@ -57,7 +57,8 @@ pub(super) fn reconcile_cohort_launch(
         rimz::harness::resume::CohortRelaunchState::Closed => {
             let status = rimz::worktree::status(&path, &marker)?;
             // Cohort liveness was already decided above, so Git state alone
-            // separates "recreate it" from "resume into it".
+            // separates "recreate it" from "resume into it". A concurrent
+            // cleanup may still remove the checkout after this decision.
             let protections = rimz::worktree::ProtectionSet::default();
             if protections.assess(&path, status) == rimz::worktree::RemovalAssessment::Removable {
                 recreate_or_done(
@@ -139,13 +140,22 @@ fn recreate_or_done(
     )? {
         return Ok(Reconciled::Done);
     }
-    let removed = rimz::worktree::remove(
+    let removed = match rimz::worktree::remove(
         workspace.launch_repo_root(),
         &machine_config.agents.worktree,
         name,
         false,
         protections,
-    )?;
+    ) {
+        Err(rimz::worktree::WorktreeErr::Missing { .. }) => {
+            writeln!(
+                std::io::stderr().lock(),
+                "worktree `{name}` was already removed; recreating {subject}"
+            )?;
+            return Ok(Reconciled::Continue);
+        }
+        result => result?,
+    };
     let retirement = rimz::worktree::retire_removal(
         store,
         &removed,
