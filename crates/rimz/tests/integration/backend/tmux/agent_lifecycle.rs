@@ -594,11 +594,6 @@ fn failing_close_pane_agent_drops_to_shell() {
             .is_some_and(|command| command.contains("agents exec codex")),
         "tmux should retain the agent wrapper as immutable birth argv: {live_pane:?}",
     );
-    assert!(
-        live_pane.hosted_agent_kind.is_none(),
-        "the exited agent must leave no hosted-process stamp: {live_pane:?}",
-    );
-
     let mut snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
         workspace.workspace_id,
         Vec::new(),

@@ -118,24 +118,14 @@ pub fn pane_agent_kind(pane: &PaneRef) -> Option<&'static str> {
         .or_else(|| {
             pane.spawn_command
                 .as_deref()
-                .filter(|_| spawn_command_names_live_root(pane))
+                .filter(|_| {
+                    crate::proc::command::spawn_command_names_live_root(
+                        pane.command.as_deref(),
+                        pane.spawn_command.as_deref(),
+                    )
+                })
                 .and_then(command_agent_kind)
         })
-}
-
-fn spawn_command_names_live_root(pane: &PaneRef) -> bool {
-    let Some(command) = pane
-        .command
-        .as_deref()
-        .filter(|command| !command.is_empty())
-    else {
-        return true;
-    };
-    pane.spawn_command
-        .as_deref()
-        .map(crate::proc::command::effective_program_info)
-        .map(|program| crate::proc::command::basename(program.root_program))
-        .is_some_and(|spawn_program| program_label(command) == spawn_program)
 }
 
 fn display_command(pane: &PaneRef) -> Option<&str> {
