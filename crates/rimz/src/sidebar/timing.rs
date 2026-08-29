@@ -367,7 +367,7 @@ pub const OBSERVE_DEADPID_CONFIRMATIONS: u32 = 2;
 
 /// Consecutive writer-side `/proc` observations required before an agent card
 /// without a matching hosted process is logged.
-pub const OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS: u32 = 2;
+pub(super) const OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS: u32 = 2;
 
 /// Default render base grid: 100ms, or 10Hz.
 pub const DEFAULT_REFRESH_MS: u16 = 100;

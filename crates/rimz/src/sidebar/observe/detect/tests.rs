@@ -67,7 +67,6 @@ fn row(id: &str, pane: &str, group: &str) -> RowSig {
 fn row_with_status(id: &str, pane: &str, group: &str, status: &str) -> RowSig {
     RowSig {
         row_id: id.to_owned(),
-        is_agent: true,
         agent_kind: Some("claude".to_owned()),
         pane_id: Some(pane.to_owned()),
         pane_pid: None,
