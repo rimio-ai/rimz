@@ -406,18 +406,6 @@ pub fn birth_prompt_with_roots(
     }))
 }
 
-fn dismiss_birth_prompt_with_roots(project_root: &Path, config_root: &Path) -> Result<()> {
-    let config_path = project_root.join(CONFIG_REL);
-    let Some(config) = read_project_config(&config_path)? else {
-        return Ok(());
-    };
-    dismiss_birth_prompt_hash_with_roots(
-        project_root,
-        config_root,
-        surface_snapshot(&config).hash.as_str(),
-    )
-}
-
 pub fn dismiss_birth_prompt_offer_with_roots(
     project_root: &Path,
     config_root: &Path,
@@ -1132,7 +1120,11 @@ mod tests {
         let dismissal_path =
             birth_prompt_path(config.path(), &WorkspaceId::from_project_root(dir.path()));
 
-        dismiss_birth_prompt_with_roots(dir.path(), config.path()).expect("dismiss prompt");
+        let offer = birth_prompt_with_roots(dir.path(), config.path())
+            .expect("birth prompt")
+            .expect("offer");
+        dismiss_birth_prompt_offer_with_roots(dir.path(), config.path(), &offer)
+            .expect("dismiss prompt");
         assert!(dismissal_path.exists());
         assert!(!birth_prompt_due(dir.path(), config.path()));
 
