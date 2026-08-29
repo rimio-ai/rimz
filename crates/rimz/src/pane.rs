@@ -114,8 +114,8 @@ pub struct PaneRef {
     /// only a program basename. Display-only; never an identity key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foreground_cmdline: Option<String>,
-    /// Spawn command used to launch the pane, if the backend reports it.
-    /// Advisory identity/classification metadata; display prefers
+    /// Birth argv used to launch the pane, if the backend reports it. Advisory
+    /// identity/classification metadata, never liveness; display prefers
     /// [`Self::command`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawn_command: Option<String>,

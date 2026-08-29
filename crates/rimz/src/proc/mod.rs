@@ -12,7 +12,9 @@ pub(crate) mod command;
 mod macos;
 mod pane_probe;
 
-pub(crate) use command::{command_program_basename, program_label, rimz_exec_worktree_path};
+pub(crate) use command::{
+    command_program_basename, program_label, rimz_exec_worktree_path, root_program_label,
+};
 
 use std::io::Read;
 use std::path::{Path, PathBuf};

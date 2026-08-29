@@ -143,7 +143,7 @@ Rebirth re-pins on both backends, and resume tabs are ordinary layout panes, so 
 
 `list_panes` reports each pane's foreground command, optional spawn command, optional title, cwd, view, and id.
 
-The sidebar uses foreground for display, spawn for stable identity where present, and cwd for worktree grouping ([sidebar.md → presence model](./sidebar/sidebar.md#presence-model)). Foreground, title, and cwd are cross-backend. Spawn stays optional because Zellij omits it for panes created through `action new-pane`, while tmux exposes the static `pane_start_command`. **The parity floor for presence is command plus cwd**, which both backends meet.
+The sidebar uses foreground for display, spawn for identity only while the pane root still runs the spawn program (or foreground is temporarily unreported), and cwd for worktree grouping ([sidebar.md → presence model](./sidebar/sidebar.md#presence-model)). A foreground shell therefore demotes historical agent birth argv. Foreground, title, and cwd are cross-backend. Spawn stays optional because Zellij omits it for panes created through `action new-pane`, while tmux exposes the static `pane_start_command`. **The parity floor for presence is command plus cwd**, which both backends meet.
 
 Two Zellij-side wrinkles: the foreground and cwd fields are version-spanning ladders, so the adapter takes the first non-empty field across the names Zellij has emitted, and a layout-named `rimz-sidebar` pane always reports `rimz-sidebar` as its foreground so it filters as chrome even when Zellij omits the command fields.
 

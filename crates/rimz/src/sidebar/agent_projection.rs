@@ -112,19 +112,20 @@ impl LocalSessionInputs {
 /// card, so admitting an ambiguous basename here preserves hook-bound Cursor
 /// enrichment without turning that basename into pane presence or routing.
 fn candidate_pane_agent_kind(pane: &PaneRef) -> Option<&'static str> {
-    pane.spawn_command
+    pane.command
         .as_deref()
         .and_then(crate::agents::registry::command_agent_kind_candidate)
-        .or_else(|| {
-            pane.command
-                .as_deref()
-                .and_then(crate::agents::registry::command_agent_kind_candidate)
-        })
         .or_else(|| {
             pane.hosted_agent_kind
                 .as_ref()
                 .and_then(|kind| crate::agents::spec_by_kind(kind.as_str()))
                 .map(|definition| definition.kind)
+        })
+        .or_else(|| {
+            pane.spawn_command
+                .as_deref()
+                .filter(|_| crate::store::snapshot::spawn_command_names_live_root(pane))
+                .and_then(crate::agents::registry::command_agent_kind_candidate)
         })
 }
 
@@ -453,6 +454,16 @@ mod tests {
         assert_eq!(calls.get(), 1);
         assert_eq!(observed[0].session_id.as_str(), "a");
         assert_eq!(observed[1].session_id.as_str(), "b");
+    }
+
+    #[test]
+    fn local_session_inputs_ignore_agent_birth_argv_after_a_shell_takes_over() {
+        let mut pane = crate::sidebar::test_support::pane("1", "zsh", "/repo");
+        pane.spawn_command = Some("/bin/rimz agents exec claude --worktree-path /repo".to_owned());
+
+        assert_eq!(candidate_pane_agent_kind(&pane), None);
+        pane.command = Some("rimz".to_owned());
+        assert_eq!(candidate_pane_agent_kind(&pane), Some("claude"));
     }
 
     #[test]

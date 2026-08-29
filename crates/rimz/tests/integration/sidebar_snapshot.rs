@@ -8,7 +8,30 @@ use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::store::event::EventEnvelope;
 use sha2::{Digest, Sha256};
 
-use crate::common::Env;
+use crate::common::{Env, tmux_pane};
+
+#[test]
+fn agent_birth_argv_returned_to_shell_renders_process_row() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let mut pane = tmux_pane("%7", "zsh", &env.project_root);
+    pane.spawn_command = Some(format!(
+        "{} agents exec claude --worktree-path {}",
+        env.rimz_bin().display(),
+        env.project_root.display(),
+    ));
+
+    let snapshot = env.snapshot_json_with_panes(&[pane]);
+    let rows = snapshot["worktree_groups"]
+        .as_array()
+        .expect("worktree groups")
+        .iter()
+        .flat_map(|group| group["rows"].as_array().expect("rows"));
+    let row = rows.into_iter().next().expect("shell process row");
+
+    assert_eq!(row["row_kind"], "process");
+    assert_eq!(row["name"], "zsh");
+}
 
 fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
     let obs = AgentLifecycleObservation {

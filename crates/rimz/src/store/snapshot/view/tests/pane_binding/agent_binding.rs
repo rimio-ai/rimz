@@ -48,7 +48,11 @@ fn stamped_codex_returned_to_shell_without_hosted_process_renders_process_row() 
     let codex = agent("codex", "sess-1", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
         .in_pane("%1");
-    let snapshot = room(vec![codex]).with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
+    let returned = PaneRef {
+        spawn_command: Some("/bin/rimz agents exec codex --worktree-path /repo/main".to_owned()),
+        ..pane("%1", "zsh", "/repo/main")
+    };
+    let snapshot = room(vec![codex]).with_live_panes(vec![returned], None);
 
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1);

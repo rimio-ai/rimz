@@ -56,6 +56,21 @@ fn commandless_panes_require_an_agent_or_spawn_identity() {
 }
 
 #[test]
+fn wired_agent_birth_argv_does_not_outlive_a_shell_foreground() {
+    let returned = PaneRef {
+        spawn_command: Some("/bin/rimz agents exec claude --worktree-path /repo/main".to_owned()),
+        ..pane("%1", "zsh", "/repo/main")
+    };
+    let mut snapshot = room(Vec::new());
+    snapshot.wired_kinds = vec!["claude".to_owned()];
+    let snapshot = snapshot.with_live_panes(vec![returned], None);
+
+    assert_eq!(rows(&snapshot).len(), 1);
+    assert!(rows(&snapshot)[0].is_process());
+    assert_eq!(rows(&snapshot)[0].name, "zsh");
+}
+
+#[test]
 fn duplicate_pane_or_agent_id_projects_one_row_identity() {
     let claude = agent("claude", "sess-a", AgentStatus::Running, 1_000)
         .worktree("/repo/main")

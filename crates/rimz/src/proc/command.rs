@@ -9,6 +9,12 @@ pub(crate) fn program_label(command: &str) -> String {
     basename(effective_program(command)).to_owned()
 }
 
+/// The program at the root of a command, seeing past `sudo` but not through
+/// RimZ or JavaScript launchers.
+pub(crate) fn root_program_label(command: &str) -> Option<&str> {
+    effective_program_and_args(command).map(|(program, _)| basename(program))
+}
+
 /// The command with an absolute program path reduced to a basename: `/usr/bin/cargo
 /// build` reads as `cargo build`, while relative paths like
 /// `target/debug/xtask install-dev` stay verbatim as build-location context.
