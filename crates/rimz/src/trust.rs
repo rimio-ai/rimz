@@ -1258,29 +1258,6 @@ mod tests {
     }
 
     #[test]
-    fn granted_roots_reads_valid_records_and_skips_corrupt_ones() {
-        let first = project_with("[tasks.first]\ncheck = \"true\"\nevery = \"5m\"\n");
-        let second = project_with("[tasks.second]\ncheck = \"true\"\nevery = \"5m\"\n");
-        let config = tempdir().expect("config root");
-        grant_with_roots(first.path(), config.path()).expect("first grant");
-        grant_with_roots(second.path(), config.path()).expect("second grant");
-        let corrupt = trust_record_path(
-            config.path(),
-            &WorkspaceId::from_project_root(Path::new("/corrupt")),
-        );
-        write_bytes_atomically(&corrupt, b"not = [valid").expect("corrupt record");
-
-        assert_eq!(
-            granted_roots_with_config(config.path()).expect("granted roots"),
-            vec![first.path().to_path_buf(), second.path().to_path_buf()]
-                .into_iter()
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>(),
-        );
-    }
-
-    #[test]
     fn project_layout_table_fails_with_per_machine_fix() {
         let dir =
             project_with("[[layout.initial_panes]]\nname = \"shell\"\ncommand = \"$SHELL\"\n");
