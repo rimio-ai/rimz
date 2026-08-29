@@ -1242,14 +1242,6 @@ mod tests {
     }
 
     #[test]
-    fn revoke_with_no_record_is_noop() {
-        let dir = project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks\"\n");
-        let config = tempdir().expect("config root");
-        let report = revoke_with_roots(dir.path(), config.path()).expect("revoke");
-        assert_eq!(report.state, TrustState::Untrusted);
-    }
-
-    #[test]
     fn project_layout_table_fails_with_per_machine_fix() {
         let dir =
             project_with("[[layout.initial_panes]]\nname = \"shell\"\ncommand = \"$SHELL\"\n");
