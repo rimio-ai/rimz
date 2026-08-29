@@ -362,7 +362,7 @@ allowed-imports = [
     "ids",
     "pane",
 ]
-surface-budget = 94
+surface-budget = 95
 
 [[module]]
 path = "crates/rimz/src/reload.rs"

@@ -9,6 +9,22 @@ pub(crate) fn program_label(command: &str) -> String {
     basename(effective_program(command)).to_owned()
 }
 
+/// Whether pane birth argv still names the live foreground root. A missing or
+/// empty foreground is a reporting race; missing birth argv carries no identity.
+pub(crate) fn spawn_command_names_live_root(
+    command: Option<&str>,
+    spawn_command: Option<&str>,
+) -> bool {
+    let Some(spawn_command) = spawn_command else {
+        return false;
+    };
+    let Some(command) = command.filter(|command| !command.is_empty()) else {
+        return true;
+    };
+    let spawn = effective_program_info(spawn_command);
+    program_label(command) == basename(spawn.root_program)
+}
+
 /// The command with an absolute program path reduced to a basename: `/usr/bin/cargo
 /// build` reads as `cargo build`, while relative paths like
 /// `target/debug/xtask install-dev` stay verbatim as build-location context.
@@ -192,6 +208,17 @@ mod tests {
             "npm"
         );
         assert_eq!(program_label("/usr/bin/cargo build"), "cargo");
+    }
+
+    #[test]
+    fn spawn_identity_requires_its_root_to_remain_live() {
+        let spawn = Some("/bin/rimz agents exec claude --worktree-path /repo");
+
+        assert!(spawn_command_names_live_root(None, spawn));
+        assert!(spawn_command_names_live_root(Some(""), spawn));
+        assert!(spawn_command_names_live_root(Some("rimz"), spawn));
+        assert!(!spawn_command_names_live_root(Some("zsh"), spawn));
+        assert!(!spawn_command_names_live_root(Some("rimz"), None));
     }
 
     #[test]
