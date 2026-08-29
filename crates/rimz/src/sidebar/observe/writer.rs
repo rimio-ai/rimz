@@ -302,7 +302,6 @@ mod tests {
                 .into_iter()
                 .map(|(row_id, pane)| RosterRowSig {
                     row_id: row_id.to_owned(),
-                    is_agent: true,
                     agent_kind: Some("claude".to_owned()),
                     pane_id: Some(pane_id(pane).to_string()),
                     pane_pid: None,
@@ -317,7 +316,6 @@ mod tests {
             panes_produced_at_ms: Some(10),
             rows: vec![RosterRowSig {
                 row_id: row_id.to_owned(),
-                is_agent: true,
                 agent_kind: Some("claude".to_owned()),
                 pane_id: Some(pane_id("terminal_1").to_string()),
                 pane_pid: Some(pid),
@@ -469,11 +467,9 @@ mod tests {
     fn hostless_agent_ignores_process_rows_pidless_rows_and_dead_pids() {
         let mut tracker = HostedAgentTracker::default();
         let mut rows = roster_with_pid("process", 123, Timestamp::from_second(10).unwrap());
-        rows.rows[0].is_agent = false;
         rows.rows[0].agent_kind = None;
         rows.rows.push(RosterRowSig {
             row_id: "pidless".to_owned(),
-            is_agent: true,
             agent_kind: Some("claude".to_owned()),
             pane_id: Some(pane_id("terminal_2").to_string()),
             pane_pid: None,

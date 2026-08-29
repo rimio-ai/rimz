@@ -83,8 +83,16 @@ fn frame_stamp_from_sig(sig: &FrameSig) -> FrameStamp {
     FrameStamp {
         produced_at_ms: sig.panes_produced_at_ms,
         rows: sig.rows.len(),
-        agents: sig.rows.iter().filter(|row| row.is_agent).count(),
-        processes: sig.rows.iter().filter(|row| !row.is_agent).count(),
+        agents: sig
+            .rows
+            .iter()
+            .filter(|row| row.agent_kind.is_some())
+            .count(),
+        processes: sig
+            .rows
+            .iter()
+            .filter(|row| row.agent_kind.is_none())
+            .count(),
         pulled_rows: Some(sig.pulled_rows),
         pulled_panes_produced_at_ms: sig.pulled_panes_produced_at_ms,
     }
@@ -94,8 +102,16 @@ fn frame_stamp_from_roster(roster: &RosterSig) -> FrameStamp {
     FrameStamp {
         produced_at_ms: roster.panes_produced_at_ms,
         rows: roster.rows.len(),
-        agents: roster.rows.iter().filter(|row| row.is_agent).count(),
-        processes: roster.rows.iter().filter(|row| !row.is_agent).count(),
+        agents: roster
+            .rows
+            .iter()
+            .filter(|row| row.agent_kind.is_some())
+            .count(),
+        processes: roster
+            .rows
+            .iter()
+            .filter(|row| row.agent_kind.is_none())
+            .count(),
         pulled_rows: None,
         pulled_panes_produced_at_ms: None,
     }
