@@ -1,6 +1,6 @@
 # Loops
 
-> `rimz loop` is cron for your agents. A task is a name, a schedule, and one action: an agent turn in a real pane, a wake to an agent that is already running, or a shell command that guards either. It fires while the room is open. The clock, the state files, and the run log underneath are in [loops.md](../internals/harness/loops.md).
+> `rimz loop` is cron for your agents. A task is a name, a schedule, and one action: an agent turn in a real pane, a wake to an agent that is already running, or a shell command that guards either. The room keeps time while it is open; an optional OS timer keeps time otherwise. The clock, the state files, and the run log underneath are in [loops.md](../internals/harness/loops.md).
 
 ## Why rimz loop
 
@@ -91,7 +91,13 @@ rimz loop add refactor --agent claude --prompt "Refactor the next rough module a
 
 Trust and enablement answer different questions. Trust says the project config contains commands you accept as yours to run; `rimz loop enable <name>` says this particular task may run unattended on this machine. A project task pulled from a repo starts disabled even after trust is granted, while a task you create with `rimz loop add --project` starts enabled here. The enablement record stays in machine state and never changes the repo or its trust hash.
 
-There is no scheduler daemon; the room keeps time. While a room for the task's project is open, attached or not, that room's elected sidebar process fires due tasks on its regular tick, running each through the hidden `rimz loop run`. Close the room and the clock stops. Opening one late does not replay what was missed: a task first seen past its time waits for the next matching occurrence, so there is never a catch-up storm.
+There is no RimZ scheduler daemon; the room keeps time. While a room for the task's project is open, attached or not, that room's elected sidebar process fires due tasks on its regular tick, running each through the hidden `rimz loop run`. If the machine should keep time without an open room, opt in once:
+
+```sh
+rimz loop timer install
+```
+
+That command installs one systemd user timer on Linux or launchd agent on macOS. Once a minute it runs a one-off RimZ tick, re-reads every task, and fires only roots without an open room; the room elder still wins wherever one is open. An `--agent` fire starts its room through the normal supervised path and leaves it open, a check-only task needs no room, and a `--wake` still needs the pinned session alive. `rimz loop timer remove` reverses the install. With or without the timer, opening a root late does not replay what was missed: a task first seen past its time waits for the next matching occurrence, so there is never a catch-up storm.
 
 A scheduled `--agent` fire lands in the `rimzd` loop zone: the runtime column's live loop panel stays open, and transient run panes stack under it instead of splitting the sidebar or a working tab. If the panel pane was closed while the `rimzd` view remains, RimZ recreates the panel at fire time and stacks the run under it; if the whole view is gone or the split fails, it falls back to a new run tab. Manual `rimz loop fire` keeps splitting beside the caller so its foreground stream stays local.
 

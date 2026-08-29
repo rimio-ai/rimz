@@ -23,7 +23,7 @@ Detail lives in four places, narrowing as you go:
 
 ## Runtime shape
 
-There is no general RimZ daemon. Every durable write is a short-lived CLI or hook subprocess; the sidebar is a native pane that reads store state in process.
+There is no general RimZ daemon. Every durable write is a short-lived CLI or hook subprocess; the sidebar is a native pane that reads store state in process. The optional loop timer is an OS-owned one-minute trigger for a one-off `rimz loop tick`, not a resident RimZ process, and it yields roots with a live sidebar elder.
 
 ```text
 terminal emulator

@@ -162,7 +162,7 @@ at = "00:30"                     # 24h time in the configured timezone
 every = "day"
 ```
 
-`rimz loop add` writes the same entries, so you never have to hand-edit unless you want to. Two things about the model are worth knowing before you write your first task: a task fires only while a room for `root` is open, since the room's sidebar keeps the clock and there is no separate daemon, and a task that repeats needs `every` or `cron` — a bare `at` fires once and retires itself.
+`rimz loop add` writes the same entries, so you never have to hand-edit unless you want to. Two things about the model are worth knowing before you write your first task: the room's sidebar keeps the clock by default, while one opt-in `rimz loop timer install` keeps every task root ticking when its room is closed; and a task that repeats needs `every` or `cron` — a bare `at` fires once and retires itself. The timer is a user-level systemd timer on Linux or launchd agent on macOS, not a resident RimZ daemon, and `rimz loop timer remove` reverses it.
 
 The same table carries watchdogs and self-wakes, where an agent turn runs on an interval behind a shell check such as `cargo test` or `gh run watch`. What you would schedule and why is [loops](./loops.md); the field-by-field shape is [configuration → Loop tasks](./configuration.md#loop-tasks), and every flag is in [the loop CLI](../reference/cli/loop.md).
 
