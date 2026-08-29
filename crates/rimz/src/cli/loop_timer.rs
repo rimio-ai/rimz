@@ -1,23 +1,29 @@
 //! Opt-in operating-system timer for loop roots without an open room.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use crate::store::atomic::write_bytes_atomically;
-use crate::store::paths::{config_home, env_path};
+use jiff::Zoned;
+
+use rimz::harness::schedule::catalog::TaskCatalog;
+use rimz::ids::WorkspaceId;
+use rimz::store::atomic::write_bytes_atomically;
+use rimz::store::paths::{RuntimePaths, config_home, env_path};
+use rimz::workspace::known_workspaces;
 
 const SYSTEMD_SERVICE: &str = "rimz-loop.service";
 const SYSTEMD_TIMER: &str = "rimz-loop.timer";
 const LAUNCHD_LABEL: &str = "ai.rimz.loop";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TimerBackend {
+pub(super) enum TimerBackend {
     Systemd,
     Launchd,
 }
 
 impl TimerBackend {
-    pub const fn label(self) -> &'static str {
+    pub(super) const fn label(self) -> &'static str {
         match self {
             Self::Systemd => "systemd user",
             Self::Launchd => "launchd agent",
@@ -26,7 +32,7 @@ impl TimerBackend {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TimerStatus {
+pub(super) enum TimerStatus {
     Installed {
         backend: TimerBackend,
         exec: PathBuf,
@@ -36,27 +42,27 @@ pub enum TimerStatus {
 }
 
 impl TimerStatus {
-    pub const fn active(&self) -> bool {
+    pub(super) const fn active(&self) -> bool {
         matches!(self, Self::Installed { active: true, .. })
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TimerReport {
-    pub backend: TimerBackend,
-    pub path: PathBuf,
-    pub changed: bool,
+pub(super) struct TimerReport {
+    pub(super) backend: TimerBackend,
+    pub(super) path: PathBuf,
+    pub(super) changed: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum TimerErr {
+pub(super) enum TimerErr {
     #[error("cannot resolve the RimZ executable: {0}")]
     CurrentExe(#[source] std::io::Error),
     #[error("cannot prepare loop timer file {path}: {source}")]
     Write {
         path: PathBuf,
         #[source]
-        source: crate::store::atomic::AtomicErr,
+        source: rimz::store::atomic::AtomicErr,
     },
     #[error("cannot remove loop timer file {path}: {source}")]
     Remove {
@@ -82,9 +88,62 @@ pub enum TimerErr {
     Unsupported { hint: String },
 }
 
-pub type Result<T> = std::result::Result<T, TimerErr>;
+type Result<T> = std::result::Result<T, TimerErr>;
 
-pub fn detect() -> Result<TimerBackend> {
+pub(super) fn tick(now: &Zoned) {
+    for root in task_roots() {
+        let workspace_id = WorkspaceId::from_project_root(&root);
+        let runtime = match RuntimePaths::for_workspace(workspace_id) {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                tracing::warn!(root = %root.display(), error = %err, "loop tick could not resolve runtime paths");
+                continue;
+            }
+        };
+        if runtime_is_open(&runtime) {
+            continue;
+        }
+        rimz::harness::schedule::fire::fire_due_tasks(&runtime, Some(&root), now);
+    }
+}
+
+pub(super) fn uncovered_task_roots() -> usize {
+    task_roots()
+        .into_iter()
+        .filter(|root| {
+            let workspace_id = WorkspaceId::from_project_root(root);
+            RuntimePaths::for_workspace(workspace_id)
+                .ok()
+                .is_none_or(|runtime| !runtime_is_open(&runtime))
+        })
+        .count()
+}
+
+fn task_roots() -> BTreeSet<PathBuf> {
+    let mut roots = TaskCatalog::load_lenient(None)
+        .visible()
+        .values()
+        .map(|task| task.entry().resolved_root())
+        .collect::<BTreeSet<_>>();
+    match known_workspaces() {
+        Ok(workspaces) => roots.extend(workspaces.into_iter().filter_map(|workspace| {
+            let root = workspace.project_root;
+            TaskCatalog::load_lenient(Some(&root))
+                .visible()
+                .values()
+                .any(|task| task.entry().resolved_root() == root)
+                .then_some(root)
+        })),
+        Err(err) => tracing::warn!(error = %err, "loop tick could not enumerate project roots"),
+    }
+    roots
+}
+
+fn runtime_is_open(runtime: &RuntimePaths) -> bool {
+    rimz::sidebar::fresh_sidebar_present(runtime)
+}
+
+fn detect() -> Result<TimerBackend> {
     let exe = current_exe()?;
     detect_for(
         std::env::consts::OS,
@@ -93,7 +152,7 @@ pub fn detect() -> Result<TimerBackend> {
     )
 }
 
-pub fn install() -> Result<TimerReport> {
+pub(super) fn install() -> Result<TimerReport> {
     let backend = detect()?;
     let exec = current_exe()?;
     match backend {
@@ -102,7 +161,7 @@ pub fn install() -> Result<TimerReport> {
     }
 }
 
-pub fn status() -> Result<TimerStatus> {
+pub(super) fn status() -> Result<TimerStatus> {
     match native_backend() {
         TimerBackend::Systemd => systemd_status(),
         TimerBackend::Launchd => launchd_status(),
@@ -140,7 +199,7 @@ fn launchd_status() -> Result<TimerStatus> {
     })
 }
 
-pub fn remove() -> Result<TimerReport> {
+pub(super) fn remove() -> Result<TimerReport> {
     match native_backend() {
         TimerBackend::Systemd => remove_systemd(),
         TimerBackend::Launchd => remove_launchd(),
@@ -415,6 +474,8 @@ fn installed_exec(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::ids::{MuxName, SidebarInstanceId};
+    use rimz::sidebar::heartbeat::SidebarHeartbeat;
 
     #[test]
     fn renders_systemd_units_with_an_escaped_exec_path() {
@@ -453,5 +514,32 @@ mod tests {
         assert!(!launchctl_service_absent(
             b"Boot-out failed: 5: Input/output error"
         ));
+    }
+
+    #[test]
+    fn external_tick_recognizes_a_root_with_a_fresh_sidebar() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("project");
+        std::fs::create_dir(&root).expect("project root");
+        let workspace_id = WorkspaceId::from_project_root(&root);
+        let runtime = RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime"))
+            .expect("runtime paths");
+        runtime.ensure_dirs().expect("runtime dirs");
+        let instance_id = SidebarInstanceId::new();
+        let heartbeat = SidebarHeartbeat::new(
+            workspace_id,
+            instance_id.clone(),
+            MuxName::Tmux,
+            "session",
+            runtime.sock_dir.join("sidebar.sock"),
+            None,
+        );
+        std::fs::write(
+            runtime.sidebar_heartbeat_path(&instance_id),
+            serde_json::to_vec(&heartbeat).expect("heartbeat json"),
+        )
+        .expect("heartbeat");
+
+        assert!(runtime_is_open(&runtime));
     }
 }

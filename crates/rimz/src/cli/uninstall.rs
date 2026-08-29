@@ -10,9 +10,9 @@ use anyhow::{Context, Result};
 use clap::Args;
 
 use super::GlobalFlags;
+use super::loop_timer::{self, TimerStatus};
 use super::render::fmt_bytes;
 use rimz::disk_usage::{RuntimeStorage, StorageKind, StorageRoot};
-use rimz::harness::schedule::timer::{self as loop_timer, TimerStatus};
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::mux::{self, MuxErr};
 use rimz::store::paths;
@@ -76,7 +76,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     let (live_rooms, session_failures) = live_rooms(&workspaces);
     failures.extend(session_failures);
     let hook_agents = managed_hook_agents();
-    let loop_timer = loop_timer::status().unwrap_or(TimerStatus::NotInstalled);
+    let timer_status = loop_timer::status().unwrap_or(TimerStatus::NotInstalled);
     let binaries = if args.keep_binary {
         Vec::new()
     } else {
@@ -94,7 +94,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
         remove_config,
         live_rooms: &live_rooms,
         hook_agents: &hook_agents,
-        loop_timer: &loop_timer,
+        loop_timer: &timer_status,
         keep_binary: args.keep_binary,
         binaries: &binaries,
         project_dirs: &project_dirs,

@@ -6,7 +6,7 @@
 //! `rimz loop run <name>` helper, so a hot tick does not spawn the same
 //! occurrence twice.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -21,7 +21,6 @@ use crate::ids::WorkspaceId;
 use crate::store::atomic::write_temp_then_rename_cache;
 use crate::store::paths::StatePaths;
 use crate::store::workspace_record;
-use crate::workspace::known_workspaces;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
@@ -29,14 +28,13 @@ enum Action {
     Fire,
 }
 
-pub(crate) fn fire_due_tasks_for_room(runtime: &RuntimePaths, now: &Zoned) {
-    let project_root = workspace_project_root(runtime);
-    fire_due_tasks(runtime, project_root.as_deref(), now);
-}
-
-fn fire_due_tasks(runtime: &RuntimePaths, project_root: Option<&Path>, now: &Zoned) -> Vec<String> {
+#[doc(hidden)]
+pub fn fire_due_tasks(runtime: &RuntimePaths, project_root: Option<&Path>, now: &Zoned) {
+    let project_root = project_root
+        .map(Path::to_path_buf)
+        .or_else(|| workspace_project_root(runtime));
     let tasks = workspace_tasks(
-        TaskCatalog::load_lenient(project_root)
+        TaskCatalog::load_lenient(project_root.as_deref())
             .runnable()
             .iter()
             .filter(|(_, task)| {
@@ -50,7 +48,7 @@ fn fire_due_tasks(runtime: &RuntimePaths, project_root: Option<&Path>, now: &Zon
             .collect(),
         &runtime.workspace_id,
     );
-    fire_tasks(runtime, project_root, tasks, now)
+    fire_tasks(runtime, project_root.as_deref(), tasks, now);
 }
 
 fn fire_tasks(
@@ -82,75 +80,6 @@ fn fire_tasks(
         }
     }
     fired
-}
-
-/// Roots whose machine, transient, or project task catalogs may need an
-/// external tick. Machine and transient tasks carry their roots directly;
-/// known workspaces supply the roots whose project config must be inspected.
-#[doc(hidden)]
-pub fn tick_roots() -> BTreeSet<PathBuf> {
-    let mut roots = TaskCatalog::load_lenient(None)
-        .runnable()
-        .values()
-        .map(|task| task.entry().resolved_root())
-        .collect::<BTreeSet<_>>();
-    match known_workspaces() {
-        Ok(workspaces) => roots.extend(workspaces.into_iter().filter_map(|workspace| {
-            let root = workspace.project_root;
-            TaskCatalog::load_lenient(Some(&root))
-                .visible()
-                .values()
-                .any(|task| task.entry().resolved_root() == root)
-                .then_some(root)
-        })),
-        Err(err) => tracing::warn!(
-            error = &err as &dyn std::error::Error,
-            "loop tick could not enumerate known project roots"
-        ),
-    }
-    roots
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[doc(hidden)]
-pub struct TickReport {
-    pub fired: Vec<(PathBuf, String)>,
-    pub skipped_open: Vec<PathBuf>,
-}
-
-/// Run one external scheduler pass, yielding to the room elder wherever a
-/// fresh sidebar proves that room is open.
-#[doc(hidden)]
-pub fn tick(now: &Zoned) -> TickReport {
-    let mut report = TickReport::default();
-    for root in tick_roots() {
-        let workspace_id = WorkspaceId::from_project_root(&root);
-        let runtime = match RuntimePaths::for_workspace(workspace_id) {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                tracing::warn!(
-                    root = %root.display(),
-                    error = &err as &dyn std::error::Error,
-                    "loop tick could not resolve runtime paths"
-                );
-                continue;
-            }
-        };
-        tick_root(&root, &runtime, now, &mut report);
-    }
-    report
-}
-
-fn tick_root(root: &Path, runtime: &RuntimePaths, now: &Zoned, report: &mut TickReport) {
-    if crate::sidebar::fresh_sidebar_present(runtime) {
-        report.skipped_open.push(root.to_path_buf());
-        return;
-    }
-    report.fired.extend(
-        fire_due_tasks(runtime, Some(root), now)
-            .into_iter()
-            .map(|name| (root.to_path_buf(), name)),
-    );
 }
 
 fn workspace_project_root(runtime: &RuntimePaths) -> Option<PathBuf> {
@@ -273,8 +202,6 @@ mod tests {
     use super::super::tests::{seconds_before, zdt};
     use super::*;
     use crate::config::TaskEntry;
-    use crate::ids::{MuxName, SidebarInstanceId};
-    use crate::sidebar::heartbeat::SidebarHeartbeat;
 
     const NAME: &str = "task";
 
@@ -569,35 +496,5 @@ mod tests {
             vec![NAME.to_owned()],
         );
         assert!(runtime.root.join("loop-fire.json").is_file());
-    }
-
-    #[test]
-    fn external_tick_skips_a_root_with_a_fresh_sidebar() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().join("project");
-        std::fs::create_dir(&root).expect("project root");
-        let workspace_id = WorkspaceId::from_project_root(&root);
-        let runtime = RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime"))
-            .expect("runtime paths");
-        runtime.ensure_dirs().expect("runtime dirs");
-        let instance_id = SidebarInstanceId::new();
-        let heartbeat = SidebarHeartbeat::new(
-            workspace_id,
-            instance_id.clone(),
-            MuxName::Tmux,
-            "session",
-            runtime.sock_dir.join("sidebar.sock"),
-            None,
-        );
-        std::fs::write(
-            runtime.sidebar_heartbeat_path(&instance_id),
-            serde_json::to_vec(&heartbeat).expect("heartbeat json"),
-        )
-        .expect("heartbeat");
-
-        let mut report = TickReport::default();
-        tick_root(&root, &runtime, &zdt(2026, 6, 24, 8, 0, 0), &mut report);
-        assert_eq!(report.skipped_open, vec![root]);
-        assert!(report.fired.is_empty());
     }
 }

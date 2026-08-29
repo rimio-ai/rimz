@@ -23,6 +23,7 @@ mod list;
 mod list_pets;
 mod list_themes;
 mod loop_cmd;
+mod loop_timer;
 mod message;
 mod pane;
 mod pricing_refresh;
