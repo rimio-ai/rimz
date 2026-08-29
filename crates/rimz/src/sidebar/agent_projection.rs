@@ -124,9 +124,24 @@ fn candidate_pane_agent_kind(pane: &PaneRef) -> Option<&'static str> {
         .or_else(|| {
             pane.spawn_command
                 .as_deref()
-                .filter(|_| crate::store::snapshot::spawn_command_names_live_root(pane))
+                .filter(|_| spawn_command_names_live_root(pane))
                 .and_then(crate::agents::registry::command_agent_kind_candidate)
         })
+}
+
+fn spawn_command_names_live_root(pane: &PaneRef) -> bool {
+    let Some(command) = pane
+        .command
+        .as_deref()
+        .filter(|command| !command.is_empty())
+    else {
+        return true;
+    };
+    pane.spawn_command
+        .as_deref()
+        .map(crate::proc::command::effective_program_info)
+        .map(|program| crate::proc::command::basename(program.root_program))
+        .is_some_and(|spawn_program| crate::proc::program_label(command) == spawn_program)
 }
 
 fn normalize_observations(observations: &mut Vec<LocalSessionObservation>) {
