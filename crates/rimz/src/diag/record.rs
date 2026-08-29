@@ -1604,6 +1604,12 @@ pub enum AnomalyKind {
         pid: u32,
         reason: String,
     },
+    AgentCardWithoutProcess {
+        row_id: String,
+        pane_id: Option<String>,
+        pid: u32,
+        kind: String,
+    },
 }
 
 impl AnomalyKind {
@@ -1626,6 +1632,7 @@ impl AnomalyKind {
             Self::CardsExceedPanes { .. } => "cards_exceed_panes",
             Self::RowPaneMissingFromFrame { .. } => "row_pane_missing_from_frame",
             Self::DeadPid { .. } => "dead_pid",
+            Self::AgentCardWithoutProcess { .. } => "agent_card_without_process",
         }
     }
 
@@ -1641,7 +1648,8 @@ impl AnomalyKind {
             | Self::StatusChurn { row_id, .. }
             | Self::DuplicateRowId { row_id, .. }
             | Self::RowPaneMissingFromFrame { row_id, .. }
-            | Self::DeadPid { row_id, .. } => Some(Cow::Borrowed(row_id)),
+            | Self::DeadPid { row_id, .. }
+            | Self::AgentCardWithoutProcess { row_id, .. } => Some(Cow::Borrowed(row_id)),
             Self::DuplicatePaneRows { pane_id, .. } => Some(Cow::Borrowed(pane_id)),
             Self::StatusCountMismatch { group_key, .. } | Self::OrderFlap { group_key, .. } => {
                 Some(Cow::Borrowed(group_key))

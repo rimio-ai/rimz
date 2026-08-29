@@ -62,7 +62,7 @@ The emitter is the triage pointer. Producer kinds describe pane-source truth, re
 | `pane_cache_divergence`, `sidebar_orphan_reaped`, `subagent_orphan_reaped`, `subagent_orphan_repair_failed` | `reload` / `sidebar repair` | A fresh pane cache omitted a sidebar process that authoritative mux truth proved alive; a sidebar reap after two authoritative omissions; or a subagent repair attempt after its parent stayed durably ended or absent beyond the wrapper watchdog window, including the repair error when pane reclamation failed |
 | `client_reaped` | `cli::room::attach_exec` | Stale mux clients killed during attach, with the killed pids, client counts before and after, and whether the reap settled or timed out |
 | `row_conflict`, `newborn_quarantined`, `group_migration`, `local_session_bind_rejected`, `ghost_session_bind` | `store::snapshot::view` | Duplicate agent identity suppression, newborn known-command unknown-cwd quarantine, cwd-driven pane moves, contained evidence-free/stale local-session rejections, and an old exact session stamp contradicted by a newer durable launch |
-| `frame_anomaly` | `sidebar::observe` writer thread | Detector verdicts on the rendered stream: flaps, oscillations, resets, per-frame consistency violations, and elder cross-checks, each carrying its detector key, evidence, frame stamp, and the writer's role |
+| `frame_anomaly` | `sidebar::observe` writer thread | Detector verdicts on the rendered stream: flaps, oscillations, resets, per-frame consistency violations, and elder cross-checks such as `dead_pid` and `agent_card_without_process`, each carrying its detector key, evidence, frame stamp, and the writer's role |
 | `mixed_build_writers` | `sidebar::produce::panes` | A prior published frame stamped by a different build than the producing process |
 | `topology_writer_changed`, `topology_write_rejected` | `sidebar::presence` | Zellij topology writer generation flips and rejected stale attempts, with plugin id, loaded-at generation, accepted writer, and reject count |
 
@@ -137,6 +137,7 @@ The writer thread re-verifies the latest roster against the world every `OBSERVE
 
 - **Cards fit the frame.** Every roster pane id appears in the published frame (`row_pane_missing_from_frame`), and the roster never exceeds the frame's pane count (`cards_exceed_panes`). The comparison runs only when the roster's fold stamp equals the frame's `produced_at_ms`, since a producer republish between fold and read is normal skew.
 - **PIDs are alive.** A row's pane pid is checked through the process backend with the start-time pid-reuse guard (`dead_pid`). A pid must stay dead across `OBSERVE_DEADPID_CONFIRMATIONS` (2) consecutive passes before it logs, so a just-exited process the next frame removes leaves no record. Platforms without process metrics skip the check.
+- **Agent cards host an agent.** An agent row whose live pane root authoritatively hosts no process of that kind logs `agent_card_without_process` after `OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS` (2) consecutive passes. Unreadable or branching process trees are indeterminate and stay silent; dead roots remain `dead_pid`'s verdict.
 
 ### Roles and cost
 

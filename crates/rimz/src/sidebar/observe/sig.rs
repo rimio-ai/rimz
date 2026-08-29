@@ -29,6 +29,7 @@ pub struct FrameSig {
 pub struct RowSig {
     pub row_id: String,
     pub is_agent: bool,
+    pub agent_kind: Option<String>,
     pub pane_id: Option<String>,
     pub pane_pid: Option<u32>,
     pub pane_process_start: Option<jiff::Timestamp>,
@@ -158,6 +159,7 @@ pub struct RosterSig {
 pub struct RosterRowSig {
     pub row_id: String,
     pub is_agent: bool,
+    pub agent_kind: Option<String>,
     pub pane_id: Option<String>,
     pub pane_pid: Option<u32>,
     pub pane_process_start: Option<jiff::Timestamp>,
@@ -178,6 +180,7 @@ pub fn extract_sig(
             group.rows.iter().map(|row| RowSig {
                 row_id: row.id.clone(),
                 is_agent: row.is_agent(),
+                agent_kind: row.is_agent().then(|| row.name.clone()),
                 pane_id: row.pane.as_ref().map(|pane| pane.pane_id.to_string()),
                 pane_pid: row.pane.as_ref().and_then(|pane| pane.pane_pid),
                 pane_process_start: row.pane.as_ref().and_then(|pane| pane.pane_process_start),
@@ -338,6 +341,7 @@ impl RosterSig {
                 .map(|row| RosterRowSig {
                     row_id: row.row_id.clone(),
                     is_agent: row.is_agent,
+                    agent_kind: row.agent_kind.clone(),
                     pane_id: row.pane_id.clone(),
                     pane_pid: row.pane_pid,
                     pane_process_start: row.pane_process_start,

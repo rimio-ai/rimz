@@ -212,6 +212,34 @@ fn row_presence_gap_evidence_is_backward_compatible() {
 }
 
 #[test]
+fn agent_card_without_process_has_stable_diagnostic_identity() {
+    let anomaly = AnomalyKind::AgentCardWithoutProcess {
+        row_id: "agent:a".to_owned(),
+        pane_id: Some("tmux:%1".to_owned()),
+        pid: 123,
+        kind: "claude".to_owned(),
+    };
+    assert_eq!(anomaly.key(), "agent_card_without_process");
+    assert_eq!(anomaly.subject().as_deref(), Some("agent:a"));
+
+    let event = DiagEvent::FrameAnomaly {
+        role: ObserveRole::Elder,
+        anomaly,
+        window_ms: None,
+        frame: frame_stamp(1),
+        events_recent: EventsSig::default(),
+        gate_reject_streak: 0,
+        health_failure_streak: 0,
+        dropped_msgs: 0,
+    };
+    assert_eq!(event.severity(), DiagSeverity::Warn);
+    assert_eq!(
+        event.summary(),
+        "observed agent_card_without_process on agent:a"
+    );
+}
+
+#[test]
 fn severity_table_pins_conditional_and_regression_categories() {
     let info = [
         DiagEvent::SidebarWidthIntent {
