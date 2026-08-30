@@ -214,9 +214,11 @@ mod tests {
 
     use super::*;
 
+    use crate::agents::AgentStatus;
     use crate::agents::lifecycle::LifecycleSignal;
     use crate::agents::{AgentLifecycleObservation, LaunchParams};
-    use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
+    use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
+    use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
     use crate::store::event::EventEnvelope;
 
     fn write_workspace_record(paths: &StatePaths, project_root: PathBuf, root_class: RootClass) {
@@ -354,6 +356,56 @@ mod tests {
             !ids.contains(&"sess-ended"),
             "an ended durable row must stay out of latest.json: {ids:?}"
         );
+    }
+
+    #[test]
+    fn assemble_keeps_ended_launched_child_on_live_parent_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace, dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+
+        let now = Timestamp::now();
+        let pane_id = PaneId::from_parts(MuxName::Tmux, "%parent");
+        let mut pane = PaneRef::from_id(pane_id);
+        pane.command = Some("claude".to_owned());
+        pane.cwd = Some(dir.path().display().to_string());
+        let mut parent = crate::testkit::agent_state("claude", "parent", now);
+        parent.pane = Some(pane.clone());
+        parent.worktree_path = pane.cwd.clone();
+
+        let mut child = crate::testkit::agent_state("codex", "child", now);
+        child.status = AgentStatus::Success;
+        child.ended_at = Some(now);
+        child.runtime_owner = Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "child",
+            u32::MAX,
+            None,
+        ));
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.launch_depth = Some(1);
+
+        let snapshot = assemble_snapshot(
+            &paths,
+            event_log::LogExtent {
+                generation: 0,
+                offset: 0,
+            },
+            vec![parent, child],
+            Vec::new(),
+        )
+        .unwrap()
+        .with_live_panes(vec![pane], None);
+        let card = snapshot
+            .rows()
+            .find(|row| row.id == "parent")
+            .expect("live parent card");
+        let children = card.sub_agents();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].id, "child");
+        assert_eq!(children[0].status, AgentStatus::Success);
     }
 
     #[cfg(target_os = "linux")]

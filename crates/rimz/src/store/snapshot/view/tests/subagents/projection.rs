@@ -162,7 +162,7 @@ fn launched_cross_kind_child_nests_without_losing_its_pane() {
 }
 
 #[test]
-fn launched_child_visibility_uses_its_own_lifetime_not_the_parent_turn() {
+fn launched_child_stays_while_live_and_retires_at_the_parents_next_turn() {
     let mut parent = agent("claude", "root", AgentStatus::Running, 100);
     parent.turn_started_at = Some(ago(10));
     let mut child = agent("codex", "child", AgentStatus::Running, 5).active_ago(60);
@@ -178,13 +178,32 @@ fn launched_child_visibility_uses_its_own_lifetime_not_the_parent_turn() {
         "a newer parent turn does not supersede a pane-backed child"
     );
 
+    child.ended_at = Some(ago(60));
     child.status = AgentStatus::Success;
-    child.ended_at = Some(ago(GHOST_SESSION_TTL_SECS + 1));
-    child.last_activity = ago(GHOST_SESSION_TTL_SECS + 1);
     let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent, child], epoch());
+    attach_sub_agents(&mut rows, &[parent.clone(), child.clone()], epoch());
     assert!(
         rows[0].sub_agents().is_empty(),
-        "an ended child expires after the ghost TTL"
+        "an ended child retires when the parent starts its next turn"
+    );
+
+    child.ended_at = Some(ago(5));
+    child.last_activity = ago(5);
+    let mut rows = vec![row_from_agent(&parent, epoch())];
+    attach_sub_agents(&mut rows, &[parent, child.clone()], epoch());
+    assert_eq!(
+        rows[0].sub_agents().len(),
+        1,
+        "an ended child from the parent's current turn remains visible"
+    );
+
+    child.ended_at = Some(ago(GHOST_SESSION_TTL_SECS + 1));
+    child.last_activity = ago(GHOST_SESSION_TTL_SECS + 1);
+    let parent_without_turn = agent("claude", "root", AgentStatus::Running, 100);
+    let mut rows = vec![row_from_agent(&parent_without_turn, epoch())];
+    attach_sub_agents(&mut rows, &[parent_without_turn, child], epoch());
+    assert!(
+        rows[0].sub_agents().is_empty(),
+        "the ghost TTL retires an ended child when no parent turn is known"
     );
 }
