@@ -188,11 +188,22 @@ impl TmuxBackend {
         argv: &[String],
         after: Option<&PaneId>,
     ) -> Result<OpenedWindow> {
-        let anchor_window = after
+        let anchor_window = match after
             .map(|anchor| self.window_id_for_pane(anchor))
-            .transpose()?;
+            .transpose()
+        {
+            Ok(window) => window,
+            Err(err) => {
+                tracing::warn!(
+                    tags.operation = "tmux.place_tab",
+                    error = &err as &dyn std::error::Error,
+                    "could not place the new window after its anchor; appending it instead",
+                );
+                None
+            }
+        };
         let mut args = vec!["new-window".to_owned(), "-d".to_owned()];
-        if after.is_some() {
+        if anchor_window.is_some() {
             args.push("-a".to_owned());
         }
         args.extend([
