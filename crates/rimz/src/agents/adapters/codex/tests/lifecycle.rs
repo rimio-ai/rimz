@@ -81,16 +81,18 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
                 edits: false,
                 name: None,
                 native_key: None,
+                turn_id: None,
             }),
         ),
         (
             "PostToolUse",
-            json!({"session_id":"s","tool_name":"shell"}),
+            json!({"session_id":"s","turn_id":"turn-1","tool_name":"shell"}),
             Some(ToolUsed {
                 mutates: true,
                 edits: false,
                 name: Some("shell".to_owned()),
                 native_key: None,
+                turn_id: Some("turn-1".to_owned()),
             }),
         ),
         (
@@ -101,6 +103,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
                 edits: false,
                 name: Some("Bash".to_owned()),
                 native_key: None,
+                turn_id: None,
             }),
         ),
         (
@@ -111,6 +114,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
                 edits: false,
                 name: Some("read".to_owned()),
                 native_key: None,
+                turn_id: None,
             }),
         ),
         (
@@ -121,6 +125,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
                 edits: false,
                 name: Some("request_user_input".to_owned()),
                 native_key: None,
+                turn_id: None,
             }),
         ),
         (
@@ -142,7 +147,9 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
         (
             "Interrupt",
             json!({"session_id":"s","turn_id":"turn-1"}),
-            Some(TurnInterrupted),
+            Some(TurnInterrupted {
+                turn_id: Some("turn-1".to_owned()),
+            }),
         ),
     ];
     for (event, payload, expected) in cases {

@@ -110,7 +110,7 @@ mod tests {
                 errored: false,
                 parked_on_background: false,
             },
-            LifecycleSignal::TurnInterrupted,
+            LifecycleSignal::TurnInterrupted { turn_id: None },
             LifecycleSignal::SubagentStarted,
             LifecycleSignal::SubagentStopped { errored: false },
             LifecycleSignal::ToolUsed {
@@ -118,6 +118,7 @@ mod tests {
                 edits: false,
                 name: None,
                 native_key: None,
+                turn_id: None,
             },
             LifecycleSignal::AwaitingInput {
                 kind: rimz::agents::AskKind::Question,

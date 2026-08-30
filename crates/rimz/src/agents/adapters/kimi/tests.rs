@@ -63,6 +63,7 @@ fn permission_result_and_interrupt_clear_waiting_state() {
             edits: false,
             name: None,
             native_key: None,
+            turn_id: None,
         }
     );
     assert!(matches!(
@@ -89,6 +90,7 @@ fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
             edits: false,
             name: None,
             native_key: None,
+            turn_id: None,
         }
     );
 
@@ -164,6 +166,7 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
             edits: true,
             name: None,
             native_key: None,
+            turn_id: None,
         }
     );
     assert_eq!(KimiAdapter.spec().process_names, ["kimi", "kimi-code"]);

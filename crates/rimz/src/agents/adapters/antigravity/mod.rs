@@ -588,6 +588,7 @@ fn decode_lifecycle_fields(
                     edits,
                     name: None,
                     native_key: None,
+                    turn_id: None,
                 }),
             )
         }

@@ -1255,6 +1255,10 @@ fn map_codex_lifecycle_signal(
                 .as_ref()
                 .and_then(|tool| tool.tool_name.clone()),
             native_key: None,
+            turn_id: parts
+                .post_tool_use
+                .as_ref()
+                .and_then(|tool| tool.common.turn_id.clone()),
         }),
         "PreToolUse" => {
             match spec.blocking_tool_kind(
@@ -1274,6 +1278,10 @@ fn map_codex_lifecycle_signal(
                     edits: false,
                     name: None,
                     native_key: None,
+                    turn_id: parts
+                        .pre_tool_use
+                        .as_ref()
+                        .and_then(|tool| tool.common.turn_id.clone()),
                 }),
             }
         }
@@ -1285,7 +1293,9 @@ fn map_codex_lifecycle_signal(
                 .and_then(|p| p.trigger.auto_flag()),
             failed: false,
         }),
-        "Interrupt" => Some(LifecycleSignal::TurnInterrupted),
+        "Interrupt" => Some(LifecycleSignal::TurnInterrupted {
+            turn_id: optional_payload_string(payload, &["turn_id"]),
+        }),
         _ => None,
     }
 }

@@ -633,12 +633,14 @@ fn lifecycle_signal(
             edits: spec.tool_edits_files(payload),
             name: None,
             native_key: parse_tool_use(payload).tool_use_id,
+            turn_id: None,
         }),
         "PostToolUseFailure" => Some(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
             name: None,
             native_key: parse_tool_use(payload).tool_use_id,
+            turn_id: None,
         }),
         "PreToolUse" => {
             let tool = parse_tool_use(payload);

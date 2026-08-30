@@ -96,7 +96,7 @@ fn active_time_op(
         Some(
             LifecycleSignal::AwaitingInput { .. }
             | LifecycleSignal::TurnEnded { .. }
-            | LifecycleSignal::TurnInterrupted
+            | LifecycleSignal::TurnInterrupted { .. }
             | LifecycleSignal::CompactionEnded { failed: true, .. }
             | LifecycleSignal::Ended
             | LifecycleSignal::Lost,
@@ -147,7 +147,10 @@ mod tests {
                 },
                 Some(ActiveTimeOp::Stop),
             ),
-            (LifecycleSignal::TurnInterrupted, Some(ActiveTimeOp::Stop)),
+            (
+                LifecycleSignal::TurnInterrupted { turn_id: None },
+                Some(ActiveTimeOp::Stop),
+            ),
             (LifecycleSignal::SubagentStarted, None),
             (LifecycleSignal::SubagentStopped { errored: false }, None),
             (
@@ -156,6 +159,7 @@ mod tests {
                     edits: false,
                     name: None,
                     native_key: None,
+                    turn_id: None,
                 },
                 Some(ActiveTimeOp::Progress),
             ),

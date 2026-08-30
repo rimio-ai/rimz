@@ -428,6 +428,7 @@ fn maps_lifecycle_context_background_and_subagents() {
             edits: true,
             name: None,
             native_key: Some("write-1".to_owned()),
+            turn_id: None,
         }
     );
     let parked = hook_lifecycle(

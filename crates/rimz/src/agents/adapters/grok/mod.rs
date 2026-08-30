@@ -620,6 +620,7 @@ fn lifecycle_signal(
                 edits: tool.is_some_and(|tool| spec.tools.editing.contains(&tool)),
                 name: None,
                 native_key: payload.tool_use_id.clone(),
+                turn_id: None,
             }
         }
         "PostToolUseFailure" => LifecycleSignal::ToolUsed {
@@ -627,6 +628,7 @@ fn lifecycle_signal(
             edits: false,
             name: None,
             native_key: payload.tool_use_id.clone(),
+            turn_id: None,
         },
         "Notification" => LifecycleSignal::AwaitingInput {
             kind: notification_ask(payload)?,
@@ -639,7 +641,7 @@ fn lifecycle_signal(
                 errored: false,
                 parked_on_background: false,
             },
-            Some("cancelled") => LifecycleSignal::TurnInterrupted,
+            Some("cancelled") => LifecycleSignal::TurnInterrupted { turn_id: None },
             Some("error") => LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,

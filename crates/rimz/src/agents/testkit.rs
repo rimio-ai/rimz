@@ -56,7 +56,9 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
     let mut signals = vec![
         LifecycleSignal::Registered,
         LifecycleSignal::TurnStarted,
-        LifecycleSignal::TurnInterrupted,
+        LifecycleSignal::TurnInterrupted {
+            turn_id: Some("turn-1".to_owned()),
+        },
         LifecycleSignal::SubagentStarted,
         LifecycleSignal::Compacting,
         LifecycleSignal::Ended,
@@ -97,6 +99,7 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
                 edits,
                 name: None,
                 native_key: None,
+                turn_id: Some("turn-1".to_owned()),
             });
         }
     }

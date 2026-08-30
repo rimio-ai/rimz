@@ -119,7 +119,7 @@ impl SignalSet {
             LifecycleSignal::Registered => Self::REGISTERED.0,
             LifecycleSignal::TurnStarted => Self::TURN_STARTED.0,
             LifecycleSignal::TurnEnded { .. } => Self::TURN_ENDED.0,
-            LifecycleSignal::TurnInterrupted => Self::TURN_INTERRUPTED.0,
+            LifecycleSignal::TurnInterrupted { .. } => Self::TURN_INTERRUPTED.0,
             LifecycleSignal::SubagentStarted => Self::SUBAGENT_STARTED.0,
             LifecycleSignal::SubagentStopped { .. } => Self::SUBAGENT_STOPPED.0,
             LifecycleSignal::ToolUsed { .. } => Self::TOOL_USED.0,
@@ -205,7 +205,7 @@ mod tests {
             parked_on_background: false,
         };
         assert!(DELIVERY_CHECKPOINT.contains(&turn_end));
-        assert!(DELIVERY_CHECKPOINT.contains(&LifecycleSignal::TurnInterrupted));
+        assert!(DELIVERY_CHECKPOINT.contains(&LifecycleSignal::TurnInterrupted { turn_id: None }));
         assert!(
             DELIVERY_CHECKPOINT.contains(&LifecycleSignal::CompactionEnded {
                 auto: None,
@@ -232,6 +232,7 @@ mod tests {
             edits: false,
             name: None,
             native_key: None,
+            turn_id: None,
         }));
     }
 }

@@ -77,7 +77,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
     assert_eq!(registered.launch.model.as_deref(), Some("high"));
     assert_eq!(registered.launch.effort.as_deref(), Some("xhigh"));
     assert_eq!(registered.origin, Some(SessionOrigin::Fresh));
-    let mut state = step(None, None, &registered.signal).next;
+    let mut state = step(None, None, None, &registered.signal).next;
     assert_eq!(state.status, AgentStatus::Idle);
 
     let started = hook_lifecycle(
@@ -87,7 +87,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
     );
     assert_eq!(started.prompt.as_deref(), Some("fix auth"));
     assert_eq!(started.task.as_deref(), Some("fix auth"));
-    state = step(Some(&state), None, &started.signal).next;
+    state = step(Some(&state), None, None, &started.signal).next;
     assert_eq!(state.status, AgentStatus::Running);
     assert_eq!(state.phase, TurnPhase::Reasoning);
 
@@ -101,7 +101,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
             "status": "done"
         }),
     );
-    state = step(Some(&state), None, &tool.signal).next;
+    state = step(Some(&state), None, None, &tool.signal).next;
     assert_eq!(state.status, AgentStatus::Running);
     assert_eq!(state.phase, TurnPhase::Acting);
 
@@ -110,7 +110,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
         "permission_ask",
         &json!({ "session_id": "T-abc123" }),
     );
-    state = step(Some(&state), None, &waiting.signal).next;
+    state = step(Some(&state), None, None, &waiting.signal).next;
     assert_eq!(state.status, AgentStatus::Waiting);
 
     for (status, expected) in [
@@ -124,7 +124,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
             &json!({ "session_id": "T-abc123", "status": status }),
         );
         assert_eq!(
-            step(Some(&state), None, &ended.signal).next.status,
+            step(Some(&state), None, None, &ended.signal).next.status,
             expected
         );
     }
@@ -154,6 +154,7 @@ fn files_modified_flag_precedes_static_tool_fallback() {
                 edits,
                 name: None,
                 native_key: None,
+                turn_id: None,
             }
         );
     }

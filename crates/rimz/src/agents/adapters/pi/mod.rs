@@ -417,7 +417,7 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
             "session_start" => Some(LifecycleSignal::Registered),
             "before_agent_start" => Some(LifecycleSignal::TurnStarted),
             "agent_settled" if parsed.stop_reason.as_deref() == Some("aborted") => {
-                Some(LifecycleSignal::TurnInterrupted)
+                Some(LifecycleSignal::TurnInterrupted { turn_id: None })
             }
             "agent_settled" => Some(LifecycleSignal::TurnEnded {
                 errored: payloads::agent_end_errored(&parsed),
@@ -435,6 +435,7 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
                     edits: false,
                     name: tool_name.map(ToOwned::to_owned),
                     native_key: optional_payload_string(payload, &["tool_call_id"]),
+                    turn_id: None,
                 })
             }
             "tool_execution_end" => Some(LifecycleSignal::ToolUsed {
@@ -442,6 +443,7 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
                 edits: self.spec().tool_edits_files(payload),
                 name: tool_name.map(ToOwned::to_owned),
                 native_key: optional_payload_string(payload, &["tool_call_id"]),
+                turn_id: None,
             }),
             "session_before_compact" => Some(LifecycleSignal::Compacting),
             "session_compact" => Some(LifecycleSignal::CompactionEnded {

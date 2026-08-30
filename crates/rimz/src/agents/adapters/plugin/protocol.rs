@@ -189,6 +189,7 @@ impl CanonicalEvent {
                     edits,
                     name: None,
                     native_key: None,
+                    turn_id: None,
                 },
                 true,
             ),

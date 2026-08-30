@@ -448,6 +448,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                     edits: false,
                     name: None,
                     native_key: None,
+                    turn_id: None,
                 },
             },
             "postToolUse" | "postToolUseFailure" => LifecycleSignal::ToolUsed {
@@ -455,6 +456,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                 edits: tools.any_named(self.spec().tools.editing),
                 name: None,
                 native_key: None,
+                turn_id: None,
             },
             "agentStop" => LifecycleSignal::TurnEnded {
                 errored: false,

@@ -329,7 +329,7 @@ pub(super) fn record_conversation(
                 rimz::transcript::append(store.paths(), &entry)?;
             }
         }
-        LifecycleSignal::TurnInterrupted => {}
+        LifecycleSignal::TurnInterrupted { .. } => {}
         LifecycleSignal::AwaitingInput { ask_id, .. } => {
             if questions.is_empty() {
                 return Ok(());

@@ -77,7 +77,7 @@ pub(super) fn handle_lifecycle_hook(
     let turn_ended = recorded.as_ref().is_some_and(|recorded| {
         matches!(
             recorded.observation.signal,
-            LifecycleSignal::TurnEnded { .. } | LifecycleSignal::TurnInterrupted
+            LifecycleSignal::TurnEnded { .. } | LifecycleSignal::TurnInterrupted { .. }
         )
     });
     let tool_call = recorded.as_ref().and_then(|recorded| {

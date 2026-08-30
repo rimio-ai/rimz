@@ -24,6 +24,7 @@ fn tool(edits: bool) -> LifecycleSignal {
         edits,
         name: None,
         native_key: None,
+        turn_id: None,
     }
 }
 
@@ -41,7 +42,7 @@ fn assert_next(
     signal: LifecycleSignal,
     expected: LifecycleState,
 ) -> Transition {
-    let transition = step(prev.as_ref(), None, &signal);
+    let transition = step(prev.as_ref(), None, None, &signal);
     assert_eq!(transition.next, expected, "{label}");
     transition
 }
@@ -123,13 +124,51 @@ fn root_turn_edges_follow_the_contract() {
         let interrupted = assert_next(
             "interrupted",
             Some(prior),
-            LifecycleSignal::TurnInterrupted,
+            LifecycleSignal::TurnInterrupted { turn_id: None },
             idle,
         );
         assert_eq!(
             (interrupted.waiting_cleared, interrupted.compaction_closed),
             (prior.status == AgentStatus::Waiting, prior.compacting,)
         );
+    }
+}
+
+#[test]
+fn interrupted_turn_ignores_only_its_own_trailing_tool_completion() {
+    let running = state(AgentStatus::Running, TurnPhase::Acting, false);
+    let idle = state(AgentStatus::Idle, TurnPhase::Idle, false);
+    let interrupted = step(
+        Some(&running),
+        None,
+        None,
+        &LifecycleSignal::TurnInterrupted {
+            turn_id: Some("turn-1".to_owned()),
+        },
+    );
+    assert_eq!(interrupted.next, idle);
+
+    let tool = |turn_id: Option<&str>| LifecycleSignal::ToolUsed {
+        mutates: true,
+        edits: false,
+        name: Some("Bash".to_owned()),
+        native_key: None,
+        turn_id: turn_id.map(ToOwned::to_owned),
+    };
+    let trailing = step(Some(&idle), None, Some("turn-1"), &tool(Some("turn-1")));
+    assert_eq!(trailing.next, idle);
+    assert_eq!(
+        trailing.kind,
+        TransitionKind::Ignored {
+            reason: "tool completed after its turn was interrupted",
+        }
+    );
+    assert!(!trailing.opened_turn);
+
+    for signal in [tool(Some("turn-2")), tool(None)] {
+        let progress = step(Some(&idle), None, Some("turn-1"), &signal);
+        assert_eq!(progress.next.status, AgentStatus::Running);
+        assert!(progress.opened_turn);
     }
 }
 
@@ -161,6 +200,7 @@ fn parked_wake_and_answered_prompt_preserve_boundary_facts() {
             edits: false,
             name: None,
             native_key: None,
+            turn_id: None,
         },
         state(AgentStatus::Running, TurnPhase::Acting, false),
     );
@@ -175,11 +215,13 @@ fn keyed_wait_clears_only_for_the_matching_tool() {
         edits: false,
         name: None,
         native_key: native_key.map(ToOwned::to_owned),
+        turn_id: None,
     };
 
     let sibling = step(
         Some(&waiting),
         Some("ask-call"),
+        None,
         &tool(Some("sibling-call")),
     );
     assert_eq!(
@@ -208,7 +250,7 @@ fn keyed_wait_clears_only_for_the_matching_tool() {
         ("keyless tool", Some("ask-call"), tool(None)),
         ("keyless ask", None, tool(Some("sibling-call"))),
     ] {
-        let transition = step(Some(&waiting), open_ask_key, &signal);
+        let transition = step(Some(&waiting), open_ask_key, None, &signal);
         assert_eq!(transition.next.status, AgentStatus::Running, "{label}");
         assert!(transition.waiting_cleared, "{label}");
         assert!(!transition.opened_turn, "{label}");
@@ -243,6 +285,7 @@ fn activity_evidence_reconciles_only_running_and_resting_states() {
                     edits: false,
                     name: None,
                     native_key: None,
+                    turn_id: None,
                 },
                 "tool used outside a running turn",
                 "tool used before session registered",
@@ -263,7 +306,7 @@ fn activity_evidence_reconciles_only_running_and_resting_states() {
                     matches!(signal, LifecycleSignal::CompactionEnded { .. }),
                 )
             });
-            let transition = step(previous.as_ref(), None, &signal);
+            let transition = step(previous.as_ref(), None, None, &signal);
             assert_eq!(transition.next.status, expected, "{prior:?} + {signal:?}");
             assert_eq!(
                 transition.kind,
@@ -308,7 +351,7 @@ fn subagent_and_terminal_edges_follow_the_contract() {
 
     for terminal in [AgentStatus::Success, AgentStatus::Failed] {
         let prior = state(terminal, TurnPhase::Idle, false);
-        let late_start = step(Some(&prior), None, &LifecycleSignal::SubagentStarted);
+        let late_start = step(Some(&prior), None, None, &LifecycleSignal::SubagentStarted);
         assert_eq!(late_start.next, prior, "{terminal:?}");
         assert_eq!(
             late_start.kind,
@@ -320,7 +363,12 @@ fn subagent_and_terminal_edges_follow_the_contract() {
         assert!(!late_start.opened_turn, "{terminal:?}");
     }
 
-    let running_start = step(Some(&reasoning), None, &LifecycleSignal::SubagentStarted);
+    let running_start = step(
+        Some(&reasoning),
+        None,
+        None,
+        &LifecycleSignal::SubagentStarted,
+    );
     assert_eq!(running_start.next, reasoning);
     assert!(running_start.opened_turn);
     for (label, signal, reason) in [
@@ -606,7 +654,7 @@ fn all_state_signal_pairs_preserve_machine_invariants() {
 
     for prev in states {
         for signal in &signals {
-            let transition = step(prev.as_ref(), None, signal);
+            let transition = step(prev.as_ref(), None, None, signal);
             if !matches!(signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
                 && transition.next.status != AgentStatus::Running
             {
@@ -629,7 +677,10 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
         (LifecycleSignal::Registered, "registered"),
         (LifecycleSignal::TurnStarted, "turn_started"),
         (turn_end(false, true), "turn_ended"),
-        (LifecycleSignal::TurnInterrupted, "turn_interrupted"),
+        (
+            LifecycleSignal::TurnInterrupted { turn_id: None },
+            "turn_interrupted",
+        ),
         (tool(true), "tool_used"),
         (
             LifecycleSignal::AwaitingInput {

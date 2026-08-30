@@ -650,6 +650,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.turn_started_at = lifecycle.turn_started_at;
     state.waiting_since = lifecycle.waiting_since;
     state.open_ask = lifecycle.open_ask;
+    state.interrupted_turn_id = lifecycle.interrupted_turn_id;
     state.compacting_since = lifecycle.compacting_since;
     state.compaction_count = lifecycle.compaction_count;
     state.tool_calls = lifecycle.tool_calls;
@@ -754,6 +755,7 @@ struct LifecycleProjection {
     turn_started_at: Option<Timestamp>,
     waiting_since: Option<Timestamp>,
     open_ask: Option<crate::agents::OpenAsk>,
+    interrupted_turn_id: Option<String>,
 }
 
 fn lifecycle_projection(
@@ -772,6 +774,7 @@ fn lifecycle_projection(
         prior
             .and_then(|p| p.open_ask.as_ref())
             .and_then(|ask| ask.native_key.as_deref()),
+        prior.and_then(|p| p.interrupted_turn_id.as_deref()),
         &signal,
     );
     let compacting_since = if next.compacting {
@@ -844,6 +847,12 @@ fn lifecycle_projection(
         _ if next.status == AgentStatus::Waiting => prior.and_then(|p| p.open_ask.clone()),
         _ => None,
     };
+    let interrupted_turn_id = match &signal {
+        lifecycle::LifecycleSignal::TurnInterrupted { turn_id } => turn_id.clone(),
+        lifecycle::LifecycleSignal::Registered => None,
+        _ if opened_turn => None,
+        _ => prior.and_then(|p| p.interrupted_turn_id.clone()),
+    };
     LifecycleProjection {
         status: next.status,
         phase: next.phase,
@@ -853,6 +862,7 @@ fn lifecycle_projection(
         turn_started_at,
         waiting_since,
         open_ask,
+        interrupted_turn_id,
     }
 }
 

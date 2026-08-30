@@ -117,7 +117,12 @@ pub enum LifecycleSignal {
     },
     /// A turn was canceled by the user or provider. This closes the turn
     /// without reporting either success or failure and leaves the session idle.
-    TurnInterrupted,
+    /// When the provider supplies its turn id, a later tool completion with the
+    /// same id is trailing output from the canceled turn rather than new work.
+    TurnInterrupted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+    },
     /// A subagent began (`SubagentStart`) — only ever observed for a child
     /// entity, keyed by its own child id.
     SubagentStarted,
@@ -134,7 +139,9 @@ pub enum LifecycleSignal {
     /// mutation or state change. `edits` marks the file-editing subset (Claude
     /// `Edit`/`Write`/…, Codex `apply_patch`): the first edit of a turn moves
     /// it from reasoning to acting. Defaulted so a `tool_used` event written
-    /// before the bit existed still replays.
+    /// before the bit existed still replays. A completion carrying the id of
+    /// the most recently interrupted turn is ignored as trailing output from
+    /// that canceled turn.
     ToolUsed {
         mutates: bool,
         #[serde(default)]
@@ -143,6 +150,8 @@ pub enum LifecycleSignal {
         name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         native_key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
     },
     /// The agent opened a native blocking prompt and is waiting for input in
     /// its own pane. Hook ingestion mints `ask_id`; adapters leave it absent.
@@ -189,7 +198,7 @@ impl LifecycleSignal {
         match self {
             Self::Registered => LifecycleSignalKind::Registered,
             Self::TurnStarted => LifecycleSignalKind::TurnStarted,
-            Self::TurnEnded { .. } | Self::TurnInterrupted => LifecycleSignalKind::TurnEnded,
+            Self::TurnEnded { .. } | Self::TurnInterrupted { .. } => LifecycleSignalKind::TurnEnded,
             Self::SubagentStarted => LifecycleSignalKind::SubagentStarted,
             Self::SubagentStopped { .. } => LifecycleSignalKind::SubagentStopped,
             Self::ToolUsed { .. } => LifecycleSignalKind::ToolUsed,
@@ -213,7 +222,7 @@ impl LifecycleSignal {
             Self::Registered => "registered",
             Self::TurnStarted => "turn_started",
             Self::TurnEnded { .. } => "turn_ended",
-            Self::TurnInterrupted => "turn_interrupted",
+            Self::TurnInterrupted { .. } => "turn_interrupted",
             Self::SubagentStarted => "subagent_started",
             Self::SubagentStopped { .. } => "subagent_stopped",
             Self::ToolUsed { .. } => "tool_used",
@@ -324,6 +333,7 @@ pub struct Transition {
 pub fn step(
     prev: Option<&LifecycleState>,
     open_ask_key: Option<&str>,
+    interrupted_turn_id: Option<&str>,
     signal: &LifecycleSignal,
 ) -> Transition {
     let prior_status = prev.map(|p| p.status);
@@ -357,7 +367,13 @@ pub fn step(
     // Compaction is the one signal that preserves the prior status; it is a
     // transient head, not a transition. Every other signal clears the head.
     let compacting = matches!(signal, LifecycleSignal::Compacting);
-    let status = map_status(signal, prior_status, open_ask_key, &mut kind);
+    let status = map_status(
+        signal,
+        prior_status,
+        open_ask_key,
+        interrupted_turn_id,
+        &mut kind,
+    );
     let phase = map_phase(signal, prior_phase, status);
     let compaction_closed = was_compacting && !compacting;
     let waiting_cleared =
@@ -421,6 +437,7 @@ fn map_status(
     signal: &LifecycleSignal,
     prior_status: Option<AgentStatus>,
     open_ask_key: Option<&str>,
+    interrupted_turn_id: Option<&str>,
     kind: &mut TransitionKind,
 ) -> AgentStatus {
     match signal {
@@ -459,9 +476,20 @@ fn map_status(
                 AgentStatus::Success
             }
         }
-        LifecycleSignal::TurnInterrupted => AgentStatus::Idle,
-        LifecycleSignal::ToolUsed { native_key, .. } => {
-            if prior_status == Some(AgentStatus::Waiting)
+        LifecycleSignal::TurnInterrupted { .. } => AgentStatus::Idle,
+        LifecycleSignal::ToolUsed {
+            native_key,
+            turn_id,
+            ..
+        } => {
+            if let Some(turn_id) = turn_id
+                && interrupted_turn_id == Some(turn_id.as_str())
+            {
+                *kind = TransitionKind::Ignored {
+                    reason: "tool completed after its turn was interrupted",
+                };
+                prior_status.unwrap_or(AgentStatus::Idle)
+            } else if prior_status == Some(AgentStatus::Waiting)
                 && open_ask_key.is_some()
                 && native_key.as_deref().is_some()
                 && open_ask_key != native_key.as_deref()
@@ -580,7 +608,7 @@ fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStat
         LifecycleSignal::CompactionEnded { .. } => prior_phase,
         LifecycleSignal::Registered
         | LifecycleSignal::TurnEnded { .. }
-        | LifecycleSignal::TurnInterrupted
+        | LifecycleSignal::TurnInterrupted { .. }
         | LifecycleSignal::SubagentStopped { .. } => TurnPhase::Idle,
         // Handled above.
         LifecycleSignal::Ended | LifecycleSignal::Lost => {

@@ -68,6 +68,7 @@ fn native_hooks_normalize_lifecycle() {
         edits,
         name: None,
         native_key: None,
+        turn_id: None,
     };
     let ended = |errored, parked_on_background| LifecycleSignal::TurnEnded {
         errored,

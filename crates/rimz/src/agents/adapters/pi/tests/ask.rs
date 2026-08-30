@@ -84,6 +84,7 @@ fn questionnaire_opens_only_with_ui_and_closes_on_tool_end() {
             edits: false,
             name: Some("ask_user_question".to_owned()),
             native_key: Some("ask-call".to_owned()),
+            turn_id: None,
         })
     );
 }
