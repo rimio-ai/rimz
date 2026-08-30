@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::config::{
-    AgentsConfig, CommandsConfig, ConfigFileDiagnosis, ProfilesConfig, TaskEntry, Tasks,
-    TeamsConfig,
+    AgentSpecSources, AgentsConfig, CommandsConfig, ConfigFileDiagnosis, ProfilesConfig, TaskEntry,
+    Tasks, TeamsConfig,
 };
 use crate::harness::schedule::{self, ScheduleErr};
 use crate::harness::spec::{self as agents_spec, LayoutErr};
@@ -103,6 +103,7 @@ pub struct LaunchAgents {
     pub profiles: ProfilesConfig,
     pub subagent_profiles: ProfilesConfig,
     pub teams: TeamsConfig,
+    repo_sources: AgentSpecSources,
     state: TrustState,
     config_path: PathBuf,
 }
@@ -120,6 +121,7 @@ pub fn load(
             profiles: machine.profiles.clone(),
             subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
+            repo_sources: AgentSpecSources::default(),
             state: report.state,
             config_path,
         });
@@ -130,6 +132,7 @@ pub fn load(
             profiles: machine.profiles.clone(),
             subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
+            repo_sources: AgentSpecSources::default(),
             state: report.state,
             config_path,
         });
@@ -197,6 +200,22 @@ pub fn load(
         },
     )?;
 
+    let repo_sources = AgentSpecSources {
+        agent_profiles: repo
+            .profiles
+            .0
+            .keys()
+            .map(|name| (name.clone(), config_path.clone()))
+            .collect(),
+        subagent_profiles: repo
+            .subagent_profiles
+            .0
+            .keys()
+            .map(|name| (name.clone(), config_path.clone()))
+            .collect(),
+        commands: Default::default(),
+    };
+
     let mut profiles = machine.profiles.clone();
     profiles.0.extend(repo.profiles.0);
     let mut subagent_profiles = machine_subagent_profiles.clone();
@@ -212,6 +231,7 @@ pub fn load(
         profiles,
         subagent_profiles,
         teams,
+        repo_sources,
         state: report.state,
         config_path,
     })
@@ -312,6 +332,16 @@ fn task_has_prompt(entry: &TaskEntry) -> bool {
 }
 
 impl LaunchAgents {
+    /// Overlay trusted project profile provenance onto machine catalog sources.
+    pub fn overlay_profile_sources(&self, sources: &mut AgentSpecSources) {
+        sources
+            .agent_profiles
+            .extend(self.repo_sources.agent_profiles.clone());
+        sources
+            .subagent_profiles
+            .extend(self.repo_sources.subagent_profiles.clone());
+    }
+
     pub fn profiles_for(&self, scope: ProfileScope) -> &ProfilesConfig {
         match scope {
             ProfileScope::Agents => &self.profiles,

@@ -68,7 +68,7 @@ pub(super) fn prepare_supervised_launch_layout(
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
     scope: rimz::config::effective::ProfileScope,
-    inherited: Option<&rimz::agents::LaunchPreset>,
+    inherited: Option<&(AgentKind, rimz::agents::LaunchPreset)>,
 ) -> Result<rimz::harness::plan::ResolvedLaunch> {
     let effective = rimz::config::effective::load(
         &machine_config.agents,
@@ -90,11 +90,25 @@ pub(super) fn prepare_supervised_launch_layout(
         &machine_config.agents.commands,
         &effective.teams,
     )?;
+    let inherit_model = inherited.is_some_and(|(caller_kind, _)| {
+        resolved
+            .layout
+            .agent_cells()
+            .next()
+            .is_some_and(|cell| &cell.kind == caller_kind)
+    });
     let preset = rimz::agents::LaunchPreset {
-        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref())
-            .or_else(|| inherited.and_then(|launch| launch.model.clone())),
+        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()).or_else(
+            || {
+                if inherit_model {
+                    inherited.and_then(|(_, launch)| launch.model.clone())
+                } else {
+                    None
+                }
+            },
+        ),
         effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref())
-            .or_else(|| inherited.and_then(|launch| launch.effort.clone())),
+            .or_else(|| inherited.and_then(|(_, launch)| launch.effort.clone())),
         system_prompt_file: request.system_prompt_file.clone(),
         append_system_prompt_files: request.append_system_prompt_files.clone(),
     };
@@ -117,6 +131,36 @@ pub(super) fn prepare_supervised_launch_layout(
         writeln!(std::io::stderr(), "{warning}")?;
     }
     Ok(resolved)
+}
+
+pub(super) fn prepare_supervised_selection<'a>(
+    request: &'a SupervisedRunRequest,
+    caller: Option<&rimz::agents::AgentState>,
+    profiles: &rimz::config::ProfilesConfig,
+) -> Result<(
+    Cow<'a, str>,
+    Option<(AgentKind, rimz::agents::LaunchPreset)>,
+)> {
+    let mut spec = Cow::Borrowed(request.spec.as_str());
+    let mut inherited = None;
+    if !request.subagent {
+        return Ok((spec, inherited));
+    }
+    let Some(caller) = caller else {
+        return Ok((spec, inherited));
+    };
+    rimz::harness::subagent_policy::check_allowed(
+        caller,
+        profiles,
+        &spec,
+        request.agent.as_deref(),
+    )?;
+    if spec.trim() == rimz::harness::subagent_policy::GENERAL_SPEC {
+        let general = rimz::harness::subagent_policy::general_launch(caller);
+        spec = Cow::Owned(general.0.to_string());
+        inherited = Some(general);
+    }
+    Ok((spec, inherited))
 }
 
 pub(in crate::cli) fn run_print(
@@ -414,23 +458,7 @@ fn prepare_supervised(
     } else {
         rimz::config::effective::ProfileScope::Agents
     };
-    let mut spec = Cow::Borrowed(request.spec.as_str());
-    let mut inherited = None;
-    if request.subagent
-        && let Some(caller) = caller
-    {
-        rimz::harness::subagent_policy::check_allowed(
-            caller,
-            &effective.profiles,
-            &spec,
-            request.agent.as_deref(),
-        )?;
-        if spec.trim() == rimz::harness::subagent_policy::GENERAL_SPEC {
-            let (kind, preset) = rimz::harness::subagent_policy::general_launch(caller);
-            spec = Cow::Owned(kind.to_string());
-            inherited = Some(preset);
-        }
-    }
+    let (mut spec, inherited) = prepare_supervised_selection(request, caller, &effective.profiles)?;
     let lane = request
         .channel
         .clone()

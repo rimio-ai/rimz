@@ -555,44 +555,43 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
-    let (config, sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
+    let (config, mut sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
         .context("loading machine config")?;
-    if !crate::cli::send::agent_caller() {
-        let mut reports = crate::cli::profile_report::available_profiles(
-            &config.subagents.profiles,
-            &config.agents.commands,
-            &sources,
-            rimz::config::effective::ProfileScope::Subagents,
-        );
-        reports.insert(0, crate::cli::profile_report::general_report(None));
-        return crate::cli::profile_report::list_profiles(
-            reports,
-            rimz::config::effective::ProfileScope::Subagents,
-            json,
-            path,
-        );
-    }
-    let ctx = Ctx::open(globals)?;
-    let projection = ctx
-        .store
-        .runtime_projection(rimz::RuntimeScope::Audit)
-        .context("reading agent history")?;
-    let caller = rimz::harness::ancestry::resolve_launch_caller_from_env(&projection.agents)?;
+    let (project_root, caller) = if crate::cli::send::agent_caller() {
+        let ctx = Ctx::open(globals)?;
+        let projection = ctx
+            .store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .context("reading agent history")?;
+        let caller =
+            rimz::harness::ancestry::resolve_launch_caller_from_env(&projection.agents)?.clone();
+        (ctx.workspace.project_root, Some(caller))
+    } else {
+        let workspace = rimz::WorkspaceResolver::resolve(".", globals.root.clone())
+            .context("resolving current project")?;
+        (workspace.project_root, None)
+    };
     let effective = rimz::config::effective::load(
         &config.agents,
         &config.subagents.profiles,
-        &ctx.workspace.project_root,
+        &project_root,
         &rimz::store::paths::config_home(),
     )?;
-    let allowed = rimz::harness::subagent_policy::allowed_specs(caller, &effective.profiles);
+    effective.overlay_profile_sources(&mut sources);
     let mut reports = crate::cli::profile_report::available_profiles(
         &effective.subagent_profiles,
         &config.agents.commands,
         &sources,
         rimz::config::effective::ProfileScope::Subagents,
     );
-    reports.insert(0, crate::cli::profile_report::general_report(Some(caller)));
-    crate::cli::profile_report::retain_allowed(&mut reports, allowed);
+    reports.insert(
+        0,
+        crate::cli::profile_report::general_report(caller.as_ref()),
+    );
+    if let Some(caller) = caller.as_ref() {
+        let allowed = rimz::harness::subagent_policy::allowed_specs(caller, &effective.profiles);
+        crate::cli::profile_report::retain_allowed(&mut reports, allowed);
+    }
     crate::cli::profile_report::list_profiles(
         reports,
         rimz::config::effective::ProfileScope::Subagents,

@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn general_inherits_launch_stamped_identity() {
+    fn general_inherits_current_model_and_effort() {
         let (caller, _) = caller(None);
         assert_eq!(
             general_launch(&caller),
