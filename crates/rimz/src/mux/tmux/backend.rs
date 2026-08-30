@@ -272,8 +272,8 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {
-        // tmux has no native analogue for Zellij's stacked panes; the
-        // direction/target still place the pane in the requested zone.
+        // tmux has no native analogue for Zellij's stacked panes; it tiles the
+        // requested zone evenly instead.
         // `-d` keeps focus on the splitting pane; omit it to land in the new
         // pane (the focused launch path).
         let flag = match opts.placement {
@@ -281,10 +281,9 @@ impl MuxBackend for TmuxBackend {
             SplitPlacement::Directional(SplitDirection::Down) | SplitPlacement::Stacked => "-v",
         };
         let title = opts.title;
-        let mut spec = self.cmd().args(["split-window", flag]);
-        if title.is_some() {
-            spec = spec.args(["-P", "-F", "#{pane_id}"]);
-        }
+        let mut spec = self
+            .cmd()
+            .args(["split-window", flag, "-P", "-F", "#{pane_id}"]);
         if !opts.focus {
             spec = spec.arg("-d");
         }
@@ -308,15 +307,25 @@ impl MuxBackend for TmuxBackend {
             spec = spec.args(command);
         }
         let output = spec.run()?;
+        let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if pane_id.is_empty() {
+            return Err(MuxErr::Output {
+                program: "tmux".to_owned(),
+                reason: "split-window did not print a pane id".to_owned(),
+            });
+        }
         if let Some(title) = title {
-            let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            if pane_id.is_empty() {
-                return Err(MuxErr::Output {
-                    program: "tmux".to_owned(),
-                    reason: "split-window did not print a pane id".to_owned(),
-                });
-            }
             self.set_pane_rimz_title(&pane_id, &title);
+        }
+        if opts.placement == SplitPlacement::Stacked
+            && let Err(err) = self.even_column(&pane_id)
+        {
+            tracing::warn!(
+                pane = %pane_id,
+                tags.operation = "tmux.split_pane.even_column",
+                error = &err as &dyn std::error::Error,
+                "could not tile the stacked pane zone evenly",
+            );
         }
         Ok(())
     }
@@ -930,6 +939,7 @@ impl TmuxBackend {
         for pane in first_column_rest {
             previous_in_column =
                 self.split_named_printed("-v", &previous_in_column, None, cwd, pane)?;
+            self.even_column(&previous_in_column)?;
         }
         for column in rest_columns {
             // tmux has no native stack, so stacked columns use tiled rows.
@@ -943,6 +953,7 @@ impl TmuxBackend {
             let mut previous = new_column;
             for row in rows {
                 previous = self.split_named_printed("-v", &previous, None, cwd, row)?;
+                self.even_column(&previous)?;
             }
         }
         Ok(())

@@ -221,6 +221,13 @@ fn equal_row_splits_size_each_remaining_stack() {
 }
 
 #[test]
+fn even_column_heights_reserve_separators_and_distribute_remainder_last() {
+    assert_eq!(window::even_column_heights(50, 3), [16, 16, 16]);
+    assert_eq!(window::even_column_heights(51, 3), [16, 16, 17]);
+    assert_eq!(window::even_column_heights(52, 3), [16, 17, 17]);
+}
+
+#[test]
 fn version_parser_and_floor_hold() {
     assert_eq!(parse_version("tmux 3.5a"), Some((3, 5, 0)));
     assert_eq!(parse_version("tmux 3.2"), Some((3, 2, 0)));
