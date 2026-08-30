@@ -18,6 +18,9 @@ use std::borrow::Cow;
 use std::io::{IsTerminal as _, Write as _};
 use std::sync::Arc;
 
+pub(super) type InheritedLaunch = (AgentKind, rimz::agents::LaunchPreset);
+pub(super) type SupervisedSelection<'a> = (Cow<'a, str>, Option<InheritedLaunch>);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RunPlacement {
     Split,
@@ -68,7 +71,7 @@ pub(super) fn prepare_supervised_launch_layout(
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
     scope: rimz::config::effective::ProfileScope,
-    inherited: Option<&(AgentKind, rimz::agents::LaunchPreset)>,
+    inherited: Option<&InheritedLaunch>,
 ) -> Result<rimz::harness::plan::ResolvedLaunch> {
     let effective = rimz::config::effective::load(
         &machine_config.agents,
@@ -137,10 +140,7 @@ pub(super) fn prepare_supervised_selection<'a>(
     request: &'a SupervisedRunRequest,
     caller: Option<&rimz::agents::AgentState>,
     profiles: &rimz::config::ProfilesConfig,
-) -> Result<(
-    Cow<'a, str>,
-    Option<(AgentKind, rimz::agents::LaunchPreset)>,
-)> {
+) -> Result<SupervisedSelection<'a>> {
     let mut spec = Cow::Borrowed(request.spec.as_str());
     let mut inherited = None;
     if !request.subagent {
