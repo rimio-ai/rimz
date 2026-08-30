@@ -317,15 +317,8 @@ impl MuxBackend for TmuxBackend {
         if let Some(title) = title {
             self.set_pane_rimz_title(&pane_id, &title);
         }
-        if opts.placement == SplitPlacement::Stacked
-            && let Err(err) = self.even_column(&pane_id)
-        {
-            tracing::warn!(
-                pane = %pane_id,
-                tags.operation = "tmux.split_pane.even_column",
-                error = &err as &dyn std::error::Error,
-                "could not tile the stacked pane zone evenly",
-            );
+        if opts.placement == SplitPlacement::Stacked {
+            self.even_column_best_effort(&pane_id, "tmux.split_pane.even_column");
         }
         Ok(())
     }
@@ -941,7 +934,10 @@ impl TmuxBackend {
         for pane in first_column_rest {
             previous_in_column =
                 self.split_named_printed("-v", &previous_in_column, None, cwd, pane)?;
-            self.even_column(&previous_in_column)?;
+            self.even_column_best_effort(
+                &previous_in_column,
+                "tmux.split_layout_columns.even_column",
+            );
         }
         for column in rest_columns {
             // tmux has no native stack, so stacked columns use tiled rows.
@@ -955,7 +951,7 @@ impl TmuxBackend {
             let mut previous = new_column;
             for row in rows {
                 previous = self.split_named_printed("-v", &previous, None, cwd, row)?;
-                self.even_column(&previous)?;
+                self.even_column_best_effort(&previous, "tmux.split_layout_columns.even_column");
             }
         }
         Ok(())
