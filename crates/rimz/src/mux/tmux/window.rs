@@ -864,6 +864,17 @@ impl TmuxBackend {
         Ok(())
     }
 
+    pub(super) fn even_column_best_effort(&self, pane: &str, operation: &'static str) {
+        if let Err(err) = self.even_column(pane) {
+            tracing::warn!(
+                pane,
+                tags.operation = operation,
+                error = &err as &dyn std::error::Error,
+                "could not tile the stacked pane zone evenly",
+            );
+        }
+    }
+
     pub(super) fn append_equal_host_rows<'a>(
         &self,
         first_pane: &str,
