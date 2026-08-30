@@ -62,18 +62,18 @@ The reminder points the agent at `Skill(rimz-subagents)` and lists the same filt
 | `print` | always `true` | a child is one bounded turn, never a session |
 | `bg` | always `true` | single launch and fanout share one background-launch composition |
 | join | absent unless `--wait[=DURATION]` | the parent normally keeps moving; the optional duration limits only its join |
-| wrapper completion monitor | on unless `--keep` | the provider stops at the durable outcome while the wrapper keeps the pane |
+| wrapper completion monitor | on unless `--keep` | the provider stops at the durable outcome and the wrapper closes the pane |
 | `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | an unattended child must not run forever |
-| `keep` | `--keep`, default false | disables automatic close even when the parent exits |
+| `keep` | `--keep`, default false | holds the pane after completion and past parent exit |
 | everything else | default | see the omissions below |
 
-The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --bg --timeout 30m`, except that the wrapper retains the pane after the one turn finishes. `--wait` leaves that launch unchanged, then passes the minted petname to the shared single-name wait path; `--wait=DURATION` adds a caller-side join deadline without changing the child's timeout.
+The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --bg --timeout 30m`: the wrapper stamps `ended_at` and closes its pane after the one turn finishes. `--wait` leaves that launch unchanged, then passes the minted petname to the shared single-name wait path; `--wait=DURATION` adds a caller-side join deadline without changing the child's timeout.
 
 The no-delegation reminder rides a provider-native append-system-text launch flag for Claude, Qwen, and Droid, after any caller-supplied append text. Codex receives it through `-c developer_instructions=…`, which produces a developer-role message separate from the user prompt and preserves Codex's built-in instructions. An argv-supplied `developer_instructions` value is composed before the reminder; a value in the user's base `~/.codex/config.toml` is overridden because it is not visible at launch composition time. Adapters without a native system-text channel keep the same tag-wrapped reminder at the end of the user prompt. The process compiler owns this choice at the adapter boundary, beside the native delegation lockdown, so preflight and the eventual exec compile the same provider argv.
 
 ## Pane zones
 
-`RunPlacement::SubagentZone` keeps the subagent doorway outside the general placement/config surface while giving its panes a stable home. For a solo caller, the first child splits right from the caller and later children stack against the newest live pane-backed child. For a configured team member, the first child opens a `<view> subagents` companion tab and children launched by any member of that team cohort stack against the newest child there. Zellij uses its native pane stack; tmux maps the same seam to vertical splits. A failed solo-column split falls back to the companion tab, then to a generic run tab if that view cannot open. If an existing team companion cannot accept another pane, the overflow child likewise opens in a generic run tab instead of failing the run or duplicating the companion.
+`RunPlacement::SubagentZone` keeps the subagent doorway outside the general placement/config surface while giving its panes a stable home. For a solo caller, the first child splits right from the caller and later children stack against the newest live pane-backed child. For a configured team member, the first child opens a `<view> subagents` companion tab immediately after the launcher's tab, and children launched by any member of that team cohort stack against the newest child there. Zellij uses its native pane stack; tmux maps the same seam to equal-height vertical rows without resizing the sidebar column. A failed solo-column split falls back to the companion tab, then to a generic run tab if that view cannot open. If an existing team companion cannot accept another pane, the overflow child likewise opens in a generic run tab instead of failing the run or duplicating the companion. When the last child pane closes, the companion sidebar's empty-view check closes itself and the mux removes the tab.
 
 Zone mutation is serialized per workspace across the mux open and wrapper-bind wait. Anchor selection joins durable child ancestry and pane bindings with one authoritative mux pane list, so an ended `--keep` child remains an anchor while its pane is live and a dead pane never does. Before creating a team companion tab, the same mux reading reuses a live tab with the expected base view name after removing its sidebar-managed status glyph, including a child pane that has opened but not bound durably yet. If authoritative placement truth is unavailable, the child degrades to a generic run tab; placement never gates the durable run.
 
@@ -146,11 +146,11 @@ Which projection each verb reads is the other half:
 
 1. The parent launches; the direct-parent stamp and subagent-caller check pass; a run record and pane are created. By default the petname prints immediately; with `--wait`, the parent then joins the result.
 2. The child runs its one turn. Its hooks fold a terminal status into the run record.
-3. The in-pane wrapper notices the terminal record, terminates the provider, transfers the child row's runtime ownership back from the provider pid to itself, and prints a done banner. The wrapper remains alive to hold the pane.
-4. `rimz subagents stop` closes the pane explicitly. If the parent exits instead, the wrapper closes after the parent's durable end stamp or three authoritative pane-absence probes and a final reconfirmation.
-5. The run record survives either close, so `list` and `wait` still report the outcome.
+3. The in-pane wrapper notices the terminal record, terminates the provider, stamps the child row's `ended_at`, and closes its pane. With `--keep`, it instead transfers runtime ownership back to itself and remains alive to hold the pane.
+4. A kept wrapper closes after `rimz subagents stop`; parent exit does not reclaim it. Without `--keep`, the parent's durable end stamp or authoritative pane-absence probes remain an earlier-close backstop.
+5. The run record survives the close, and runtime projection retains the ended child under its visible parent, so `list` and `wait` still report the outcome and the card keeps its verdict until the parent's next prompt boundary.
 
-`wait` remains only a reader and never closes the pane. `--keep` disables parent-death close as well as completion cleanup, leaving reclamation to `rimz subagents stop` or `rimz gc`.
+`wait` remains only a reader and never closes the pane. `--keep` is the sole linger path, leaving reclamation to `rimz subagents stop` or `rimz gc`.
 
 The watchdog probes every 60 seconds on its own thread, rereads the parent row so an in-place restart can move panes, and treats only `RequireAuthoritative` mux absence as a strike. The elected sidebar producer scans for orphans no more than once per minute as a slower durable-record backstop: a live child whose parent has been ended (or missing) for ten minutes starts a hidden repair helper. The helper rechecks the records, closes the child, records its durable end, and emits the warning diagnostic `subagent_orphan_reaped`. A failed close emits `subagent_orphan_repair_failed` and remains eligible for a later scan. Either warning means the wrapper watchdog missed its normal window rather than reporting routine parent shutdown.
 

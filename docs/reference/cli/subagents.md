@@ -66,10 +66,10 @@ The bare form and `launch` verb are equivalent. A prompt is mandatory: the paren
 | Execution | supervised print mode, background | `--wait[=DURATION]` joins and prints the result |
 | Checkout | caller's current checkout | fixed |
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
-| Pane after completion | retained until stop or parent exit | `--keep` also survives parent exit |
+| Pane after completion | closes when the run settles | `--keep` holds it until `stop` or `rimz gc` |
 | Address | minted petname | `--name/-n` |
 
-A finished child's in-pane wrapper stops the provider but remains alive to hold the pane. The pane closes when the parent runs `rimz subagents stop` or when the parent itself exits, including an external tmux/Zellij pane close. `--keep` disables the parent-exit close and leaves reclamation to `stop` or `rimz gc`.
+A finished child's in-pane wrapper stamps its durable end and closes the pane after stopping the provider. The run result remains joinable, and the finished child stays on the parent card until the parent's next prompt boundary. `--keep` instead holds the pane after completion and past parent exit, leaving reclamation to `stop` or `rimz gc`.
 
 The single-launch surface deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output/input formats, retries, and verification. Use `rimz agents` when the launch needs those controls; use `rimz teams` when the workers are peers rather than children.
 
@@ -101,7 +101,7 @@ rimz subagents wait --json
 
 With no names, `wait` joins every supervised child recorded beneath the caller, including children that finished before the command started; `--any` instead considers only children still running, since it reports the first to finish. Explicit names must resolve inside that same set. A single result prints as a bare answer; plural and `--any` waits label each answer with its child name. Joins, streaming, JSON, timeout behavior, output, and exit codes are the same durable machinery as [`rimz agents wait`](./agents.md#wait).
 
-The result is available as soon as the run settles and remains available after the retained pane eventually closes, because the run record, not the pane, is truth.
+The result is available as soon as the run settles and remains available after the pane closes, because the run record, not the pane, is truth.
 
 ## Inspect and drive children
 
@@ -112,7 +112,7 @@ rimz subagents stop calm-fox
 rimz subagents stop --all
 ```
 
-Bare `rimz subagents` lists the caller's children, including retained completed children, with live status, the newest supervised-run outcome, and each child's current one-line description. `stop` accepts only live children of the caller.
+Bare `rimz subagents` lists the caller's children, including completed children retained in durable history, with live status, the newest supervised-run outcome, and each child's current one-line description. `stop` accepts only live children of the caller.
 
 `restart` and `resume` are deliberately absent in v1: the durable run record does not yet retain every launch argument needed to reproduce the supervised deadline, wait, and self-close contracts. Relaunch the same spec and prompt to start a fresh child, matching the Agent-tool model.
 
@@ -126,7 +126,7 @@ Only `rimz subagents` creates a parented pane-backed child. The child appears in
 
 Subagent launches are not capped by `[agents] max-chain-length`; that setting governs successive top-level peer launches through `rimz agents` and `rimz teams`. Instead, a subagent cannot launch anything through either doorway. A refused call creates no run, pane, worktree, or provisional agent.
 
-Pane-backed children also share a physical zone instead of repeatedly reshaping the caller's view. A solo parent's first child opens in a right-hand column and later children stack there (native Zellij stacks, vertical tmux panes). A member of a launched team sends its children to one companion `<view> subagents` tab shared by that team's view on both backends. If a solo child column has no room for another split, RimZ falls back to the companion tab, then to a generic run tab if needed. If a team companion is full, the overflow child opens in a generic run tab rather than failing the run or creating a second companion.
+Pane-backed children also share a physical zone instead of repeatedly reshaping the caller's view. A solo parent's first child opens in a right-hand column and later children stack there (native Zellij stacks, equal-height tmux panes). A member of a launched team sends its children to one companion `<view> subagents` tab shared by that team's view on both backends; the companion opens immediately after the launcher's tab. If a solo child column has no room for another split, RimZ falls back to the companion tab, then to a generic run tab if needed. If a team companion is full, the overflow child opens in a generic run tab rather than failing the run or creating a second companion. Once the last child pane closes, the companion sidebar exits and the empty tab collapses with it.
 
 ## Configure launch defaults
 
