@@ -30,7 +30,7 @@ Each array entry has the single-launch fields that make sense for data-driven de
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `spec` | yes | `general`, an agent kind, or a configured profile |
+| `spec` | yes | An agent kind, configured subagent profile, or command |
 | `prompt` | exactly one | Complete task supplied by the parent |
 | `prompt_file` | exactly one | File whose contents become the prompt; exclusive with `prompt` |
 | `name` | no | Durable child petname |
@@ -61,8 +61,6 @@ rimz subagents wait "$first" "$second"
 
 The bare form and `launch` verb are equivalent. A prompt is mandatory: the parent must supply the whole assignment as the second positional argument or with `--prompt-file PATH`. Relative paths resolve from the caller's current working directory. The child inherits the parent's current checkout and lane.
 
-The built-in `general` spec launches a child of the caller's provider kind and current model and effort; explicit `--model` and `--effort` values win. A same-kind `[subagents.profiles.<kind>]` entry still supplies mode, arguments, and prompt files, while the caller's current model and effort take precedence. `--agent` rebases `general` like any other spec: a cross-kind rebase drops the inherited model and effort in favor of the rebased profile or provider defaults. Fanout entries may also set `"spec": "general"`.
-
 | Behavior | Default | Override |
 | --- | --- | --- |
 | Execution | supervised print mode, background | `--wait[=DURATION]` joins and prints the result |
@@ -85,9 +83,11 @@ rimz subagents profiles --path
 rimz subagents profiles --json --path
 ```
 
-`profiles` lists the built-in `general` spec first, followed by `[subagents.profiles]` profiles and configured launch commands available for one child as compact cards. Profile cards include their optional descriptions; `--path` adds the defining-file path. JSON also omits `path` unless `--path` is passed, keeps that path absolute, and includes `source` (`builtin`, `profile`, or `command`). `[agents.profiles]` entries are excluded. Registered agent kinds remain directly launchable but are omitted from this catalog. It also works from a user shell.
+`profiles` lists `[subagents.profiles]` profiles and configured launch commands available for one child as compact cards. Profile cards include their optional descriptions; `--path` adds the defining-file path. JSON also omits `path` unless `--path` is passed, keeps that path absolute, and includes `source` (`profile` or `command`). `[agents.profiles]` entries are excluded. Registered agent kinds remain directly launchable but are omitted from this catalog. It also works from a user shell.
 
 Inside an agent whose `[agents.profiles]` entry sets `subagents = [...]`, the catalog includes only listed specs. A launch naming any other positional spec or `--agent` rebase is refused before RimZ creates a run or pane. Team names are excluded because a subagent launch creates one agent, not a cohort.
+
+RimZ places this same filtered catalog in each launched agent's system reminder when its adapter supports native appended system text. With no configured profiles or commands, the reminder says that no subagent types are configured instead of showing an empty list.
 
 ## Join results
 

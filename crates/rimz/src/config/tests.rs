@@ -1525,7 +1525,7 @@ fn agent_profile_subagent_allowlist_parses_round_trips_and_validates() {
     let path = write_named(
         &dir,
         "agents.toml",
-        "[agents.profiles.planner]\nagent = \"claude\"\nsubagents = [\"general\", \"explorer\"]\n\
+        "[agents.profiles.planner]\nagent = \"claude\"\nsubagents = [\"explorer\"]\n\
          [subagents.profiles.explorer]\nagent = \"codex\"\n",
     );
     let config = MachineConfig::load_from(&path, &agents_home).expect("valid allowlist");
@@ -1537,7 +1537,7 @@ fn agent_profile_subagent_allowlist_parses_round_trips_and_validates() {
         .expect("planner profile");
     assert_eq!(
         planner.subagents.as_deref(),
-        Some(["general".to_owned(), "explorer".to_owned()].as_slice())
+        Some(["explorer".to_owned()].as_slice())
     );
     let encoded = toml::to_string(planner).expect("serialize profile");
     assert_eq!(
@@ -1551,16 +1551,8 @@ fn agent_profile_subagent_allowlist_parses_round_trips_and_validates() {
             "allows subagent `typo`",
         ),
         (
-            "[subagents.profiles.general]\nagent = \"claude\"\n",
-            "built-in `rimz subagents general`",
-        ),
-        (
             "[subagents.profiles.explorer]\nagent = \"claude\"\nsubagents = []\n",
             "a subagent cannot launch",
-        ),
-        (
-            "[agents.commands]\ngeneral = \"claude\"\n",
-            "built-in `rimz subagents general`",
         ),
     ];
     for (text, expected) in cases {

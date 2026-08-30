@@ -346,7 +346,9 @@ fn resumed_agent_env_funnels_through_the_exec_wrapper() {
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
-        dumped.lines().any(|line| line == "ARGV=--resume sess-1"),
+        dumped.lines().any(|line| line == "ARGV_1=--resume")
+            && dumped.lines().any(|line| line == "ARGV_2=sess-1")
+            && dumped.contains("<system_reminder>"),
         "resumed agent misses the resume argv:\n{dumped}"
     );
     assert!(

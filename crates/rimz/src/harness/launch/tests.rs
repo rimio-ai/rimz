@@ -300,6 +300,94 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
 }
 
 #[test]
+fn process_compiler_appends_available_catalog_only_to_peer_launches() {
+    let project = tempfile::tempdir().expect("project");
+    let catalog = crate::harness::subagent_policy::SubagentCatalog::Available(vec![
+        crate::harness::subagent_policy::SubagentSpec {
+            name: "explorer".to_owned(),
+            source: crate::harness::subagent_policy::SubagentSpecSource::Profile,
+            agent: Some("claude".to_owned()),
+            model: Some("sonnet".to_owned()),
+            effort: None,
+            description: None,
+        },
+    ]);
+    let reminder = crate::harness::subagent_policy::reminder(&catalog);
+
+    for kind in ["claude", "codex"] {
+        let invocation = request(
+            kind,
+            ExecAction::Launch {
+                prompt: Some("inspect".to_owned()),
+                extra_args: Vec::new(),
+            },
+        );
+        let peer = compile_agent_process_with_extra_env(
+            project.path(),
+            crate::config::RtkMode::Auto,
+            &invocation,
+            project.path(),
+            &BTreeMap::new(),
+            Some(&catalog),
+        )
+        .expect("peer process");
+        if kind == "claude" {
+            assert!(
+                peer.provider_argv
+                    .windows(2)
+                    .any(|args| args == ["--append-system-prompt", reminder.as_str()])
+            );
+        } else {
+            let occurrences = crate::agents::PresetArgMatcher::ConfigKey {
+                flags: vec!["-c".to_owned(), "--config".to_owned()],
+                key: "developer_instructions".to_owned(),
+            }
+            .occurrences(&peer.provider_argv);
+            assert_eq!(occurrences.len(), 1);
+            assert_eq!(parse_toml_string_or_raw(&occurrences[0].value), reminder);
+        }
+
+        let without_catalog = compile_agent_process(
+            project.path(),
+            crate::config::RtkMode::Auto,
+            &invocation,
+            project.path(),
+        )
+        .expect("process without catalog");
+        assert!(
+            !without_catalog
+                .provider_argv
+                .iter()
+                .any(|arg| arg.contains(&reminder))
+        );
+
+        let mut child = invocation;
+        child.subagent = true;
+        let child = compile_agent_process_with_extra_env(
+            project.path(),
+            crate::config::RtkMode::Auto,
+            &child,
+            project.path(),
+            &BTreeMap::new(),
+            Some(&catalog),
+        )
+        .expect("child process");
+        assert!(
+            child
+                .provider_argv
+                .iter()
+                .any(|arg| arg.contains(SUBAGENT_REMINDER))
+        );
+        assert!(
+            !child
+                .provider_argv
+                .iter()
+                .any(|arg| arg.contains(&reminder))
+        );
+    }
+}
+
+#[test]
 fn process_compiler_merges_subagent_reminder_into_existing_append_flag() {
     let project = tempfile::tempdir().expect("project");
     let mut invocation = request(
@@ -817,6 +905,7 @@ fn provider_account_stage_validates_and_reenters_once() {
             project.path(),
             Path::new("/bin/rimz"),
             &BTreeMap::new(),
+            None,
         )
         .expect_err("binding scope");
         assert_eq!(
@@ -842,6 +931,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
         Path::new("/bin/rimz"),
         &BTreeMap::new(),
+        None,
     )
     .expect("pending stage");
     let AgentProcessStage::LoginShellReentry { argv, .. } = stage else {
@@ -864,6 +954,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
         Path::new("/bin/rimz"),
         &BTreeMap::new(),
+        None,
     )
     .expect_err("unresolved account mismatches");
     assert!(err.is_finalized_provider_mismatch());
@@ -890,6 +981,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
         Path::new("/bin/rimz"),
         &BTreeMap::new(),
+        None,
     )
     .expect("ordinary stage") else {
         panic!("unbound launch is ready");

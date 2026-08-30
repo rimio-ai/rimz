@@ -56,6 +56,12 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         None => None,
     };
     let machine_config = crate::cli::machine_config();
+    let subagent_catalog = exec_subagent_catalog(
+        &request,
+        &machine_config,
+        &workspace.project_root,
+        &rimz::store::paths::config_home(),
+    );
     let provider_cwd = match &request.action {
         rimz::harness::launch::ExecAction::Fork { .. } => {
             std::env::current_dir().context("reading the fork pane cwd")?
@@ -74,6 +80,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &provider_cwd,
         &rimz::proc::rimz_exe(),
         &materialized_prompt.env,
+        subagent_catalog.as_ref(),
     );
     let stage = match stage {
         Ok(stage) => stage,
@@ -161,6 +168,38 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         entered_worktree.as_deref(),
         outcome,
     )
+}
+
+fn exec_subagent_catalog(
+    request: &rimz::harness::launch::ExecRequest,
+    machine_config: &rimz::config::MachineConfig,
+    project_root: &std::path::Path,
+    config_root: &std::path::Path,
+) -> Option<rimz::harness::subagent_policy::SubagentCatalog> {
+    if request.subagent {
+        return None;
+    }
+    let effective = match rimz::config::effective::load(
+        &machine_config.agents,
+        &machine_config.subagents.profiles,
+        project_root,
+        config_root,
+    ) {
+        Ok(effective) => effective,
+        Err(err) => {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "rimz: {err}; launching without the subagent reminder"
+            );
+            return None;
+        }
+    };
+    Some(rimz::harness::subagent_policy::catalog(
+        request.identity.params.profile.as_deref(),
+        &effective.profiles,
+        &effective.subagent_profiles,
+        &machine_config.agents.commands,
+    ))
 }
 
 fn apply_materialized_system_prompt(
@@ -1262,6 +1301,33 @@ mod tests {
     }
 
     #[test]
+    fn broken_effective_config_skips_launch_reminder() {
+        let project = tempfile::tempdir().expect("project");
+        let config = tempfile::tempdir().expect("config");
+        let project_config = project.path().join(".rimz");
+        std::fs::create_dir_all(&project_config).expect("create project config dir");
+        std::fs::write(
+            project_config.join("config.toml"),
+            "[profiles.child]\nagent = \"unknown-base\"\n",
+        )
+        .expect("write broken project config");
+        rimz::trust::grant_with_roots(project.path(), config.path()).expect("trust project");
+        let machine_config = rimz::config::MachineConfig::default();
+        let request = request(
+            "claude",
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        );
+
+        assert!(
+            exec_subagent_catalog(&request, &machine_config, project.path(), config.path())
+                .is_none()
+        );
+    }
+
+    #[test]
     fn materialized_prompt_replaces_raw_prompt_args_for_every_action() {
         let materialized = MaterializedSystemPrompt {
             args: vec![
@@ -1384,6 +1450,7 @@ mod tests {
             project.path(),
             Path::new("/bin/rimz"),
             &materialized.env,
+            None,
         )
         .expect("compile qwen process");
         let AgentProcessStage::Ready(process) = stage else {

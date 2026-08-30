@@ -260,7 +260,6 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
         &workspace,
         &rimz::config::MachineConfig::default(),
         rimz::config::effective::ProfileScope::Agents,
-        None,
     )
     .expect("prepare supervised launch")
     .layout;
@@ -278,101 +277,26 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
 }
 
 #[test]
-fn general_inheritance_is_a_preset_below_explicit_overrides() {
-    let mut request = supervised_request("fix-it", true);
-    request.effort = Some("low".to_owned());
-    let dir = tempfile::tempdir().expect("temp dir");
-    let workspace =
-        rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
-    let inherited = (
-        AgentKind::new_unchecked("claude"),
-        rimz::agents::LaunchPreset {
-            model: Some("opus".to_owned()),
-            effort: Some("high".to_owned()),
-            system_prompt_file: None,
-            append_system_prompt_files: Vec::new(),
-        },
-    );
-
-    let prepared = super::run::prepare_supervised_launch_layout(
-        &request,
-        "claude",
-        &workspace,
-        &rimz::config::MachineConfig::default(),
-        rimz::config::effective::ProfileScope::Subagents,
-        Some(&inherited),
-    )
-    .expect("prepare inherited launch")
-    .layout;
-    let cell = prepared.agent_cells().next().expect("agent cell");
-
-    assert_eq!(cell.launch.model.as_deref(), Some("opus"));
-    assert_eq!(cell.launch.effort.as_deref(), Some("low"));
-}
-
-#[test]
-fn general_cross_kind_rebase_drops_current_model_and_effort() {
-    let mut request = supervised_request("fix-it", true);
-    request.agent = Some("cursor".to_owned());
-    let dir = tempfile::tempdir().expect("temp dir");
-    let workspace =
-        rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
-    let inherited = (
-        AgentKind::new_unchecked("claude"),
-        rimz::agents::LaunchPreset {
-            model: Some("opus".to_owned()),
-            effort: Some("high".to_owned()),
-            system_prompt_file: None,
-            append_system_prompt_files: Vec::new(),
-        },
-    );
-
-    let prepared = super::run::prepare_supervised_launch_layout(
-        &request,
-        "claude",
-        &workspace,
-        &rimz::config::MachineConfig::default(),
-        rimz::config::effective::ProfileScope::Subagents,
-        Some(&inherited),
-    )
-    .expect("prepare cross-kind inherited launch")
-    .layout;
-    let cell = prepared.agent_cells().next().expect("agent cell");
-
-    assert_eq!(cell.kind.as_str(), "cursor");
-    assert_eq!(cell.launch.model, None);
-    assert_eq!(cell.launch.effort, None);
-}
-
-#[test]
-fn supervised_selection_wires_general_rewrite_and_allowlist_refusal() {
+fn supervised_selection_checks_subagent_allowlist() {
     let mut caller = AgentState::stub("claude", "parent", AgentStatus::Running);
     caller.profile = Some("planner".to_owned());
-    caller.model = Some("opus".to_owned());
-    caller.effort = Some("high".to_owned());
     let profiles: rimz::config::ProfilesConfig = toml::from_str(
         r#"
         [planner]
         agent = "claude"
-        subagents = ["general"]
+        subagents = ["explorer"]
         "#,
     )
     .expect("profiles");
     let mut request = supervised_request("fix-it", true);
-    request.spec = "general".to_owned();
+    request.spec = "explorer".to_owned();
 
-    let (spec, inherited) =
-        super::run::prepare_supervised_selection(&request, Some(&caller), &profiles)
-            .expect("allowed general selection");
-    assert_eq!(spec, "claude");
-    assert_eq!(
-        inherited,
-        Some(rimz::harness::subagent_policy::general_launch(&caller))
-    );
+    super::run::check_supervised_subagent_allowed(&request, Some(&caller), &profiles)
+        .expect("allowed subagent");
 
     request.spec = "codex".to_owned();
-    let error = super::run::prepare_supervised_selection(&request, Some(&caller), &profiles)
-        .expect_err("unlisted selection");
+    let error = super::run::check_supervised_subagent_allowed(&request, Some(&caller), &profiles)
+        .expect_err("unlisted subagent");
     assert!(error.to_string().contains("profile `planner`"), "{error:#}");
 }
 
@@ -389,7 +313,6 @@ fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
         &workspace,
         &rimz::config::MachineConfig::default(),
         rimz::config::effective::ProfileScope::Subagents,
-        None,
     )
     .expect_err("spec-like prompt");
     assert!(
