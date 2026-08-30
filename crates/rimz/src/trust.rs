@@ -1201,10 +1201,10 @@ mod tests {
     #[test]
     fn unknown_non_command_field_does_not_change_hash() {
         let base = project_with(
-            "display_name = \"Query Engine\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
+            "display_name = \"Query Engine\"\n\n[profiles.x]\nagent = \"claude\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
         );
         let extra = project_with(
-            "display_name = \"Query Engine dev\"\nsidebar = true\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
+            "display_name = \"Query Engine dev\"\nsidebar = true\n\n[profiles.x]\nagent = \"claude\"\nsubagents = [\"explorer\"]\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
         );
         let a = read_project_config(&base.path().join(CONFIG_REL))
             .expect("read base")
@@ -1213,21 +1213,6 @@ mod tests {
             .expect("read extra")
             .expect("config present");
         assert_eq!(executable_surface_hash(&a), executable_surface_hash(&b));
-    }
-
-    #[test]
-    fn subagent_allowlist_does_not_change_trust_hash() {
-        // The allowlist only narrows launches; it is not executable surface.
-        let base: ProjectConfig =
-            toml::from_str("[profiles.x]\nagent = \"claude\"\n").expect("base config");
-        let restricted: ProjectConfig =
-            toml::from_str("[profiles.x]\nagent = \"claude\"\nsubagents = [\"explorer\"]\n")
-                .expect("restricted config");
-
-        assert_eq!(
-            executable_surface_hash(&base),
-            executable_surface_hash(&restricted)
-        );
     }
 
     #[test]
