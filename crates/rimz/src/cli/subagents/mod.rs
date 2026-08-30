@@ -558,13 +558,16 @@ fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
     let (config, sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
         .context("loading machine config")?;
     if !crate::cli::send::agent_caller() {
-        return crate::cli::profile_report::list_profiles(
+        let mut reports = crate::cli::profile_report::available_profiles(
             &config.subagents.profiles,
             &config.agents.commands,
             &sources,
             rimz::config::effective::ProfileScope::Subagents,
-            vec![crate::cli::profile_report::general_report(None)],
-            None,
+        );
+        reports.insert(0, crate::cli::profile_report::general_report(None));
+        return crate::cli::profile_report::list_profiles(
+            reports,
+            rimz::config::effective::ProfileScope::Subagents,
             json,
             path,
         );
@@ -582,13 +585,17 @@ fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
         &rimz::store::paths::config_home(),
     )?;
     let allowed = rimz::harness::subagent_policy::allowed_specs(caller, &effective.profiles);
-    crate::cli::profile_report::list_profiles(
+    let mut reports = crate::cli::profile_report::available_profiles(
         &effective.subagent_profiles,
         &config.agents.commands,
         &sources,
         rimz::config::effective::ProfileScope::Subagents,
-        vec![crate::cli::profile_report::general_report(Some(caller))],
-        allowed,
+    );
+    reports.insert(0, crate::cli::profile_report::general_report(Some(caller)));
+    crate::cli::profile_report::retain_allowed(&mut reports, allowed);
+    crate::cli::profile_report::list_profiles(
+        reports,
+        rimz::config::effective::ProfileScope::Subagents,
         json,
         path,
     )
