@@ -27,6 +27,14 @@ use crate::sidebar::timing::unix_now_ms;
 use crate::store::paths::RuntimePaths;
 
 #[test]
+fn tab_move_count_places_new_last_tab_after_anchor() {
+    assert_eq!(backend::moves_to_place_after(2, 5), 1);
+    assert_eq!(backend::moves_to_place_after(3, 5), 0);
+    assert_eq!(backend::moves_to_place_after(4, 5), 0);
+    assert_eq!(backend::moves_to_place_after(8, 5), 0);
+}
+
+#[test]
 fn pane_short_name_uses_program_basename() {
     assert_eq!(
         pane_short_name(&[
@@ -1385,6 +1393,7 @@ exit 0
             },
             focus: true,
             dock_sidebar: true,
+            after: None,
             sidebar: room.sidebar_options(120),
         })
         .expect("open tab");

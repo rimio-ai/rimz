@@ -218,6 +218,7 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
         },
         focus: true,
         dock_sidebar: true,
+        after: None,
         sidebar,
     });
 }

@@ -222,6 +222,7 @@ fn open_resume_tab(room: &RoomContext, tab: ResumeTab, bg: bool) -> Result<()> {
             panes: tab.layout,
             focus: !bg,
             dock_sidebar: true,
+            after: None,
             sidebar,
         })
         .map_err(Into::into)

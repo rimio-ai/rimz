@@ -43,6 +43,7 @@ fn live_work_boundary_resize_is_audited() {
             },
             focus: true,
             dock_sidebar: true,
+            after: None,
             sidebar: sidebar.clone(),
         })
         .expect("open audit tab");
@@ -800,6 +801,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
             },
             focus: true,
             dock_sidebar: true,
+            after: None,
             sidebar: sidebar.clone(),
         })
         .expect("open switch target tab");

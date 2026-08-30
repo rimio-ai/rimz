@@ -186,28 +186,47 @@ impl TmuxBackend {
         name: &str,
         cwd: &Path,
         argv: &[String],
+        after: Option<&PaneId>,
     ) -> Result<OpenedWindow> {
-        let output = self
-            .cmd()
-            .args([
-                "new-window".to_owned(),
-                "-d".to_owned(),
-                "-P".to_owned(),
-                "-F".to_owned(),
-                "#{window_id} #{pane_id}".to_owned(),
-                "-t".to_owned(),
-                session.to_owned(),
-                "-n".to_owned(),
-                window_name_arg(name),
-                "-c".to_owned(),
-                cwd.to_string_lossy().into_owned(),
-            ])
-            .args(argv.iter().cloned())
-            .run()?;
+        let anchor_window = after
+            .map(|anchor| self.window_id_for_pane(anchor))
+            .transpose()?;
+        let mut args = vec!["new-window".to_owned(), "-d".to_owned()];
+        if after.is_some() {
+            args.push("-a".to_owned());
+        }
+        args.extend([
+            "-P".to_owned(),
+            "-F".to_owned(),
+            "#{window_id} #{pane_id}".to_owned(),
+            "-t".to_owned(),
+            anchor_window.unwrap_or_else(|| session.to_owned()),
+            "-n".to_owned(),
+            window_name_arg(name),
+            "-c".to_owned(),
+            cwd.to_string_lossy().into_owned(),
+        ]);
+        let output = self.cmd().args(args).args(argv.iter().cloned()).run()?;
         let (window_id, first_pane) = parse_new_window_ids(&output.stdout)?;
         Ok(OpenedWindow {
             window_id,
             first_pane,
+        })
+    }
+
+    fn window_id_for_pane(&self, pane: &PaneId) -> Result<String> {
+        ensure_pane_backend(pane, MuxName::Tmux)?;
+        let output = self
+            .cmd()
+            .args(["display-message", "-p", "-t", pane.raw(), "#{window_id}"])
+            .run()?;
+        let window_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if window_id.starts_with('@') {
+            return Ok(window_id);
+        }
+        Err(MuxErr::Output {
+            program: "tmux".to_owned(),
+            reason: format!("pane `{pane}` did not resolve to a window id"),
         })
     }
 
@@ -721,7 +740,7 @@ impl TmuxBackend {
                 );
                 (&fallback_shell, Some(tab.label.as_str()))
             };
-            match self.open_named_window(&opts.session_name, &tab.label, &tab.cwd, first) {
+            match self.open_named_window(&opts.session_name, &tab.label, &tab.cwd, first, None) {
                 Ok(opened) => {
                     if let Some(name) = first_name {
                         self.set_pane_rimz_title(&opened.first_pane, name);

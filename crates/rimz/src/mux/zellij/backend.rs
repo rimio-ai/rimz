@@ -47,7 +47,6 @@ fn env_prefixed(env: &BTreeMap<String, String>, command: Vec<String>) -> Vec<Str
 #[derive(Clone, Debug)]
 struct FocusRestoreTarget {
     pane: PaneId,
-    tab_position: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -332,10 +331,7 @@ impl ZellijBackend {
             .ok()?;
         panes.iter().find_map(|candidate| {
             (candidate.is_live_terminal() && parse_zellij_raw(pane) == Some(candidate.id))
-                .then_some(FocusRestoreTarget {
-                    pane: pane.clone(),
-                    tab_position: candidate.tab_position,
-                })
+                .then_some(FocusRestoreTarget { pane: pane.clone() })
         })
     }
 
@@ -345,15 +341,109 @@ impl ZellijBackend {
         workspace_id: &WorkspaceId,
         restore: &FocusRestoreTarget,
     ) -> Result<()> {
+        let pane_id = parse_zellij_raw(&restore.pane).ok_or_else(|| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!("focus restore pane `{}` has no terminal id", restore.pane),
+        })?;
+        let tab_position = self
+            .raw_listed_panes(session_name, super::super::COMMAND_TIMEOUT)?
+            .into_iter()
+            .map(PaneTopologyPane::from)
+            .find(|pane| pane.id == pane_id && pane.is_live_terminal())
+            .map(|pane| pane.tab_position)
+            .ok_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("focus restore pane `{}` is no longer live", restore.pane),
+            })?;
         let runtime = self.runtime_paths_for_workspace(workspace_id.clone())?;
-        execute_focus_restoration(
-            self,
-            &runtime,
-            session_name,
-            &restore.pane,
-            restore.tab_position,
-        )
-        .map_err(focus_action_error)
+        execute_focus_restoration(self, &runtime, session_name, &restore.pane, tab_position)
+            .map_err(focus_action_error)
+    }
+
+    fn move_new_tab_after(&self, session: &str, anchor: &PaneId) -> Result<()> {
+        ensure_pane_backend(anchor, MuxName::Zellij)?;
+        let panes: Vec<PaneTopologyPane> = self
+            .raw_listed_panes(session, crate::sidebar::timing::RECONCILE_LIST_TIMEOUT)?
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        let anchor_id = parse_zellij_raw(anchor).ok_or_else(|| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!("tab anchor `{anchor}` has no terminal id"),
+        })?;
+        let anchor_position = panes
+            .iter()
+            .find(|pane| pane.id == anchor_id && pane.is_live_terminal())
+            .map(|pane| pane.tab_position)
+            .ok_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("tab anchor `{anchor}` is absent from session `{session}`"),
+            })?;
+        let tab_count = self.list_tabs(session)?.len() as u64;
+        let last_position = tab_count.saturating_sub(1);
+        let new_pane_id = panes
+            .iter()
+            .find(|pane| {
+                pane.tab_position == last_position
+                    && pane.is_live_terminal()
+                    && !is_sidebar_pane(pane)
+            })
+            .map(|pane| pane.id)
+            .ok_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: "new tab has no live work pane".to_owned(),
+            })?;
+        let new_pane = PaneId::from(ZellijPaneId::Terminal(new_pane_id));
+        let mut focused = false;
+        for attempt in 0..super::FOCUS_RESTORE_ATTEMPTS {
+            self.focus_pane(&new_pane, Some(session))?;
+            if self
+                .client_view(ClientFocusOptions {
+                    session_name: Some(session.to_owned()),
+                    command_timeout: None,
+                })
+                .is_ok_and(|view| view.viewed_panes.contains(&new_pane))
+            {
+                focused = true;
+                break;
+            }
+            if attempt + 1 < super::FOCUS_RESTORE_ATTEMPTS {
+                std::thread::sleep(super::FOCUS_RESTORE_RETRY_DELAY);
+            }
+        }
+        if !focused {
+            return Err(MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: "new tab did not accept focus before its move".to_owned(),
+            });
+        }
+        let move_count = moves_to_place_after(anchor_position, tab_count);
+        for completed in 0..move_count {
+            self.zellij_action(session)
+                .env("ZELLIJ_PANE_ID", new_pane_id.to_string())
+                .args(["move-tab", "left"])
+                .run()?;
+            let expected_position = last_position - completed - 1;
+            for attempt in 0..super::FOCUS_RESTORE_ATTEMPTS {
+                let moved = self
+                    .raw_listed_panes(session, crate::sidebar::timing::RECONCILE_LIST_TIMEOUT)?
+                    .into_iter()
+                    .map(PaneTopologyPane::from)
+                    .find(|pane| pane.id == new_pane_id && pane.is_live_terminal())
+                    .is_some_and(|pane| pane.tab_position == expected_position);
+                if moved {
+                    break;
+                }
+                if attempt + 1 == super::FOCUS_RESTORE_ATTEMPTS {
+                    return Err(MuxErr::Output {
+                        program: "zellij".to_owned(),
+                        reason: "new tab did not move to the requested position".to_owned(),
+                    });
+                }
+                std::thread::sleep(super::FOCUS_RESTORE_RETRY_DELAY);
+            }
+        }
+        Ok(())
     }
 
     fn run_new_tab_confirmed(&self, session: &str, args: &[String], tab_name: &str) -> Result<()> {
@@ -1227,6 +1317,17 @@ impl MuxBackend for ZellijBackend {
         ];
         self.run_new_tab_confirmed(&opts.sidebar.session_name, &args, &opts.title)?;
         drop(layout);
+        if let Some(anchor) = opts.after.as_ref()
+            && let Err(err) = self.move_new_tab_after(&opts.sidebar.session_name, anchor)
+        {
+            tracing::warn!(
+                session = %opts.sidebar.session_name,
+                pane = %anchor,
+                tags.operation = "zellij.move_tab",
+                error = &err as &dyn std::error::Error,
+                "could not place the new tab after its anchor; leaving it appended",
+            );
+        }
         if !opts.focus {
             let result = match &restore {
                 Some(restore) => self.restore_attached_client_focus(
@@ -1295,6 +1396,12 @@ impl MuxBackend for ZellijBackend {
     fn version(&self) -> Result<String> {
         memoized_version(&self.version, &self.cmd().arg("--version"))
     }
+}
+
+pub(super) fn moves_to_place_after(anchor_position: u64, tab_count: u64) -> u64 {
+    tab_count
+        .saturating_sub(1)
+        .saturating_sub(anchor_position.saturating_add(1))
 }
 
 pub(super) fn reconcile_pane(pane: &PaneTopologyPane) -> Option<ReconcilePane> {

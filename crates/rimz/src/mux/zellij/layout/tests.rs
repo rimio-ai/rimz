@@ -367,6 +367,7 @@ fn tab_layout_derives_percent_from_an_explicit_live_width() {
         },
         focus: true,
         dock_sidebar: true,
+        after: None,
         sidebar,
     };
     let layout = render_tab_layout(&opts, 21).expect("render tab layout");
@@ -411,6 +412,7 @@ fn tab_layout_prefers_the_callers_pane_name_over_the_argv_wrapper() {
         },
         focus: true,
         dock_sidebar: true,
+        after: None,
         sidebar: background_view_opts(vec![]).sidebar,
     };
 
@@ -433,6 +435,7 @@ fn tab_layout_renders_tiled_and_stacked_columns() {
         },
         focus: true,
         dock_sidebar: true,
+        after: None,
         sidebar,
     };
 
@@ -464,6 +467,7 @@ fn undocked_tab_layout_renders_stacked_columns() {
         },
         focus: true,
         dock_sidebar: false,
+        after: None,
         sidebar,
     };
 
@@ -488,6 +492,7 @@ fn tab_layout_can_omit_sidebar_for_gallery_columns() {
         },
         focus: true,
         dock_sidebar: false,
+        after: None,
         sidebar,
     };
     let layout = render_tab_layout(&opts, 30).expect("render gallery layout");

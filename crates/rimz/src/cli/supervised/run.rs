@@ -277,6 +277,7 @@ fn open_attempt_pane(
     pane: &PaneCmd,
 ) -> Result<()> {
     let target = own_pane_id(room.mux_name());
+    let tab_anchor = target.clone();
     let launch_identity = launch_batch.single_identity()?;
     let direction = rimz::mux::detect_terminal_size()
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
@@ -294,6 +295,7 @@ fn open_attempt_pane(
                 },
                 focus: false,
                 dock_sidebar: true,
+                after: tab_anchor.clone(),
                 sidebar,
             })
             .map_err(anyhow::Error::from)

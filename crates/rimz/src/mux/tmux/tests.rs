@@ -381,6 +381,7 @@ fn open_tab_rejects_an_empty_layout() {
         },
         focus: true,
         dock_sidebar: true,
+        after: None,
         sidebar: sidebar.clone(),
     };
 

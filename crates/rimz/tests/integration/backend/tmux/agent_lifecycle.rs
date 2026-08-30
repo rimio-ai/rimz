@@ -330,6 +330,7 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
             },
             focus: false,
             dock_sidebar: false,
+            after: None,
             sidebar: SidebarPaneOptions {
                 workspace_id: workspace.workspace_id.clone(),
                 project_root: workspace.project_root.clone(),
@@ -491,6 +492,7 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
             },
             focus: false,
             dock_sidebar: true,
+            after: None,
             sidebar: SidebarPaneOptions {
                 workspace_id: workspace.workspace_id.clone(),
                 project_root: workspace.project_root.clone(),
@@ -553,6 +555,7 @@ fn failing_close_pane_agent_drops_to_shell() {
             },
             focus: false,
             dock_sidebar: true,
+            after: None,
             sidebar: SidebarPaneOptions {
                 workspace_id: workspace.workspace_id.clone(),
                 project_root: workspace.project_root.clone(),
