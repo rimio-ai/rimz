@@ -93,25 +93,20 @@ pub(super) fn prepare_supervised_launch_layout(
         &machine_config.agents.commands,
         &effective.teams,
     )?;
-    let inherit_model = inherited.is_some_and(|(caller_kind, _)| {
-        resolved
-            .layout
-            .agent_cells()
-            .next()
-            .is_some_and(|cell| &cell.kind == caller_kind)
-    });
+    let inherited = inherited
+        .filter(|(caller_kind, _)| {
+            resolved
+                .layout
+                .agent_cells()
+                .next()
+                .is_some_and(|cell| &cell.kind == caller_kind)
+        })
+        .map(|(_, preset)| preset);
     let preset = rimz::agents::LaunchPreset {
-        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()).or_else(
-            || {
-                if inherit_model {
-                    inherited.and_then(|(_, launch)| launch.model.clone())
-                } else {
-                    None
-                }
-            },
-        ),
+        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref())
+            .or_else(|| inherited.and_then(|preset| preset.model.clone())),
         effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref())
-            .or_else(|| inherited.and_then(|(_, launch)| launch.effort.clone())),
+            .or_else(|| inherited.and_then(|preset| preset.effort.clone())),
         system_prompt_file: request.system_prompt_file.clone(),
         append_system_prompt_files: request.append_system_prompt_files.clone(),
     };

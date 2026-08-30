@@ -61,7 +61,7 @@ rimz subagents wait "$first" "$second"
 
 The bare form and `launch` verb are equivalent. A prompt is mandatory: the parent must supply the whole assignment as the second positional argument or with `--prompt-file PATH`. Relative paths resolve from the caller's current working directory. The child inherits the parent's current checkout and lane.
 
-The built-in `general` spec launches a child of the caller's provider kind and current model and effort; explicit `--model` and `--effort` values win. A same-kind `[subagents.profiles.<kind>]` entry still supplies mode, arguments, and prompt files, while the caller's current model and effort take precedence. `--agent` rebases `general` like any other spec: on a cross-kind rebase the caller's provider-specific model is dropped in favor of the rebased profile or provider default, while effort remains portable. Fanout entries may also set `"spec": "general"`.
+The built-in `general` spec launches a child of the caller's provider kind and current model and effort; explicit `--model` and `--effort` values win. A same-kind `[subagents.profiles.<kind>]` entry still supplies mode, arguments, and prompt files, while the caller's current model and effort take precedence. `--agent` rebases `general` like any other spec: a cross-kind rebase drops the inherited model and effort in favor of the rebased profile or provider defaults. Fanout entries may also set `"spec": "general"`.
 
 | Behavior | Default | Override |
 | --- | --- | --- |

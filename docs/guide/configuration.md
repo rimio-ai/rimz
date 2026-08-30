@@ -468,7 +468,7 @@ timeout = "30m"
 
 These defaults apply only to the agent-only [`rimz subagents`](../reference/cli/subagents.md) doorway, which is the only launch path that creates a parented child. `timeout` is the wall-clock limit for each supervised child and defaults to 30 minutes; the producer enforces it even when no process is waiting on the result. Per-launch `--timeout` overrides this table. Subagents cannot launch agents or subagents.
 
-The `general` spec launches the caller's agent kind and current model and effort unless the launch overrides them. A cross-kind `--agent` rebase drops the caller's provider-specific model while keeping effort.
+The `general` spec launches the caller's agent kind and current model and effort unless the launch overrides them. A cross-kind `--agent` rebase drops the inherited model and effort.
 
 Child launch presets live separately under `[subagents.profiles.<name>]`; `[agents.subagents]` continues to hold only doorway defaults such as `timeout`.
 
