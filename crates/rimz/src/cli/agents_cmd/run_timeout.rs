@@ -27,10 +27,10 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
     if wrote {
         let _ = rimz::harness::run_wake::wake_run(ctx.store.runtime_paths(), &record);
     }
+    if wrote && let Some((pid, process_start)) = provider_process {
+        let _ = rimz::child_process::signal_process_term(pid, Some(&process_start));
+    }
     if retains_pane_after_timeout(&record) {
-        if wrote && let Some((pid, process_start)) = provider_process {
-            let _ = rimz::child_process::signal_process_term(pid, Some(&process_start));
-        }
         // The wrapper observes the terminal record and stops the provider, but
         // `--keep` retains the subagent pane until explicit stop or gc.
         return Ok(());

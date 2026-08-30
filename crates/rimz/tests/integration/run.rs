@@ -176,7 +176,7 @@ fn hidden_timeout_helper_signals_pre_hook_provider_without_killing_wrapper() {
     assert!(!provider_live, "timeout helper should SIGTERM the provider");
     assert!(
         wrapper_live,
-        "timeout helper must not signal the wrapper that retains the pane"
+        "timeout helper must target the pre-hook provider, not its wrapper"
     );
 }
 
