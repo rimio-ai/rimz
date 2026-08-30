@@ -21,6 +21,15 @@ pub(super) struct TmuxPaneGeometry {
     pub(super) is_sidebar: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TmuxPaneCell {
+    pane_id: String,
+    left: u64,
+    width: u64,
+    top: u64,
+    height: u64,
+}
+
 pub(super) struct OpenedWindow {
     pub(super) window_id: String,
     pub(super) first_pane: String,
@@ -30,6 +39,18 @@ pub(super) fn equal_row_split_size(pane_count: usize, split_index: usize) -> Str
     debug_assert!(pane_count >= 2 && (1..pane_count).contains(&split_index));
     let remaining = pane_count - split_index;
     format!("{}%", 100 * remaining / (remaining + 1))
+}
+
+pub(super) fn even_column_heights(total_height: u64, pane_count: usize) -> Vec<u64> {
+    debug_assert!(pane_count > 0 && total_height >= pane_count as u64);
+    let separators = pane_count.saturating_sub(1) as u64;
+    let available = total_height.saturating_sub(separators);
+    let pane_count = pane_count as u64;
+    let base = available / pane_count;
+    let remainder = available % pane_count;
+    (0..pane_count)
+        .map(|index| base + u64::from(index >= pane_count - remainder))
+        .collect()
 }
 
 /// A tmux window name with its reserved separators neutralized. tmux parses a
@@ -766,6 +787,53 @@ impl TmuxBackend {
         Ok(pane_id)
     }
 
+    /// Resize every pane sharing the target's column to an even height.
+    /// Selecting by both left edge and width leaves sidebars and other columns
+    /// untouched while shrinking earlier rows as new ones join.
+    pub(super) fn even_column(&self, pane: &str) -> Result<()> {
+        let output = self
+            .cmd()
+            .args([
+                "list-panes",
+                "-t",
+                pane,
+                "-F",
+                "#{pane_id} #{pane_left} #{pane_width} #{pane_top} #{pane_height}",
+            ])
+            .run()?;
+        let cells = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(parse_tmux_pane_cell)
+            .collect::<Vec<_>>();
+        let target = cells
+            .iter()
+            .find(|cell| cell.pane_id == pane)
+            .ok_or_else(|| MuxErr::Output {
+                program: "tmux".to_owned(),
+                reason: "list-panes did not include the target pane".to_owned(),
+            })?;
+        let mut column = cells
+            .iter()
+            .filter(|cell| cell.left == target.left && cell.width == target.width)
+            .collect::<Vec<_>>();
+        column.sort_by_key(|cell| cell.top);
+        let total_height = column.iter().map(|cell| cell.height).sum::<u64>()
+            + column.len().saturating_sub(1) as u64;
+        let heights = even_column_heights(total_height, column.len());
+        for (cell, height) in column.into_iter().zip(heights) {
+            self.cmd()
+                .args([
+                    "resize-pane".to_owned(),
+                    "-t".to_owned(),
+                    cell.pane_id.clone(),
+                    "-y".to_owned(),
+                    height.to_string(),
+                ])
+                .run()?;
+        }
+        Ok(())
+    }
+
     pub(super) fn append_equal_host_rows<'a>(
         &self,
         first_pane: &str,
@@ -833,4 +901,16 @@ pub(super) fn parse_tmux_pane_geometry(line: &str) -> Option<TmuxPaneGeometry> {
         is_sidebar: fields.next()? == "1",
     };
     fields.next().is_none().then_some(geometry)
+}
+
+fn parse_tmux_pane_cell(line: &str) -> Option<TmuxPaneCell> {
+    let mut fields = line.split_whitespace();
+    let cell = TmuxPaneCell {
+        pane_id: fields.next()?.to_owned(),
+        left: fields.next()?.parse().ok()?,
+        width: fields.next()?.parse().ok()?,
+        top: fields.next()?.parse().ok()?,
+        height: fields.next()?.parse().ok()?,
+    };
+    fields.next().is_none().then_some(cell)
 }

@@ -477,6 +477,124 @@ fn open_tab_builds_multi_column_layout() {
 }
 
 #[test]
+fn stacked_splits_tile_the_column_evenly() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    server
+        .backend
+        .ensure_session(&session_opts(
+            "rimz-stacked",
+            WorkspaceId::from_project_root(cwd.path()),
+            cwd.path(),
+            cwd.path(),
+            Some((120, 50)),
+        ))
+        .expect("ensure_session");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = SidebarPaneOptions {
+        workspace_id: WorkspaceId::from_project_root(cwd.path()),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        ..sidebar_opts("rimz-stacked", stub, Some(120))
+    };
+    server
+        .backend
+        .open_sidebar(&sidebar, None)
+        .expect("open_sidebar");
+    server
+        .backend
+        .open_tab(&TabOptions {
+            title: "stacked".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    name: None,
+                }])],
+            },
+            focus: true,
+            dock_sidebar: true,
+            sidebar,
+        })
+        .expect("open_tab");
+
+    let initial = server.wait_for_panes("rimz-stacked:stacked", 2);
+    let sidebar_width = initial
+        .iter()
+        .find(|pane| pane.left == 0)
+        .expect("sidebar pane")
+        .width;
+    let work_width = initial
+        .iter()
+        .find(|pane| pane.left > 0)
+        .expect("work pane")
+        .width;
+    let mut target = PaneId::from_parts(
+        MuxName::Tmux,
+        initial
+            .iter()
+            .find(|pane| pane.left > 0)
+            .expect("work pane")
+            .id
+            .clone(),
+    );
+    let mut known = initial
+        .iter()
+        .map(|pane| pane.id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    for _ in 0..2 {
+        server
+            .backend
+            .split_pane(SplitPaneOptions {
+                target: SplitTarget::Pane(target),
+                cwd: Some(cwd.path().display().to_string()),
+                command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
+                title: None,
+                close_on_exit: true,
+                env: Default::default(),
+                placement: SplitPlacement::Stacked,
+                focus: false,
+            })
+            .expect("stacked split");
+        let panes = server.wait_for_panes("rimz-stacked:stacked", known.len() + 1);
+        let new_id = panes
+            .iter()
+            .map(|pane| pane.id.clone())
+            .find(|id| !known.contains(id))
+            .expect("new split pane");
+        known.insert(new_id.clone());
+        target = PaneId::from_parts(MuxName::Tmux, new_id);
+    }
+
+    let panes = server.wait_for_panes("rimz-stacked:stacked", 4);
+    assert_eq!(
+        panes
+            .iter()
+            .find(|pane| pane.left == 0)
+            .expect("sidebar pane")
+            .width,
+        sidebar_width,
+        "stacked splits must not resize the sidebar: {panes:?}",
+    );
+    let work = panes
+        .iter()
+        .filter(|pane| pane.left > 0)
+        .collect::<Vec<_>>();
+    assert_eq!(work.len(), 3, "expected three work panes: {panes:?}");
+    assert!(
+        work.iter().all(|pane| pane.width == work_width),
+        "stacked splits must preserve the target column width: {panes:?}",
+    );
+    let min_height = work.iter().map(|pane| pane.height).min().unwrap();
+    let max_height = work.iter().map(|pane| pane.height).max().unwrap();
+    assert!(
+        max_height - min_height <= 1,
+        "stacked pane heights should differ by at most one row: {panes:?}",
+    );
+}
+
+#[test]
 fn open_tab_can_suppress_hook_docked_sidebar() {
     require_tmux!();
     let server = TmuxServer::new();
