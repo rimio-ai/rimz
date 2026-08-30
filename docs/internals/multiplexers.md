@@ -93,12 +93,14 @@ Selection is stable across worktrees: every worktree of one repository resolves 
 | Session lifecycle | `ensure_session`, `attach_command`, `detach`, `kill_session`, `list_sessions`, `session_liveness`, `version` | `attach_command` hands a `CommandSpec` to the CLI attach runner rather than running it. |
 | Pane inventory | `list_panes`, `cached_pane_roster`, `client_view` | See [reading the room](#reading-the-room). |
 | Pane I/O | `capture_pane`, `send_keys`, `send_key`, `paste_text` | `paste_text` wraps one bracketed paste and converts logical newlines to CR; the submit Enter follows separately as a keystroke. |
-| Structure | `split_pane`, `open_tab`, `rename_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. `rename_tab` addresses the view through one pane anchor. |
+| Structure | `split_pane`, `open_tab`, `rename_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. Tab rename and optional post-birth placement address a view through a pane anchor. |
 | Focus and geometry | `focus_pane`, `toggle_fullscreen`, `sidebar_width_step`, `nudge_sidebar_width`, `record_sidebar_width_default`, `register_room_key` | |
 | Health | `probe_session_health`, `ensure_clean_session`, `reconcile_sidebars`, `purge_resurrection_cache`, `resurrection_cache_paths`, `session_accepts_agent_close` | Several default to a no-op because they answer a Zellij-only question. |
 | Presence | `ensure_presence_plugin` | Zellij-only; tmux inherits the no-op default because its control-mode watch already pushes. |
 
 Methods with a sensible cross-backend answer carry a default implementation, so a backend implements only what it does differently. `ensure_clean_session` and `purge_resurrection_cache` exist because Zellij resurrects sessions and tmux does not; tmux takes the no-op and the calling code stays branch-free.
+
+`TabOptions::after` requests that a new view open immediately after the view containing an anchor pane; `None` appends. tmux resolves the pane to its window id and uses `new-window -a`. Zellij appends, focuses the new tab long enough to move it left across the required neighbors, then restores an unfocused launch by re-resolving the original pane's current tab position. Placement is best-effort on both backends: failure leaves the new view appended rather than sinking the launch.
 
 Everything correctness-critical stays above the trait and is byte-identical across backends: the store, the run and wakeup sockets, the event schema, the trust gate, and the agent hooks.
 
@@ -245,6 +247,8 @@ The planner in [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) is pure.
 | Orphan (no working pane, no daemon host) | `CloseDuplicates` for every sidebar, so a wedged renderer collapses with its view |
 | The daemon view | Left alone |
 
+The ordinary renderer follows the same empty-view contract without waiting for reconcile: once the last working pane exits, the sidebar closes itself, and both muxes remove a view when its last pane closes. A companion subagent tab therefore collapses naturally after its final child finishes; no separate close-tab primitive participates.
+
 `SidebarLiveness` carries the claims: `claimed_panes` from fresh renderer heartbeats, plus `young_panes` inside the first-heartbeat grace window so a pane that just started is never reaped. `has_unlocated` marks a live renderer whose pane could not be placed, which keeps the planner conservative. On Zellij repair it also carries the presence probe's observation floor, so the pass cannot judge width from topology older than the probe it already awaited. The floorless launch pass still repairs pane count and docking, but leaves width to the renderer rather than blocking attach on a topology dump.
 
 Replacement is add-before-close on purpose. [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) blocks up to six seconds for the new pane to publish a heartbeat naming the expected build before the old pane is closed. A failed add leaves the user with the sidebar they had, and a stale binary's pane never counts as the repair.
@@ -371,13 +375,13 @@ The producer's shrink-confirmation path bypasses `pane-topology.json` entirely a
 
 ### The daemon view and resumed births
 
-`rimz start` always carries the `rimzd` runtime view, so `open_sidebar` births a two-tab layout: the runtime dashboard first, then the focused working tab. The order is fixed at birth because Zellij has no CLI to reorder tabs afterwards.
+`rimz start` always carries the `rimzd` runtime view, so `open_sidebar` births a two-tab layout: the runtime dashboard first, then the focused working tab. Zellij can move later tabs one position at a time, but spelling this leading order in the birth layout is free and avoids a visible post-birth move.
 
 The runtime view is `sidebar | content | runtime`, and what fills those columns, how its panes are identified, and how repair rebuilds them are in [rimzd.md](./rimzd.md). What the backends contribute is the placement: tmux births multiple content or runtime panes as equal-height rows, with at most one row of integer-rounding drift.
 
 Repair identity differs by backend: every managed Zellij pane carries its joined launch argv as an explicit pane name, so identity survives a supervisor or remote-control host putting a child in the foreground; tmux uses `pane_start_command`, with foreground command and title as fallbacks.
 
-Scheduled loop runs split against the loop panel with Zellij's native stack, anchored through the panel's CLI pane context with `--near-current-pane`, so attached-client focus and the active tab stay untouched; tmux degrades the stack to a tiled row. If the view survives but the panel is gone, the same placement engine recreates the panel first; a missing view or a failed split falls back to a new tab. What decides that a run fires at all is in [loops.md](./harness/loops.md#where-a-scheduled-run-lands).
+Scheduled loop runs split against the loop panel with Zellij's native stack, anchored through the panel's CLI pane context with `--near-current-pane`, so attached-client focus and the active tab stay untouched; tmux maps the stack to equal-height rows within the target column. It computes each row from pane geometry and resizes only panes sharing that column, so the sidebar width and neighboring columns never move. If the view survives but the panel is gone, the same placement engine recreates the panel first; a missing view or a failed split falls back to a new tab. What decides that a run fires at all is in [loops.md](./harness/loops.md#where-a-scheduled-run-lands).
 
 A reborn session re-seeds its remembered agents: the birth layout spells one `sidebar | agents…` tab per worktree, each agent a command pane running its resume CLI in that worktree, focus on the freshest. Born in a fresh layout they start running rather than suspended, which is the same reason serialization is off. One renderer handles plain, daemon, and resumed births.
 
