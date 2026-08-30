@@ -284,12 +284,15 @@ fn general_inheritance_is_a_preset_below_explicit_overrides() {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
-    let inherited = rimz::agents::LaunchPreset {
-        model: Some("opus".to_owned()),
-        effort: Some("high".to_owned()),
-        system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
-    };
+    let inherited = (
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::LaunchPreset {
+            model: Some("opus".to_owned()),
+            effort: Some("high".to_owned()),
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+        },
+    );
 
     let prepared = super::run::prepare_supervised_launch_layout(
         &request,
@@ -305,6 +308,72 @@ fn general_inheritance_is_a_preset_below_explicit_overrides() {
 
     assert_eq!(cell.launch.model.as_deref(), Some("opus"));
     assert_eq!(cell.launch.effort.as_deref(), Some("low"));
+}
+
+#[test]
+fn general_cross_kind_rebase_drops_current_model_but_keeps_effort() {
+    let mut request = supervised_request("fix-it", true);
+    request.agent = Some("codex".to_owned());
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workspace =
+        rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
+    let inherited = (
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::LaunchPreset {
+            model: Some("opus".to_owned()),
+            effort: Some("high".to_owned()),
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+        },
+    );
+
+    let prepared = super::run::prepare_supervised_launch_layout(
+        &request,
+        "claude",
+        &workspace,
+        &rimz::config::MachineConfig::default(),
+        rimz::config::effective::ProfileScope::Subagents,
+        Some(&inherited),
+    )
+    .expect("prepare cross-kind inherited launch")
+    .layout;
+    let cell = prepared.agent_cells().next().expect("agent cell");
+
+    assert_eq!(cell.kind.as_str(), "codex");
+    assert_eq!(cell.launch.model.as_deref(), Some("gpt-5.5-codex"));
+    assert_eq!(cell.launch.effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn supervised_selection_wires_general_rewrite_and_allowlist_refusal() {
+    let mut caller = AgentState::stub("claude", "parent", AgentStatus::Running);
+    caller.profile = Some("planner".to_owned());
+    caller.model = Some("opus".to_owned());
+    caller.effort = Some("high".to_owned());
+    let profiles: rimz::config::ProfilesConfig = toml::from_str(
+        r#"
+        [planner]
+        agent = "claude"
+        subagents = ["general"]
+        "#,
+    )
+    .expect("profiles");
+    let mut request = supervised_request("fix-it", true);
+    request.spec = "general".to_owned();
+
+    let (spec, inherited) =
+        super::run::prepare_supervised_selection(&request, Some(&caller), &profiles)
+            .expect("allowed general selection");
+    assert_eq!(spec, "claude");
+    assert_eq!(
+        inherited,
+        Some(rimz::harness::subagent_policy::general_launch(&caller))
+    );
+
+    request.spec = "codex".to_owned();
+    let error = super::run::prepare_supervised_selection(&request, Some(&caller), &profiles)
+        .expect_err("unlisted selection");
+    assert!(error.to_string().contains("profile `planner`"), "{error:#}");
 }
 
 #[test]

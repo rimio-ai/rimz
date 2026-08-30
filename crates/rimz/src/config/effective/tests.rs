@@ -528,6 +528,16 @@ fn trusted_repo_allowlist_can_reference_repo_subagent_profile() {
         Some(["repo-child".to_owned()].as_slice())
     );
     assert!(effective.subagent_profiles.0.contains_key("repo-child"));
+    let mut sources = crate::config::AgentSpecSources::default();
+    effective.overlay_profile_sources(&mut sources);
+    assert_eq!(
+        sources.profile(ProfileScope::Agents, "planner"),
+        Some(project.path().join(".rimz/config.toml").as_path())
+    );
+    assert_eq!(
+        sources.profile(ProfileScope::Subagents, "repo-child"),
+        Some(project.path().join(".rimz/config.toml").as_path())
+    );
 }
 
 #[test]

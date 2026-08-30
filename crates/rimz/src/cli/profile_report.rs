@@ -70,7 +70,7 @@ pub(crate) fn general_report(caller: Option<&rimz::agents::AgentState>) -> Agent
         model: caller.and_then(|caller| caller.model.clone()),
         effort: caller.and_then(|caller| caller.effort.clone()),
         description: Some(
-            "General-purpose child of the caller's kind; inherits its model and effort unless overridden"
+            "General-purpose child of the caller's kind; inherits its current model and effort unless overridden"
                 .to_owned(),
         ),
         path: None,
@@ -302,10 +302,10 @@ mod tests {
 
         insta::assert_snapshot!(String::from_utf8(output).expect("utf-8"), @r"
         general — claude · opus · high
-          General-purpose child of the caller's kind; inherits its model and effort unless overridden
+          General-purpose child of the caller's kind; inherits its current model and effort unless overridden
 
         general — caller's kind
-          General-purpose child of the caller's kind; inherits its model and effort unless overridden
+          General-purpose child of the caller's kind; inherits its current model and effort unless overridden
         ");
         assert_eq!(reports[0].source, "builtin");
     }

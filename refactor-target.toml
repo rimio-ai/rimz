@@ -112,7 +112,7 @@ allowed-imports = [
     "utils::time",
     "trust",
 ]
-surface-budget = 12
+surface-budget = 13
 
 [[module]]
 path = "crates/rimz/src/config/notifications.rs"
