@@ -18,12 +18,15 @@ const FEEDBACK_TIMEOUT: Duration = Duration::from_secs(1);
 const IDLE_RETRY: Duration = Duration::from_secs(5);
 const STRUCTURAL_GUARD_MS: u64 = 2_000;
 const MAX_STEPS: u8 = 32;
+// One cycle is an issued step plus its single no-progress retry.
+const MAX_NO_PROGRESS_CYCLES: u8 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WidthIdleReason {
     ReachedTolerance,
     ReverseParked,
     NoProgress,
+    Unacknowledged,
     StepBudget,
     FullscreenHeld,
 }
@@ -38,12 +41,14 @@ struct WidthIdle {
 enum WidthTransition {
     StepIssued { from: u16, target: u16 },
     FeedbackLearned { settled: u16, learned_step: u16 },
+    LateFeedback { settled: u16 },
     Idle { at: u16, reason: WidthIdleReason },
 }
 
 #[derive(Clone, Copy, Debug)]
 struct IssuedStep {
     width_before: u16,
+    target: u16,
     at: Instant,
 }
 
@@ -56,6 +61,8 @@ struct WidthControl {
     /// Backend-native step estimate that seeds nearest-width tolerance and survives retargeting.
     native_step: Option<NonZeroU16>,
     retried_no_progress: bool,
+    no_progress_cycles: u8,
+    unacknowledged: Option<IssuedStep>,
     reverse_max_distance: Option<u16>,
     idle: Option<WidthIdle>,
     traces: VecDeque<WidthTransition>,
@@ -70,6 +77,8 @@ impl WidthControl {
             learned_step: None,
             native_step: None,
             retried_no_progress: false,
+            no_progress_cycles: 0,
+            unacknowledged: None,
             reverse_max_distance: None,
             idle: None,
             traces: VecDeque::new(),
@@ -84,6 +93,7 @@ impl WidthControl {
         self.steps_issued = 0;
         self.learned_step = None;
         self.retried_no_progress = false;
+        self.no_progress_cycles = 0;
         self.reverse_max_distance = None;
         if !self.is_fullscreen_held() {
             self.idle = None;
@@ -108,6 +118,27 @@ impl WidthControl {
             .is_some_and(|idle| idle.reason == WidthIdleReason::FullscreenHeld)
     }
 
+    fn is_unacknowledged(&self) -> bool {
+        self.idle
+            .is_some_and(|idle| idle.reason == WidthIdleReason::Unacknowledged)
+    }
+
+    fn retries_when_idle(&self) -> bool {
+        self.idle.is_some_and(|idle| {
+            !matches!(
+                idle.reason,
+                WidthIdleReason::FullscreenHeld | WidthIdleReason::Unacknowledged
+            )
+        })
+    }
+
+    fn explains(&self, own_cols: u16) -> bool {
+        self.unacknowledged.is_some_and(|step| {
+            own_cols != step.width_before
+                && (own_cols > step.width_before) == (step.target > step.width_before)
+        })
+    }
+
     fn in_flight(&self) -> bool {
         self.in_flight.is_some()
     }
@@ -119,8 +150,18 @@ impl WidthControl {
         self.steps_issued = 0;
         self.in_flight = None;
         self.retried_no_progress = false;
+        self.no_progress_cycles = 0;
         self.reverse_max_distance = None;
         self.idle = None;
+    }
+
+    fn retry_idle(&mut self) {
+        if !self.retries_when_idle() {
+            return;
+        }
+        let no_progress_cycles = self.no_progress_cycles;
+        self.rearm();
+        self.no_progress_cycles = no_progress_cycles;
     }
 
     fn observe_fullscreen(&mut self, active: bool, own_cols: u16) -> bool {
@@ -128,6 +169,8 @@ impl WidthControl {
             self.steps_issued = 0;
             self.in_flight = None;
             self.retried_no_progress = false;
+            self.no_progress_cycles = 0;
+            self.unacknowledged = None;
             self.reverse_max_distance = None;
             self.idle = Some(WidthIdle {
                 at: own_cols,
@@ -187,8 +230,16 @@ impl WidthControl {
             self.steps_issued = 0;
             self.in_flight = None;
             self.retried_no_progress = false;
+            self.no_progress_cycles = 0;
             self.reverse_max_distance = None;
             self.idle = None;
+        }
+
+        if self.in_flight.is_none() && self.explains(own_cols) {
+            self.no_progress_cycles = 0;
+            self.unacknowledged = None;
+            self.traces
+                .push_back(WidthTransition::LateFeedback { settled: own_cols });
         }
 
         if let Some(step) = self.in_flight {
@@ -201,6 +252,8 @@ impl WidthControl {
                 });
                 self.in_flight = None;
                 self.retried_no_progress = false;
+                self.no_progress_cycles = 0;
+                self.unacknowledged = None;
                 if let Some(max_distance) = self.reverse_max_distance {
                     if own_cols.abs_diff(target_cols) <= max_distance {
                         self.idle = Some(WidthIdle {
@@ -226,18 +279,25 @@ impl WidthControl {
                 return None;
             } else if self.retried_no_progress {
                 self.in_flight = None;
+                self.no_progress_cycles = self.no_progress_cycles.saturating_add(1);
+                let reason = if self.no_progress_cycles >= MAX_NO_PROGRESS_CYCLES {
+                    WidthIdleReason::Unacknowledged
+                } else {
+                    WidthIdleReason::NoProgress
+                };
                 self.idle = Some(WidthIdle {
                     at: own_cols,
-                    reason: WidthIdleReason::NoProgress,
+                    reason,
                 });
                 self.traces.push_back(WidthTransition::Idle {
                     at: own_cols,
-                    reason: WidthIdleReason::NoProgress,
+                    reason,
                 });
                 return None;
             } else {
                 self.in_flight = None;
                 self.retried_no_progress = true;
+                self.unacknowledged = Some(step);
             }
         }
 
@@ -249,6 +309,17 @@ impl WidthControl {
             self.traces.push_back(WidthTransition::Idle {
                 at: own_cols,
                 reason: WidthIdleReason::ReachedTolerance,
+            });
+            return None;
+        }
+        if self.no_progress_cycles >= MAX_NO_PROGRESS_CYCLES {
+            self.idle = Some(WidthIdle {
+                at: own_cols,
+                reason: WidthIdleReason::Unacknowledged,
+            });
+            self.traces.push_back(WidthTransition::Idle {
+                at: own_cols,
+                reason: WidthIdleReason::Unacknowledged,
             });
             return None;
         }
@@ -267,6 +338,7 @@ impl WidthControl {
         self.steps_issued += 1;
         self.in_flight = Some(IssuedStep {
             width_before: own_cols,
+            target: target_cols,
             at: now,
         });
         self.traces.push_back(WidthTransition::StepIssued {
@@ -478,7 +550,10 @@ impl WidthController {
         if self.own_pane.is_none() {
             return;
         }
-        if trigger == SidebarWidthControlTrigger::ResizeFeedback && !self.convergence.in_flight() {
+        if trigger == SidebarWidthControlTrigger::ResizeFeedback
+            && !self.convergence.in_flight()
+            && !self.convergence.explains(measured_cols)
+        {
             if self.convergence.needs_adjustment(measured_cols) {
                 self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
                 self.classification_resize_at_ms = Some(crate::sidebar::timing::unix_now_ms());
@@ -504,6 +579,13 @@ impl WidthController {
                     learned_step: Some(learned_step),
                     outcome: SidebarWidthSettleOutcome::FeedbackLearned,
                 }),
+                WidthTransition::LateFeedback { settled } => {
+                    diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthSettle {
+                        settled_cols: settled,
+                        learned_step: None,
+                        outcome: SidebarWidthSettleOutcome::LateFeedback,
+                    });
+                }
                 WidthTransition::Idle { at, reason } => {
                     let outcome = match reason {
                         WidthIdleReason::ReachedTolerance => {
@@ -511,6 +593,9 @@ impl WidthController {
                         }
                         WidthIdleReason::ReverseParked => SidebarWidthSettleOutcome::ReverseParked,
                         WidthIdleReason::NoProgress => SidebarWidthSettleOutcome::NoProgress,
+                        WidthIdleReason::Unacknowledged => {
+                            SidebarWidthSettleOutcome::Unacknowledged
+                        }
                         WidthIdleReason::StepBudget => SidebarWidthSettleOutcome::StepBudget,
                         WidthIdleReason::FullscreenHeld => continue,
                     };
@@ -619,12 +704,12 @@ impl WidthController {
         if let Some(cols) = measured_cols {
             if self.classification_deadline.is_some() || self.convergence.is_fullscreen_held() {
                 self.idle_retry_deadline = None;
-            } else if self.convergence.is_idle() {
+            } else if self.convergence.retries_when_idle() {
                 let deadline = self.idle_retry_deadline.get_or_insert(now + IDLE_RETRY);
                 if now >= *deadline {
                     let _ = self.refresh_target(None);
                     if self.convergence.needs_adjustment(cols) {
-                        self.convergence.rearm();
+                        self.convergence.retry_idle();
                         self.observe(cols, SidebarWidthControlTrigger::IdleRetry, diag);
                     }
                     self.idle_retry_deadline = Some(now + IDLE_RETRY);
@@ -695,11 +780,6 @@ impl WidthController {
             Some(proven) => proven,
             None => {
                 debug!("sidebar settled resize lacks backend geometry");
-                self.observe(
-                    measured_cols,
-                    SidebarWidthControlTrigger::Classification,
-                    diag,
-                );
                 self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
                 return;
             }

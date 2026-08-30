@@ -176,6 +176,8 @@ pub enum SidebarWidthSettleOutcome {
     ReachedTolerance,
     ReverseParked,
     NoProgress,
+    Unacknowledged,
+    LateFeedback,
     StepBudget,
 }
 
@@ -186,6 +188,8 @@ impl SidebarWidthSettleOutcome {
             Self::ReachedTolerance => "reached-tolerance",
             Self::ReverseParked => "reverse-parked",
             Self::NoProgress => "no-progress",
+            Self::Unacknowledged => "unacknowledged",
+            Self::LateFeedback => "late-feedback",
             Self::StepBudget => "step-budget",
         }
     }
