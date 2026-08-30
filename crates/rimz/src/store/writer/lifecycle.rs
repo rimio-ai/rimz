@@ -172,6 +172,7 @@ fn lifecycle_transition(
         prior
             .and_then(|agent| agent.open_ask.as_ref())
             .and_then(|ask| ask.native_key.as_deref()),
+        prior.and_then(|agent| agent.interrupted_turn_id.as_deref()),
         &observation.signal,
     ))
 }
@@ -311,7 +312,7 @@ fn append_adoption(
             lifecycle_transition(agents, &intent.agent_kind, &observation)
                 .expect("derived adoption has child identity")
         },
-        |primary| lifecycle::step(Some(&primary.next), None, &observation.signal),
+        |primary| lifecycle::step(Some(&primary.next), None, None, &observation.signal),
     );
     let prior_status = primary_transition
         .map(|primary| primary.next.status)
@@ -508,18 +509,21 @@ mod tests {
             edits: false,
             name: None,
             native_key: None,
+            turn_id: None,
         };
         let mutating = LifecycleSignal::ToolUsed {
             mutates: true,
             edits: false,
             name: None,
             native_key: None,
+            turn_id: None,
         };
         let named = LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
             name: Some("Read".to_owned()),
             native_key: None,
+            turn_id: None,
         };
 
         assert!(append_lifecycle_event(&mutating, None, false));
@@ -577,6 +581,7 @@ mod tests {
             edits: false,
             name: None,
             native_key: None,
+            turn_id: None,
         });
         let before = std::fs::metadata(&store.paths().events_log)
             .map(|meta| meta.len())
@@ -644,6 +649,7 @@ mod tests {
             edits: false,
             name: None,
             native_key: None,
+            turn_id: None,
         });
         let receipt = store
             .append_agent_lifecycle(AgentLifecycleIntent {
@@ -807,6 +813,7 @@ mod tests {
             edits: false,
             name: None,
             native_key: None,
+            turn_id: None,
         };
         let spawned = |model: &str, total_tokens| SpawnedSubagent {
             child_agent_id: AgentSessionId::from("child"),

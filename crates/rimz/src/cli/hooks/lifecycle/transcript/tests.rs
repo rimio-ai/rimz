@@ -501,7 +501,7 @@ fn cursor_response_hook_is_the_only_assistant_text_authority() {
             errored: true,
             parked_on_background: false,
         },
-        LifecycleSignal::TurnInterrupted,
+        LifecycleSignal::TurnInterrupted { turn_id: None },
     ] {
         let mut stopped = recorded(signal);
         stopped.observation.agent_id = Some(rimz::ids::AgentSessionId::from("conv-1"));

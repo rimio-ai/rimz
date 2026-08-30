@@ -741,7 +741,7 @@ pub fn terminal_status_for_signal(signal: &LifecycleSignal) -> Option<RunStatus>
         } else {
             RunStatus::Completed
         }),
-        LifecycleSignal::TurnInterrupted => Some(RunStatus::Canceled),
+        LifecycleSignal::TurnInterrupted { .. } => Some(RunStatus::Canceled),
         LifecycleSignal::Ended => Some(RunStatus::Failed),
         _ => None,
     }

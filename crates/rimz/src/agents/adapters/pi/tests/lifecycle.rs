@@ -35,6 +35,7 @@ fn lifecycle_signals_map_every_wired_event() {
                 edits: true,
                 name: Some("edit".to_owned()),
                 native_key: Some("sibling-call".to_owned()),
+                turn_id: None,
             }),
         ),
         (
@@ -45,6 +46,7 @@ fn lifecycle_signals_map_every_wired_event() {
                 edits: false,
                 name: Some("bash".to_owned()),
                 native_key: Some("sibling-call".to_owned()),
+                turn_id: None,
             }),
         ),
         (
@@ -55,6 +57,7 @@ fn lifecycle_signals_map_every_wired_event() {
                 edits: false,
                 name: Some("powershell".to_owned()),
                 native_key: Some("windows-call".to_owned()),
+                turn_id: None,
             }),
         ),
         (
@@ -65,6 +68,7 @@ fn lifecycle_signals_map_every_wired_event() {
                 edits: false,
                 name: Some("read".to_owned()),
                 native_key: None,
+                turn_id: None,
             }),
         ),
         // An ordinary tool call is neutral; only the rpiv questionnaire blocks.
@@ -85,7 +89,7 @@ fn lifecycle_signals_map_every_wired_event() {
         &json!({ "session_id": "sess-1", "tool_name": "edit" }),
     );
     assert_eq!(
-        step(Some(&running), None, &edit.signal).next.phase,
+        step(Some(&running), None, None, &edit.signal).next.phase,
         TurnPhase::Acting
     );
 }
@@ -115,7 +119,7 @@ fn settled_boundary_is_terminal_and_agent_end_is_not() {
         ),
         (
             json!({ "session_id": "sess-1", "stop_reason": "aborted" }),
-            LifecycleSignal::TurnInterrupted,
+            LifecycleSignal::TurnInterrupted { turn_id: None },
         ),
         (
             json!({ "session_id": "sess-1", "stop_reason": "error" }),

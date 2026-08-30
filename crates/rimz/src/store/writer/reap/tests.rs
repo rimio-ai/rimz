@@ -111,6 +111,22 @@ fn turn_started_lifecycle(workspace_id: &WorkspaceId, agent_id: &str) -> EventEn
     )
 }
 
+fn turn_lifecycle(
+    workspace_id: &WorkspaceId,
+    agent_id: &str,
+    event_name: &str,
+    signal: LifecycleSignal,
+) -> EventEnvelope {
+    let observation = AgentLifecycleObservation::new(Some(AgentSessionId::from(agent_id)), signal);
+    EventEnvelope::agent_lifecycle(
+        workspace_id.clone(),
+        "rimz-test",
+        "codex",
+        event_name,
+        &observation,
+    )
+}
+
 fn amp_focus_lifecycle(workspace_id: &WorkspaceId, agent_id: &str, pane_id: &str) -> EventEnvelope {
     let mut observation = crate::agents::definition_by_kind("amp")
         .expect("Amp definition")
@@ -379,6 +395,73 @@ fn interrupted_replacement_bypasses_roster_and_replays_durably() {
                     event.kind(),
                     EventKind::AgentLifecycle(payload)
                         if payload.event_name.as_deref() == Some("ReapedInterrupted")
+                            && payload.observation.agent_id.as_deref() == Some("interrupted")
+                )
+            })
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn late_tool_of_interrupted_turn_rests_and_is_superseded() {
+    let (_dir, store, workspace_id) = store();
+    let now = Timestamp::now();
+    let mut older = fresh_pane_lifecycle(&workspace_id, "interrupted", "%1");
+    older.timestamp = now - Duration::from_secs(5);
+    let mut turn_started = turn_started_lifecycle(&workspace_id, "interrupted");
+    turn_started.timestamp = now - Duration::from_secs(4);
+    let mut interrupted = turn_lifecycle(
+        &workspace_id,
+        "interrupted",
+        "Interrupt",
+        LifecycleSignal::TurnInterrupted {
+            turn_id: Some("turn-1".to_owned()),
+        },
+    );
+    interrupted.timestamp = now - Duration::from_secs(3);
+    let mut late_tool = turn_lifecycle(
+        &workspace_id,
+        "interrupted",
+        "PostToolUse",
+        LifecycleSignal::ToolUsed {
+            mutates: true,
+            edits: false,
+            name: Some("Bash".to_owned()),
+            native_key: None,
+            turn_id: Some("turn-1".to_owned()),
+        },
+    );
+    late_tool.timestamp = now - Duration::from_secs(2);
+    let mut replacement = fresh_pane_lifecycle(&workspace_id, "replacement", "%1");
+    replacement.timestamp = now - Duration::from_secs(1);
+    for event in [older, turn_started, interrupted, late_tool, replacement] {
+        event_log::append(&store.paths().events_log, &event).expect("append lifecycle");
+    }
+    live_roster::publish(
+        &store.paths().live_roster,
+        [(
+            AgentKind::new_unchecked("codex"),
+            AgentSessionId::from("interrupted"),
+        )]
+        .into_iter()
+        .collect(),
+    )
+    .expect("publish roster");
+
+    assert_eq!(
+        store.reap_dead_sessions().expect("reap superseded owner"),
+        1
+    );
+    assert!(
+        store
+            .read_events()
+            .expect("read events")
+            .iter()
+            .any(|event| {
+                matches!(
+                    event.kind(),
+                    EventKind::AgentLifecycle(payload)
+                        if payload.event_name.as_deref() == Some("ReapedSuperseded")
                             && payload.observation.agent_id.as_deref() == Some("interrupted")
                 )
             })

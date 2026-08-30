@@ -16,6 +16,7 @@ type AgentKey = (AgentKind, AgentSessionId);
 struct FollowState {
     lifecycle: LifecycleState,
     open_ask_key: Option<String>,
+    interrupted_turn_id: Option<String>,
 }
 
 /// Events and non-fatal archive-gap warnings observed in one poll.
@@ -67,6 +68,7 @@ impl LifecycleFollower {
                 let state = FollowState {
                     lifecycle: agent.lifecycle(),
                     open_ask_key: open_ask_key(&agent),
+                    interrupted_turn_id: agent.interrupted_turn_id,
                 };
                 (key, state)
             })
@@ -163,6 +165,7 @@ impl LifecycleFollower {
             let transition = step(
                 prior.map(|state| &state.lifecycle),
                 prior.and_then(|state| state.open_ask_key.as_deref()),
+                prior.and_then(|state| state.interrupted_turn_id.as_deref()),
                 &observation.signal,
             );
             events.push(LifecycleEvent::new(
@@ -187,11 +190,18 @@ impl LifecycleFollower {
                 _ if transition.next.status != crate::agents::AgentStatus::Waiting => None,
                 _ => prior.and_then(|state| state.open_ask_key.clone()),
             };
+            let interrupted_turn_id = match &observation.signal {
+                LifecycleSignal::TurnInterrupted { turn_id } => turn_id.clone(),
+                LifecycleSignal::Registered => None,
+                _ if transition.opened_turn => None,
+                _ => prior.and_then(|state| state.interrupted_turn_id.clone()),
+            };
             self.states.insert(
                 key,
                 FollowState {
                     lifecycle: transition.next,
                     open_ask_key,
+                    interrupted_turn_id,
                 },
             );
         }
@@ -309,6 +319,7 @@ mod tests {
                 edits: false,
                 name: None,
                 native_key: Some("sibling-call".to_owned()),
+                turn_id: None,
             },
         );
 

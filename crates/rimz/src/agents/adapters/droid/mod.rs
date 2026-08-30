@@ -314,6 +314,7 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
                 edits: self.spec().tool_edits_files(payload),
                 name: None,
                 native_key: None,
+                turn_id: None,
             },
             "Stop" => LifecycleSignal::TurnEnded {
                 errored: false,

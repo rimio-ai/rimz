@@ -308,6 +308,7 @@ impl crate::agents::capabilities::HookCapability for AmpAdapter {
                     .unwrap_or_else(|| self.spec().tool_edits_files(payload)),
                 name: None,
                 native_key: None,
+                turn_id: None,
             },
             "agent_end" => LifecycleSignal::TurnEnded {
                 errored: parsed.status.as_deref() != Some("done"),

@@ -474,6 +474,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
                 edits: true,
                 name: Some("edit".to_owned()),
                 native_key: None,
+                turn_id: None,
             }),
         ),
         (
@@ -483,6 +484,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
                 edits: false,
                 name: Some("bash".to_owned()),
                 native_key: None,
+                turn_id: None,
             }),
         ),
         (
@@ -492,6 +494,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
                 edits: false,
                 name: Some("read".to_owned()),
                 native_key: None,
+                turn_id: None,
             }),
         ),
     ] {
@@ -517,6 +520,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
                 edits: false,
                 name: None,
                 native_key: None,
+                turn_id: None,
             },
             "{event}"
         );

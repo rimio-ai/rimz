@@ -568,6 +568,10 @@ pub struct AgentState {
     /// no identity and therefore replay with this field absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_ask: Option<OpenAsk>,
+    /// Provider turn id most recently canceled for this session. A matching
+    /// trailing tool completion is ignored instead of reopening the turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupted_turn_id: Option<String>,
     /// When this agent last began compacting its context window — the timestamp
     /// of its most-recent compaction-start signal (`PreCompact` or Pi
     /// `session_before_compact`). Set by the rollup, cleared by the session's
@@ -672,6 +676,8 @@ struct AgentStateWire {
     waiting_since: Option<Timestamp>,
     #[serde(default)]
     open_ask: Option<OpenAsk>,
+    #[serde(default)]
+    interrupted_turn_id: Option<String>,
     compacting_since: Option<Timestamp>,
     #[serde(default)]
     compaction_count: u32,
@@ -742,6 +748,7 @@ impl From<AgentStateWire> for AgentState {
             turn_started_at: wire.turn_started_at,
             waiting_since: wire.waiting_since,
             open_ask: wire.open_ask,
+            interrupted_turn_id: wire.interrupted_turn_id,
             compacting_since: wire.compacting_since,
             compaction_count: wire.compaction_count,
             tool_calls: wire.tool_calls,
@@ -813,6 +820,7 @@ impl AgentState {
             turn_started_at: None,
             waiting_since: None,
             open_ask: None,
+            interrupted_turn_id: None,
             compacting_since: None,
             compaction_count: 0,
             tool_calls: BTreeMap::new(),

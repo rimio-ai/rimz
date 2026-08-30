@@ -132,7 +132,10 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
         "Stop",
         &json!({"sessionId":"s1","reason":"cancelled"}),
     );
-    assert_eq!(interrupted.signal, LifecycleSignal::TurnInterrupted);
+    assert_eq!(
+        interrupted.signal,
+        LifecycleSignal::TurnInterrupted { turn_id: None }
+    );
     assert!(
         hook_observation(
             &adapter,
@@ -200,6 +203,7 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
                 edits,
                 name: None,
                 native_key: None,
+                turn_id: None,
             }
         );
     }
@@ -214,6 +218,7 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
             edits: false,
             name: None,
             native_key: None,
+            turn_id: None,
         }
     );
     assert_eq!(

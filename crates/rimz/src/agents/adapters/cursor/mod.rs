@@ -401,9 +401,10 @@ impl crate::agents::capabilities::HookCapability for CursorAdapter {
                 edits: self.spec().tool_edits_files(payload),
                 name: None,
                 native_key: None,
+                turn_id: None,
             },
             "stop" if parsed.stop_outcome() == payloads::StopOutcome::Aborted => {
-                LifecycleSignal::TurnInterrupted
+                LifecycleSignal::TurnInterrupted { turn_id: None }
             }
             "stop" => LifecycleSignal::TurnEnded {
                 errored: parsed.stop_outcome() == payloads::StopOutcome::Error,

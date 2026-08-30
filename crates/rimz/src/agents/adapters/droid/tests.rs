@@ -107,7 +107,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
     );
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
     assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
-    let running = step(None, None, &prompt.signal).next;
+    let running = step(None, None, None, &prompt.signal).next;
     assert_eq!(running.status, AgentStatus::Running);
     assert_eq!(running.phase, TurnPhase::Reasoning);
 
@@ -127,6 +127,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
                 edits,
                 name: None,
                 native_key: None,
+                turn_id: None,
             }
         );
     }
@@ -145,7 +146,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
         compacting: false,
     };
     assert_eq!(
-        step(Some(&prior), None, &stop.signal).next.status,
+        step(Some(&prior), None, None, &stop.signal).next.status,
         AgentStatus::Success
     );
 

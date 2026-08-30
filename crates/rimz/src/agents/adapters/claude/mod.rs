@@ -1002,6 +1002,7 @@ fn map_claude_lifecycle_signal(
                 .as_ref()
                 .and_then(|tool| tool.tool_name.clone()),
             native_key: None,
+            turn_id: None,
         }),
         "PreToolUse" => {
             match spec.blocking_tool_kind(
@@ -1021,6 +1022,7 @@ fn map_claude_lifecycle_signal(
                     edits: false,
                     name: None,
                     native_key: None,
+                    turn_id: None,
                 }),
             }
         }

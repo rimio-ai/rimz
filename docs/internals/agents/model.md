@@ -136,11 +136,11 @@ The edges, precisely:
 | `turn_ended`, clean | `running` → `success` | the turn resolved; the phase rests |
 | `turn_ended`, errored | `running` → `failed` | the error bit always wins |
 | `turn_ended`, clean with background work in flight | `running` → `running` | the rollup parks; display projects `success` with `⋯ bg` |
-| `turn_interrupted` | any → `idle` | the provider or user canceled the turn, closing it with no result |
+| `turn_interrupted` | any → `idle` | the provider or user canceled the turn, closing it with no result; carries the provider turn id when known |
 | `awaiting_input` | any → `waiting` | a blocking prompt ([`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs): permission, plan approval, or question) holds the row for a human; a repeat restamps it |
 | `subagent_started` | *(none)* → `running` | establishes the child row, keyed by the child's own id; a terminal `success` or `failed` child holds its verdict when a reordered start arrives late |
 | `subagent_stopped` | `running` → `success` / `failed` | the child's terminal verdict, kept through the parent's turn |
-| `tool_used` (mutating) | resting or *(none)* → `running`, reconciled; `waiting` → `running` | completed work proves a turn; attention rows hold; a keyed ask clears only for a tool with the same native key, while either key being absent preserves the any-completion fallback; the first file-editing tool moves the phase to `acting` |
+| `tool_used` (mutating) | resting or *(none)* → `running`, reconciled; `waiting` → `running` | completed work proves a turn, except a completion carrying the id of the turn just interrupted is trailing canceled-turn output and is ignored; attention rows hold; a keyed ask clears only for a tool with the same native key, while either key being absent preserves the any-completion fallback; the first file-editing tool moves the phase to `acting` |
 | `compacting` | status and phase held, except `waiting` → `running`, reconciled | stamps the [compaction head](#the-compaction-bracket); compaction proves the native prompt released the pane, so it clears a waiting row and the ask behind it |
 | `compaction_ended` | auto → `running` (phase carried) · manual → prior resting status resumed, or stale `running` → `idle` · trigger unknown → held · any close on `waiting` → `running` | closes and counts an open [bracket](#the-compaction-bracket) |
 | `ended` | held, row stamped ended | the reducer records `ended_at`; reaching `step` preserves the prior lifecycle state as an ignored no-op |

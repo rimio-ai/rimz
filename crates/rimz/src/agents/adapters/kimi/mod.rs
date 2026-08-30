@@ -354,6 +354,7 @@ fn kimi_root_signal(
         edits: false,
         name: None,
         native_key: None,
+        turn_id: None,
     };
     match event_name {
         "SessionStart" => Some(LifecycleSignal::Registered),
@@ -384,6 +385,7 @@ fn kimi_root_signal(
             edits: adapter.spec().tool_edits_files(payload),
             name: None,
             native_key: None,
+            turn_id: None,
         }),
         "Stop" | "Interrupt" => Some(LifecycleSignal::TurnEnded {
             errored: false,

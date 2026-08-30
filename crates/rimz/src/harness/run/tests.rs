@@ -379,6 +379,7 @@ fn record_lifecycle_folds_transcript_path_on_run_writes() {
             edits: true,
             name: None,
             native_key: None,
+            turn_id: None,
         },
     );
     tool.transcript_path = Some("/tmp/second.jsonl".to_owned());
@@ -437,6 +438,7 @@ fn record_lifecycle_folds_first_late_transcript_path() {
             edits: true,
             name: None,
             native_key: None,
+            turn_id: None,
         },
     );
     tool.transcript_path = Some("/tmp/late.jsonl".to_owned());

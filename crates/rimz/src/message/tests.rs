@@ -312,7 +312,7 @@ fn when_parser_accepts_literal_statuses_and_duration_units() {
 #[test]
 fn delivery_checkpoint_recognizes_turn_boundaries() {
     let checkpoint = crate::agents::DELIVERY_CHECKPOINT;
-    assert!(checkpoint.contains(&LifecycleSignal::TurnInterrupted));
+    assert!(checkpoint.contains(&LifecycleSignal::TurnInterrupted { turn_id: None }));
     assert!(checkpoint.contains(&LifecycleSignal::TurnEnded {
         errored: false,
         parked_on_background: false,

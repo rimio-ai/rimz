@@ -458,6 +458,7 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
                     edits: false,
                     name: None,
                     native_key: None,
+                    turn_id: None,
                 })
             }
             "tool_after" => Some(LifecycleSignal::ToolUsed {
@@ -465,6 +466,7 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
                 edits: self.spec().tool_edits_files(payload),
                 name: optional_payload_string(payload, &["tool_name"]),
                 native_key: None,
+                turn_id: None,
             }),
             "session_compacting" => Some(LifecycleSignal::Compacting),
             "session_compacted" => Some(LifecycleSignal::CompactionEnded {

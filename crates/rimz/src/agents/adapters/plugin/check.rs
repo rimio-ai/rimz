@@ -356,7 +356,7 @@ fn replay(adapter: &PluginAdapter, path: &Path) -> Result<ReplayCheckReport, Str
             states.remove(&agent_id);
             "ended".into()
         } else {
-            let transition = step(states.get(&agent_id), None, &observation.signal);
+            let transition = step(states.get(&agent_id), None, None, &observation.signal);
             states.insert(agent_id, transition.next);
             state_label(&transition.next)
         };

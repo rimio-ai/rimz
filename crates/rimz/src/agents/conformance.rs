@@ -585,6 +585,7 @@ fn awaiting_input_projects_to_waiting() {
             let transition = step(
                 Some(&prior),
                 None,
+                None,
                 &LifecycleSignal::AwaitingInput {
                     kind: ask_kind,
                     ask_id: None,
