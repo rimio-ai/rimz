@@ -576,6 +576,8 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
                 &config.agents.commands,
                 &sources,
                 rimz::config::effective::ProfileScope::Agents,
+                Vec::new(),
+                None,
                 json,
                 path,
             );

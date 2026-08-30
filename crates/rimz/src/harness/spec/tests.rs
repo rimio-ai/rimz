@@ -7,6 +7,7 @@ fn profile(agent: &str) -> Profile {
     Profile {
         agent: agent.to_owned(),
         description: None,
+        subagents: None,
         mode: None,
         model: None,
         effort: None,
@@ -517,6 +518,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
         Profile {
             agent: "claude".to_owned(),
             description: None,
+            subagents: None,
             mode: Some(PermissionMode::Auto),
             model: Some("claude-model".to_owned()),
             effort: Some("high".to_owned()),

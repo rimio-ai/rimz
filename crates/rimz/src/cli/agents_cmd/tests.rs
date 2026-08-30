@@ -30,6 +30,7 @@ fn planner_profiles() -> ProfilesConfig {
         Profile {
             agent: "claude".to_owned(),
             description: None,
+            subagents: None,
             mode: None,
             model: None,
             effort: None,
@@ -73,6 +74,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
         Profile {
             agent: "claude".to_owned(),
             description: Some("Plans the main lane".to_owned()),
+            subagents: None,
             mode: None,
             model: None,
             effort: None,
@@ -87,6 +89,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
         Profile {
             agent: "codex".to_owned(),
             description: Some("Child profile".to_owned()),
+            subagents: None,
             mode: None,
             model: None,
             effort: None,
@@ -1061,6 +1064,7 @@ mod launch_options {
             rimz::config::Profile {
                 agent: "codex".to_owned(),
                 description: None,
+                subagents: None,
                 mode: None,
                 model: Some("declared".to_owned()),
                 effort: None,

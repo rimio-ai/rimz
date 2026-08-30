@@ -259,6 +259,8 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
         &request.spec,
         &workspace,
         &rimz::config::MachineConfig::default(),
+        rimz::config::effective::ProfileScope::Agents,
+        None,
     )
     .expect("prepare supervised launch")
     .layout;
@@ -276,6 +278,35 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
 }
 
 #[test]
+fn general_inheritance_is_a_preset_below_explicit_overrides() {
+    let mut request = supervised_request("fix-it", true);
+    request.effort = Some("low".to_owned());
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workspace =
+        rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
+    let inherited = rimz::harness::subagent_policy::GeneralLaunch {
+        kind: rimz::ids::AgentKind::new_unchecked("claude"),
+        model: Some("opus".to_owned()),
+        effort: Some("high".to_owned()),
+    };
+
+    let prepared = super::run::prepare_supervised_launch_layout(
+        &request,
+        "claude",
+        &workspace,
+        &rimz::config::MachineConfig::default(),
+        rimz::config::effective::ProfileScope::Subagents,
+        Some(&inherited),
+    )
+    .expect("prepare inherited launch")
+    .layout;
+    let cell = prepared.agent_cells().next().expect("agent cell");
+
+    assert_eq!(cell.launch.model.as_deref(), Some("opus"));
+    assert_eq!(cell.launch.effort.as_deref(), Some("low"));
+}
+
+#[test]
 fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
     let request = supervised_request("amp", true);
     let dir = tempfile::tempdir().expect("temp dir");
@@ -287,6 +318,8 @@ fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
         "claude",
         &workspace,
         &rimz::config::MachineConfig::default(),
+        rimz::config::effective::ProfileScope::Subagents,
+        None,
     )
     .expect_err("spec-like prompt");
     assert!(

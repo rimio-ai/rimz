@@ -1624,7 +1624,8 @@ fn validate_agents_base(
 ) -> std::result::Result<(), InvalidAgentsLayer> {
     validate_agents_config(agents, path).map_err(InvalidAgentsLayer::Agents)?;
     validate_subagent_profiles_config(subagents, agents, path)
-        .map_err(InvalidAgentsLayer::Subagents)
+        .map_err(InvalidAgentsLayer::Subagents)?;
+    validate_subagent_allowlists_config(agents, subagents, path).map_err(InvalidAgentsLayer::Agents)
 }
 
 fn effective_with_fragments<'a>(
@@ -1670,7 +1671,24 @@ fn validate_agents_file(
     path: &Path,
 ) -> Result<()> {
     validate_agents_config(agents, path)?;
-    validate_subagent_profiles_config(subagents, agents, path)
+    validate_subagent_profiles_config(subagents, agents, path)?;
+    validate_subagent_allowlists_config(agents, subagents, path)
+}
+
+fn validate_subagent_allowlists_config(
+    agents: &AgentsConfig,
+    subagents: &SubagentProfilesConfig,
+    path: &Path,
+) -> Result<()> {
+    crate::harness::spec::validate_subagent_allowlists(
+        &agents.profiles,
+        &subagents.profiles,
+        &agents.commands,
+    )
+    .map_err(|source| ConfigErr::Agents {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn validate_subagent_profiles_config(
@@ -1678,7 +1696,7 @@ fn validate_subagent_profiles_config(
     agents: &AgentsConfig,
     path: &Path,
 ) -> Result<()> {
-    crate::harness::spec::validate_profile_namespace(
+    crate::harness::spec::validate_subagent_profile_namespace(
         &subagents.profiles,
         &agents.commands,
         &agents.teams,

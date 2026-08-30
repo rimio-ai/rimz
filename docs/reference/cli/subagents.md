@@ -30,7 +30,7 @@ Each array entry has the single-launch fields that make sense for data-driven de
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `spec` | yes | Agent kind or configured profile |
+| `spec` | yes | `general`, an agent kind, or a configured profile |
 | `prompt` | exactly one | Complete task supplied by the parent |
 | `prompt_file` | exactly one | File whose contents become the prompt; exclusive with `prompt` |
 | `name` | no | Durable child petname |
@@ -61,6 +61,8 @@ rimz subagents wait "$first" "$second"
 
 The bare form and `launch` verb are equivalent. A prompt is mandatory: the parent must supply the whole assignment as the second positional argument or with `--prompt-file PATH`. Relative paths resolve from the caller's current working directory. The child inherits the parent's current checkout and lane.
 
+The built-in `general` spec launches a child of the caller's provider kind. Its model and effort default to the caller's launch-stamped values; precedence is an explicit `--model`/`--effort`, then the caller's value, then a same-kind `[subagents.profiles]` value, then the provider default. `--agent` rebases it like any other spec. Fanout entries may also set `"spec": "general"`.
+
 | Behavior | Default | Override |
 | --- | --- | --- |
 | Execution | supervised print mode, background | `--wait[=DURATION]` joins and prints the result |
@@ -83,7 +85,9 @@ rimz subagents profiles --path
 rimz subagents profiles --json --path
 ```
 
-`profiles` lists `[subagents.profiles]` profiles and configured launch commands available for one child as compact cards. Profile cards include their optional descriptions; `--path` adds the defining-file path. JSON also omits `path` unless `--path` is passed, keeps that path absolute, and includes `source` to distinguish profiles from commands. `[agents.profiles]` entries are excluded. Built-in and registered agent kinds remain directly launchable but are omitted from this configured-profile catalog. It also works from a user shell. Team names are excluded because a subagent launch creates one agent, not a cohort.
+`profiles` lists the built-in `general` spec first, followed by `[subagents.profiles]` profiles and configured launch commands available for one child as compact cards. Profile cards include their optional descriptions; `--path` adds the defining-file path. JSON also omits `path` unless `--path` is passed, keeps that path absolute, and includes `source` (`builtin`, `profile`, or `command`). `[agents.profiles]` entries are excluded. Registered agent kinds remain directly launchable but are omitted from this catalog. It also works from a user shell.
+
+Inside an agent whose `[agents.profiles]` entry sets `subagents = [...]`, the catalog includes only listed specs. A launch naming any other positional spec or `--agent` rebase is refused before RimZ creates a run or pane. Team names are excluded because a subagent launch creates one agent, not a cohort.
 
 ## Join results
 

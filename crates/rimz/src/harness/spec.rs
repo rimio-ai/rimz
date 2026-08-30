@@ -343,6 +343,22 @@ pub enum LayoutErr {
     InvalidCommandName { name: String },
     #[error("command name `{name}` is reserved for `rimz agents`")]
     ReservedCommandName { name: String },
+    #[error(
+        "`{name}` is reserved for the built-in `rimz subagents general` spec; choose another name"
+    )]
+    ReservedSubagentSpec { name: String },
+    #[error(
+        "`[subagents.profiles.{profile}]` sets `subagents`, but a subagent cannot launch; remove the field"
+    )]
+    SubagentAllowlistOnSubagentProfile { profile: String },
+    #[error(
+        "profile `{profile}` allows subagent `{entry}`, which is not `general`, a [subagents.profiles] name, a command, or an agent kind; valid: {valid}"
+    )]
+    UnknownSubagentAllowlistEntry {
+        profile: String,
+        entry: String,
+        valid: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, LayoutErr>;
@@ -424,6 +440,63 @@ pub fn validate_profile_namespace(
     for name in teams.0.keys() {
         if is_cell_word(name, profiles, commands) {
             return Err(LayoutErr::ReservedTeamName(name.clone()));
+        }
+    }
+    Ok(())
+}
+
+/// Validate the profile namespace dedicated to the `rimz subagents` doorway.
+pub fn validate_subagent_profile_namespace(
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+    teams: &TeamsConfig,
+) -> Result<()> {
+    validate_profile_namespace(profiles, commands, teams)?;
+    if profiles
+        .0
+        .contains_key(crate::harness::subagent_policy::GENERAL_SPEC)
+    {
+        return Err(LayoutErr::ReservedSubagentSpec {
+            name: crate::harness::subagent_policy::GENERAL_SPEC.to_owned(),
+        });
+    }
+    if let Some((profile, _)) = profiles
+        .0
+        .iter()
+        .find(|(_, profile)| profile.subagents.is_some())
+    {
+        return Err(LayoutErr::SubagentAllowlistOnSubagentProfile {
+            profile: profile.clone(),
+        });
+    }
+    Ok(())
+}
+
+pub fn validate_subagent_allowlists(
+    profiles: &ProfilesConfig,
+    subagent_profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<()> {
+    let valid = format!(
+        "{}, {}",
+        crate::harness::subagent_policy::GENERAL_SPEC,
+        valid_cells(subagent_profiles, commands)
+    );
+    for (profile_name, profile) in &profiles.0 {
+        let Some(allowed) = profile.subagents.as_ref() else {
+            continue;
+        };
+        for entry in allowed {
+            if entry == crate::harness::subagent_policy::GENERAL_SPEC
+                || is_cell_word(entry, subagent_profiles, commands)
+            {
+                continue;
+            }
+            return Err(LayoutErr::UnknownSubagentAllowlistEntry {
+                profile: profile_name.clone(),
+                entry: entry.clone(),
+                valid: valid.clone(),
+            });
         }
     }
     Ok(())
@@ -1390,6 +1463,9 @@ fn validate_command_names(commands: &CommandsConfig) -> Result<()> {
                 .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+' || ch == '/')
         {
             return Err(LayoutErr::InvalidCommandName { name: name.clone() });
+        }
+        if name == crate::harness::subagent_policy::GENERAL_SPEC {
+            return Err(LayoutErr::ReservedSubagentSpec { name: name.clone() });
         }
         if petname::RESERVED_AGENT_WORDS.contains(&name.as_str()) {
             return Err(LayoutErr::ReservedCommandName { name: name.clone() });

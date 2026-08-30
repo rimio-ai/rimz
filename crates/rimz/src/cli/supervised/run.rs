@@ -67,6 +67,8 @@ pub(super) fn prepare_supervised_launch_layout(
     spec: &str,
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
+    scope: rimz::config::effective::ProfileScope,
+    inherited: Option<&rimz::harness::subagent_policy::GeneralLaunch>,
 ) -> Result<rimz::harness::plan::ResolvedLaunch> {
     let effective = rimz::config::effective::load(
         &machine_config.agents,
@@ -74,11 +76,6 @@ pub(super) fn prepare_supervised_launch_layout(
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
-    let scope = if request.subagent {
-        rimz::config::effective::ProfileScope::Subagents
-    } else {
-        rimz::config::effective::ProfileScope::Agents
-    };
     let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
         scope,
@@ -94,8 +91,10 @@ pub(super) fn prepare_supervised_launch_layout(
         &effective.teams,
     )?;
     let preset = rimz::agents::LaunchPreset {
-        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
-        effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
+        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref())
+            .or_else(|| inherited.and_then(|launch| launch.model.clone())),
+        effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref())
+            .or_else(|| inherited.and_then(|launch| launch.effort.clone())),
         system_prompt_file: request.system_prompt_file.clone(),
         append_system_prompt_files: request.append_system_prompt_files.clone(),
     };
@@ -396,34 +395,72 @@ fn prepare_supervised(
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
-    let lane = request
-        .channel
-        .clone()
-        .or_else(|| crate::cli::current_channel(&workspace));
-    let mut spec = Cow::Borrowed(request.spec.as_str());
-    let mut inferred_lane = None;
+    let projection = rimz::harness::ancestry::launch_ancestry_required()
+        .then(|| store.runtime_projection(rimz::RuntimeScope::Audit))
+        .transpose()?;
+    let caller = projection
+        .as_ref()
+        .map(|projection| {
+            rimz::harness::ancestry::resolve_launch_caller_from_env(&projection.agents)
+        })
+        .transpose()?;
+    let ancestry = rimz::harness::ancestry::resolve_launch_ancestry(
+        caller,
+        request.subagent,
+        machine_config.agents.max_chain_length,
+    )?;
     let scope = if request.subagent {
         rimz::config::effective::ProfileScope::Subagents
     } else {
         rimz::config::effective::ProfileScope::Agents
     };
+    let mut spec = Cow::Borrowed(request.spec.as_str());
+    let mut inherited = None;
+    if request.subagent
+        && let Some(caller) = caller
+    {
+        rimz::harness::subagent_policy::check_allowed(
+            caller,
+            &effective.profiles,
+            &spec,
+            request.agent.as_deref(),
+        )?;
+        if spec.trim() == rimz::harness::subagent_policy::GENERAL_SPEC {
+            let general = rimz::harness::subagent_policy::general_launch(caller);
+            spec = Cow::Owned(general.kind.to_string());
+            inherited = Some(general);
+        }
+    }
+    let lane = request
+        .channel
+        .clone()
+        .or_else(|| crate::cli::current_channel(&workspace));
+    let mut inferred_lane = None;
     if let Some(channel) = lane.as_deref() {
         let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
         if let Some(team) = rimz::harness::target::channel_team(&snapshot.agents, channel) {
-            spec = rimz::harness::spec::qualify_spec_in_channel(
-                &request.spec,
+            let qualified = rimz::harness::spec::qualify_spec_in_channel(
+                &spec,
                 channel,
                 team,
                 &effective.teams,
                 effective.profiles_for(scope),
                 &machine_config.agents.commands,
             )?;
-            if matches!(spec, Cow::Owned(_)) {
+            if let Cow::Owned(qualified) = qualified {
+                spec = Cow::Owned(qualified);
                 inferred_lane = Some(channel.to_owned());
             }
         }
     }
-    let resolved = prepare_supervised_launch_layout(request, &spec, &workspace, &machine_config)?;
+    let resolved = prepare_supervised_launch_layout(
+        request,
+        &spec,
+        &workspace,
+        &machine_config,
+        scope,
+        inherited.as_ref(),
+    )?;
     let team_name = resolved.team_name;
     let layout = resolved.layout;
     let agent_cells = layout.agent_cells().collect::<Vec<_>>();
@@ -437,16 +474,6 @@ fn prepare_supervised(
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
     let prompt = supervised_prompt(request, adapter);
-    let ancestry = if rimz::harness::ancestry::launch_ancestry_required() {
-        let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-        rimz::harness::ancestry::resolve_launch_ancestry_from_env(
-            &projection.agents,
-            request.subagent,
-            machine_config.agents.max_chain_length,
-        )?
-    } else {
-        None
-    };
     let worktree_launch = request.worktree.is_some() || request.from_pr.is_some();
     if worktree_launch && !crate::cli::confirm_cross_repo_worktree(&workspace)? {
         return Ok(None);

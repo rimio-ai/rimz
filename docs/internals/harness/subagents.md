@@ -75,6 +75,12 @@ The wrapper records its binding asynchronously after the mux starts it, so a sub
 
 The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output and input formats, retries, and verification. Each of those needs a decision the delegating agent is not well placed to make, and each is still reachable by calling `rimz agents` directly. Its launch resolution and `profiles` catalog read `[subagents.profiles]`, while `rimz agents` reads `[agents.profiles]`; a wrong-doorway profile names both sections in the error. Commands and teams remain shared. `profiles` never lists teams because one launch produces one agent rather than a cohort.
 
+## Caller policy
+
+The supervised runner resolves the durable caller before it resolves a subagent spec. [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs) then applies the caller's `[agents.profiles]` policy: when that profile sets `subagents = [...]`, both the positional spec and any `--agent` rebase must appear literally in the list. Refusal happens before provider preflight, store append, or mux mutation. The same policy filters `rimz subagents profiles` when invoked inside the agent; a user-shell catalog remains unfiltered.
+
+The built-in `general` spec is rewritten to the caller's `AgentKind` before ordinary subagent profile resolution. The caller's launch-stamped model and effort become presets below explicit launch flags and above profile defaults. Keeping this caller-dependent rule out of the generic spec parser lets the rest of resolution, including same-kind profiles and `--agent` rebasing, remain unchanged.
+
 ## Single launch and fanout share one composition
 
 `rimz subagents fanout` accepts a JSON array and desugars every entry through the same `SubagentLaunchArgs::into_agent_launch` path above. Task `timeout` wins over the fanout flag, which wins over the configured default. Fanout-level `keep` applies uniformly; per-task foreground, retention, and passthrough argv are not part of the data format.
@@ -89,7 +95,7 @@ A runtime failure during that loop aborts the remaining launches and reports eve
 
 ## Launch generations and parentage
 
-Ancestry resolves in [`plan.rs`](../../../crates/rimz/src/harness/plan.rs) as step 4 of [the compile path](./fleet.md#from-spec-to-panes) — **before** provider preflight, worktree creation, store append, or any mux action, so a refusal leaves nothing behind.
+Ancestry resolves in the supervised runner before layout compilation — **before** provider preflight, worktree creation, store append, or any mux action, so a refusal leaves nothing behind.
 
 `resolve_launch_caller_from_env` finds the launching agent's durable row. It reads `RIMZ_AGENT_KIND` and `RIMZ_AGENT_ID`, then matches the row whose `launch_id` equals that id, with the kind corroborating the match so a stale cross-provider environment cannot attach a child to the wrong row. Only an agent process with no launch id at all — one that survived an upgrade — may fall back to an unambiguous live pane stamp.
 

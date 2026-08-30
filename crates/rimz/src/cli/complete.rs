@@ -166,7 +166,12 @@ pub(crate) fn agent_specs() -> Vec<CompletionCandidate> {
 
 pub(crate) fn subagent_specs() -> Vec<CompletionCandidate> {
     let config = MachineConfig::load_lenient();
-    launch_specs_from(&config, &config.subagents.profiles)
+    let mut candidates = vec![candidate(
+        rimz::harness::subagent_policy::GENERAL_SPEC,
+        "builtin · caller's kind",
+    )];
+    candidates.extend(launch_specs_from(&config, &config.subagents.profiles));
+    candidates
 }
 
 pub(crate) fn team_names() -> Vec<CompletionCandidate> {
@@ -456,6 +461,15 @@ mod tests {
             !candidates
                 .iter()
                 .any(|candidate| candidate.get_value() == "writer")
+        );
+    }
+
+    #[test]
+    fn subagent_completion_starts_with_general() {
+        let candidates = subagent_specs();
+        assert_eq!(
+            candidates[0].get_value().to_string_lossy(),
+            rimz::harness::subagent_policy::GENERAL_SPEC
         );
     }
 

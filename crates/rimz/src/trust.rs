@@ -1216,6 +1216,21 @@ mod tests {
     }
 
     #[test]
+    fn subagent_allowlist_does_not_change_trust_hash() {
+        // The allowlist only narrows launches; it is not executable surface.
+        let base: ProjectConfig =
+            toml::from_str("[profiles.x]\nagent = \"claude\"\n").expect("base config");
+        let restricted: ProjectConfig =
+            toml::from_str("[profiles.x]\nagent = \"claude\"\nsubagents = [\"explorer\"]\n")
+                .expect("restricted config");
+
+        assert_eq!(
+            executable_surface_hash(&base),
+            executable_surface_hash(&restricted)
+        );
+    }
+
+    #[test]
     fn project_notifications_do_not_enter_trust_hash() {
         let base =
             project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");

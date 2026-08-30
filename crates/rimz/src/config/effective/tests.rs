@@ -19,6 +19,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
     Profile {
         agent: agent.to_owned(),
         description: None,
+        subagents: None,
         mode: None,
         model: None,
         effort: None,
@@ -497,6 +498,36 @@ fn trusted_repo_subagent_profile_overlays_machine_profile() {
     let reviewer = effective.0.get("reviewer").expect("reviewer profile");
     assert_eq!(reviewer.agent, "codex");
     assert_eq!(reviewer.args.as_deref(), Some("--repo"));
+}
+
+#[test]
+fn trusted_repo_allowlist_can_reference_repo_subagent_profile() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(
+        &project,
+        "[profiles.planner]\nagent = \"claude\"\nsubagents = [\"repo-child\"]\n\
+         [subagents.profiles.repo-child]\nagent = \"codex\"\n",
+    );
+    crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
+
+    let effective = super::load(
+        &AgentsConfig::default(),
+        &ProfilesConfig::default(),
+        project.path(),
+        config.path(),
+    )
+    .expect("merged catalogs validate together");
+
+    assert_eq!(
+        effective
+            .profiles
+            .0
+            .get("planner")
+            .and_then(|profile| profile.subagents.as_deref()),
+        Some(["repo-child".to_owned()].as_slice())
+    );
+    assert!(effective.subagent_profiles.0.contains_key("repo-child"));
 }
 
 #[test]
