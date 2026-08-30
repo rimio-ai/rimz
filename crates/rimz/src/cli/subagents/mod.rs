@@ -578,20 +578,17 @@ fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
         &rimz::store::paths::config_home(),
     )?;
     effective.overlay_profile_sources(&mut sources);
-    let mut reports = crate::cli::profile_report::available_profiles(
+    let catalog = rimz::harness::subagent_policy::catalog(
+        caller.as_ref().and_then(|caller| caller.profile.as_deref()),
+        &effective.profiles,
         &effective.subagent_profiles,
         &config.agents.commands,
+    );
+    let reports = crate::cli::profile_report::subagent_reports(
+        catalog,
+        &effective.subagent_profiles,
         &sources,
-        rimz::config::effective::ProfileScope::Subagents,
     );
-    reports.insert(
-        0,
-        crate::cli::profile_report::general_report(caller.as_ref()),
-    );
-    if let Some(caller) = caller.as_ref() {
-        let allowed = rimz::harness::subagent_policy::allowed_specs(caller, &effective.profiles);
-        crate::cli::profile_report::retain_allowed(&mut reports, allowed);
-    }
     crate::cli::profile_report::list_profiles(
         reports,
         rimz::config::effective::ProfileScope::Subagents,

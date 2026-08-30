@@ -47,6 +47,12 @@ The restriction marker is internal to this doorway. A peer launched with `rimz a
 
 The launch planner independently rejects any `rimz agents` or `rimz subagents` call whose durable caller is a pane-backed child. That check blocks the child from launching another RimZ process, while the process restriction blocks the provider's native delegation tool. The reminder covers every adapter and states both rules in the child's instruction context.
 
+## Parents learn their catalog
+
+The exec wrapper builds every non-child's allowed catalog from its launching profile and appends an availability reminder on the adapter's native append-system-text channel. Fresh launches, resumes, forks, restarts, and recovery launches all pass through that wrapper. Claude, Codex, Qwen, and Droid receive the reminder; adapters without a native channel receive none because an interactive launch has no user prompt to extend safely.
+
+The reminder points the agent at `Skill(rimz-subagents)` and lists the same filtered specs as `rimz subagents profiles --json`. A profile with `subagents = []` instead receives a disabled reminder telling it to work directly; an available catalog with no configured profiles or commands receives dedicated nothing-configured text instead of an empty list. Both surfaces use `subagent_policy::catalog`, so catalog assembly, literal allowlist filtering, and the distinction between a disabled policy and an available but empty named catalog have one owner. If effective project config fails during crash recovery, reminder enrichment warns and is skipped rather than killing the recovered pane.
+
 ## What a launch desugars to
 
 `rimz subagents <spec> <prompt>` builds an ordinary `AgentLaunchArgs` and hands it to the same background supervised launcher a fanout uses. The sugar is entirely in the defaults and the optional join:
@@ -77,9 +83,7 @@ The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`
 
 ## Caller policy
 
-The supervised runner resolves the durable caller before it resolves a subagent spec. [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs) then applies the caller's `[agents.profiles]` policy: when that profile sets `subagents = [...]`, both the positional spec and any `--agent` rebase must appear literally in the list. Refusal happens before provider preflight, store append, or mux mutation. The same policy filters `rimz subagents profiles` when invoked inside the agent; a user-shell catalog remains unfiltered.
-
-The built-in `general` spec is rewritten to the caller's `AgentKind` before ordinary subagent profile resolution. The caller's current provider-observed model and effort become presets below explicit launch flags. A cross-kind `--agent` rebase drops the inherited model and effort; same-kind profiles still supply mode, arguments, and prompt files. Keeping this caller-dependent rule out of the generic spec parser lets the rest of resolution remain unchanged.
+The supervised runner resolves the durable caller before it resolves a subagent spec. [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs) then applies the caller's `[agents.profiles]` policy: when that profile sets `subagents = [...]`, both the positional spec and any `--agent` rebase must appear literally in the list. Refusal happens before provider preflight, store append, or mux mutation. Its shared catalog filters both `rimz subagents profiles` and the parent's launch reminder; a user-shell catalog remains unfiltered.
 
 ## Single launch and fanout share one composition
 

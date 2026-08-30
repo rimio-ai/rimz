@@ -351,7 +351,7 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
     let profile = Profile {
         agent: "claude".to_owned(),
         description: Some("test".to_owned()),
-        subagents: Some(vec!["general".to_owned()]),
+        subagents: Some(vec!["explorer".to_owned()]),
         mode: Some(PermissionMode::Yolo),
         model: Some("model".to_owned()),
         effort: Some("high".to_owned()),

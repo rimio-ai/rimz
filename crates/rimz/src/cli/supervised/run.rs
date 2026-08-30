@@ -18,9 +18,6 @@ use std::borrow::Cow;
 use std::io::{IsTerminal as _, Write as _};
 use std::sync::Arc;
 
-pub(super) type InheritedLaunch = (AgentKind, rimz::agents::LaunchPreset);
-pub(super) type SupervisedSelection<'a> = (Cow<'a, str>, Option<InheritedLaunch>);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RunPlacement {
     Split,
@@ -71,7 +68,6 @@ pub(super) fn prepare_supervised_launch_layout(
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
     scope: rimz::config::effective::ProfileScope,
-    inherited: Option<&InheritedLaunch>,
 ) -> Result<rimz::harness::plan::ResolvedLaunch> {
     let effective = rimz::config::effective::load(
         &machine_config.agents,
@@ -93,20 +89,9 @@ pub(super) fn prepare_supervised_launch_layout(
         &machine_config.agents.commands,
         &effective.teams,
     )?;
-    let inherited = inherited
-        .filter(|(caller_kind, _)| {
-            resolved
-                .layout
-                .agent_cells()
-                .next()
-                .is_some_and(|cell| &cell.kind == caller_kind)
-        })
-        .map(|(_, preset)| preset);
     let preset = rimz::agents::LaunchPreset {
-        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref())
-            .or_else(|| inherited.and_then(|preset| preset.model.clone())),
-        effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref())
-            .or_else(|| inherited.and_then(|preset| preset.effort.clone())),
+        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
+        effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
         system_prompt_file: request.system_prompt_file.clone(),
         append_system_prompt_files: request.append_system_prompt_files.clone(),
     };
@@ -131,31 +116,24 @@ pub(super) fn prepare_supervised_launch_layout(
     Ok(resolved)
 }
 
-pub(super) fn prepare_supervised_selection<'a>(
-    request: &'a SupervisedRunRequest,
+pub(super) fn check_supervised_subagent_allowed(
+    request: &SupervisedRunRequest,
     caller: Option<&rimz::agents::AgentState>,
     profiles: &rimz::config::ProfilesConfig,
-) -> Result<SupervisedSelection<'a>> {
-    let mut spec = Cow::Borrowed(request.spec.as_str());
-    let mut inherited = None;
+) -> Result<()> {
     if !request.subagent {
-        return Ok((spec, inherited));
+        return Ok(());
     }
     let Some(caller) = caller else {
-        return Ok((spec, inherited));
+        return Ok(());
     };
     rimz::harness::subagent_policy::check_allowed(
         caller,
         profiles,
-        &spec,
+        &request.spec,
         request.agent.as_deref(),
     )?;
-    if spec.trim() == rimz::harness::subagent_policy::GENERAL_SPEC {
-        let general = rimz::harness::subagent_policy::general_launch(caller);
-        spec = Cow::Owned(general.0.to_string());
-        inherited = Some(general);
-    }
-    Ok((spec, inherited))
+    Ok(())
 }
 
 pub(in crate::cli) fn run_print(
@@ -453,7 +431,8 @@ fn prepare_supervised(
     } else {
         rimz::config::effective::ProfileScope::Agents
     };
-    let (mut spec, inherited) = prepare_supervised_selection(request, caller, &effective.profiles)?;
+    check_supervised_subagent_allowed(request, caller, &effective.profiles)?;
+    let mut spec = Cow::Borrowed(request.spec.as_str());
     let lane = request
         .channel
         .clone()
@@ -476,14 +455,8 @@ fn prepare_supervised(
             }
         }
     }
-    let resolved = prepare_supervised_launch_layout(
-        request,
-        &spec,
-        &workspace,
-        &machine_config,
-        scope,
-        inherited.as_ref(),
-    )?;
+    let resolved =
+        prepare_supervised_launch_layout(request, &spec, &workspace, &machine_config, scope)?;
     let team_name = resolved.team_name;
     let layout = resolved.layout;
     let agent_cells = layout.agent_cells().collect::<Vec<_>>();
