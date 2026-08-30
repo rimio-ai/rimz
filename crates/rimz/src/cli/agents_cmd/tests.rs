@@ -1133,6 +1133,8 @@ mod pane_exec {
         completion_owned.run_id = Some(rimz::RunId::new());
         completion_owned.exit_on_run_completion = true;
         completion_owned.close_pane_on_exit = true;
+        let mut subagent_completion_owned = completion_owned.clone();
+        subagent_completion_owned.subagent = true;
         let mut close_owned = bare_exec_args();
         close_owned.close_pane_on_exit = true;
 
@@ -1141,6 +1143,13 @@ mod pane_exec {
             ("supervised run", run_owned, false, true, false),
             ("worktree", worktree_owned, false, true, true),
             ("completion", completion_owned, false, false, false),
+            (
+                "subagent completion",
+                subagent_completion_owned,
+                false,
+                true,
+                false,
+            ),
             ("close", close_owned, false, true, true),
         ] {
             assert_eq!(should_exec_agent_directly(&args), direct, "{name}");

@@ -32,7 +32,7 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
             let _ = rimz::child_process::signal_process_term(pid, Some(&process_start));
         }
         // The wrapper observes the terminal record and stops the provider, but
-        // a subagent pane is retained until explicit stop or parent exit.
+        // `--keep` retains the subagent pane until explicit stop or gc.
         return Ok(());
     }
     super::supervised::stop_supervised_run(&ctx.workspace, &ctx.store, globals, &record)
@@ -40,7 +40,7 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
 }
 
 fn retains_pane_after_timeout(record: &rimz::harness::run::RunRecord) -> bool {
-    record.subagent
+    record.subagent && record.keep
 }
 
 fn provider_process_for_run(record: &rimz::harness::run::RunRecord) -> Option<(u32, String)> {
@@ -52,7 +52,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_subagent_timeouts_retain_the_pane() {
+    fn only_kept_subagent_timeouts_retain_the_pane() {
         let mut record = rimz::harness::run::RunRecord::new(
             rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-run")),
             rimz::ids::AgentKind::new_unchecked("codex"),
@@ -63,6 +63,9 @@ mod tests {
         assert!(!retains_pane_after_timeout(&record));
 
         record.subagent = true;
+        assert!(!retains_pane_after_timeout(&record));
+
+        record.keep = true;
         assert!(retains_pane_after_timeout(&record));
     }
 

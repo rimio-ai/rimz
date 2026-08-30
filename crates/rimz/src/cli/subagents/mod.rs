@@ -101,7 +101,7 @@ struct FanoutArgs {
     /// Stop each child after this duration.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<Duration>,
-    /// Leave child panes open after completion.
+    /// Hold the panes after the children finish and past parent exit; `rimz subagents stop` or `rimz gc` reclaims them.
     #[arg(long)]
     keep: bool,
     /// Emit JSON.
@@ -164,7 +164,7 @@ struct SubagentLaunchArgs {
         value_parser = crate::cli::supervised::parse_timeout
     )]
     wait: Option<Option<Duration>>,
-    /// Leave the child pane open after completion.
+    /// Hold the pane after the child finishes and past parent exit; `rimz subagents stop` or `rimz gc` reclaims it.
     #[arg(long)]
     keep: bool,
     /// Seed the child card's description.
