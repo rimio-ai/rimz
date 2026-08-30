@@ -127,11 +127,21 @@ impl WidthControl {
         self.is_idle() && !self.is_fullscreen_held() && !self.is_unacknowledged()
     }
 
-    fn explains(&self, own_cols: u16) -> bool {
-        self.unacknowledged.is_some_and(|step| {
-            own_cols != step.width_before
-                && (own_cols > step.width_before) == (step.target > step.width_before)
-        })
+    fn settle_unacknowledged(&mut self, own_cols: u16) -> bool {
+        let Some(step) = self.unacknowledged else {
+            return false;
+        };
+        if own_cols == step.width_before {
+            return false;
+        }
+        self.unacknowledged = None;
+        if (own_cols > step.width_before) != (step.target > step.width_before) {
+            return false;
+        }
+        self.no_progress_cycles = 0;
+        self.traces
+            .push_back(WidthTransition::LateFeedback { settled: own_cols });
+        true
     }
 
     fn in_flight(&self) -> bool {
@@ -230,11 +240,8 @@ impl WidthControl {
             self.idle = None;
         }
 
-        if self.in_flight.is_none() && self.explains(own_cols) {
-            self.no_progress_cycles = 0;
-            self.unacknowledged = None;
-            self.traces
-                .push_back(WidthTransition::LateFeedback { settled: own_cols });
+        if self.in_flight.is_none() {
+            self.settle_unacknowledged(own_cols);
         }
 
         if let Some(step) = self.in_flight {
@@ -304,17 +311,6 @@ impl WidthControl {
             self.traces.push_back(WidthTransition::Idle {
                 at: own_cols,
                 reason: WidthIdleReason::ReachedTolerance,
-            });
-            return None;
-        }
-        if self.no_progress_cycles >= MAX_NO_PROGRESS_CYCLES {
-            self.idle = Some(WidthIdle {
-                at: own_cols,
-                reason: WidthIdleReason::Unacknowledged,
-            });
-            self.traces.push_back(WidthTransition::Idle {
-                at: own_cols,
-                reason: WidthIdleReason::Unacknowledged,
             });
             return None;
         }
@@ -547,7 +543,7 @@ impl WidthController {
         }
         if trigger == SidebarWidthControlTrigger::ResizeFeedback
             && !self.convergence.in_flight()
-            && !self.convergence.explains(measured_cols)
+            && !self.convergence.settle_unacknowledged(measured_cols)
         {
             if self.convergence.needs_adjustment(measured_cols) {
                 self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);

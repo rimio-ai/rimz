@@ -1230,7 +1230,30 @@ fn opposite_resize_after_timeout_still_arms_mouse_classification() {
 
     assert!(controller.classification_deadline.is_some());
     assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
-    assert!(controller.convergence.is_unacknowledged());
+    assert!(controller.convergence.unacknowledged.is_none());
+}
+
+#[test]
+fn stale_step_memory_is_consumed_once_after_retargeted_settlement() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = crate::diag::DiagSink::disabled();
+
+    controller.backstop(Some(83), Some(1), None, &diag);
+    park_after_silent_backend(&mut controller, 83, &diag);
+    crate::sidebar::width_target::pin(&runtime, target(83), 200).expect("pin new target");
+    controller.reload_target(&crate::config::ThemeConfig::default(), Some(83), &diag);
+
+    assert_eq!(controller.convergence.target(), Some(target(83)));
+    assert!(controller.convergence.unacknowledged.is_some());
+    controller.observe(70, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+    assert_eq!(controller.classification_deadline, None);
+    assert!(controller.convergence.unacknowledged.is_none());
+    assert!(controller.convergence.in_flight());
+
+    controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+    controller.observe(65, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+    assert!(controller.classification_deadline.is_some());
 }
 
 #[test]
