@@ -124,12 +124,7 @@ impl WidthControl {
     }
 
     fn retries_when_idle(&self) -> bool {
-        self.idle.is_some_and(|idle| {
-            !matches!(
-                idle.reason,
-                WidthIdleReason::FullscreenHeld | WidthIdleReason::Unacknowledged
-            )
-        })
+        self.is_idle() && !self.is_fullscreen_held() && !self.is_unacknowledged()
     }
 
     fn explains(&self, own_cols: u16) -> bool {
