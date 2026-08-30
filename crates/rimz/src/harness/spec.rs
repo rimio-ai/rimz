@@ -359,6 +359,14 @@ pub enum LayoutErr {
         entry: String,
         valid: String,
     },
+    #[error(
+        "launch refused: profile `{profile}` may only launch subagents {allowed}; `{spec}` is not one of them. Pick an allowed spec or ask the user to widen `[agents.profiles.{profile}] subagents`."
+    )]
+    SubagentSpecNotAllowed {
+        profile: String,
+        spec: String,
+        allowed: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, LayoutErr>;
