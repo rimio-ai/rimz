@@ -705,14 +705,16 @@ pub struct TabOptions {
     pub panes: LayoutPanes,
     pub focus: bool,
     pub dock_sidebar: bool,
+    /// Open immediately after the view containing this pane. `None` appends.
+    /// Placement is best-effort; an unsupported move leaves the view appended.
+    pub after: Option<PaneId>,
     pub sidebar: SidebarPaneOptions,
 }
 
 /// The daemon view (the `rimzd` tab/window) to birth *ahead* of the working
-/// view, in the same session-creation step. On Zellij this is the only way the
-/// view can lead — Zellij can't reorder tabs after birth, so the lead position
-/// is owned by the birth layout, not a later move. tmux can reorder freely, so
-/// it ignores this and leads via [`MuxBackend::open_background_view`] instead.
+/// view, in the same session-creation step. On Zellij this avoids a post-birth
+/// move for the leading daemon view; tmux ignores it and leads via
+/// [`MuxBackend::open_background_view`] instead.
 /// Only `rimz start` supplies one; every other sidebar launch passes `None`, and
 /// the working view leads as before.
 #[derive(Clone, Debug)]
@@ -889,9 +891,9 @@ pub trait MuxBackend: Send + Sync {
     fn paste_text(&self, pane: &PaneId, text: &str) -> Result<()>;
     /// Birth (or heal) the session's working view with its sidebar. When `daemon`
     /// is `Some`, the session is born with that `sidebar | content | hosts…`
-    /// view leading and the working view focused second — on Zellij the lead order is
-    /// fixed here, at birth, since tabs can't be reordered afterwards. tmux
-    /// ignores `daemon` (it leads its window via [`Self::open_background_view`]).
+    /// view leading and the working view focused second. Zellij can move later
+    /// tabs one position at a time, but births this leading view in place for
+    /// free. tmux ignores `daemon` (it leads via [`Self::open_background_view`]).
     /// Only `rimz start` passes a `daemon`; other launches pass `None` and birth
     /// the working view alone.
     fn open_sidebar(&self, opts: &SidebarPaneOptions, daemon: Option<&DaemonView>) -> Result<()>;

@@ -67,6 +67,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
             },
             focus: true,
             dock_sidebar: true,
+            after: None,
             sidebar,
         })
         .expect("open agent tab");

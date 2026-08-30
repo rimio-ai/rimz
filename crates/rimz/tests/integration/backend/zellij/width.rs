@@ -165,6 +165,7 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
             },
             focus: true,
             dock_sidebar: true,
+            after: None,
             sidebar: sidebar.clone(),
         })
         .expect("open explicit tab");
@@ -366,6 +367,7 @@ fn sidebar_widths_agree_across_tabs_after_a_pinned_retarget() {
             },
             focus: true,
             dock_sidebar: true,
+            after: None,
             sidebar: sidebar.clone(),
         })
         .expect("open retargeted tab");

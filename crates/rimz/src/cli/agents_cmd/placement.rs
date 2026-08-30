@@ -184,6 +184,7 @@ fn prepare_resolved(
             panes,
             focus: !background,
             dock_sidebar: true,
+            after: None,
             sidebar,
         }),
         Placement::NewPane => {

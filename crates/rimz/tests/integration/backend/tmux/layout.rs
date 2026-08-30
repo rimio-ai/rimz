@@ -381,6 +381,7 @@ fn open_tab_builds_multi_column_layout() {
             },
             focus: true,
             dock_sidebar: true,
+            after: None,
             sidebar: sidebar.clone(),
         })
         .expect("open_tab");
@@ -446,6 +447,7 @@ fn open_tab_builds_multi_column_layout() {
             },
             focus: false,
             dock_sidebar: true,
+            after: None,
             sidebar,
         })
         .expect("open solo tab");
@@ -514,6 +516,7 @@ fn stacked_splits_tile_the_column_evenly() {
             },
             focus: true,
             dock_sidebar: true,
+            after: None,
             sidebar,
         })
         .expect("open_tab");
@@ -595,6 +598,70 @@ fn stacked_splits_tile_the_column_evenly() {
 }
 
 #[test]
+fn open_tab_after_anchor_inserts_next_to_it() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let session = "rimz-tab-anchor";
+    server
+        .backend
+        .ensure_session(&session_opts(
+            session,
+            WorkspaceId::from_project_root(cwd.path()),
+            cwd.path(),
+            cwd.path(),
+            Some((120, 40)),
+        ))
+        .expect("ensure_session");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = SidebarPaneOptions {
+        workspace_id: WorkspaceId::from_project_root(cwd.path()),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        ..sidebar_opts(session, stub, Some(120))
+    };
+    server
+        .backend
+        .open_sidebar(&sidebar, None)
+        .expect("open_sidebar");
+    server.tmux(&["rename-window", "-t", session, "anchor"]);
+    let anchor = PaneId::from_parts(MuxName::Tmux, server.display(session, "#{pane_id}"));
+    server.tmux(&["new-window", "-d", "-t", session, "-n", "middle", "sh"]);
+    server.tmux(&["new-window", "-d", "-t", session, "-n", "tail", "sh"]);
+
+    server
+        .backend
+        .open_tab(&TabOptions {
+            title: "inserted".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    name: None,
+                }])],
+            },
+            focus: false,
+            dock_sidebar: true,
+            after: Some(anchor),
+            sidebar,
+        })
+        .expect("open anchored tab");
+
+    let windows = server.stdout(&[
+        "list-windows",
+        "-t",
+        session,
+        "-F",
+        "#{window_index} #{window_name}",
+    ]);
+    let names = windows
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .map(|(_, name)| name)
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["anchor", "inserted", "middle", "tail"], "{windows}");
+}
+
+#[test]
 fn open_tab_can_suppress_hook_docked_sidebar() {
     require_tmux!();
     let server = TmuxServer::new();
@@ -634,6 +701,7 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
             },
             focus: true,
             dock_sidebar: false,
+            after: None,
             sidebar,
         })
         .expect("open_tab");
@@ -729,6 +797,7 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
             },
             focus: false,
             dock_sidebar: true,
+            after: None,
             sidebar: sidebar.clone(),
         })
         .expect("open_tab");

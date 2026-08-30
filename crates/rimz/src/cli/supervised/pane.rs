@@ -295,6 +295,7 @@ pub(super) fn split_into_subagent_zone(
             },
             focus: false,
             dock_sidebar: true,
+            after: caller.pane.as_ref().map(|pane| pane.pane_id.clone()),
             sidebar,
         }) {
             Ok(()) => SubagentZoneOpen::Opened,

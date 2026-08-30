@@ -141,6 +141,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
             },
             focus: true,
             dock_sidebar: true,
+            after: None,
             sidebar: sidebar.clone(),
         })
         .expect("open focused source tab");
@@ -172,6 +173,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
             },
             focus: false,
             dock_sidebar: true,
+            after: None,
             sidebar,
         })
         .expect("open unfocused background tab");
@@ -191,6 +193,99 @@ fn open_tab_unfocused_routes_input_back_to_source() {
         rimz::sidebar::focus_anchor::FocusIntentState::Applied,
     );
 }
+
+#[test]
+fn open_tab_after_anchor_inserts_next_to_it() {
+    require_zellij!();
+
+    let room = LiveZellijSession::new("tab-anchor");
+    let xdg = room.path();
+    let name = room.name().to_owned();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let sidebar = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-tab-anchor")),
+        project_root: cwd.path().to_path_buf(),
+        extra_env: Default::default(),
+        cwd: cwd.path().to_path_buf(),
+        target: rimz::mux::SidebarTarget {
+            share: rimz::mux::WidthPermille::from_percent(25),
+            max_cols: std::num::NonZeroU16::new(50).expect("nonzero test width"),
+            pinned: false,
+        },
+        detected_view_size: None,
+        rimz_bin: stub,
+        pristine_birth: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &sidebar);
+    backend.open_sidebar(&sidebar, None).expect("open_sidebar");
+    wait_for_pane_count(xdg, &name, 2);
+    let client = AttachedClient::attach(&room, 160, 40);
+    let anchor_pane = expect_list_panes(xdg, &name)
+        .panes
+        .into_iter()
+        .filter(|pane| pane.is_live_terminal() && !pane.is_sidebar())
+        .min_by_key(|pane| pane.tab_position.unwrap_or(pane.tab_id))
+        .expect("anchor work pane");
+    let anchor_position = anchor_pane.tab_position.unwrap_or(anchor_pane.tab_id);
+    let anchor = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", anchor_pane.id));
+    let pane = || PaneCmd {
+        argv: vec!["sleep".to_owned(), "600".to_owned()],
+        name: None,
+    };
+    for title in ["middle", "tail"] {
+        backend
+            .open_tab(&TabOptions {
+                title: title.to_owned(),
+                panes: LayoutPanes {
+                    columns: vec![tiled_column(vec![pane()])],
+                },
+                focus: true,
+                dock_sidebar: true,
+                after: None,
+                sidebar: sidebar.clone(),
+            })
+            .expect("append fixture tab");
+    }
+    wait_for_tab_count(xdg, &name, 3);
+    let tail = wait_for_named_work_pane_count(xdg, &name, "tail", 1)[0];
+    let tail = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", tail.id));
+    client.wait_until_focused(&tail, "tail before anchored open");
+
+    backend
+        .open_tab(&TabOptions {
+            title: "inserted".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![pane()])],
+            },
+            focus: false,
+            dock_sidebar: true,
+            after: Some(anchor),
+            sidebar,
+        })
+        .expect("open anchored tab");
+    wait_for_named_work_pane_count(xdg, &name, "inserted", 1);
+    client.wait_until_focused(&tail, "tail after anchored unfocused open");
+
+    let snapshot = expect_list_panes(xdg, &name);
+    let position = |tab_name: &str| {
+        snapshot
+            .panes
+            .iter()
+            .find(|pane| pane.tab_name.as_deref() == Some(tab_name) && pane.is_live_terminal())
+            .map(|pane| pane.tab_position.unwrap_or(pane.tab_id))
+            .unwrap_or_else(|| panic!("missing tab {tab_name}: {snapshot:?}"))
+    };
+    assert_eq!(position("inserted"), anchor_position + 1, "{snapshot:?}");
+    assert_eq!(position("middle"), anchor_position + 2, "{snapshot:?}");
+    assert_eq!(position("tail"), anchor_position + 3, "{snapshot:?}");
+}
+
 #[test]
 fn open_tab_can_omit_sidebar_for_gallery_layout() {
     require_zellij!();
@@ -237,6 +332,7 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
             },
             focus: true,
             dock_sidebar: false,
+            after: None,
             sidebar,
         })
         .expect("open gallery tab");
@@ -313,6 +409,7 @@ fn native_focused_split_preserves_docked_sidebar() {
             },
             focus: true,
             dock_sidebar: true,
+            after: None,
             sidebar: sidebar.clone(),
         })
         .expect("open backend split tab layout");

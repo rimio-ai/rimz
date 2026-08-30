@@ -739,6 +739,7 @@ impl MuxBackend for TmuxBackend {
             &opts.view.name,
             &first_content.cwd,
             &first_content.argv,
+            None,
         )?;
         let view_cols = self
             .window_width(&opened.window_id)
@@ -814,6 +815,7 @@ impl MuxBackend for TmuxBackend {
             &opts.title,
             &opts.sidebar.cwd,
             &first.argv,
+            opts.after.as_ref(),
         )?;
         let window_id = opened.window_id;
         let first_pane = opened.first_pane;
