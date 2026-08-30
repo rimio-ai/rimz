@@ -143,7 +143,7 @@ pub(super) struct RunPaneCmdArgs<'a> {
 
 pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     let (close_pane_on_exit, exit_on_run_completion) =
-        run_exit_policy(args.self_cleanup_on_completion, args.subagent);
+        run_exit_policy(args.self_cleanup_on_completion);
     let rimz_bin = rimz::proc::rimz_exe();
     let name = args.adapter.spec().kind_id();
     let argv = rimz::harness::launch::exec_argv(
@@ -181,11 +181,8 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     })
 }
 
-fn run_exit_policy(self_cleanup_on_completion: bool, subagent: bool) -> (bool, bool) {
-    (
-        self_cleanup_on_completion && !subagent,
-        self_cleanup_on_completion,
-    )
+fn run_exit_policy(self_cleanup_on_completion: bool) -> (bool, bool) {
+    (self_cleanup_on_completion, self_cleanup_on_completion)
 }
 
 pub(super) fn install_run_interrupt_flag() -> Result<RunCancellation> {

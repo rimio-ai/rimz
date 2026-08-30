@@ -150,8 +150,26 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     if let Some(context) = run_context.as_ref() {
         record_provider_process(context, child.id());
     }
-    let parent_watchdog =
-        subagent_parent_watchdog(&request, run_context.as_ref(), launch_identity.as_ref());
+    let keep = run_context
+        .as_ref()
+        .and_then(|context| {
+            rimz::harness::run::load(context.store.paths(), &context.run_id)
+                .inspect_err(|err| {
+                    tracing::debug!(
+                        run_id = %context.run_id,
+                        error = %err,
+                        "could not load supervised run policy",
+                    );
+                })
+                .ok()
+        })
+        .is_some_and(|record| record.keep);
+    let parent_watchdog = subagent_parent_watchdog(
+        &request,
+        run_context.as_ref(),
+        launch_identity.as_ref(),
+        keep,
+    );
     let monitor = if request.exit_on_run_completion {
         run_context.as_ref()
     } else {
@@ -166,6 +184,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         run_context.as_ref(),
         launch_identity.as_ref(),
         entered_worktree.as_deref(),
+        keep,
         outcome,
     )
 }
@@ -231,6 +250,7 @@ fn settle_after_exit(
     run_context: Option<&RunExecContext>,
     launch_identity: Option<&LaunchIdentity>,
     entered_worktree: Option<&Path>,
+    keep: bool,
     outcome: ExecOutcome,
 ) -> ! {
     let ExecOutcome {
@@ -251,7 +271,8 @@ fn settle_after_exit(
     let abrupt = child_exit_abrupt || cleanup_signal_received();
     let session_accepts_close = !abrupt || session_accepts_agent_close(globals, session_name);
     let deliberate = close_is_deliberate(abrupt, session_accepts_close);
-    let ended_session = if deliberate && should_record_end_trace(request) {
+    let linger = should_linger_subagent(request, keep, parent_ended);
+    let ended_session = if deliberate && !linger && should_record_end_trace(request) {
         record_own_agent_end_trace(invocation, request)
     } else {
         None
@@ -269,7 +290,7 @@ fn settle_after_exit(
             "rimz: worktree cleanup did not complete: {err}"
         );
     }
-    if should_linger_subagent(request, parent_ended) {
+    if linger {
         if let Some(identity) = launch_identity {
             // Provider hooks temporarily own the runtime row while the turn
             // runs. The wrapper becomes the long-lived owner once the
@@ -286,9 +307,10 @@ fn settle_after_exit(
 
 fn should_linger_subagent(
     request: &rimz::harness::launch::ExecRequest,
+    keep: bool,
     parent_ended: bool,
 ) -> bool {
-    request.subagent && !parent_ended && !cleanup_signal_received()
+    request.subagent && keep && !parent_ended && !cleanup_signal_received()
 }
 
 fn linger_subagent(
@@ -307,7 +329,7 @@ fn linger_subagent(
         .unwrap_or("done");
     let _ = writeln!(
         std::io::stderr().lock(),
-        "rimz: subagent {run_status}; pane held for parent (`rimz subagents stop` closes it)"
+        "rimz: subagent {run_status}; --keep holds the pane (`rimz subagents stop` closes it)"
     );
     loop {
         if cleanup_signal_received() {
@@ -333,7 +355,7 @@ pub(super) fn should_exec_agent_directly(request: &rimz::harness::launch::ExecRe
 }
 
 pub(super) fn should_record_end_trace(request: &rimz::harness::launch::ExecRequest) -> bool {
-    !request.exit_on_run_completion
+    !request.exit_on_run_completion || request.subagent
 }
 
 pub(super) fn should_drop_to_shell(
@@ -1149,6 +1171,7 @@ fn subagent_parent_watchdog(
     request: &rimz::harness::launch::ExecRequest,
     run_context: Option<&RunExecContext>,
     launch_identity: Option<&LaunchIdentity>,
+    keep: bool,
 ) -> Option<rimz::harness::parent_watch::ParentWatch> {
     if !request.subagent {
         return None;
@@ -1157,18 +1180,7 @@ fn subagent_parent_watchdog(
         tracing::debug!("subagent parent watchdog has no supervised run context");
         return None;
     };
-    let record = match rimz::harness::run::load(context.store.paths(), &context.run_id) {
-        Ok(record) => record,
-        Err(err) => {
-            tracing::debug!(
-                run_id = %context.run_id,
-                error = &err as &dyn std::error::Error,
-                "subagent parent watchdog could not load run policy",
-            );
-            return None;
-        }
-    };
-    if record.keep {
+    if keep {
         return None;
     }
     let Some(identity) = launch_identity else {

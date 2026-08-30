@@ -398,10 +398,9 @@ fn stream_event_shapes_are_ndjson_ready() {
 }
 
 #[test]
-fn subagent_run_holds_its_pane_after_terminal_completion() {
-    assert_eq!(run_exit_policy(true, true), (false, true));
-    assert_eq!(run_exit_policy(true, false), (true, true));
-    assert_eq!(run_exit_policy(false, true), (false, false));
+fn subagent_run_closes_its_pane_after_terminal_completion() {
+    assert_eq!(run_exit_policy(true), (true, true));
+    assert_eq!(run_exit_policy(false), (false, false));
 
     let run_id = rimz::RunId::new();
     let launch = rimz::agents::LaunchParams::default();
@@ -430,7 +429,7 @@ fn subagent_run_holds_its_pane_after_terminal_completion() {
         pane.argv.last().expect("exec payload"),
     )
     .unwrap();
-    assert!(!request.close_pane_on_exit);
+    assert!(request.close_pane_on_exit);
     assert!(request.exit_on_run_completion);
     assert!(request.subagent);
 }
