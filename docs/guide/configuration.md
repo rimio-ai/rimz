@@ -394,6 +394,16 @@ mode = "plan"
 
 A profile is a named agent preset. `[agents.profiles]` entries belong to `rimz agents` and become addressable type handles; `[subagents.profiles]` entries belong only to `rimz subagents`. `agent` is the base, a built-in kind (`claude`, `codex`, …) or another profile in the same namespace, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `system-prompt-file`, `append-system-prompt-files`, and raw `args`. Optional `description` is listing metadata shown by `rimz agents profiles` or `rimz subagents profiles`; it is not inherited. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. Team roles expose the launch fields; loop tasks expose the subset relevant to scheduled work.
 
+An `[agents.profiles]` entry may restrict delegation by listing the only specs its agents may launch through `rimz subagents`:
+
+```toml
+[agents.profiles.planner]
+agent = "claude"
+subagents = ["general", "explorer", "designer"]
+```
+
+With no `subagents` field, every subagent spec is allowed; an empty list allows none. Entries are literal spec names and are validated against `general`, `[subagents.profiles]`, commands, and agent kinds when config loads. Team roles inherit the policy through their bound profile. The field is invalid on `[subagents.profiles]` because a subagent cannot launch again.
+
 Drop-ins under `~/.agents/profiles/<name>/agent.toml` may declare either or both profile namespaces. Their relative prompt paths root at the drop-in directory, and same-named entries in the machine `agents.toml` take precedence.
 
 Inheritance flattens at launch to one concrete adapter kind, and **the nearest set value wins for every field except prompt fragments**: a child that sets `args` replaces the base `args`, while `append-system-prompt-files` concatenates parent-first through the profile chain and a team role appends last. Fragments require a resolved `system-prompt-file` base. RimZ reads the pieces, separates them with blank lines, materializes one content-addressed replacement, and passes that complete value through the adapter's existing replacement channel. A `~` expands to home and a relative path roots at the declaring config file. Every source file must exist at launch; a missing one fails with the path to fix.
@@ -427,7 +437,7 @@ An inline spec like `rimz agents "claude,codex+term"` keeps the same shape gramm
 
 The [agents CLI reference](../reference/cli/agents.md) lists the built-in virtual cells in full.
 
-`rimz subagents` uses the same resolution order except that step 2 reads `[subagents.profiles]`. If a profile exists only in the other namespace, launch fails with the section to move or copy it to.
+`rimz subagents` uses the same resolution order except that step 2 reads `[subagents.profiles]`; its built-in `general` spec is rewritten to the caller's kind before resolution. If a profile exists only in the other namespace, launch fails with the section to move or copy it to. `general` is reserved in `[subagents.profiles]` and `[agents.commands]`.
 
 Profiles and roles become addressable handles, so they must not shadow `@all`, agent kinds (`@claude`), kind ordinals (`@claude-2`), or the pane and channel sigils (`:`, `#`). Profile, command, and team names also reserve the `agents` subcommand verbs `list`, `ls`, `show`, `profiles`, `stop`, `focus`, `fork`, `wait`, `term`, and `exec`. A config that still uses a removed table fails fast naming the rename rather than silently dropping it: `[tab]` (with its `[tab.keywords]`/`[tab.layouts]` children) → `placement` under `[agents]` plus `[agents.teams]`; `[agents.aliases]` → `[agents.profiles]` and `[agents.commands]`; `[agents.layouts]` → `[agents.teams]`. The room degrades to defaults with a warning while `rimz config` and `rimz doctor` print the precise rename.
 
@@ -457,6 +467,8 @@ timeout = "30m"
 ```
 
 These defaults apply only to the agent-only [`rimz subagents`](../reference/cli/subagents.md) doorway, which is the only launch path that creates a parented child. `timeout` is the wall-clock limit for each supervised child and defaults to 30 minutes; the producer enforces it even when no process is waiting on the result. Per-launch `--timeout` overrides this table. Subagents cannot launch agents or subagents.
+
+The `general` spec launches the caller's agent kind and inherits its launch-stamped model and effort unless the launch overrides them.
 
 Child launch presets live separately under `[subagents.profiles.<name>]`; `[agents.subagents]` continues to hold only doorway defaults such as `timeout`.
 

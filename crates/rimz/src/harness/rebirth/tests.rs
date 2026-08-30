@@ -694,6 +694,7 @@ fn team_machine() -> MachineConfig {
         Profile {
             agent: "claude".to_owned(),
             description: None,
+            subagents: None,
             mode: None,
             model: None,
             effort: None,
@@ -708,6 +709,7 @@ fn team_machine() -> MachineConfig {
         Profile {
             agent: "codex".to_owned(),
             description: None,
+            subagents: None,
             mode: None,
             model: None,
             effort: None,

@@ -186,7 +186,7 @@ pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(SubagentsSubcmd::Launch(args)) => launch_child(args.launch, args.json, globals),
         Some(SubagentsSubcmd::Fanout(fanout)) => fanout_children(fanout, globals),
         Some(SubagentsSubcmd::List { json }) => list_children(json, globals),
-        Some(SubagentsSubcmd::Profiles { json, path }) => list_profiles(json, path),
+        Some(SubagentsSubcmd::Profiles { json, path }) => list_profiles(json, path, globals),
         Some(SubagentsSubcmd::Wait {
             names,
             any,
@@ -554,14 +554,41 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
     table.render(&mut render::out()).map_err(Into::into)
 }
 
-fn list_profiles(json: bool, path: bool) -> Result<()> {
+fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
     let (config, sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
         .context("loading machine config")?;
-    crate::cli::profile_report::list_profiles(
+    if !crate::cli::send::agent_caller() {
+        return crate::cli::profile_report::list_profiles(
+            &config.subagents.profiles,
+            &config.agents.commands,
+            &sources,
+            rimz::config::effective::ProfileScope::Subagents,
+            vec![crate::cli::profile_report::general_report(None)],
+            None,
+            json,
+            path,
+        );
+    }
+    let ctx = Ctx::open(globals)?;
+    let projection = ctx
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .context("reading agent history")?;
+    let caller = rimz::harness::ancestry::resolve_launch_caller_from_env(&projection.agents)?;
+    let effective = rimz::config::effective::load(
+        &config.agents,
         &config.subagents.profiles,
+        &ctx.workspace.project_root,
+        &rimz::store::paths::config_home(),
+    )?;
+    let allowed = rimz::harness::subagent_policy::allowed_specs(caller, &effective.profiles);
+    crate::cli::profile_report::list_profiles(
+        &effective.subagent_profiles,
         &config.agents.commands,
         &sources,
         rimz::config::effective::ProfileScope::Subagents,
+        vec![crate::cli::profile_report::general_report(Some(caller))],
+        allowed,
         json,
         path,
     )

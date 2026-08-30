@@ -177,7 +177,7 @@ pub fn load(
             }
         })?;
     }
-    agents_spec::validate_profile_namespace(
+    agents_spec::validate_subagent_profile_namespace(
         &repo.subagent_profiles,
         &CommandsConfig::default(),
         &TeamsConfig::default(),
@@ -203,6 +203,11 @@ pub fn load(
     subagent_profiles.0.extend(repo.subagent_profiles.0);
     let mut teams = machine.teams.clone();
     teams.0.extend(repo.teams.0);
+    agents_spec::validate_subagent_allowlists(&profiles, &subagent_profiles, &machine.commands)
+        .map_err(|source| EffectiveConfigErr::Agents {
+            path: config_path.clone(),
+            source,
+        })?;
     Ok(LaunchAgents {
         profiles,
         subagent_profiles,

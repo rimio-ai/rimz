@@ -142,6 +142,7 @@ fn configured_profile(
     Profile {
         agent: agent.to_owned(),
         description: None,
+        subagents: None,
         mode,
         model: model.map(str::to_owned),
         effort: effort.map(str::to_owned),

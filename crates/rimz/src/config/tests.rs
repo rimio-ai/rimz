@@ -981,6 +981,7 @@ fn agents_toml_entries_override_agents_home_fragments() {
         Profile {
             agent: "claude".to_owned(),
             description: None,
+            subagents: None,
             mode: None,
             model: Some("opus".to_owned()),
             effort: None,
@@ -1114,6 +1115,7 @@ fn absent_agents_home_is_noop_and_malformed_fragment_leaves_config_unchanged() {
         Profile {
             agent: "claude".to_owned(),
             description: None,
+            subagents: None,
             mode: None,
             model: None,
             effort: None,
@@ -1378,6 +1380,7 @@ fn agent_profiles_commands_and_teams_parse() {
         Some(&Profile {
             agent: "codex".to_owned(),
             description: None,
+            subagents: None,
             mode: Some(PermissionMode::Yolo),
             model: Some("gpt-5-codex".to_owned()),
             effort: Some("high".to_owned()),
@@ -1392,6 +1395,7 @@ fn agent_profiles_commands_and_teams_parse() {
         Some(&Profile {
             agent: "claude".to_owned(),
             description: None,
+            subagents: None,
             mode: None,
             model: None,
             effort: None,
@@ -1512,6 +1516,58 @@ fn agent_and_subagent_profiles_parse_in_separate_namespaces_with_descriptions() 
         toml::from_str::<Profile>(&encoded).expect("round-trip profile"),
         *subagent
     );
+}
+
+#[test]
+fn agent_profile_subagent_allowlist_parses_round_trips_and_validates() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = dir.path().join("missing-agents-home");
+    let path = write_named(
+        &dir,
+        "agents.toml",
+        "[agents.profiles.planner]\nagent = \"claude\"\nsubagents = [\"general\", \"explorer\"]\n\
+         [subagents.profiles.explorer]\nagent = \"codex\"\n",
+    );
+    let config = MachineConfig::load_from(&path, &agents_home).expect("valid allowlist");
+    let planner = config
+        .agents
+        .profiles
+        .0
+        .get("planner")
+        .expect("planner profile");
+    assert_eq!(
+        planner.subagents.as_deref(),
+        Some(["general".to_owned(), "explorer".to_owned()].as_slice())
+    );
+    let encoded = toml::to_string(planner).expect("serialize profile");
+    assert_eq!(
+        toml::from_str::<Profile>(&encoded).expect("round-trip profile"),
+        *planner
+    );
+
+    let cases = [
+        (
+            "[agents.profiles.planner]\nagent = \"claude\"\nsubagents = [\"typo\"]\n",
+            "allows subagent `typo`",
+        ),
+        (
+            "[subagents.profiles.general]\nagent = \"claude\"\n",
+            "built-in `rimz subagents general`",
+        ),
+        (
+            "[subagents.profiles.explorer]\nagent = \"claude\"\nsubagents = []\n",
+            "a subagent cannot launch",
+        ),
+        (
+            "[agents.commands]\ngeneral = \"claude\"\n",
+            "built-in `rimz subagents general`",
+        ),
+    ];
+    for (text, expected) in cases {
+        let path = write_named(&dir, "agents.toml", text);
+        let error = MachineConfig::load_from(&path, &agents_home).expect_err("invalid config");
+        assert!(error.to_string().contains(expected), "{error:#}");
+    }
 }
 
 #[test]

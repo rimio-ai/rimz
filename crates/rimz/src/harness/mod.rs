@@ -19,6 +19,7 @@ pub mod run_timeout;
 pub mod run_wake;
 pub mod schedule;
 pub mod spec;
+pub mod subagent_policy;
 pub mod target;
 
 pub use auto_continue::AutoContinueRequest;

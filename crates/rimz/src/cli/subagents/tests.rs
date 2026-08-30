@@ -318,6 +318,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
         rimz::config::Profile {
             agent: "claude".to_owned(),
             description: None,
+            subagents: None,
             mode: None,
             model: None,
             effort: None,
@@ -332,6 +333,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
         rimz::config::Profile {
             agent: "claude".to_owned(),
             description: Some("Plans supervised work".to_owned()),
+            subagents: None,
             mode: None,
             model: Some("fable".to_owned()),
             effort: Some("high".to_owned()),
@@ -346,6 +348,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
         rimz::config::Profile {
             agent: "claude".to_owned(),
             description: None,
+            subagents: None,
             mode: None,
             model: None,
             effort: None,

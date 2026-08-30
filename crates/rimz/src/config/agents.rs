@@ -115,6 +115,10 @@ pub struct Profile {
     pub agent: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Specs this profile's agents may launch through `rimz subagents`.
+    /// `None` allows all specs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagents: Option<Vec<String>>,
     #[serde(default)]
     pub mode: Option<PermissionMode>,
     #[serde(default)]

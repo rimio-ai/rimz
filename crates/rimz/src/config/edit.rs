@@ -967,6 +967,7 @@ const ANIMATION_FIELDS: &[&str] = &["frames", "color", "effect", "speed"];
 const PROFILE_FIELDS: &[&str] = &[
     "agent",
     "description",
+    "subagents",
     "mode",
     "model",
     "effort",

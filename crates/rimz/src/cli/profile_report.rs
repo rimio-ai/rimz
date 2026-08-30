@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use super::render;
 use rimz::config::effective::ProfileScope;
+use rimz::harness::subagent_policy::GENERAL_SPEC;
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct AgentProfileReport {
@@ -59,6 +60,30 @@ pub(crate) fn available_profiles(
     reports
 }
 
+pub(crate) fn general_report(caller: Option<&rimz::agents::AgentState>) -> AgentProfileReport {
+    let kind = caller.map(|caller| caller.kind.to_string());
+    AgentProfileReport {
+        name: GENERAL_SPEC.to_owned(),
+        source: "builtin",
+        brand_kind: kind.clone(),
+        agent: kind,
+        model: caller.and_then(|caller| caller.model.clone()),
+        effort: caller.and_then(|caller| caller.effort.clone()),
+        description: Some(
+            "General-purpose child of the caller's kind; inherits its model and effort unless overridden"
+                .to_owned(),
+        ),
+        path: None,
+    }
+}
+
+pub(crate) fn retain_allowed(reports: &mut Vec<AgentProfileReport>, allowed: Option<&[String]>) {
+    let Some(allowed) = allowed else {
+        return;
+    };
+    reports.retain(|report| allowed.contains(&report.name));
+}
+
 fn provider_brand_kind<'a>(
     raw_agent: &'a str,
     profiles: &'a rimz::config::ProfilesConfig,
@@ -87,10 +112,14 @@ pub(crate) fn list_profiles(
     commands: &rimz::config::CommandsConfig,
     sources: &rimz::config::AgentSpecSources,
     scope: ProfileScope,
+    prepend: Vec<AgentProfileReport>,
+    allowed: Option<&[String]>,
     json: bool,
     show_path: bool,
 ) -> Result<()> {
     let mut reports = available_profiles(profiles, commands, sources, scope);
+    reports.splice(0..0, prepend);
+    retain_allowed(&mut reports, allowed);
     apply_path_visibility(&mut reports, show_path);
     if json {
         return render::json_pretty(&reports);
@@ -137,6 +166,7 @@ fn profile_cards(
                 let brand_kind = report.brand_kind.as_deref().unwrap_or(agent);
                 (render::palette::identity(brand_kind).bold(), segments)
             }
+            None if report.source == "builtin" => (render::palette::muted(), vec!["caller's kind"]),
             None => (render::palette::muted(), vec!["command"]),
         };
         writeln!(
@@ -262,6 +292,72 @@ mod tests {
     }
 
     #[test]
+    fn general_report_uses_caller_identity_or_labels_the_unknown_kind() {
+        let mut caller =
+            rimz::agents::AgentState::stub("claude", "caller", rimz::agents::AgentStatus::Running);
+        caller.model = Some("opus".to_owned());
+        caller.effort = Some("high".to_owned());
+        let reports = [general_report(Some(&caller)), general_report(None)];
+        let mut output = Vec::new();
+
+        profile_cards(
+            &reports,
+            ProfileScope::Subagents,
+            &mut anstream::StripStream::new(&mut output),
+        )
+        .expect("render general cards");
+
+        insta::assert_snapshot!(String::from_utf8(output).expect("utf-8"), @r"
+        general — claude · opus · high
+          General-purpose child of the caller's kind; inherits its model and effort unless overridden
+
+        general — caller's kind
+          General-purpose child of the caller's kind; inherits its model and effort unless overridden
+        ");
+        assert_eq!(reports[0].source, "builtin");
+    }
+
+    #[test]
+    fn profile_allowlist_filters_builtin_profiles_and_commands() {
+        let mut reports = vec![
+            general_report(None),
+            AgentProfileReport {
+                name: "explorer".to_owned(),
+                source: "profile",
+                brand_kind: Some("claude".to_owned()),
+                agent: Some("claude".to_owned()),
+                model: None,
+                effort: None,
+                description: None,
+                path: None,
+            },
+            AgentProfileReport {
+                name: "lint".to_owned(),
+                source: "command",
+                brand_kind: None,
+                agent: None,
+                model: None,
+                effort: None,
+                description: None,
+                path: None,
+            },
+        ];
+
+        retain_allowed(
+            &mut reports,
+            Some(&["general".to_owned(), "lint".to_owned()]),
+        );
+
+        assert_eq!(
+            reports
+                .iter()
+                .map(|report| report.name.as_str())
+                .collect::<Vec<_>>(),
+            ["general", "lint"]
+        );
+    }
+
+    #[test]
     fn chained_profiles_resolve_the_provider_for_brand_tint() {
         let profiles = rimz::config::ProfilesConfig(
             [
@@ -309,6 +405,7 @@ mod tests {
         rimz::config::Profile {
             agent: agent.to_owned(),
             description: None,
+            subagents: None,
             mode: None,
             model: None,
             effort: None,
