@@ -311,9 +311,9 @@ fn general_inheritance_is_a_preset_below_explicit_overrides() {
 }
 
 #[test]
-fn general_cross_kind_rebase_drops_current_model_but_keeps_effort() {
+fn general_cross_kind_rebase_drops_current_model_and_effort() {
     let mut request = supervised_request("fix-it", true);
-    request.agent = Some("codex".to_owned());
+    request.agent = Some("cursor".to_owned());
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
@@ -339,9 +339,9 @@ fn general_cross_kind_rebase_drops_current_model_but_keeps_effort() {
     .layout;
     let cell = prepared.agent_cells().next().expect("agent cell");
 
-    assert_eq!(cell.kind.as_str(), "codex");
-    assert_eq!(cell.launch.model.as_deref(), Some("gpt-5.5-codex"));
-    assert_eq!(cell.launch.effort.as_deref(), Some("high"));
+    assert_eq!(cell.kind.as_str(), "cursor");
+    assert_eq!(cell.launch.model, None);
+    assert_eq!(cell.launch.effort, None);
 }
 
 #[test]

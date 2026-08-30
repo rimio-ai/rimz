@@ -79,7 +79,7 @@ The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`
 
 The supervised runner resolves the durable caller before it resolves a subagent spec. [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs) then applies the caller's `[agents.profiles]` policy: when that profile sets `subagents = [...]`, both the positional spec and any `--agent` rebase must appear literally in the list. Refusal happens before provider preflight, store append, or mux mutation. The same policy filters `rimz subagents profiles` when invoked inside the agent; a user-shell catalog remains unfiltered.
 
-The built-in `general` spec is rewritten to the caller's `AgentKind` before ordinary subagent profile resolution. The caller's current provider-observed model and effort become presets below explicit launch flags. A cross-kind `--agent` rebase drops the provider-specific model while retaining portable effort, matching `rebase_onto`; same-kind profiles still supply mode, arguments, and prompt files. Keeping this caller-dependent rule out of the generic spec parser lets the rest of resolution remain unchanged.
+The built-in `general` spec is rewritten to the caller's `AgentKind` before ordinary subagent profile resolution. The caller's current provider-observed model and effort become presets below explicit launch flags. A cross-kind `--agent` rebase drops the inherited model and effort; same-kind profiles still supply mode, arguments, and prompt files. Keeping this caller-dependent rule out of the generic spec parser lets the rest of resolution remain unchanged.
 
 ## Single launch and fanout share one composition
 
