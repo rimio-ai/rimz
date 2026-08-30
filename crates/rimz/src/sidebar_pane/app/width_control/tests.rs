@@ -115,6 +115,38 @@ fn write_zellij_topology_panes(
     .expect("write pane topology");
 }
 
+fn expire_no_progress_cycle(
+    controller: &mut WidthController,
+    measured_cols: u16,
+    diag: &crate::diag::DiagSink,
+) {
+    for _ in 0..2 {
+        controller
+            .convergence
+            .in_flight
+            .as_mut()
+            .expect("width nudge in flight")
+            .at = Instant::now() - FEEDBACK_TIMEOUT;
+        controller.observe(measured_cols, SidebarWidthControlTrigger::Backstop, diag);
+    }
+}
+
+fn park_after_silent_backend(
+    controller: &mut WidthController,
+    measured_cols: u16,
+    diag: &crate::diag::DiagSink,
+) {
+    expire_no_progress_cycle(controller, measured_cols, diag);
+    assert_eq!(
+        controller.convergence.idle.map(|idle| idle.reason),
+        Some(WidthIdleReason::NoProgress),
+    );
+    controller.idle_retry_deadline = Some(Instant::now() - Duration::from_millis(1));
+    controller.backstop(Some(measured_cols), Some(1), None, diag);
+    expire_no_progress_cycle(controller, measured_cols, diag);
+    assert!(controller.convergence.is_unacknowledged());
+}
+
 #[test]
 fn one_target_converges_from_both_directions_and_none_stays_idle() {
     let now = Instant::now();
@@ -782,6 +814,7 @@ fn settled_resize_without_geometry_never_adopts() {
 
     assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
     assert!(controller.classification_deadline.is_some());
+    assert!(!controller.convergence.in_flight());
 }
 
 #[test]
@@ -1065,6 +1098,156 @@ fn unchanged_measurement_retries_once_then_stops() {
     assert_eq!(control.decide(50, now + FEEDBACK_TIMEOUT), Some((50, 72)));
     assert_eq!(control.decide(50, now + FEEDBACK_TIMEOUT * 2), None);
     assert_eq!(control.decide(50, now + FEEDBACK_TIMEOUT * 3), None);
+}
+
+#[test]
+fn no_progress_cycle_retries_once_then_parks_unacknowledged() {
+    let now = Instant::now();
+    let mut control = WidthControl::new(Some(target(72)));
+    let mut nudges = 0;
+
+    nudges += usize::from(control.decide(50, now).is_some());
+    nudges += usize::from(control.decide(50, now + FEEDBACK_TIMEOUT).is_some());
+    assert_eq!(control.decide(50, now + FEEDBACK_TIMEOUT * 2), None);
+    assert_eq!(
+        control.idle.map(|idle| idle.reason),
+        Some(WidthIdleReason::NoProgress),
+    );
+
+    control.retry_idle();
+    nudges += usize::from(control.decide(50, now + FEEDBACK_TIMEOUT * 3).is_some());
+    nudges += usize::from(control.decide(50, now + FEEDBACK_TIMEOUT * 4).is_some());
+    assert_eq!(control.decide(50, now + FEEDBACK_TIMEOUT * 5), None);
+    assert_eq!(nudges, 4);
+    assert!(control.is_unacknowledged());
+    assert_eq!(control.decide(50, now + FEEDBACK_TIMEOUT * 10), None);
+
+    assert_eq!(
+        control.decide(60, now + FEEDBACK_TIMEOUT * 11),
+        Some((60, 72)),
+    );
+    assert!(!control.is_unacknowledged());
+    assert!(
+        control
+            .traces
+            .iter()
+            .any(|transition| matches!(transition, WidthTransition::LateFeedback { settled: 60 }))
+    );
+}
+
+#[test]
+fn silent_backend_parks_after_four_nudges_without_further_idle_retries() {
+    let (dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = crate::diag::DiagSink::under(
+        dir.path().to_path_buf(),
+        runtime.workspace_id.clone(),
+        "rimz-test",
+        None,
+    );
+
+    controller.backstop(Some(83), Some(1), None, &diag);
+    park_after_silent_backend(&mut controller, 83, &diag);
+    for _ in 0..3 {
+        controller.idle_retry_deadline = Some(Instant::now() - Duration::from_millis(1));
+        controller.backstop(Some(83), Some(1), None, &diag);
+    }
+
+    assert!(controller.convergence.is_unacknowledged());
+    assert!(!controller.convergence.in_flight());
+    let events = std::fs::read_to_string(diag.log_path().expect("diagnostic path"))
+        .expect("width diagnostics")
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<crate::diag::record::DiagEnvelope>(line)
+                .expect("diagnostic envelope")
+                .event
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                crate::diag::record::DiagEvent::SidebarWidthNudge { .. }
+            ))
+            .count(),
+        4,
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        crate::diag::record::DiagEvent::SidebarWidthSettle {
+            outcome: SidebarWidthSettleOutcome::Unacknowledged,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn late_landing_nudge_is_feedback_not_mouse_intent() {
+    let (dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = crate::diag::DiagSink::under(
+        dir.path().to_path_buf(),
+        runtime.workspace_id.clone(),
+        "rimz-test",
+        None,
+    );
+
+    controller.backstop(Some(83), Some(1), None, &diag);
+    park_after_silent_backend(&mut controller, 83, &diag);
+    controller.observe(60, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+
+    assert_eq!(controller.classification_deadline, None);
+    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert!(!controller.convergence.is_unacknowledged());
+    assert!(controller.convergence.in_flight());
+    let text = std::fs::read_to_string(diag.log_path().expect("diagnostic path"))
+        .expect("width diagnostics");
+    assert!(text.lines().any(|line| {
+        matches!(
+            serde_json::from_str::<crate::diag::record::DiagEnvelope>(line)
+                .expect("diagnostic envelope")
+                .event,
+            crate::diag::record::DiagEvent::SidebarWidthSettle {
+                outcome: SidebarWidthSettleOutcome::LateFeedback,
+                learned_step: None,
+                ..
+            }
+        )
+    }));
+}
+
+#[test]
+fn opposite_resize_after_timeout_still_arms_mouse_classification() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = crate::diag::DiagSink::disabled();
+
+    controller.backstop(Some(83), Some(1), None, &diag);
+    park_after_silent_backend(&mut controller, 83, &diag);
+    controller.observe(95, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+
+    assert!(controller.classification_deadline.is_some());
+    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert!(controller.convergence.is_unacknowledged());
+}
+
+#[test]
+fn structural_change_releases_unacknowledged_park() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = crate::diag::DiagSink::disabled();
+
+    controller.backstop(Some(83), Some(1), None, &diag);
+    park_after_silent_backend(&mut controller, 83, &diag);
+    let structural_at_ms = crate::sidebar::timing::unix_now_ms();
+    write_zellij_topology_for_view_at(&runtime, 200, structural_at_ms);
+    controller.backstop(Some(83), Some(2), Some(structural_at_ms), &diag);
+
+    assert!(!controller.convergence.is_unacknowledged());
+    assert!(controller.convergence.in_flight());
+    assert_eq!(controller.convergence.no_progress_cycles, 0);
 }
 
 #[test]
