@@ -3,22 +3,20 @@
 use crate::agents::AgentState;
 use crate::config::ProfilesConfig;
 use crate::ids::AgentKind;
+use crate::{agents::LaunchPreset, harness::spec::LayoutErr};
 
 pub const GENERAL_SPEC: &str = "general";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GeneralLaunch {
-    pub kind: AgentKind,
-    pub model: Option<String>,
-    pub effort: Option<String>,
-}
-
-pub fn general_launch(caller: &AgentState) -> GeneralLaunch {
-    GeneralLaunch {
-        kind: caller.kind.clone(),
-        model: caller.model.clone(),
-        effort: caller.effort.clone(),
-    }
+pub fn general_launch(caller: &AgentState) -> (AgentKind, LaunchPreset) {
+    (
+        caller.kind.clone(),
+        LaunchPreset {
+            model: caller.model.clone(),
+            effort: caller.effort.clone(),
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+        },
+    )
 }
 
 pub fn allowed_specs<'a>(
@@ -32,22 +30,12 @@ pub fn allowed_specs<'a>(
         .and_then(|profile| profile.subagents.as_deref())
 }
 
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "launch refused: profile `{profile}` may only launch subagents {allowed}; `{spec}` is not one of them. Pick an allowed spec or ask the user to widen `[agents.profiles.{profile}] subagents`."
-)]
-pub struct SpecNotAllowed {
-    profile: String,
-    spec: String,
-    allowed: String,
-}
-
 pub fn check_allowed(
     caller: &AgentState,
     profiles: &ProfilesConfig,
     spec: &str,
     agent_override: Option<&str>,
-) -> Result<(), SpecNotAllowed> {
+) -> crate::harness::spec::Result<()> {
     let Some(allowed) = allowed_specs(caller, profiles) else {
         return Ok(());
     };
@@ -56,7 +44,7 @@ pub fn check_allowed(
         if allowed.iter().any(|candidate| candidate == requested) {
             continue;
         }
-        return Err(SpecNotAllowed {
+        return Err(LayoutErr::SubagentSpecNotAllowed {
             profile: caller.profile.clone().unwrap_or_default(),
             spec: requested.to_owned(),
             allowed: format!("[{}]", allowed.join(", ")),
@@ -100,18 +88,22 @@ mod tests {
         let (caller, _) = caller(None);
         assert_eq!(
             general_launch(&caller),
-            GeneralLaunch {
-                kind: AgentKind::new_unchecked("claude"),
-                model: Some("opus".to_owned()),
-                effort: Some("high".to_owned()),
-            }
+            (
+                AgentKind::new_unchecked("claude"),
+                LaunchPreset {
+                    model: Some("opus".to_owned()),
+                    effort: Some("high".to_owned()),
+                    system_prompt_file: None,
+                    append_system_prompt_files: Vec::new(),
+                }
+            )
         );
 
         let mut bare = caller;
         bare.model = None;
         bare.effort = None;
-        assert_eq!(general_launch(&bare).model, None);
-        assert_eq!(general_launch(&bare).effort, None);
+        assert_eq!(general_launch(&bare).1.model, None);
+        assert_eq!(general_launch(&bare).1.effort, None);
     }
 
     #[test]

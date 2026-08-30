@@ -284,10 +284,11 @@ fn general_inheritance_is_a_preset_below_explicit_overrides() {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
-    let inherited = rimz::harness::subagent_policy::GeneralLaunch {
-        kind: rimz::ids::AgentKind::new_unchecked("claude"),
+    let inherited = rimz::agents::LaunchPreset {
         model: Some("opus".to_owned()),
         effort: Some("high".to_owned()),
+        system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
     };
 
     let prepared = super::run::prepare_supervised_launch_layout(

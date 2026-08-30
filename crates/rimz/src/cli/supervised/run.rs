@@ -68,7 +68,7 @@ pub(super) fn prepare_supervised_launch_layout(
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
     scope: rimz::config::effective::ProfileScope,
-    inherited: Option<&rimz::harness::subagent_policy::GeneralLaunch>,
+    inherited: Option<&rimz::agents::LaunchPreset>,
 ) -> Result<rimz::harness::plan::ResolvedLaunch> {
     let effective = rimz::config::effective::load(
         &machine_config.agents,
@@ -426,9 +426,9 @@ fn prepare_supervised(
             request.agent.as_deref(),
         )?;
         if spec.trim() == rimz::harness::subagent_policy::GENERAL_SPEC {
-            let general = rimz::harness::subagent_policy::general_launch(caller);
-            spec = Cow::Owned(general.kind.to_string());
-            inherited = Some(general);
+            let (kind, preset) = rimz::harness::subagent_policy::general_launch(caller);
+            spec = Cow::Owned(kind.to_string());
+            inherited = Some(preset);
         }
     }
     let lane = request
