@@ -58,11 +58,24 @@ impl RuntimeProjection {
                 agents,
             },
             RuntimeScope::Runtime => {
+                let visible_parents = agents
+                    .iter()
+                    .filter(|agent| !agent.is_launched_child() && agent_is_runtime_visible(agent))
+                    .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+                    .collect::<BTreeSet<_>>();
                 let mut expelled = BTreeSet::new();
                 let agents = agents
                     .into_iter()
                     .filter(|agent| {
-                        let visible = agent_is_runtime_visible(agent);
+                        let parent_visible = agent.is_launched_child()
+                            && agent
+                                .parent_agent_kind
+                                .as_ref()
+                                .zip(agent.parent_agent_id.as_ref())
+                                .is_some_and(|(kind, id)| {
+                                    visible_parents.contains(&(kind.clone(), id.clone()))
+                                });
+                        let visible = agent_is_runtime_visible(agent) || parent_visible;
                         if !visible && agent.ended_at.is_none() {
                             expelled.insert((agent.kind.clone(), agent.agent_id.clone()));
                         }
@@ -82,7 +95,8 @@ impl RuntimeProjection {
 /// Runtime visibility for an agent. Liveness suppresses; it never gates an
 /// agent in. An unknown pid abstains (foreground/pane corroboration carries
 /// liveness — see `docs/internals/agents/model.md`); a known owner that is known-dead
-/// suppresses the stale overlay.
+/// suppresses the stale overlay. A launched child's liveness follows its visible
+/// parent, matching a native child whose runtime owner is the parent's process.
 fn agent_is_runtime_visible(agent: &AgentState) -> bool {
     agent.ended_at.is_none() && agent.runtime_owner.as_ref().is_none_or(owner_is_live)
 }
@@ -173,6 +187,40 @@ mod tests {
             .into_iter()
             .collect()
         );
+    }
+
+    #[test]
+    fn runtime_projection_keeps_ended_launched_child_only_with_visible_parent() {
+        let parent = agent(None);
+        let mut child = agent(Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "sess-child",
+            u32::MAX,
+            None,
+        )));
+        child.kind = AgentKind::new_unchecked("codex");
+        child.agent_id = AgentSessionId::from("sess-child");
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.launch_depth = Some(1);
+        child.ended_at = Some(Timestamp::UNIX_EPOCH);
+        child.status = AgentStatus::Success;
+
+        let projection = RuntimeProjection::from_parts(
+            vec![parent.clone(), child.clone()],
+            RuntimeScope::Runtime,
+        );
+        assert_eq!(projection.agents, vec![parent.clone(), child.clone()]);
+
+        let without_parent =
+            RuntimeProjection::from_parts(vec![child.clone()], RuntimeScope::Runtime);
+        assert!(without_parent.agents.is_empty());
+
+        let mut ended_parent = parent;
+        ended_parent.ended_at = Some(Timestamp::UNIX_EPOCH);
+        let ended_parent_projection =
+            RuntimeProjection::from_parts(vec![ended_parent, child], RuntimeScope::Runtime);
+        assert!(ended_parent_projection.agents.is_empty());
     }
 
     #[test]

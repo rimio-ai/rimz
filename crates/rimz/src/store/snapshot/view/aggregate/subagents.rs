@@ -96,9 +96,8 @@ fn child_is_visible(
     parent_turn_started_at: Option<Timestamp>,
     now: Timestamp,
 ) -> bool {
-    if child.is_launched_child() {
-        return child.ended_at.is_none()
-            || now.duration_since(child.last_activity).as_secs() < GHOST_SESSION_TTL_SECS;
+    if child.is_launched_child() && child.ended_at.is_none() {
+        return true;
     }
     let parent_id = child.parent_agent_id.as_deref().unwrap_or_default();
     let superseded = parent_turn_started_at.is_some_and(|started| started > child.last_activity);
