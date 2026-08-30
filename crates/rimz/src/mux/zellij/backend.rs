@@ -44,11 +44,6 @@ fn env_prefixed(env: &BTreeMap<String, String>, command: Vec<String>) -> Vec<Str
     wrapped
 }
 
-#[derive(Clone, Debug)]
-struct FocusRestoreTarget {
-    pane: PaneId,
-}
-
 #[derive(Debug, Deserialize)]
 pub(super) struct RawTab {
     pub(super) name: String,
@@ -308,7 +303,7 @@ impl ZellijBackend {
         &self,
         session_name: &str,
         workspace_id: &WorkspaceId,
-    ) -> Option<FocusRestoreTarget> {
+    ) -> Option<PaneId> {
         let mut viewed = self
             .client_view(ClientFocusOptions {
                 session_name: Some(session_name.to_owned()),
@@ -331,7 +326,7 @@ impl ZellijBackend {
             .ok()?;
         panes.iter().find_map(|candidate| {
             (candidate.is_live_terminal() && parse_zellij_raw(pane) == Some(candidate.id))
-                .then_some(FocusRestoreTarget { pane: pane.clone() })
+                .then_some(pane.clone())
         })
     }
 
@@ -339,11 +334,11 @@ impl ZellijBackend {
         &self,
         session_name: &str,
         workspace_id: &WorkspaceId,
-        restore: &FocusRestoreTarget,
+        restore: &PaneId,
     ) -> Result<()> {
-        let pane_id = parse_zellij_raw(&restore.pane).ok_or_else(|| MuxErr::Output {
+        let pane_id = parse_zellij_raw(restore).ok_or_else(|| MuxErr::Output {
             program: "zellij".to_owned(),
-            reason: format!("focus restore pane `{}` has no terminal id", restore.pane),
+            reason: format!("focus restore pane `{restore}` has no terminal id"),
         })?;
         let tab_position = self
             .raw_listed_panes(session_name, super::super::COMMAND_TIMEOUT)?
@@ -353,10 +348,10 @@ impl ZellijBackend {
             .map(|pane| pane.tab_position)
             .ok_or_else(|| MuxErr::Output {
                 program: "zellij".to_owned(),
-                reason: format!("focus restore pane `{}` is no longer live", restore.pane),
+                reason: format!("focus restore pane `{restore}` is no longer live"),
             })?;
         let runtime = self.runtime_paths_for_workspace(workspace_id.clone())?;
-        execute_focus_restoration(self, &runtime, session_name, &restore.pane, tab_position)
+        execute_focus_restoration(self, &runtime, session_name, restore, tab_position)
             .map_err(focus_action_error)
     }
 
