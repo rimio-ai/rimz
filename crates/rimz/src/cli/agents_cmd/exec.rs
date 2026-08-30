@@ -181,10 +181,12 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &request,
         globals,
         &invocation,
-        run_context.as_ref(),
+        RunExitContext {
+            run: run_context.as_ref(),
+            keep,
+        },
         launch_identity.as_ref(),
         entered_worktree.as_deref(),
-        keep,
         outcome,
     )
 }
@@ -243,29 +245,34 @@ fn apply_materialized_system_prompt(
         .extend(materialized.args.iter().cloned());
 }
 
+struct RunExitContext<'a> {
+    run: Option<&'a RunExecContext>,
+    keep: bool,
+}
+
 fn settle_after_exit(
     request: &rimz::harness::launch::ExecRequest,
     globals: &GlobalFlags,
     invocation: &ExecInvocationContext<'_>,
-    run_context: Option<&RunExecContext>,
+    run_exit: RunExitContext<'_>,
     launch_identity: Option<&LaunchIdentity>,
     entered_worktree: Option<&Path>,
-    keep: bool,
     outcome: ExecOutcome,
 ) -> ! {
+    let RunExitContext { run, keep } = run_exit;
     let ExecOutcome {
         status,
         abrupt: child_exit_abrupt,
         parent_ended,
         parent_watchdog,
     } = outcome;
-    if let Some(context) = run_context {
+    if let Some(context) = run {
         fail_run_if_child_exited_first(context, globals, RUN_EXIT_TERMINAL_GRACE);
     }
     let startup_failure =
         !status.success() && mark_launch_failed_if_provisional(invocation, launch_identity);
 
-    let session_name = run_context
+    let session_name = run
         .map(|context| context.session_name.as_str())
         .unwrap_or(&invocation.workspace.session_name);
     let abrupt = child_exit_abrupt || cleanup_signal_received();
@@ -297,7 +304,7 @@ fn settle_after_exit(
             // provider exits, so dead-provider reaping must not end the pane.
             attach_own_launch_pane(invocation, identity);
         }
-        linger_subagent(globals, session_name, run_context, status, parent_watchdog);
+        linger_subagent(globals, session_name, run, status, parent_watchdog);
     }
     if parent_ended || request.close_pane_on_exit {
         close_own_pane(globals, session_name);
