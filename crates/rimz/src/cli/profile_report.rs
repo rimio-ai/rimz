@@ -108,18 +108,11 @@ fn provider_brand_kind<'a>(
 }
 
 pub(crate) fn list_profiles(
-    profiles: &rimz::config::ProfilesConfig,
-    commands: &rimz::config::CommandsConfig,
-    sources: &rimz::config::AgentSpecSources,
+    mut reports: Vec<AgentProfileReport>,
     scope: ProfileScope,
-    prepend: Vec<AgentProfileReport>,
-    allowed: Option<&[String]>,
     json: bool,
     show_path: bool,
 ) -> Result<()> {
-    let mut reports = available_profiles(profiles, commands, sources, scope);
-    reports.splice(0..0, prepend);
-    retain_allowed(&mut reports, allowed);
     apply_path_visibility(&mut reports, show_path);
     if json {
         return render::json_pretty(&reports);

@@ -572,12 +572,13 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             let (config, sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
                 .context("loading machine config")?;
             return crate::cli::profile_report::list_profiles(
-                &config.agents.profiles,
-                &config.agents.commands,
-                &sources,
+                crate::cli::profile_report::available_profiles(
+                    &config.agents.profiles,
+                    &config.agents.commands,
+                    &sources,
+                    rimz::config::effective::ProfileScope::Agents,
+                ),
                 rimz::config::effective::ProfileScope::Agents,
-                Vec::new(),
-                None,
                 json,
                 path,
             );
