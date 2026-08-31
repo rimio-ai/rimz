@@ -247,6 +247,11 @@ fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> 
         writeln!(render::out(), "{}", child.name)?;
     }
     let Some(timeout) = wait else {
+        writeln!(
+            render::err(),
+            "@{} reports back to you as a SUBAGENT_REPORT message when it finishes; no need to wait.",
+            child.name
+        )?;
         return Ok(());
     };
     agents_cmd::wait_agent(
@@ -300,6 +305,11 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
     let Some(wait_timeout) = args.wait else {
+        writeln!(
+            render::err(),
+            "{} subagents launched; each reports back to you as a SUBAGENT_REPORT message when it finishes; no need to wait.",
+            launched.len()
+        )?;
         if args.json {
             #[derive(Serialize)]
             struct BackgroundReport<'a> {

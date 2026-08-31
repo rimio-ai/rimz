@@ -269,6 +269,11 @@ fn settle_after_exit(
     if let Some(context) = run {
         fail_run_if_child_exited_first(context, globals, RUN_EXIT_TERMINAL_GRACE);
     }
+    if let Some(context) = run
+        && !parent_ended
+    {
+        report_settled_child_or_log(context, invocation);
+    }
     let startup_failure =
         !status.success() && mark_launch_failed_if_provisional(invocation, launch_identity);
 
@@ -310,6 +315,36 @@ fn settle_after_exit(
         close_own_pane(globals, session_name);
     }
     std::process::exit(status.code().unwrap_or(1));
+}
+
+fn report_settled_child_or_log(context: &RunExecContext, invocation: &ExecInvocationContext<'_>) {
+    let run = match rimz::harness::run::load(context.store.paths(), &context.run_id) {
+        Ok(run) => run,
+        Err(err) => {
+            tracing::warn!(
+                run_id = %context.run_id,
+                error = %err,
+                "could not load settled subagent run for parent report",
+            );
+            return;
+        }
+    };
+    match rimz::harness::subagent_report::report_settled_child(
+        invocation.workspace,
+        &context.store,
+        &run,
+    ) {
+        Ok(outcome) => tracing::debug!(
+            run_id = %context.run_id,
+            ?outcome,
+            "evaluated settled subagent parent report",
+        ),
+        Err(err) => tracing::warn!(
+            run_id = %context.run_id,
+            error = %err,
+            "could not queue settled subagent parent report",
+        ),
+    }
 }
 
 fn should_linger_subagent(
