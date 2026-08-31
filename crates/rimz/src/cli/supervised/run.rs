@@ -163,7 +163,13 @@ pub(in crate::cli) fn run_print(
         OutputFormat::Text => {
             let mut stdout = render::out();
             let mut stderr = render::err();
-            supervised::output::print_run_output(record_ref, &mut stdout, &mut stderr)?
+            supervised::output::print_run_output(
+                record_ref,
+                &mut stdout,
+                &mut stderr,
+                render::prose::Prose::for_stdout(),
+                render::prose::prose_width(0),
+            )?
         }
         OutputFormat::Json => crate::cli::render::json_pretty(record_ref)?,
         // stream-json already emitted its events as the run progressed.
@@ -230,7 +236,12 @@ impl PresentationWaiter {
             let mut stdout = render::out();
             let mut gutter = render::GutterWriter::new(&mut stdout);
             let mut stderr = render::err();
-            let mut sink = supervised::output::StreamSink::text(&mut gutter, &mut stderr);
+            let mut sink = supervised::output::StreamSink::text(
+                &mut gutter,
+                &mut stderr,
+                render::prose::Prose::for_stdout(),
+                render::prose::prose_width(4),
+            );
             supervised::stream::stream_blocking_run(
                 &self.waiter,
                 &prepared.store,

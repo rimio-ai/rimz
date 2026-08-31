@@ -186,7 +186,12 @@ impl WaitStyle {
                 if json {
                     print_wait_json(std::iter::once(outcome))
                 } else {
-                    print_wait_block(&mut render::out(), &mut render::err(), outcome)
+                    print_wait_block(
+                        &mut render::out(),
+                        &mut render::err(),
+                        outcome,
+                        render::prose::Prose::for_stdout(),
+                    )
                 }
             }
             Self::All { json } => {
@@ -515,6 +520,7 @@ pub(super) fn print_wait_block(
     out: &mut impl Write,
     err: &mut impl Write,
     outcome: &TargetOutcome,
+    prose: render::prose::Prose,
 ) -> Result<()> {
     write_wait_header(out, outcome)?;
     if let TerminalPayload::Run(record) = &outcome.payload {
@@ -526,7 +532,13 @@ pub(super) fn print_wait_block(
         if emits_diagnostics {
             write_wait_header(err, outcome)?;
         }
-        supervised::output::print_run_output(record, out, err)?;
+        supervised::output::print_run_output(
+            record,
+            out,
+            err,
+            prose,
+            render::prose::prose_width(0),
+        )?;
     }
     writeln!(out)?;
     Ok(())
@@ -560,7 +572,13 @@ fn print_single_outcome(outcome: &TargetOutcome, json: bool) -> Result<()> {
         TerminalPayload::Run(record) => {
             let mut stdout = render::out();
             let mut stderr = render::err();
-            supervised::output::print_run_output(record, &mut stdout, &mut stderr)
+            supervised::output::print_run_output(
+                record,
+                &mut stdout,
+                &mut stderr,
+                render::prose::Prose::for_stdout(),
+                render::prose::prose_width(0),
+            )
         }
         TerminalPayload::Agent(agent) if json => render::json_pretty(agent),
         TerminalPayload::Agent(_) | TerminalPayload::Disappeared => Ok(()),
@@ -591,11 +609,12 @@ fn report_settled_disappearances(waits: &WaitSet, settled: &[usize]) -> Result<(
 fn print_settled_blocks(waits: &WaitSet, settled: &[usize]) -> Result<()> {
     let mut out = render::out();
     let mut err = render::err();
+    let prose = render::prose::Prose::for_stdout();
     for &index in settled {
         let outcome = waits
             .outcome(index)
             .context("settled wait without outcome")?;
-        print_wait_block(&mut out, &mut err, outcome)?;
+        print_wait_block(&mut out, &mut err, outcome, prose)?;
     }
     Ok(())
 }
@@ -648,7 +667,12 @@ fn wait_interactive_agent_stream(
     let mut sink = if options.json {
         supervised::output::StreamSink::ndjson(&mut json_stdout)
     } else {
-        supervised::output::StreamSink::text(&mut stdout, &mut stderr)
+        supervised::output::StreamSink::text(
+            &mut stdout,
+            &mut stderr,
+            render::prose::Prose::for_stdout(),
+            render::prose::prose_width(0),
+        )
     };
     let deadline = options.timeout.map(|duration| Instant::now() + duration);
     loop {
@@ -700,7 +724,12 @@ fn wait_run_stream(store: &rimz::Store, run: &RunRecord, options: WaitStreamOpti
     let mut sink = if options.json {
         supervised::output::StreamSink::ndjson(&mut json_stdout)
     } else {
-        supervised::output::StreamSink::text(&mut stdout, &mut stderr)
+        supervised::output::StreamSink::text(
+            &mut stdout,
+            &mut stderr,
+            render::prose::Prose::for_stdout(),
+            render::prose::prose_width(0),
+        )
     };
     match supervised::stream::stream_attached_run(
         store,

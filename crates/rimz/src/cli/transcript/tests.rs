@@ -96,10 +96,14 @@ fn render_raw(entries: &[RenderEntry], today: Date) -> String {
 }
 
 fn render_threaded(entries: &[RenderEntry], today: Date) -> String {
+    render_threaded_with_prose(entries, today, Prose::Raw)
+}
+
+fn render_threaded_with_prose(entries: &[RenderEntry], today: Date, prose: Prose) -> String {
     let tz = TimeZone::get("America/New_York").expect("timezone");
     let display = assemble_threads(entries, 0, false);
     let mut out = anstream::StripStream::new(Vec::new());
-    render_display_chat_to(&mut out, None, &display, &tz, today).expect("render");
+    render_display_chat_to(&mut out, None, &display, &tz, today, prose).expect("render");
     String::from_utf8(out.into_inner()).expect("utf8")
 }
 
@@ -477,6 +481,43 @@ fn threaded_render_puts_replies_behind_a_spine() {
     );
     assert!(out.contains("│ question"), "{out}");
     assert!(out.contains("Jun 29 2026 · 00:02"), "{out}");
+}
+
+#[test]
+fn threaded_render_formats_markdown_behind_the_spine() {
+    let root = linked(
+        render_entry(
+            TranscriptKind::Message,
+            "@planner",
+            Some("@coder"),
+            "2026-06-28T04:00:00Z",
+            "handoff",
+        ),
+        Some(1),
+        &[],
+    );
+    let reply = linked(
+        render_entry(
+            TranscriptKind::Assistant,
+            "@coder",
+            None,
+            "2026-06-28T04:01:00Z",
+            "**Done**\n\n- first item\n- second item",
+        ),
+        None,
+        &[1],
+    );
+
+    let out = render_threaded_with_prose(
+        &[root, reply],
+        jiff::civil::date(2026, 6, 28),
+        Prose::Markdown,
+    );
+
+    assert!(out.contains("│ Done"), "{out}");
+    assert!(out.contains("│ • first item"), "{out}");
+    assert!(out.contains("│ • second item"), "{out}");
+    assert!(!out.contains("**"), "{out}");
 }
 
 fn log_entry(

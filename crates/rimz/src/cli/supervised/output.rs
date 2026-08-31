@@ -6,14 +6,17 @@ use anyhow::Result;
 use rimz::harness::run::{RunLiveStatus, RunRecord, RunStatus};
 
 use crate::cli::render;
+use crate::cli::render::prose::Prose;
 
 pub(crate) fn print_run_output(
     record: &RunRecord,
     out: &mut impl Write,
     err: &mut impl Write,
+    prose: Prose,
+    width: usize,
 ) -> Result<()> {
     if let Some(message) = trimmed_message(record.last_message.as_deref()) {
-        writeln!(out, "{message}")?;
+        write_prose(out, message, prose, width)?;
     } else if record.status == RunStatus::Completed {
         writeln!(
             err,
@@ -105,6 +108,8 @@ pub(crate) enum StreamSink<'a> {
         out: &'a mut dyn Write,
         err: &'a mut dyn Write,
         last_emitted: Option<String>,
+        prose: Prose,
+        width: usize,
     },
     Ndjson {
         out: &'a mut dyn Write,
@@ -113,11 +118,18 @@ pub(crate) enum StreamSink<'a> {
 }
 
 impl<'a> StreamSink<'a> {
-    pub(crate) fn text(out: &'a mut dyn Write, err: &'a mut dyn Write) -> Self {
+    pub(crate) fn text(
+        out: &'a mut dyn Write,
+        err: &'a mut dyn Write,
+        prose: Prose,
+        width: usize,
+    ) -> Self {
         Self::Text {
             out,
             err,
             last_emitted: None,
+            prose,
+            width,
         }
     }
 
@@ -135,8 +147,12 @@ impl<'a> StreamSink<'a> {
     pub(crate) fn message(&mut self, text: String) -> Result<()> {
         match self {
             Self::Text {
-                out, last_emitted, ..
-            } => emit_text_message(&mut **out, last_emitted, &text),
+                out,
+                last_emitted,
+                prose,
+                width,
+                ..
+            } => emit_text_message(&mut **out, last_emitted, &text, *prose, *width),
             Self::Ndjson { out, .. } => emit_ndjson(&mut **out, &RunStreamEvent::Message { text }),
         }
     }
@@ -170,12 +186,16 @@ impl<'a> StreamSink<'a> {
     ) -> Result<()> {
         match self {
             Self::Text {
-                out, last_emitted, ..
+                out,
+                last_emitted,
+                prose,
+                width,
+                ..
             } => {
                 if let Some(message) = trimmed_message(last_message)
                     && last_emitted.as_deref() != Some(message)
                 {
-                    emit_text_message(&mut **out, last_emitted, message)?;
+                    emit_text_message(&mut **out, last_emitted, message, *prose, *width)?;
                 }
                 Ok(())
             }
@@ -201,6 +221,8 @@ fn emit_text_message(
     out: &mut dyn Write,
     last_emitted: &mut Option<String>,
     text: &str,
+    prose: Prose,
+    width: usize,
 ) -> Result<()> {
     let Some(message) = trimmed_message(Some(text)) else {
         return Ok(());
@@ -208,9 +230,16 @@ fn emit_text_message(
     if last_emitted.is_some() {
         writeln!(out)?;
     }
-    writeln!(out, "{message}")?;
+    write_prose(out, message, prose, width)?;
     out.flush()?;
     *last_emitted = Some(message.to_owned());
+    Ok(())
+}
+
+fn write_prose(out: &mut dyn Write, message: &str, prose: Prose, width: usize) -> Result<()> {
+    for line in prose.lines(message, width) {
+        writeln!(out, "{line}")?;
+    }
     Ok(())
 }
 
@@ -269,9 +298,23 @@ mod tests {
         let mut out = Vec::new();
         let mut err = Vec::new();
 
-        print_run_output(&record, &mut out, &mut err).unwrap();
+        print_run_output(&record, &mut out, &mut err, Prose::Raw, 100).unwrap();
 
         assert_eq!(String::from_utf8(out).unwrap(), "done\n");
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn completed_run_renders_markdown_when_requested() {
+        let mut record = record(RunStatus::Completed);
+        record.last_message = Some("**done**\n\n- checked".to_owned());
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        print_run_output(&record, &mut out, &mut err, Prose::Markdown, 40).unwrap();
+
+        let plain = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+        assert_eq!(plain, "done\n\n• checked\n");
         assert!(err.is_empty());
     }
 
@@ -283,7 +326,7 @@ mod tests {
         let mut out = Vec::new();
         let mut err = Vec::new();
 
-        print_run_output(&record, &mut out, &mut err).unwrap();
+        print_run_output(&record, &mut out, &mut err, Prose::Raw, 100).unwrap();
 
         assert!(out.is_empty());
         let raw = String::from_utf8(err).unwrap();
@@ -312,7 +355,7 @@ mod tests {
         let mut out = Vec::new();
         let mut err = Vec::new();
 
-        print_run_output(&record, &mut out, &mut err).unwrap();
+        print_run_output(&record, &mut out, &mut err, Prose::Raw, 100).unwrap();
 
         assert_eq!(String::from_utf8(out).unwrap(), "claimed done\n");
         let err = anstream::adapter::strip_str(&String::from_utf8(err).unwrap()).to_string();
@@ -353,7 +396,7 @@ mod tests {
         record.last_message = Some("done".to_owned());
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let mut sink = StreamSink::text(&mut out, &mut err);
+        let mut sink = StreamSink::text(&mut out, &mut err, Prose::Raw, 100);
 
         sink.message("done".to_owned()).unwrap();
         sink.end_record(&record).unwrap();
@@ -368,7 +411,7 @@ mod tests {
         record.last_message = Some("done".to_owned());
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let mut sink = StreamSink::text(&mut out, &mut err);
+        let mut sink = StreamSink::text(&mut out, &mut err, Prose::Raw, 100);
 
         sink.end_record(&record).unwrap();
 

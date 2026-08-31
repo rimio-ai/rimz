@@ -373,7 +373,16 @@ fn print_run_summary(
     summary: &RunSummary<'_>,
 ) -> Result<()> {
     let mut out = ui::out();
-    write_run_summary(&mut out, name, entry, action, mode, keep, summary)?;
+    write_run_summary(
+        &mut out,
+        name,
+        entry,
+        action,
+        mode,
+        keep,
+        summary,
+        ui::prose::Prose::for_stdout(),
+    )?;
     Ok(())
 }
 

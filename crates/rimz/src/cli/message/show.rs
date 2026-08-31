@@ -49,6 +49,7 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
     let raw_target = message_target(&message, &agents);
     let target = scoped_handle(raw_target.clone(), message.channel.as_deref());
     let sender = scoped_handle(message.sender.render(), message.channel.as_deref());
+    let prose = render::prose::Prose::for_stdout();
     let mut out = render::out();
     writeln!(
         out,
@@ -67,7 +68,7 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
     writeln!(out)?;
     writeln!(out, "{}", render::paint(render::palette::header(), "TEXT"))?;
     if let Some(text) = message.text.as_deref() {
-        write_indented_block(&mut out, text)?;
+        write_indented_block(&mut out, text, prose)?;
     } else {
         writeln!(out, "  ({})", textless_location(&message, &raw_target))?;
     }
@@ -338,12 +339,22 @@ pub(super) fn time_until_with_absolute(ts: Timestamp, now: Timestamp) -> String 
     format!("{} ({absolute})", render::rel_until(ts, now))
 }
 
-pub(super) fn write_indented_block(out: &mut impl Write, text: &str) -> Result<()> {
+pub(super) fn write_indented_block(
+    out: &mut impl Write,
+    text: &str,
+    prose: render::prose::Prose,
+) -> Result<()> {
     if text.is_empty() {
         writeln!(out, "  ")?;
         return Ok(());
     }
-    for line in text.split('\n') {
+    if prose == render::prose::Prose::Raw {
+        for line in text.split('\n') {
+            writeln!(out, "  {line}")?;
+        }
+        return Ok(());
+    }
+    for line in prose.lines(text, render::prose::prose_width(2)) {
         writeln!(out, "  {line}")?;
     }
     Ok(())

@@ -583,7 +583,12 @@ fn blocking_text_stream_leaves_forensics_to_its_caller() {
     let mut cursor = rimz::agents::transcript::TranscriptCursor::new(true);
     let mut out = Vec::new();
     let mut err = Vec::new();
-    let mut sink = output::StreamSink::text(&mut out, &mut err);
+    let mut sink = output::StreamSink::text(
+        &mut out,
+        &mut err,
+        crate::cli::render::prose::Prose::Raw,
+        100,
+    );
 
     let failed = stream_blocking_run(
         &waiter,
@@ -604,7 +609,12 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
     let run_id = fixture.run_id();
     let mut out = Vec::new();
     let mut err = Vec::new();
-    let mut sink = output::StreamSink::text(&mut out, &mut err);
+    let mut sink = output::StreamSink::text(
+        &mut out,
+        &mut err,
+        crate::cli::render::prose::Prose::Raw,
+        100,
+    );
 
     let outcome = stream_attached_run(
         &fixture.store,

@@ -166,7 +166,12 @@ fn render_show_report(
     if let Some(view) = report.recent_transcript.as_ref() {
         section(&mut out, "Recent transcript")?;
         let tz = crate::cli::machine_config().time_zone();
-        crate::cli::transcript::render_lines_to(&mut out, view, &tz)?;
+        crate::cli::transcript::render_lines_to(
+            &mut out,
+            view,
+            &tz,
+            render::prose::Prose::for_stdout(),
+        )?;
     }
     if let Some(capture) = report.capture.as_ref() {
         if report.recent_transcript.is_some() {

@@ -1667,7 +1667,13 @@ fn plural_wait_block_prints_completed_answer() {
     let mut out = Vec::new();
     let mut err = Vec::new();
 
-    wait::print_wait_block(&mut out, &mut err, &outcome).unwrap();
+    wait::print_wait_block(
+        &mut out,
+        &mut err,
+        &outcome,
+        crate::cli::render::prose::Prose::Raw,
+    )
+    .unwrap();
 
     assert_eq!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
@@ -1694,7 +1700,13 @@ fn plural_wait_block_marks_failure_and_prints_forensics() {
     let mut out = Vec::new();
     let mut err = Vec::new();
 
-    wait::print_wait_block(&mut out, &mut err, &outcome).unwrap();
+    wait::print_wait_block(
+        &mut out,
+        &mut err,
+        &outcome,
+        crate::cli::render::prose::Prose::Raw,
+    )
+    .unwrap();
 
     assert_eq!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
@@ -1721,7 +1733,13 @@ fn plural_wait_block_for_agent_payload_is_header_only() {
     let mut out = Vec::new();
     let mut err = Vec::new();
 
-    wait::print_wait_block(&mut out, &mut err, &outcome).unwrap();
+    wait::print_wait_block(
+        &mut out,
+        &mut err,
+        &outcome,
+        crate::cli::render::prose::Prose::Raw,
+    )
+    .unwrap();
 
     assert_eq!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),

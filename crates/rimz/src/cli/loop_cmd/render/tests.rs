@@ -617,6 +617,7 @@ fn render_record_detail_titles_status_age_and_mode() {
         &detail,
         "LAST FAILURE",
         Timestamp::from_second(30).expect("timestamp"),
+        ui::prose::Prose::Raw,
     )
     .unwrap();
 
@@ -649,6 +650,7 @@ fn render_record_detail_marks_failed_check_output() {
         &detail,
         "LAST FAILURE",
         Timestamp::from_second(30).expect("timestamp"),
+        ui::prose::Prose::Raw,
     )
     .unwrap();
 
