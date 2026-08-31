@@ -33,6 +33,7 @@ pub(crate) use fold::{
     stage_carryover_for_rotation,
 };
 pub(crate) use fold::{lifecycle_follow_seed, lifecycle_log_generation};
+pub(crate) use panes::compare_same_pane_owners;
 pub use panes::{
     HookPaneRecoveryCandidate, HookPaneRecoveryContext, HookPaneRecoveryMethod,
     HookPaneRecoveryPhase, HookPaneRecoverySelection,

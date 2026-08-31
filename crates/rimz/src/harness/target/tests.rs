@@ -1467,6 +1467,45 @@ fn team_cohorts_group_live_root_members_by_team_and_lane() {
 }
 
 #[test]
+fn team_cohorts_keep_only_the_owner_of_an_inherited_launch_identity() {
+    let mut rested = agent("codex", "conversation-a", Some("auth"), "terminal_1");
+    rested.launch_id = Some(AgentSessionId::from("launch_coder"));
+    rested.team = Some("forge".to_owned());
+    rested.role = Some("coder".to_owned());
+    rested.channel = Some("auth".to_owned());
+    rested.status = AgentStatus::Success;
+    rested.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+        crate::pane::RuntimeOwnerKind::Agent,
+        "conversation-a",
+        42,
+        Some("agent-start".to_owned()),
+    ));
+    let mut successor = agent("codex", "conversation-b", Some("auth"), "terminal_1");
+    successor.launch_id = Some(AgentSessionId::from("launch_coder"));
+    successor.team = Some("forge".to_owned());
+    successor.role = Some("coder".to_owned());
+    successor.channel = Some("auth".to_owned());
+    successor.status = AgentStatus::Running;
+    successor.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+        crate::pane::RuntimeOwnerKind::Agent,
+        "conversation-b",
+        42,
+        Some("agent-start".to_owned()),
+    ));
+    let agents = [rested, successor];
+
+    let cohorts = team_cohorts(&agents);
+
+    assert_eq!(cohorts.len(), 1);
+    assert_eq!(cohorts[0].members.len(), 1);
+    assert_eq!(cohorts[0].members[0].agent_id.as_str(), "conversation-b");
+    assert_eq!(
+        agent_handle(cohorts[0].members[0], &cohorts[0].members, false),
+        "@coder"
+    );
+}
+
+#[test]
 fn launched_children_matches_a_parent_that_adopted_its_provider_session() {
     let mut parent = agent("codex", "provider-parent", None, "terminal_1");
     parent.launch_id = Some("launch-parent".into());

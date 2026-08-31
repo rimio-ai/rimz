@@ -848,7 +848,21 @@ pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
             continue;
         };
         let channel = agent_channel(agent).unwrap_or_else(|| "external".to_owned());
-        grouped.entry((team, channel)).or_default().push(agent);
+        let members = grouped.entry((team, channel)).or_default();
+        let same_occupancy = agent.launch_id.as_ref().and_then(|launch_id| {
+            members.iter().position(|member| {
+                member.kind == agent.kind
+                    && member.launch_id.as_ref() == Some(launch_id)
+                    && crate::store::session_death::same_agent_instance(member, agent)
+            })
+        });
+        let Some(index) = same_occupancy else {
+            members.push(agent);
+            continue;
+        };
+        if crate::store::snapshot::compare_same_pane_owners(members[index], agent).is_gt() {
+            members[index] = agent;
+        }
     }
     grouped
         .into_iter()
