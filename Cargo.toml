@@ -95,16 +95,19 @@ terminal_size = "0.4"
 # CLICOLOR_FORCE and TTY), so `--json` and snapshot output stay byte-clean while
 # interactive runs get color; `colorchoice` carries the `--color` override into
 # anstream's global. `unicode-width` measures display columns so the borderless
-# auto-fit tables align under wide glyphs. This is the clap-native styling stack
-# (the same one cargo and ripgrep use) and every one of these crates is already
-# in the tree transitively through clap — promoting them to direct deps adds
-# zero footprint. Writing through anstream uses `writeln!`, matching the
-# existing `print_json` stdout path, so the `print_stdout` lint still guards the
-# protocol surface.
+# auto-fit tables align under wide glyphs. `pulldown-cmark` supplies the
+# CommonMark event stream and table, strikethrough, and task-list extensions;
+# hand-rolling CommonMark inline parsing would be substantially larger and less
+# correct. Its CLI and HTML backends stay disabled because RimZ consumes only
+# the parser events. The styling stack is already present transitively through
+# clap; writing through anstream uses `writeln!`, matching the existing
+# `print_json` stdout path, so the `print_stdout` lint still guards the protocol
+# surface.
 anstyle = "1"
 anstream = "1"
 colorchoice = "1"
 unicode-width = "0.2"
+pulldown-cmark = { version = "0.13", default-features = false }
 
 # Hook consent diffs — `similar` gives a minimal line-level unified diff for
 # the config install gate. It is already in the tree transitively via `insta`;
