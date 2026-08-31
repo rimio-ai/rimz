@@ -205,7 +205,7 @@ pub(super) fn split_into_subagent_zone(
     pane: &PaneCmd,
     child_name: &str,
 ) -> SubagentZoneOpen {
-    let projection = match store.runtime_projection(rimz::RuntimeScope::Audit) {
+    let mut projection = match store.runtime_projection(rimz::RuntimeScope::Audit) {
         Ok(projection) => projection,
         Err(err) => {
             tracing::debug!(
@@ -215,6 +215,23 @@ pub(super) fn split_into_subagent_zone(
             return SubagentZoneOpen::RunTab;
         }
     };
+    for agent in &mut projection.agents {
+        if agent.ended_at.is_some()
+            || agent.is_provider_subagent()
+            || !matches!(
+                agent.status,
+                rimz::agents::AgentStatus::Running | rimz::agents::AgentStatus::Waiting
+            )
+        {
+            continue;
+        }
+        agent.context = rimz::store::agent_context::read_one(
+            store.runtime_paths(),
+            agent.kind.as_str(),
+            agent.agent_id.as_str(),
+        )
+        .map(|record| record.context);
+    }
     let caller = match rimz::harness::ancestry::resolve_launch_caller_from_env(&projection.agents) {
         Ok(caller) => caller,
         Err(err) => {
