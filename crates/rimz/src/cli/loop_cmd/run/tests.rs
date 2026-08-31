@@ -163,20 +163,11 @@ fn raw_summary(
     let summary = RunSummary {
         record: &record,
         presentation: &outcome.presentation,
+        prose: ui::prose::Prose::Raw,
     };
     let mut out = Vec::new();
     let action = TaskAction::from_entry(name, entry).unwrap();
-    write_run_summary(
-        &mut out,
-        name,
-        entry,
-        &action,
-        mode,
-        keep,
-        &summary,
-        ui::prose::Prose::Raw,
-    )
-    .unwrap();
+    write_run_summary(&mut out, name, entry, &action, mode, keep, &summary).unwrap();
     String::from_utf8(out).unwrap()
 }
 
