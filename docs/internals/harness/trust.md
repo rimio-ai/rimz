@@ -47,7 +47,7 @@ Four surfaces apply today; the rest are hashed but not yet consumed at launch.
 | --- | --- | --- |
 | `[[agents]]` `env` | injected into the agent process | launch refuses with the `rimz trust grant` fix |
 | `[profiles]` | overlaid over machine profiles, winning name collisions | a spec that references a repo profile refuses |
-| `[subagents.profiles]` | overlaid over machine subagent profiles, winning name collisions | a child spec that references a repo subagent profile refuses |
+| `[subagents.profiles]` | overlaid over machine subagent profiles, winning name collisions | a child profile that references a repo subagent profile refuses |
 | `[agents.teams]` | overlaid over machine teams | a spec that references a repo team refuses |
 | `[tasks]` | overlaid over machine loop tasks and state instances, then gated by machine-local task enablement | the project task stays inert; a same-named machine task keeps running |
 | `[[agents]]` `launch_command`, `[[hooks]]`, top-level `[env]` | hashed only | hashed only |

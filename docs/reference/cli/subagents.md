@@ -10,14 +10,14 @@ A child launched through this doorway must complete its assignment directly and 
 
 ```sh
 rimz subagents fanout tasks.json
-printf '%s\n' '[{"spec":"codex","prompt":"find the smallest safe fix"}]' \
+printf '%s\n' '[{"profile":"codex","prompt":"find the smallest safe fix"}]' \
   | rimz subagents fanout
 rimz subagents fanout tasks.json --wait
 
 rimz subagents fanout --wait <<'JSON'
 [
-  {"spec":"codex","prompt":"review correctness; report concrete findings"},
-  {"spec":"claude","prompt_file":"/tmp/review-brief.md"}
+  {"profile":"codex","prompt":"review correctness; report concrete findings"},
+  {"profile":"claude","prompt_file":"/tmp/review-brief.md"}
 ]
 JSON
 ```
@@ -30,7 +30,7 @@ Each array entry has the single-launch fields that make sense for data-driven de
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `spec` | yes | An agent kind, configured subagent profile, or command |
+| `profile` | yes | A configured subagent profile, agent kind, or shared command |
 | `prompt` | exactly one | Complete task supplied by the parent |
 | `prompt_file` | exactly one | File whose contents become the prompt; exclusive with `prompt` |
 | `name` | no | Durable child petname |
@@ -51,7 +51,7 @@ All tasks are validated before the first launch. If a runtime failure occurs aft
 rimz subagents claude "trace the authentication call path"
 ```
 
-Each launch is equivalent to a one-cell `rimz agents <spec> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately, so a parent can start several children without waiting between launches. Pass `--wait[=DURATION]` to print the petname and then join the child like `subagents wait <name>`, including its final message or failure tail. `--json` is accepted on a single launch only with `--wait`; it emits the full run record, the same shape as `subagents wait <name> --json`, without the human petname line.
+Each launch is equivalent to a one-cell `rimz agents <profile> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately, so a parent can start several children without waiting between launches. Pass `--wait[=DURATION]` to print the petname and then join the child like `subagents wait <name>`, including its final message or failure tail. `--json` is accepted on a single launch only with `--wait`; it emits the full run record, the same shape as `subagents wait <name> --json`, without the human petname line.
 
 ```sh
 first=$(rimz subagents codex "find the smallest safe fix")
@@ -85,9 +85,9 @@ rimz subagents profiles --json --path
 
 `profiles` lists `[subagents.profiles]` profiles and configured launch commands available for one child as compact cards. Profile cards include their optional descriptions; `--path` adds the defining-file path. JSON also omits `path` unless `--path` is passed, keeps that path absolute, and includes `source` (`profile` or `command`). `[agents.profiles]` entries are excluded. Registered agent kinds remain directly launchable but are omitted from this catalog. It also works from a user shell.
 
-Inside an agent whose `[agents.profiles]` entry sets `subagents = [...]`, the catalog includes only listed specs. A launch naming any other positional spec or `--agent` rebase is refused before RimZ creates a run or pane. Team names are excluded because a subagent launch creates one agent, not a cohort.
+Inside an agent whose `[agents.profiles]` entry sets `subagents = [...]`, the catalog includes only listed profiles. A launch naming any other positional profile or `--agent` rebase is refused before RimZ creates a run or pane. Team names are excluded because a subagent launch creates one agent, not a cohort.
 
-RimZ places this same filtered catalog in each launched agent's system reminder when its adapter supports native appended system text. With no configured profiles or commands, the reminder says that no subagent types are configured instead of showing an empty list.
+RimZ places this same filtered catalog in each launched agent's system reminder when its adapter supports native appended system text. With no configured profiles or commands, the reminder says that no subagent profiles are configured instead of showing an empty list.
 
 ## Join results
 
@@ -114,7 +114,7 @@ rimz subagents stop --all
 
 Bare `rimz subagents` lists the caller's children, including completed children retained in durable history, with live status, the newest supervised-run outcome, and each child's current one-line description. `stop` accepts only live children of the caller.
 
-`restart` and `resume` are deliberately absent in v1: the durable run record does not yet retain every launch argument needed to reproduce the supervised deadline, wait, and self-close contracts. Relaunch the same spec and prompt to start a fresh child, matching the Agent-tool model.
+`restart` and `resume` are deliberately absent in v1: the durable run record does not yet retain every launch argument needed to reproduce the supervised deadline, wait, and self-close contracts. Relaunch the same profile and prompt to start a fresh child, matching the Agent-tool model.
 
 Stopping a parent through `rimz agents stop` stops its live pane-backed children first. The same cascade applies when `rimz teams stop` stops that parent.
 
