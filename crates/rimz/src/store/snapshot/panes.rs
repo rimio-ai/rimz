@@ -457,7 +457,7 @@ pub fn stamped_agent_for_launch<'a>(
 /// Which co-resident root owns a pane: an open turn outranks a rested one;
 /// policy orders open pairs; latest activity orders rested pairs. Registration
 /// and session id break the remaining ties deterministically.
-fn compare_same_pane_owners(left: &AgentState, right: &AgentState) -> Ordering {
+pub(crate) fn compare_same_pane_owners(left: &AgentState, right: &AgentState) -> Ordering {
     let follows_latest = left.kind == right.kind
         && crate::agents::spec_by_kind(left.kind.as_str()).is_some_and(|definition| {
             definition.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
