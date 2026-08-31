@@ -521,24 +521,82 @@ fn open_turn_predicate_follows_lifecycle_and_rest_certificates() {
 }
 
 #[test]
-fn an_open_turn_projects_to_running_or_waiting() {
-    for mut agent in [
-        test_agent(AgentStatus::Running, 1_000),
-        test_agent(AgentStatus::Waiting, 1_000),
-    ] {
-        assert!(agent.holds_open_turn());
-        assert!(matches!(
+fn open_turn_and_effective_status_are_consistent() {
+    fn assert_consistent(agent: &AgentState, resting_running_exception: bool) {
+        let status_is_open = matches!(
             agent.effective_status(),
             AgentStatus::Running | AgentStatus::Waiting
-        ));
-
-        agent.context = Some(context_settle(Some(1_010), TurnSettleOutcome::PlanProposed));
-        if agent.holds_open_turn() {
-            assert!(matches!(
-                agent.effective_status(),
-                AgentStatus::Running | AgentStatus::Waiting
-            ));
+        );
+        assert!(
+            !agent.holds_open_turn() || status_is_open,
+            "an open turn must render active: {agent:?}"
+        );
+        if !resting_running_exception {
+            assert_eq!(
+                agent.holds_open_turn(),
+                status_is_open,
+                "an active projection must hold its turn: {agent:?}"
+            );
         }
+    }
+
+    for status in [
+        AgentStatus::Running,
+        AgentStatus::Waiting,
+        AgentStatus::Idle,
+        AgentStatus::Success,
+        AgentStatus::Failed,
+        AgentStatus::Paused,
+    ] {
+        assert_consistent(&test_agent(status, 1_000), false);
+    }
+    for class in [
+        TurnErrorClass::PausedSpendLimit,
+        TurnErrorClass::PausedRateLimit,
+        TurnErrorClass::PausedOverloaded,
+        TurnErrorClass::Unknown,
+        TurnErrorClass::Failed,
+    ] {
+        let mut agent = test_agent(AgentStatus::Running, 1_000);
+        agent.context = Some(context_error(class, 1_010));
+        assert_consistent(
+            &agent,
+            matches!(class, TurnErrorClass::Unknown | TurnErrorClass::Failed),
+        );
+    }
+    for outcome in [
+        TurnSettleOutcome::PlanProposed,
+        TurnSettleOutcome::NativeWait,
+        TurnSettleOutcome::Complete,
+        TurnSettleOutcome::Interrupted,
+    ] {
+        let mut agent = test_agent(AgentStatus::Running, 1_000);
+        agent.context = Some(context_settle(Some(1_010), outcome));
+        assert_consistent(&agent, false);
+    }
+
+    let budget_park = crate::harness::budget::BudgetPark {
+        cap_usd: 5.0,
+        spend_usd: 5.25,
+        window: crate::harness::budget::BudgetWindow::Session,
+        at: Timestamp::from_second(1_000).unwrap(),
+        scope: crate::harness::budget::BudgetScope::Agent,
+        account_kind: None,
+        resets_at: None,
+    };
+    for outcome in [
+        TurnSettleOutcome::PlanProposed,
+        TurnSettleOutcome::NativeWait,
+    ] {
+        let mut budget_parked = test_agent(AgentStatus::Running, 1_000);
+        budget_parked.budget_park = Some(budget_park.clone());
+        budget_parked.context = Some(context_settle(Some(1_010), outcome));
+        assert_consistent(&budget_parked, false);
+
+        let mut background_parked = budget_parked;
+        background_parked.budget_park = None;
+        background_parked.phase = TurnPhase::Parked;
+        assert_consistent(&background_parked, false);
     }
 }
 
