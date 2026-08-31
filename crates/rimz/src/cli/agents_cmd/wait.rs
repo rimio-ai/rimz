@@ -194,13 +194,13 @@ impl WaitStyle {
                     )?;
                     return Ok(());
                 }
-                mark_joined(store, session_name, std::iter::once(outcome))?;
+                mark_joined(store, session_name, std::iter::once(outcome));
                 print_single_outcome(outcome, json)
             }
             Self::Any { json } => {
                 let outcome = settled_outcome(waits, selected)?;
                 report_disappearance(&waits.targets[selected], outcome)?;
-                mark_joined(store, session_name, std::iter::once(outcome))?;
+                mark_joined(store, session_name, std::iter::once(outcome));
                 if json {
                     print_wait_json(std::iter::once(outcome))
                 } else {
@@ -215,7 +215,7 @@ impl WaitStyle {
             Self::All { json } => {
                 report_settled_disappearances(waits, settled)?;
                 if json {
-                    mark_joined(store, session_name, waits.outcomes.iter().flatten())?;
+                    mark_joined(store, session_name, waits.outcomes.iter().flatten());
                     print_wait_json(waits.outcomes.iter().flatten())
                 } else {
                     mark_settled_joined(store, session_name, waits, settled)?;
@@ -237,7 +237,7 @@ impl WaitStyle {
             Self::Any { json } | Self::All { json } => {
                 report_settled_disappearances(waits, settled)?;
                 if json {
-                    mark_joined(store, session_name, waits.outcomes.iter().flatten())?;
+                    mark_joined(store, session_name, waits.outcomes.iter().flatten());
                     print_timeout_json(waits)
                 } else {
                     mark_settled_joined(store, session_name, waits, settled)?;
@@ -269,7 +269,7 @@ fn mark_settled_joined(
             store,
             session_name,
             std::iter::once(settled_outcome(waits, index)?),
-        )?;
+        );
     }
     Ok(())
 }
@@ -278,17 +278,26 @@ fn mark_joined<'a>(
     store: &rimz::Store,
     session_name: &str,
     outcomes: impl IntoIterator<Item = &'a TargetOutcome>,
-) -> Result<()> {
+) {
     for outcome in outcomes {
         let TerminalPayload::Run(record) = &outcome.payload else {
             continue;
         };
-        let record = rimz::harness::run::report::mark_joined(store.paths(), &record.run_id)?;
-        if let Some(message_id) = record.report_message_id {
-            store.cancel_message(&message_id, session_name, "joined inline")?;
+        let result = (|| -> Result<()> {
+            let record = rimz::harness::run::report::mark_joined(store.paths(), &record.run_id)?;
+            if let Some(message_id) = record.report_message_id {
+                store.cancel_message(&message_id, session_name, "joined inline")?;
+            }
+            Ok(())
+        })();
+        if let Err(err) = result {
+            tracing::warn!(
+                run_id = %record.run_id,
+                error = %err,
+                "could not mark the joined run; a duplicate report may follow",
+            );
         }
     }
-    Ok(())
 }
 
 fn settled_outcome(waits: &WaitSet, index: usize) -> Result<&TargetOutcome> {
