@@ -74,7 +74,7 @@ pub const SUBAGENT_REMINDER: &str = concat!(
     "complete the task you were given. You must not spawn agents or subagents of any kind — do not use ",
     "agent, task, or spawn tools, and do not launch `rimz subagents`, `rimz agents`, or ",
     "`rimz teams`. Do the work yourself with your direct tools and report the result; your final ",
-    "message is returned to your caller when you exit.\n",
+    "message is delivered to your caller as a message when you exit.\n",
     "</system_reminder>"
 );
 
