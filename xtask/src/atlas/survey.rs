@@ -331,12 +331,7 @@ pub(super) fn divergence(
             .strip_prefix(&scope_module)
             .and_then(|value| value.strip_prefix("::"))
             .unwrap_or(module);
-        relative
-            .split("::")
-            .next()
-            .filter(|value| !value.is_empty())
-            .unwrap_or("(root)")
-            .to_owned()
+        top_endpoint(relative)
     };
     let mut coupling = BTreeMap::<(String, String), BTreeSet<String>>::new();
     for file in facts
@@ -395,7 +390,7 @@ pub(super) fn module_divergence(
         if module_is_within(module, &scope_module) {
             target.to_owned()
         } else {
-            module.split("::").next().unwrap_or("(root)").to_owned()
+            top_endpoint(module)
         }
     };
     let mut coupling = BTreeMap::<(String, String), BTreeSet<String>>::new();
@@ -423,22 +418,40 @@ pub(super) fn module_divergence(
         }
     }
     if let Some(references) = &facts.references {
-        for edge in references
-            .edges
-            .iter()
-            .filter(|edge| !edge.test && path_in_scope(&edge.from_path, scope))
-        {
-            let from = endpoint(&edge.from);
-            let to = endpoint(&edge.to);
-            if from != to {
-                coupling
-                    .entry(ordered_pair(&from, &to))
-                    .or_default()
-                    .insert(edge.item.clone());
-            }
+        for edge in references.edges.iter().filter(|edge| !edge.test) {
+            let Some(pair) = scoped_reference_pair(&edge.from, &edge.to, &scope_module, target)
+            else {
+                continue;
+            };
+            coupling.entry(pair).or_default().insert(edge.item.clone());
         }
     }
     divergence_rows(coupling, cochange, minimum)
+}
+
+fn scoped_reference_pair(
+    from: &str,
+    to: &str,
+    scope_module: &str,
+    target: &str,
+) -> Option<(String, String)> {
+    let endpoint = |module: &str| {
+        if module_is_within(module, scope_module) {
+            target.to_owned()
+        } else {
+            top_endpoint(module)
+        }
+    };
+    let from = endpoint(from);
+    let to = endpoint(to);
+    (from != to && (from == target || to == target)).then(|| ordered_pair(&from, &to))
+}
+
+fn top_endpoint(module: &str) -> String {
+    match module.split("::").next().filter(|value| !value.is_empty()) {
+        Some("(crate)") | None => "(root)".to_owned(),
+        Some(module) => module.to_owned(),
+    }
 }
 
 fn divergence_rows(
@@ -592,12 +605,7 @@ fn providers(facts: &Facts, scope: &Path) -> Vec<Provider> {
                 .strip_prefix(&scope_module)
                 .and_then(|value| value.strip_prefix("::"))
                 .unwrap_or(&resolved);
-            let provider = relative
-                .split("::")
-                .next()
-                .filter(|value| !value.is_empty())
-                .unwrap_or("(root)")
-                .to_owned();
+            let provider = top_endpoint(relative);
             if scope_endpoints.contains(&provider) {
                 continue;
             }
@@ -629,23 +637,24 @@ fn providers(facts: &Facts, scope: &Path) -> Vec<Provider> {
 )]
 fn print_markdown(report: &Report, top: usize, markdown: bool) {
     let fence = if markdown { "```" } else { "" };
-    println!("# Atlas survey — {}", report.path.display());
+    let title_prefix = if markdown { "# " } else { "" };
+    println!("{title_prefix}Atlas survey — {}", report.path.display());
     println!(
         "history: {} commits; code: {}; tests: {}",
         report.history_commits, report.total_code, report.total_tests
     );
-    section("Rank", fence);
-    println!("module                              code  tests   pub   esc      cx");
+    section("Rank", fence, markdown);
+    println!("{:<35}   code  tests   pub   esc      cx", "module");
     for row in report.rank.iter().take(top) {
         print_rank(row, 0);
     }
     close(fence);
-    section("Co-change reading assignments", fence);
+    section("Co-change reading assignments", fence, markdown);
     for cluster in report.cochange_clusters.iter().take(top) {
         println!("{}", cluster.members.join(" <> "));
     }
     close(fence);
-    section("Divergence", fence);
+    section("Divergence", fence, markdown);
     for row in report.divergence.iter().take(top) {
         println!(
             "{:<24} {:<24} {:>5} {:>5} {}",
@@ -653,7 +662,7 @@ fn print_markdown(report: &Report, top: usize, markdown: bool) {
         );
     }
     close(fence);
-    section("External providers", fence);
+    section("External providers", fence, markdown);
     for row in report.external_providers.iter().take(top) {
         println!(
             "{:<28} modules {:>3} items {:>4}",
@@ -661,7 +670,7 @@ fn print_markdown(report: &Report, top: usize, markdown: bool) {
         );
     }
     close(fence);
-    section("Shapes", fence);
+    section("Shapes", fence, markdown);
     if let Some(clusters) = report
         .shapes
         .get("clusters")
@@ -672,7 +681,7 @@ fn print_markdown(report: &Report, top: usize, markdown: bool) {
         }
     }
     close(fence);
-    section("Exact single callers", fence);
+    section("Exact single callers", fence, markdown);
     for row in report.single_callers.iter().take(top) {
         println!(
             "{}:{} {}::{} -> {}",
@@ -684,7 +693,7 @@ fn print_markdown(report: &Report, top: usize, markdown: bool) {
         );
     }
     close(fence);
-    section("Pass-throughs", fence);
+    section("Pass-throughs", fence, markdown);
     for row in report.passthroughs.iter().take(top) {
         println!(
             "{}:{} {} -> {}",
@@ -695,7 +704,7 @@ fn print_markdown(report: &Report, top: usize, markdown: bool) {
         );
     }
     close(fence);
-    section("Vestigial items", fence);
+    section("Vestigial items", fence, markdown);
     for row in report.vestigial_items.iter().take(top) {
         println!(
             "{}:{} {} ({}d)",
@@ -706,7 +715,7 @@ fn print_markdown(report: &Report, top: usize, markdown: bool) {
         );
     }
     close(fence);
-    section("Repeated guards", fence);
+    section("Repeated guards", fence, markdown);
     for row in report.repeated_guards.iter().take(top) {
         println!("{} files  {}", row.files, row.predicate);
     }
@@ -714,8 +723,9 @@ fn print_markdown(report: &Report, top: usize, markdown: bool) {
 }
 
 #[expect(clippy::print_stdout, reason = "atlas report helper")]
-fn section(name: &str, fence: &str) {
-    println!("\n## {name}");
+fn section(name: &str, fence: &str, markdown: bool) {
+    let prefix = if markdown { "## " } else { "" };
+    println!("\n{prefix}{name}");
     if !fence.is_empty() {
         println!("{fence}");
     }
@@ -741,5 +751,33 @@ fn print_rank(row: &RankRow, indent: usize) {
     );
     for child in &row.children {
         print_rank(child, indent + 2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn module_reference_pairs_include_edges_in_both_directions() {
+        let scope = "agents::adapters";
+        let target = "agents/adapters";
+
+        assert_eq!(
+            scoped_reference_pair("cli::agents_cmd", scope, scope, target),
+            Some((target.to_owned(), "cli".to_owned()))
+        );
+        assert_eq!(
+            scoped_reference_pair(scope, "store::runtime", scope, target),
+            Some((target.to_owned(), "store".to_owned()))
+        );
+        assert_eq!(scoped_reference_pair("cli", "store", scope, target), None);
+    }
+
+    #[test]
+    fn crate_root_has_one_endpoint_label() {
+        assert_eq!(top_endpoint("(crate)"), "(root)");
+        assert_eq!(top_endpoint(""), "(root)");
+        assert_eq!(top_endpoint("cli::agents_cmd"), "cli");
     }
 }

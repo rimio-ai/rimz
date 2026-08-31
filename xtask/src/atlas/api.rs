@@ -566,21 +566,7 @@ fn print_report(report: &Report, top: usize, requested_module: Option<&str>, sho
     if let Some(module) = requested_module {
         println!("Public items in {module}");
         for item in report.module_items.iter().take(top) {
-            let reference_evidence = item.resolved.map_or_else(String::new, |resolved| {
-                format!(
-                    " resolved {resolved} prod {} [{}] test {} [{}]",
-                    item.production_refs.unwrap_or(0),
-                    item.production_ref_modules
-                        .as_deref()
-                        .unwrap_or_default()
-                        .join(","),
-                    item.test_refs.unwrap_or(0),
-                    item.test_ref_modules
-                        .as_deref()
-                        .unwrap_or_default()
-                        .join(",")
-                )
-            });
+            let reference_evidence = reference_evidence(item);
             println!(
                 "{}::{} ({}) {}:{} declared {} reach {} params {} [{}]{}",
                 item.module,
@@ -630,11 +616,47 @@ fn print_report(report: &Report, top: usize, requested_module: Option<&str>, sho
         }
     }
     println!(
-        "total: {} modules, {} exact single-caller items, {} parse failures",
-        report.total_modules,
-        report.total_single_caller_items.unwrap_or(0),
-        report.parse_failures
+        "{}",
+        totals_line(
+            report.total_modules,
+            report.total_single_caller_items,
+            report.parse_failures
+        )
     );
+}
+
+fn reference_evidence(item: &ItemOccurrence) -> String {
+    match item.resolved {
+        Some(true) => format!(
+            " resolved true prod {} [{}] test {} [{}]",
+            item.production_refs.unwrap_or(0),
+            item.production_ref_modules
+                .as_deref()
+                .unwrap_or_default()
+                .join(","),
+            item.test_refs.unwrap_or(0),
+            item.test_ref_modules
+                .as_deref()
+                .unwrap_or_default()
+                .join(",")
+        ),
+        Some(false) => " resolved false".to_owned(),
+        None => String::new(),
+    }
+}
+
+fn totals_line(
+    total_modules: usize,
+    single_callers: Option<usize>,
+    parse_failures: usize,
+) -> String {
+    let references = single_callers.map_or_else(String::new, |items| {
+        format!(", {items} exact single-caller items")
+    });
+    format!(
+        "total: {} modules{}, {} parse failures",
+        total_modules, references, parse_failures
+    )
 }
 
 fn module_header(show_references: bool, show_delta: bool) -> &'static str {
@@ -671,6 +693,7 @@ fn item_tags(item: &ItemOccurrence) -> String {
 #[cfg(test)]
 mod v3_tests {
     use super::*;
+    use crate::atlas::modules;
 
     #[test]
     fn api_header_only_advertises_requested_delta() {
@@ -696,5 +719,45 @@ mod v3_tests {
 
         assert!(validate_requested_module(&modules, Some("agents_cmd")).is_ok());
         assert!(validate_requested_module(&modules, Some("missing")).is_err());
+    }
+
+    #[test]
+    fn api_no_index_total_omits_reference_counts() {
+        assert_eq!(
+            totals_line(17, None, 0),
+            "total: 17 modules, 0 parse failures"
+        );
+        assert_eq!(
+            totals_line(17, Some(4), 0),
+            "total: 17 modules, 4 exact single-caller items, 0 parse failures"
+        );
+    }
+
+    #[test]
+    fn api_unresolved_item_omits_reference_counts() {
+        let mut item = ItemOccurrence {
+            module: "agents".to_owned(),
+            name: "Agent".to_owned(),
+            kind: "struct".to_owned(),
+            path: PathBuf::from("src/agents.rs"),
+            line: 1,
+            declared_visibility: "pub".to_owned(),
+            effective_reach: modules::EXTERNAL_REACH.to_owned(),
+            escapes_module: true,
+            params: None,
+            resolved: Some(false),
+            production_ref_modules: Some(Vec::new()),
+            production_refs: Some(0),
+            test_ref_modules: Some(Vec::new()),
+            test_refs: Some(0),
+            single_caller: Some(false),
+        };
+
+        assert_eq!(reference_evidence(&item), " resolved false");
+        item.resolved = Some(true);
+        assert_eq!(
+            reference_evidence(&item),
+            " resolved true prod 0 [] test 0 []"
+        );
     }
 }

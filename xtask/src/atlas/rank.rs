@@ -737,11 +737,13 @@ fn print_report(report: &Report, show_delta: bool) {
     println!("Atlas rank — {}", report.path.display());
     if show_delta {
         println!(
-            "module                 code   pub   esc  loc/esc  churn%  pace      cx    t/c  flags          Δcode Δpub"
+            "{:<35}   code   pub   esc  loc/esc  churn%  pace      cx    t/c  flags          Δcode Δpub",
+            "module"
         );
     } else {
         println!(
-            "module                 code   pub   esc  loc/esc  churn%  pace      cx    t/c  flags"
+            "{:<35}   code   pub   esc  loc/esc  churn%  pace      cx    t/c  flags",
+            "module"
         );
     }
     for row in &report.rows {
