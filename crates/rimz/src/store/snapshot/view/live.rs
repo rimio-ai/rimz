@@ -89,13 +89,22 @@ impl SidebarSnapshot {
                 bindings.push((observation_index, pane.clone()));
                 continue;
             }
-            let exact_stamp = panes.iter().find(|pane| {
+            if let Some(pane) = panes.iter().find(|pane| {
+                pane.resumed_session_id.as_ref() == Some(&observation.session_id)
+                    && local_pane_matches(pane, observation)
+                    && !used_panes.contains(&pane.pane_id)
+            }) {
+                used_panes.insert(pane.pane_id.clone());
+                used_sessions.insert(observation_index);
+                bindings.push((observation_index, pane.clone()));
+                continue;
+            }
+            if let Some(pane) = panes.iter().find(|pane| {
                 binding_index
                     .stamped_agent_for_session(pane, &observation.kind, &observation.session_id)
                     .is_some()
                     && local_pane_matches(pane, observation)
-            });
-            if let Some(pane) = exact_stamp {
+            }) {
                 if newer_launch_contradicts_observation(&binding_index, pane, observation) {
                     diagnostics.push(DiagEvent::GhostSessionBind {
                         agent_kind: observation.kind.clone(),
@@ -109,16 +118,6 @@ impl SidebarSnapshot {
                 used_sessions.insert(observation_index);
                 continue;
             }
-            let Some(pane) = panes.iter().find(|pane| {
-                pane.resumed_session_id.as_ref() == Some(&observation.session_id)
-                    && local_pane_matches(pane, observation)
-                    && !used_panes.contains(&pane.pane_id)
-            }) else {
-                continue;
-            };
-            used_panes.insert(pane.pane_id.clone());
-            used_sessions.insert(observation_index);
-            bindings.push((observation_index, pane.clone()));
         }
         let mut fresh = observations
             .iter()
