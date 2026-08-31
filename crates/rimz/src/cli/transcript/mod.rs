@@ -8,7 +8,6 @@ use clap::Args;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use serde::Serialize;
-use unicode_width::UnicodeWidthStr;
 
 use super::{GlobalFlags, current_channel};
 use crate::cli::render;
