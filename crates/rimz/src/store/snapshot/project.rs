@@ -306,6 +306,7 @@ fn reduce_lifecycle_event(
         card_identity,
     });
     inherit_compaction_registration(map, &mut state);
+    inherit_launch_identity(map, &mut state);
     map.insert(key, state);
 }
 
@@ -677,6 +678,63 @@ fn inherit_compaction_registration(
     {
         continuation.registered_at = Some(predecessor_registered_at);
     }
+}
+
+/// Carry launch-scoped routing and ancestry across an in-place provider
+/// conversation change. Card naming stays session-scoped, and only an explicit
+/// compaction edge inherits registration primacy.
+fn inherit_launch_identity(
+    map: &BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    successor: &mut AgentState,
+) {
+    if successor.launch_id.is_some()
+        || successor.pane.is_none()
+        || successor.is_provider_subagent()
+        || successor.runtime_owner.as_ref().map(|owner| owner.kind) != Some(RuntimeOwnerKind::Agent)
+    {
+        return;
+    }
+    let key = (successor.kind.clone(), successor.agent_id.clone());
+    if map.get(&key).is_some_and(|prior| {
+        prior.pane == successor.pane && prior.runtime_owner == successor.runtime_owner
+    }) {
+        return;
+    }
+    let Some(predecessor) = map
+        .values()
+        .filter(|candidate| {
+            candidate.kind == successor.kind
+                && candidate.agent_id != successor.agent_id
+                && candidate.launch_id.is_some()
+                && !candidate.is_provider_subagent()
+                && crate::store::session_death::same_agent_instance(candidate, successor)
+        })
+        .min_by_key(|candidate| {
+            (
+                candidate.registered_at.is_none(),
+                candidate.registered_at,
+                candidate.agent_id.clone(),
+            )
+        })
+    else {
+        return;
+    };
+
+    successor.launch_id.clone_from(&predecessor.launch_id);
+    successor.profile.clone_from(&predecessor.profile);
+    successor.mode = predecessor.mode;
+    successor.role.clone_from(&predecessor.role);
+    successor.team.clone_from(&predecessor.team);
+    successor.launch_group.clone_from(&predecessor.launch_group);
+    successor.launch_ordinal = predecessor.launch_ordinal;
+    successor.channel.clone_from(&predecessor.channel);
+    successor.launch_depth = predecessor.launch_depth;
+    successor
+        .parent_agent_id
+        .clone_from(&predecessor.parent_agent_id);
+    successor
+        .parent_agent_kind
+        .clone_from(&predecessor.parent_agent_kind);
 }
 
 fn assemble_launch_state(
