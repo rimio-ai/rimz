@@ -65,7 +65,7 @@ The launch block is declarative on purpose. Because permission argv, resume shap
 | `local_session_discovery` | session identity and lifecycle come from a provider-owned local store rather than hooks |
 | `daemon_hooked_sessions` | hooks fire from a per-user daemon that outlives any one conversation |
 | `direct_account_usage` | an authoritative identity-bearing account-usage probe exists ([providers.md](./providers.md#refresh-cadences)) |
-| `same_pane_session` | which co-resident root session owns a pane: `KeepPrimary` or `FollowLatest` |
+| `same_pane_session` | how co-resident open turns are ordered: `KeepPrimary` chooses the earliest registration and `FollowLatest` the latest; rested roots always follow latest activity |
 | `remote_control` | which remote-control surfaces the provider hosts (pane sessions, background sessions) |
 
 ### The traits: behavior

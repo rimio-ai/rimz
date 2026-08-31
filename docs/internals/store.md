@@ -230,10 +230,11 @@ The off-lock tail runs a debounced scan, at most once a minute, over the audit r
 
 | Event name | Condition |
 | --- | --- |
-| `ReapedSuperseded` | A newer session took the same pane: a genuine relaunch, or a `/clear` that started a fresh conversation in place. |
-| `ReapedInterrupted` | The adapter probe confirms the older conversation was interrupted at rest and a newer one superseded it. |
+| `ReapedSuperseded` | A newer session took the same slot: a relaunch, a fresh replacement, or a rested owner (hook-reported or context-sidecar-certified) replaced in place. |
 | `ReapedDead` | The recorded owner process is provably dead. |
 | `ReapedStale` | The session never captured a pid, or its owner is the shared daemon, and it has been quiet past the three-hour ghost TTL. |
+
+Before evaluating supersession, the writer reaper attaches the context sidecar for each raw-running or raw-waiting root. A current provider error or completed/interrupted settle can therefore certify that the owner is rested; if the sidecar is missing, raw lifecycle status remains authoritative.
 
 An agent named in `live-roster.json` is exempt from the last two until rebirth planning consumes the roster, so crash-recovery candidates survive the scan. Already-ended rows are skipped and cannot supersede an active replacement.
 
