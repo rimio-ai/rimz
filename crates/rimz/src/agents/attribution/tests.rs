@@ -148,6 +148,83 @@ fn claude_slot_credits_subagent_transcript_effort() {
 }
 
 #[test]
+fn launched_child_effort_is_credited_to_the_parent_seat() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let parent_transcript = dir.path().join("parent.jsonl");
+    let child_transcript = dir.path().join("child.jsonl");
+    std::fs::write(
+        &parent_transcript,
+        concat!(
+            r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":1.0,"requestId":"parent","message":{"id":"parent","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &child_transcript,
+        concat!(
+            r#"{"timestamp":"2026-01-01T10:00:01.000Z","costUSD":2.0,"requestId":"child","message":{"id":"child","usage":{"input_tokens":20,"output_tokens":2}}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    let mut parent = agent("parent", "claude", 10);
+    parent.team = Some("forge".to_owned());
+    parent.role = Some("planner".to_owned());
+    parent.transcript_path = Some(parent_transcript.to_string_lossy().into_owned());
+    let mut child = agent("child", "claude", 30);
+    child.name = Some("helper".to_owned());
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child.profile = Some("explorer".to_owned());
+    child.transcript_path = Some(child_transcript.to_string_lossy().into_owned());
+
+    let report = build_for(&[parent, child]);
+    let member = &report.groups[0].members[0];
+
+    assert_eq!(report.totals.agents, 1);
+    assert_eq!(member.handle, "@planner");
+    assert_eq!(member.sessions, 1);
+    assert_eq!(member.cost_usd, Some(3.0));
+    assert_eq!(member.tokens.input, 30);
+    assert_eq!(
+        member.subagents,
+        vec![SubagentStat {
+            task: Some("explorer".to_owned()),
+            count: 1,
+            cost_usd: Some(2.0),
+        }]
+    );
+}
+
+#[test]
+fn launched_child_without_a_retained_parent_keeps_its_own_seat() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let transcript = dir.path().join("child.jsonl");
+    std::fs::write(
+        &transcript,
+        concat!(
+            r#"{"timestamp":"2026-01-01T10:00:01.000Z","costUSD":2.0,"requestId":"child","message":{"id":"child","usage":{"input_tokens":20,"output_tokens":2}}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    let mut child = agent("child", "claude", 30);
+    child.parent_agent_id = Some(AgentSessionId::from("missing"));
+    child.launch_depth = Some(1);
+    child.transcript_path = Some(transcript.to_string_lossy().into_owned());
+    child.tool_calls.insert("exec".to_owned(), 1);
+
+    let report = build_for(&[child]);
+
+    assert_eq!(report.totals.agents, 1);
+    assert_eq!(report.groups[0].members[0].sessions, 1);
+    assert_eq!(report.groups[0].members[0].cost_usd, Some(2.0));
+    assert!(report.groups[0].members[0].subagents.is_empty());
+}
+
+#[test]
 fn team_roles_and_provider_kinds_keep_distinct_slots() {
     let mut planner = agent("planner", "claude", 10);
     planner.team = Some("forge".to_owned());

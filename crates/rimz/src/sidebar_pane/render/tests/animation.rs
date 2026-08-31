@@ -313,6 +313,7 @@ fn selected_pet_action_follows_the_focused_card() {
             status: AgentStatus::Running,
             phase: crate::agents::TurnPhase::Reasoning,
             task: None,
+            profile: None,
             model: None,
             effort: None,
             description: None,

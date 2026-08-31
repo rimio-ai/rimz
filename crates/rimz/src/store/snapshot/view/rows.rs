@@ -48,6 +48,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
                 ..agent.usage.clone()
             },
             context: agent.context.clone(),
+            delegated_cost_usd: None,
             context_severity: None,
             estimated_active_secs: agent.estimated_active_secs,
             registered_at: agent.registered_at,

@@ -46,8 +46,9 @@ pub struct LaunchParams {
     /// paneless subagent; without a parent, it tracks a top-level peer chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_depth: Option<u8>,
-    /// The `[agents.profiles]` profile the launcher selected, passed through
-    /// `RIMZ_AGENT_PROFILE`. Used as the card handle when no role is present.
+    /// The profile selected from `[agents.profiles]` or
+    /// `[subagents.profiles]`, passed through `RIMZ_AGENT_PROFILE`. Used as the
+    /// card handle when no role is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     /// The permission posture selected by the launcher. Stored durably so an

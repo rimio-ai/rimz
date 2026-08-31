@@ -328,6 +328,7 @@ fn provider_child_attention_matches_declared_status_count() {
             status: AgentStatus::Waiting,
             phase: TurnPhase::Idle,
             task: None,
+            profile: None,
             model: None,
             effort: None,
             description: None,

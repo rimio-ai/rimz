@@ -164,7 +164,7 @@ struct FoldedMember {
 }
 
 pub fn build(request: AttributionRequest<'_>) -> Attribution {
-    let folded = fold(request.agents);
+    let folded = fold_seats(request.agents);
     let peer_representatives = representatives(request.peers);
     let conversation_counts = conversation_counts(request.transcript);
     let active_records = active_time::read_for_keys(
@@ -182,8 +182,14 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
     let mut members = folded
         .into_iter()
         .map(|(slot, records)| {
-            let team = newest(&records).and_then(|agent| agent.team.clone());
-            let opened_turn = records.iter().any(|agent| agent.turn_started_at.is_some());
+            let seat = seat_records(&records);
+            let identity = if seat.is_empty() {
+                records.as_slice()
+            } else {
+                seat.as_slice()
+            };
+            let team = newest(identity).and_then(|agent| agent.team.clone());
+            let opened_turn = identity.iter().any(|agent| agent.turn_started_at.is_some());
             let member = member(
                 &records,
                 &peer_representatives,
@@ -313,8 +319,38 @@ fn fold<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
     slots
 }
 
+/// Fold pane-backed children into the durable seat that launched them.
+/// Orphaned children retain their own slot so their effort is never lost.
+fn fold_seats<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
+    let parents = agents
+        .iter()
+        .copied()
+        .filter(|agent| !agent.is_launched_child())
+        .collect::<Vec<_>>();
+    let mut slots = fold(&parents).into_iter().collect::<HashMap<_, _>>();
+    for child in agents
+        .iter()
+        .copied()
+        .filter(|agent| agent.is_launched_child())
+    {
+        let key = parents
+            .iter()
+            .copied()
+            .find(|parent| child.is_launched_child_of(parent))
+            .map(slot)
+            .unwrap_or_else(|| slot(child));
+        slots.entry(key).or_default().push(child);
+    }
+    let mut slots = slots.into_iter().collect::<Vec<_>>();
+    for (_, records) in &mut slots {
+        records.sort_by_key(|agent| (agent.registered_at, agent.last_activity));
+    }
+    slots
+}
+
+/// Lifetime records for one seat, including pane-backed children it launched.
 pub fn slot_groups<'a>(agents: &[&'a AgentState]) -> Vec<Vec<&'a AgentState>> {
-    fold(agents)
+    fold_seats(agents)
         .into_iter()
         .map(|(_, records)| records)
         .collect()
@@ -335,15 +371,38 @@ fn member(
     prices: &pricing::PriceBook,
     conversation_counts: &HashMap<(AgentKind, AgentSessionId), ConversationCounts>,
 ) -> AttributionMember {
-    // Every slot is created by `fold` only after its first record is inserted.
-    let latest = newest(records).expect("folded attribution slot has records");
-    let effort = spending::slot_effort_breakdown(
-        &records
+    let seat = seat_records(records);
+    let orphan = seat.is_empty();
+    let identity = if orphan { records.to_vec() } else { seat };
+    let children = if orphan {
+        Vec::new()
+    } else {
+        records
+            .iter()
+            .copied()
+            .filter(|agent| agent.is_launched_child())
+            .collect::<Vec<_>>()
+    };
+    // Every slot is created only after its first record is inserted.
+    let latest = newest(&identity).expect("folded attribution slot has records");
+    let mut effort = spending::slot_effort_breakdown(
+        &identity
             .iter()
             .map(|agent| spending::EffortSessionRef::from_state(agent))
             .collect::<Vec<_>>(),
         prices,
     );
+    let launched_effort = children
+        .iter()
+        .map(|child| {
+            let child_effort =
+                spending::slot_effort(&[spending::EffortSessionRef::from_state(child)], prices);
+            effort.total.tokens.add_assign(child_effort.tokens);
+            effort.total.cost_usd =
+                spending::sum_optional_cost(effort.total.cost_usd, child_effort.cost_usd);
+            (*child, child_effort)
+        })
+        .collect::<Vec<_>>();
     let messages = records
         .iter()
         .fold(MessageCounts::default(), |mut total, agent| {
@@ -371,7 +430,12 @@ fn member(
                 .map_or(0, |counts| counts.asks_answered),
         )
     });
-    let subagents = subagent_stats(records, request.subagents, &effort.subagents);
+    let subagents = subagent_stats(
+        &identity,
+        request.subagents,
+        &effort.subagents,
+        &launched_effort,
+    );
     let active_secs = records
         .iter()
         .filter_map(|agent| {
@@ -390,17 +454,20 @@ fn member(
             .unwrap_or_else(|| latest.kind.to_string()),
         model: latest.model.clone(),
         effort: latest.effort.clone(),
-        presence: if records.iter().any(|agent| agent.ended_at.is_none()) {
+        presence: if identity.iter().any(|agent| agent.ended_at.is_none()) {
             Presence::Live
         } else {
             Presence::Exited
         },
         me: request
             .me
-            .is_some_and(|me| records.iter().any(|agent| &agent.agent_id == me)),
+            .is_some_and(|me| identity.iter().any(|agent| &agent.agent_id == me)),
         launch_ordinal: latest.launch_ordinal,
-        sessions: u32::try_from(records.len()).unwrap_or(u32::MAX),
-        registered_at: records.iter().filter_map(|agent| agent.registered_at).min(),
+        sessions: u32::try_from(identity.len()).unwrap_or(u32::MAX),
+        registered_at: identity
+            .iter()
+            .filter_map(|agent| agent.registered_at)
+            .min(),
         last_activity: records
             .iter()
             .map(|agent| agent.last_activity)
@@ -426,6 +493,14 @@ fn member(
         cost_usd: effort.total.cost_usd,
         subagents,
     }
+}
+
+fn seat_records<'a>(records: &[&'a AgentState]) -> Vec<&'a AgentState> {
+    records
+        .iter()
+        .copied()
+        .filter(|agent| !agent.is_launched_child())
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -494,6 +569,7 @@ fn subagent_stats(
     records: &[&AgentState],
     subagents: &[&AgentState],
     spend: &BTreeMap<String, spending::SlotEffort>,
+    launched: &[(&AgentState, spending::SlotEffort)],
 ) -> Vec<SubagentStat> {
     let mut children = BTreeMap::<String, Option<String>>::new();
     for child in subagents.iter().copied().filter(|child| {
@@ -526,6 +602,16 @@ fn subagent_stats(
             stat.cost_usd,
             spend.get(&child_id).and_then(|effort| effort.cost_usd),
         );
+    }
+    for (child, effort) in launched {
+        let task = subagent_type(child.profile.as_deref());
+        let stat = grouped.entry(task.clone()).or_insert_with(|| SubagentStat {
+            task,
+            count: 0,
+            cost_usd: None,
+        });
+        stat.count = stat.count.saturating_add(1);
+        stat.cost_usd = spending::sum_optional_cost(stat.cost_usd, effort.cost_usd);
     }
     let mut stats = grouped.into_values().collect::<Vec<_>>();
     stats.sort_by(|left, right| {

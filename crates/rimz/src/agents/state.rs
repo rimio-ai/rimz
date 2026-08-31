@@ -399,10 +399,10 @@ pub struct AgentState {
     pub name_explicit: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_ordinal: Option<u32>,
-    /// The `[agents.profiles]` profile this agent launched as (`planner`,
-    /// `codex-yolo`), stamped by the launch event and carried forward like
-    /// `name`. The agent answers to `@<profile>` and renders by it; `None` for
-    /// a bare-kind launch. `RIMZ_AGENT_PROFILE` remains the pane's
+    /// The launch profile selected from `[agents.profiles]` or
+    /// `[subagents.profiles]`, stamped by the launch event and carried forward
+    /// like `name`. The agent answers to `@<profile>` and renders by it; `None`
+    /// for a bare-kind launch. `RIMZ_AGENT_PROFILE` remains the pane's
     /// sender-attribution identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
@@ -839,6 +839,18 @@ impl AgentState {
     /// A pane-backed child created through `rimz subagents`.
     pub fn is_launched_child(&self) -> bool {
         self.parent_agent_id.is_some() && self.launch_depth.is_some()
+    }
+
+    /// Whether this pane-backed child was launched directly by `parent`.
+    pub fn is_launched_child_of(&self, parent: &Self) -> bool {
+        self.is_launched_child()
+            && self.parent_agent_id.as_ref().is_some_and(|parent_id| {
+                parent_id == &parent.agent_id || parent.launch_id.as_ref() == Some(parent_id)
+            })
+            && self
+                .parent_agent_kind
+                .as_ref()
+                .is_none_or(|kind| kind == &parent.kind)
     }
 
     /// A provider-native, paneless child rather than a full agent session.

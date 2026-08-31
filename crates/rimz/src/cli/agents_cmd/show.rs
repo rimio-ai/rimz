@@ -620,14 +620,19 @@ fn slot_lifetime_effort(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
     let refs = audit.agents.iter().collect::<Vec<_>>();
-    let records = rimz::agents::attribution::slot_groups(&refs)
-        .into_iter()
-        .find(|records| {
-            records
-                .iter()
-                .any(|record| record.agent_id == agent.agent_id)
-        })
-        .unwrap_or_else(|| vec![agent]);
+    // A child addressed directly reports its own transcript, not its parent's seat.
+    let records = if agent.is_launched_child() {
+        vec![agent]
+    } else {
+        rimz::agents::attribution::slot_groups(&refs)
+            .into_iter()
+            .find(|records| {
+                records
+                    .iter()
+                    .any(|record| record.agent_id == agent.agent_id)
+            })
+            .unwrap_or_else(|| vec![agent])
+    };
     let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     let effort = rimz::agents::spending::slot_effort(
         &records

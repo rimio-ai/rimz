@@ -53,6 +53,38 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
 }
 
 #[test]
+fn launched_child_projects_profile_cost_and_lifetime_delegated_spend() {
+    let mut parent = agent("claude", "root", AgentStatus::Running, 100);
+    parent.turn_started_at = Some(ago(30));
+    let mut child = agent("codex", "child", AgentStatus::Success, 0);
+    child.name = Some("helper".to_owned());
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child.profile = Some("explorer".to_owned());
+    child.last_activity = ago(60);
+    child.ended_at = Some(ago(60));
+    let mut context = crate::agents::AgentContext::new("codex", epoch());
+    context.cost = Some(crate::agents::AgentCost {
+        total_cost_usd: Some(0.42),
+        ..crate::agents::AgentCost::default()
+    });
+    child.context = Some(context);
+
+    let projected = sub_agent_from_state(&child, epoch());
+    assert_eq!(projected.profile.as_deref(), Some("explorer"));
+    assert_eq!(projected.cost_usd, Some(0.42));
+
+    let mut native = child_state("root", "native", AgentStatus::Success, 5);
+    native.subagent_cost_usd = Some(0.25);
+    let mut rows = vec![row_from_agent(&parent, epoch())];
+    attach_sub_agents(&mut rows, &[parent, child, native], epoch());
+    let card = rows[0].as_agent().expect("parent card");
+    assert!(card.sub_agents.iter().all(|child| child.id != "child"));
+    assert_eq!(card.delegated_cost_usd, Some(0.42));
+}
+
+#[test]
 fn live_descendant_projects_clean_resting_parents_to_delegating_running() {
     for status in [
         AgentStatus::Idle,

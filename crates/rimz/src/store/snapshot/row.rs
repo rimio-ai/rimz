@@ -349,6 +349,10 @@ pub struct AgentCard {
     pub usage: AgentUsageSummary,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<AgentContext>,
+    /// Cost of every pane-backed child this session launched, across all turns.
+    /// The turn-scoped `sub_agents` list can be shorter than this lifetime sum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_severity: Option<ContextSeverity>,
     /// Estimated working time for this root session, in seconds.
@@ -397,6 +401,7 @@ impl Default for AgentCard {
             launch_ordinal: None,
             usage: AgentUsageSummary::default(),
             context: None,
+            delegated_cost_usd: None,
             context_severity: None,
             estimated_active_secs: None,
             registered_at: None,
@@ -411,6 +416,17 @@ impl Default for AgentCard {
 }
 
 impl AgentCard {
+    /// Session cost plus the cost of pane-backed children this session launched.
+    pub fn cost_usd(&self) -> Option<f64> {
+        crate::agents::spending::sum_optional_cost(
+            self.context
+                .as_ref()
+                .and_then(|context| context.cost.as_ref())
+                .and_then(|cost| cost.total_cost_usd),
+            self.delegated_cost_usd,
+        )
+    }
+
     /// One-line activity label for CLI and sidebar rows: a rich session name
     /// that does not merely prefix the prompt, rich session preview, launch
     /// description, live task, first prompt, then latest prompt.
@@ -508,6 +524,7 @@ impl AgentCard {
                 .and_then(|context| context.cost.as_ref())
                 .and_then(|cost| cost.total_cost_usd)
                 .is_some_and(|cost| cost > 0.0)
+            || self.delegated_cost_usd.is_some_and(|cost| cost > 0.0)
     }
 }
 
@@ -604,6 +621,10 @@ pub struct SidebarSubAgent {
     pub phase: TurnPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
+    /// The `[subagents.profiles]` profile a pane-backed child launched as;
+    /// absent for provider-native children and bare-kind launches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -612,9 +633,9 @@ pub struct SidebarSubAgent {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
-    /// Exact cumulative cost for this child, when its provider exposes a
-    /// dedicated priced transcript. Display-only and never summed into parent
-    /// or provider spend.
+    /// Exact cumulative cost from a provider-native child feed, or from a
+    /// pane-backed child's own session sidecar. Provider-native cost is already
+    /// included in the parent transcript; pane-backed cost is added separately.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

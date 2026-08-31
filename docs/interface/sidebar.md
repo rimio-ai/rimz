@@ -235,13 +235,13 @@ The expanded card also lists any **subagents** the agent spawned this turn. A `�
 
 ```
 ▌  ⧉ subagents (2)
-▌    ⠁ Explore — locate the render seam         $0.42
+▌    ⠁ helper · explorer — locate the seam      $0.42
 ▌      ◇ 12k · Opus 4.8                         ◔ 14m
 ▌    ✓ review — audit the trust hash
 ▌      ◇ 22k · Haiku 4.5
 ```
 
-Claude's description, cumulative tokens, and precise start time ride in from `subagentStatusLine` (Claude-only, harvested at install time). The same feed incrementally prices every request in that child's dedicated transcript; when every model resolves, the exact cumulative figure pins right on line 1. Any unpriced request hides the figure rather than showing a partial sum, and providers without a dedicated per-child transcript show no child cost. The figure is display-only: Claude's parent session spend already includes the child, so it never joins parent, room, or provider totals. Codex reads nickname, task path, role, model/effort, and current context tokens from the child rollout around each hook; its elapsed fallback starts at durable child registration. Copilot reads the model from the parent's start record and reconciles the exact total from the completion record at the next parent checkpoint. Siblings on different models read apart at a glance and a reasoning child uses the same thinking animation its parent would. A child with no enrichment shows just its `glyph type` line. Provider-native subagents have no pane; a child launched through `rimz subagents` owns a pane while it runs or is kept. Neither gets a duplicate top-level row while its parent is visible; both nest here only.
+Claude's description, cumulative tokens, and precise start time ride in from `subagentStatusLine` (Claude-only, harvested at install time). The same feed incrementally prices every request in that child's dedicated transcript; when every model resolves, the exact cumulative figure pins right on line 1. Any unpriced request hides the figure rather than showing a partial sum. That provider-native figure is display-only because Claude's parent session spend already includes it. A child launched through `rimz subagents` instead shows its petname and launch profile, prices its own provider session, and adds that cost to the parent's line-1 figure across every turn. Codex reads nickname, task path, role, model/effort, and current context tokens from the child rollout around each hook; its elapsed fallback starts at durable child registration. Copilot reads the model from the parent's start record and reconciles the exact total from the completion record at the next parent checkpoint. Siblings on different models read apart at a glance and a reasoning child uses the same thinking animation its parent would. A child with no enrichment shows just its `glyph type` line. Provider-native subagents have no pane; a launched child owns a pane while it runs or is kept. Neither gets a duplicate top-level row while its parent is visible; both nest here only.
 
 ### Attention rows
 

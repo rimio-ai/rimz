@@ -48,17 +48,15 @@ fn agent(row: &SidebarRow) -> Option<&AgentCard> {
     row.as_agent()
 }
 
-fn session_cost_usd(row: &SidebarRow) -> Option<f64> {
-    ctx(row)
-        .and_then(|context| context.cost.as_ref())
-        .and_then(|cost| cost.total_cost_usd)
+fn card_cost_usd(row: &SidebarRow) -> Option<f64> {
+    agent(row).and_then(AgentCard::cost_usd)
 }
 
 pub(in crate::sidebar_pane) fn agent_card_cost_usd(
     group: &SidebarWorktreeGroup,
     row: &SidebarRow,
 ) -> Option<f64> {
-    let session = session_cost_usd(row);
+    let session = card_cost_usd(row);
     if group.collapses() {
         group
             .cohort_effort
@@ -148,8 +146,8 @@ pub(super) fn row_lines(
 /// in the delegation violet, the label dim — then up to two indented lines per
 /// child. Line 1 leads with the same live cell an agent row wears — the
 /// thinking head while the child reasons, the working fill while it acts,
-/// the static `✓`/`!` verdict once it finishes — then the type and the
-/// description of what the parent asked it to do, with the child's exact cost
+/// the static `✓`/`!` verdict once it finishes — then the name, launch profile,
+/// and description of what the parent asked it to do, with the child's cost
 /// pinned right when a priced per-child transcript exists; line 2 (deeper
 /// indent) is its reported token figure `◇` (the card's whole-unit figure,
 /// never a decimal), model, and reasoning effort — one per-card column grid,
@@ -219,6 +217,9 @@ fn sub_agent_lines(ctx: &RowCtx<'_>, sub_agents: &[SidebarSubAgent]) -> Vec<Line
             Span::raw(" "),
             Span::styled(sub.name.clone(), theme.body()),
         ];
+        if let Some(profile) = sub.profile.as_deref() {
+            spans.push(Span::styled(format!(" · {profile}"), theme.muted()));
+        }
         // Prefer the `subagentStatusLine` description; fall back to the task
         // definition, shown only when it differs from the name (the name already
         // is the type for most children) so the line never reads `Explore —
