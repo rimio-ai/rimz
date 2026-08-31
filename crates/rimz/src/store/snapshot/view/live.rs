@@ -66,12 +66,11 @@ impl SidebarSnapshot {
             // authority before command-line resume discovery, then leave the
             // fresh-cache path below for sessions that registered no hook.
             let stamped = panes.iter().find(|pane| {
-                binding_index.stamped_agent(pane).is_some_and(|agent| {
-                    agent.kind == observation.kind
-                        && agent.agent_id == observation.session_id
-                        && local_pane_matches(pane, observation)
-                        && !used_panes.contains(&pane.pane_id)
-                })
+                binding_index
+                    .stamped_agent_for_session(pane, &observation.kind, &observation.session_id)
+                    .is_some()
+                    && local_pane_matches(pane, observation)
+                    && !used_panes.contains(&pane.pane_id)
             });
             if let Some(pane) = stamped {
                 if binding_index

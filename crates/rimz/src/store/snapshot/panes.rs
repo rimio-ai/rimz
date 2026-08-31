@@ -98,6 +98,26 @@ impl<'a> PaneBindingIndex<'a> {
             .min_by(|left, right| compare_same_pane_owners(left, right))
     }
 
+    pub(super) fn stamped_agent_for_session(
+        &self,
+        pane: &PaneRef,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+    ) -> Option<&'a AgentState> {
+        self.stamped_by_pane
+            .get(&pane.pane_id)?
+            .iter()
+            .filter_map(|index| self.agents.get(*index))
+            .find(|agent| {
+                agent.parent_agent_id.is_none()
+                    && agent.kind == *kind
+                    && agent.agent_id == *agent_id
+                    && agent.pane.as_ref().is_some_and(|stamped| {
+                        stamped_agent_matches_live_pane(agent, stamped, pane)
+                    })
+            })
+    }
+
     /// The newest RimZ-launched root stamped on this live pane. Unlike
     /// [`Self::stamped_agent`], this deliberately ignores the adapter's
     /// same-pane primary policy: a later launch is the pane-incarnation clock
