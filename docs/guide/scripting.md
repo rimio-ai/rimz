@@ -147,9 +147,9 @@ A reference is the printed name, a run id, or any [agent address](./messaging.md
 # inside a planner turn: launch three bounded audits, then join all three
 rimz subagents fanout --wait <<'JSON'
 [
-  {"spec":"codex","prompt":"review correctness; report concrete findings"},
-  {"spec":"claude","prompt":"review the interface; report concrete findings"},
-  {"spec":"codex","prompt":"review test coverage; report concrete findings"}
+  {"profile":"codex","prompt":"review correctness; report concrete findings"},
+  {"profile":"claude","prompt":"review the interface; report concrete findings"},
+  {"profile":"codex","prompt":"review test coverage; report concrete findings"}
 ]
 JSON
 ```

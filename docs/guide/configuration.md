@@ -337,7 +337,7 @@ archive_after_secs = 86400
 
 ## agents.toml: profiles, teams, and worktrees
 
-This file configures what `rimz agents <spec>` and `rimz subagents <spec>` can launch and how worktrees are cut.
+This file configures what `rimz agents <spec>` and `rimz subagents <profile>` can launch and how worktrees are cut.
 
 ### Agent profiles, commands, and teams
 
@@ -394,7 +394,7 @@ mode = "plan"
 
 A profile is a named agent preset. `[agents.profiles]` entries belong to `rimz agents` and become addressable type handles; `[subagents.profiles]` entries belong only to `rimz subagents`. `agent` is the base, a built-in kind (`claude`, `codex`, …) or another profile in the same namespace, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `system-prompt-file`, `append-system-prompt-files`, and raw `args`. Optional `description` is listing metadata shown by `rimz agents profiles` or `rimz subagents profiles`; it is not inherited. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. Team roles expose the launch fields; loop tasks expose the subset relevant to scheduled work.
 
-An `[agents.profiles]` entry may restrict delegation by listing the only specs its agents may launch through `rimz subagents`:
+An `[agents.profiles]` entry may restrict delegation by listing the only profiles its agents may launch through `rimz subagents`:
 
 ```toml
 [agents.profiles.planner]
@@ -402,9 +402,9 @@ agent = "claude"
 subagents = ["explorer", "designer"]
 ```
 
-With no `subagents` field, every subagent spec is allowed; an empty list allows none. Entries are literal spec names and are validated against `[subagents.profiles]`, commands, and agent kinds when config loads. Team roles inherit the policy through their bound profile. The field is invalid on `[subagents.profiles]` because a subagent cannot launch again.
+With no `subagents` field, every subagent profile is allowed; an empty list allows none. Entries are literal profile names and are validated against `[subagents.profiles]`, commands, and agent kinds when config loads. Team roles inherit the policy through their bound profile. The field is invalid on `[subagents.profiles]` because a subagent cannot launch again.
 
-At launch, RimZ tells a supported agent which subagent specs it may use; an empty list instead tells it that delegation is off. When no subagent profiles or commands are configured, the reminder says that `Skill(rimz-subagents)` has nothing configured to launch and points at `[subagents.profiles]`.
+At launch, RimZ tells a supported agent which subagent profiles it may use; an empty list instead tells it that delegation is off. When no subagent profiles or commands are configured, the reminder says that `Skill(rimz-subagents)` has nothing configured to launch and points at `[subagents.profiles]`.
 
 Drop-ins under `~/.agents/profiles/<name>/agent.toml` may declare either or both profile namespaces. Their relative prompt paths root at the drop-in directory, and same-named entries in the machine `agents.toml` take precedence.
 

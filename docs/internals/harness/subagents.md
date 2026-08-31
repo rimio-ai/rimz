@@ -51,11 +51,11 @@ The launch planner independently rejects any `rimz agents` or `rimz subagents` c
 
 The exec wrapper builds every non-child's allowed catalog from its launching profile and appends an availability reminder on the adapter's native append-system-text channel. Fresh launches, resumes, forks, restarts, and recovery launches all pass through that wrapper. Claude, Codex, Qwen, and Droid receive the reminder; adapters without a native channel receive none because an interactive launch has no user prompt to extend safely.
 
-The reminder points the agent at `Skill(rimz-subagents)` and lists the same filtered specs as `rimz subagents profiles --json`. A profile with `subagents = []` instead receives a disabled reminder telling it to work directly; an available catalog with no configured profiles or commands receives dedicated nothing-configured text instead of an empty list. Both surfaces use `subagent_policy::catalog`, so catalog assembly, literal allowlist filtering, and the distinction between a disabled policy and an available but empty named catalog have one owner. If effective project config fails during crash recovery, reminder enrichment warns and is skipped rather than killing the recovered pane.
+The reminder points the agent at `Skill(rimz-subagents)` and lists the same filtered profiles as `rimz subagents profiles --json`. A profile with `subagents = []` instead receives a disabled reminder telling it to work directly; an available catalog with no configured profiles or commands receives dedicated nothing-configured text instead of an empty list. Both surfaces use `subagent_policy::catalog`, so catalog assembly, literal allowlist filtering, and the distinction between a disabled policy and an available but empty named catalog have one owner. If effective project config fails during crash recovery, reminder enrichment warns and is skipped rather than killing the recovered pane.
 
 ## What a launch desugars to
 
-`rimz subagents <spec> <prompt>` builds an ordinary `AgentLaunchArgs` and hands it to the same background supervised launcher a fanout uses. The sugar is entirely in the defaults and the optional join:
+`rimz subagents <profile> <prompt>` builds an ordinary `AgentLaunchArgs` and hands it to the same background supervised launcher a fanout uses. The sugar is entirely in the defaults and the optional join:
 
 | Field | Value | Why |
 | --- | --- | --- |
@@ -67,7 +67,7 @@ The reminder points the agent at `Skill(rimz-subagents)` and lists the same filt
 | `keep` | `--keep`, default false | holds the pane after completion and past parent exit |
 | everything else | default | see the omissions below |
 
-The default has the user-visible behavior of `rimz agents <spec> <prompt> -p --bg --timeout 30m`: the wrapper stamps `ended_at` and closes its pane after the one turn finishes. `--wait` leaves that launch unchanged, then passes the minted petname to the shared single-name wait path; `--wait=DURATION` adds a caller-side join deadline without changing the child's timeout.
+The default has the user-visible behavior of `rimz agents <profile> <prompt> -p --bg --timeout 30m`: the wrapper stamps `ended_at` and closes its pane after the one turn finishes. `--wait` leaves that launch unchanged, then passes the minted petname to the shared single-name wait path; `--wait=DURATION` adds a caller-side join deadline without changing the child's timeout.
 
 The no-delegation reminder rides a provider-native append-system-text launch flag for Claude, Qwen, and Droid, after any caller-supplied append text. Codex receives it through `-c developer_instructions=…`, which produces a developer-role message separate from the user prompt and preserves Codex's built-in instructions. An argv-supplied `developer_instructions` value is composed before the reminder; a value in the user's base `~/.codex/config.toml` is overridden because it is not visible at launch composition time. Adapters without a native system-text channel keep the same tag-wrapped reminder at the end of the user prompt. The process compiler owns this choice at the adapter boundary, beside the native delegation lockdown, so preflight and the eventual exec compile the same provider argv.
 
@@ -83,7 +83,7 @@ The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`
 
 ## Caller policy
 
-The supervised runner resolves the durable caller before it resolves a subagent spec. [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs) then applies the caller's `[agents.profiles]` policy: when that profile sets `subagents = [...]`, both the positional spec and any `--agent` rebase must appear literally in the list. Refusal happens before provider preflight, store append, or mux mutation. Its shared catalog filters both `rimz subagents profiles` and the parent's launch reminder; a user-shell catalog remains unfiltered.
+The supervised runner resolves the durable caller before it resolves a subagent profile. [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs) then applies the caller's `[agents.profiles]` policy: when that profile sets `subagents = [...]`, both the positional profile and any `--agent` rebase must appear literally in the list. Refusal happens before provider preflight, store append, or mux mutation. Its shared catalog filters both `rimz subagents profiles` and the parent's launch reminder; a user-shell catalog remains unfiltered.
 
 ## Single launch and fanout share one composition
 
@@ -158,7 +158,7 @@ Stopping a parent through `rimz agents stop` — or through `rimz teams stop` re
 
 ## What v1 leaves out
 
-`restart` and `resume` are absent by design: the durable run record does not retain every launch argument needed to reproduce the supervised deadline, wait, and self-close contracts, and a partial reproduction would silently change the child's lifecycle. Relaunching the same spec and prompt is the supported path, which matches the model agents already have for their native Agent tool.
+`restart` and `resume` are absent by design: the durable run record does not retain every launch argument needed to reproduce the supervised deadline, wait, and self-close contracts, and a partial reproduction would silently change the child's lifecycle. Relaunching the same profile and prompt is the supported path, which matches the model agents already have for their native Agent tool.
 
 The durable launch record also does not stamp which profile namespace produced a child. Generic restart and recovery posture therefore continue to resolve `[agents.profiles]`; a subagent-only profile degrades or refuses through the existing missing-profile path. Persisting the doorway scope with the launch event is the upgrade path.
 
