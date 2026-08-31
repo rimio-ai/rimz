@@ -1,7 +1,10 @@
 use std::time::SystemTime;
 
 use super::*;
-use crate::agents::{LaunchParams, SessionOrigin};
+use crate::agents::{
+    AgentContext, AgentTurnError, LaunchParams, SessionOrigin, TurnErrorClass, TurnSettle,
+    TurnSettleOutcome,
+};
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::EventKind;
@@ -316,9 +319,8 @@ fn amp_focus_switch_retires_then_revives_threads_in_one_pane() {
 
 #[cfg(unix)]
 #[test]
-fn interrupted_replacement_bypasses_roster_and_replays_durably() {
+fn certificate_dead_replacement_bypasses_roster_and_replays_durably() {
     let (_dir, store, workspace_id) = store();
-    let rollouts = tempfile::tempdir().expect("rollout tempdir");
     let now = Timestamp::now();
     let mut older = fresh_pane_lifecycle(&workspace_id, "interrupted", "%1");
     older.timestamp = now - Duration::from_secs(4);
@@ -342,30 +344,23 @@ fn interrupted_replacement_bypasses_roster_and_replays_durably() {
     .expect("publish roster");
 
     assert_eq!(
-        crate::agents::session::with_sessions_root("codex", rollouts.path(), || {
-            store.reap_dead_sessions().expect("reap without evidence")
-        }),
+        store.reap_dead_sessions().expect("reap without evidence"),
         0,
         "structural conflict alone keeps the running owner"
     );
 
-    let record = json!({
-        "timestamp": interrupted_at.to_string(),
-        "type": "event_msg",
-        "payload": { "type": "turn_aborted", "reason": "interrupted" }
-    });
-    std::fs::write(
-        rollouts
-            .path()
-            .join("rollout-2026-06-26T00-00-00-interrupted.jsonl"),
-        format!("{record}\n"),
-    )
-    .expect("write interrupted rollout");
+    let context = AgentContext {
+        settle: Some(TurnSettle::new(
+            interrupted_at,
+            TurnSettleOutcome::Interrupted,
+        )),
+        ..AgentContext::new("codex", interrupted_at)
+    };
+    crate::store::agent_context::write(store.runtime_paths(), "codex", "interrupted", &context)
+        .expect("write interruption certificate");
 
     assert_eq!(
-        crate::agents::session::with_sessions_root("codex", rollouts.path(), || {
-            store.reap_dead_sessions().expect("reap interrupted owner")
-        }),
+        store.reap_dead_sessions().expect("reap interrupted owner"),
         1
     );
     assert_eq!(store.reap_dead_sessions().expect("idempotent reap"), 0);
@@ -394,11 +389,73 @@ fn interrupted_replacement_bypasses_roster_and_replays_durably() {
                 matches!(
                     event.kind(),
                     EventKind::AgentLifecycle(payload)
-                        if payload.event_name.as_deref() == Some("ReapedInterrupted")
+                        if payload.event_name.as_deref() == Some("ReapedSuperseded")
                             && payload.observation.agent_id.as_deref() == Some("interrupted")
                 )
             })
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn provider_error_certificate_reaps_the_replaced_owner() {
+    let (_dir, store, workspace_id) = store();
+    let now = Timestamp::now();
+    let mut older = fresh_pane_lifecycle(&workspace_id, "overloaded", "%1");
+    older.timestamp = now - Duration::from_secs(4);
+    let mut turn_started = turn_started_lifecycle(&workspace_id, "overloaded");
+    turn_started.timestamp = now - Duration::from_secs(3);
+    let error_at = now - Duration::from_secs(2);
+    let mut replacement = fresh_pane_lifecycle(&workspace_id, "replacement", "%1");
+    replacement.timestamp = now - Duration::from_secs(1);
+    for event in [older, turn_started, replacement] {
+        event_log::append(&store.paths().events_log, &event).expect("append lifecycle");
+    }
+
+    let context = AgentContext {
+        turn_error: Some(AgentTurnError {
+            class: TurnErrorClass::PausedOverloaded,
+            at: error_at,
+            label: Some("server_overloaded".to_owned()),
+        }),
+        ..AgentContext::new("codex", error_at)
+    };
+    crate::store::agent_context::write(store.runtime_paths(), "codex", "overloaded", &context)
+        .expect("write overload certificate");
+
+    assert_eq!(
+        store.reap_dead_sessions().expect("reap overloaded owner"),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn stale_provider_certificate_does_not_reap_the_owner() {
+    let (_dir, store, workspace_id) = store();
+    let now = Timestamp::now();
+    let mut older = fresh_pane_lifecycle(&workspace_id, "stale", "%1");
+    older.timestamp = now - Duration::from_secs(4);
+    let mut turn_started = turn_started_lifecycle(&workspace_id, "stale");
+    turn_started.timestamp = now - Duration::from_secs(2);
+    let mut replacement = fresh_pane_lifecycle(&workspace_id, "replacement", "%1");
+    replacement.timestamp = now - Duration::from_secs(1);
+    for event in [older, turn_started, replacement] {
+        event_log::append(&store.paths().events_log, &event).expect("append lifecycle");
+    }
+
+    let context = AgentContext {
+        turn_error: Some(AgentTurnError {
+            class: TurnErrorClass::PausedOverloaded,
+            at: now - Duration::from_secs(3),
+            label: Some("server_overloaded".to_owned()),
+        }),
+        ..AgentContext::new("codex", now - Duration::from_secs(3))
+    };
+    crate::store::agent_context::write(store.runtime_paths(), "codex", "stale", &context)
+        .expect("write stale certificate");
+
+    assert_eq!(store.reap_dead_sessions().expect("keep active owner"), 0);
 }
 
 #[cfg(unix)]

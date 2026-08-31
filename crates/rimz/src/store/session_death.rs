@@ -55,14 +55,11 @@ fn compaction_continuation_supersedes(older: &AgentState, newer: &AgentState) ->
 
 /// A provider that follows its latest conversation can prove an in-place
 /// session switch when both records name the same pane incarnation and agent
-/// process. The outer activity guard establishes which record is newer. A
-/// running, waiting, or paused owner remains authoritative because same-process
-/// child hooks can carry a distinct conversation ID while its turn is open.
+/// process. The outer activity guard establishes which record is newer. An
+/// open owner remains authoritative because same-process child hooks can carry
+/// a distinct conversation ID while its turn is open.
 fn same_process_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
-    if matches!(
-        older.status,
-        AgentStatus::Running | AgentStatus::Waiting | AgentStatus::Paused
-    ) {
+    if older.holds_open_turn() {
         return false;
     }
     if crate::agents::spec_by_kind(older.kind.as_str()).is_none_or(|definition| {
@@ -100,32 +97,6 @@ fn same_agent_instance(older: &AgentState, newer: &AgentState) -> bool {
     )
 }
 
-/// Whether `newer` structurally qualifies as an in-place replacement of a
-/// still-raw-active `older`. Provider interruption evidence completes this
-/// proof in [`interrupted_conversation_supersedes`].
-pub(crate) fn interrupted_conversation_candidate(older: &AgentState, newer: &AgentState) -> bool {
-    matches!(older.status, AgentStatus::Running | AgentStatus::Waiting)
-        && older.origin == Some(SessionOrigin::Fresh)
-        && newer.origin == Some(SessionOrigin::Fresh)
-        && newer.kind == older.kind
-        && newer.agent_id != older.agent_id
-        && newer.last_activity > older.last_activity
-        && same_agent_instance(older, newer)
-}
-
-/// Whether `newer` is a proven in-place replacement of a still-raw-active
-/// `older`: both Fresh roots share one pane and process incarnation, and the
-/// provider reports that the older turn was aborted after its last activity.
-/// This is the only rule allowed past the running-owner guard and demands
-/// strictly more proof than [`cleared_conversation_supersedes`].
-pub(crate) fn interrupted_conversation_supersedes(
-    older: &AgentState,
-    newer: &AgentState,
-    interrupted_at: Timestamp,
-) -> bool {
-    interrupted_conversation_candidate(older, newer) && interrupted_at > older.last_activity
-}
-
 fn compatible_tokens<T: PartialEq>(older: Option<&T>, newer: Option<&T>) -> bool {
     match (older, newer) {
         (Some(older), Some(newer)) => older == newer,
@@ -157,15 +128,13 @@ fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool {
 /// Whether `newer` is a fresh `/clear` / `/new` conversation superseding
 /// `older` in their shared pane. Both roots carrying `Fresh` rollout lineage
 /// on one stamped pane are sequential conversations of a single terminal; the
-/// older ended when the newer began, live pane or not. A running, waiting, or
-/// paused owner remains authoritative because same-process child hooks can
-/// carry a distinct conversation ID while its turn is open. A fork carries
-/// `Forked` lineage and survives; unknown lineage keeps both.
+/// older ended when the newer began, live pane or not. An open owner remains
+/// authoritative because same-process child hooks can carry a distinct
+/// conversation ID while its turn is open. A fork carries `Forked` lineage and
+/// survives; unknown lineage keeps both. The writer reaper attaches provider
+/// rest certificates before applying this rule.
 fn cleared_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
-    if matches!(
-        older.status,
-        AgentStatus::Running | AgentStatus::Waiting | AgentStatus::Paused
-    ) {
+    if older.holds_open_turn() {
         return false;
     }
     older.origin == Some(SessionOrigin::Fresh)
@@ -197,6 +166,9 @@ fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::{
+        AgentContext, AgentTurnError, TurnErrorClass, TurnSettle, TurnSettleOutcome,
+    };
     use crate::ids::{MuxName, PaneId};
     use crate::pane::{PaneRef, RuntimeOwner};
 
@@ -223,17 +195,28 @@ mod tests {
 
     #[test]
     fn mid_turn_session_death_keeps_same_process_owner_authoritative() {
-        for status in [
-            AgentStatus::Running,
-            AgentStatus::Waiting,
-            AgentStatus::Paused,
-        ] {
+        for status in [AgentStatus::Running, AgentStatus::Waiting] {
             let (older, newer) =
                 conversation_pair("antigravity", status, Some(SessionOrigin::Fresh));
             assert!(!same_process_conversation_supersedes(&older, &newer));
             assert!(!cleared_conversation_supersedes(&older, &newer));
             assert!(!supersedes(&older, &newer));
         }
+
+        let (mut waiting, newer) = conversation_pair(
+            "antigravity",
+            AgentStatus::Waiting,
+            Some(SessionOrigin::Fresh),
+        );
+        waiting.context = Some(AgentContext {
+            settle: Some(TurnSettle::new(
+                waiting.last_activity + std::time::Duration::from_secs(1),
+                TurnSettleOutcome::NativeWait,
+            )),
+            ..AgentContext::new("antigravity", waiting.last_activity)
+        });
+        assert!(waiting.holds_open_turn());
+        assert!(!supersedes(&waiting, &newer));
     }
 
     #[test]
@@ -305,80 +288,84 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_replacement_requires_fresh_same_instance_evidence() {
-        let (older, newer) =
+    fn certificate_dead_owner_yields_to_fresh_replacement() {
+        for class in [
+            TurnErrorClass::PausedOverloaded,
+            TurnErrorClass::PausedRateLimit,
+            TurnErrorClass::Failed,
+        ] {
+            let (mut older, newer) =
+                conversation_pair("codex", AgentStatus::Running, Some(SessionOrigin::Fresh));
+            let at = older.last_activity + std::time::Duration::from_secs(1);
+            older.context = Some(AgentContext {
+                turn_error: Some(AgentTurnError {
+                    class,
+                    at,
+                    label: None,
+                }),
+                ..AgentContext::new("codex", at)
+            });
+            assert!(supersedes(&older, &newer), "{class:?}");
+        }
+
+        for outcome in [TurnSettleOutcome::Interrupted, TurnSettleOutcome::Complete] {
+            let (mut older, newer) =
+                conversation_pair("codex", AgentStatus::Running, Some(SessionOrigin::Fresh));
+            let at = older.last_activity + std::time::Duration::from_secs(1);
+            older.context = Some(AgentContext {
+                settle: Some(TurnSettle::new(at, outcome)),
+                ..AgentContext::new("codex", at)
+            });
+            assert!(supersedes(&older, &newer), "{outcome:?}");
+        }
+
+        let (mut parked, newer) =
             conversation_pair("codex", AgentStatus::Running, Some(SessionOrigin::Fresh));
-        let interrupted_at = older.last_activity + std::time::Duration::from_secs(2);
-        assert!(interrupted_conversation_supersedes(
-            &older,
-            &newer,
-            interrupted_at
-        ));
-        assert!(!interrupted_conversation_supersedes(
-            &older,
-            &newer,
-            older.last_activity
-        ));
-
-        let (_, mut forked) =
-            conversation_pair("codex", AgentStatus::Running, Some(SessionOrigin::Forked));
-        assert!(!interrupted_conversation_supersedes(
-            &older,
-            &forked,
-            interrupted_at
-        ));
-
-        forked.origin = Some(SessionOrigin::Fresh);
-        forked.runtime_owner = Some(RuntimeOwner::new(
-            RuntimeOwnerKind::Agent,
-            "codex",
-            43,
-            Some("start".to_owned()),
-        ));
-        assert!(!interrupted_conversation_supersedes(
-            &older,
-            &forked,
-            interrupted_at
-        ));
-
-        let (mut daemon_older, mut daemon_newer) =
-            conversation_pair("codex", AgentStatus::Running, Some(SessionOrigin::Fresh));
-        daemon_older.runtime_owner.as_mut().unwrap().kind = RuntimeOwnerKind::Daemon;
-        daemon_newer.runtime_owner.as_mut().unwrap().kind = RuntimeOwnerKind::Daemon;
-        assert!(!interrupted_conversation_supersedes(
-            &daemon_older,
-            &daemon_newer,
-            interrupted_at
-        ));
-
-        let (paused, paused_newer) =
-            conversation_pair("codex", AgentStatus::Paused, Some(SessionOrigin::Fresh));
-        assert!(!interrupted_conversation_supersedes(
-            &paused,
-            &paused_newer,
-            interrupted_at
-        ));
+        parked.phase = crate::agents::TurnPhase::Parked;
+        assert!(supersedes(&parked, &newer));
     }
 
     #[test]
-    fn interrupted_replacement_rejects_process_incarnation_mismatches() {
-        let (mut older, mut newer) =
-            conversation_pair("codex", AgentStatus::Waiting, Some(SessionOrigin::Fresh));
-        let interrupted_at = older.last_activity + std::time::Duration::from_secs(2);
+    fn stale_certificate_keeps_owner() {
+        let (mut older, newer) =
+            conversation_pair("codex", AgentStatus::Running, Some(SessionOrigin::Fresh));
+        older.context = Some(AgentContext {
+            turn_error: Some(AgentTurnError {
+                class: TurnErrorClass::PausedOverloaded,
+                at: older.last_activity,
+                label: None,
+            }),
+            ..AgentContext::new("codex", older.last_activity)
+        });
+        assert!(!supersedes(&older, &newer));
+    }
+
+    #[test]
+    fn rested_follow_latest_owner_requires_the_same_process_incarnation() {
+        let (mut older, mut newer) = conversation_pair("antigravity", AgentStatus::Success, None);
         newer.runtime_owner.as_mut().unwrap().process_start = Some("replacement".to_owned());
-        assert!(!interrupted_conversation_supersedes(
-            &older,
-            &newer,
-            interrupted_at
-        ));
+        assert!(!supersedes(&older, &newer));
 
         newer.runtime_owner = older.runtime_owner.clone();
-        newer.pane.as_mut().unwrap().pane_process_start = Some(interrupted_at);
+        newer.pane.as_mut().unwrap().pane_process_start = Some(newer.last_activity);
         older.pane.as_mut().unwrap().pane_process_start = Some(older.last_activity);
-        assert!(!interrupted_conversation_supersedes(
-            &older,
-            &newer,
-            interrupted_at
-        ));
+        assert!(!supersedes(&older, &newer));
+
+        newer.pane = older.pane.clone();
+        older.runtime_owner.as_mut().unwrap().kind = RuntimeOwnerKind::Daemon;
+        newer.runtime_owner.as_mut().unwrap().kind = RuntimeOwnerKind::Daemon;
+        assert!(!supersedes(&older, &newer));
+    }
+
+    #[test]
+    fn rested_fresh_owner_does_not_yield_to_a_fork() {
+        let (mut older, newer) =
+            conversation_pair("codex", AgentStatus::Running, Some(SessionOrigin::Forked));
+        let at = older.last_activity + std::time::Duration::from_secs(1);
+        older.context = Some(AgentContext {
+            settle: Some(TurnSettle::new(at, TurnSettleOutcome::Interrupted)),
+            ..AgentContext::new("codex", at)
+        });
+        assert!(!supersedes(&older, &newer));
     }
 }
