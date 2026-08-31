@@ -518,7 +518,7 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
     let reports = children
         .into_iter()
         .map(|child| {
-            let run = newest_run_for_child(&runs, child);
+            let run = rimz::harness::run::newest_run_for_agent(&runs, child);
             let name = child
                 .name
                 .clone()
@@ -602,18 +602,6 @@ fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
     )
 }
 
-fn newest_run_for_child<'a>(
-    runs: &'a [rimz::harness::run::RunRecord],
-    child: &AgentState,
-) -> Option<&'a rimz::harness::run::RunRecord> {
-    runs.iter()
-        .filter(|run| {
-            run.agent_id.as_ref() == Some(&child.agent_id)
-                || run.agent_name.as_deref() == child.name.as_deref()
-        })
-        .max_by_key(|run| run.started_at)
-}
-
 fn wait_children(
     names: Vec<String>,
     any: bool,
@@ -647,7 +635,7 @@ fn wait_references(
             .iter()
             .copied()
             .filter_map(|child| {
-                let run = newest_run_for_child(runs, child)?;
+                let run = rimz::harness::run::newest_run_for_agent(runs, child)?;
                 (!any || !run.status.is_terminal()).then(|| child_reference(child))
             })
             .collect());

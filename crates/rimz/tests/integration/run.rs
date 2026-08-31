@@ -1003,7 +1003,7 @@ fn red_verify_at_attempt_cap_exits_123_with_forensics() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "claimed done\n");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("rimz: run verify_failed (exit 123)"),
+        stderr.contains("rimz: run verify failed (exit 123)"),
         "{stderr}"
     );
     assert!(stderr.contains("verify `"), "{stderr}");
@@ -2088,7 +2088,7 @@ fn wait_single_run_prints_full_human_output_and_terminal_exit() {
     assert_eq!(out.status.code(), Some(123));
     assert_eq!(String::from_utf8_lossy(&out.stdout), "finished review\n");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("rimz: run verify_failed (exit 123)"));
+    assert!(stderr.contains("rimz: run verify failed (exit 123)"));
     assert!(stderr.contains("review failed"));
     assert!(stderr.contains("transcript: /tmp/swift-otter.jsonl"));
 }
