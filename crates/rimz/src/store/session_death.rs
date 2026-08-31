@@ -2,7 +2,7 @@
 
 use jiff::Timestamp;
 
-use crate::agents::{AgentState, AgentStatus, SamePaneSessionPolicy, SessionOrigin};
+use crate::agents::{AgentState, SamePaneSessionPolicy, SessionOrigin};
 use crate::pane::RuntimeOwnerKind;
 
 /// Age in seconds after which a pidless agent session is reaped as a ghost.
@@ -167,7 +167,7 @@ fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
 mod tests {
     use super::*;
     use crate::agents::{
-        AgentContext, AgentTurnError, TurnErrorClass, TurnSettle, TurnSettleOutcome,
+        AgentContext, AgentStatus, AgentTurnError, TurnErrorClass, TurnSettle, TurnSettleOutcome,
     };
     use crate::ids::{MuxName, PaneId};
     use crate::pane::{PaneRef, RuntimeOwner};

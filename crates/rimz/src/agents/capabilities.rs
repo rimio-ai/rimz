@@ -339,17 +339,6 @@ pub trait SessionCapability: CoreCapability {
         Vec::new()
     }
 
-    /// Probe a provider-owned transcript for a resting interruption marker on
-    /// one exact session. The store reaper calls this only after proving that
-    /// two active roots share one physical agent instance; adapters normalize
-    /// provider evidence and perform no writes.
-    fn probe_resting_interruption(
-        &self,
-        _agent_id: &crate::ids::AgentSessionId,
-    ) -> Option<Timestamp> {
-        None
-    }
-
     /// Discover validated sessions for absolute workspaces from the provider's
     /// machine-local store. The result is pulled display truth; callers bind it
     /// only to currently live panes and never append it to the RimZ event log.
