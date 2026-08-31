@@ -972,7 +972,9 @@ fn launch_occupant<'a>(group: &[&'a AgentState]) -> Option<&'a AgentState> {
 /// launch currently is. It reads `holds_open_turn`, so callers that need the
 /// current answer must attach rest certificates first.
 fn launch_occupants(agents: &[AgentState]) -> impl Iterator<Item = &AgentState> {
-    launch_occupants_from(agents.iter()).into_iter()
+    launch_groups(agents)
+        .into_iter()
+        .filter_map(|group| launch_occupant(&group))
 }
 
 pub(super) fn launch_occupants_from<'a>(
@@ -1311,12 +1313,11 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
                 target_peer.is_some_and(|target| std::ptr::eq(*matched, target))
             })
     };
-    if launch_occupant {
-        if let Some(role) = agent.role.as_deref()
-            && resolves_in(role, &launch_occupants)
-        {
-            return format!("@{role}");
-        }
+    if launch_occupant
+        && let Some(role) = agent.role.as_deref()
+        && resolves_in(role, &launch_occupants)
+    {
+        return format!("@{role}");
     }
     if let Some(name) = agent.name.as_deref().filter(|_| agent.name_explicit)
         && resolves_in(name, &scoped_peers)

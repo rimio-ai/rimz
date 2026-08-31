@@ -382,7 +382,7 @@ fn cohort_matching_uses_one_occupant_per_launch_instance() {
     let live_pool = [ended_old.clone(), current.clone()];
     let matched = match_cohort(
         &live_pool.iter().collect::<Vec<_>>(),
-        &[cell.clone()],
+        std::slice::from_ref(&cell),
         Some("forge"),
     );
     assert_eq!(
@@ -393,7 +393,7 @@ fn cohort_matching_uses_one_occupant_per_launch_instance() {
         inspect_cohort_relaunch(
             &live_pool,
             Path::new("/code/feature"),
-            &[cell.clone()],
+            std::slice::from_ref(&cell),
             Some("forge")
         ),
         CohortRelaunchState::Present {
@@ -408,7 +408,7 @@ fn cohort_matching_uses_one_occupant_per_launch_instance() {
     let closed_pool = [ended_old, ended_current];
     let matched = match_cohort(
         &closed_pool.iter().collect::<Vec<_>>(),
-        &[cell.clone()],
+        std::slice::from_ref(&cell),
         Some("forge"),
     );
     assert_eq!(
