@@ -1570,6 +1570,101 @@ fn launch_role_follows_the_current_conversation_without_a_pane_frame() {
 }
 
 #[test]
+fn closed_launch_keeps_its_role_handle_and_pane_address() {
+    let owner = |session: &str| {
+        crate::pane::RuntimeOwner::new(
+            crate::pane::RuntimeOwnerKind::Agent,
+            session,
+            42,
+            Some("agent-start".to_owned()),
+        )
+    };
+    let mut older = agent("codex", "older", Some("auth"), "terminal_1");
+    older.launch_id = Some(AgentSessionId::from("launch_coder"));
+    older.role = Some("coder".to_owned());
+    older.status = AgentStatus::Success;
+    older.ended_at = Some(Timestamp::from_second(1_000).unwrap());
+    older.last_activity = Timestamp::from_second(1_000).unwrap();
+    older.runtime_owner = Some(owner("older"));
+    let mut latest = agent("codex", "latest", Some("auth"), "terminal_1");
+    latest.launch_id = Some(AgentSessionId::from("launch_coder"));
+    latest.role = Some("coder".to_owned());
+    latest.status = AgentStatus::Success;
+    latest.ended_at = Some(Timestamp::from_second(2_000).unwrap());
+    latest.last_activity = Timestamp::from_second(2_000).unwrap();
+    latest.runtime_owner = Some(owner("latest"));
+    let mut snapshot = empty_snapshot();
+    snapshot.agents = vec![older, latest];
+
+    assert_eq!(
+        resolve_one(&snapshot, "@coder", None, Some("auth"))
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "latest"
+    );
+    assert_eq!(
+        resolve_one(&snapshot, "zellij:terminal_1", None, None)
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "latest"
+    );
+    let peers = snapshot.root_agents().collect::<Vec<_>>();
+    assert_eq!(agent_handle(&snapshot.agents[1], &peers, false), "@coder");
+}
+
+#[test]
+fn ordinal_fallback_does_not_widen_launch_delivery_tiers() {
+    let owner = |session: &str| {
+        crate::pane::RuntimeOwner::new(
+            crate::pane::RuntimeOwnerKind::Agent,
+            session,
+            42,
+            Some("agent-start".to_owned()),
+        )
+    };
+    let mut sibling = agent("codex", "sibling", Some("auth"), "terminal_1");
+    sibling.launch_id = Some(AgentSessionId::from("launch_coder"));
+    sibling.role = Some("coder".to_owned());
+    sibling.kind_ordinal = Some(1);
+    sibling.status = AgentStatus::Success;
+    sibling.runtime_owner = Some(owner("sibling"));
+    let mut occupant = agent("codex", "occupant", Some("auth"), "terminal_1");
+    occupant.launch_id = Some(AgentSessionId::from("launch_coder"));
+    occupant.role = Some("coder".to_owned());
+    occupant.kind_ordinal = Some(2);
+    occupant.status = AgentStatus::Running;
+    occupant.runtime_owner = Some(owner("occupant"));
+    let mut snapshot = empty_snapshot();
+    snapshot.agents = vec![sibling, occupant];
+
+    assert_eq!(
+        resolve_one(&snapshot, "@codex-1", None, Some("auth"))
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "sibling"
+    );
+    assert_eq!(
+        resolve_many(&snapshot, "@all", None, Some("auth"))
+            .unwrap()
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["occupant"]
+    );
+    assert_eq!(
+        resolve_many(&snapshot, "@coder", None, Some("auth"))
+            .unwrap()
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["occupant"]
+    );
+}
+
+#[test]
 fn launch_groups_separate_relaunched_processes_reusing_an_id() {
     let mut crashed = agent("codex", "crashed", Some("auth"), "terminal_1");
     crashed.launch_id = Some(AgentSessionId::from("launch_coder"));

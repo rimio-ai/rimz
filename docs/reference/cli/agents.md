@@ -23,7 +23,7 @@ The [`pane` commands](./pane.md) additionally accept the literal `sidebar` for t
 
 **Handles that name one agent:**
 
-- `@coder` — a team or ad-hoc role; it names the launch's current conversation, so the handle follows whichever same-instance conversation currently occupies the launch. Other conversations in that instance remain addressable by pet name or session id.
+- `@coder` — a team or ad-hoc role; it names the launch's current conversation, so the handle follows whichever same-instance conversation currently occupies the launch. Other conversations remain audit records resolvable by `agents show`, `history`, or `fork`; a live pane has one message recipient, so shadowed siblings are never message targets.
 - `@writer` — an explicit name from a single-agent launch such as `rimz agents claude --name writer`.
 - `@swift-otter` — a pet name.
 - `@claude-2` — a kind plus ordinal (the ordinal appears only when two of a kind share one worktree).
