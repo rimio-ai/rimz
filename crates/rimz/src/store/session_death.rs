@@ -1,8 +1,8 @@
-//! Agent session lineage and supersession rules shared by reducer inheritance
-//! and durable/view reaps. [`same_instance_lineage`] proves replacement
-//! ancestry; reaping adds activity and open-turn guards. The writer attaches
-//! provider rest certificates before applying those guards, while the
-//! store-only view reap deliberately falls back to durable lifecycle state.
+//! Agent-instance identity and supersession rules shared by reducer inheritance
+//! and durable/view reaps. Launch identity spans every same-instance
+//! conversation, while reaping separately requires replacement or failure
+//! evidence. The writer attaches provider rest certificates before applying
+//! those guards; the store-only view reap falls back to durable lifecycle state.
 
 use jiff::Timestamp;
 
@@ -43,6 +43,7 @@ pub(crate) fn supersedes(older: &AgentState, newer: &AgentState) -> bool {
         && (older_yields_pane(older, newer)
             || cleared_conversation_supersedes(older, newer)
             || same_process_conversation_supersedes(older, newer)
+            || forked_retry_supersedes(older, newer)
             || compaction_continuation_supersedes(older, newer))
 }
 
@@ -74,26 +75,26 @@ fn same_process_conversation_supersedes(older: &AgentState, newer: &AgentState) 
     same_agent_instance(older, newer)
 }
 
-/// Whether two roots are replacement conversations in one agent-process and
-/// pane incarnation. This deliberately ignores liveness: the reducer uses it
-/// to transfer launch identity even when only a later sidecar proves the older
-/// raw-active root rested.
-pub(crate) fn same_instance_lineage(older: &AgentState, newer: &AgentState) -> bool {
-    if !same_agent_instance(older, newer) {
-        return false;
-    }
-    let fresh_replacement =
-        older.origin == Some(SessionOrigin::Fresh) && newer.origin == Some(SessionOrigin::Fresh);
-    let compacted_continuation = newer.compacted_from.as_ref() == Some(&older.agent_id);
-    let follows_latest =
-        crate::agents::spec_by_kind(older.kind.as_str()).is_some_and(|definition| {
-            definition.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
-        });
-    fresh_replacement || compacted_continuation || follows_latest
+/// A fork retires only a same-instance predecessor that a provider error or
+/// raw failure already ended. Cleanly rested primaries remain valid siblings.
+fn forked_retry_supersedes(older: &AgentState, newer: &AgentState) -> bool {
+    newer.origin == Some(SessionOrigin::Forked)
+        && rested_by_error(older)
+        && same_agent_instance(older, newer)
+}
+
+fn rested_by_error(agent: &AgentState) -> bool {
+    !agent.holds_open_turn()
+        && (agent.status == crate::agents::AgentStatus::Failed
+            || crate::agents::is_turn_dead(
+                agent.status,
+                agent.context.as_ref(),
+                agent.last_activity,
+            ))
 }
 
 /// Whether two roots name the same pane and agent-process incarnation.
-fn same_agent_instance(older: &AgentState, newer: &AgentState) -> bool {
+pub(crate) fn same_agent_instance(older: &AgentState, newer: &AgentState) -> bool {
     let same_pane = matches!(
         (older.pane.as_ref(), newer.pane.as_ref()),
         (Some(older_pane), Some(newer_pane))

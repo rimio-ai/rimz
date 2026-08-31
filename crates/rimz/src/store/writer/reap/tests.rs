@@ -100,6 +100,27 @@ fn fresh_pane_lifecycle(
     )
 }
 
+fn forked_pane_lifecycle(
+    workspace_id: &WorkspaceId,
+    agent_id: &str,
+    pane_id: &str,
+) -> EventEnvelope {
+    let mut observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from(agent_id)),
+        LifecycleSignal::Registered,
+    );
+    observation.agent_pid = Some(std::process::id());
+    observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, pane_id));
+    observation.origin = Some(SessionOrigin::Forked);
+    EventEnvelope::agent_lifecycle(
+        workspace_id.clone(),
+        "rimz-test",
+        "codex",
+        "SessionStart",
+        &observation,
+    )
+}
+
 fn turn_started_lifecycle(workspace_id: &WorkspaceId, agent_id: &str) -> EventEnvelope {
     let observation = AgentLifecycleObservation::new(
         Some(AgentSessionId::from(agent_id)),
@@ -406,7 +427,7 @@ fn provider_error_certificate_reaps_the_replaced_owner() {
     let mut turn_started = turn_started_lifecycle(&workspace_id, "overloaded");
     turn_started.timestamp = now - Duration::from_secs(3);
     let error_at = now - Duration::from_secs(2);
-    let mut replacement = fresh_pane_lifecycle(&workspace_id, "replacement", "%1");
+    let mut replacement = forked_pane_lifecycle(&workspace_id, "replacement", "%1");
     replacement.timestamp = now - Duration::from_secs(1);
     for event in [older, turn_started, replacement] {
         event_log::append(&store.paths().events_log, &event).expect("append lifecycle");
@@ -427,6 +448,60 @@ fn provider_error_certificate_reaps_the_replaced_owner() {
         store.reap_dead_sessions().expect("reap overloaded owner"),
         1
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanly_rested_primary_is_not_reaped_by_a_fork() {
+    let (_dir, store, workspace_id) = store();
+    let now = Timestamp::now();
+    let mut primary = fresh_pane_lifecycle(&workspace_id, "primary", "%1");
+    primary.timestamp = now - Duration::from_secs(3);
+    let mut completed = turn_lifecycle(
+        &workspace_id,
+        "primary",
+        "Stop",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+        },
+    );
+    completed.timestamp = now - Duration::from_secs(2);
+    let mut fork = forked_pane_lifecycle(&workspace_id, "fork", "%1");
+    fork.timestamp = now - Duration::from_secs(1);
+    for event in [primary, completed, fork] {
+        event_log::append(&store.paths().events_log, &event).expect("append lifecycle");
+    }
+
+    assert_eq!(store.reap_dead_sessions().expect("keep clean primary"), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_primary_is_reaped_by_a_fork() {
+    let (_dir, store, workspace_id) = store();
+    let now = Timestamp::now();
+    let mut primary = fresh_pane_lifecycle(&workspace_id, "primary", "%1");
+    primary.timestamp = now - Duration::from_secs(4);
+    let mut started = turn_started_lifecycle(&workspace_id, "primary");
+    started.timestamp = now - Duration::from_secs(3);
+    let mut failed = turn_lifecycle(
+        &workspace_id,
+        "primary",
+        "Stop",
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+        },
+    );
+    failed.timestamp = now - Duration::from_secs(2);
+    let mut fork = forked_pane_lifecycle(&workspace_id, "fork", "%1");
+    fork.timestamp = now - Duration::from_secs(1);
+    for event in [primary, started, failed, fork] {
+        event_log::append(&store.paths().events_log, &event).expect("append lifecycle");
+    }
+
+    assert_eq!(store.reap_dead_sessions().expect("reap failed primary"), 1);
 }
 
 #[cfg(unix)]

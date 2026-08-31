@@ -81,12 +81,42 @@ fn compaction_ended_for_unknown_session_folds_to_nothing() {
 
 #[test]
 fn linked_compaction_end_seeds_and_carries_the_continuation() {
+    let pane_id = "tmux:%compact";
+    let owner_pid = 42;
+    let mut launch = launch_event(
+        "codex",
+        AgentLaunchPayload {
+            launch_id: Some(AgentSessionId::from("launch_coder")),
+            launch: LaunchParams {
+                role: Some("coder".to_owned()),
+                ..LaunchParams::default()
+            },
+            pane_id: Some(PaneId::parse(pane_id).expect("pane id")),
+            runtime_owner: Some(RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "launch_coder",
+                owner_pid,
+                Some("agent-start".to_owned()),
+            )),
+            ..launch_payload("launch_coder", "coder-card")
+        },
+    );
+    launch.timestamp = epoch();
     let predecessor = raw_lifecycle_at(
         "codex",
         1,
         serde_json::json!({
             "event_name": "Stop",
             "agent_id": "predecessor",
+            "agent_name": "coder-card",
+            "pane_id": pane_id,
+            "pane_process_start": "pane-start",
+            "runtime_owner": {
+                "kind": "agent",
+                "subject_id": "predecessor",
+                "pid": owner_pid,
+                "process_start": "agent-start",
+            },
             "signal": {
                 "signal": "turn_ended",
                 "errored": false,
@@ -101,6 +131,14 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
             "event_name": "SessionStart",
             "agent_id": "continuation",
             "compacted_from": "predecessor",
+            "pane_id": pane_id,
+            "pane_process_start": "pane-start",
+            "runtime_owner": {
+                "kind": "agent",
+                "subject_id": "continuation",
+                "pid": owner_pid,
+                "process_start": "agent-start",
+            },
             "signal": { "signal": "compaction_ended" },
         }),
     );
@@ -114,7 +152,8 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
         }),
     );
 
-    let after_start = reduce_agent_states(&[predecessor.clone(), continuation.clone()]);
+    let after_start =
+        reduce_agent_states(&[launch.clone(), predecessor.clone(), continuation.clone()]);
     let predecessor_state = after_start
         .iter()
         .find(|agent| agent.agent_id == "predecessor")
@@ -131,8 +170,13 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
         continuation_state.registered_at, predecessor_state.registered_at,
         "the continuation inherits pane primacy"
     );
+    assert_eq!(
+        continuation_state.launch_id.as_deref(),
+        Some("launch_coder")
+    );
+    assert_eq!(continuation_state.role.as_deref(), Some("coder"));
 
-    let after_turn = reduce_agent_states(&[predecessor, continuation, continued_turn]);
+    let after_turn = reduce_agent_states(&[launch, predecessor, continuation, continued_turn]);
     let continuation_state = after_turn
         .iter()
         .find(|agent| agent.agent_id == "continuation")
