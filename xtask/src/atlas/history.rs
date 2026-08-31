@@ -88,6 +88,8 @@ pub(super) struct Blame {
     pub(super) lines: BTreeMap<PathBuf, Vec<(String, i64)>>,
 }
 
+type BlamedFile = (PathBuf, Vec<(String, i64)>);
+
 impl Blame {
     pub(super) fn read(root: &Path, files: &[PathBuf], workers: usize) -> Result<Self> {
         let workers = workers.max(1).min(files.len().max(1));
@@ -121,7 +123,7 @@ impl Blame {
     }
 }
 
-fn blame_files(root: &Path, paths: Vec<PathBuf>) -> Result<Vec<(PathBuf, Vec<(String, i64)>)>> {
+fn blame_files(root: &Path, paths: Vec<PathBuf>) -> Result<Vec<BlamedFile>> {
     paths
         .into_iter()
         .map(|path| {
