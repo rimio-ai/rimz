@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::{AgentContext, AgentStatus, AgentTurnError, TurnErrorClass};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::sidebar::enrich::{FoldOpts, WorkspaceSnapshot, enrich};
 use crate::sidebar::frame::{CarriedPane, assemble_frame};
@@ -196,6 +197,64 @@ fn cached_alive_snapshot_binds_safe_local_session_intersection() {
             .all(|agent| agent.agent_id != removed_observation.session_id),
         "published observations bind only through current card-admitted panes",
     );
+}
+
+#[test]
+fn cached_alive_snapshot_attaches_rest_certificates_for_team_ownership() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let older_at = Timestamp::from_second(1_750_000_000).unwrap();
+    let error_at = Timestamp::from_second(1_750_000_001).unwrap();
+    let newer_at = Timestamp::from_second(1_750_000_002).unwrap();
+    let shared_pane = pane("terminal_1", "codex", "/repo/main");
+    let owner = crate::pane::RuntimeOwner::new(
+        crate::pane::RuntimeOwnerKind::Agent,
+        "conversation-a",
+        42,
+        Some("agent-start".to_owned()),
+    );
+    let mut dead_owner = root_agent("codex", "conversation-a", None);
+    dead_owner.last_activity = older_at;
+    dead_owner.pane = Some(shared_pane.clone());
+    dead_owner.runtime_owner = Some(owner.clone());
+    dead_owner.launch_id = Some("launch-coder".into());
+    dead_owner.role = Some("coder".to_owned());
+    dead_owner.team = Some("forge".to_owned());
+    let mut successor = root_agent("codex", "conversation-b", None);
+    successor.last_activity = newer_at;
+    successor.pane = Some(shared_pane);
+    successor.runtime_owner = Some(crate::pane::RuntimeOwner {
+        subject_id: "conversation-b".into(),
+        ..owner
+    });
+    successor.launch_id = Some("launch-coder".into());
+    successor.role = Some("coder".to_owned());
+    successor.team = Some("forge".to_owned());
+    let context = AgentContext {
+        turn_error: Some(AgentTurnError {
+            class: TurnErrorClass::PausedOverloaded,
+            at: error_at,
+            label: Some("server_overloaded".to_owned()),
+        }),
+        ..AgentContext::new("codex", error_at)
+    };
+    crate::store::agent_context::write(&runtime, "codex", "conversation-a", &context).unwrap();
+    let base = SidebarSnapshot::build_with_agents(workspace, vec![dead_owner, successor], newer_at);
+
+    let snapshot = cached_alive_snapshot(base, &runtime, "rimz-test");
+
+    let dead_owner = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == "conversation-a")
+        .unwrap();
+    assert_eq!(dead_owner.status, AgentStatus::Running);
+    assert!(!dead_owner.holds_open_turn());
+    let cohorts = crate::harness::target::team_cohorts(&snapshot.agents);
+    assert_eq!(cohorts[0].members.len(), 1);
+    assert_eq!(cohorts[0].members[0].agent_id.as_str(), "conversation-b");
 }
 
 #[test]

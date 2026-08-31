@@ -296,6 +296,7 @@ pub fn cached_alive_snapshot(
             read_published_agent_projection(frame_panes, runtime, session, None);
         base = base.with_local_sessions(&panes, projection.local_sessions);
     }
+    crate::store::agent_context::attach_rest_certificates(runtime, &mut base.agents);
     base
 }
 
