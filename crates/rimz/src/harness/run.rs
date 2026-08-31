@@ -71,6 +71,9 @@ pub struct SupervisedRunRequest {
     /// Apply provider-native delegation restrictions to a `rimz subagents`
     /// child.
     pub subagent: bool,
+    /// Queue the settled outcome to the launching agent as a `SUBAGENT_REPORT`;
+    /// set by `rimz subagents` when the caller does not join.
+    pub report_to_parent: bool,
     pub force_new_tab: bool,
     pub permission_mode: PermissionMode,
     pub agent: Option<String>,
@@ -111,6 +114,7 @@ impl SupervisedRunRequest {
             background: false,
             self_cleanup_on_completion: false,
             subagent: false,
+            report_to_parent: false,
             force_new_tab: false,
             permission_mode,
             agent: None,
@@ -286,6 +290,9 @@ pub struct RunRecord {
     /// Pane-backed child launched through `rimz subagents`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub subagent: bool,
+    /// Queue the settled outcome to the launching agent.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub report_to_parent: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -334,6 +341,7 @@ impl RunRecord {
             permission_mode,
             keep: false,
             subagent: false,
+            report_to_parent: false,
             budget: None,
             cost_usd: None,
             input_tokens: None,

@@ -64,12 +64,22 @@ fn durable_deadline_defaults_for_old_records_and_times_out_once_due() {
 #[test]
 fn retention_flags_default_false_for_old_run_records() {
     let (_dir, _paths, record) = setup();
+    let mut reporting = record.clone();
+    reporting.report_to_parent = true;
+    let reporting: RunRecord =
+        serde_json::from_value(serde_json::to_value(&reporting).unwrap()).unwrap();
+    assert!(reporting.report_to_parent);
+
     let mut old_json = serde_json::to_value(&record).expect("serialize run");
     old_json.as_object_mut().expect("run object").remove("keep");
     old_json
         .as_object_mut()
         .expect("run object")
         .remove("subagent");
+    old_json
+        .as_object_mut()
+        .expect("run object")
+        .remove("report_to_parent");
     old_json
         .as_object_mut()
         .expect("run object")
@@ -83,6 +93,7 @@ fn retention_flags_default_false_for_old_run_records() {
 
     assert!(!old.keep);
     assert!(!old.subagent);
+    assert!(!old.report_to_parent);
     assert_eq!(old.provider_pid, None);
     assert_eq!(old.provider_process_start, None);
 }

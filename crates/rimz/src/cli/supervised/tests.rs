@@ -224,6 +224,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         background: false,
         self_cleanup_on_completion: false,
         subagent,
+        report_to_parent: false,
         force_new_tab: false,
         permission_mode: PermissionMode::Auto,
         agent: None,
