@@ -1974,9 +1974,8 @@ pub fn inspect_cohort_relaunch(
                 })
         })
         .collect::<Vec<_>>();
-    let candidates = crate::harness::target::launch_occupants_from(candidates);
     let members = match team {
-        Some(team) => candidates
+        Some(team) => crate::harness::target::launch_occupants_from(candidates)
             .into_iter()
             .filter(|agent| agent.team.as_deref() == Some(team))
             .collect::<Vec<_>>(),
@@ -2028,8 +2027,9 @@ fn match_team_cohort<'a>(
     cells: &[CohortCell],
     team: &str,
 ) -> Vec<Option<&'a AgentState>> {
-    let pool = crate::harness::target::launch_occupants_from(candidates.iter().copied())
-        .into_iter()
+    let pool = candidates
+        .iter()
+        .copied()
         .filter(|agent| agent.team.as_deref() == Some(team))
         .collect::<Vec<_>>();
     let mut claimed = BTreeSet::new();
