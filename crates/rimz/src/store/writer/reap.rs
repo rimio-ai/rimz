@@ -4,9 +4,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use tracing::warn;
 
-use crate::agents::{AgentLifecycleObservation, AgentState, AgentStatus, LifecycleSignal};
+use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
 use crate::store::event::EventEnvelope;
-use crate::store::paths::RuntimePaths;
 use crate::store::runtime::{self, AgentLiveness, RuntimeScope};
 use crate::store::{live_roster, session_death};
 
@@ -34,22 +33,6 @@ type EndedSession = (
     crate::ids::AgentSessionId,
     &'static str,
 );
-
-fn attach_rest_certificates(agents: &mut [AgentState], runtime: &RuntimePaths) {
-    for agent in agents {
-        if agent.ended_at.is_some()
-            || !matches!(agent.status, AgentStatus::Running | AgentStatus::Waiting)
-        {
-            continue;
-        }
-        agent.context = crate::store::agent_context::read_one(
-            runtime,
-            agent.kind.as_str(),
-            agent.agent_id.as_str(),
-        )
-        .map(|record| record.context);
-    }
-}
 
 impl Store {
     fn append_ended_sessions(&self, victims: &[EndedSession]) -> Result<usize> {
@@ -112,7 +95,10 @@ impl Store {
         // Rest certificates are cache-class sidecars. Reading only raw-active
         // roots lets a provider-rested owner yield; a missing sidecar leaves
         // the lifecycle status in charge.
-        attach_rest_certificates(&mut projection.agents, &self.inner.runtime);
+        crate::store::agent_context::attach_rest_certificates(
+            &self.inner.runtime,
+            projection.agents.iter_mut(),
+        );
         let protected = live_roster::read(&self.inner.paths.live_roster)
             .map(|roster| roster.agents)
             .unwrap_or_default();

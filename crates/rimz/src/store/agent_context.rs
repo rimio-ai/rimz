@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::context::{AgentContext, AgentTurnError, merge_session_usage};
 use crate::agents::{
-    AgentCost, AgentSpec, AgentTokenUsage, LocalContextRefresh, LocalSpendFold, TranscriptStat,
+    AgentCost, AgentSpec, AgentState, AgentStatus, AgentTokenUsage, LocalContextRefresh,
+    LocalSpendFold, TranscriptStat,
 };
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::atomic;
@@ -145,6 +146,26 @@ pub fn write(
         true
     })
     .map(|_| ())
+}
+
+/// Attach provider rest certificates to raw-active root sessions before a
+/// caller makes an ownership or reaping decision. Missing sidecars leave the
+/// durable lifecycle status authoritative.
+#[doc(hidden)]
+pub fn attach_rest_certificates<'a>(
+    runtime: &RuntimePaths,
+    agents: impl IntoIterator<Item = &'a mut AgentState>,
+) {
+    for agent in agents {
+        if agent.ended_at.is_some()
+            || agent.is_provider_subagent()
+            || !matches!(agent.status, AgentStatus::Running | AgentStatus::Waiting)
+        {
+            continue;
+        }
+        agent.context = read_one(runtime, agent.kind.as_str(), agent.agent_id.as_str())
+            .map(|record| record.context);
+    }
 }
 
 /// Persist a fully-shaped sidecar fixture while preserving concurrently owned
