@@ -13,7 +13,6 @@ use crate::pane::PaneRef;
 use crate::store::active_time::ActiveTimeRecord;
 use crate::store::snapshot::panes::{
     LazyAgentPairingResult, PaneBindingIndex, pane_admits_card, row_from_frame_pane,
-    stamped_agent_for_pane,
 };
 
 use super::SidebarSnapshot;
@@ -391,13 +390,15 @@ impl SidebarSnapshot {
     /// ask-fold guard, and the stall window all read the accurate value.
     /// The root agent bound to this live pane, by the same stamped-id +
     /// process-start rule the sidebar's card projection binds with
-    /// ([`stamped_agent_for_pane`]): a pane the multiplexer has since reused for a
-    /// shell never inherits the agent that once ran there, and a pane shared by
-    /// two sessions resolves to the one the card shows. The CLI's `pane list`
-    /// overlay reads through this so its annotations match the rendered room
-    /// rather than a looser pane-id lookup.
+    /// (`PaneBindingIndex`): a pane the multiplexer has since reused for a shell
+    /// never inherits the agent that once ran there, and a pane shared by two
+    /// sessions resolves to the one the card shows. The CLI's `pane list`
+    /// overlay reads through this so its annotations match the rendered room.
     pub fn agent_bound_to_pane(&self, pane: &PaneRef) -> Option<&AgentState> {
-        stamped_agent_for_pane(pane, &self.agents)
+        let index = PaneBindingIndex::new(&self.agents);
+        index
+            .stamped_agent(pane)
+            .or_else(|| index.stamped_launched_child(pane))
     }
 
     pub fn with_agent_activity(mut self, activity: &[AgentActivity]) -> Self {
