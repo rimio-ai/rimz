@@ -1249,6 +1249,79 @@ fn tmux_settled_subagent_reports_to_parent() {
         "--wait launch must not queue a duplicate report"
     );
 
+    for (key, value) in [
+        ("RIMZ_TEST_AGENT_SESSION", "sess-report-timed"),
+        ("RIMZ_TEST_AGENT_SLEEP_MS", "2500"),
+    ] {
+        tmux(&socket, &["set-environment", "-t", &session, key, value]);
+    }
+    let timed = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("TMUX_PANE", &parent_pane_raw)
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
+        .env("RIMZ_TEST_AGENT_SESSION", "sess-report-timed")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "2500")
+        .args([
+            "--mux",
+            "tmux",
+            "subagents",
+            "codex",
+            "finish after the join deadline",
+            "--name",
+            "report-timed",
+            "--timeout",
+            "2m",
+            "--wait=1s",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch deadline-limited subagent");
+    assert_eq!(
+        timed.status.code(),
+        Some(rimz::harness::run::RunStatus::TimedOut.exit_code()),
+        "deadline-limited join should time out\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&timed.stdout),
+        String::from_utf8_lossy(&timed.stderr)
+    );
+    let timed_run = wait_for_named_terminal_run(&env, "report-timed", CAPTURE_BUDGET);
+    assert_eq!(
+        timed_run.joined_at, None,
+        "a join deadline must not claim an unprinted result"
+    );
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    let timed_report = loop {
+        if let Some(report) = env
+            .store()
+            .list_messages()
+            .expect("list reports after join deadline")
+            .into_iter()
+            .find(|message| {
+                matches!(
+                    &message.sender,
+                    rimz::message::MessageSender::Subagent { name, .. }
+                        if name == "report-timed"
+                )
+            })
+        {
+            break report;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "deadline-limited child did not queue a later report; run: {timed_run:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(
+        timed_report.status,
+        rimz::message::MessageStatus::Sent,
+        "deadline-limited child report should traverse the delivery path"
+    );
+
     let parent_frame = capture_joined_until(
         &socket,
         &parent_pane_raw,
@@ -1269,7 +1342,7 @@ fn tmux_settled_subagent_reports_to_parent() {
             && parent_frame.contains("stub done")
             && parent_frame.contains("From: @report-second")
             && parent_frame.contains("All your subagents have finished."),
-        "parent pane did not receive the queued reports:\n{parent_frame}"
+        "parent pane did not receive the queued reports; timed report: {timed_report:?}\n{parent_frame}"
     );
 }
 

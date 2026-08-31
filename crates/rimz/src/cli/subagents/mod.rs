@@ -399,7 +399,7 @@ impl FanoutTask {
             .map_err(anyhow::Error::msg)
             .context("parsing timeout")?
             .or(fanout.timeout);
-        let mut launch = SubagentLaunchArgs {
+        let launch = SubagentLaunchArgs {
             profile: self.profile,
             prompt: self.prompt,
             prompt_file: self.prompt_file,
@@ -415,7 +415,6 @@ impl FanoutTask {
             passthrough: Vec::new(),
         }
         .into_agent_launch(defaults)?;
-        launch.report_to_parent = fanout.wait.is_none();
         Ok(launch)
     }
 }
@@ -426,7 +425,6 @@ impl SubagentLaunchArgs {
         defaults: &rimz::config::SubagentsConfig,
     ) -> Result<agents_cmd::AgentLaunchArgs> {
         let profile = self.profile.context("a subagent needs a profile")?;
-        let report_to_parent = self.wait.is_none();
         if self.wait == Some(None)
             && let Some(prompt) = self.prompt.as_deref()
         {
@@ -468,7 +466,6 @@ impl SubagentLaunchArgs {
             print: true,
             self_cleanup_on_completion: true,
             subagent: true,
-            report_to_parent,
             timeout: Some(timeout),
             keep: self.keep,
             max_turns: self.max_turns,

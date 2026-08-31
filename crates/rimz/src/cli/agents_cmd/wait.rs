@@ -46,11 +46,10 @@ fn wait_non_stream_request(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
-    let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let current_channel = ctx.channel();
     wait_non_stream(
-        store,
+        &ctx,
         &snapshot,
         references,
         any,
@@ -91,7 +90,7 @@ fn wait_stream_request(
 }
 
 fn wait_non_stream(
-    store: &rimz::Store,
+    ctx: &Ctx,
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     references: Vec<String>,
     any: bool,
@@ -99,6 +98,8 @@ fn wait_non_stream(
     style: WaitStyle,
     current_channel: Option<&str>,
 ) -> Result<()> {
+    let store = &ctx.store;
+    let session_name = &ctx.workspace.session_name;
     let targets = references
         .iter()
         .map(|reference| resolve_wait_target(store, snapshot, reference, current_channel))
@@ -111,14 +112,21 @@ fn wait_non_stream(
     loop {
         match waits.poll(store, current_channel)? {
             WaitPoll::Pending { settled } => {
-                style.report_progress(&waits, &settled)?;
+                style.report_progress(store, session_name, &waits, &settled)?;
             }
             WaitPoll::Settled { selected, settled } => {
-                style.report_settled(store, current_channel, &waits, selected, &settled)?;
+                style.report_settled(
+                    store,
+                    session_name,
+                    current_channel,
+                    &waits,
+                    selected,
+                    &settled,
+                )?;
                 std::process::exit(style.exit_code(&waits, selected)?);
             }
             WaitPoll::TimedOut { settled } => {
-                style.report_timeout(&waits, &settled)?;
+                style.report_timeout(store, session_name, &waits, &settled)?;
                 std::process::exit(RunStatus::TimedOut.exit_code());
             }
         }
@@ -144,12 +152,19 @@ impl WaitStyle {
         }
     }
 
-    fn report_progress(self, waits: &WaitSet, settled: &[usize]) -> Result<()> {
+    fn report_progress(
+        self,
+        store: &rimz::Store,
+        session_name: &str,
+        waits: &WaitSet,
+        settled: &[usize],
+    ) -> Result<()> {
         match self {
             Self::Single { .. } => Ok(()),
             Self::Any { json } | Self::All { json } => {
                 report_settled_disappearances(waits, settled)?;
                 if !json {
+                    mark_settled_joined(store, session_name, waits, settled)?;
                     print_settled_blocks(waits, settled)?;
                 }
                 Ok(())
@@ -160,6 +175,7 @@ impl WaitStyle {
     fn report_settled(
         self,
         store: &rimz::Store,
+        session_name: &str,
         current_channel: Option<&str>,
         waits: &WaitSet,
         selected: usize,
@@ -178,11 +194,13 @@ impl WaitStyle {
                     )?;
                     return Ok(());
                 }
+                mark_joined(store, session_name, std::iter::once(outcome))?;
                 print_single_outcome(outcome, json)
             }
             Self::Any { json } => {
                 let outcome = settled_outcome(waits, selected)?;
                 report_disappearance(&waits.targets[selected], outcome)?;
+                mark_joined(store, session_name, std::iter::once(outcome))?;
                 if json {
                     print_wait_json(std::iter::once(outcome))
                 } else {
@@ -197,22 +215,32 @@ impl WaitStyle {
             Self::All { json } => {
                 report_settled_disappearances(waits, settled)?;
                 if json {
+                    mark_joined(store, session_name, waits.outcomes.iter().flatten())?;
                     print_wait_json(waits.outcomes.iter().flatten())
                 } else {
+                    mark_settled_joined(store, session_name, waits, settled)?;
                     print_settled_blocks(waits, settled)
                 }
             }
         }
     }
 
-    fn report_timeout(self, waits: &WaitSet, settled: &[usize]) -> Result<()> {
+    fn report_timeout(
+        self,
+        store: &rimz::Store,
+        session_name: &str,
+        waits: &WaitSet,
+        settled: &[usize],
+    ) -> Result<()> {
         match self {
             Self::Single { .. } => Ok(()),
             Self::Any { json } | Self::All { json } => {
                 report_settled_disappearances(waits, settled)?;
                 if json {
+                    mark_joined(store, session_name, waits.outcomes.iter().flatten())?;
                     print_timeout_json(waits)
                 } else {
+                    mark_settled_joined(store, session_name, waits, settled)?;
                     print_settled_blocks(waits, settled)?;
                     print_pending_timeouts(waits)
                 }
@@ -228,6 +256,39 @@ impl WaitStyle {
             Self::All { .. } => Ok(waits.all_exit_code()),
         }
     }
+}
+
+fn mark_settled_joined(
+    store: &rimz::Store,
+    session_name: &str,
+    waits: &WaitSet,
+    settled: &[usize],
+) -> Result<()> {
+    for &index in settled {
+        mark_joined(
+            store,
+            session_name,
+            std::iter::once(settled_outcome(waits, index)?),
+        )?;
+    }
+    Ok(())
+}
+
+fn mark_joined<'a>(
+    store: &rimz::Store,
+    session_name: &str,
+    outcomes: impl IntoIterator<Item = &'a TargetOutcome>,
+) -> Result<()> {
+    for outcome in outcomes {
+        let TerminalPayload::Run(record) = &outcome.payload else {
+            continue;
+        };
+        let record = rimz::harness::run::report::mark_joined(store.paths(), &record.run_id)?;
+        if let Some(message_id) = record.report_message_id {
+            store.cancel_message(&message_id, session_name, "joined inline")?;
+        }
+    }
+    Ok(())
 }
 
 fn settled_outcome(waits: &WaitSet, index: usize) -> Result<&TargetOutcome> {

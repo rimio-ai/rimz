@@ -19,8 +19,10 @@ pub(super) enum ReportOutcome {
         delivered: bool,
         parent: String,
     },
+    ChildMissing,
     NoParent,
     ParentEnded,
+    Joined,
     NotRequested,
 }
 
@@ -41,8 +43,11 @@ pub(super) fn report_settled_child(
     store: &Store,
     run: &RunRecord,
 ) -> Result<ReportOutcome> {
-    if !run.subagent || !run.report_to_parent || !run.status.is_terminal() {
+    if !run.subagent || !run.status.is_terminal() {
         return Ok(ReportOutcome::NotRequested);
+    }
+    if run.joined_at.is_some() {
+        return Ok(ReportOutcome::Joined);
     }
 
     let projection = store.runtime_projection(RuntimeScope::Audit)?;
@@ -52,7 +57,7 @@ pub(super) fn report_settled_child(
             |agent_id| &agent.agent_id == agent_id,
         )
     }) else {
-        return Ok(ReportOutcome::NoParent);
+        return Ok(ReportOutcome::ChildMissing);
     };
     let (Some(parent_kind), Some(parent_id)) = (
         child.parent_agent_kind.as_ref(),
@@ -99,6 +104,12 @@ pub(super) fn report_settled_child(
         DeliveryGate::Done,
         pane_id,
     )?;
+    let recorded =
+        run::report::record_report_message(store.paths(), &run.run_id, message_id.clone())?;
+    if recorded.joined_at.is_some() {
+        store.cancel_message(&message_id, &workspace.session_name, "joined inline")?;
+        return Ok(ReportOutcome::Joined);
+    }
     let delivered = match pane_id {
         Some(pane_id) => rimz::message::deliver::deliver_one(
             workspace,
@@ -222,8 +233,11 @@ fn report_detail(run: &RunRecord) -> Option<String> {
 mod tests {
     use super::*;
     use jiff::Timestamp;
-    use rimz::agents::{AgentStatus, PermissionMode};
-    use rimz::ids::{AgentKind, WorkspaceId};
+    use rimz::agents::{AgentLifecycleObservation, AgentStatus, LifecycleSignal, PermissionMode};
+    use rimz::ids::{AgentKind, AgentSessionId, WorkspaceId};
+    use rimz::store::writer::AgentLifecycleIntent;
+    use rimz::store::{RuntimePaths, StatePaths};
+    use rimz::workspace::RootClass;
     use std::path::{Path, PathBuf};
 
     fn child() -> AgentState {
@@ -246,6 +260,67 @@ mod tests {
         run.started_at = Timestamp::from_second(1_000).unwrap();
         run.completed_at = Some(Timestamp::from_second(1_252).unwrap());
         run.updated_at = run.completed_at.unwrap();
+        run
+    }
+
+    fn report_fixture() -> (tempfile::TempDir, ResolvedWorkspace, Store) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state"))
+            .expect("state paths");
+        let runtime = RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime"))
+            .expect("runtime paths");
+        let store = Store::open(state, runtime).expect("store");
+        let workspace = ResolvedWorkspace {
+            workspace_id,
+            project_root: dir.path().to_path_buf(),
+            cwd_project_root: None,
+            root_class: RootClass::Directory,
+            worktree_root: dir.path().to_path_buf(),
+            worktree_branch: None,
+            session_name: "report-test".to_owned(),
+            mux_hint: None,
+        };
+        (dir, workspace, store)
+    }
+
+    fn append_agent(store: &Store, name: &str, parent: Option<&str>, signal: LifecycleSignal) {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from(name)), signal);
+        observation.agent_name = Some(name.to_owned());
+        if let Some(parent) = parent {
+            observation.launch.parent_agent_id = Some(AgentSessionId::from(parent));
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("codex"));
+            observation.launch.launch_depth = Some(1);
+        }
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "report-test",
+                agent_kind: AgentKind::new_unchecked("codex"),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .expect("append agent");
+    }
+
+    fn child_run(workspace_id: &WorkspaceId, name: &str, status: RunStatus) -> RunRecord {
+        let mut run = RunRecord::new(
+            workspace_id.clone(),
+            AgentKind::new_unchecked("codex"),
+            PermissionMode::Auto,
+            format!("task for {name}"),
+            PathBuf::from("/tmp/subagent-report"),
+        );
+        run.agent_id = Some(AgentSessionId::from(name));
+        run.agent_name = Some(name.to_owned());
+        run.subagent = true;
+        run.status = status;
+        run.started_at = Timestamp::from_second(1_000).unwrap();
+        run.updated_at = Timestamp::from_second(1_252).unwrap();
+        run.completed_at = status
+            .is_terminal()
+            .then(|| Timestamp::from_second(1_252).unwrap());
         run
     }
 
@@ -275,5 +350,84 @@ mod tests {
              provider did not stop\n\
              transcript: /tmp/transcript.jsonl"
         );
+    }
+
+    #[test]
+    fn missing_child_and_parent_are_distinct_skip_outcomes() {
+        let (_dir, workspace, store) = report_fixture();
+        let missing_child = child_run(&workspace.workspace_id, "missing", RunStatus::Completed);
+        assert_eq!(
+            report_settled_child(&workspace, &store, &missing_child).unwrap(),
+            ReportOutcome::ChildMissing
+        );
+
+        append_agent(
+            &store,
+            "child",
+            Some("missing-parent"),
+            LifecycleSignal::Registered,
+        );
+        let missing_parent = child_run(&workspace.workspace_id, "child", RunStatus::Completed);
+        assert_eq!(
+            report_settled_child(&workspace, &store, &missing_parent).unwrap(),
+            ReportOutcome::NoParent
+        );
+    }
+
+    #[test]
+    fn ended_parent_suppresses_the_report() {
+        let (_dir, workspace, store) = report_fixture();
+        append_agent(&store, "parent", None, LifecycleSignal::Registered);
+        append_agent(&store, "child", Some("parent"), LifecycleSignal::Registered);
+        append_agent(&store, "parent", None, LifecycleSignal::Ended);
+
+        let run = child_run(&workspace.workspace_id, "child", RunStatus::Completed);
+        assert_eq!(
+            report_settled_child(&workspace, &store, &run).unwrap(),
+            ReportOutcome::ParentEnded
+        );
+    }
+
+    #[test]
+    fn queued_report_counts_only_nonterminal_siblings() {
+        let (_dir, workspace, store) = report_fixture();
+        append_agent(&store, "parent", None, LifecycleSignal::Registered);
+        for name in ["child", "running", "finished"] {
+            append_agent(&store, name, Some("parent"), LifecycleSignal::Registered);
+        }
+        let child = child_run(&workspace.workspace_id, "child", RunStatus::Completed);
+        let running = child_run(&workspace.workspace_id, "running", RunStatus::Running);
+        let finished = child_run(&workspace.workspace_id, "finished", RunStatus::Completed);
+        for run in [&child, &running, &finished] {
+            run::create(store.paths(), run).expect("create run");
+        }
+
+        let ReportOutcome::Queued {
+            message_id,
+            delivered,
+            parent,
+        } = report_settled_child(&workspace, &store, &child).unwrap()
+        else {
+            panic!("report should queue");
+        };
+        assert!(!delivered);
+        assert_eq!(parent, "parent");
+        assert_eq!(
+            run::load(store.paths(), &child.run_id)
+                .expect("stored child")
+                .report_message_id,
+            Some(message_id.clone())
+        );
+        let messages = store.list_messages().expect("messages");
+        let report = messages
+            .iter()
+            .find(|message| message.message_id == message_id)
+            .expect("queued report");
+        assert!(report.text.contains("1 subagent still running: @running."));
+        assert!(!report.text.contains("@finished"));
+        assert!(matches!(
+            &report.sender,
+            MessageSender::Subagent { name, .. } if name == "child"
+        ));
     }
 }
