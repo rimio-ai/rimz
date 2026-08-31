@@ -66,23 +66,15 @@ impl SidebarSnapshot {
             // authority before command-line resume discovery, then leave the
             // fresh-cache path below for sessions that registered no hook.
             let stamped = panes.iter().find(|pane| {
-                binding_index
-                    .stamped_agent_for_session(pane, &observation.kind, &observation.session_id)
-                    .is_some()
-                    && local_pane_matches(pane, observation)
-                    && !used_panes.contains(&pane.pane_id)
+                binding_index.stamped_agent(pane).is_some_and(|agent| {
+                    agent.kind == observation.kind
+                        && agent.agent_id == observation.session_id
+                        && local_pane_matches(pane, observation)
+                        && !used_panes.contains(&pane.pane_id)
+                })
             });
             if let Some(pane) = stamped {
-                if binding_index
-                    .latest_launch_agent(pane, &observation.kind)
-                    .is_some_and(|launch| {
-                        launch.agent_id != observation.session_id
-                            && launch.registered_at.is_some_and(|launched_at| {
-                                observation.created_at < launched_at
-                                    || observation.last_activity < launched_at
-                            })
-                    })
-                {
+                if newer_launch_contradicts_observation(&binding_index, pane, observation) {
                     diagnostics.push(DiagEvent::GhostSessionBind {
                         agent_kind: observation.kind.clone(),
                         agent_session_id: observation.session_id.clone(),
@@ -95,6 +87,26 @@ impl SidebarSnapshot {
                 used_sessions.insert(observation_index);
                 used_panes.insert(pane.pane_id.clone());
                 bindings.push((observation_index, pane.clone()));
+                continue;
+            }
+            let exact_stamp = panes.iter().find(|pane| {
+                binding_index
+                    .stamped_agent_for_session(pane, &observation.kind, &observation.session_id)
+                    .is_some()
+                    && local_pane_matches(pane, observation)
+            });
+            if let Some(pane) = exact_stamp {
+                if newer_launch_contradicts_observation(&binding_index, pane, observation) {
+                    diagnostics.push(DiagEvent::GhostSessionBind {
+                        agent_kind: observation.kind.clone(),
+                        agent_session_id: observation.session_id.clone(),
+                        pane_id: pane.pane_id.clone(),
+                    });
+                }
+                // This durable identity is co-resident but does not own the
+                // pane. Keep it out of cwd fallback without consuming the pane
+                // from the selected conversation's observation.
+                used_sessions.insert(observation_index);
                 continue;
             }
             let Some(pane) = panes.iter().find(|pane| {
@@ -467,6 +479,21 @@ fn fresh_pane_allows_bind(
         return Err(LocalSessionBindRejectReason::StaleLaunchClock);
     }
     Ok(())
+}
+
+fn newer_launch_contradicts_observation(
+    binding_index: &PaneBindingIndex<'_>,
+    pane: &PaneRef,
+    observation: &LocalSessionObservation,
+) -> bool {
+    binding_index
+        .latest_launch_agent(pane, &observation.kind)
+        .is_some_and(|launch| {
+            launch.agent_id != observation.session_id
+                && launch.registered_at.is_some_and(|launched_at| {
+                    observation.created_at < launched_at || observation.last_activity < launched_at
+                })
+        })
 }
 
 fn local_pane_matches(pane: &PaneRef, observation: &LocalSessionObservation) -> bool {
