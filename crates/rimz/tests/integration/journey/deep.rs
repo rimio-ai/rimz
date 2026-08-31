@@ -987,7 +987,7 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
 }
 
 #[test]
-fn tmux_completed_subagent_lingers_until_parent_pane_disappears() {
+fn tmux_completed_subagent_status_lingers_until_parent_pane_disappears() {
     if which::which("tmux").is_err() {
         eprintln!("tmux not on PATH; skipping subagent parent-watch smoke");
         return;
@@ -1060,7 +1060,6 @@ fn tmux_completed_subagent_lingers_until_parent_pane_disappears() {
     );
     let parent_pane = parent_run.pane_id.expect("parent run pane");
     let parent_pane_raw = parent_pane.raw().to_owned();
-    let panes_before_child = tmux_panes(&socket, &session);
 
     for (key, value) in [
         ("RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS", "500"),
@@ -1107,78 +1106,72 @@ fn tmux_completed_subagent_lingers_until_parent_pane_disappears() {
         child_run.status.is_terminal(),
         "hook-firing child should have completed before the lifecycle assertion"
     );
-    let panes_after_child = tmux_panes(&socket, &session);
-    let new_panes = panes_after_child
-        .difference(&panes_before_child)
-        .cloned()
-        .collect::<Vec<_>>();
-    assert_eq!(
-        new_panes.len(),
-        1,
-        "subagent launch should add one pane: before={panes_before_child:?}, after={panes_after_child:?}"
+    let child_pane = child_run.pane_id.expect("child run pane");
+    let child_pane_raw = child_pane.raw().to_owned();
+    assert_ne!(
+        parent_actual_pane, child_pane_raw,
+        "parent and child must occupy distinct panes"
     );
-    let child_pane = &new_panes[0];
+
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    while Instant::now() < deadline && tmux_pane_alive(&socket, &session, &child_pane_raw) {
+        std::thread::sleep(Duration::from_millis(25));
+    }
     assert!(
-        tmux_pane_alive(&socket, &session, child_pane),
-        "completed subagent pane should remain visible"
+        !tmux_pane_alive(&socket, &session, &child_pane_raw),
+        "completed subagent pane should close by default"
     );
-    assert!(
-        !tmux_pane_dead(&socket, child_pane),
-        "completed subagent wrapper should remain alive"
-    );
-    let child_wrapper_pid =
-        tmux_pane_pid(&socket, child_pane).expect("completed child wrapper pid");
-    let child_agent = env
+
+    let audit = env
         .store()
         .runtime_projection(rimz::RuntimeScope::Audit)
-        .expect("read child runtime owner")
+        .expect("read completed child audit projection");
+    let child_agent = audit
         .agents
-        .into_iter()
+        .iter()
         .find(|agent| agent.name.as_deref() == Some("parent-watch-child"))
-        .expect("completed child row");
-    let child_owner_pid = child_agent
-        .runtime_owner
-        .as_ref()
-        .expect("child runtime owner")
-        .pid;
-    assert_eq!(
-        child_owner_pid, child_wrapper_pid,
-        "lingering child row must be owned by the wrapper, not the exited provider"
+        .expect("completed child should remain in durable history");
+    assert!(
+        child_agent.ended_at.is_some(),
+        "closing the completed subagent pane should stamp its durable end: {child_agent:#?}"
     );
     assert_ne!(
         child_agent.status,
         rimz::agents::AgentStatus::Running,
-        "transferring wrapper ownership must not reopen the completed turn"
+        "retaining the completed child must preserve its terminal verdict"
     );
-    assert_ne!(
-        parent_actual_pane, *child_pane,
-        "parent and child must occupy distinct panes"
+    let live_projection = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Runtime)
+        .expect("read live child projection");
+    assert!(
+        live_projection
+            .agents
+            .iter()
+            .any(|agent| agent.name.as_deref() == Some("parent-watch-child")),
+        "ended subagent status should remain visible under its live parent; audit={audit:#?}"
     );
-    // This test launches the child from outside tmux by spelling the caller
-    // identity explicitly. Re-stamp the real parent pane that an in-pane
-    // caller already carries before exercising the watchdog decision.
-    env.store()
-        .attach_agent_pane(
-            &parent_agent.kind,
-            &parent_agent.agent_id,
-            parent_agent.launch_id.as_ref(),
-            &session,
-            &rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Tmux, &parent_actual_pane),
-        )
-        .expect("restore synthetic parent pane binding");
 
     tmux(&socket, &["kill-pane", "-t", &parent_actual_pane]);
 
-    // The watchdog requires three distinct authoritative tmux reads. Keep the
-    // journey's deadline wide enough for those subprocesses on a loaded runner.
     let deadline = Instant::now() + CAPTURE_BUDGET;
-    while Instant::now() < deadline && tmux_pane_alive(&socket, &session, child_pane) {
+    loop {
+        let child_visible = env
+            .store()
+            .runtime_projection(rimz::RuntimeScope::Runtime)
+            .expect("read projection after parent exit")
+            .agents
+            .iter()
+            .any(|agent| agent.name.as_deref() == Some("parent-watch-child"));
+        if !child_visible {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "completed subagent status should retire after its parent disappears"
+        );
         std::thread::sleep(Duration::from_millis(25));
     }
-    assert!(
-        !tmux_pane_alive(&socket, &session, child_pane),
-        "subagent wrapper should close its pane after authoritative parent-pane absence"
-    );
 }
 
 #[test]
@@ -1859,26 +1852,6 @@ fn tmux_pane_alive(socket: &Path, session: &str, pane: &str) -> bool {
             .any(|id| id == expected)
 }
 
-fn tmux_panes(socket: &Path, session: &str) -> std::collections::BTreeSet<String> {
-    let out = Command::new("tmux")
-        .scrub_session_env()
-        .arg("-S")
-        .arg(socket)
-        .args(["list-panes", "-a", "-F", "#{session_name}:#{pane_id}"])
-        .bounded_output()
-        .expect("spawn tmux list-panes");
-    assert!(
-        out.status.success(),
-        "tmux list-panes failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let prefix = format!("{session}:");
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|line| line.strip_prefix(&prefix).map(ToOwned::to_owned))
-        .collect()
-}
-
 fn tmux_pane_for_pid(socket: &Path, session: &str, pid: u32) -> Option<String> {
     let out = Command::new("tmux")
         .scrub_session_env()
@@ -1900,32 +1873,6 @@ fn tmux_pane_for_pid(socket: &Path, session: &str, pid: u32) -> Option<String> {
             let (pane, raw_pid) = line.rsplit_once(':')?;
             (raw_pid.parse::<u32>().ok() == Some(pid)).then(|| pane.to_owned())
         })
-}
-
-fn tmux_pane_dead(socket: &Path, pane: &str) -> bool {
-    let output = Command::new("tmux")
-        .env("TMUX", tmux_env(socket))
-        .args(["display-message", "-p", "-t", pane, "#{pane_dead}"])
-        .output();
-    output
-        .ok()
-        .filter(|out| out.status.success())
-        .is_some_and(|out| String::from_utf8_lossy(&out.stdout).trim() == "1")
-}
-
-fn tmux_pane_pid(socket: &Path, pane: &str) -> Option<u32> {
-    let output = Command::new("tmux")
-        .scrub_session_env()
-        .arg("-S")
-        .arg(socket)
-        .args(["display-message", "-p", "-t", pane, "#{pane_pid}"])
-        .bounded_output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().parse().ok())
-        .flatten()
 }
 
 /// The rightmost painted column across a captured frame (trailing blanks

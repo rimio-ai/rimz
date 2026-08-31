@@ -910,6 +910,23 @@ fn resolve_own_agent_end_trace(
             .runtime_projection(rimz::RuntimeScope::Audit)
             .context("reading audit projection for agent exit end stamp")?;
         let pane = rimz::pane::PaneRef::from_id(pane_id);
+        // The generic pane resolver intentionally selects root agents only.
+        // A launched child instead carries the wrapper's exact launch id, so
+        // corroborate that durable identity against its pane before fallback.
+        if let Some(launch_id) = request.identity.launch_id.as_deref() {
+            let launch_id = AgentSessionId::from(launch_id);
+            if let Some(agent) = projection.agents.iter().find(|agent| {
+                agent.kind == request.kind
+                    && agent.launch_id.as_ref() == Some(&launch_id)
+                    && agent
+                        .pane
+                        .as_ref()
+                        .is_some_and(|stamped| stamped.pane_id == pane.pane_id)
+            }) && !agent.agent_id.is_empty()
+            {
+                return Ok(Some((agent.kind.clone(), agent.agent_id.clone())));
+            }
+        }
         if let Some(agent) =
             rimz::store::snapshot::stamped_agent_for_pane(&pane, &projection.agents)
             && !agent.agent_id.is_empty()
