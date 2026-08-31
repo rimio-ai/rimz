@@ -945,6 +945,30 @@ impl AgentState {
         }
     }
 
+    /// Whether this root still owns an open provider turn. Same-pane ownership
+    /// uses this predicate so hook-reported lifecycle and provider-side rest
+    /// certificates cannot disagree about which conversation may yield.
+    pub fn holds_open_turn(&self) -> bool {
+        let settled = settled_outcome(self.status, self.context.as_ref(), self.last_activity);
+        match self.status {
+            AgentStatus::Running => {
+                self.budget_park.is_none()
+                    && self.phase != TurnPhase::Parked
+                    && active_turn_error(self.status, self.context.as_ref(), self.last_activity)
+                        .is_none()
+                    && !matches!(
+                        settled,
+                        Some(TurnSettleOutcome::Complete | TurnSettleOutcome::Interrupted)
+                    )
+            }
+            AgentStatus::Waiting => settled != Some(TurnSettleOutcome::Interrupted),
+            AgentStatus::Idle
+            | AgentStatus::Success
+            | AgentStatus::Failed
+            | AgentStatus::Paused => false,
+        }
+    }
+
     /// True when the row must reserve pane input for a native prompt. Durable
     /// `Waiting` uses its ask timestamp; provider-local input and rollout plan
     /// markers cover native dialogs without inventing a durable ask record.

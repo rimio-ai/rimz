@@ -457,6 +457,92 @@ fn effective_status_projects_hookless_turn_settle_markers() {
 }
 
 #[test]
+fn open_turn_predicate_follows_lifecycle_and_rest_certificates() {
+    for status in [AgentStatus::Running, AgentStatus::Waiting] {
+        assert!(test_agent(status, 1_000).holds_open_turn(), "{status:?}");
+    }
+    for status in [
+        AgentStatus::Idle,
+        AgentStatus::Success,
+        AgentStatus::Failed,
+        AgentStatus::Paused,
+    ] {
+        assert!(!test_agent(status, 1_000).holds_open_turn(), "{status:?}");
+    }
+
+    for class in [
+        TurnErrorClass::PausedSpendLimit,
+        TurnErrorClass::PausedRateLimit,
+        TurnErrorClass::PausedOverloaded,
+        TurnErrorClass::Unknown,
+        TurnErrorClass::Failed,
+    ] {
+        let mut agent = test_agent(AgentStatus::Running, 1_000);
+        agent.context = Some(context_error(class, 1_010));
+        assert!(!agent.holds_open_turn(), "{class:?}");
+
+        agent.last_activity = Timestamp::from_second(1_010).unwrap();
+        assert!(agent.holds_open_turn(), "stale {class:?}");
+    }
+
+    for outcome in [TurnSettleOutcome::Complete, TurnSettleOutcome::Interrupted] {
+        let mut agent = test_agent(AgentStatus::Running, 1_000);
+        agent.context = Some(context_settle(Some(1_010), outcome));
+        assert!(!agent.holds_open_turn(), "{outcome:?}");
+    }
+    for outcome in [
+        TurnSettleOutcome::PlanProposed,
+        TurnSettleOutcome::NativeWait,
+    ] {
+        let mut agent = test_agent(AgentStatus::Running, 1_000);
+        agent.context = Some(context_settle(Some(1_010), outcome));
+        assert!(agent.holds_open_turn(), "{outcome:?}");
+    }
+
+    let mut waiting = test_agent(AgentStatus::Waiting, 1_000);
+    waiting.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Interrupted));
+    assert!(!waiting.holds_open_turn());
+
+    let mut parked = test_agent(AgentStatus::Running, 1_000);
+    parked.phase = TurnPhase::Parked;
+    assert!(!parked.holds_open_turn());
+
+    let mut budget_parked = test_agent(AgentStatus::Running, 1_000);
+    budget_parked.budget_park = Some(crate::harness::budget::BudgetPark {
+        cap_usd: 5.0,
+        spend_usd: 5.25,
+        window: crate::harness::budget::BudgetWindow::Session,
+        at: Timestamp::from_second(1_000).unwrap(),
+        scope: crate::harness::budget::BudgetScope::Agent,
+        account_kind: None,
+        resets_at: None,
+    });
+    assert!(!budget_parked.holds_open_turn());
+}
+
+#[test]
+fn an_open_turn_projects_to_running_or_waiting() {
+    for mut agent in [
+        test_agent(AgentStatus::Running, 1_000),
+        test_agent(AgentStatus::Waiting, 1_000),
+    ] {
+        assert!(agent.holds_open_turn());
+        assert!(matches!(
+            agent.effective_status(),
+            AgentStatus::Running | AgentStatus::Waiting
+        ));
+
+        agent.context = Some(context_settle(Some(1_010), TurnSettleOutcome::PlanProposed));
+        if agent.holds_open_turn() {
+            assert!(matches!(
+                agent.effective_status(),
+                AgentStatus::Running | AgentStatus::Waiting
+            ));
+        }
+    }
+}
+
+#[test]
 fn keyed_wait_outranks_newer_activity_while_keyless_wait_self_clears() {
     let waiting_since = Timestamp::from_second(1_000).unwrap();
     let mut keyed = test_agent(AgentStatus::Waiting, 1_010);
