@@ -2169,8 +2169,8 @@ rimz statusline help help
 
 rimz subagents
     <passthrough>  [action=append takes=1..=inf]
+    <profile>  [action=set takes=1..=1]
     <prompt>  [action=set takes=1..=1]
-    <spec>  [action=set takes=1..=1]
     --agent <PROFILE|KIND>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --description <TEXT>  [action=set takes=1..=1]
@@ -2220,8 +2220,8 @@ rimz subagents help wait
 
 rimz subagents launch
     <passthrough>  [action=append takes=1..=inf]
+    <profile>  [action=set takes=1..=1]
     <prompt>  [action=set takes=1..=1]
-    <spec>  [action=set takes=1..=1]
     --agent <PROFILE|KIND>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --description <TEXT>  [action=set takes=1..=1]
