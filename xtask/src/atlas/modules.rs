@@ -94,11 +94,19 @@ pub(super) fn module_is_within(module: &str, ancestor: &str) -> bool {
 }
 
 pub(super) fn module_endpoint(module: &str, scope_module: &str) -> String {
+    let top = |module: &str| {
+        module
+            .split("::")
+            .next()
+            .filter(|module| !module.is_empty())
+            .unwrap_or("(root)")
+            .to_owned()
+    };
     if scope_module.is_empty() {
         return if module == "(crate)" {
             "(root)".to_owned()
         } else {
-            module.split("::").next().unwrap_or("(root)").to_owned()
+            top(module)
         };
     }
     if module == scope_module {
@@ -108,9 +116,9 @@ pub(super) fn module_endpoint(module: &str, scope_module: &str) -> String {
         .strip_prefix(scope_module)
         .and_then(|relative| relative.strip_prefix("::"))
     {
-        return relative.split("::").next().unwrap_or("(root)").to_owned();
+        return top(relative);
     }
-    module.split("::").next().unwrap_or("(root)").to_owned()
+    top(module)
 }
 
 pub(super) fn crate_module_for_row(scope: &Path, row: &str) -> String {
@@ -269,6 +277,8 @@ mod tests {
 
     #[test]
     fn module_endpoints_distinguish_scope_root_from_crate_root() {
+        assert_eq!(module_endpoint("", ""), "(root)");
+        assert_eq!(module_endpoint("", "agents"), "(root)");
         assert_eq!(module_endpoint("(crate)", ""), "(root)");
         assert_eq!(module_endpoint("agents", "agents"), "(root)");
         assert_eq!(module_endpoint("agents::adapters", "agents"), "adapters");
