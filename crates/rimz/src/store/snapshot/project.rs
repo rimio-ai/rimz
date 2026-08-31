@@ -701,7 +701,7 @@ fn inherit_launch_identity(
                 && candidate.agent_id != successor.agent_id
                 && candidate.launch_id.is_some()
                 && !candidate.is_provider_subagent()
-                && crate::store::session_death::same_instance_lineage(candidate, successor)
+                && crate::store::session_death::same_agent_instance(candidate, successor)
         })
         .min_by_key(|candidate| {
             (

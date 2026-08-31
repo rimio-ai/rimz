@@ -934,7 +934,7 @@ fn launched_child_successor_stays_nested_under_its_parent() {
 }
 
 #[test]
-fn same_process_fork_does_not_inherit_launch_identity() {
+fn same_process_fork_inherits_launch_identity_and_owns_the_role() {
     let pane_id = "tmux:%3";
     let owner_pid = 126;
     let launch = launch_event(
@@ -982,17 +982,17 @@ fn same_process_fork_does_not_inherit_launch_identity() {
         .find(|agent| agent.agent_id == "side-thread")
         .expect("side thread");
 
-    assert!(fork.launch_id.is_none());
-    assert!(fork.role.is_none());
-    assert!(fork.team.is_none());
+    assert_eq!(fork.launch_id.as_deref(), Some("launch_coder"));
+    assert_eq!(fork.role.as_deref(), Some("coder"));
+    assert_eq!(fork.team.as_deref(), Some("forge"));
     let snapshot = SidebarSnapshot::build_with_agents(workspace(), agents, epoch());
     let resolved = crate::harness::target::resolve_one(&snapshot, "@coder", None, None)
-        .expect("role remains unique without pane context");
-    assert_eq!(resolved.agent_id.as_str(), "primary");
+        .expect("the launch role has one occupant without pane context");
+    assert_eq!(resolved.agent_id.as_str(), "side-thread");
 }
 
 #[test]
-fn launch_identity_waits_for_late_successor_origin() {
+fn launch_identity_does_not_wait_for_successor_origin() {
     let pane_id = "tmux:%4";
     let owner_pid = 168;
     let launch = launch_event(
@@ -1031,44 +1031,11 @@ fn launch_identity_waits_for_late_successor_origin() {
             },
         }),
     );
-    let origin_arrives = raw_lifecycle_at(
-        "codex",
-        4,
-        json!({
-            "agent_id": "successor",
-            "origin": "fresh",
-            "signal": { "signal": "turn_started" },
-            "pane_id": pane_id,
-            "pane_process_start": "pane-start",
-            "runtime_owner": {
-                "kind": "agent",
-                "subject_id": "successor",
-                "pid": owner_pid,
-                "process_start": "agent-start",
-            },
-        }),
-    );
-
-    let before_origin = reduce_agent_states(&[
-        launch.clone(),
-        primary.clone(),
-        successor_without_origin.clone(),
-    ]);
-    assert!(
-        before_origin
-            .iter()
-            .find(|agent| agent.agent_id == "successor")
-            .expect("successor before origin")
-            .launch_id
-            .is_none()
-    );
-
-    let after_origin =
-        reduce_agent_states(&[launch, primary, successor_without_origin, origin_arrives]);
-    let successor = after_origin
+    let agents = reduce_agent_states(&[launch, primary, successor_without_origin]);
+    let successor = agents
         .iter()
         .find(|agent| agent.agent_id == "successor")
-        .expect("successor after origin");
+        .expect("successor before origin");
     assert_eq!(successor.launch_id.as_deref(), Some("launch_coder"));
     assert_eq!(successor.role.as_deref(), Some("coder"));
 }
