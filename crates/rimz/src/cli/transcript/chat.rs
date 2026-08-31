@@ -2,6 +2,7 @@ use super::ask_card::write_ask_card;
 use super::scope::entry_key;
 use super::thread::DisplayEntry;
 use super::*;
+pub(super) use crate::cli::render::prose::paint_mentions_with;
 
 pub(super) fn render_entry_for_log_entry(
     entry: &TranscriptEntry,
@@ -492,79 +493,6 @@ pub(super) fn write_body_lines_with(
         }
     }
     Ok(())
-}
-
-pub(super) fn paint_mentions_with(line: &str, base_style: Option<anstyle::Style>) -> String {
-    let mut rendered = String::new();
-    let mut index = 0;
-    while index < line.len() {
-        let ch = line[index..]
-            .chars()
-            .next()
-            .expect("index stays on char boundary");
-        if matches!(ch, '@' | '#') && mention_boundary(line, index) {
-            let token_start = index + ch.len_utf8();
-            let mut token_end = token_start;
-            for (offset, token_ch) in line[token_start..].char_indices() {
-                if is_mention_char(token_ch) {
-                    token_end = token_start + offset + token_ch.len_utf8();
-                } else {
-                    break;
-                }
-            }
-            let mut paint_end = token_end;
-            while paint_end > token_start {
-                let tail = line[..paint_end]
-                    .chars()
-                    .next_back()
-                    .expect("paint_end stays on char boundary");
-                if matches!(tail, '.' | ',' | ';' | ':' | '!' | '?' | ')') {
-                    paint_end -= tail.len_utf8();
-                } else {
-                    break;
-                }
-            }
-            if paint_end > token_start {
-                push_painted(&mut rendered, base_style, &line[..index]);
-                rendered.push_str(&render::paint(
-                    render::palette::cool().bold(),
-                    &line[index..paint_end],
-                ));
-                push_painted(&mut rendered, base_style, &line[paint_end..token_end]);
-                let rest = &line[token_end..];
-                rendered.push_str(&paint_mentions_with(rest, base_style));
-                return rendered;
-            }
-        }
-        index += ch.len_utf8();
-    }
-    push_painted(&mut rendered, base_style, line);
-    rendered
-}
-
-pub(super) fn push_painted(rendered: &mut String, style: Option<anstyle::Style>, text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    if let Some(style) = style {
-        rendered.push_str(&render::paint(style, text));
-    } else {
-        rendered.push_str(text);
-    }
-}
-
-pub(super) fn mention_boundary(line: &str, index: usize) -> bool {
-    if index == 0 {
-        return true;
-    }
-    line[..index]
-        .chars()
-        .next_back()
-        .is_some_and(|ch| ch.is_whitespace() || ch == '(')
-}
-
-pub(super) fn is_mention_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/' | '-')
 }
 
 pub(super) fn write_day_delimiter(out: &mut impl Write, date: Date, today: Date) -> Result<()> {
