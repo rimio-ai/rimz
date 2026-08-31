@@ -60,6 +60,13 @@ pub(super) struct Log {
 }
 
 impl Log {
+    #[cfg(test)]
+    pub(super) fn empty() -> Self {
+        Self {
+            commits: Vec::new(),
+        }
+    }
+
     pub(super) fn read(root: &Path, scope: &Path) -> Result<Self> {
         let commits = parse_history(&git_history(root, scope)?)?;
         if commits.is_empty() {

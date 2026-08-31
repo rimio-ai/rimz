@@ -23,6 +23,7 @@ struct Args {
     all: bool,
     out_dir: Option<PathBuf>,
     path: PathBuf,
+    md: bool,
     json: bool,
     no_index: bool,
 }
@@ -132,7 +133,12 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
             serde_json::to_string_pretty(&report).context("rendering atlas brief JSON")?
         );
     } else {
-        print!("{}", markdown(&report));
+        let rendered = markdown(&report);
+        if args.md {
+            print!("{rendered}");
+        } else {
+            print!("{}", plain_text(&rendered));
+        }
     }
     Ok(())
 }
@@ -238,9 +244,24 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         all,
         out_dir,
         path: path.unwrap_or_else(|| PathBuf::from(DEFAULT_PATH)),
+        md,
         json,
         no_index,
     }))
+}
+
+fn plain_text(markdown: &str) -> String {
+    markdown
+        .lines()
+        .filter(|line| *line != "```")
+        .map(|line| {
+            line.strip_prefix("## ")
+                .or_else(|| line.strip_prefix("# "))
+                .unwrap_or(line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
 }
 
 fn build_report(facts: &Facts, module: &Path, args: &Args) -> Result<Report> {

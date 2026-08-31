@@ -604,7 +604,7 @@ fn child_rows(facts: &Facts, args: &Args, scope: &Path, prefix: &str) -> Result<
             let ref_median = facts
                 .references
                 .as_ref()
-                .map(|_| refs.get(&module).copied().unwrap_or(0.0));
+                .and_then(|_| refs.get(&module).copied());
             let history = pace.modules.get(&module).cloned().unwrap_or_default();
             let churn_pct = history.share * 100.0;
             let test_code_ratio = (size.code > 0).then_some(size.tests as f64 / size.code as f64);
