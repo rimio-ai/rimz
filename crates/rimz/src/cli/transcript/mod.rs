@@ -12,6 +12,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{GlobalFlags, current_channel};
 use crate::cli::render;
+use crate::cli::render::prose::Prose;
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::transcript::{AskOption, TranscriptEntry, TranscriptKind};
 use rimz::workspace::WorkspaceResolver;
@@ -158,8 +159,9 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         })?;
     } else {
         let tz = super::machine_config().time_zone();
+        let prose = Prose::for_stdout();
         let mut out = render::out();
-        render_lines_to(&mut out, &view, &tz)?;
+        render_lines_to(&mut out, &view, &tz, prose)?;
         if view.archived_hidden > 0 {
             write_archive_hint(view.archived_hidden, view.newest_archived_at, &tz)?;
         }
@@ -308,6 +310,7 @@ pub(crate) fn render_lines_to(
     out: &mut impl Write,
     view: &RenderedChat,
     tz: &TimeZone,
+    prose: Prose,
 ) -> Result<()> {
     chat::render_display_chat_to(
         out,
@@ -315,6 +318,7 @@ pub(crate) fn render_lines_to(
         &entries_for_view(view),
         tz,
         jiff::Timestamp::now().to_zoned(tz.clone()).date(),
+        prose,
     )
 }
 
@@ -327,6 +331,7 @@ pub(crate) fn render_lines_since_to(
     view: &RenderedChat,
     source_index: usize,
     tz: &TimeZone,
+    prose: Prose,
 ) -> Result<()> {
     let entries = entries_for_view(view)
         .into_iter()
@@ -338,6 +343,7 @@ pub(crate) fn render_lines_since_to(
         &entries,
         tz,
         jiff::Timestamp::now().to_zoned(tz.clone()).date(),
+        prose,
     )
 }
 

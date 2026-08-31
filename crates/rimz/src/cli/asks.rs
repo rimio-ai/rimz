@@ -185,6 +185,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     if json {
         return render::json_pretty(&AskJsonView::from(&view));
     }
+    let prose = render::prose::Prose::for_stdout();
     let mut out = render::out();
     let now = jiff::Timestamp::now();
     writeln!(
@@ -203,23 +204,16 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     )?;
     if let Some(context) = view.detail.context.as_deref() {
         writeln!(out)?;
-        let width = render::terminal_columns(100)
-            .min(100)
-            .saturating_sub(2)
-            .max(1);
-        for source_line in context.lines() {
-            let lines = render::wrap_words(source_line, width);
-            if lines.is_empty() {
+        for line in prose.lines(context, render::prose::prose_width(2)) {
+            if line.is_empty() {
                 writeln!(out, "{}", render::paint(render::palette::muted(), "▌"))?;
-            } else {
-                for line in lines {
-                    writeln!(
-                        out,
-                        "{}",
-                        render::paint(render::palette::muted(), &format!("▌ {line}"))
-                    )?;
-                }
+                continue;
             }
+            writeln!(
+                out,
+                "{} {line}",
+                render::paint(render::palette::muted(), "▌")
+            )?;
         }
     }
     for (question_index, question) in view.detail.questions.iter().enumerate() {

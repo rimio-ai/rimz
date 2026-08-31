@@ -8,6 +8,7 @@ use anyhow::{Result, bail};
 use serde::Serialize;
 
 use crate::cli::render;
+use crate::cli::render::prose::{Prose, prose_width};
 use crate::cli::send::WaitSpec;
 use crate::cli::spinner::Spinner;
 use rimz::harness::run::RunStatus;
@@ -24,6 +25,7 @@ pub(super) fn wait_for_replies(
 ) -> Result<()> {
     let initial_progress = wait_state.progress();
     let total = progress_total(&initial_progress);
+    let prose = Prose::for_stdout();
     let spinner = Spinner::delayed(
         progress_label(&initial_progress),
         Duration::from_millis(500),
@@ -41,6 +43,7 @@ pub(super) fn wait_for_replies(
             &spinner,
             &mut printed_block,
             &mut gathered,
+            prose,
         )? {
             return return_or_exit(status);
         }
@@ -77,6 +80,7 @@ fn present_update(
     spinner: &Spinner,
     printed_block: &mut bool,
     gathered: &mut BTreeMap<String, ReplyResult>,
+    prose: Prose,
 ) -> Result<Option<RunStatus>> {
     let winner = update.join.as_ref().and_then(|join| join.winner.as_ref());
     for result in update.settled {
@@ -92,7 +96,7 @@ fn present_update(
         }
         if !wait.json {
             spinner.pause();
-            print_reply_result(&result, total, printed_block)?;
+            print_reply_result(&result, total, printed_block, prose)?;
             spinner.resume();
         }
         gathered.insert(result.label.clone(), result);
@@ -133,7 +137,12 @@ fn progress_total(progress: &ReplyProgress) -> usize {
     }
 }
 
-fn print_reply_result(result: &ReplyResult, total: usize, printed_block: &mut bool) -> Result<()> {
+fn print_reply_result(
+    result: &ReplyResult,
+    total: usize,
+    printed_block: &mut bool,
+    prose: Prose,
+) -> Result<()> {
     if let Some(failure) = &result.failure {
         let mut err = render::err();
         writeln!(err, "rimz: {}", failure_message(result, failure))?;
@@ -149,7 +158,7 @@ fn print_reply_result(result: &ReplyResult, total: usize, printed_block: &mut bo
     match (label, message, result.status) {
         (None, Some(message), _) => {
             let mut out = render::out();
-            writeln!(out, "{message}")?;
+            write_prose(&mut out, message, prose)?;
             out.flush()?;
         }
         (Some(label), Some(message), RunStatus::Completed) => {
@@ -157,7 +166,8 @@ fn print_reply_result(result: &ReplyResult, total: usize, printed_block: &mut bo
             if *printed_block {
                 writeln!(out)?;
             }
-            writeln!(out, "{label}:\n{message}")?;
+            writeln!(out, "{label}:")?;
+            write_prose(&mut out, message, prose)?;
             out.flush()?;
             *printed_block = true;
         }
@@ -181,6 +191,13 @@ fn print_reply_result(result: &ReplyResult, total: usize, printed_block: &mut bo
     }
     if result.status != RunStatus::Completed {
         print_turn_failure(label, result.status, result.transcript_path.as_deref())?;
+    }
+    Ok(())
+}
+
+fn write_prose(out: &mut impl Write, message: &str, prose: Prose) -> Result<()> {
+    for line in prose.lines(message, prose_width(0)) {
+        writeln!(out, "{line}")?;
     }
     Ok(())
 }

@@ -7,12 +7,14 @@ pub(super) fn write_ask_card(
     ask: &RenderEntry,
     answer: Option<&RenderEntry>,
     show_context: bool,
+    prose: Prose,
+    width: usize,
 ) -> Result<()> {
     if ask.chat.questions.is_empty() {
         return write_text_card(out, ask, answer);
     }
     if show_context && !ask.chat.text.is_empty() {
-        write_body_lines(out, &ask.chat.text)?;
+        write_body_lines(out, &ask.chat.text, prose, width)?;
     }
     write_structured_ask_card(out, &ask.chat.questions, answer)
 }

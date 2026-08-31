@@ -25,7 +25,7 @@ A handler parses, calls the domain, and presents; the knowledge lives in its own
 
 ## Boundaries
 
-- Human colors come from `render::palette` accessors, state tones come from typed `render::status` helpers, and provider names and handles come from `palette::identity`. JSON, hook stdout, pane capture, scripting values, and streaming protocols stay raw.
+- Human colors come from `render::palette` accessors, state tones come from typed `render::status` helpers, and provider names and handles come from `palette::identity`. Agent prose reaches a human through `render::prose::Prose`: markdown on a styled stdout and raw text when piped; one-line previews stay snippets. JSON, hook stdout, pane capture, scripting values, and streaming protocols stay raw.
 - A command module's internals are private: one command never imports another command's functions or types. Shared logic moves to the domain module that owns the knowledge, or to a shared CLI-layer module when it is pure presentation.
 - A command may publish an orchestration entry that other commands call as its owning surface: `room` publishes attach execution (used by `remote`), `hooks` publishes the install UX (used by `room` start and `setup`), `supervised` publishes the run driver and run rendering (used by `agents_cmd` and `loop_cmd`), and `agents_cmd` publishes resolved agent lifecycle operations (used by `teams`).
 - Concrete typed structs and functions are the default shape here. A generic service trait earns its place once a second real caller needs the seam, never in anticipation of one.

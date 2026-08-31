@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::cli::render;
+use crate::cli::render::prose::Prose;
 
 pub(super) fn logs_agent(
     reference: String,
@@ -37,7 +38,10 @@ pub(super) fn logs_agent(
         let tz = crate::cli::machine_config().time_zone();
         let mut out = render::out();
         finish_transcript_render(crate::cli::transcript::render_lines_to(
-            &mut out, &view, &tz,
+            &mut out,
+            &view,
+            &tz,
+            Prose::for_stdout(),
         ))?;
     }
     Ok(())
@@ -74,7 +78,10 @@ fn follow_agent_logs(
         let tz = crate::cli::machine_config().time_zone();
         let mut out = render::out();
         finish_transcript_render(crate::cli::transcript::render_lines_to(
-            &mut out, &initial, &tz,
+            &mut out,
+            &initial,
+            &tz,
+            Prose::for_stdout(),
         ))?;
     }
 
@@ -99,6 +106,7 @@ fn follow_agent_logs(
                 &view,
                 seen - new_entries.len(),
                 &tz,
+                Prose::for_stdout(),
             ))?;
         }
     }

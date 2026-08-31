@@ -166,7 +166,17 @@ fn raw_summary(
     };
     let mut out = Vec::new();
     let action = TaskAction::from_entry(name, entry).unwrap();
-    write_run_summary(&mut out, name, entry, &action, mode, keep, &summary).unwrap();
+    write_run_summary(
+        &mut out,
+        name,
+        entry,
+        &action,
+        mode,
+        keep,
+        &summary,
+        ui::prose::Prose::Raw,
+    )
+    .unwrap();
     String::from_utf8(out).unwrap()
 }
 

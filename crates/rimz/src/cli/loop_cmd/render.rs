@@ -532,7 +532,14 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let (detail_idx, failure_idx) = detail_indices(&records);
     if let Some(detail) = detail_idx.and_then(|idx| records.get(idx)) {
         writeln!(out)?;
-        run_report::render_record_detail(&mut out, entry, detail, "LAST RUN", now)?;
+        run_report::render_record_detail(
+            &mut out,
+            entry,
+            detail,
+            "LAST RUN",
+            now,
+            ui::prose::Prose::for_stdout(),
+        )?;
     }
     if let Some(failure) = failure_idx.and_then(|idx| records.get(idx)) {
         run_report::write_failure_pointer(&mut out, &args.name, failure, now)?;
@@ -562,6 +569,7 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         return Ok(());
     }
     let now = Timestamp::now();
+    let prose = ui::prose::Prose::for_stdout();
     for (idx, record) in visible.iter().rev().enumerate() {
         if idx > 0 {
             writeln!(out)?;
@@ -582,7 +590,7 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
             write!(out, " · {exit}")?;
         }
         writeln!(out)?;
-        run_report::write_record_forensics(&mut out, entry, record)?;
+        run_report::write_record_forensics(&mut out, entry, record, prose)?;
     }
     Ok(())
 }

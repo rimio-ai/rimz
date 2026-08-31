@@ -30,13 +30,16 @@ pub(super) fn write_run_summary(
     mode: LoopRunMode,
     keep: bool,
     summary: &RunSummary<'_>,
+    prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     let action_kind = action.kind();
     match mode {
         LoopRunMode::Manual => {
-            write_manual_run_summary(out, name, entry, action, action_kind, keep, summary)
+            write_manual_run_summary(out, name, entry, action, action_kind, keep, summary, prose)
         }
-        LoopRunMode::Scheduled => write_scheduled_run_summary(out, name, entry, action, summary),
+        LoopRunMode::Scheduled => {
+            write_scheduled_run_summary(out, name, entry, action, summary, prose)
+        }
     }
 }
 
@@ -48,6 +51,7 @@ fn write_manual_run_summary(
     action_kind: TaskActionKind,
     keep: bool,
     summary: &RunSummary<'_>,
+    prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     let record = summary.record;
     let duration_ms = record.duration_ms.unwrap_or_default();
@@ -87,7 +91,7 @@ fn write_manual_run_summary(
     if is_spawn_failure(record.result) && !action_kind.is_check_only() {
         write_failure_forensics(out, name, summary)?;
     } else if record.result == LoopRunResult::Completed && record.run_id.is_some() {
-        write_completion_detail(out, name, summary)?;
+        write_completion_detail(out, name, summary, prose)?;
     }
     if !is_spawn_failure(record.result) && !keep && record.run_id.is_some() {
         writeln!(
@@ -130,6 +134,7 @@ fn write_scheduled_run_summary(
     entry: &TaskEntry,
     action: &TaskAction,
     summary: &RunSummary<'_>,
+    prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     let record = summary.record;
     let duration_ms = record.duration_ms.unwrap_or_default();
@@ -183,7 +188,7 @@ fn write_scheduled_run_summary(
         }
         writeln!(out)?;
         if record.result == LoopRunResult::Completed && record.run_id.is_some() {
-            write_completion_detail(out, name, summary)?;
+            write_completion_detail(out, name, summary, prose)?;
         }
     }
     Ok(())
@@ -324,6 +329,7 @@ fn write_completion_detail(
     out: &mut impl Write,
     name: &str,
     summary: &RunSummary<'_>,
+    prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     if !summary.presentation.streamed {
         if let Some(message) = summary
@@ -332,7 +338,7 @@ fn write_completion_detail(
             .as_deref()
             .filter(|msg| !msg.trim().is_empty())
         {
-            write_gutter_block(out, None, message)?;
+            write_gutter_prose(out, message, prose)?;
         } else {
             writeln!(
                 out,
@@ -391,6 +397,7 @@ pub(super) fn render_record_detail(
     record: &LoopRunRecord,
     title: &str,
     now: Timestamp,
+    prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     write!(out, "{} — ", ui::paint(anstyle::Style::new().bold(), title))?;
     let status = render::run_status(record);
@@ -409,7 +416,7 @@ pub(super) fn render_record_detail(
         write!(out, " · {exit}")?;
     }
     writeln!(out)?;
-    write_record_forensics(out, entry, record)
+    write_record_forensics(out, entry, record, prose)
 }
 
 pub(super) fn write_failure_pointer(
@@ -447,12 +454,13 @@ pub(super) fn write_record_forensics(
     out: &mut impl Write,
     entry: &TaskEntry,
     record: &LoopRunRecord,
+    prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     let run_record = record
         .run_id
         .as_deref()
         .and_then(|run_id| run_record_for(entry, run_id));
-    write_check_section(out, record, run_record.as_ref())?;
+    write_check_section(out, record, run_record.as_ref(), prose)?;
     write_verify_section(out, run_record.as_ref())?;
     if let Some(spend) = record_spend_label(record) {
         writeln!(
@@ -468,6 +476,7 @@ fn write_check_section(
     out: &mut impl Write,
     record: &LoopRunRecord,
     run_record: Option<&rimz::harness::run::RunRecord>,
+    prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     if let Some(check) = &record.check {
         let first_style = if check.timed_out || check.code != Some(0) {
@@ -487,7 +496,7 @@ fn write_check_section(
         .or_else(|| run_record.and_then(|record| record.last_message.as_ref()))
     {
         write_detail_label(out, "last message")?;
-        write_gutter_block(out, None, last_message)?;
+        write_gutter_prose(out, last_message, prose)?;
     }
     Ok(())
 }
@@ -603,6 +612,21 @@ fn write_gutter_block(
     for (idx, line) in body.lines().enumerate() {
         let style = if idx == 0 { first_style } else { None };
         write_gutter_line(out, style, line)?;
+    }
+    Ok(())
+}
+
+fn write_gutter_prose(
+    out: &mut impl Write,
+    body: &str,
+    prose: ui::prose::Prose,
+) -> std::io::Result<()> {
+    let body = body.trim_end();
+    if body.trim().is_empty() {
+        return write_gutter_line(out, Some(ui::palette::faint()), "-");
+    }
+    for line in prose.lines(body, ui::prose::prose_width(4)) {
+        write_gutter_line(out, None, &line)?;
     }
     Ok(())
 }

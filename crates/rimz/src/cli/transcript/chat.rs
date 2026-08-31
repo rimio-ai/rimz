@@ -165,6 +165,7 @@ pub(super) fn render_chat_to(
         &super::thread::flat_entries(entries, archive_prefix),
         tz,
         today,
+        Prose::Raw,
     )
 }
 
@@ -174,6 +175,7 @@ pub(super) fn render_display_chat_to(
     entries: &[DisplayEntry],
     tz: &TimeZone,
     today: Date,
+    prose: Prose,
 ) -> Result<()> {
     write_header(out, channel)?;
     let grouped = channel.is_some();
@@ -265,6 +267,8 @@ pub(super) fn render_display_chat_to(
                 &brands,
                 tz,
                 false,
+                prose,
+                crate::cli::render::prose::prose_width(0),
             )?;
         } else {
             let mut buffer = Vec::new();
@@ -285,6 +289,8 @@ pub(super) fn render_display_chat_to(
                 &brands,
                 tz,
                 show_date,
+                prose,
+                crate::cli::render::prose::prose_width(2),
             )?;
             write_thread_lines(out, &buffer)?;
         }
@@ -312,16 +318,24 @@ fn write_entry_content(
     brands: &BrandColors,
     tz: &TimeZone,
     show_date: bool,
+    prose: Prose,
+    width: usize,
 ) -> Result<()> {
     if !continuation {
         write_entry_header(out, entry, grouped, brands, tz, show_date)?;
     }
     if entry.kind == TranscriptKind::Ask {
-        write_ask_card(out, entry, answer, !suppress_ask_context)
+        write_ask_card(out, entry, answer, !suppress_ask_context, prose, width)
     } else if entry.chat.error {
-        write_body_lines_with(out, &entry.chat.text, Some(render::palette::alarm()))
+        write_body_lines_with(
+            out,
+            &entry.chat.text,
+            Some(render::palette::alarm()),
+            prose,
+            width,
+        )
     } else {
-        write_body_lines(out, &entry.chat.text)
+        write_body_lines(out, &entry.chat.text, prose, width)
     }
 }
 
@@ -476,20 +490,37 @@ fn chip(style: anstyle::Style, label: &str) -> String {
     render::paint(style, &format!(" {label} "))
 }
 
-pub(super) fn write_body_lines(out: &mut impl Write, text: &str) -> Result<()> {
-    write_body_lines_with(out, text, None)
+pub(super) fn write_body_lines(
+    out: &mut impl Write,
+    text: &str,
+    prose: Prose,
+    width: usize,
+) -> Result<()> {
+    write_body_lines_with(out, text, None, prose, width)
 }
 
 pub(super) fn write_body_lines_with(
     out: &mut impl Write,
     text: &str,
     style: Option<anstyle::Style>,
+    prose: Prose,
+    width: usize,
 ) -> Result<()> {
-    for line in text.lines() {
+    if prose == Prose::Raw {
+        for line in text.lines() {
+            if line.is_empty() {
+                writeln!(out)?;
+            } else {
+                writeln!(out, "{}", paint_mentions_with(line, style))?;
+            }
+        }
+        return Ok(());
+    }
+    for line in prose.lines_with_style(text, width, style) {
         if line.is_empty() {
             writeln!(out)?;
         } else {
-            writeln!(out, "{}", paint_mentions_with(line, style))?;
+            writeln!(out, "{line}")?;
         }
     }
     Ok(())
