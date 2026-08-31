@@ -841,18 +841,6 @@ impl AgentState {
         self.parent_agent_id.is_some() && self.launch_depth.is_some()
     }
 
-    /// Whether this pane-backed child was launched directly by `parent`.
-    pub fn is_launched_child_of(&self, parent: &Self) -> bool {
-        self.is_launched_child()
-            && self.parent_agent_id.as_ref().is_some_and(|parent_id| {
-                parent_id == &parent.agent_id || parent.launch_id.as_ref() == Some(parent_id)
-            })
-            && self
-                .parent_agent_kind
-                .as_ref()
-                .is_none_or(|kind| kind == &parent.kind)
-    }
-
     /// A provider-native, paneless child rather than a full agent session.
     pub fn is_provider_subagent(&self) -> bool {
         self.parent_agent_id.is_some() && self.launch_depth.is_none()

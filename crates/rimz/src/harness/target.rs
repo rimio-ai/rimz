@@ -867,7 +867,16 @@ pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
 pub fn launched_children<'a>(agents: &'a [AgentState], parent: &AgentState) -> Vec<&'a AgentState> {
     let mut children = agents
         .iter()
-        .filter(|agent| agent.is_launched_child_of(parent))
+        .filter(|agent| {
+            agent.is_launched_child()
+                && agent.parent_agent_id.as_ref().is_some_and(|parent_id| {
+                    parent_id == &parent.agent_id || parent.launch_id.as_ref() == Some(parent_id)
+                })
+                && agent
+                    .parent_agent_kind
+                    .as_ref()
+                    .is_none_or(|kind| kind == &parent.kind)
+        })
         .collect::<Vec<_>>();
     children.sort_by_key(|agent| (agent.registered_at, agent.agent_id.clone()));
     children

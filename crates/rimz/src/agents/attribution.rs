@@ -336,7 +336,7 @@ fn fold_seats<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState
         let key = parents
             .iter()
             .copied()
-            .find(|parent| child.is_launched_child_of(parent))
+            .find(|parent| is_launched_child_of(child, parent))
             .map(slot)
             .unwrap_or_else(|| slot(child));
         slots.entry(key).or_default().push(child);
@@ -346,6 +346,17 @@ fn fold_seats<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState
         records.sort_by_key(|agent| (agent.registered_at, agent.last_activity));
     }
     slots
+}
+
+fn is_launched_child_of(child: &AgentState, parent: &AgentState) -> bool {
+    child.is_launched_child()
+        && child.parent_agent_id.as_ref().is_some_and(|parent_id| {
+            parent_id == &parent.agent_id || parent.launch_id.as_ref() == Some(parent_id)
+        })
+        && child
+            .parent_agent_kind
+            .as_ref()
+            .is_none_or(|kind| kind == &parent.kind)
 }
 
 /// Lifetime records for one seat, including pane-backed children it launched.
