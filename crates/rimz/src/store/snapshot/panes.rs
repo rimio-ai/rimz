@@ -432,11 +432,10 @@ pub(super) fn pane_binding_evidence(pane: &PaneRef) -> PaneBindingEvidence<'_> {
     }
 }
 
-/// The root agent stamped on this exact live pane id, regardless of whether
-/// another row already bound it. For lazy-registering kinds, the stamp survives
-/// non-agent child foregrounds only while the pane carries the hosted-process
-/// signal for that agent kind; a positively different agent command
-/// disqualifies it.
+/// The root agent durably stamped on this ambient pane id and compatible pane
+/// process incarnation, regardless of whether another row already bound it.
+/// Unlike live-pane binding, this exit-time lookup has no command or hosted-
+/// process evidence and therefore does not apply those checks.
 pub fn stamped_agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
@@ -444,9 +443,6 @@ pub fn stamped_agent_for_pane<'a>(
     PaneBindingIndex::new(agents).stamped_agent_for_ambient_pane(pane)
 }
 
-/// Which co-resident root owns a pane: an open turn outranks a rested one;
-/// policy orders open pairs; latest activity orders rested pairs. Registration
-/// and session id break the remaining ties deterministically.
 fn compare_same_pane_owners(left: &AgentState, right: &AgentState) -> Ordering {
     left.compare_same_pane_owner(right)
 }
