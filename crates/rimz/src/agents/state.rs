@@ -909,7 +909,10 @@ impl AgentState {
     /// still upgrade a paused projection to `failed`.
     pub fn effective_status(&self) -> AgentStatus {
         let settled = settled_outcome(self.status, self.context.as_ref(), self.last_activity);
-        if settled == Some(TurnSettleOutcome::NativeWait) {
+        if matches!(
+            settled,
+            Some(TurnSettleOutcome::NativeWait | TurnSettleOutcome::PlanProposed)
+        ) {
             return AgentStatus::Waiting;
         }
         if self.budget_park.is_some() && self.status != AgentStatus::Waiting {
@@ -929,13 +932,13 @@ impl AgentState {
             };
         }
         match settled {
-            Some(TurnSettleOutcome::PlanProposed) => AgentStatus::Waiting,
             Some(TurnSettleOutcome::Complete) => AgentStatus::Success,
             Some(TurnSettleOutcome::Interrupted) => AgentStatus::Idle,
-            // A native wait already returned above. A clean turn end parked on
-            // still-in-flight background work reads as success: the verdict was
-            // earned, only the chore hums on (mirrors the sidebar's parked settle).
-            Some(TurnSettleOutcome::NativeWait) | None => {
+            // Input settles already returned above. A clean turn end parked on
+            // still-in-flight background work reads as success: the verdict
+            // was earned, only the chore hums on (mirrors the sidebar's parked
+            // settle).
+            Some(TurnSettleOutcome::PlanProposed | TurnSettleOutcome::NativeWait) | None => {
                 if self.phase == TurnPhase::Parked {
                     AgentStatus::Success
                 } else {
@@ -952,6 +955,12 @@ impl AgentState {
         let settled = settled_outcome(self.status, self.context.as_ref(), self.last_activity);
         match self.status {
             AgentStatus::Running => {
+                if matches!(
+                    settled,
+                    Some(TurnSettleOutcome::NativeWait | TurnSettleOutcome::PlanProposed)
+                ) {
+                    return true;
+                }
                 self.budget_park.is_none()
                     && self.phase != TurnPhase::Parked
                     && active_turn_error(self.status, self.context.as_ref(), self.last_activity)
