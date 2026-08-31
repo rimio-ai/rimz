@@ -39,7 +39,7 @@ JSON rows have this shape:
 }
 ```
 
-`context` is the agent's explanation message written just before it raised the prompt. `show` renders it above the questions, and the field is absent when the agent wrote no explanation, including permission asks.
+`context` is the agent's explanation message written just before it raised the prompt. `show` renders it above the questions using the shared [agent-prose rendering rule](../cli.md#agent-prose), and the field is absent when the agent wrote no explanation, including permission asks.
 
 Permission asks expose only `allow`, which approves the current tool call once. Plan approvals expose only `approve`, whose caution reports that it enables auto-accept for subsequent edits. The JSON options contain only those deliverable actions; denial, persistent grants, keep-planning, refinement text, and manual-review approval remain in the Claude pane.
 
