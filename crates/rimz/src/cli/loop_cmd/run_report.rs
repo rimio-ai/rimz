@@ -7,6 +7,7 @@ const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
 pub(super) struct RunSummary<'a> {
     pub(super) record: &'a LoopRunRecord,
     pub(super) presentation: &'a LoopRunPresentation,
+    pub(super) prose: ui::prose::Prose,
 }
 
 pub(super) fn write_manual_verdict(
@@ -30,16 +31,13 @@ pub(super) fn write_run_summary(
     mode: LoopRunMode,
     keep: bool,
     summary: &RunSummary<'_>,
-    prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     let action_kind = action.kind();
     match mode {
         LoopRunMode::Manual => {
-            write_manual_run_summary(out, name, entry, action, action_kind, keep, summary, prose)
+            write_manual_run_summary(out, name, entry, action, action_kind, keep, summary)
         }
-        LoopRunMode::Scheduled => {
-            write_scheduled_run_summary(out, name, entry, action, summary, prose)
-        }
+        LoopRunMode::Scheduled => write_scheduled_run_summary(out, name, entry, action, summary),
     }
 }
 
@@ -51,7 +49,6 @@ fn write_manual_run_summary(
     action_kind: TaskActionKind,
     keep: bool,
     summary: &RunSummary<'_>,
-    prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     let record = summary.record;
     let duration_ms = record.duration_ms.unwrap_or_default();
@@ -91,7 +88,7 @@ fn write_manual_run_summary(
     if is_spawn_failure(record.result) && !action_kind.is_check_only() {
         write_failure_forensics(out, name, summary)?;
     } else if record.result == LoopRunResult::Completed && record.run_id.is_some() {
-        write_completion_detail(out, name, summary, prose)?;
+        write_completion_detail(out, name, summary)?;
     }
     if !is_spawn_failure(record.result) && !keep && record.run_id.is_some() {
         writeln!(
@@ -134,7 +131,6 @@ fn write_scheduled_run_summary(
     entry: &TaskEntry,
     action: &TaskAction,
     summary: &RunSummary<'_>,
-    prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     let record = summary.record;
     let duration_ms = record.duration_ms.unwrap_or_default();
@@ -188,7 +184,7 @@ fn write_scheduled_run_summary(
         }
         writeln!(out)?;
         if record.result == LoopRunResult::Completed && record.run_id.is_some() {
-            write_completion_detail(out, name, summary, prose)?;
+            write_completion_detail(out, name, summary)?;
         }
     }
     Ok(())
@@ -329,7 +325,6 @@ fn write_completion_detail(
     out: &mut impl Write,
     name: &str,
     summary: &RunSummary<'_>,
-    prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     if !summary.presentation.streamed {
         if let Some(message) = summary
@@ -338,7 +333,7 @@ fn write_completion_detail(
             .as_deref()
             .filter(|msg| !msg.trim().is_empty())
         {
-            write_gutter_prose(out, message, prose)?;
+            write_gutter_prose(out, message, summary.prose)?;
         } else {
             writeln!(
                 out,

@@ -287,6 +287,7 @@ fn present_finished(
     let summary = RunSummary {
         record: &finished.record,
         presentation: &finished.presentation,
+        prose: ui::prose::Prose::for_stdout(),
     };
     print_run_summary(name, entry, action, mode, keep, &summary)
 }
@@ -373,16 +374,7 @@ fn print_run_summary(
     summary: &RunSummary<'_>,
 ) -> Result<()> {
     let mut out = ui::out();
-    write_run_summary(
-        &mut out,
-        name,
-        entry,
-        action,
-        mode,
-        keep,
-        summary,
-        ui::prose::Prose::for_stdout(),
-    )?;
+    write_run_summary(&mut out, name, entry, action, mode, keep, summary)?;
     Ok(())
 }
 
