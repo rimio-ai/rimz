@@ -8,7 +8,7 @@ RimZ shows both under one product term and nests both under the same card, so th
 
 A **provider-native subagent** is the agent's own child, running headless inside the parent's process. RimZ learns it exists only from `SubagentStarted` and `SubagentStopped` hook signals and folds it into the rollup as a child row. It has no pane, no run record, and no address — [model.md](../agents/model.md) owns it.
 
-A **launched subagent** is a full RimZ agent: its own pane, its own provider process, its own durable run record, petname, and address. `rimz subagents` creates it. This page owns it.
+A **launched subagent** is a full RimZ agent: its own pane, provider process, durable run record, petname, launch profile, transcript, cost, and address. `rimz subagents` creates it. Its separate transcript spend folds into the parent's seat; provider-native child spend is already in the parent transcript. This page owns it.
 
 One field separates them, and both predicates live in [`agents/state.rs`](../../../crates/rimz/src/agents/state.rs):
 

@@ -38,6 +38,7 @@ pub(super) fn attach_sub_agents_indexed(
         let parent_turn_started_at = index
             .root(parent_key)
             .and_then(|parent| parent.turn_started_at);
+        let all_newest = newest_by_id(children.iter().copied());
         let visible = children
             .iter()
             .copied()
@@ -63,23 +64,19 @@ pub(super) fn attach_sub_agents_indexed(
             }
             continue;
         };
-        let mut newest_by_id = BTreeMap::<&str, &AgentState>::new();
-        for child in visible {
-            newest_by_id
-                .entry(child.agent_id.as_str())
-                .and_modify(|current| {
-                    if child.last_activity > current.last_activity {
-                        *current = child;
-                    }
-                })
-                .or_insert(child);
-        }
+        let visible_newest = newest_by_id(visible);
         // `row_by_parent` includes only rows whose card is an agent.
         let parent = rows[row_index]
             .as_agent_mut()
             .expect("row index contains only agent rows");
+        parent.delegated_cost_usd = all_newest
+            .values()
+            .filter(|child| child.is_launched_child())
+            .fold(None, |total, child| {
+                crate::agents::spending::sum_optional_cost(total, child_cost_usd(child))
+            });
         parent.sub_agents.extend(
-            newest_by_id
+            visible_newest
                 .into_values()
                 .map(|child| sub_agent_from_state(child, now)),
         );
@@ -89,6 +86,23 @@ pub(super) fn attach_sub_agents_indexed(
             cmp_start_asc(a.registered_at, b.registered_at).then_with(|| a.id.cmp(&b.id))
         });
     }
+}
+
+fn newest_by_id<'a>(
+    children: impl IntoIterator<Item = &'a AgentState>,
+) -> BTreeMap<&'a str, &'a AgentState> {
+    let mut newest = BTreeMap::<&str, &AgentState>::new();
+    for child in children {
+        newest
+            .entry(child.agent_id.as_str())
+            .and_modify(|current| {
+                if child.last_activity > current.last_activity {
+                    *current = child;
+                }
+            })
+            .or_insert(child);
+    }
+    newest
 }
 
 fn child_is_visible(
@@ -205,6 +219,7 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
         status: child.status,
         phase: child.phase,
         task: child.task.clone(),
+        profile: child.profile.clone(),
         model: child.model.clone(),
         effort: child.effort.clone(),
         description: child
@@ -212,12 +227,27 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
             .clone()
             .or_else(|| child.description.clone()),
         total_tokens: child.usage.total_tokens,
-        cost_usd: child.subagent_cost_usd,
+        cost_usd: child_cost_usd(child),
         elapsed_secs,
         started_at,
         last_activity: child.last_activity,
         registered_at: child.registered_at,
     }
+}
+
+fn child_cost_usd(child: &AgentState) -> Option<f64> {
+    child.subagent_cost_usd.or_else(|| {
+        child
+            .is_launched_child()
+            .then(|| {
+                child
+                    .context
+                    .as_ref()
+                    .and_then(|context| context.cost.as_ref())
+                    .and_then(|cost| cost.total_cost_usd)
+            })
+            .flatten()
+    })
 }
 
 /// A placeholder label for a subagent that reported no type — a short id prefix

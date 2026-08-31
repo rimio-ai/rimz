@@ -135,6 +135,71 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
 }
 
 #[test]
+fn launched_subagent_renders_profile_cost_and_parent_rollup() {
+    let mut parent = agent(
+        "claude-root",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    let mut parent_context = claude_context(fixed_now());
+    parent_context.cost = Some(crate::agents::AgentCost {
+        total_cost_usd: Some(0.10),
+        ..crate::agents::AgentCost::default()
+    });
+    parent.context = Some(parent_context);
+    let mut child = agent(
+        "codex-child",
+        "codex",
+        AgentStatus::Success,
+        None,
+        None,
+        Some("map sidebar"),
+    );
+    child.name = Some("helper".to_owned());
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child.profile = Some("explorer".to_owned());
+    child.description = Some("map sidebar".to_owned());
+    let mut child_context = crate::agents::AgentContext::new("codex", fixed_now());
+    child_context.cost = Some(crate::agents::AgentCost {
+        total_cost_usd: Some(0.42),
+        ..crate::agents::AgentCost::default()
+    });
+    child.context = Some(child_context);
+
+    let snapshot = snapshot_with(vec![parent, child]);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: 0,
+            ..Default::default()
+        },
+        60,
+        20,
+    );
+
+    assert!(
+        rendered.contains("helper · explorer — map sidebar"),
+        "the child line names its profile:\n{rendered}"
+    );
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.contains("helper · explorer") && line.contains("$0.42")),
+        "the child cost pins on its line:\n{rendered}"
+    );
+    assert!(
+        rendered.lines().any(|line| line.contains("$0.52")),
+        "the parent cost includes delegated spend:\n{rendered}"
+    );
+}
+
+#[test]
 fn narrow_subagent_line_truncates_description_before_exact_cost() {
     let parent = agent(
         "claude-root",

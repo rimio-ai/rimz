@@ -27,6 +27,7 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
         status: crate::agents::AgentStatus::Running,
         phase: crate::agents::TurnPhase::Acting,
         task: None,
+        profile: None,
         model: Some("claude-opus-4-8".to_owned()),
         effort: Some("high".to_owned()),
         description: Some(format!("scan module {index} for callers")),

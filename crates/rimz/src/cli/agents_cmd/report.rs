@@ -282,11 +282,7 @@ pub(super) fn build_entry(
         .or(agent.pane.as_ref())
         .map(|pane| pane.pane_id.to_string());
     let cost_usd = overrides.effort.map_or_else(
-        || {
-            card.and_then(|card| card.context.as_ref())
-                .and_then(|context| context.cost.as_ref())
-                .and_then(|cost| cost.total_cost_usd)
-        },
+        || card.and_then(AgentCard::cost_usd),
         |effort| effort.cost_usd,
     );
     let effort_tokens = overrides
@@ -667,6 +663,48 @@ mod tests {
     }
 
     #[test]
+    fn report_cost_includes_delegated_spend() {
+        let now = Timestamp::from_second(1_000).unwrap();
+        let state = agent("spend");
+        let mut context = rimz::agents::AgentContext::new("codex", now);
+        context.cost = Some(rimz::agents::AgentCost {
+            total_cost_usd: Some(0.40),
+            ..rimz::agents::AgentCost::default()
+        });
+        let row = SidebarRow {
+            id: "spend".to_owned(),
+            name: "codex".to_owned(),
+            pane: None,
+            worktree_path: None,
+            worktree_branch: None,
+            channel: None,
+            unread: false,
+            inactive: false,
+            archived: false,
+            attention_score: 0,
+            last_activity: now,
+            card: RowCard::Agent(Box::new(AgentCard {
+                context: Some(context),
+                delegated_cost_usd: Some(0.60),
+                ..AgentCard::default()
+            })),
+        };
+        let peers = [&state];
+
+        let entry = build_entry(
+            &state,
+            Some(&row),
+            None,
+            &peers,
+            None,
+            now,
+            ReportOverrides::default(),
+        );
+
+        assert_eq!(entry.stats.cost_usd, Some(1.0));
+    }
+
+    #[test]
     fn full_entry_has_a_stable_projection() {
         let now = Timestamp::from_second(2_000).unwrap();
         let mut state = agent("full");
@@ -726,6 +764,7 @@ mod tests {
                     status: AgentStatus::Running,
                     phase: TurnPhase::Reasoning,
                     task: None,
+                    profile: None,
                     model: Some("sonnet".to_owned()),
                     effort: Some("high".to_owned()),
                     description: None,

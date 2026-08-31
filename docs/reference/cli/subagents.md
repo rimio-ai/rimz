@@ -122,7 +122,7 @@ Every child is addressable as `@<petname>`. A supervised print-mode provider is 
 
 ## Parentage and sidebar placement
 
-Only `rimz subagents` creates a parented pane-backed child. The child appears in the subagent section nested under its direct parent and is not duplicated as a top-level card. Provider-native children share the product term *subagent* and the same nested presentation.
+Only `rimz subagents` creates a parented pane-backed child. The child appears in the subagent section nested under its direct parent and is not duplicated as a top-level card. Its entry shows the petname, launch profile, description, and own session cost; that spend rolls into the parent's live and lifetime figures. Provider-native children share the product term *subagent* and the same nested presentation, but their cost is already inside the parent transcript.
 
 Subagent launches are not capped by `[agents] max-chain-length`; that setting governs successive top-level peer launches through `rimz agents` and `rimz teams`. Instead, a subagent cannot launch anything through either doorway. A refused call creates no run, pane, worktree, or provisional agent.
 
