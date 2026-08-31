@@ -940,7 +940,8 @@ pub struct Capabilities {
     /// probe. Scheduling uses this static declaration before provider work.
     pub direct_account_usage: bool,
     /// How co-resident open turns are ordered when one agent process carries
-    /// more than one session id. Rested roots always follow latest activity.
+    /// more than one session id. Rested roots always follow latest activity;
+    /// forked conversations never inherit the primary's launch role.
     pub same_pane_session: SamePaneSessionPolicy,
     /// Remote-control surfaces the provider can host.
     pub remote_control: RemoteControlCapability,
