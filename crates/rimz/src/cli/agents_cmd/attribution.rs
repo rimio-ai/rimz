@@ -299,11 +299,7 @@ fn effort_label(member: &AttributionMember) -> Option<String> {
         parts.push(active);
     }
     if let Some(cost) = member.cost_usd.map(rimz::theme::fmt::dollars2) {
-        parts.push(if member.subagents.is_empty() {
-            cost
-        } else {
-            format!("{cost} incl. subagents")
-        });
+        parts.push(cost);
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
@@ -593,7 +589,7 @@ mod tests {
         forge team · 1 agent · 1h05m active · $1.25 · 7 messages (2 from you)
 
           @planner (plan|ner) · Claude · fable`2@high
-              effort:    1h05m active · $1.25 incl. subagents
+              effort:    1h05m active · $1.25
               calls:     2 asks · 7 tool calls · 1 compaction
               messages:  2 from you · 5 from teammates · 4 to teammates
               tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
@@ -602,7 +598,7 @@ mod tests {
         Other agents · 1 agent · 1h05m active · $1.25 · 7 messages (2 from you)
 
           @codex · Codex · gpt-5.5@high
-              effort:    1h05m active · $1.25 incl. subagents
+              effort:    1h05m active · $1.25
               calls:     2 asks · 7 tool calls · 1 compaction
               messages:  2 from you · 5 from teammates · 4 to teammates
               tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
@@ -623,7 +619,7 @@ mod tests {
         render_panel(&mut output, &report).expect("render panel");
         insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @r"
           @codex · Codex · gpt-5.5@high
-              effort:    1h05m active · $1.25 incl. subagents
+              effort:    1h05m active · $1.25
               calls:     2 asks · 7 tool calls · 1 compaction
               messages:  2 from you · 5 from teammates · 4 to teammates
               tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
@@ -644,7 +640,7 @@ mod tests {
         **forge team**
 
         - **plan|ner** — Claude fable&#96;2@high
-          - effort: 1h05m active · $1.25 incl. subagents
+          - effort: 1h05m active · $1.25
           - calls: 2 asks · 7 tool calls · 1 compaction
           - messages: 2 from you · 5 from teammates · 4 to teammates
           - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
@@ -653,7 +649,7 @@ mod tests {
         **Other agents**
 
         - **@codex** — Codex `gpt-5.5@high`
-          - effort: 1h05m active · $1.25 incl. subagents
+          - effort: 1h05m active · $1.25
           - calls: 2 asks · 7 tool calls · 1 compaction
           - messages: 2 from you · 5 from teammates · 4 to teammates
           - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read

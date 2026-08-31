@@ -115,7 +115,7 @@ fn resumed_slot_deduplicates_replayed_transcript_effort() {
 #[test]
 fn launched_child_continuations_deduplicate_as_one_subagent_seat() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut parent = agent("parent", "codex", 5);
+    let mut parent = agent("parent", "claude", 5);
     parent.team = Some("forge".to_owned());
     parent.role = Some("planner".to_owned());
     parent.tool_calls.insert("exec".to_owned(), 1);
@@ -132,15 +132,10 @@ fn launched_child_continuations_deduplicate_as_one_subagent_seat() {
         let mut file = std::fs::File::create(&path).unwrap();
         writeln!(
             file,
-            r#"{{"type":"session_meta","payload":{{"id":"{id}"}}}}"#
+            r#"{{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":2.0,"requestId":"request","message":{{"id":"message","usage":{{"input_tokens":20,"output_tokens":2}}}}}}"#
         )
         .unwrap();
-        writeln!(
-            file,
-            r#"{{"model":"gpt-5.6-sol","timestamp":"2026-01-01T10:00:00.000Z","usage":{{"input_tokens":100,"output_tokens":20}}}}"#
-        )
-        .unwrap();
-        let mut child = agent(id, "codex", registered);
+        let mut child = agent(id, "claude", registered);
         child.parent_agent_id = Some(parent.agent_id.clone());
         child.parent_agent_kind = Some(parent.kind.clone());
         child.launch_depth = Some(1);
@@ -154,12 +149,17 @@ fn launched_child_continuations_deduplicate_as_one_subagent_seat() {
     let report = build_for(&agents);
     let member = &report.groups[0].members[0];
 
-    assert_eq!(member.tokens.input, 100);
-    assert_eq!(member.tokens.output, 20);
+    assert_eq!(member.tokens, TokenSplit::default());
+    assert_eq!(member.cost_usd, None);
     assert_eq!(member.sessions, 1);
-    assert_eq!(member.subagents.len(), 1);
-    assert_eq!(member.subagents[0].task.as_deref(), Some("explorer"));
-    assert_eq!(member.subagents[0].count, 1);
+    assert_eq!(
+        member.subagents,
+        vec![SubagentStat {
+            task: Some("explorer".to_owned()),
+            count: 1,
+            cost_usd: Some(2.0),
+        }]
+    );
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn claude_slot_credits_subagent_transcript_effort() {
 }
 
 #[test]
-fn launched_child_effort_is_credited_to_the_parent_seat() {
+fn launched_child_effort_stays_out_of_the_parent_seat() {
     let dir = tempfile::tempdir().expect("tempdir");
     let parent_transcript = dir.path().join("parent.jsonl");
     let child_transcript = dir.path().join("child.jsonl");
@@ -222,6 +222,7 @@ fn launched_child_effort_is_credited_to_the_parent_seat() {
     parent.team = Some("forge".to_owned());
     parent.role = Some("planner".to_owned());
     parent.transcript_path = Some(parent_transcript.to_string_lossy().into_owned());
+    parent.tool_calls.insert("exec".to_owned(), 1);
     let mut child = agent("child", "claude", 30);
     child.name = Some("helper".to_owned());
     child.parent_agent_id = Some(parent.agent_id.clone());
@@ -229,15 +230,66 @@ fn launched_child_effort_is_credited_to_the_parent_seat() {
     child.launch_depth = Some(1);
     child.profile = Some("explorer".to_owned());
     child.transcript_path = Some(child_transcript.to_string_lossy().into_owned());
+    child.tool_calls.insert("exec".to_owned(), 5);
+    child.compaction_count = 1;
 
-    let report = build_for(&[parent, child]);
+    let parent_last_activity = parent.last_activity;
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime paths");
+    active_time::record_progress(&runtime, "claude", "parent", at(0), 180).unwrap();
+    active_time::record_stop(&runtime, "claude", "parent", at(10), 180).unwrap();
+    active_time::record_progress(&runtime, "claude", "child", at(0), 180).unwrap();
+    active_time::record_stop(&runtime, "claude", "child", at(20), 180).unwrap();
+    let child_transcript = [
+        TranscriptEntry::new(
+            at(50),
+            child.kind.clone(),
+            child.agent_id.clone(),
+            TranscriptKind::Prompt,
+            String::new(),
+        ),
+        TranscriptEntry::new(
+            at(51),
+            child.kind.clone(),
+            child.agent_id.clone(),
+            TranscriptKind::Message,
+            String::new(),
+        ),
+        TranscriptEntry::new(
+            at(52),
+            child.kind.clone(),
+            child.agent_id.clone(),
+            TranscriptKind::Ask,
+            String::new(),
+        ),
+    ];
+    let agents = [parent, child];
+    let refs = agents.iter().collect::<Vec<_>>();
+    let report = build(AttributionRequest {
+        agents: &refs,
+        peers: &refs,
+        subagents: &[],
+        transcript: &child_transcript,
+        me: None,
+        runtime: &runtime,
+        active_grace_secs: 180,
+        require_contribution: false,
+        scope: AttributionScope::default(),
+        now: at(100),
+    });
     let member = &report.groups[0].members[0];
 
     assert_eq!(report.totals.agents, 1);
     assert_eq!(member.handle, "@planner");
     assert_eq!(member.sessions, 1);
-    assert_eq!(member.cost_usd, Some(3.0));
-    assert_eq!(member.tokens.input, 30);
+    assert_eq!(member.cost_usd, Some(1.0));
+    assert_eq!(member.tokens.input, 10);
+    assert_eq!(member.tool_calls, 1);
+    assert_eq!(member.compactions, 0);
+    assert_eq!(member.last_activity, parent_last_activity);
+    assert_eq!(member.active_secs, Some(10));
+    assert_eq!(member.asks, 0);
+    assert_eq!(member.messages, MessageCounts::default());
     assert_eq!(
         member.subagents,
         vec![SubagentStat {
@@ -246,10 +298,16 @@ fn launched_child_effort_is_credited_to_the_parent_seat() {
             cost_usd: Some(2.0),
         }]
     );
+    assert_eq!(report.totals.cost_usd, Some(1.0));
+    assert_eq!(report.totals.tokens.input, 10);
+    assert_eq!(report.groups[0].totals.tool_calls, 1);
+    assert_eq!(report.totals.active_secs, Some(10));
+    assert_eq!(report.totals.asks, 0);
+    assert_eq!(report.totals.messages, MessageCounts::default());
 }
 
 #[test]
-fn launched_child_without_a_retained_parent_keeps_its_own_seat() {
+fn launched_child_without_a_retained_parent_is_not_a_member() {
     let dir = tempfile::tempdir().expect("tempdir");
     let transcript = dir.path().join("child.jsonl");
     std::fs::write(
@@ -268,10 +326,9 @@ fn launched_child_without_a_retained_parent_keeps_its_own_seat() {
 
     let report = build_for(&[child]);
 
-    assert_eq!(report.totals.agents, 1);
-    assert_eq!(report.groups[0].members[0].sessions, 1);
-    assert_eq!(report.groups[0].members[0].cost_usd, Some(2.0));
-    assert!(report.groups[0].members[0].subagents.is_empty());
+    assert_eq!(report.totals.agents, 0);
+    assert!(report.groups.is_empty());
+    assert_eq!(report.totals.cost_usd, None);
 }
 
 #[test]

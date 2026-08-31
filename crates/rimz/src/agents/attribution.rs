@@ -2,7 +2,8 @@
 //!
 //! Identity, tool calls, and compactions come from the audit rollup; tokens and
 //! dollars come from provider transcripts through the shared price book; active
-//! time comes from runtime sidecars and can become unavailable after GC.
+//! time comes from runtime sidecars and can become unavailable after GC. Launched
+//! children contribute only to the subagent breakdown.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -181,15 +182,17 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
 
     let mut members = folded
         .into_iter()
-        .map(|(slot, records)| {
+        .filter_map(|(slot, records)| {
             let seat = split_seat_records(&records);
+            if seat.identity.is_empty() {
+                return None;
+            }
             let team = newest(&seat.identity).and_then(|agent| agent.team.clone());
             let opened_turn = seat
                 .identity
                 .iter()
                 .any(|agent| agent.turn_started_at.is_some());
             let member = member(
-                &records,
                 &seat,
                 &peer_representatives,
                 &request,
@@ -197,12 +200,12 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
                 &prices,
                 &conversation_counts,
             );
-            FoldedMember {
+            Some(FoldedMember {
                 channel: slot.channel,
                 team,
                 attribution: member,
                 opened_turn,
-            }
+            })
         })
         .collect::<Vec<_>>();
     credit_sent_messages(&mut members, request.transcript);
@@ -319,7 +322,8 @@ fn fold<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
 }
 
 /// Fold pane-backed children into the durable seat that launched them.
-/// Orphaned children retain their own slot so their effort is never lost.
+/// Orphaned children retain their own slot for `slot_groups` consumers;
+/// attribution drops slots that contain no parent identity.
 fn fold_seats<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
     let parents = agents
         .iter()
@@ -376,7 +380,6 @@ fn representatives<'a>(peers: &[&'a AgentState]) -> Vec<&'a AgentState> {
 }
 
 fn member(
-    records: &[&AgentState],
     seat: &SeatRecords<'_>,
     peers: &[&AgentState],
     request: &AttributionRequest<'_>,
@@ -384,9 +387,9 @@ fn member(
     prices: &pricing::PriceBook,
     conversation_counts: &HashMap<(AgentKind, AgentSessionId), ConversationCounts>,
 ) -> AttributionMember {
-    // Every slot is created only after its first record is inserted.
+    // Attribution drops identity-less slots before constructing a member.
     let latest = newest(&seat.identity).expect("folded attribution slot has records");
-    let mut effort = spending::slot_effort_breakdown(
+    let effort = spending::slot_effort_breakdown(
         &seat
             .identity
             .iter()
@@ -404,16 +407,14 @@ fn member(
                     .collect::<Vec<_>>(),
                 prices,
             );
-            effort.total.tokens.add_assign(child_effort.tokens);
-            effort.total.cost_usd =
-                spending::sum_optional_cost(effort.total.cost_usd, child_effort.cost_usd);
             (
                 newest(&child_records).expect("folded child slot has records"),
                 child_effort,
             )
         })
         .collect::<Vec<_>>();
-    let messages = records
+    let messages = seat
+        .identity
         .iter()
         .fold(MessageCounts::default(), |mut total, agent| {
             if let Some(counts) =
@@ -426,14 +427,14 @@ fn member(
             }
             total
         });
-    let asks = records.iter().fold(0u64, |total, agent| {
+    let asks = seat.identity.iter().fold(0u64, |total, agent| {
         total.saturating_add(
             conversation_counts
                 .get(&(agent.kind.clone(), agent.agent_id.clone()))
                 .map_or(0, |counts| counts.asks),
         )
     });
-    let asks_answered = records.iter().fold(0u64, |total, agent| {
+    let asks_answered = seat.identity.iter().fold(0u64, |total, agent| {
         total.saturating_add(
             conversation_counts
                 .get(&(agent.kind.clone(), agent.agent_id.clone()))
@@ -446,7 +447,8 @@ fn member(
         &effort.subagents,
         &launched_effort,
     );
-    let active_secs = records
+    let active_secs = seat
+        .identity
         .iter()
         .filter_map(|agent| {
             active_records
@@ -479,7 +481,8 @@ fn member(
             .iter()
             .filter_map(|agent| agent.registered_at)
             .min(),
-        last_activity: records
+        last_activity: seat
+            .identity
             .iter()
             .map(|agent| agent.last_activity)
             .max()
@@ -487,7 +490,7 @@ fn member(
         active_secs,
         asks,
         asks_answered,
-        tool_calls: records.iter().fold(0u64, |total, agent| {
+        tool_calls: seat.identity.iter().fold(0u64, |total, agent| {
             total.saturating_add(
                 agent
                     .tool_calls
@@ -496,7 +499,7 @@ fn member(
                     .sum::<u64>(),
             )
         }),
-        compactions: records.iter().fold(0u32, |total, agent| {
+        compactions: seat.identity.iter().fold(0u32, |total, agent| {
             total.saturating_add(agent.compaction_count)
         }),
         messages,
@@ -517,12 +520,6 @@ fn split_seat_records<'a>(records: &[&'a AgentState]) -> SeatRecords<'a> {
         .copied()
         .filter(|agent| !agent.is_launched_child())
         .collect::<Vec<_>>();
-    if identity.is_empty() {
-        return SeatRecords {
-            identity: records.to_vec(),
-            children: Vec::new(),
-        };
-    }
     let children = records
         .iter()
         .copied()

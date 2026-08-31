@@ -181,7 +181,7 @@ $ rimz agents attribution
 forge team · 2 agents · 36m active · $29.39
 
   @planner · Claude · claude-opus-5@xhigh
-      effort:    15m active · $16.72 incl. subagents
+      effort:    15m active · $16.72
       calls:     84 tool calls
       tokens:    11k input, 148k output, 16m cache read
       subagents: 3 × explore ($2.19)

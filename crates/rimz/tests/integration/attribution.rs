@@ -330,7 +330,7 @@ fn attribution_cli_credits_claude_subagent_companions() {
         .expect("run markdown attribution");
     assert!(markdown.status.success());
     let markdown = String::from_utf8(markdown.stdout).expect("markdown utf8");
-    assert!(markdown.contains("$3.00 incl. subagents"));
+    assert!(markdown.contains("effort: $3.00"));
     assert!(markdown.contains("subagents: 1 × explore ($2.00)"));
 }
 
