@@ -4,8 +4,9 @@ use std::time::Duration;
 use jiff::Timestamp;
 use tracing::warn;
 
-use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
+use crate::agents::{AgentLifecycleObservation, AgentState, AgentStatus, LifecycleSignal};
 use crate::store::event::EventEnvelope;
+use crate::store::paths::RuntimePaths;
 use crate::store::runtime::{self, AgentLiveness, RuntimeScope};
 use crate::store::{live_roster, session_death};
 
@@ -33,6 +34,22 @@ type EndedSession = (
     crate::ids::AgentSessionId,
     &'static str,
 );
+
+fn attach_rest_certificates(agents: &mut [AgentState], runtime: &RuntimePaths) {
+    for agent in agents {
+        if agent.ended_at.is_some()
+            || !matches!(agent.status, AgentStatus::Running | AgentStatus::Waiting)
+        {
+            continue;
+        }
+        agent.context = crate::store::agent_context::read_one(
+            runtime,
+            agent.kind.as_str(),
+            agent.agent_id.as_str(),
+        )
+        .map(|record| record.context);
+    }
+}
 
 impl Store {
     fn append_ended_sessions(&self, victims: &[EndedSession]) -> Result<usize> {
@@ -91,7 +108,11 @@ impl Store {
         // rebirth consumes it. The remaining scan stays lock-free: a live
         // same-id session that races the append clears its end stamp on its
         // next lifecycle event.
-        let projection = self.runtime_projection(RuntimeScope::Audit)?;
+        let mut projection = self.runtime_projection(RuntimeScope::Audit)?;
+        // Rest certificates are cache-class sidecars. Reading only raw-active
+        // roots lets a provider-rested owner yield; a missing sidecar leaves
+        // the lifecycle status in charge.
+        attach_rest_certificates(&mut projection.agents, &self.inner.runtime);
         let protected = live_roster::read(&self.inner.paths.live_roster)
             .map(|roster| roster.agents)
             .unwrap_or_default();
@@ -107,29 +128,8 @@ impl Store {
                         && newer.ended_at.is_none()
                         && session_death::supersedes(agent, newer)
                 });
-                let interrupted = !superseded
-                    && projection.agents.iter().any(|newer| {
-                        !newer.is_provider_subagent()
-                            && newer.ended_at.is_none()
-                            && session_death::interrupted_conversation_candidate(agent, newer)
-                    })
-                    && crate::agents::find_definition(agent.kind.as_str())
-                        .and_then(|adapter| adapter.probe_resting_interruption(&agent.agent_id))
-                        .is_some_and(|interrupted_at| {
-                            projection.agents.iter().any(|newer| {
-                                !newer.is_provider_subagent()
-                                    && newer.ended_at.is_none()
-                                    && session_death::interrupted_conversation_supersedes(
-                                        agent,
-                                        newer,
-                                        interrupted_at,
-                                    )
-                            })
-                        });
                 let event_name = if superseded {
                     "ReapedSuperseded"
-                } else if interrupted {
-                    "ReapedInterrupted"
                 } else if protected.contains(&(agent.kind.clone(), agent.agent_id.clone())) {
                     return None;
                 } else if runtime::agent_liveness(agent) == AgentLiveness::Dead {
