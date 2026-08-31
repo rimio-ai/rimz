@@ -40,7 +40,9 @@ pub use panes::{
 pub(crate) use panes::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, compute_lazy_agent_pairings,
 };
-pub use panes::{SidebarOwnView, pane_start_allows_bind, stamped_agent_for_pane};
+pub use panes::{
+    SidebarOwnView, pane_start_allows_bind, stamped_agent_for_launch, stamped_agent_for_pane,
+};
 pub use process::pane_agent_kind;
 pub(crate) use process::pane_worktree_path;
 pub(crate) use process::{command_is_sidebar_chrome, process_is_active};
