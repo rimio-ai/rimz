@@ -94,6 +94,97 @@ fn forked_side_session_does_not_repaint_primary_card() {
 }
 
 #[test]
+fn turn_dead_primary_yields_pane_to_successful_same_pane_replacement() {
+    let owner = |id| {
+        RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            id,
+            9_999,
+            Some("process-start".to_owned()),
+        )
+    };
+
+    let mut first = agent("codex", "first", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(120)
+        .overloaded_turn_error(110, "server_overloaded");
+    first.registered_at = Some(ago(600));
+    first.runtime_owner = Some(owner("first"));
+    first.origin = Some(SessionOrigin::Fresh);
+
+    let mut second = agent("codex", "second", AgentStatus::Running, 2_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(60)
+        .overloaded_turn_error(50, "server_overloaded");
+    second.registered_at = Some(ago(300));
+    second.runtime_owner = Some(owner("second"));
+    second.origin = Some(SessionOrigin::Fresh);
+
+    let mut successful = agent("codex", "successful", AgentStatus::Success, 3_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(5);
+    successful.registered_at = Some(ago(30));
+    successful.runtime_owner = Some(owner("successful"));
+    successful.origin = Some(SessionOrigin::Forked);
+
+    let mut snapshot = room(vec![first, second, successful]);
+    snapshot.reap_stale_sessions();
+    let snapshot = snapshot.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+
+    let pane_rows = rows(&snapshot);
+    assert_eq!(pane_rows.len(), 1);
+    assert_eq!(pane_rows[0].id, "successful");
+    assert_eq!(pane_rows[0].status(), Some(AgentStatus::Success));
+
+    let mut dead = agent("codex", "dead", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(120)
+        .overloaded_turn_error(110, "server_overloaded");
+    dead.registered_at = Some(ago(600));
+    dead.origin = Some(SessionOrigin::Fresh);
+
+    let mut replacement = agent("codex", "replacement", AgentStatus::Success, 2_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(5);
+    replacement.registered_at = Some(ago(60));
+    replacement.origin = Some(SessionOrigin::Fresh);
+
+    let snapshot = room(vec![dead, replacement])
+        .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+    assert_eq!(rows(&snapshot)[0].id, "replacement");
+}
+
+#[test]
+fn idle_primary_follows_a_newer_fork_until_it_is_prompted_again() {
+    let mut primary = agent("codex", "primary", AgentStatus::Success, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(120);
+    primary.registered_at = Some(ago(600));
+
+    let mut fork = agent("codex", "fork", AgentStatus::Running, 2_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(5);
+    fork.registered_at = Some(ago(60));
+
+    let snapshot = room(vec![primary.clone(), fork.clone()])
+        .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+    assert_eq!(rows(&snapshot)[0].id, "fork");
+
+    primary.status = AgentStatus::Running;
+    primary.last_activity = ago(1);
+    let snapshot =
+        room(vec![primary, fork]).with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+    assert_eq!(rows(&snapshot)[0].id, "primary");
+}
+
+#[test]
 fn antigravity_shared_pane_follows_latest_conversation() {
     let mut older = agent(
         "antigravity",
@@ -117,11 +208,16 @@ fn antigravity_shared_pane_follows_latest_conversation() {
     .active_ago(5);
     newer.registered_at = Some(ago(60));
 
+    let snapshot = room(vec![older.clone(), newer.clone()])
+        .with_live_panes(vec![pane("%1", "agy", "/repo/main")], None);
+    let pane_rows = rows(&snapshot);
+    assert_eq!(pane_rows.len(), 1);
+    assert_eq!(pane_rows[0].id, "conversation-new");
+
+    older.status = AgentStatus::Running;
     let snapshot =
         room(vec![older, newer]).with_live_panes(vec![pane("%1", "agy", "/repo/main")], None);
-    let rows = rows(&snapshot);
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].id, "conversation-new");
+    assert_eq!(rows(&snapshot)[0].id, "conversation-new");
 }
 
 #[test]
@@ -205,22 +301,31 @@ fn forked_side_session_survives_the_reaper_and_keeps_primary_card() {
 }
 
 #[test]
-fn cleared_fresh_session_reap_repins_shared_pane_but_fork_keeps_primary() {
-    for (label, main_origin, replacement_origin, expected) in [
+fn cleared_fresh_session_reaps_while_binding_tracks_open_turns() {
+    for (label, main_status, main_origin, replacement_origin, expected) in [
         (
             "fresh replacement",
+            AgentStatus::Success,
             Some(SessionOrigin::Fresh),
             Some(SessionOrigin::Fresh),
             "new-sess",
         ),
         (
-            "fork or unknown",
+            "fork outranks a rested primary",
+            AgentStatus::Success,
+            Some(SessionOrigin::Fresh),
+            Some(SessionOrigin::Forked),
+            "new-sess",
+        ),
+        (
+            "fork stays below an open primary",
+            AgentStatus::Running,
             Some(SessionOrigin::Fresh),
             Some(SessionOrigin::Forked),
             "main-sess",
         ),
     ] {
-        let mut main = agent("codex", "main-sess", AgentStatus::Success, 1_000)
+        let mut main = agent("codex", "main-sess", main_status, 1_000)
             .worktree("/repo/main")
             .in_pane("%1")
             .active_ago(120);
