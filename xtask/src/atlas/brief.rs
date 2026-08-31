@@ -353,7 +353,14 @@ fn build_report(facts: &Facts, module: &Path, args: &Args) -> Result<Report> {
                 .collect()
         })
         .unwrap_or_default();
-    let divergence = super::survey::divergence(facts, module, &cochange.edges, 3);
+    let target_label = module
+        .strip_prefix(&args.path)
+        .unwrap_or(module)
+        .with_extension("")
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    let divergence =
+        super::survey::module_divergence(facts, module, &target_label, &cochange.edges, 3);
     Ok(Report {
         version: REPORT_VERSION,
         verb: "brief",

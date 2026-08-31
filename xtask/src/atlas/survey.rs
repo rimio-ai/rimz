@@ -380,6 +380,72 @@ pub(super) fn divergence(
             }
         }
     }
+    divergence_rows(coupling, cochange, minimum)
+}
+
+pub(super) fn module_divergence(
+    facts: &Facts,
+    scope: &Path,
+    target: &str,
+    cochange: &[CochangeEdge],
+    minimum: usize,
+) -> Vec<Divergence> {
+    let scope_module = crate_module_for_path(&scope.join("mod.rs"));
+    let endpoint = |module: &str| {
+        if module_is_within(module, &scope_module) {
+            target.to_owned()
+        } else {
+            module.split("::").next().unwrap_or("(root)").to_owned()
+        }
+    };
+    let mut coupling = BTreeMap::<(String, String), BTreeSet<String>>::new();
+    for file in facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| path_in_scope(&file.path, scope))
+    {
+        for import in &file.imports {
+            let Some(resolved) = super::syntax::resolved_internal_import(
+                import,
+                &facts.known_modules,
+                &facts.crate_names,
+            ) else {
+                continue;
+            };
+            let to = endpoint(&resolved);
+            if to != target {
+                coupling
+                    .entry(ordered_pair(target, &to))
+                    .or_default()
+                    .insert(import.item.clone());
+            }
+        }
+    }
+    if let Some(references) = &facts.references {
+        for edge in references
+            .edges
+            .iter()
+            .filter(|edge| !edge.test && path_in_scope(&edge.from_path, scope))
+        {
+            let from = endpoint(&edge.from);
+            let to = endpoint(&edge.to);
+            if from != to {
+                coupling
+                    .entry(ordered_pair(&from, &to))
+                    .or_default()
+                    .insert(edge.item.clone());
+            }
+        }
+    }
+    divergence_rows(coupling, cochange, minimum)
+}
+
+fn divergence_rows(
+    coupling: BTreeMap<(String, String), BTreeSet<String>>,
+    cochange: &[CochangeEdge],
+    minimum: usize,
+) -> Vec<Divergence> {
     let changes = cochange
         .iter()
         .map(|edge| (ordered_pair(&edge.left, &edge.right), edge.commits))
