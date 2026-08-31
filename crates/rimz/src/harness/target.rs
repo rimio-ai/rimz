@@ -853,7 +853,7 @@ pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
             members.iter().position(|member| {
                 member.kind == agent.kind
                     && member.launch_id.as_ref() == Some(launch_id)
-                    && crate::store::session_death::same_agent_instance(member, agent)
+                    && crate::store::session_death::same_instance_lineage(member, agent)
             })
         });
         let Some(index) = same_occupancy else {

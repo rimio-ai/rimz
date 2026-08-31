@@ -93,7 +93,7 @@ pub(crate) fn same_instance_lineage(older: &AgentState, newer: &AgentState) -> b
 }
 
 /// Whether two roots name the same pane and agent-process incarnation.
-pub(crate) fn same_agent_instance(older: &AgentState, newer: &AgentState) -> bool {
+fn same_agent_instance(older: &AgentState, newer: &AgentState) -> bool {
     let same_pane = matches!(
         (older.pane.as_ref(), newer.pane.as_ref()),
         (Some(older_pane), Some(newer_pane))
