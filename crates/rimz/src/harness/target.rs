@@ -14,9 +14,9 @@
 //! handle, and a pane id (`tmux:%1`, `zellij:terminal_3`) is a precise,
 //! sigil-free, channel-agnostic address. The renderer prefers a unique role,
 //! then an explicit name, then a non-kind profile, then the kind, then an
-//! ordinal, then the petname. Co-resident historical conversations keep their
-//! petname and session-id addresses, but only the launch occupant claims role,
-//! profile, kind, ordinal, pane, and broadcast matches.
+//! ordinal, then the petname. Co-resident historical conversations remain
+//! audit records, but a pane-bearing snapshot exposes one recipient: only the
+//! launch occupant claims live addresses.
 //!
 //! The channel is the workspace segment the room groups by — an explicit named
 //! lane, else a worktree name, else an in-place named team stamped at launch as
@@ -236,7 +236,7 @@ pub fn resolve_one<'a>(
     current_channel: Option<&str>,
 ) -> Result<&'a AgentState, TargetErr> {
     let candidates = addressable_agents(snapshot);
-    let launch_candidates = addressable_launch_occupants(&candidates);
+    let launch_candidates = launch_occupants_from(candidates.iter().copied());
     let matches = resolve_mentions_with_launch_candidates(
         raw,
         worktree_flag,
@@ -275,7 +275,7 @@ pub fn resolve_agents<'a>(
     current_channel: Option<&str>,
     candidates: &[&'a AgentState],
 ) -> Result<Vec<&'a AgentState>, TargetErr> {
-    let launch_candidates = addressable_launch_occupants(candidates);
+    let launch_candidates = launch_occupants_from(candidates.iter().copied());
     resolve_mentions_with_launch_candidates(
         raw,
         worktree_flag,
@@ -406,9 +406,9 @@ pub fn bind_agent<'a>(
 /// subagents remain display-only; pane-backed launched children are peers for
 /// messaging and pane operations even though they render under a parent card.
 ///
-/// Every root session that can be named precisely in this snapshot. Launch
-/// handles are narrowed separately to one occupant per live instance, while a
-/// co-resident conversation remains reachable by petname or session id.
+/// Every root session that can be named in this snapshot. A pane-bearing
+/// snapshot exposes one recipient per pane; shadowed siblings remain audit
+/// records resolvable through the audit fallback, never message targets.
 pub fn addressable_agents(snapshot: &SidebarSnapshot) -> Vec<&AgentState> {
     snapshot
         .agents
@@ -418,17 +418,8 @@ pub fn addressable_agents(snapshot: &SidebarSnapshot) -> Vec<&AgentState> {
         .collect()
 }
 
-fn addressable_launch_occupants<'a>(agents: &[&'a AgentState]) -> Vec<&'a AgentState> {
-    launch_occupants_from(agents.iter().copied())
-        .into_iter()
-        .filter(|agent| agent.ended_at.is_none())
-        .collect()
-}
-
-/// Whether a co-resident historical root has yielded its physical agent
-/// instance to the pane's bound owner. One physical instance contributes at
-/// most one recipient; shadowed sessions remain audit records but are not
-/// addressable, including by exact session id.
+/// The pane-frame form of the one-recipient rule. Co-resident historical roots
+/// remain audit records but are not live addresses, including by session id.
 pub(crate) fn shadowed_by_pane_owner(snapshot: &SidebarSnapshot, agent: &AgentState) -> bool {
     let Some(stamped_pane) = agent.pane.as_ref().map(|pane| &pane.pane_id) else {
         return false;
@@ -525,7 +516,7 @@ fn select_with_launch_candidates<'a, C: Candidate<'a>>(
     launch_candidates: &[C],
 ) -> Vec<C> {
     let tier = winning_tier(selector, candidates);
-    let candidates = match tier {
+    let narrowed = match tier {
         SelectorTier::ExplicitName | SelectorTier::Name | SelectorTier::SessionPrefix => candidates,
         SelectorTier::All
         | SelectorTier::Role
@@ -533,7 +524,11 @@ fn select_with_launch_candidates<'a, C: Candidate<'a>>(
         | SelectorTier::KindOrdinal
         | SelectorTier::Profile => launch_candidates,
     };
-    select_at_tier(tier, selector, candidates)
+    let matches = select_at_tier(tier, selector, narrowed);
+    if matches.is_empty() && tier == SelectorTier::KindOrdinal {
+        return select_at_tier(tier, selector, candidates);
+    }
+    matches
 }
 
 /// Require the `@` mention sigil (or a pane id). The `message` command calls
