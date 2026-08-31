@@ -2,15 +2,8 @@ use super::*;
 pub(super) use crate::cli::render::prose::StyledFragment;
 use crate::cli::render::prose::wrap_fragments;
 
-pub(super) const MAX_CARD_WIDTH: usize = 100;
-pub(super) const MIN_CARD_CONTENT_WIDTH: usize = 24;
-
 pub(super) fn card_content_width() -> usize {
-    let terminal = render::terminal_columns(MAX_CARD_WIDTH).min(MAX_CARD_WIDTH);
-    let prefix_width = UnicodeWidthStr::width("│ ");
-    terminal
-        .saturating_sub(prefix_width)
-        .max(MIN_CARD_CONTENT_WIDTH)
+    render::prose::prose_width(2)
 }
 
 pub(super) fn write_wrapped_spine_fragments(
