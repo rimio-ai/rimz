@@ -952,9 +952,9 @@ impl AgentState {
     /// Whether this root still owns an open provider turn. Same-pane ownership
     /// uses this predicate so hook-reported lifecycle and provider-side rest
     /// certificates cannot disagree about which conversation may yield. With
-    /// no attached context it reads raw lifecycle status, so snapshots that
-    /// compare pane owners or team cohorts must attach rest certificates with
-    /// `store::agent_context::attach_rest_certificates` first.
+    /// no attached context it reads raw lifecycle status. Every snapshot used
+    /// to resolve an address or compare pane owners must attach rest
+    /// certificates first.
     pub fn holds_open_turn(&self) -> bool {
         let settled = settled_outcome(self.status, self.context.as_ref(), self.last_activity);
         match self.status {

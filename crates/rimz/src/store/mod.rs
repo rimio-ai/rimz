@@ -173,12 +173,15 @@ impl Store {
     /// `latest.json` is published after every mutation's lock releases and
     /// carries the same runtime liveness expel as [`Self::snapshot`], so the
     /// served rollup matches the live read; the extent stamp catches a fetch
-    /// racing a just-appended event and re-projects instead.
+    /// racing a just-appended event and re-projects instead. Cached snapshots
+    /// also attach cache-class agent context so every address resolver sees the
+    /// same rest certificates as pane ownership.
     pub fn snapshot_cached(&self) -> Result<SidebarSnapshot> {
-        if let Some(snapshot) = snapshot::read_fresh_latest(&self.inner.paths) {
-            return Ok(snapshot);
-        }
-        self.snapshot()
+        let snapshot = match snapshot::read_fresh_latest(&self.inner.paths) {
+            Some(snapshot) => snapshot,
+            None => self.snapshot()?,
+        };
+        Ok(snapshot.with_agent_context(agent_context::read_all(&self.inner.runtime)))
     }
 
     /// Walk the event log, returning every parseable record and logging
@@ -204,9 +207,12 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::AgentLifecycleObservation;
     use crate::agents::lifecycle::LifecycleSignal;
+    use crate::agents::{
+        AgentContext, AgentLifecycleObservation, AgentStatus, AgentTurnError, TurnErrorClass,
+    };
     use crate::ids::{AgentSessionId, WorkspaceId};
+    use jiff::Timestamp;
 
     #[test]
     fn open_existing_missing_root_creates_nothing() {
@@ -268,6 +274,50 @@ mod tests {
             event_log::read_from_offset(&paths.events_log, base).unwrap(),
             (Vec::new(), base)
         );
+    }
+
+    #[test]
+    fn cached_snapshot_attaches_rest_certificates_for_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+        let runtime =
+            RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
+        let store = Store::open(paths.clone(), runtime.clone()).unwrap();
+        let error_at = Timestamp::now();
+        let started_at = error_at - std::time::Duration::from_secs(1);
+        let registered_at = error_at - std::time::Duration::from_secs(2);
+        let mut registered = lifecycle(&workspace_id, 0);
+        registered.timestamp = registered_at;
+        let started = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("agent-0")),
+            LifecycleSignal::TurnStarted,
+        );
+        let mut started = EventEnvelope::agent_lifecycle(
+            workspace_id,
+            "session",
+            "claude",
+            "UserPromptSubmit",
+            &started,
+        );
+        started.timestamp = started_at;
+        event_log::append(&paths.events_log, &registered).unwrap();
+        event_log::append(&paths.events_log, &started).unwrap();
+        let context = AgentContext {
+            turn_error: Some(AgentTurnError {
+                class: TurnErrorClass::PausedOverloaded,
+                at: error_at,
+                label: Some("server_overloaded".to_owned()),
+            }),
+            ..AgentContext::new("claude", error_at)
+        };
+        agent_context::write(&runtime, "claude", "agent-0", &context).unwrap();
+
+        let snapshot = store.snapshot_cached().unwrap();
+        let agent = &snapshot.agents[0];
+
+        assert_eq!(agent.status, AgentStatus::Running);
+        assert!(!agent.holds_open_turn());
     }
 
     fn lifecycle(workspace_id: &WorkspaceId, index: usize) -> EventEnvelope {

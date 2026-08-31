@@ -256,10 +256,7 @@ pub fn dispatch(
     let agent_context =
         needs_context.then(|| crate::store::agent_context::read_all(store.runtime_paths()));
 
-    let mut cached_snapshot = boundary.then(|| store.snapshot_cached()).transpose()?;
-    if let (Some(snapshot), Some(context)) = (&mut cached_snapshot, agent_context.as_ref()) {
-        *snapshot = snapshot.clone().with_agent_context(context.clone());
-    }
+    let cached_snapshot = boundary.then(|| store.snapshot_cached()).transpose()?;
     let rollup_only = cached_snapshot.as_ref().is_some_and(|snapshot| {
         targets_all_park_without_live(
             snapshot,

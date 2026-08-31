@@ -210,6 +210,8 @@ Reads take no lock. `snapshot::rebuild` and the `assemble.rs` entry points fold 
 
 The fold is resumable. `snapshots/rollup.json` holds a fold base and the `LogExtent` it reflects; `snapshots/latest.json` holds the published view-model and the extent it was built from. A reader trusts either checkpoint exactly when its extent matches the live log, and folds the missing tail itself otherwise. So a cold reader pays one full fold, a warm reader pays only the new bytes, and neither can be wrong ([`snapshot/fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs), [`writer/publish.rs`](../../crates/rimz/src/store/writer/publish.rs)).
 
+`Store::snapshot_cached` joins cache-class agent context after reading that durable view, so every address resolver sees provider rest certificates. The pure snapshot reducer remains store-only; a missing sidecar leaves raw lifecycle status authoritative.
+
 The publish gate decides when the writer refreshes those files. A checkpoint is due when the stamp is a second old, when the unpublished tail crosses 64 KiB, or when the log shrank underneath the stamp, which is how rotation, an identity rewrite, and a repair all force a fresh publication. Concurrent publishers serialize on `locks/publish.lock` and group-commit.
 
 ### Runtime and audit
