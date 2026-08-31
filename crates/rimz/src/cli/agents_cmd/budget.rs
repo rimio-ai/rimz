@@ -103,10 +103,11 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
             .auto_continue_text
             .clone();
         if !text.trim().is_empty() {
-            rimz::message::deliver::queue_nudge(
+            rimz::message::deliver::queue_synthetic(
                 workspace,
                 store,
                 agent,
+                rimz::message::MessageSender::System,
                 text,
                 DeliveryGate::Done,
                 None,

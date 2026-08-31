@@ -97,10 +97,10 @@ This indexes what lives where; runtime shape and the single-binary rationale liv
 **Repository** — `crates/rimz/` (the binary plus the runtime/domain library; `benches/`, and `presence/`/`pricing/`/`themes/` data `build.rs` embeds), `crates/rimz-presence-zellij/` (headless Zellij presence plugin, wasm32-wasip1, no rimz-crate deps), `docs/` (product and engineering docs; `docs/externals/` mirrors upstream), `xtask/` (task runner and every gate), `examples/`, `ci/`, `docker/`, `scripts/`, `supply-chain/`.
 
 **Subsystems — `crates/rimz/src/`**, each carrying its own `AGENTS.md` contract:
-- `cli/` — command parsing, one `run(...)` per subcommand, shared `cli/render/` output.
+- `cli/` — command parsing, one `run(...)` per subcommand, shared `cli/render/` output, and wrapper-owned subagent completion reports.
 - `agents/` — the provider-neutral `AgentDefinition` catalog, caller-aligned capability contracts and services, `state.rs` rollup, private `adapters/` implementations for every built-in and process plugin, and shared spend/pricing/account machinery including upstream pricing projection.
 - `room/` — private managed-room context, birth/reset lifecycle, sidebar/presence options, and health gating.
-- `harness/` — layout IR, teams, address grammar, launch argv, supervised runs and their wake socket, subagent completion reports, loop scheduling, resume planning, and rebirth recovery inspection/materialization.
+- `harness/` — layout IR, teams, address grammar, launch argv, supervised runs and their wake socket, loop scheduling, resume planning, and rebirth recovery inspection/materialization.
 - `message/` — durable per-agent message queue: park-vs-live dispatch, live-pane send, scheduled wakeups.
 - `store/` — durable state engine: `Store` handle, canonical snapshot schema, writer mutation vocabulary/choreography, framed event log, message/run stores, GC.
 - `mux/` — Zellij/tmux seam: `MuxBackend`, subprocess engine, reconcile planner, recovery.

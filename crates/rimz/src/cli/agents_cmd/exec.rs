@@ -329,11 +329,7 @@ fn report_settled_child_or_log(context: &RunExecContext, invocation: &ExecInvoca
             return;
         }
     };
-    match rimz::harness::subagent_report::report_settled_child(
-        invocation.workspace,
-        &context.store,
-        &run,
-    ) {
+    match super::subagent_report::report_settled_child(invocation.workspace, &context.store, &run) {
         Ok(outcome) => tracing::debug!(
             run_id = %context.run_id,
             ?outcome,

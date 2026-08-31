@@ -27,6 +27,7 @@ mod run_timeout;
 mod runs_lookup;
 mod show;
 mod stop;
+mod subagent_report;
 mod top;
 mod wait;
 
