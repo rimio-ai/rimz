@@ -987,6 +987,293 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
 }
 
 #[test]
+fn tmux_settled_subagent_reports_to_parent() {
+    if which::which("tmux").is_err() {
+        eprintln!("tmux not on PATH; skipping subagent report smoke");
+        return;
+    }
+    let Some(_rimz) = rimz_bin() else {
+        eprintln!("rimz not built; skipping subagent report smoke");
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    let stub_dir = write_hook_firing_agent(&env, "codex");
+    let agent_path = path_with_front(&stub_dir);
+    trust_codex_agent_path(&env, &agent_path);
+    let socket = managed_socket(&env.runtime_root);
+    let _server = TmuxServerGuard::new(socket.clone());
+    let session = workspace_session(&env);
+    let started = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .args(["--mux", "tmux", "start", "--no-attach"])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("start report room");
+    assert!(
+        started.status.success(),
+        "room start failed: {}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    let launch_pane = tmux_capture(
+        &socket,
+        &[
+            "list-panes",
+            "-t",
+            &session,
+            "-F",
+            "#{pane_id}:#{pane_title}",
+        ],
+    )
+    .lines()
+    .find_map(|line| {
+        let (pane, title) = line.split_once(':')?;
+        (title != rimz::pane::SIDEBAR_CHROME_TITLE).then(|| pane.to_owned())
+    })
+    .expect("room shell pane");
+    for (key, value) in [
+        ("RIMZ_TEST_AGENT_SESSION", "sess-report-parent"),
+        ("RIMZ_TEST_AGENT_WAIT_STDIN", "1"),
+    ] {
+        tmux(&socket, &["set-environment", "-t", &session, key, value]);
+    }
+
+    let parent = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("TMUX_PANE", &launch_pane)
+        .env("RIMZ_TEST_AGENT_SESSION", "sess-report-parent")
+        .env("RIMZ_TEST_AGENT_WAIT_STDIN", "1")
+        .args([
+            "--mux",
+            "tmux",
+            "agents",
+            "codex",
+            "coordinate the reports",
+            "--name",
+            "report-parent",
+            "--bg",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch report parent");
+    assert!(
+        parent.status.success(),
+        "parent launch failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&parent.stdout),
+        String::from_utf8_lossy(&parent.stderr)
+    );
+
+    let parent_agent = wait_for_named_agent(&env, "report-parent", true, CAPTURE_BUDGET);
+    let parent_launch_id = parent_agent
+        .launch_id
+        .clone()
+        .expect("RimZ-launched parent has launch id");
+    let parent_pane_raw = parent_agent
+        .pane
+        .as_ref()
+        .expect("parent provider pane")
+        .pane_id
+        .raw()
+        .to_owned();
+
+    for (key, value) in [
+        ("RIMZ_TEST_AGENT_SESSION", "sess-report-second"),
+        ("RIMZ_TEST_AGENT_SLEEP_MS", "10000"),
+    ] {
+        tmux(&socket, &["set-environment", "-t", &session, key, value]);
+    }
+    let second = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("TMUX_PANE", &parent_pane_raw)
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
+        .env("RIMZ_TEST_AGENT_SESSION", "sess-report-second")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "10000")
+        .args([
+            "--mux",
+            "tmux",
+            "subagents",
+            "codex",
+            "stay running",
+            "--name",
+            "report-second",
+            "--timeout",
+            "2m",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch second subagent");
+    assert!(second.status.success(), "second launch failed: {second:?}");
+    wait_for_named_run(&env, "report-second", CAPTURE_BUDGET);
+
+    for (key, value) in [
+        ("RIMZ_TEST_AGENT_SESSION", "sess-report-first"),
+        ("RIMZ_TEST_AGENT_SLEEP_MS", "0"),
+    ] {
+        tmux(&socket, &["set-environment", "-t", &session, key, value]);
+    }
+    let first = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("TMUX_PANE", &parent_pane_raw)
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
+        .env("RIMZ_TEST_AGENT_SESSION", "sess-report-first")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "0")
+        .args([
+            "--mux",
+            "tmux",
+            "subagents",
+            "codex",
+            "finish now",
+            "--name",
+            "report-first",
+            "--timeout",
+            "2m",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch first subagent");
+    assert!(
+        first.status.success(),
+        "first launch failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&first.stderr).contains("no need to wait"),
+        "background launch should explain callback delivery: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    wait_for_named_terminal_run(&env, "report-first", CAPTURE_BUDGET);
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    let first_report = loop {
+        if let Some(report) = env
+            .store()
+            .list_messages()
+            .expect("list queued reports")
+            .into_iter()
+            .find(|message| {
+                matches!(
+                    &message.sender,
+                    rimz::message::MessageSender::Subagent { name, .. }
+                        if name == "report-first"
+                )
+            })
+        {
+            break report;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "first child report was not queued"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert!(first_report.text.contains("stub done"));
+    assert!(
+        first_report
+            .text
+            .contains("1 subagent still running: @report-second.")
+    );
+
+    let stopped = env
+        .rimz()
+        .env("TMUX", tmux_env(&socket))
+        .args(["--mux", "tmux", "agents", "stop", "@report-second"])
+        .bounded_output_within(Duration::from_secs(20))
+        .expect("stop second subagent");
+    assert!(stopped.status.success(), "stop second failed: {stopped:?}");
+    wait_for_named_terminal_run(&env, "report-second", CAPTURE_BUDGET);
+
+    for (key, value) in [
+        ("RIMZ_TEST_AGENT_SESSION", "sess-report-waited"),
+        ("RIMZ_TEST_AGENT_SLEEP_MS", "0"),
+    ] {
+        tmux(&socket, &["set-environment", "-t", &session, key, value]);
+    }
+    let waited = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("TMUX_PANE", &parent_pane_raw)
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
+        .env("RIMZ_TEST_AGENT_SESSION", "sess-report-waited")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "0")
+        .args([
+            "--mux",
+            "tmux",
+            "subagents",
+            "codex",
+            "join this result",
+            "--name",
+            "report-waited",
+            "--timeout",
+            "2m",
+            "--wait",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch waited subagent");
+    assert!(
+        waited.status.success(),
+        "waited launch failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&waited.stdout),
+        String::from_utf8_lossy(&waited.stderr)
+    );
+    assert!(String::from_utf8_lossy(&waited.stdout).contains("stub done"));
+    assert!(
+        env.store()
+            .list_messages()
+            .expect("list reports after waited launch")
+            .iter()
+            .all(|message| !matches!(
+                &message.sender,
+                rimz::message::MessageSender::Subagent { name, .. }
+                    if name == "report-waited"
+            )),
+        "--wait launch must not queue a duplicate report"
+    );
+
+    let parent_frame = capture_joined_until(
+        &socket,
+        &parent_pane_raw,
+        |frame| {
+            frame.contains("Type: SUBAGENT_REPORT")
+                && frame.contains("From: @report-first")
+                && frame.contains("1 subagent still running: @report-second.")
+                && frame.contains("stub done")
+                && frame.contains("From: @report-second")
+                && frame.contains("All your subagents have finished.")
+        },
+        CAPTURE_BUDGET,
+    );
+    assert!(
+        parent_frame.contains("Type: SUBAGENT_REPORT")
+            && parent_frame.contains("From: @report-first")
+            && parent_frame.contains("1 subagent still running: @report-second.")
+            && parent_frame.contains("stub done")
+            && parent_frame.contains("From: @report-second")
+            && parent_frame.contains("All your subagents have finished."),
+        "parent pane did not receive the queued reports:\n{parent_frame}"
+    );
+}
+
+#[test]
 fn tmux_completed_subagent_status_lingers_until_parent_pane_disappears() {
     if which::which("tmux").is_err() {
         eprintln!("tmux not on PATH; skipping subagent parent-watch smoke");
@@ -1707,14 +1994,39 @@ fn capture_until(
     pred: impl Fn(&str) -> bool,
     budget: Duration,
 ) -> String {
+    capture_until_with_join(socket, session, pred, budget, false)
+}
+
+fn capture_joined_until(
+    socket: &Path,
+    session: &str,
+    pred: impl Fn(&str) -> bool,
+    budget: Duration,
+) -> String {
+    capture_until_with_join(socket, session, pred, budget, true)
+}
+
+fn capture_until_with_join(
+    socket: &Path,
+    session: &str,
+    pred: impl Fn(&str) -> bool,
+    budget: Duration,
+    join_wrapped: bool,
+) -> String {
     let deadline = Instant::now() + budget;
     let mut last = String::new();
     loop {
-        let out = Command::new("tmux")
+        let mut command = Command::new("tmux");
+        command
             .scrub_session_env()
             .arg("-S")
             .arg(socket)
-            .args(["capture-pane", "-p", "-t", session])
+            .args(["capture-pane", "-p"]);
+        if join_wrapped {
+            command.arg("-J");
+        }
+        let out = command
+            .args(["-t", session])
             .bounded_output()
             .expect("spawn tmux capture-pane");
         if out.status.success() {

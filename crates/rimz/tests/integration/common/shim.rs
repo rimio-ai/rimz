@@ -71,6 +71,7 @@ pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
          branch=${{RIMZ_TEST_AGENT_BRANCH:-main}}\n\
          exit_code=${{RIMZ_TEST_AGENT_EXIT:-0}}\n\
          sleep_ms=${{RIMZ_TEST_AGENT_SLEEP_MS:-0}}\n\
+         wait_stdin=${{RIMZ_TEST_AGENT_WAIT_STDIN:-0}}\n\
          feed() {{\n\
            printf '%s\\n' \"$1\" | RIMZ_AGENT_PID=${{RIMZ_AGENT_PID:-$$}} \"$rimz\" hooks feed --source \"$agent\" >/dev/null\n\
          }}\n\
@@ -87,6 +88,9 @@ pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
            exit \"$exit_code\"\n\
          fi\n\
          feed '{{\"hook_event_name\":\"Stop\",\"session_id\":\"'\"$session\"'\",\"last_assistant_message\":\"stub done\"}}'\n\
+         if [ \"$wait_stdin\" = 1 ]; then\n\
+           while IFS= read -r line; do printf '%s\\n' \"$line\"; done\n\
+         fi\n\
          exit 0\n",
         version = sh_quote(version),
         rimz = sh_quote(&env.rimz_bin().display().to_string()),
