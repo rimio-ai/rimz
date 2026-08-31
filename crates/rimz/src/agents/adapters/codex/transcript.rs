@@ -364,14 +364,6 @@ pub(super) fn find_session_transcript(session_id: &str) -> Option<PathBuf> {
     })
 }
 
-/// Return the abort time only when this exact rollout is resting on a
-/// `turn_aborted` outcome. Later live records clear the evidence.
-pub(super) fn resting_interruption(session_id: &str) -> Option<Timestamp> {
-    let path = find_session_transcript(session_id)?;
-    let tail = read_transcript_tail(&path)?;
-    detect_turn_interrupted(&tail)
-}
-
 /// Same active-tree or flat-directory walk as [`find_session_transcript`] but
 /// rooted at an explicit directory — kept separate so tests can pass a tempdir
 /// without setting `HOME` or `RIMZ_CODEX_SESSIONS` in-process. Bounded by a
@@ -499,6 +491,7 @@ pub(super) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
     scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_raw_error()
 }
 
+#[cfg(test)]
 fn detect_resting_turn_outcome(tail: &str) -> Option<RestingTurnOutcome> {
     scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_outcome()
 }
@@ -577,6 +570,7 @@ pub(super) fn detect_turn_complete(tail: &str) -> Option<Timestamp> {
 /// Codex writes `event_msg`/`turn_aborted` for Esc and `/clear` of a running
 /// turn. Any abort reason counts; a later live record makes the session no
 /// longer "at rest" and clears the marker.
+#[cfg(test)]
 pub(super) fn detect_turn_interrupted(tail: &str) -> Option<Timestamp> {
     match detect_resting_turn_outcome(tail) {
         Some(RestingTurnOutcome::Interrupted(at)) => Some(at),
@@ -827,6 +821,7 @@ impl TranscriptScan {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn into_outcome(self) -> Option<RestingTurnOutcome> {
         match self.outcome {
             OutcomeScan::Resolved(outcome) => outcome,

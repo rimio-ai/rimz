@@ -731,13 +731,6 @@ impl crate::agents::capabilities::SessionCapability for CodexAdapter {
         local_sessions::discover(workspaces)
     }
 
-    fn probe_resting_interruption(
-        &self,
-        agent_id: &crate::ids::AgentSessionId,
-    ) -> Option<Timestamp> {
-        transcript::resting_interruption(agent_id.as_str())
-    }
-
     /// `codex resume <id>` resolves the UUID to its rollout file and restores
     fn resumed_session_id_from_cmdline(&self, cmdline: &str) -> Option<crate::ids::AgentSessionId> {
         codex_resumed_session_id_from_cmdline(cmdline)
