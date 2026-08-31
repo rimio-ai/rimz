@@ -112,6 +112,8 @@ fn turn_dead_primary_yields_pane_to_successful_same_pane_replacement() {
     first.registered_at = Some(ago(600));
     first.runtime_owner = Some(owner("first"));
     first.origin = Some(SessionOrigin::Fresh);
+    first.launch_id = Some("launch-coder".into());
+    first.role = Some("coder".to_owned());
 
     let mut second = agent("codex", "second", AgentStatus::Running, 2_000)
         .worktree("/repo/main")
@@ -121,6 +123,8 @@ fn turn_dead_primary_yields_pane_to_successful_same_pane_replacement() {
     second.registered_at = Some(ago(300));
     second.runtime_owner = Some(owner("second"));
     second.origin = Some(SessionOrigin::Fresh);
+    second.launch_id = Some("launch-coder".into());
+    second.role = Some("coder".to_owned());
 
     let mut successful = agent("codex", "successful", AgentStatus::Success, 3_000)
         .worktree("/repo/main")
@@ -129,14 +133,28 @@ fn turn_dead_primary_yields_pane_to_successful_same_pane_replacement() {
     successful.registered_at = Some(ago(30));
     successful.runtime_owner = Some(owner("successful"));
     successful.origin = Some(SessionOrigin::Forked);
+    successful.launch_id = Some("launch-coder".into());
+    successful.role = Some("coder".to_owned());
 
-    let snapshot = room(vec![first, second, successful])
-        .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+    let pane_less = room(vec![first, second, successful]);
+    let resolved = crate::harness::target::resolve_one(&pane_less, "@coder", None, None)
+        .expect("launch role resolves without a pane frame");
+    assert_eq!(resolved.agent_id.as_str(), "successful");
+    let snapshot = pane_less.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
 
     let pane_rows = rows(&snapshot);
     assert_eq!(pane_rows.len(), 1);
     assert_eq!(pane_rows[0].id, "successful");
     assert_eq!(pane_rows[0].status(), Some(AgentStatus::Success));
+    assert_eq!(
+        pane_rows[0]
+            .as_agent()
+            .and_then(|card| card.handle.as_deref()),
+        Some("coder")
+    );
+    let resolved = crate::harness::target::resolve_one(&snapshot, "@coder", None, None)
+        .expect("launch role resolves through the pane owner");
+    assert_eq!(resolved.agent_id.as_str(), "successful");
 
     let mut dead = agent("codex", "dead", AgentStatus::Running, 1_000)
         .worktree("/repo/main")

@@ -4,7 +4,8 @@
 //! inverse of the parser). Pane binding joins resolved panes to exact lifecycle
 //! sessions, provisional launch cards, or sessionless lazy targets.
 //!
-//! Handles read like Slack. A role handle names a team member (`@coder`). A
+//! Handles read like Slack. A role handle names a team launch's current
+//! conversation (`@coder`). A
 //! *type handle* names a profile to fill — `@<kind>` (`@codex`) or `@<profile>`
 //! (`@planner`) — and matches every such agent in the channel; the same handles
 //! can also create one (see [`create_mention`]). An
@@ -13,7 +14,9 @@
 //! handle, and a pane id (`tmux:%1`, `zellij:terminal_3`) is a precise,
 //! sigil-free, channel-agnostic address. The renderer prefers a unique role,
 //! then an explicit name, then a non-kind profile, then the kind, then an
-//! ordinal, then the petname, so a handle always round-trips to its agent.
+//! ordinal, then the petname. Co-resident historical conversations keep their
+//! petname and session-id addresses, but only the launch occupant claims role,
+//! profile, kind, ordinal, pane, and broadcast matches.
 //!
 //! The channel is the workspace segment the room groups by — an explicit named
 //! lane, else a worktree name, else an in-place named team stamped at launch as
@@ -233,7 +236,14 @@ pub fn resolve_one<'a>(
     current_channel: Option<&str>,
 ) -> Result<&'a AgentState, TargetErr> {
     let candidates = addressable_agents(snapshot);
-    let matches = resolve_mentions(raw, worktree_flag, current_channel, &candidates)?;
+    let launch_candidates = addressable_launch_occupants(&candidates);
+    let matches = resolve_mentions_with_launch_candidates(
+        raw,
+        worktree_flag,
+        current_channel,
+        &candidates,
+        &launch_candidates,
+    )?;
     match matches.as_slice() {
         [one] => Ok(one),
         many => Err(TargetErr::Ambiguous {
@@ -265,7 +275,14 @@ pub fn resolve_agents<'a>(
     current_channel: Option<&str>,
     candidates: &[&'a AgentState],
 ) -> Result<Vec<&'a AgentState>, TargetErr> {
-    resolve_mentions(raw, worktree_flag, current_channel, candidates)
+    let launch_candidates = addressable_launch_occupants(candidates);
+    resolve_mentions_with_launch_candidates(
+        raw,
+        worktree_flag,
+        current_channel,
+        candidates,
+        &launch_candidates,
+    )
 }
 
 /// Resolve a target to exactly one agent from a caller-supplied durable
@@ -389,16 +406,22 @@ pub fn bind_agent<'a>(
 /// subagents remain display-only; pane-backed launched children are peers for
 /// messaging and pane operations even though they render under a parent card.
 ///
-/// One physical agent instance contributes at most one addressable row. Handle
-/// rendering uses this same set so [`agent_handle`] stays the inverse of
-/// [`parse_target`]. A pure rollup has no `agent_panes`, cannot observe
-/// shadowing, and therefore yields every root.
+/// Every root session that can be named precisely in this snapshot. Launch
+/// handles are narrowed separately to one occupant per live instance, while a
+/// co-resident conversation remains reachable by petname or session id.
 pub fn addressable_agents(snapshot: &SidebarSnapshot) -> Vec<&AgentState> {
     snapshot
         .agents
         .iter()
         .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| !shadowed_by_pane_owner(snapshot, agent))
+        .collect()
+}
+
+fn addressable_launch_occupants<'a>(agents: &[&'a AgentState]) -> Vec<&'a AgentState> {
+    launch_occupants_from(agents.iter().copied())
+        .into_iter()
+        .filter(|agent| agent.ended_at.is_none())
         .collect()
 }
 
@@ -428,8 +451,24 @@ fn resolve_mentions<'a, C: Candidate<'a>>(
     current_channel: Option<&str>,
     candidates: &[C],
 ) -> Result<Vec<C>, TargetErr> {
+    resolve_mentions_with_launch_candidates(
+        raw,
+        worktree_flag,
+        current_channel,
+        candidates,
+        candidates,
+    )
+}
+
+fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
+    raw: &str,
+    worktree_flag: Option<&str>,
+    current_channel: Option<&str>,
+    candidates: &[C],
+    launch_candidates: &[C],
+) -> Result<Vec<C>, TargetErr> {
     match parse_target(raw)? {
-        Target::Pane(pane) => resolve_by_pane(raw, &pane, candidates).map(|one| vec![one]),
+        Target::Pane(pane) => resolve_by_pane(raw, &pane, launch_candidates).map(|one| vec![one]),
         Target::Mention { selector, channel } => {
             let channel =
                 effective_channel(raw, channel.as_deref(), worktree_flag, current_channel)?;
@@ -456,13 +495,45 @@ fn resolve_mentions<'a, C: Candidate<'a>>(
                         .is_none_or(|filter| candidate.in_worktree(filter))
                 })
                 .collect();
-            let matches = select(&selector, &in_channel);
+            let launch_in_channel = launch_candidates
+                .iter()
+                .copied()
+                .filter(|candidate| {
+                    channel
+                        .as_deref()
+                        .is_none_or(|filter| candidate.in_worktree(filter))
+                })
+                .collect::<Vec<_>>();
+            let matches = select_with_launch_candidates(&selector, &in_channel, &launch_in_channel);
             if !matches.is_empty() {
                 return Ok(matches);
             }
-            Err(no_match_error(candidates, raw, &selector, channel))
+            Err(no_match_error(
+                candidates,
+                launch_candidates,
+                raw,
+                &selector,
+                channel,
+            ))
         }
     }
+}
+
+fn select_with_launch_candidates<'a, C: Candidate<'a>>(
+    selector: &AgentSelector,
+    candidates: &[C],
+    launch_candidates: &[C],
+) -> Vec<C> {
+    let tier = winning_tier(selector, candidates);
+    let candidates = match tier {
+        SelectorTier::ExplicitName | SelectorTier::Name | SelectorTier::SessionPrefix => candidates,
+        SelectorTier::All
+        | SelectorTier::Role
+        | SelectorTier::Kind
+        | SelectorTier::KindOrdinal
+        | SelectorTier::Profile => launch_candidates,
+    };
+    select_at_tier(tier, selector, candidates)
 }
 
 /// Require the `@` mention sigil (or a pane id). The `message` command calls
@@ -598,6 +669,14 @@ fn classify_selector(selector: &str) -> AgentSelector {
 
 fn select<'a, C: Candidate<'a>>(selector: &AgentSelector, candidates: &[C]) -> Vec<C> {
     let tier = winning_tier(selector, candidates);
+    select_at_tier(tier, selector, candidates)
+}
+
+fn select_at_tier<'a, C: Candidate<'a>>(
+    tier: SelectorTier,
+    selector: &AgentSelector,
+    candidates: &[C],
+) -> Vec<C> {
     let mut matches = candidates
         .iter()
         .copied()
@@ -763,12 +842,13 @@ pub fn agent_in_worktree(agent: &AgentState, filter: &str) -> bool {
 /// fix is obvious; otherwise fall back to the generic did-you-mean miss.
 fn no_match_error<'a, C: Candidate<'a>>(
     everywhere: &[C],
+    launch_candidates: &[C],
     raw: &str,
     selector: &AgentSelector,
     channel: Option<String>,
 ) -> TargetErr {
     if let Some(channel) = channel {
-        let elsewhere = select(selector, everywhere);
+        let elsewhere = select_with_launch_candidates(selector, everywhere, launch_candidates);
         if !elsewhere.is_empty() {
             return TargetErr::NoMatchInChannel {
                 target: raw.to_owned(),
@@ -834,35 +914,88 @@ pub struct TeamCohort<'a> {
     pub members: Vec<&'a AgentState>,
 }
 
+/// Group conversation rows by shared launch id and agent-process/pane
+/// incarnation. Relaunches that reuse a launch id remain separate groups, and
+/// unstamped rows form singleton groups.
+fn launch_groups(agents: &[AgentState]) -> Vec<Vec<&AgentState>> {
+    launch_groups_from(agents.iter())
+}
+
+fn launch_groups_from<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState>,
+) -> Vec<Vec<&'a AgentState>> {
+    let mut groups: Vec<Vec<&AgentState>> = Vec::new();
+    for agent in agents
+        .into_iter()
+        .filter(|agent| !agent.is_provider_subagent())
+    {
+        let Some(launch_id) = agent.launch_id.as_ref() else {
+            groups.push(vec![agent]);
+            continue;
+        };
+        let group = groups.iter_mut().find(|group| {
+            group.first().is_some_and(|member| {
+                member.launch_id.as_ref() == Some(launch_id)
+                    && group.iter().all(|member| {
+                        crate::store::session_death::same_agent_instance(member, agent)
+                    })
+            })
+        });
+        match group {
+            Some(group) => group.push(agent),
+            None => groups.push(vec![agent]),
+        }
+    }
+    groups
+}
+
+/// Select one row to represent a launch group. A live row wins by pane-owner
+/// order; an entirely ended group keeps its latest activity as the resume
+/// representative.
+fn launch_occupant<'a>(group: &[&'a AgentState]) -> Option<&'a AgentState> {
+    group
+        .iter()
+        .copied()
+        .filter(|agent| agent.ended_at.is_none())
+        .min_by(|left, right| left.compare_same_pane_owner(right))
+        .or_else(|| {
+            group.iter().copied().max_by(|left, right| {
+                left.last_activity
+                    .cmp(&right.last_activity)
+                    .then_with(|| left.agent_id.cmp(&right.agent_id))
+            })
+        })
+}
+
+/// One representative per launch instance. Every conversation in an agent
+/// instance shares its `launch_id`; this selector alone decides which row the
+/// launch currently is. It reads `holds_open_turn`, so callers that need the
+/// current answer must attach rest certificates first.
+fn launch_occupants(agents: &[AgentState]) -> impl Iterator<Item = &AgentState> {
+    launch_occupants_from(agents.iter()).into_iter()
+}
+
+pub(super) fn launch_occupants_from<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState>,
+) -> Vec<&'a AgentState> {
+    launch_groups_from(agents)
+        .into_iter()
+        .filter_map(|group| launch_occupant(&group))
+        .collect()
+}
+
 /// Group live root team members by team and lane.
 ///
 /// Agents launched outside a named lane share the `external` fallback, matching
 /// the teams catalogue.
 pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
     let mut grouped: BTreeMap<(&str, String), Vec<&AgentState>> = BTreeMap::new();
-    for agent in agents
-        .iter()
-        .filter(|agent| !agent.is_provider_subagent() && agent.ended_at.is_none())
-    {
+    for agent in launch_occupants(agents).filter(|agent| agent.ended_at.is_none()) {
         let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
             continue;
         };
         let channel = agent_channel(agent).unwrap_or_else(|| "external".to_owned());
-        let members = grouped.entry((team, channel)).or_default();
-        let same_occupancy = agent.launch_id.as_ref().and_then(|launch_id| {
-            members.iter().position(|member| {
-                member.kind == agent.kind
-                    && member.launch_id.as_ref() == Some(launch_id)
-                    && crate::store::session_death::same_instance_lineage(member, agent)
-            })
-        });
-        let Some(index) = same_occupancy else {
-            members.push(agent);
-            continue;
-        };
-        if members[index].compare_same_pane_owner(agent).is_gt() {
-            members[index] = agent;
-        }
+        grouped.entry((team, channel)).or_default().push(agent);
     }
     grouped
         .into_iter()
@@ -1161,11 +1294,15 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
     if target_peer.is_none() {
         return absent_agent_handle_base(agent, &scoped_peers, scoped);
     }
-    let resolves = |text: &str| {
+    let launch_occupants = launch_occupants_from(scoped_peers.iter().copied());
+    let launch_occupant = launch_occupants
+        .iter()
+        .any(|occupant| target_peer.is_some_and(|target| std::ptr::eq(*occupant, target)));
+    let resolves_in = |text: &str, candidates: &[&AgentState]| {
         let selector = classify_selector(text);
-        let exact = exact_session_match(&selector, peers);
+        let exact = exact_session_match(&selector, candidates);
         let matches = if exact.is_empty() {
-            select(&selector, &scoped_peers)
+            select(&selector, candidates)
         } else {
             exact
         };
@@ -1174,6 +1311,24 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
                 target_peer.is_some_and(|target| std::ptr::eq(*matched, target))
             })
     };
+    if launch_occupant {
+        if let Some(role) = agent.role.as_deref()
+            && resolves_in(role, &launch_occupants)
+        {
+            return format!("@{role}");
+        }
+    }
+    if let Some(name) = agent.name.as_deref().filter(|_| agent.name_explicit)
+        && resolves_in(name, &scoped_peers)
+    {
+        return format!("@{name}");
+    }
+    if launch_occupant
+        && let Some(profile) = agent.profile.as_deref()
+        && resolves_in(profile, &launch_occupants)
+    {
+        return format!("@{profile}");
+    }
     let ordinal = scoped
         .then(|| {
             agent
@@ -1182,16 +1337,13 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
         })
         .flatten();
     let candidates = [
-        agent.role.as_deref(),
-        agent.name.as_deref().filter(|_| agent.name_explicit),
-        agent.profile.as_deref(),
         Some(agent.kind.as_str()),
         ordinal.as_deref(),
         agent.name.as_deref(),
         Some(agent.agent_id.as_str()),
     ];
     for candidate in candidates.into_iter().flatten() {
-        if resolves(candidate) {
+        if resolves_in(candidate, &scoped_peers) {
             return format!("@{candidate}");
         }
     }

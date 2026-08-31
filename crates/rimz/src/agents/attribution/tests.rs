@@ -57,19 +57,60 @@ fn build_with(
 
 #[test]
 fn folds_compaction_continuations_and_sums_rollup_effort() {
-    let mut first = agent("one", "codex", 10);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let first_transcript = dir.path().join("one.jsonl");
+    let second_transcript = dir.path().join("two.jsonl");
+    std::fs::write(
+        &first_transcript,
+        concat!(
+            r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":1.0,"requestId":"one","message":{"id":"one","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &second_transcript,
+        concat!(
+            r#"{"timestamp":"2026-01-01T10:00:01.000Z","costUSD":2.0,"requestId":"two","message":{"id":"two","usage":{"input_tokens":20,"output_tokens":2}}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    let pane = crate::pane::PaneRef::from_id(crate::ids::PaneId::from_parts(
+        crate::ids::MuxName::Tmux,
+        "%3",
+    ));
+    let mut first = agent("one", "claude", 10);
     first.team = Some("forge".to_owned());
     first.role = Some("coder".to_owned());
     first.launch_ordinal = Some(1);
     first.ended_at = Some(at(20));
     first.tool_calls.insert("exec".to_owned(), 2);
     first.compaction_count = 1;
-    let mut second = agent("two", "codex", 30);
+    first.launch_id = Some(AgentSessionId::from("launch_coder"));
+    first.pane = Some(pane.clone());
+    first.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+        crate::pane::RuntimeOwnerKind::Agent,
+        "one",
+        42,
+        Some("agent-start".to_owned()),
+    ));
+    first.transcript_path = Some(first_transcript.to_string_lossy().into_owned());
+    let mut second = agent("two", "claude", 30);
     second.team = Some("forge".to_owned());
     second.role = Some("coder".to_owned());
     second.launch_ordinal = Some(1);
     second.tool_calls.insert("exec".to_owned(), 3);
     second.compaction_count = 2;
+    second.launch_id = Some(AgentSessionId::from("launch_coder"));
+    second.pane = Some(pane);
+    second.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+        crate::pane::RuntimeOwnerKind::Agent,
+        "two",
+        42,
+        Some("agent-start".to_owned()),
+    ));
+    second.transcript_path = Some(second_transcript.to_string_lossy().into_owned());
 
     let report = build_for(&[first, second]);
     let member = &report.groups[0].members[0];
@@ -77,6 +118,9 @@ fn folds_compaction_continuations_and_sums_rollup_effort() {
     assert_eq!(member.sessions, 2);
     assert_eq!(member.tool_calls, 5);
     assert_eq!(member.compactions, 3);
+    assert_eq!(member.tokens.input, 30);
+    assert_eq!(member.tokens.output, 3);
+    assert_eq!(member.cost_usd, Some(3.0));
     assert_eq!(member.presence, Presence::Live);
 }
 

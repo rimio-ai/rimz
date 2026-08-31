@@ -1508,6 +1508,94 @@ fn team_cohorts_keep_only_the_owner_of_an_inherited_launch_identity() {
 }
 
 #[test]
+fn launch_role_follows_the_current_conversation_without_a_pane_frame() {
+    let mut primary = agent("codex", "primary", Some("auth"), "terminal_1");
+    primary.launch_id = Some(AgentSessionId::from("launch_coder"));
+    primary.name = Some("primary-card".to_owned());
+    primary.role = Some("coder".to_owned());
+    primary.team = Some("forge".to_owned());
+    primary.status = AgentStatus::Success;
+    primary.last_activity = Timestamp::from_second(1_000).unwrap();
+    primary.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+        crate::pane::RuntimeOwnerKind::Agent,
+        "primary",
+        42,
+        Some("agent-start".to_owned()),
+    ));
+    let mut fork = agent("codex", "fork", Some("auth"), "terminal_1");
+    fork.launch_id = Some(AgentSessionId::from("launch_coder"));
+    fork.name = Some("fork-card".to_owned());
+    fork.role = Some("coder".to_owned());
+    fork.team = Some("forge".to_owned());
+    fork.status = AgentStatus::Success;
+    fork.last_activity = Timestamp::from_second(2_000).unwrap();
+    fork.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+        crate::pane::RuntimeOwnerKind::Agent,
+        "fork",
+        42,
+        Some("agent-start".to_owned()),
+    ));
+    let mut snapshot = empty_snapshot();
+    snapshot.agents = vec![primary.clone(), fork.clone()];
+
+    let resolved = resolve_one(&snapshot, "@coder", None, Some("auth")).unwrap();
+    assert_eq!(resolved.agent_id.as_str(), "fork");
+    assert_eq!(addressable_agents(&snapshot).len(), 2);
+    assert_eq!(
+        resolve_one(&snapshot, "@primary-card", None, Some("auth"))
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "primary"
+    );
+    assert_eq!(
+        resolve_one(&snapshot, "@primary", None, Some("auth"))
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "primary"
+    );
+    let peers = snapshot.root_agents().collect::<Vec<_>>();
+    assert_eq!(
+        agent_handle(&snapshot.agents[0], &peers, false),
+        "@primary-card"
+    );
+    assert_eq!(agent_handle(&snapshot.agents[1], &peers, false), "@coder");
+
+    primary.status = AgentStatus::Running;
+    primary.last_activity = Timestamp::from_second(3_000).unwrap();
+    snapshot.agents = vec![primary, fork];
+    let resolved = resolve_one(&snapshot, "@coder", None, Some("auth")).unwrap();
+    assert_eq!(resolved.agent_id.as_str(), "primary");
+}
+
+#[test]
+fn launch_groups_separate_relaunched_processes_reusing_an_id() {
+    let mut crashed = agent("codex", "crashed", Some("auth"), "terminal_1");
+    crashed.launch_id = Some(AgentSessionId::from("launch_coder"));
+    crashed.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+        crate::pane::RuntimeOwnerKind::Agent,
+        "crashed",
+        41,
+        Some("old-start".to_owned()),
+    ));
+    let mut relaunched = agent("codex", "relaunched", Some("auth"), "terminal_1");
+    relaunched.launch_id = Some(AgentSessionId::from("launch_coder"));
+    relaunched.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+        crate::pane::RuntimeOwnerKind::Agent,
+        "relaunched",
+        42,
+        Some("new-start".to_owned()),
+    ));
+
+    let agents = [crashed, relaunched];
+    let groups = launch_groups(&agents);
+
+    assert_eq!(groups.len(), 2);
+    assert!(groups.iter().all(|group| group.len() == 1));
+}
+
+#[test]
 fn launched_children_matches_a_parent_that_adopted_its_provider_session() {
     let mut parent = agent("codex", "provider-parent", None, "terminal_1");
     parent.launch_id = Some("launch-parent".into());

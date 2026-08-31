@@ -360,6 +360,73 @@ fn cohort_relaunch_normalizes_worktrees_and_keeps_named_team_siblings() {
 }
 
 #[test]
+fn cohort_matching_uses_one_occupant_per_launch_instance() {
+    let owner = |session: &str| {
+        crate::store::runtime::current_process_owner(crate::pane::RuntimeOwnerKind::Agent, session)
+    };
+    let member = |id: &str, secs_ago: i64| AgentState {
+        launch_id: Some(AgentSessionId::from("launch_coder")),
+        runtime_owner: Some(owner(id)),
+        team: Some("forge".to_owned()),
+        role: Some("coder".to_owned()),
+        ..agent_on_pane("codex", id, "/code/feature", secs_ago, "terminal_coder")
+    };
+    let old = member("old", 10);
+    let current = member("current", 2);
+    let ended_old = AgentState {
+        ended_at: Some(old.last_seen),
+        ..old
+    };
+    let cell = cohort_cell("codex", Some("coder"));
+
+    let live_pool = [ended_old.clone(), current.clone()];
+    let matched = match_cohort(
+        &live_pool.iter().collect::<Vec<_>>(),
+        &[cell.clone()],
+        Some("forge"),
+    );
+    assert_eq!(
+        matched[0].map(|agent| agent.agent_id.as_str()),
+        Some("current")
+    );
+    assert_eq!(
+        inspect_cohort_relaunch(
+            &live_pool,
+            Path::new("/code/feature"),
+            &[cell.clone()],
+            Some("forge")
+        ),
+        CohortRelaunchState::Present {
+            focus_pane: Some(pane_id("terminal_coder")),
+        }
+    );
+
+    let ended_current = AgentState {
+        ended_at: Some(current.last_seen),
+        ..current
+    };
+    let closed_pool = [ended_old, ended_current];
+    let matched = match_cohort(
+        &closed_pool.iter().collect::<Vec<_>>(),
+        &[cell.clone()],
+        Some("forge"),
+    );
+    assert_eq!(
+        matched[0].map(|agent| agent.agent_id.as_str()),
+        Some("current")
+    );
+    assert_eq!(
+        inspect_cohort_relaunch(
+            &closed_pool,
+            Path::new("/code/feature"),
+            &[cell],
+            Some("forge")
+        ),
+        CohortRelaunchState::Closed
+    );
+}
+
+#[test]
 fn cohort_relaunch_presence_table() {
     let one_cell = vec![cohort_cell("codex", None)];
     let two_cells = vec![cohort_cell("claude", None), cohort_cell("codex", None)];
