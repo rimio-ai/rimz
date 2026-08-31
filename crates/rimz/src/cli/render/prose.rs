@@ -1,7 +1,7 @@
 use pulldown_cmark::{Alignment, Event, LinkType, Options, Parser, Tag, TagEnd};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::{Table, cell, paint, palette, terminal_columns};
+use super::{Table, cell, clip_to_width, paint, palette, terminal_columns};
 
 const MAX_PROSE_WIDTH: usize = 100;
 const MIN_PROSE_WIDTH: usize = 24;
@@ -52,6 +52,7 @@ pub(crate) struct StyledFragment {
     text: String,
     style: Option<anstyle::Style>,
     mentions: bool,
+    glue_left: bool,
 }
 
 impl StyledFragment {
@@ -60,6 +61,7 @@ impl StyledFragment {
             text: text.into(),
             style: None,
             mentions: false,
+            glue_left: false,
         }
     }
 
@@ -68,6 +70,7 @@ impl StyledFragment {
             text: text.into(),
             style: Some(style),
             mentions: false,
+            glue_left: false,
         }
     }
 
@@ -76,6 +79,7 @@ impl StyledFragment {
             text: text.into(),
             style,
             mentions: true,
+            glue_left: false,
         }
     }
 
@@ -97,14 +101,49 @@ struct WrapToken {
     mentions: bool,
 }
 
+struct WrapUnit {
+    tokens: Vec<WrapToken>,
+    width: usize,
+}
+
+struct WrapLine {
+    fragments: Vec<StyledFragment>,
+    width: usize,
+    has_text: bool,
+}
+
+impl WrapLine {
+    fn new(indent: &str) -> Self {
+        Self {
+            fragments: if indent.is_empty() {
+                Vec::new()
+            } else {
+                vec![StyledFragment::plain(indent)]
+            },
+            width: UnicodeWidthStr::width(indent),
+            has_text: false,
+        }
+    }
+
+    fn push(&mut self, text: impl Into<String>, token: &WrapToken) {
+        self.fragments.push(StyledFragment {
+            text: text.into(),
+            style: token.style,
+            mentions: token.mentions,
+            glue_left: false,
+        });
+        self.has_text = true;
+    }
+}
+
 pub(crate) fn wrap_fragments(
     fragments: Vec<StyledFragment>,
     width: usize,
     first_indent: &str,
     hang_indent: &str,
 ) -> Vec<Vec<StyledFragment>> {
-    let tokens = fragment_tokens(fragments);
-    if tokens.is_empty() {
+    let units = fragment_tokens(fragments);
+    if units.is_empty() {
         return vec![if first_indent.is_empty() {
             Vec::new()
         } else {
@@ -113,60 +152,117 @@ pub(crate) fn wrap_fragments(
     }
 
     let mut lines = Vec::new();
-    let first_width = UnicodeWidthStr::width(first_indent);
-    let mut current = if first_indent.is_empty() {
-        Vec::new()
-    } else {
-        vec![StyledFragment::plain(first_indent)]
-    };
-    let mut current_width = first_width;
-    let mut has_word = false;
-    let hang_width = UnicodeWidthStr::width(hang_indent);
+    let mut line = WrapLine::new(first_indent);
 
-    for token in tokens {
-        let token_width = UnicodeWidthStr::width(token.text.as_str());
-        let separator_width = usize::from(has_word);
-        if has_word && current_width + separator_width + token_width > width {
-            lines.push(current);
-            current = Vec::new();
-            current_width = 0;
-            has_word = false;
-            if !hang_indent.is_empty() {
-                current.push(StyledFragment::plain(hang_indent));
-                current_width = hang_width;
+    for unit in units {
+        if line.has_text && line.width + 1 + unit.width > width {
+            lines.push(line.fragments);
+            line = WrapLine::new(hang_indent);
+        }
+        if line.has_text {
+            line.fragments.push(StyledFragment::plain(" "));
+            line.width += 1;
+        }
+
+        for token in unit.tokens {
+            let mut remaining = token.text.as_str();
+            while !remaining.is_empty() {
+                let budget = width.saturating_sub(line.width);
+                let (end, used) = width_prefix(remaining, budget);
+                if end > 0 {
+                    line.push(&remaining[..end], &token);
+                    line.width += used;
+                    remaining = &remaining[end..];
+                    if remaining.is_empty() {
+                        continue;
+                    }
+                    lines.push(line.fragments);
+                    line = WrapLine::new(hang_indent);
+                    continue;
+                }
+
+                if line.has_text {
+                    lines.push(line.fragments);
+                    line = WrapLine::new(hang_indent);
+                    continue;
+                }
+
+                let ch = remaining
+                    .chars()
+                    .next()
+                    .expect("remaining text is non-empty");
+                let clipped = clip_to_width(&ch.to_string(), budget.max(1));
+                line.push(clipped, &token);
+                line.width += budget.max(1);
+                remaining = &remaining[ch.len_utf8()..];
+                if !remaining.is_empty() {
+                    lines.push(line.fragments);
+                    line = WrapLine::new(hang_indent);
+                }
             }
         }
-        if has_word {
-            current.push(StyledFragment::plain(" "));
-            current_width += 1;
-        }
-        current.push(StyledFragment {
-            text: token.text,
-            style: token.style,
-            mentions: token.mentions,
-        });
-        current_width += token_width;
-        has_word = true;
     }
-    lines.push(current);
+    lines.push(line.fragments);
     lines
 }
 
-fn fragment_tokens(fragments: Vec<StyledFragment>) -> Vec<WrapToken> {
-    fragments
-        .into_iter()
-        .flat_map(|fragment| {
-            fragment
-                .text
-                .split_whitespace()
-                .map(|word| WrapToken {
-                    text: word.to_owned(),
-                    style: fragment.style,
-                    mentions: fragment.mentions,
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
+fn fragment_tokens(fragments: Vec<StyledFragment>) -> Vec<WrapUnit> {
+    let mut units: Vec<WrapUnit> = Vec::new();
+    let mut separated = true;
+    for fragment in fragments {
+        if !fragment.glue_left {
+            separated = true;
+        }
+        let mut remaining = fragment.text.as_str();
+        while !remaining.is_empty() {
+            let word_start = remaining
+                .find(|ch: char| !ch.is_whitespace())
+                .unwrap_or(remaining.len());
+            if word_start > 0 {
+                separated = true;
+                remaining = &remaining[word_start..];
+            }
+            if remaining.is_empty() {
+                break;
+            }
+            let word_end = remaining
+                .find(char::is_whitespace)
+                .unwrap_or(remaining.len());
+            let word = &remaining[..word_end];
+            let token = WrapToken {
+                text: word.to_owned(),
+                style: fragment.style,
+                mentions: fragment.mentions,
+            };
+            let token_width = UnicodeWidthStr::width(word);
+            if separated || units.is_empty() {
+                units.push(WrapUnit {
+                    tokens: vec![token],
+                    width: token_width,
+                });
+            } else if let Some(unit) = units.last_mut() {
+                unit.tokens.push(token);
+                unit.width += token_width;
+            }
+            separated = false;
+            remaining = &remaining[word_end..];
+        }
+    }
+    units
+}
+
+fn width_prefix(text: &str, budget: usize) -> (usize, usize) {
+    let mut end = 0;
+    let mut used = 0;
+    for (index, ch) in text.char_indices() {
+        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + char_width > budget {
+            break;
+        }
+        used += char_width;
+        end = index + ch.len_utf8();
+    }
+    (end, used)
 }
 
 pub(crate) fn paint_mentions_with(line: &str, base_style: Option<anstyle::Style>) -> String {
@@ -261,7 +357,7 @@ struct ItemState {
 }
 
 struct LinkState {
-    start: usize,
+    label: String,
     destination: String,
     kind: LinkType,
 }
@@ -310,19 +406,27 @@ impl Layout {
         match event {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
-            Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
+            Event::Text(text) => {
                 if let Some(code) = self.code.as_mut() {
                     code.push_str(&text);
                 } else {
                     self.push_prose(&text);
                 }
             }
-            Event::Code(text) => self
-                .inline
-                .push(StyledFragment::styled(text, palette::accent())),
+            Event::Html(text) => self.emit_html(&text),
+            Event::InlineHtml(text) => self.push_prose(&text),
+            Event::Code(text) => self.push_inline(StyledFragment::styled(
+                text.into_string(),
+                palette::accent(),
+            )),
             Event::InlineMath(text) | Event::DisplayMath(text) => self.push_prose(&text),
             Event::SoftBreak => self.push_prose(" "),
-            Event::HardBreak => self.flush_inline(),
+            Event::HardBreak => {
+                if let Some(link) = self.link.as_mut() {
+                    link.label.push('\n');
+                }
+                self.flush_inline();
+            }
             Event::Rule => {
                 self.flush_inline();
                 let rule_width = self.available_width().max(1);
@@ -359,7 +463,7 @@ impl Layout {
                 self.flush_inline();
                 self.code = Some(String::new());
             }
-            Tag::HtmlBlock => {}
+            Tag::HtmlBlock => self.flush_inline(),
             Tag::List(start) => {
                 self.flush_inline();
                 self.lists.push(ListState { next: start });
@@ -400,7 +504,7 @@ impl Layout {
                 ..
             } if self.image_depth == 0 => {
                 self.link = Some(LinkState {
-                    start: self.inline.len(),
+                    label: String::new(),
                     destination: dest_url.into_string(),
                     kind: link_type,
                 });
@@ -484,8 +588,18 @@ impl Layout {
     }
 
     fn push_prose(&mut self, text: &str) {
-        self.inline
-            .push(StyledFragment::prose(text, self.style_option()));
+        self.push_inline(StyledFragment::prose(text, self.style_option()));
+    }
+
+    fn push_inline(&mut self, mut fragment: StyledFragment) {
+        if let Some(link) = self.link.as_mut() {
+            link.label.push_str(&fragment.text);
+        }
+        fragment.glue_left = self.inline.last().is_some_and(|previous| {
+            !previous.text.ends_with(char::is_whitespace)
+                && !fragment.text.starts_with(char::is_whitespace)
+        });
+        self.inline.push(fragment);
     }
 
     fn push_style(&mut self, style: anstyle::Style) {
@@ -511,12 +625,8 @@ impl Layout {
         let Some(link) = self.link.take() else {
             return;
         };
-        let label = self.inline[link.start..]
-            .iter()
-            .map(|fragment| fragment.text.as_str())
-            .collect::<String>();
         if matches!(link.kind, LinkType::Autolink | LinkType::Email)
-            || label.trim() == link.destination
+            || link.label.trim() == link.destination
         {
             return;
         }
@@ -524,6 +634,11 @@ impl Layout {
             format!(" ({})", link.destination),
             palette::faint(),
         ));
+    }
+
+    fn emit_html(&mut self, html: &str) {
+        self.flush_inline();
+        self.emit_preformatted(html.split_terminator('\n').map(ToOwned::to_owned).collect());
     }
 
     fn flush_inline(&mut self) {
@@ -711,6 +826,48 @@ mod tests {
         assert!(rendered.contains("docs (https://example.com)"));
         assert!(rendered.contains("☑ done"));
         assert!(rendered.contains("Name  Count\none       2"));
+    }
+
+    #[test]
+    fn markdown_preserves_inline_punctuation_and_link_breaks() {
+        let rendered = plain(Prose::Markdown.lines(
+            "Run `cargo test`, then **ship**. Done (*maybe*).\n\nSee the **guide** in [the docs  \nhere](https://example.com) now.",
+            80,
+        ));
+
+        assert_eq!(
+            rendered,
+            "Run cargo test, then ship. Done (maybe).\n\nSee the guide in the docs\nhere (https://example.com) now."
+        );
+    }
+
+    #[test]
+    fn markdown_splits_long_tokens_to_the_requested_width() {
+        let rendered = Prose::Markdown.lines(
+            "https://example.com/a/very/long/path/that/needs/wrapping",
+            30,
+        );
+        let plain = rendered
+            .iter()
+            .map(|line| anstream::adapter::strip_str(line).to_string())
+            .collect::<Vec<_>>();
+
+        assert!(
+            plain
+                .iter()
+                .all(|line| UnicodeWidthStr::width(line.as_str()) <= 30)
+        );
+        assert_eq!(
+            plain.join(""),
+            "https://example.com/a/very/long/path/that/needs/wrapping"
+        );
+    }
+
+    #[test]
+    fn markdown_preserves_html_block_lines() {
+        let rendered = plain(Prose::Markdown.lines("<div class=\"x\">\nhi\n</div>", 80));
+
+        assert_eq!(rendered, "<div class=\"x\">\nhi\n</div>");
     }
 
     #[test]
