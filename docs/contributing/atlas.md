@@ -25,7 +25,7 @@ Test files and inline `#[cfg(test)] mod` regions are classified separately from 
 
 `--no-index` is the explicit lower-cost mode. It keeps syntax-derived facts and `use` edges but omits every reference-derived column, shortlist, flag, and JSON field; it never substitutes name matching. `shapes` and `conform` never load the index, so the conform gate does not pay this cost.
 
-SCIP definitions join to syntax items by file and identifier line, with the symbol descriptor used only to confirm the item name. An unmatched definition is reported as unresolved and excluded from reference medians; Atlas never fabricates a zero. Reference sets distinguish production from tests and count outside production modules rather than raw textual occurrences.
+SCIP definitions join to syntax items by file and identifier line, with the symbol descriptor used only to confirm the item name. An unmatched definition is reported as unresolved and excluded from reference medians; Atlas never fabricates a zero. Public re-exports and module declarations commonly lack their own SCIP definitions, so inspect unresolved counts before reading a module median as complete. Reference sets distinguish production from tests and count outside production modules rather than raw textual occurrences.
 
 ## Reading the reports
 
@@ -125,7 +125,7 @@ Important per-verb additions are recursive `rank.rows[].children` and optional `
 
 ## A worked reading chain
 
-Suppose `survey` reports a `cochange-without-import` divergence across `claude <> codex <> kiro <> cursor`. Open a brief on their common adapter parent rather than assigning four directory-local cleanups. If its callers show the same outside consumers and `shapes` groups their `decode_hook` functions, the evidence supports one **collapse** candidate: centralize hook decoding behind a provider-neutral seam, then make each adapter translate only provider-specific input. Encode that destination in layers, admissions, and budgets before moving code; use `rank --since` and `conform --ratchet` to judge the pass.
+Suppose `survey` reports a `cochange-without-edge` divergence across `claude <> codex <> kiro <> cursor`. Open a brief on their common adapter parent rather than assigning four directory-local cleanups. If its callers show the same outside consumers and `shapes` groups their `decode_hook` functions, the evidence supports one **collapse** candidate: centralize hook decoding behind a provider-neutral seam, then make each adapter translate only provider-specific input. Encode that destination in layers, admissions, and budgets before moving code; use `rank --since` and `conform --ratchet` to judge the pass.
 
 The chain matters: divergence locates shared hidden knowledge, callers identify the boundary's consumers, shapes identify repeated choreography, and the target states the desired dependency direction. No single row establishes the refactor.
 
