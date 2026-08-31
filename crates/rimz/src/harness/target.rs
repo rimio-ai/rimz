@@ -1015,9 +1015,10 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
 /// Align one submitted pane paste with the records written as its batch.
 ///
 /// Record text supplies the otherwise ambiguous boundaries between adjacent
-/// messages. Agent- and human-authored records consume their rendered headers;
-/// system records stay verbatim. Interior record whitespace matches verbatim;
-/// only the paste's outer first/last whitespace follows hook normalization.
+/// messages. Agent-, subagent-, and human-authored records consume their
+/// rendered headers; system records stay verbatim. Interior record whitespace
+/// matches verbatim; only the paste's outer first/last whitespace follows hook
+/// normalization.
 pub fn align_submitted_prompt<'a>(
     prompt: &'a str,
     records: &[&MessageRecord],
