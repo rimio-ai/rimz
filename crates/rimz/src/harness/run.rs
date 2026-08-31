@@ -1,5 +1,7 @@
 //! Supervised-run requests, records, transitions, and cancellation.
 
+pub mod report;
+
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,7 +47,7 @@ pub enum RunStoreErr {
     },
 }
 
-pub type Result<T> = std::result::Result<T, RunStoreErr>;
+type Result<T> = std::result::Result<T, RunStoreErr>;
 
 /// Typed cancellation signal shared between CLI signal handlers and the
 /// supervised-run waiter.
@@ -71,9 +73,6 @@ pub struct SupervisedRunRequest {
     /// Apply provider-native delegation restrictions to a `rimz subagents`
     /// child.
     pub subagent: bool,
-    /// Queue the settled outcome to the launching agent as a `SUBAGENT_REPORT`;
-    /// set by `rimz subagents` when the caller does not join.
-    pub report_to_parent: bool,
     pub force_new_tab: bool,
     pub permission_mode: PermissionMode,
     pub agent: Option<String>,
@@ -114,7 +113,6 @@ impl SupervisedRunRequest {
             background: false,
             self_cleanup_on_completion: false,
             subagent: false,
-            report_to_parent: false,
             force_new_tab: false,
             permission_mode,
             agent: None,
@@ -290,9 +288,12 @@ pub struct RunRecord {
     /// Pane-backed child launched through `rimz subagents`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub subagent: bool,
-    /// Queue the settled outcome to the launching agent.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub report_to_parent: bool,
+    /// Time at which a joiner claimed the settled result for inline output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joined_at: Option<Timestamp>,
+    /// Completion message queued by the in-pane wrapper.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_message_id: Option<crate::ids::MessageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -341,7 +342,8 @@ impl RunRecord {
             permission_mode,
             keep: false,
             subagent: false,
-            report_to_parent: false,
+            joined_at: None,
+            report_message_id: None,
             budget: None,
             cost_usd: None,
             input_tokens: None,

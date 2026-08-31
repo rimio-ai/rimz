@@ -24,7 +24,7 @@ JSON
 
 `fanout` reads a JSON task array from `FILE`, or from stdin when `FILE` is omitted. It validates the whole list and opens each child pane in sequence. The children run in parallel after their panes open, and each minted petname prints as it launches.
 
-By default, `fanout` returns after launching and each child reports back as a `SUBAGENT_REPORT` message when it settles. Use `--wait[=DURATION]` to join exactly the children from that fanout instead, optionally with a caller-side deadline; each answer prints as it finishes under a `--- petname ---` header using the shared [agent-prose rendering rule](../cli.md#agent-prose), with a status suffix only for an abnormal outcome, and the command exits nonzero if any child does. A joined child sends no completion report. This wait deadline is distinct from the children's `--timeout`. With background fanout `--json`, RimZ emits a map from petname to `run_id`; with `--wait --json`, fanout emits the same labeled result map as a plural `rimz subagents wait --json`, including each run's `last_message` when available.
+By default, `fanout` returns after launching and each child reports back as a `SUBAGENT_REPORT` message when it settles. Use `--wait[=DURATION]` to join exactly the children from that fanout, optionally with a caller-side deadline; each answer prints as it finishes under a `--- petname ---` header using the shared [agent-prose rendering rule](../cli.md#agent-prose), with a status suffix only for an abnormal outcome, and the command exits nonzero if any child does. Each result is delivered exactly once: inline when the join prints it, as a report otherwise. This wait deadline is distinct from the children's `--timeout`. With background fanout `--json`, RimZ emits a map from petname to `run_id`; with `--wait --json`, fanout emits the same labeled result map as a plural `rimz subagents wait --json`, including each run's `last_message` when available.
 
 Each array entry has the single-launch fields that make sense for data-driven delegation:
 
@@ -63,7 +63,7 @@ The bare form and `launch` verb are equivalent. A prompt is mandatory: the paren
 
 | Behavior | Default | Override |
 | --- | --- | --- |
-| Result | reported back as a `SUBAGENT_REPORT` message when the child settles | `--wait[=DURATION]` joins inline and sends no report |
+| Result | reported back as a `SUBAGENT_REPORT` message when the child settles | `--wait[=DURATION]` joins inline when it reaches the result |
 | Checkout | caller's current checkout | fixed |
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
 | Pane after completion | closes when the run settles | `--keep` holds it until `stop` or `rimz gc` |
@@ -105,7 +105,7 @@ Done.
 
 The first line names the child, its profile and description when available, outcome, and elapsed time. The next line says whether siblings are still running, followed by the final message for a completed run or failure detail and transcript path for an abnormal outcome. Sibling state is read when each report is composed, so children settling at the same instant may each truthfully say that all subagents have finished.
 
-No report is sent when the launch uses `--wait` or the parent has ended. The run record remains the fallback truth: `list` shows it and `wait` can still read it after the pane closes.
+The result is delivered exactly once: inline when a join prints it, as a report otherwise. An expired `--wait=DURATION` or a join cut short by its calling shell therefore still gets a later report. The joiner and wrapper coordinate through the durable run record so a result that did print inline does not also remain queued. No report is sent when the parent has ended. The run record remains the fallback truth: `list` shows it and `wait` can still read it after the pane closes.
 
 ## Join results manually
 

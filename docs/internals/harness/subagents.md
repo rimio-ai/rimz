@@ -62,13 +62,12 @@ The reminder points the agent at `Skill(rimz-subagents)` and lists the same filt
 | `print` | always `true` | a child is one bounded turn, never a session |
 | `bg` | always `true` | single launch and fanout share one background-launch composition |
 | join | absent unless `--wait[=DURATION]` | the parent normally keeps moving; the optional duration limits only its join |
-| `report_to_parent` | true without `--wait`, false with it | a background child calls the parent back once; an inline join does not duplicate the result |
 | wrapper completion monitor | on unless `--keep` | the provider stops at the durable outcome and the wrapper closes the pane |
 | `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | an unattended child must not run forever |
 | `keep` | `--keep`, default false | holds the pane after completion and past parent exit |
 | everything else | default | see the omissions below |
 
-The default has the user-visible behavior of `rimz agents <profile> <prompt> -p --bg --timeout 30m`, plus `report_to_parent`: the wrapper queues a completion message, stamps `ended_at`, and closes its pane after the one turn finishes. `--wait` leaves the background run unchanged but disables that report, then passes the minted petname to the shared single-name wait path; `--wait=DURATION` adds a caller-side join deadline without changing the child's timeout.
+The default has the user-visible behavior of `rimz agents <profile> <prompt> -p --bg --timeout 30m`, plus a completion report: the wrapper queues a message, stamps `ended_at`, and closes its pane after the one turn finishes. `--wait` leaves the background run unchanged and passes the minted petname to the shared single-name wait path; `--wait=DURATION` adds a caller-side join deadline without changing the child's timeout. The joiner suppresses the queued copy only when it actually prints the result, so an expired or shell-cut join still receives the report later.
 
 The no-delegation reminder rides a provider-native append-system-text launch flag for Claude, Qwen, and Droid, after any caller-supplied append text. Codex receives it through `-c developer_instructions=…`, which produces a developer-role message separate from the user prompt and preserves Codex's built-in instructions. An argv-supplied `developer_instructions` value is composed before the reminder; a value in the user's base `~/.codex/config.toml` is overridden because it is not visible at launch composition time. Adapters without a native system-text channel keep the same tag-wrapped reminder at the end of the user prompt. The process compiler owns this choice at the adapter boundary, beside the native delegation lockdown, so preflight and the eventual exec compile the same provider argv.
 
@@ -145,15 +144,17 @@ Which projection each verb reads is the other half:
 
 ## The lifecycle, end to end
 
-1. The parent launches; the direct-parent stamp and subagent-caller check pass; a run record and pane are created. By default `report_to_parent` is set and the petname prints immediately; with `--wait`, the flag is clear and the parent instead joins the result.
+1. The parent launches; the direct-parent stamp and subagent-caller check pass; a run record and pane are created. The petname prints immediately; with `--wait`, the parent then joins the result.
 2. The child runs its one turn. Its hooks fold a terminal status into the run record.
 3. The in-pane wrapper notices the terminal record and terminates the provider. After its child-exit fallback guarantees a terminal run, [`subagent_report`](../../../crates/rimz/src/cli/agents_cmd/subagent_report.rs) reads the parent and sibling rows from the audit projection and composes the settled outcome.
-4. When reporting was requested and the parent still exists, the wrapper queues a parked `MessageSender::Subagent { kind, name }` record with gate `Done`. Its `SUBAGENT_REPORT` envelope names the child; immediate pane delivery is best-effort latency over the durable run record.
+4. When the parent still exists, the wrapper queues a parked `MessageSender::Subagent { kind, name }` record with gate `Done`. Its `SUBAGENT_REPORT` envelope names the child; immediate pane delivery is best-effort latency over the durable run record.
 5. The wrapper stamps the child row's `ended_at` and closes its pane. With `--keep`, it instead transfers runtime ownership back to itself and remains alive to hold the pane.
 6. A kept wrapper closes after `rimz subagents stop`; parent exit does not reclaim it. Without `--keep`, the parent's durable end stamp or authoritative pane-absence probes remain an earlier-close backstop.
 7. The run record survives the close, and runtime projection retains the ended child under its visible parent, so `list` and `wait` still report the outcome and the card keeps its verdict until the parent's next prompt boundary.
 
 The still-running count uses each launched sibling's newest run at report composition time. Two children that settle together may each observe no non-terminal sibling and report that all have finished; both statements are true at their respective read. A missing or ended parent suppresses the report without changing the run.
+
+Inline joins and wrapper reports use a two-field handshake on the run record. The joiner stamps `joined_at` at the point it prints a terminal run; the wrapper stores the queued message in `report_message_id`. Both mutations take the run lock. Whichever side observes the other's field cancels the queued message before delivery, while a join deadline or shell exit that never prints leaves the callback intact. This gives one result in every case without making the caller's join posture a launch-time policy.
 
 `wait` remains only a reader and never closes the pane. It is the manual re-join when the caller needs the result synchronously or wants to reread durable history. `--keep` is the sole linger path, leaving reclamation to `rimz subagents stop` or `rimz gc`.
 

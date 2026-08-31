@@ -227,9 +227,6 @@ pub(crate) struct AgentLaunchArgs {
     /// Internal launch posture for the `rimz subagents` doorway.
     #[arg(skip)]
     pub(crate) subagent: bool,
-    /// Internal: the subagents doorway asks for a completion report to the caller.
-    #[arg(skip)]
-    pub(crate) report_to_parent: bool,
     /// Read stdin to EOF as prompt content. With a positional prompt, the
     /// instruction goes first and stdin follows inside `<stdin>` tags.
     #[arg(long, requires = "print")]
@@ -789,7 +786,6 @@ fn into_supervised_request(
     request.self_cleanup_on_completion =
         args.launch.cohort.bg || args.launch.self_cleanup_on_completion;
     request.subagent = args.launch.subagent;
-    request.report_to_parent = args.launch.report_to_parent;
     request.force_new_tab = args.launch.cohort.new_tab;
     request.agent = rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref());
     request.model = args.launch.model;

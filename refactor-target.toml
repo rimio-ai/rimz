@@ -202,7 +202,7 @@ allowed-imports = [
     "trust",
     "workspace",
 ]
-surface-budget = 588
+surface-budget = 590
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -627,6 +627,11 @@ allowed-imports = [
     "store",
 ]
 surface-budget = 42
+
+[[module]]
+path = "crates/rimz/src/harness/run/report.rs"
+allowed-imports = ["harness::run", "ids", "store"]
+surface-budget = 2
 
 [[module]]
 path = "crates/rimz/src/harness/run_wake.rs"
