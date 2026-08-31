@@ -1301,11 +1301,12 @@ fn tmux_settled_subagent_reports_to_parent() {
             .expect("list reports after join deadline")
             .into_iter()
             .find(|message| {
-                matches!(
-                    &message.sender,
-                    rimz::message::MessageSender::Subagent { name, .. }
-                        if name == "report-timed"
-                )
+                message.status == rimz::message::MessageStatus::Sent
+                    && matches!(
+                        &message.sender,
+                        rimz::message::MessageSender::Subagent { name, .. }
+                            if name == "report-timed"
+                    )
             })
         {
             break report;
@@ -1316,11 +1317,6 @@ fn tmux_settled_subagent_reports_to_parent() {
         );
         std::thread::sleep(Duration::from_millis(25));
     };
-    assert_eq!(
-        timed_report.status,
-        rimz::message::MessageStatus::Sent,
-        "deadline-limited child report should traverse the delivery path"
-    );
 
     let parent_frame = capture_joined_until(
         &socket,
