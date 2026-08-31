@@ -135,10 +135,9 @@ pub enum DeliveryVerdict {
     Ready,
 }
 
-/// The record a system-initiated nudge queues against an agent card: budget
-/// continues, auto-continue resumes, and supervised verify re-prompts. A nudge
-/// carries the agent's channel, always submits, and stays verbatim as system
-/// text; its gate marks the automation.
+/// Build automation or orchestration text against an agent card. The sender
+/// determines whether delivery stays verbatim or receives an attributed
+/// envelope; every synthetic record carries the agent's channel and submits.
 fn synthetic_record(
     workspace_id: crate::ids::WorkspaceId,
     agent: &crate::agents::AgentState,
