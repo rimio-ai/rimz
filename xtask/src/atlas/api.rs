@@ -5,7 +5,9 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use super::facts::{Facets, Facts};
-use super::modules::{crate_module_for_row, module_for_path, module_is_within, path_in_scope};
+use super::modules::{
+    crate_module_for_row, module_for_path, module_is_within, path_in_scope, reference_module_label,
+};
 use super::syntax::FileSyntax;
 use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
 
@@ -228,6 +230,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
 
     let mut module_items = BTreeMap::<String, Vec<ItemOccurrence>>::new();
     let mut module_params = BTreeMap::<String, Vec<usize>>::new();
+    let scope_module = crate_module_for_row(&args.path, "(root)");
     for file in &scoped_files {
         let module = module_for_path(&file.path, &args.path);
         for item in &file.pub_items {
@@ -241,7 +244,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         module_items.entry(module).or_default().extend(
             file.pub_items
                 .iter()
-                .map(|item| item_occurrence(&facts, file, item)),
+                .map(|item| item_occurrence(&facts, file, item, &scope_module)),
         );
     }
 
@@ -412,6 +415,7 @@ fn item_occurrence(
     facts: &Facts,
     file: &FileSyntax,
     item: &super::syntax::PubItem,
+    scope_module: &str,
 ) -> ItemOccurrence {
     let effective_reach = facts.mod_index.effective_reach(file, item);
     let item_refs = facts
@@ -422,7 +426,9 @@ fn item_occurrence(
         modules
             .iter()
             .filter(|module| !module_is_within(module, &item.module))
-            .cloned()
+            .map(|module| reference_module_label(module, scope_module))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
             .collect::<Vec<_>>()
     };
     let production_ref_modules = facts
@@ -434,7 +440,7 @@ fn item_occurrence(
         .as_ref()
         .map(|_| item_refs.map_or_else(Vec::new, |references| outside(&references.tests)));
     ItemOccurrence {
-        module: item.module.clone(),
+        module: reference_module_label(&item.module, scope_module),
         name: item.name.clone(),
         kind: item.kind.clone(),
         path: file.path.clone(),

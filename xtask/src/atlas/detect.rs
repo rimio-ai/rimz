@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::facts::Facts;
-use super::modules::{crate_module_for_row, module_for_path, module_is_within, path_in_scope};
+use super::modules::{
+    crate_module_for_row, module_for_path, module_is_within, path_in_scope, reference_module_label,
+};
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct PassThrough {
@@ -79,6 +81,7 @@ pub(super) fn single_callers(facts: &Facts, scope: &Path) -> Vec<SingleCaller> {
     let Some(references) = &facts.references else {
         return Vec::new();
     };
+    let scope_module = crate_module_for_row(scope, "(root)");
     let mut rows = Vec::new();
     for file in facts
         .syntax
@@ -107,7 +110,7 @@ pub(super) fn single_callers(facts: &Facts, scope: &Path) -> Vec<SingleCaller> {
                     path: file.path.clone(),
                     line: item.line,
                     name: item.name.clone(),
-                    caller: (*caller).clone(),
+                    caller: reference_module_label(caller, &scope_module),
                 });
             }
         }
@@ -127,6 +130,7 @@ pub(super) fn vestigial(facts: &Facts, scope: &Path, window_pct: usize) -> Vec<V
     else {
         return Vec::new();
     };
+    let scope_module = crate_module_for_row(scope, "(root)");
     let window_start = history.window_start(window_pct);
     let now = history.last_time();
     let mut rows = Vec::new();
@@ -151,7 +155,9 @@ pub(super) fn vestigial(facts: &Facts, scope: &Path, window_pct: usize) -> Vec<V
                 .production
                 .iter()
                 .filter(|module| !module_is_within(module, &item.module))
-                .cloned()
+                .map(|module| reference_module_label(module, &scope_module))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .collect::<Vec<_>>();
             if production_ref_modules.len() > 1 {
                 continue;
