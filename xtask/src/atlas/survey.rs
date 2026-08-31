@@ -10,7 +10,8 @@ use super::facts::{Facets, Facts};
 use super::history::{self, CochangeEdge};
 use super::index::IndexPolicy;
 use super::modules::{
-    crate_module_for_path, crate_module_for_row, module_for_path, module_is_within, path_in_scope,
+    crate_module_for_path, crate_module_for_row, module_endpoint, module_for_path,
+    module_is_within, path_in_scope,
 };
 use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
 
@@ -326,13 +327,7 @@ pub(super) fn divergence(
     minimum: usize,
 ) -> Vec<Divergence> {
     let scope_module = crate_module_for_path(&scope.join("mod.rs"));
-    let endpoint = |module: &str| {
-        let relative = module
-            .strip_prefix(&scope_module)
-            .and_then(|value| value.strip_prefix("::"))
-            .unwrap_or(module);
-        top_endpoint(relative)
-    };
+    let endpoint = |module: &str| module_endpoint(module, &scope_module);
     let mut coupling = BTreeMap::<(String, String), BTreeSet<String>>::new();
     for file in facts
         .syntax
@@ -363,7 +358,7 @@ pub(super) fn divergence(
         for edge in references
             .edges
             .iter()
-            .filter(|edge| !edge.test && path_in_scope(&edge.from_path, scope))
+            .filter(|edge| reference_in_scope(edge, scope))
         {
             let from = endpoint(&edge.from);
             let to = endpoint(&edge.to);
@@ -378,6 +373,10 @@ pub(super) fn divergence(
     divergence_rows(coupling, cochange, minimum)
 }
 
+fn reference_in_scope(edge: &super::references::Edge, scope: &Path) -> bool {
+    !edge.test && (path_in_scope(&edge.from_path, scope) || path_in_scope(&edge.to_path, scope))
+}
+
 pub(super) fn module_divergence(
     facts: &Facts,
     scope: &Path,
@@ -390,7 +389,7 @@ pub(super) fn module_divergence(
         if module_is_within(module, &scope_module) {
             target.to_owned()
         } else {
-            top_endpoint(module)
+            module_endpoint(module, &scope_module)
         }
     };
     let mut coupling = BTreeMap::<(String, String), BTreeSet<String>>::new();
@@ -439,19 +438,12 @@ fn scoped_reference_pair(
         if module_is_within(module, scope_module) {
             target.to_owned()
         } else {
-            top_endpoint(module)
+            module_endpoint(module, scope_module)
         }
     };
     let from = endpoint(from);
     let to = endpoint(to);
     (from != to && (from == target || to == target)).then(|| ordered_pair(&from, &to))
-}
-
-fn top_endpoint(module: &str) -> String {
-    match module.split("::").next().filter(|value| !value.is_empty()) {
-        Some("(crate)") | None => "(root)".to_owned(),
-        Some(module) => module.to_owned(),
-    }
 }
 
 fn divergence_rows(
@@ -601,11 +593,7 @@ fn providers(facts: &Facts, scope: &Path) -> Vec<Provider> {
             ) else {
                 continue;
             };
-            let relative = resolved
-                .strip_prefix(&scope_module)
-                .and_then(|value| value.strip_prefix("::"))
-                .unwrap_or(&resolved);
-            let provider = top_endpoint(relative);
+            let provider = module_endpoint(&resolved, &scope_module);
             if scope_endpoints.contains(&provider) {
                 continue;
             }
@@ -626,6 +614,7 @@ fn providers(facts: &Facts, scope: &Path) -> Vec<Provider> {
         right
             .items
             .cmp(&left.items)
+            .then_with(|| right.modules.cmp(&left.modules))
             .then_with(|| left.provider.cmp(&right.provider))
     });
     rows
@@ -775,9 +764,18 @@ mod tests {
     }
 
     #[test]
-    fn crate_root_has_one_endpoint_label() {
-        assert_eq!(top_endpoint("(crate)"), "(root)");
-        assert_eq!(top_endpoint(""), "(root)");
-        assert_eq!(top_endpoint("cli::agents_cmd"), "cli");
+    fn reference_scope_keeps_inbound_edges() {
+        let scope = Path::new("crates/rimz/src/agents");
+        let edge = super::super::references::Edge {
+            from_path: PathBuf::from("crates/rimz/src/cli/agents_cmd.rs"),
+            to_path: PathBuf::from("crates/rimz/src/agents/mod.rs"),
+            from: "cli::agents_cmd".to_owned(),
+            to: "agents".to_owned(),
+            item: "Agent".to_owned(),
+            kind: super::super::references::EdgeKind::Reference,
+            test: false,
+        };
+
+        assert!(reference_in_scope(&edge, scope));
     }
 }
