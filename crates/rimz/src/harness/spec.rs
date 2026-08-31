@@ -356,11 +356,11 @@ pub enum LayoutErr {
         valid: String,
     },
     #[error(
-        "launch refused: profile `{profile}` may only launch subagents {allowed}; `{spec}` is not one of them. Pick an allowed spec or ask the user to widen `[agents.profiles.{profile}] subagents`."
+        "launch refused: profile `{caller_profile}` may only launch subagent profiles {allowed}; `{profile}` is not one of them. Pick an allowed profile or ask the user to widen `[agents.profiles.{caller_profile}] subagents`."
     )]
-    SubagentSpecNotAllowed {
+    SubagentProfileNotAllowed {
+        caller_profile: String,
         profile: String,
-        spec: String,
         allowed: String,
     },
 }

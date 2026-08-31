@@ -110,8 +110,9 @@ struct FanoutArgs {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FanoutTask {
-    spec: Option<String>,
+    profile: Option<String>,
     prompt: Option<String>,
     prompt_file: Option<PathBuf>,
     name: Option<String>,
@@ -125,15 +126,15 @@ struct FanoutTask {
 
 #[derive(Debug, Default, PartialEq, Args)]
 #[command(
-    after_help = "Launch several children in parallel, then join them with `rimz subagents wait`. The printed petname is also an address: use `rimz message @petname \"…\"` for a follow-up."
+    after_help = "Launch several children in parallel; each reports back to you as a SUBAGENT_REPORT message when it finishes. The printed petname is also an address: use `rimz message @petname \"…\"` for a follow-up."
 )]
 struct SubagentLaunchArgs {
-    /// Agent kind or configured profile.
+    /// Configured subagent profile, agent kind, or shared command.
     #[arg(
-        value_name = "SPEC",
-        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::subagent_specs)
+        value_name = "PROFILE",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::subagent_profiles)
     )]
-    spec: Option<String>,
+    profile: Option<String>,
     /// Complete task prompt supplied by the parent agent.
     #[arg(value_name = "PROMPT")]
     prompt: Option<String>,
@@ -146,7 +147,7 @@ struct SubagentLaunchArgs {
     /// Model for the child.
     #[arg(long, value_name = "MODEL")]
     model: Option<String>,
-    /// Re-base the spec onto this profile or provider kind.
+    /// Re-base the profile onto another profile or provider kind.
     #[arg(long, value_name = "PROFILE|KIND")]
     agent: Option<String>,
     /// Reasoning effort for the child.
@@ -195,7 +196,7 @@ pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
             json,
         }) => wait_children(names, any, timeout, stream, json, globals),
         Some(SubagentsSubcmd::Stop { names, all }) => stop_children(names, all, globals),
-        None if args.launch.spec.is_some() => launch_child(args.launch, args.json, globals),
+        None if args.launch.profile.is_some() => launch_child(args.launch, args.json, globals),
         None => {
             reject_launch_flags_without_spec(&args.launch)?;
             list_children(args.json, globals)
@@ -389,7 +390,7 @@ impl FanoutTask {
             .context("parsing timeout")?
             .or(fanout.timeout);
         SubagentLaunchArgs {
-            spec: self.spec,
+            profile: self.profile,
             prompt: self.prompt,
             prompt_file: self.prompt_file,
             name: self.name,
@@ -412,7 +413,7 @@ impl SubagentLaunchArgs {
         self,
         defaults: &rimz::config::SubagentsConfig,
     ) -> Result<agents_cmd::AgentLaunchArgs> {
-        let spec = self.spec.context("a subagent needs an agent spec")?;
+        let profile = self.profile.context("a subagent needs a profile")?;
         if self.wait == Some(None)
             && let Some(prompt) = self.prompt.as_deref()
         {
@@ -440,7 +441,7 @@ impl SubagentLaunchArgs {
             .map_err(anyhow::Error::msg)
             .context("parsing agents.subagents.timeout")?;
         Ok(agents_cmd::AgentLaunchArgs {
-            spec: Some(spec),
+            spec: Some(profile),
             prompt: Some(prompt),
             cohort: agents_cmd::CohortLaunchArgs {
                 description: self.description,
@@ -477,7 +478,7 @@ fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
         || args.max_turns.is_some()
         || !args.passthrough.is_empty()
     {
-        bail!("subagent launch options require an agent spec");
+        bail!("subagent launch options require a profile");
     }
     Ok(())
 }
