@@ -113,6 +113,56 @@ fn resumed_slot_deduplicates_replayed_transcript_effort() {
 }
 
 #[test]
+fn launched_child_continuations_deduplicate_as_one_subagent_seat() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut parent = agent("parent", "codex", 5);
+    parent.team = Some("forge".to_owned());
+    parent.role = Some("planner".to_owned());
+    parent.tool_calls.insert("exec".to_owned(), 1);
+    let pane = crate::pane::PaneRef::from_id(crate::ids::PaneId::from_parts(
+        crate::ids::MuxName::Tmux,
+        "%3",
+    ));
+    let mut children = Vec::new();
+    for (id, filename, registered) in [
+        ("child-one", "child-one.jsonl", 10),
+        ("child-two", "child-two.jsonl", 30),
+    ] {
+        let path = dir.path().join(filename);
+        let mut file = std::fs::File::create(&path).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"session_meta","payload":{{"id":"{id}"}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"model":"gpt-5.6-sol","timestamp":"2026-01-01T10:00:00.000Z","usage":{{"input_tokens":100,"output_tokens":20}}}}"#
+        )
+        .unwrap();
+        let mut child = agent(id, "codex", registered);
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.launch_depth = Some(1);
+        child.profile = Some("explorer".to_owned());
+        child.pane = Some(pane.clone());
+        child.transcript_path = Some(path.to_string_lossy().into_owned());
+        children.push(child);
+    }
+    let agents = [parent, children.remove(0), children.remove(0)];
+
+    let report = build_for(&agents);
+    let member = &report.groups[0].members[0];
+
+    assert_eq!(member.tokens.input, 100);
+    assert_eq!(member.tokens.output, 20);
+    assert_eq!(member.sessions, 1);
+    assert_eq!(member.subagents.len(), 1);
+    assert_eq!(member.subagents[0].task.as_deref(), Some("explorer"));
+    assert_eq!(member.subagents[0].count, 1);
+}
+
+#[test]
 fn claude_slot_credits_subagent_transcript_effort() {
     let dir = tempfile::tempdir().expect("tempdir");
     let transcript = dir.path().join("claude-session.jsonl");

@@ -38,7 +38,6 @@ pub(super) fn attach_sub_agents_indexed(
         let parent_turn_started_at = index
             .root(parent_key)
             .and_then(|parent| parent.turn_started_at);
-        let all_newest = newest_by_id(children.iter().copied());
         let visible = children
             .iter()
             .copied()
@@ -64,6 +63,7 @@ pub(super) fn attach_sub_agents_indexed(
             }
             continue;
         };
+        let all_newest = newest_by_id(children.iter().copied());
         let visible_newest = newest_by_id(visible);
         // `row_by_parent` includes only rows whose card is an agent.
         let parent = rows[row_index]

@@ -182,16 +182,15 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
     let mut members = folded
         .into_iter()
         .map(|(slot, records)| {
-            let seat = seat_records(&records);
-            let identity = if seat.is_empty() {
-                records.as_slice()
-            } else {
-                seat.as_slice()
-            };
-            let team = newest(identity).and_then(|agent| agent.team.clone());
-            let opened_turn = identity.iter().any(|agent| agent.turn_started_at.is_some());
+            let seat = split_seat_records(&records);
+            let team = newest(&seat.identity).and_then(|agent| agent.team.clone());
+            let opened_turn = seat
+                .identity
+                .iter()
+                .any(|agent| agent.turn_started_at.is_some());
             let member = member(
                 &records,
+                &seat,
                 &peer_representatives,
                 &request,
                 &active_records,
@@ -327,19 +326,21 @@ fn fold_seats<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState
         .copied()
         .filter(|agent| !agent.is_launched_child())
         .collect::<Vec<_>>();
-    let mut slots = fold(&parents).into_iter().collect::<HashMap<_, _>>();
-    for child in agents
+    let children = agents
         .iter()
         .copied()
         .filter(|agent| agent.is_launched_child())
-    {
-        let key = parents
-            .iter()
-            .copied()
-            .find(|parent| is_launched_child_of(child, parent))
-            .map(slot)
-            .unwrap_or_else(|| slot(child));
-        slots.entry(key).or_default().push(child);
+        .collect::<Vec<_>>();
+    let mut slots = fold(&parents).into_iter().collect::<HashMap<_, _>>();
+    for (child_slot, child_records) in fold(&children) {
+        let parent = child_records.iter().find_map(|child| {
+            parents
+                .iter()
+                .copied()
+                .find(|parent| is_launched_child_of(child, parent))
+        });
+        let key = parent.map(slot).unwrap_or(child_slot);
+        slots.entry(key).or_default().extend(child_records);
     }
     let mut slots = slots.into_iter().collect::<Vec<_>>();
     for (_, records) in &mut slots {
@@ -376,42 +377,40 @@ fn representatives<'a>(peers: &[&'a AgentState]) -> Vec<&'a AgentState> {
 
 fn member(
     records: &[&AgentState],
+    seat: &SeatRecords<'_>,
     peers: &[&AgentState],
     request: &AttributionRequest<'_>,
     active_records: &BTreeMap<(AgentKind, AgentSessionId), active_time::ActiveTimeRecord>,
     prices: &pricing::PriceBook,
     conversation_counts: &HashMap<(AgentKind, AgentSessionId), ConversationCounts>,
 ) -> AttributionMember {
-    let seat = seat_records(records);
-    let orphan = seat.is_empty();
-    let identity = if orphan { records.to_vec() } else { seat };
-    let children = if orphan {
-        Vec::new()
-    } else {
-        records
-            .iter()
-            .copied()
-            .filter(|agent| agent.is_launched_child())
-            .collect::<Vec<_>>()
-    };
     // Every slot is created only after its first record is inserted.
-    let latest = newest(&identity).expect("folded attribution slot has records");
+    let latest = newest(&seat.identity).expect("folded attribution slot has records");
     let mut effort = spending::slot_effort_breakdown(
-        &identity
+        &seat
+            .identity
             .iter()
             .map(|agent| spending::EffortSessionRef::from_state(agent))
             .collect::<Vec<_>>(),
         prices,
     );
-    let launched_effort = children
-        .iter()
-        .map(|child| {
-            let child_effort =
-                spending::slot_effort(&[spending::EffortSessionRef::from_state(child)], prices);
+    let launched_effort = fold(&seat.children)
+        .into_iter()
+        .map(|(_, child_records)| {
+            let child_effort = spending::slot_effort(
+                &child_records
+                    .iter()
+                    .map(|child| spending::EffortSessionRef::from_state(child))
+                    .collect::<Vec<_>>(),
+                prices,
+            );
             effort.total.tokens.add_assign(child_effort.tokens);
             effort.total.cost_usd =
                 spending::sum_optional_cost(effort.total.cost_usd, child_effort.cost_usd);
-            (*child, child_effort)
+            (
+                newest(&child_records).expect("folded child slot has records"),
+                child_effort,
+            )
         })
         .collect::<Vec<_>>();
     let messages = records
@@ -442,7 +441,7 @@ fn member(
         )
     });
     let subagents = subagent_stats(
-        &identity,
+        &seat.identity,
         request.subagents,
         &effort.subagents,
         &launched_effort,
@@ -465,17 +464,18 @@ fn member(
             .unwrap_or_else(|| latest.kind.to_string()),
         model: latest.model.clone(),
         effort: latest.effort.clone(),
-        presence: if identity.iter().any(|agent| agent.ended_at.is_none()) {
+        presence: if seat.identity.iter().any(|agent| agent.ended_at.is_none()) {
             Presence::Live
         } else {
             Presence::Exited
         },
         me: request
             .me
-            .is_some_and(|me| identity.iter().any(|agent| &agent.agent_id == me)),
+            .is_some_and(|me| seat.identity.iter().any(|agent| &agent.agent_id == me)),
         launch_ordinal: latest.launch_ordinal,
-        sessions: u32::try_from(identity.len()).unwrap_or(u32::MAX),
-        registered_at: identity
+        sessions: u32::try_from(seat.identity.len()).unwrap_or(u32::MAX),
+        registered_at: seat
+            .identity
             .iter()
             .filter_map(|agent| agent.registered_at)
             .min(),
@@ -506,12 +506,29 @@ fn member(
     }
 }
 
-fn seat_records<'a>(records: &[&'a AgentState]) -> Vec<&'a AgentState> {
-    records
+struct SeatRecords<'a> {
+    identity: Vec<&'a AgentState>,
+    children: Vec<&'a AgentState>,
+}
+
+fn split_seat_records<'a>(records: &[&'a AgentState]) -> SeatRecords<'a> {
+    let identity = records
         .iter()
         .copied()
         .filter(|agent| !agent.is_launched_child())
-        .collect()
+        .collect::<Vec<_>>();
+    if identity.is_empty() {
+        return SeatRecords {
+            identity: records.to_vec(),
+            children: Vec::new(),
+        };
+    }
+    let children = records
+        .iter()
+        .copied()
+        .filter(|agent| agent.is_launched_child())
+        .collect();
+    SeatRecords { identity, children }
 }
 
 #[derive(Clone, Copy, Debug, Default)]

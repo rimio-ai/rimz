@@ -620,19 +620,7 @@ fn slot_lifetime_effort(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
     let refs = audit.agents.iter().collect::<Vec<_>>();
-    // A child addressed directly reports its own transcript, not its parent's seat.
-    let records = if agent.is_launched_child() {
-        vec![agent]
-    } else {
-        rimz::agents::attribution::slot_groups(&refs)
-            .into_iter()
-            .find(|records| {
-                records
-                    .iter()
-                    .any(|record| record.agent_id == agent.agent_id)
-            })
-            .unwrap_or_else(|| vec![agent])
-    };
+    let records = slot_records_for_agent(&refs, agent);
     let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     let effort = rimz::agents::spending::slot_effort(
         &records
@@ -657,6 +645,24 @@ fn slot_lifetime_effort(
     .map(|record| record.display_secs(now, active_grace_secs))
     .reduce(u64::saturating_add);
     Ok((effort, active_secs))
+}
+
+fn slot_records_for_agent<'a>(
+    records: &[&'a AgentState],
+    agent: &'a AgentState,
+) -> Vec<&'a AgentState> {
+    let launched_children = agent.is_launched_child().then(|| {
+        records
+            .iter()
+            .copied()
+            .filter(|record| record.is_launched_child())
+            .collect::<Vec<_>>()
+    });
+    let candidates = launched_children.as_deref().unwrap_or(records);
+    rimz::agents::attribution::slot_groups(candidates)
+        .into_iter()
+        .find(|slot| slot.iter().any(|record| record.agent_id == agent.agent_id))
+        .unwrap_or_else(|| vec![agent])
 }
 
 fn session_cost(
@@ -828,6 +834,33 @@ mod tests {
         };
 
         insta::assert_json_snapshot!("show_agent_report", report);
+    }
+
+    #[test]
+    fn launched_child_show_uses_its_own_continuation_slot() {
+        let now = jiff::Timestamp::UNIX_EPOCH;
+        let parent = rimz::testkit::agent_state("claude", "parent", now);
+        let mut first = rimz::testkit::agent_state("codex", "child-one", now);
+        first.parent_agent_id = Some(parent.agent_id.clone());
+        first.parent_agent_kind = Some(parent.kind.clone());
+        first.launch_depth = Some(1);
+        first.pane = Some(rimz::pane::PaneRef::from_id(rimz::PaneId::from_parts(
+            rimz::MuxName::Tmux,
+            "%3",
+        )));
+        let mut second = first.clone();
+        second.agent_id = "child-two".into();
+        let records = [&parent, &first, &second];
+
+        let child_slot = slot_records_for_agent(&records, &second);
+
+        assert_eq!(
+            child_slot
+                .iter()
+                .map(|record| record.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            ["child-one", "child-two"]
+        );
     }
 
     #[test]
