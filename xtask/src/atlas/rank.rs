@@ -470,8 +470,8 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             .functions
             .iter()
             .filter(|function| function.score > 0.0 && shown.contains(&function.module.as_str()))
-            .cloned()
             .take(args.top.saturating_mul(3).min(60))
+            .cloned()
             .collect()
     } else {
         Vec::new()
