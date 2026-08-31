@@ -535,7 +535,7 @@ fn providers(facts: &Facts, scope: &Path) -> Vec<Provider> {
     reason = "xtask atlas survey output is a command stdout contract"
 )]
 fn print_markdown(report: &Report, top: usize, markdown: bool) {
-    let fence = markdown.then_some("```").unwrap_or("");
+    let fence = if markdown { "```" } else { "" };
     println!("# Atlas survey — {}", report.path.display());
     println!(
         "history: {} commits; code: {}; tests: {}",
