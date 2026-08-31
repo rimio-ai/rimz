@@ -130,9 +130,8 @@ fn turn_dead_primary_yields_pane_to_successful_same_pane_replacement() {
     successful.runtime_owner = Some(owner("successful"));
     successful.origin = Some(SessionOrigin::Forked);
 
-    let mut snapshot = room(vec![first, second, successful]);
-    snapshot.reap_stale_sessions();
-    let snapshot = snapshot.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+    let snapshot = room(vec![first, second, successful])
+        .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
 
     let pane_rows = rows(&snapshot);
     assert_eq!(pane_rows.len(), 1);

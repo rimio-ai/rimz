@@ -205,20 +205,20 @@ mod tests {
             assert!(!supersedes(&older, &newer));
         }
 
-        let (mut waiting, newer) = conversation_pair(
+        let (mut native_wait, newer) = conversation_pair(
             "antigravity",
-            AgentStatus::Waiting,
+            AgentStatus::Running,
             Some(SessionOrigin::Fresh),
         );
-        waiting.context = Some(AgentContext {
+        native_wait.context = Some(AgentContext {
             settle: Some(TurnSettle::new(
-                waiting.last_activity + std::time::Duration::from_secs(1),
+                native_wait.last_activity + std::time::Duration::from_secs(1),
                 TurnSettleOutcome::NativeWait,
             )),
-            ..AgentContext::new("antigravity", waiting.last_activity)
+            ..AgentContext::new("antigravity", native_wait.last_activity)
         });
-        assert!(waiting.holds_open_turn());
-        assert!(!supersedes(&waiting, &newer));
+        assert!(native_wait.holds_open_turn());
+        assert!(!supersedes(&native_wait, &newer));
     }
 
     #[test]
