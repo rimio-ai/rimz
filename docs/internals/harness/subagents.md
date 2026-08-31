@@ -147,7 +147,7 @@ Which projection each verb reads is the other half:
 
 1. The parent launches; the direct-parent stamp and subagent-caller check pass; a run record and pane are created. By default `report_to_parent` is set and the petname prints immediately; with `--wait`, the flag is clear and the parent instead joins the result.
 2. The child runs its one turn. Its hooks fold a terminal status into the run record.
-3. The in-pane wrapper notices the terminal record and terminates the provider. After its child-exit fallback guarantees a terminal run, [`subagent_report`](../../../crates/rimz/src/harness/subagent_report.rs) reads the parent and sibling rows from the audit projection and composes the settled outcome.
+3. The in-pane wrapper notices the terminal record and terminates the provider. After its child-exit fallback guarantees a terminal run, [`subagent_report`](../../../crates/rimz/src/cli/agents_cmd/subagent_report.rs) reads the parent and sibling rows from the audit projection and composes the settled outcome.
 4. When reporting was requested and the parent still exists, the wrapper queues a parked `MessageSender::Subagent { kind, name }` record with gate `Done`. Its `SUBAGENT_REPORT` envelope names the child; immediate pane delivery is best-effort latency over the durable run record.
 5. The wrapper stamps the child row's `ended_at` and closes its pane. With `--keep`, it instead transfers runtime ownership back to itself and remains alive to hold the pane.
 6. A kept wrapper closes after `rimz subagents stop`; parent exit does not reclaim it. Without `--keep`, the parent's durable end stamp or authoritative pane-absence probes remain an earlier-close backstop.

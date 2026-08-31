@@ -82,10 +82,11 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
             && !args.no_continue
             && !continue_text.is_empty()
         {
-            rimz::message::deliver::queue_nudge(
+            rimz::message::deliver::queue_synthetic(
                 workspace,
                 store,
                 agent,
+                rimz::message::MessageSender::System,
                 continue_text.to_owned(),
                 DeliveryGate::Done,
                 None,

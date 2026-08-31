@@ -228,19 +228,6 @@ impl RunStatus {
         )
     }
 
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::VerifyFailed => "verify failed",
-            Self::TimedOut => "timed out",
-            Self::BudgetExceeded => "budget exceeded",
-            Self::Canceled => "canceled",
-        }
-    }
-
     pub const fn exit_code(self) -> i32 {
         match self {
             Self::Completed => 0,
@@ -395,18 +382,6 @@ pub fn load(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
 
 pub fn list(paths: &StatePaths) -> Result<Vec<RunRecord>> {
     run_store::list(&paths.runs_dir)
-}
-
-pub fn newest_run_for_agent<'a>(
-    runs: &'a [RunRecord],
-    agent: &crate::agents::AgentState,
-) -> Option<&'a RunRecord> {
-    runs.iter()
-        .filter(|run| {
-            run.agent_id.as_ref() == Some(&agent.agent_id)
-                || run.agent_name.as_deref() == agent.name.as_deref()
-        })
-        .max_by_key(|run| run.started_at)
 }
 
 enum RecordMutation<T> {

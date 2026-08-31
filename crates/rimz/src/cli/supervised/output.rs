@@ -72,7 +72,16 @@ pub(crate) fn print_run_forensics<W: Write + ?Sized>(
 }
 
 pub(crate) fn status_label(status: RunStatus) -> &'static str {
-    status.label()
+    match status {
+        RunStatus::Pending => "pending",
+        RunStatus::Running => "running",
+        RunStatus::Completed => "completed",
+        RunStatus::Failed => "failed",
+        RunStatus::VerifyFailed => "verify failed",
+        RunStatus::TimedOut => "timed out",
+        RunStatus::BudgetExceeded => "budget exceeded",
+        RunStatus::Canceled => "canceled",
+    }
 }
 
 pub(super) fn verify_status_label(verify: &rimz::harness::run::RunVerify) -> String {

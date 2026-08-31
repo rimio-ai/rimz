@@ -53,10 +53,11 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
         } else {
             DeliveryGate::Resume
         };
-        deliver::queue_nudge(
+        deliver::queue_synthetic(
             workspace,
             store,
             agent,
+            rimz::message::MessageSender::System,
             text.to_owned(),
             gate,
             Some(&request.pane_id),

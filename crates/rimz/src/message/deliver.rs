@@ -156,29 +156,8 @@ fn synthetic_record(
     }
 }
 
-/// Queue a system-initiated nudge against an agent card.
-pub fn queue_nudge(
-    workspace: &ResolvedWorkspace,
-    store: &Store,
-    agent: &crate::agents::AgentState,
-    text: String,
-    gate: DeliveryGate,
-    pane_id: Option<&PaneId>,
-) -> Result<MessageId> {
-    let message = synthetic_record(
-        workspace.workspace_id.clone(),
-        agent,
-        MessageSender::System,
-        text,
-        gate,
-        pane_id,
-    );
-    store.queue_message(&message, &workspace.session_name)?;
-    Ok(message.message_id)
-}
-
-/// Queue a synthetic report and attempt boundary delivery when the recipient pane is known.
-pub fn queue_report(
+/// Queue synthetic text against an agent card.
+pub fn queue_synthetic(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &crate::agents::AgentState,
@@ -186,7 +165,7 @@ pub fn queue_report(
     text: String,
     gate: DeliveryGate,
     pane_id: Option<&PaneId>,
-) -> Result<(MessageId, bool)> {
+) -> Result<MessageId> {
     let message = synthetic_record(
         workspace.workspace_id.clone(),
         agent,
@@ -196,18 +175,7 @@ pub fn queue_report(
         pane_id,
     );
     store.queue_message(&message, &workspace.session_name)?;
-    let Some(pane_id) = pane_id else {
-        return Ok((message.message_id, false));
-    };
-    let delivered = deliver_one(
-        workspace,
-        store,
-        &message.message_id,
-        Duration::ZERO,
-        Some(pane_id.mux()),
-        DeliveryPolicy::Boundary,
-    )?;
-    Ok((message.message_id, delivered))
+    Ok(message.message_id)
 }
 
 /// Queue a nudge against a known pane and attempt boundary delivery in the same
@@ -220,7 +188,15 @@ pub fn nudge_now(
     gate: DeliveryGate,
     pane_id: &PaneId,
 ) -> Result<(MessageId, bool)> {
-    let message_id = queue_nudge(workspace, store, agent, text, gate, Some(pane_id))?;
+    let message_id = queue_synthetic(
+        workspace,
+        store,
+        agent,
+        MessageSender::System,
+        text,
+        gate,
+        Some(pane_id),
+    )?;
     let delivered = deliver_one(
         workspace,
         store,

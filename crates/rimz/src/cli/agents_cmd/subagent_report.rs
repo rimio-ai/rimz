@@ -1,19 +1,19 @@
-//! Parent-facing completion reports for supervised subagents.
+//! Parent-facing completion reports emitted by the in-pane wrapper.
 //!
 //! The durable run record remains truth. Report delivery is best-effort latency:
 //! a parked message returns the settled outcome when the parent still exists.
 //! Sibling state is read at send time, so children settling together may each
 //! truthfully report that all siblings have finished.
 
-use crate::agents::AgentState;
-use crate::harness::run::{self, RunRecord, RunStatus};
-use crate::ids::MessageId;
-use crate::message::{DeliveryGate, MessageSender};
-use crate::workspace::ResolvedWorkspace;
-use crate::{RuntimeScope, Store};
+use rimz::agents::AgentState;
+use rimz::harness::run::{self, RunRecord, RunStatus};
+use rimz::ids::MessageId;
+use rimz::message::{DeliveryGate, MessageSender};
+use rimz::workspace::ResolvedWorkspace;
+use rimz::{RuntimeScope, Store};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ReportOutcome {
+pub(super) enum ReportOutcome {
     Queued {
         message_id: MessageId,
         delivered: bool,
@@ -25,18 +25,18 @@ pub enum ReportOutcome {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ReportErr {
+pub(super) enum ReportErr {
     #[error(transparent)]
-    Store(#[from] crate::store::StoreErr),
+    Store(#[from] rimz::store::StoreErr),
     #[error(transparent)]
     Run(#[from] run::RunStoreErr),
     #[error(transparent)]
-    Deliver(#[from] crate::message::deliver::DeliverErr),
+    Deliver(#[from] rimz::message::deliver::DeliverErr),
 }
 
-pub type Result<T> = std::result::Result<T, ReportErr>;
+type Result<T> = std::result::Result<T, ReportErr>;
 
-pub fn report_settled_child(
+pub(super) fn report_settled_child(
     workspace: &ResolvedWorkspace,
     store: &Store,
     run: &RunRecord,
@@ -71,10 +71,10 @@ pub fn report_settled_child(
     }
 
     let runs = run::list(store.paths())?;
-    let still_running = crate::harness::target::launched_children(&projection.agents, parent)
+    let still_running = rimz::harness::target::launched_children(&projection.agents, parent)
         .into_iter()
         .filter_map(|sibling| {
-            let sibling_run = run::newest_run_for_agent(&runs, sibling)?;
+            let sibling_run = newest_run_for_agent(&runs, sibling)?;
             (sibling_run.run_id != run.run_id && !sibling_run.status.is_terminal()).then(|| {
                 sibling
                     .name
@@ -90,7 +90,7 @@ pub fn report_settled_child(
         name,
     };
     let pane_id = parent.pane.as_ref().map(|pane| &pane.pane_id);
-    let (message_id, delivered) = crate::message::deliver::queue_report(
+    let message_id = rimz::message::deliver::queue_synthetic(
         workspace,
         store,
         parent,
@@ -99,6 +99,17 @@ pub fn report_settled_child(
         DeliveryGate::Done,
         pane_id,
     )?;
+    let delivered = match pane_id {
+        Some(pane_id) => rimz::message::deliver::deliver_one(
+            workspace,
+            store,
+            &message_id,
+            std::time::Duration::ZERO,
+            Some(pane_id.mux()),
+            rimz::message::deliver::DeliveryPolicy::Boundary,
+        )?,
+        None => false,
+    };
     Ok(ReportOutcome::Queued {
         message_id,
         delivered,
@@ -109,7 +120,7 @@ pub fn report_settled_child(
     })
 }
 
-pub fn compose_report(child: &AgentState, run: &RunRecord, still_running: &[&str]) -> String {
+fn compose_report(child: &AgentState, run: &RunRecord, still_running: &[&str]) -> String {
     let name = child_name(child, run);
     let metadata = [child.profile.as_deref(), child.description.as_deref()]
         .into_iter()
@@ -123,12 +134,10 @@ pub fn compose_report(child: &AgentState, run: &RunRecord, still_running: &[&str
     };
     let finished_at = run.completed_at.unwrap_or(run.updated_at);
     let elapsed_seconds = finished_at.duration_since(run.started_at).as_secs().max(0) as u64;
-    let elapsed = crate::utils::time::format_compact_duration(std::time::Duration::from_secs(
-        elapsed_seconds,
-    ));
+    let elapsed = format_compact_duration(elapsed_seconds);
     let mut report = format!(
         "@{name}{metadata} {} in {elapsed}.\n{}",
-        run.status.label(),
+        crate::cli::supervised::output::status_label(run.status),
         sibling_summary(still_running)
     );
     if let Some(detail) = report_detail(run) {
@@ -136,6 +145,30 @@ pub fn compose_report(child: &AgentState, run: &RunRecord, still_running: &[&str
         report.push_str(&detail);
     }
     report
+}
+
+fn newest_run_for_agent<'a>(runs: &'a [RunRecord], agent: &AgentState) -> Option<&'a RunRecord> {
+    runs.iter()
+        .filter(|run| {
+            run.agent_id.as_ref() == Some(&agent.agent_id)
+                || run.agent_name.as_deref() == agent.name.as_deref()
+        })
+        .max_by_key(|run| run.started_at)
+}
+
+fn format_compact_duration(mut seconds: u64) -> String {
+    let mut rendered = String::new();
+    for (unit_seconds, suffix) in [(86_400, "d"), (3_600, "h"), (60, "m")] {
+        let amount = seconds / unit_seconds;
+        if amount > 0 {
+            rendered.push_str(&format!("{amount}{suffix}"));
+            seconds %= unit_seconds;
+        }
+    }
+    if seconds > 0 || rendered.is_empty() {
+        rendered.push_str(&format!("{seconds}s"));
+    }
+    rendered
 }
 
 fn child_name<'a>(child: &'a AgentState, run: &'a RunRecord) -> &'a str {
@@ -188,9 +221,9 @@ fn report_detail(run: &RunRecord) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{AgentStatus, PermissionMode};
-    use crate::ids::{AgentKind, WorkspaceId};
     use jiff::Timestamp;
+    use rimz::agents::{AgentStatus, PermissionMode};
+    use rimz::ids::{AgentKind, WorkspaceId};
     use std::path::{Path, PathBuf};
 
     fn child() -> AgentState {
