@@ -315,7 +315,7 @@ fn initialize(root: &Path, scope: &Path, requested_layers: Option<&[String]>) ->
             .push(file);
     }
     let layers = requested_layers.map_or_else(
-        || greedy_layers(scope, files_by_rule.values().flatten().copied(), &facts),
+        || greedy_layers(files_by_rule.values().flatten().copied(), &facts),
         <[String]>::to_vec,
     );
     let layer_positions = layers
@@ -389,7 +389,6 @@ fn top_module(module: &str) -> &str {
 }
 
 fn greedy_layers<'a>(
-    _scope: &Path,
     files: impl Iterator<Item = &'a syntax::FileSyntax>,
     facts: &Facts,
 ) -> Vec<String> {

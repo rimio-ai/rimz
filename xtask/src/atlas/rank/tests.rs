@@ -101,3 +101,73 @@ fn totals_line_uses_scope_totals_not_the_top_n_rows() {
         "overall: code 60, tests 15, pub 12, esc 6, cx 0.0; Δcode -9, Δtests +4, Δpub -3, Δesc -2"
     );
 }
+
+#[test]
+fn large_directory_rows_split_and_preserve_the_parent_subtotal() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("src/large/sub")).unwrap();
+    let sources = vec![
+        super::super::sources::Source::new("src/large/a.rs", "pub fn a() {}\n"),
+        super::super::sources::Source::new("src/large/sub/b.rs", "pub fn b() {}\n"),
+    ];
+    let syntax = syntax::analyze_sources(&sources);
+    let mod_index = syntax::ModIndex::new(&syntax.files);
+    let facts = Facts {
+        root: root.path().to_path_buf(),
+        scope: PathBuf::from("src"),
+        sources,
+        known_modules: syntax
+            .files
+            .iter()
+            .map(|file| file.module_path.clone())
+            .collect(),
+        crate_names: Default::default(),
+        sizes: BTreeMap::from([
+            (
+                PathBuf::from("src/large/a.rs"),
+                FileSize { code: 10, tests: 2 },
+            ),
+            (
+                PathBuf::from("src/large/sub/b.rs"),
+                FileSize { code: 12, tests: 3 },
+            ),
+        ]),
+        syntax,
+        mod_index,
+        history: Some(history::Log::empty()),
+        metrics: Some(super::super::metrics::MetricsReport {
+            module_scores: Default::default(),
+            functions: Vec::new(),
+        }),
+        references: None,
+        blame: None,
+    };
+    let args = parse_args(&[
+        "--path".into(),
+        "src".into(),
+        "--split-above".into(),
+        "5".into(),
+        "--no-index".into(),
+    ])
+    .unwrap()
+    .unwrap();
+    let mut rows = vec![Row {
+        module: "large".to_owned(),
+        code: 22,
+        tests: 5,
+        ..Row::default()
+    }];
+
+    split_rows(&mut rows, &facts, &args, Path::new("src"), "").unwrap();
+
+    assert_eq!(rows[0].children.iter().map(|row| row.code).sum::<u64>(), 22);
+    assert_eq!(rows[0].children.iter().map(|row| row.tests).sum::<u64>(), 5);
+    assert_eq!(
+        rows[0]
+            .children
+            .iter()
+            .map(|row| row.module.as_str())
+            .collect::<Vec<_>>(),
+        ["large/sub", "large/a"]
+    );
+}
