@@ -38,3 +38,7 @@ These hold across the whole CLI, so each command page assumes them rather than r
 **Durations and sizes are unit strings.** Timeouts and intervals take `s`, `m`, `h`, and `d` (`30s`, `15m`, `4h`, `30d`); byte sizes take `B`, `KB`, `KiB`, `MB`, `MiB`, `GB`, and `GiB`.
 
 **Color follows the terminal.** `--color auto` (the default) honors the terminal and the `NO_COLOR`/`CLICOLOR` environment; `--color always` and `--color never` force it.
+
+### Agent prose
+
+On a styled stdout, full agent-authored answers and message bodies render CommonMark headings, emphasis, links, lists, task lists, code, quotes, and tables, fitted to the terminal. Piped output and `--color never` preserve the text as written for agents and scripts; `--color always` forces terminal rendering through a pipe. JSON and one-line previews remain raw.
