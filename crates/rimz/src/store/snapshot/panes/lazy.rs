@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use super::{PaneBindingEvidence, PaneBindingIndex, pane_binding_evidence, pane_start_allows_bind};
 use crate::agents::AgentSpec;
-use crate::agents::{AgentState, AgentStatus, SamePaneSessionPolicy, SessionOrigin};
+use crate::agents::{AgentState, SamePaneSessionPolicy, SessionOrigin};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
 use crate::store::snapshot::process::{pane_command_is_known, row_from_process};
@@ -449,7 +449,7 @@ fn allow_occupied_candidates(candidates: &mut [HookCandidate<'_, '_>], selected:
 fn occupied_owner_is_resting(candidate: &HookCandidate<'_, '_>) -> bool {
     candidate
         .occupied_by
-        .is_some_and(|owner| !matches!(owner.status, AgentStatus::Running | AgentStatus::Waiting))
+        .is_some_and(|owner| !owner.holds_open_turn())
 }
 
 fn select_focused_candidate(

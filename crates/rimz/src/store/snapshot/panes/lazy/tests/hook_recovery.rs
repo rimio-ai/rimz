@@ -1,6 +1,6 @@
 use super::super::*;
 
-use crate::agents::{AgentStatus, SessionOrigin};
+use crate::agents::{AgentContext, AgentStatus, AgentTurnError, SessionOrigin, TurnErrorClass};
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::pane::PaneRef;
 use crate::store::snapshot::testkit::agent;
@@ -507,6 +507,39 @@ fn sole_resting_fresh_occupied_pane_binds_without_focus() {
     assert_eq!(selected.method, OccupiedSoleCandidate);
     assert_eq!(selected.candidate_count, 1);
     assert!(selected.candidates[0].reject_reasons.is_empty());
+}
+
+#[test]
+fn certificate_dead_occupied_pane_binds_without_focus() {
+    let pane_id = id("terminal_30");
+    let mut owner = prior(
+        "codex",
+        "old",
+        Some(pane_id.clone()),
+        AgentStatus::Running,
+        Some(SessionOrigin::Fresh),
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+    let error_at = jiff::Timestamp::from_second(1).unwrap();
+    owner.context = Some(AgentContext {
+        turn_error: Some(AgentTurnError {
+            class: TurnErrorClass::PausedOverloaded,
+            at: error_at,
+            label: Some("server_overloaded".to_owned()),
+        }),
+        ..AgentContext::new("codex", error_at)
+    });
+
+    let selected = select(
+        &[owner],
+        &[candidate("terminal_30", false)],
+        Some(&[]),
+        Some(SessionOrigin::Fresh),
+        HookPaneRecoveryPhase::TurnStarted,
+    );
+
+    assert_eq!(selected.pane_id.as_ref(), Some(&pane_id));
+    assert_eq!(selected.method, OccupiedSoleCandidate);
 }
 
 #[test]

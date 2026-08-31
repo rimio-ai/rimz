@@ -70,7 +70,8 @@ pub(super) fn recover_focused_pane_binding(
         return;
     };
 
-    let snapshot = match store.snapshot_cached() {
+    let kind_id = AgentKind::new_unchecked(kind);
+    let mut snapshot = match store.snapshot_cached() {
         Ok(snapshot) => snapshot,
         Err(err) => {
             debug!(
@@ -82,7 +83,24 @@ pub(super) fn recover_focused_pane_binding(
             return;
         }
     };
-    let kind_id = AgentKind::new_unchecked(kind);
+    // A provider-rested owner must not block the conversation replacing it;
+    // read only the keyed sidecars that can affect this hook's pane choice.
+    for agent in snapshot.agents.iter_mut().filter(|agent| {
+        agent.ended_at.is_none()
+            && agent.parent_agent_id.is_none()
+            && agent.kind == kind_id
+            && matches!(
+                agent.status,
+                rimz::agents::AgentStatus::Running | rimz::agents::AgentStatus::Waiting
+            )
+    }) {
+        agent.context = rimz::store::agent_context::read_one(
+            store.runtime_paths(),
+            kind,
+            agent.agent_id.as_str(),
+        )
+        .map(|record| record.context);
+    }
     let phase = match observation.signal {
         LifecycleSignal::Registered => HookPaneRecoveryPhase::Registered,
         LifecycleSignal::TurnStarted => HookPaneRecoveryPhase::TurnStarted,
