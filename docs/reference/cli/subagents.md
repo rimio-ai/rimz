@@ -24,7 +24,7 @@ JSON
 
 `fanout` reads a JSON task array from `FILE`, or from stdin when `FILE` is omitted. It validates the whole list and opens each child pane in sequence. The children run in parallel after their panes open, and each minted petname prints as it launches.
 
-By default, `fanout` returns after launching. Use `--wait[=DURATION]` to join exactly the children from that fanout, optionally with a caller-side deadline; each answer prints as it finishes under a `--- petname ---` header using the shared [agent-prose rendering rule](../cli.md#agent-prose), with a status suffix only for an abnormal outcome, and the command exits nonzero if any child does. This wait deadline is distinct from the children's `--timeout`. With background fanout `--json`, RimZ emits a map from petname to `run_id`; with `--wait --json`, fanout emits the same labeled result map as a plural `rimz subagents wait --json`, including each run's `last_message` when available.
+By default, `fanout` returns after launching and each child reports back as a `SUBAGENT_REPORT` message when it settles. Use `--wait[=DURATION]` to join exactly the children from that fanout instead, optionally with a caller-side deadline; each answer prints as it finishes under a `--- petname ---` header using the shared [agent-prose rendering rule](../cli.md#agent-prose), with a status suffix only for an abnormal outcome, and the command exits nonzero if any child does. A joined child sends no completion report. This wait deadline is distinct from the children's `--timeout`. With background fanout `--json`, RimZ emits a map from petname to `run_id`; with `--wait --json`, fanout emits the same labeled result map as a plural `rimz subagents wait --json`, including each run's `last_message` when available.
 
 Each array entry has the single-launch fields that make sense for data-driven delegation:
 
@@ -51,7 +51,7 @@ All tasks are validated before the first launch. If a runtime failure occurs aft
 rimz subagents claude "trace the authentication call path"
 ```
 
-Each launch is equivalent to a one-cell `rimz agents <profile> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately, so a parent can start several children without waiting between launches. Pass `--wait[=DURATION]` to print the petname and then join the child like `subagents wait <name>`, including its final message or failure tail. `--json` is accepted on a single launch only with `--wait`; it emits the full run record, the same shape as `subagents wait <name> --json`, without the human petname line.
+Each launch is equivalent to a one-cell `rimz agents <profile> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately and writes a callback notice to stderr, so a parent can start several children without waiting between launches. Pass `--wait[=DURATION]` to print the petname and then join the child like `subagents wait <name>`, including its final message or failure tail. `--json` is accepted on a single launch only with `--wait`; it emits the full run record, the same shape as `subagents wait <name> --json`, without the human petname line.
 
 ```sh
 first=$(rimz subagents codex "find the smallest safe fix")
@@ -63,7 +63,7 @@ The bare form and `launch` verb are equivalent. A prompt is mandatory: the paren
 
 | Behavior | Default | Override |
 | --- | --- | --- |
-| Execution | supervised print mode, background | `--wait[=DURATION]` joins and prints the result |
+| Result | reported back as a `SUBAGENT_REPORT` message when the child settles | `--wait[=DURATION]` joins inline and sends no report |
 | Checkout | caller's current checkout | fixed |
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
 | Pane after completion | closes when the run settles | `--keep` holds it until `stop` or `rimz gc` |
@@ -89,7 +89,25 @@ Inside an agent whose `[agents.profiles]` entry sets `subagents = [...]`, the ca
 
 RimZ places this same filtered catalog in each launched agent's system reminder when its adapter supports native appended system text. With no configured profiles or commands, the reminder says that no subagent profiles are configured instead of showing an empty list.
 
-## Join results
+## Reports
+
+A background child returns through the ordinary durable message queue. RimZ parks the report until the parent can receive at a successful or idle boundary, using the child as its sender:
+
+```text
+Type: SUBAGENT_REPORT
+From: @naming
+Content:
+@naming (explorer · map profile surfaces) completed in 4m12s.
+1 subagent still running: @runtime.
+
+Done.
+```
+
+The first line names the child, its profile and description when available, outcome, and elapsed time. The next line says whether siblings are still running, followed by the final message for a completed run or failure detail and transcript path for an abnormal outcome. Sibling state is read when each report is composed, so children settling at the same instant may each truthfully say that all subagents have finished.
+
+No report is sent when the launch uses `--wait` or the parent has ended. The run record remains the fallback truth: `list` shows it and `wait` can still read it after the pane closes.
+
+## Join results manually
 
 ```sh
 rimz subagents wait
@@ -99,7 +117,7 @@ rimz subagents wait calm-fox --stream
 rimz subagents wait --json
 ```
 
-With no names, `wait` joins every supervised child recorded beneath the caller, including children that finished before the command started; `--any` instead considers only children still running, since it reports the first to finish. Explicit names must resolve inside that same set. A single result prints as a bare answer; plural and `--any` waits label each answer with its child name. Joins, streaming, JSON, timeout behavior, output, and exit codes are the same durable machinery as [`rimz agents wait`](./agents.md#wait).
+Background launches normally call the parent back, so `wait` is the manual re-join for a result needed before continuing or for reading durable history again. With no names, it joins every supervised child recorded beneath the caller, including children that finished before the command started; `--any` instead considers only children still running, since it reports the first to finish. Explicit names must resolve inside that same set. A single result prints as a bare answer; plural and `--any` waits label each answer with its child name. Joins, streaming, JSON, timeout behavior, output, and exit codes are the same durable machinery as [`rimz agents wait`](./agents.md#wait).
 
 The result is available as soon as the run settles and remains available after the pane closes, because the run record, not the pane, is truth.
 

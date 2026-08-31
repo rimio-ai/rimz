@@ -50,7 +50,7 @@ A record is keyed on a **card**, the logical agent identity the rollup tracks: a
 | `kind`, `agent_id`, `agent_name` | receiver card; the name folds provisional ids into the registered queue |
 | `address` | receiver handle as resolved at enqueue, rendered by `list` and `show` after the live card is gone |
 | `channel` | receiver lane at enqueue time |
-| `sender` | `Human`, `Agent { kind, name, profile, role, channel }`, or `System` (renders as `rimz`) |
+| `sender` | `Human`, `Agent { kind, name, profile, role, channel }`, `Subagent { kind, name }` (renders as `@petname`), or `System` (renders as `rimz`) |
 | `automated` | background orchestration traffic; never earns a dollar-budget waiver |
 | `reply_wait` | a CLI is blocked on this record's reply ([Reply waits](#reply-waits)) |
 | `in_reply_to` | the messages that opened the sender's authoring turn; empty starts a new conversation root |
@@ -257,11 +257,11 @@ Content:
 <message>
 ```
 
-`Type` is `AGENT_MESSAGE` for a send from a RimZ-launched agent and `USER_MESSAGE` for a human's `rimz message`; a human header always uses `From: @user`. An agent handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
+`Type` is `AGENT_MESSAGE` for a send from a RimZ-launched agent, `SUBAGENT_REPORT` for a launched child's settled result, and `USER_MESSAGE` for a human's `rimz message`; a human header always uses `From: @user`, while a subagent report uses the child's petname. An agent handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
 
 The agent handle is the shortest unique selector over addressable agents: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down this ladder. System records and `--no-from` sends stay verbatim.
 
-The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` becomes a first-class `Message` transcript entry with structured `from`; `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. When the agent has an open question, the first human `Prompt` segment instead becomes its id-stamped `Answer`; an agent-authored `Message` never answers it. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
+The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` and `SUBAGENT_REPORT` become first-class `Message` transcript entries with structured `from`; `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. When the agent has an open question, the first human `Prompt` segment instead becomes its id-stamped `Answer`; an agent-authored `Message` never answers it. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
 
 ## Smart compaction
 
@@ -375,7 +375,7 @@ Two fields link entries into conversations, and both default empty so older JSON
 
 `reply_to` carries the parent message ids. The same turn-start replaces `AgentContext.turn_opened_by` with every matched id, including an empty vector that clears a prior turn. An agent-authored enqueue copies that current-turn vector into its new record's `in_reply_to`; a human sender, `--no-from`, an unnamed sender, or missing context starts a root. The turn's final `Assistant` entry and any mid-turn `Ask` copy `turn_opened_by` into `reply_to`. Requeue preserves `in_reply_to`, so retrying text keeps its causal position.
 
-A batched delivery splits on blank-line boundaries that introduce another `Type: AGENT_MESSAGE` or `Type: USER_MESSAGE` header, so each section becomes its own entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh); statusline-only detections stay card enrichment, because that path is lock-free and writes no transcript.
+A batched delivery splits on blank-line boundaries that introduce another `Type: AGENT_MESSAGE`, `Type: SUBAGENT_REPORT`, or `Type: USER_MESSAGE` header, so each section becomes its own entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh); statusline-only detections stay card enrichment, because that path is lock-free and writes no transcript.
 
 `rimz transcript` projects linked entries into flat conversation components: it unions output edges from an `Assistant`, `Ask`, `Error`, or `Answer` to the messages that opened its turn, plus reply-back edges from a message to a parent whose sender is that message's receiver. Other causal edges, including hand-offs to third parties, root new conversations. The earliest entry in a component is its root; the rest follow chronologically beneath it. `--flat` skips the assembly.
 
