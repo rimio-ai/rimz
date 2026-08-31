@@ -38,3 +38,29 @@ fn newer_lifecycle_activity_self_clears_a_stale_native_permission_marker() {
         "a later post-tool or turn hook proves the native dialog moved on"
     );
 }
+
+#[test]
+fn plan_proposal_outranks_budget_park_on_the_card() {
+    let mut session = agent("codex", "codex-plan", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(60)
+        .settle(10, TurnSettleOutcome::PlanProposed);
+    session.budget_park = Some(crate::harness::budget::BudgetPark {
+        cap_usd: 5.0,
+        spend_usd: 5.25,
+        window: crate::harness::budget::BudgetWindow::Session,
+        at: epoch(),
+        scope: crate::harness::budget::BudgetScope::Agent,
+        account_kind: None,
+        resets_at: None,
+    });
+
+    let snapshot = room_with_agent_panes(vec![session]);
+
+    assert_eq!(
+        row(&snapshot, "codex-plan").status(),
+        Some(AgentStatus::Waiting),
+        "a proposed plan needs the same attention as a native input prompt"
+    );
+}
