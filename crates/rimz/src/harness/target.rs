@@ -860,7 +860,7 @@ pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
             members.push(agent);
             continue;
         };
-        if crate::store::snapshot::compare_same_pane_owners(members[index], agent).is_gt() {
+        if members[index].compare_same_pane_owner(agent).is_gt() {
             members[index] = agent;
         }
     }

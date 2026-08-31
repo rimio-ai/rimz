@@ -101,13 +101,27 @@ pub(super) fn recover_focused_pane_binding(
     }
     // A provider-rested owner must not block the conversation replacing it;
     // read only the keyed sidecars that can affect this hook's pane choice.
-    rimz::store::agent_context::attach_rest_certificates(
-        store.runtime_paths(),
-        snapshot
-            .agents
-            .iter_mut()
-            .filter(|agent| agent.kind == kind_id),
-    );
+    for agent in snapshot
+        .agents
+        .iter_mut()
+        .filter(|agent| agent.kind == kind_id)
+    {
+        if agent.ended_at.is_some()
+            || agent.is_provider_subagent()
+            || !matches!(
+                agent.status,
+                rimz::agents::AgentStatus::Running | rimz::agents::AgentStatus::Waiting
+            )
+        {
+            continue;
+        }
+        agent.context = rimz::store::agent_context::read_one(
+            store.runtime_paths(),
+            agent.kind.as_str(),
+            agent.agent_id.as_str(),
+        )
+        .map(|record| record.context);
+    }
     let recovery = HookPaneRecoveryContext::new(
         &kind_id,
         &agent_id,

@@ -940,28 +940,36 @@ fn resolve_own_agent_end_trace(
         let mut projection = store
             .runtime_projection(rimz::RuntimeScope::Audit)
             .context("reading audit projection for agent exit end stamp")?;
-        rimz::store::agent_context::attach_rest_certificates(
-            store.runtime_paths(),
-            projection.agents.iter_mut(),
-        );
+        for agent in &mut projection.agents {
+            if agent.ended_at.is_some()
+                || agent.is_provider_subagent()
+                || !matches!(
+                    agent.status,
+                    rimz::agents::AgentStatus::Running | rimz::agents::AgentStatus::Waiting
+                )
+            {
+                continue;
+            }
+            agent.context = rimz::store::agent_context::read_one(
+                store.runtime_paths(),
+                agent.kind.as_str(),
+                agent.agent_id.as_str(),
+            )
+            .map(|record| record.context);
+        }
         let pane = rimz::pane::PaneRef::from_id(pane_id);
-        // The generic pane resolver intentionally selects root agents only.
-        // A launched child instead carries the wrapper's exact launch id, so
-        // corroborate that durable identity against its pane before fallback.
+        let owner = rimz::store::snapshot::stamped_agent_for_pane(&pane, &projection.agents);
         if let Some(launch_id) = request.identity.launch_id.as_deref() {
             let launch_id = AgentSessionId::from(launch_id);
-            if let Some(agent) = rimz::store::snapshot::stamped_agent_for_launch(
-                &pane,
-                &projection.agents,
-                &request.kind,
-                &launch_id,
-            ) && !agent.agent_id.is_empty()
+            if let Some(agent) = owner
+                && agent.kind == request.kind
+                && agent.launch_id.as_ref() == Some(&launch_id)
+                && !agent.agent_id.is_empty()
             {
                 return Ok(Some((agent.kind.clone(), agent.agent_id.clone())));
             }
         }
-        if let Some(agent) =
-            rimz::store::snapshot::stamped_agent_for_pane(&pane, &projection.agents)
+        if let Some(agent) = owner
             && !agent.agent_id.is_empty()
         {
             return Ok(Some((agent.kind.clone(), agent.agent_id.clone())));

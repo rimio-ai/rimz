@@ -3,6 +3,7 @@
 //! This is the provider-agnostic model the store reducer writes and the
 //! sidebar projects. The rollup itself lives with the agent integration layer.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use jiff::Timestamp;
@@ -976,6 +977,47 @@ impl AgentState {
             | AgentStatus::Failed
             | AgentStatus::Paused => false,
         }
+    }
+
+    pub(crate) fn compare_same_pane_owner(&self, other: &Self) -> Ordering {
+        let follows_latest = self.kind == other.kind
+            && super::spec_by_kind(self.kind.as_str()).is_some_and(|definition| {
+                definition.capabilities.same_pane_session
+                    == super::SamePaneSessionPolicy::FollowLatest
+            });
+        let open_turn_order = other.holds_open_turn().cmp(&self.holds_open_turn());
+        if open_turn_order != Ordering::Equal {
+            return open_turn_order;
+        }
+        let latest_registration =
+            |left: &Self, right: &Self| match (left.registered_at, right.registered_at) {
+                (Some(left), Some(right)) => right.cmp(&left),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            };
+        if self.holds_open_turn() {
+            if follows_latest {
+                return latest_registration(self, other)
+                    .then_with(|| other.last_activity.cmp(&self.last_activity))
+                    .then_with(|| other.agent_id.cmp(&self.agent_id));
+            }
+            return (self.registered_at.is_none(), self.registered_at)
+                .cmp(&(other.registered_at.is_none(), other.registered_at))
+                .then_with(|| self.agent_id.cmp(&other.agent_id));
+        }
+
+        other
+            .last_activity
+            .cmp(&self.last_activity)
+            .then_with(|| latest_registration(self, other))
+            .then_with(|| {
+                if follows_latest {
+                    other.agent_id.cmp(&self.agent_id)
+                } else {
+                    self.agent_id.cmp(&other.agent_id)
+                }
+            })
     }
 
     /// True when the row must reserve pane input for a native prompt. Durable

@@ -8,7 +8,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::process::{pane_agent_kind, pane_worktree_path};
-use crate::agents::{AgentState, SamePaneSessionPolicy};
+use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::{PaneRef, RuntimeOwnerKind};
 use crate::store::session_death::agent_owner_pid;
@@ -118,30 +118,6 @@ impl<'a> PaneBindingIndex<'a> {
             })
     }
 
-    fn stamped_agent_for_launch(
-        &self,
-        pane: &PaneRef,
-        kind: &AgentKind,
-        launch_id: &AgentSessionId,
-    ) -> Option<&'a AgentState> {
-        self.stamped_by_pane
-            .get(&pane.pane_id)?
-            .iter()
-            .filter_map(|index| self.agents.get(*index))
-            .filter(|agent| {
-                agent.kind == *kind
-                    && agent.launch_id.as_ref() == Some(launch_id)
-                    && !agent.is_provider_subagent()
-            })
-            .filter(|agent| {
-                agent
-                    .pane
-                    .as_ref()
-                    .is_some_and(|stamped| stamped_agent_matches_live_pane(agent, stamped, pane))
-            })
-            .min_by(|left, right| compare_same_pane_owners(left, right))
-    }
-
     /// The newest RimZ-launched root stamped on this live pane. Unlike
     /// [`Self::stamped_agent`], this deliberately ignores the adapter's
     /// same-pane primary policy: a later launch is the pane-incarnation clock
@@ -186,6 +162,30 @@ impl<'a> PaneBindingIndex<'a> {
                     .is_some_and(|stamped| stamped_agent_matches_live_pane(agent, stamped, pane))
             })
             .min_by(|left, right| compare_same_pane_owners(left, right))
+    }
+
+    fn stamped_agent_for_ambient_pane(&self, pane: &PaneRef) -> Option<&'a AgentState> {
+        let candidates = self
+            .stamped_by_pane
+            .get(&pane.pane_id)?
+            .iter()
+            .filter_map(|index| self.agents.get(*index))
+            .filter(|agent| !agent.is_provider_subagent())
+            .filter(|agent| {
+                agent
+                    .pane
+                    .as_ref()
+                    .is_some_and(|stamped| pane_start_matches_agent_stamp(stamped, pane))
+            });
+        candidates
+            .clone()
+            .filter(|agent| agent.parent_agent_id.is_none())
+            .min_by(|left, right| compare_same_pane_owners(left, right))
+            .or_else(|| {
+                candidates
+                    .filter(|agent| agent.is_launched_child())
+                    .min_by(|left, right| compare_same_pane_owners(left, right))
+            })
     }
 
     pub(super) fn live_foreign_owner(
@@ -441,72 +441,14 @@ pub fn stamped_agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
 ) -> Option<&'a AgentState> {
-    PaneBindingIndex::new(agents).stamped_agent(pane)
-}
-
-#[doc(hidden)]
-pub fn stamped_agent_for_launch<'a>(
-    pane: &PaneRef,
-    agents: &'a [AgentState],
-    kind: &AgentKind,
-    launch_id: &AgentSessionId,
-) -> Option<&'a AgentState> {
-    PaneBindingIndex::new(agents).stamped_agent_for_launch(pane, kind, launch_id)
+    PaneBindingIndex::new(agents).stamped_agent_for_ambient_pane(pane)
 }
 
 /// Which co-resident root owns a pane: an open turn outranks a rested one;
 /// policy orders open pairs; latest activity orders rested pairs. Registration
 /// and session id break the remaining ties deterministically.
-pub(crate) fn compare_same_pane_owners(left: &AgentState, right: &AgentState) -> Ordering {
-    let follows_latest = left.kind == right.kind
-        && crate::agents::spec_by_kind(left.kind.as_str()).is_some_and(|definition| {
-            definition.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
-        });
-    let open_turn_order = right.holds_open_turn().cmp(&left.holds_open_turn());
-    if open_turn_order != Ordering::Equal {
-        return open_turn_order;
-    }
-
-    if left.holds_open_turn() {
-        if follows_latest {
-            return compare_latest_registration(left, right)
-                .then_with(|| right.last_activity.cmp(&left.last_activity))
-                .then_with(|| right.agent_id.cmp(&left.agent_id));
-        }
-        return registered_rank(left)
-            .cmp(&registered_rank(right))
-            .then_with(|| left.agent_id.cmp(&right.agent_id));
-    }
-
-    right
-        .last_activity
-        .cmp(&left.last_activity)
-        .then_with(|| compare_latest_registration(left, right))
-        .then_with(|| {
-            if follows_latest {
-                right.agent_id.cmp(&left.agent_id)
-            } else {
-                left.agent_id.cmp(&right.agent_id)
-            }
-        })
-}
-
-fn compare_latest_registration(left: &AgentState, right: &AgentState) -> Ordering {
-    match (left.registered_at, right.registered_at) {
-        (Some(left), Some(right)) => right.cmp(&left),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
-    }
-}
-
-/// Registration sort key: an earlier `registered_at` ranks first (the pane's
-/// primary owner), and an absent stamp (a rollup persisted before the field
-/// existed) ranks last so a known primary always outranks it. `is_none()` is
-/// `false` for `Some` and `true` for `None`, so `Some` sorts ahead of `None`;
-/// within `Some`, the earlier timestamp sorts first.
-fn registered_rank(agent: &AgentState) -> (bool, Option<Timestamp>) {
-    (agent.registered_at.is_none(), agent.registered_at)
+fn compare_same_pane_owners(left: &AgentState, right: &AgentState) -> Ordering {
+    left.compare_same_pane_owner(right)
 }
 
 fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: &PaneRef) -> bool {
@@ -745,34 +687,28 @@ mod tests {
     }
 
     #[test]
-    fn launch_identity_lookup_uses_the_same_pane_owner_order() {
+    fn pane_lookup_uses_the_same_owner_order_for_launched_children() {
         let mut dead = agent("codex", "conversation-a", AgentStatus::Running, 1_000)
             .worktree("/repo/main")
             .in_pane("%1")
             .active_ago(120)
             .overloaded_turn_error(110, "server_overloaded");
         dead.launch_id = Some(AgentSessionId::from("launch_coder"));
+        dead.parent_agent_id = Some(AgentSessionId::from("parent"));
+        dead.launch_depth = Some(1);
         dead.registered_at = Some(ago(600));
         let mut successor = agent("codex", "conversation-b", AgentStatus::Success, 2_000)
             .worktree("/repo/main")
             .in_pane("%1")
             .active_ago(5);
         successor.launch_id = Some(AgentSessionId::from("launch_coder"));
+        successor.parent_agent_id = Some(AgentSessionId::from("parent"));
+        successor.launch_depth = Some(1);
         successor.registered_at = Some(ago(60));
-        let pane = PaneRef {
-            command: Some("codex".to_owned()),
-            cwd: Some("/repo/main".to_owned()),
-            ..PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%1"))
-        };
+        let pane = PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%1"));
         let agents = [dead, successor];
 
-        let owner = stamped_agent_for_launch(
-            &pane,
-            &agents,
-            &AgentKind::new_unchecked("codex"),
-            &AgentSessionId::from("launch_coder"),
-        )
-        .expect("launched pane owner");
+        let owner = stamped_agent_for_pane(&pane, &agents).expect("launched pane owner");
 
         assert_eq!(owner.agent_id.as_str(), "conversation-b");
     }
