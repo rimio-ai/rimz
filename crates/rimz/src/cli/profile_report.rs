@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use super::render;
 use rimz::config::effective::ProfileScope;
-use rimz::harness::subagent_policy::{SubagentCatalog, SubagentSpec, SubagentSpecSource};
+use rimz::harness::subagent_policy::{SubagentCatalog, SubagentProfile, SubagentProfileSource};
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct AgentProfileReport {
@@ -75,31 +75,33 @@ pub(crate) fn subagent_reports(
 }
 
 fn subagent_report(
-    spec: SubagentSpec,
+    profile: SubagentProfile,
     profiles: &rimz::config::ProfilesConfig,
     sources: &rimz::config::AgentSpecSources,
 ) -> AgentProfileReport {
-    let (source, path) = match spec.source {
-        SubagentSpecSource::Profile => (
+    let (source, path) = match profile.source {
+        SubagentProfileSource::Profile => (
             "profile",
             sources
-                .profile(ProfileScope::Subagents, &spec.name)
+                .profile(ProfileScope::Subagents, &profile.name)
                 .map(PathBuf::from),
         ),
-        SubagentSpecSource::Command => ("command", sources.command(&spec.name).map(PathBuf::from)),
+        SubagentProfileSource::Command => {
+            ("command", sources.command(&profile.name).map(PathBuf::from))
+        }
     };
-    let brand_kind = spec
+    let brand_kind = profile
         .agent
         .as_deref()
         .map(|agent| provider_brand_kind(agent, profiles).to_owned());
     AgentProfileReport {
-        name: spec.name,
+        name: profile.name,
         source,
         brand_kind,
-        agent: spec.agent,
-        model: spec.model,
-        effort: spec.effort,
-        description: spec.description,
+        agent: profile.agent,
+        model: profile.model,
+        effort: profile.effort,
+        description: profile.description,
         path,
     }
 }

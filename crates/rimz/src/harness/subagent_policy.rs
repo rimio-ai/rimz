@@ -5,15 +5,15 @@ use crate::config::{CommandsConfig, ProfilesConfig};
 use crate::harness::spec::LayoutErr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SubagentSpecSource {
+pub enum SubagentProfileSource {
     Profile,
     Command,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SubagentSpec {
+pub struct SubagentProfile {
     pub name: String,
-    pub source: SubagentSpecSource,
+    pub source: SubagentProfileSource,
     pub agent: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -23,7 +23,7 @@ pub struct SubagentSpec {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SubagentCatalog {
     Disabled,
-    Available(Vec<SubagentSpec>),
+    Available(Vec<SubagentProfile>),
 }
 
 pub fn catalog(
@@ -40,18 +40,18 @@ pub fn catalog(
     let mut specs = subagent_profiles
         .0
         .iter()
-        .map(|(name, profile)| SubagentSpec {
+        .map(|(name, profile)| SubagentProfile {
             name: name.clone(),
-            source: SubagentSpecSource::Profile,
+            source: SubagentProfileSource::Profile,
             agent: Some(profile.agent.clone()),
             model: profile.model.clone(),
             effort: profile.effort.clone(),
             description: profile.description.clone(),
         })
         .collect::<Vec<_>>();
-    specs.extend(commands.0.keys().map(|name| SubagentSpec {
+    specs.extend(commands.0.keys().map(|name| SubagentProfile {
         name: name.clone(),
-        source: SubagentSpecSource::Command,
+        source: SubagentProfileSource::Command,
         agent: None,
         model: None,
         effort: None,
@@ -66,39 +66,39 @@ pub fn catalog(
 pub fn reminder(catalog: &SubagentCatalog) -> String {
     let body = match catalog {
         SubagentCatalog::Disabled => "Subagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools.".to_owned(),
-        SubagentCatalog::Available(specs) if specs.is_empty() => "No subagent types are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `[subagents.profiles]` entries to agents.toml.".to_owned(),
+        SubagentCatalog::Available(specs) if specs.is_empty() => "No subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `[subagents.profiles]` entries to agents.toml.".to_owned(),
         SubagentCatalog::Available(specs) => {
             let list = specs
                 .iter()
-                .map(reminder_spec)
+                .map(reminder_profile)
                 .collect::<Vec<_>>()
                 .join("\n");
             format!(
-                "Subagents are available to you; launch them with Skill(rimz-subagents). Use them to run independent work in parallel, fan out searches or audits, or keep a large exploration out of your own context: delegate it and keep the conclusion, not the file dumps.\n\nAvailable subagent types you may launch:\n{list}"
+                "Subagents are available to you; launch them with Skill(rimz-subagents). Use them to run independent work in parallel, fan out searches or audits, or keep a large exploration out of your own context: delegate it and keep the conclusion, not the file dumps.\n\nAvailable subagent profiles you may launch:\n{list}"
             )
         }
     };
     format!("<system_reminder>\n{body}\n</system_reminder>")
 }
 
-fn reminder_spec(spec: &SubagentSpec) -> String {
+fn reminder_profile(profile: &SubagentProfile) -> String {
     let details = [
-        spec.agent.as_deref(),
-        spec.model.as_deref(),
-        spec.effort.as_deref(),
+        profile.agent.as_deref(),
+        profile.model.as_deref(),
+        profile.effort.as_deref(),
     ]
     .into_iter()
     .flatten()
     .collect::<Vec<_>>()
     .join(" · ");
     let details = (!details.is_empty()).then(|| format!(" ({details})"));
-    let description = spec
+    let description = profile
         .description
         .as_deref()
         .map(|description| format!(": {description}"));
     format!(
         "- `{}`{}{}",
-        spec.name,
+        profile.name,
         details.as_deref().unwrap_or_default(),
         description.as_deref().unwrap_or_default()
     )
@@ -116,20 +116,20 @@ pub fn allowed_specs<'a>(
 pub fn check_allowed(
     caller: &AgentState,
     profiles: &ProfilesConfig,
-    spec: &str,
+    profile: &str,
     agent_override: Option<&str>,
 ) -> crate::harness::spec::Result<()> {
     let Some(allowed) = allowed_specs(caller.profile.as_deref(), profiles) else {
         return Ok(());
     };
-    for requested in [Some(spec), agent_override].into_iter().flatten() {
+    for requested in [Some(profile), agent_override].into_iter().flatten() {
         let requested = requested.trim();
         if allowed.iter().any(|candidate| candidate == requested) {
             continue;
         }
-        return Err(LayoutErr::SubagentSpecNotAllowed {
-            profile: caller.profile.clone().unwrap_or_default(),
-            spec: requested.to_owned(),
+        return Err(LayoutErr::SubagentProfileNotAllowed {
+            caller_profile: caller.profile.clone().unwrap_or_default(),
+            profile: requested.to_owned(),
             allowed: format!("[{}]", allowed.join(", ")),
         });
     }
@@ -224,8 +224,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["explorer", "lint"]
         );
-        assert_eq!(specs[0].source, SubagentSpecSource::Profile);
-        assert_eq!(specs[1].source, SubagentSpecSource::Command);
+        assert_eq!(specs[0].source, SubagentProfileSource::Profile);
+        assert_eq!(specs[1].source, SubagentProfileSource::Command);
     }
 
     #[test]
@@ -266,17 +266,17 @@ mod tests {
     #[test]
     fn reminder_renders_available_specs_and_disabled_policy() {
         let available = SubagentCatalog::Available(vec![
-            SubagentSpec {
+            SubagentProfile {
                 name: "explorer".to_owned(),
-                source: SubagentSpecSource::Profile,
+                source: SubagentProfileSource::Profile,
                 agent: Some("claude".to_owned()),
                 model: Some("sonnet".to_owned()),
                 effort: Some("low".to_owned()),
                 description: Some("Finds files and traces code paths".to_owned()),
             },
-            SubagentSpec {
+            SubagentProfile {
                 name: "lint".to_owned(),
-                source: SubagentSpecSource::Command,
+                source: SubagentProfileSource::Command,
                 agent: None,
                 model: None,
                 effort: None,
@@ -288,7 +288,7 @@ mod tests {
             text,
             "<system_reminder>\n\
              Subagents are available to you; launch them with Skill(rimz-subagents). Use them to run independent work in parallel, fan out searches or audits, or keep a large exploration out of your own context: delegate it and keep the conclusion, not the file dumps.\n\n\
-             Available subagent types you may launch:\n\
+             Available subagent profiles you may launch:\n\
              - `explorer` (claude · sonnet · low): Finds files and traces code paths\n\
              - `lint`\n\
              </system_reminder>"
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(
             reminder(&SubagentCatalog::Available(Vec::new())),
             "<system_reminder>\n\
-             No subagent types are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `[subagents.profiles]` entries to agents.toml.\n\
+             No subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `[subagents.profiles]` entries to agents.toml.\n\
              </system_reminder>"
         );
     }

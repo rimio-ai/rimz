@@ -137,7 +137,7 @@ fn fanout_task_matches_the_single_launch_surface() {
     assert!(fanout.json);
     let launches = parse_fanout_launches(
         r#"[{
-            "spec": "claude",
+            "profile": "claude",
             "prompt": "review this",
             "name": "auth-review",
             "model": "opus",
@@ -196,22 +196,26 @@ fn fanout_timeout_precedence_is_task_then_flag_then_config() {
     };
 
     let task = parse_fanout_launches(
-        r#"[{"spec":"codex","prompt":"one","timeout":"5m"}]"#,
+        r#"[{"profile":"codex","prompt":"one","timeout":"5m"}]"#,
         &flagged,
         &defaults,
     )
     .expect("task timeout");
     assert_eq!(task[0].timeout, Some(Duration::from_secs(5 * 60)));
 
-    let flag = parse_fanout_launches(r#"[{"spec":"codex","prompt":"one"}]"#, &flagged, &defaults)
-        .expect("flag timeout");
+    let flag = parse_fanout_launches(
+        r#"[{"profile":"codex","prompt":"one"}]"#,
+        &flagged,
+        &defaults,
+    )
+    .expect("flag timeout");
     assert_eq!(flag[0].timeout, Some(Duration::from_secs(10 * 60)));
 
     let Some(SubagentsSubcmd::Fanout(unflagged)) = parse(&["rimz", "fanout"]).command else {
         panic!("fanout command");
     };
     let config = parse_fanout_launches(
-        r#"[{"spec":"codex","prompt":"one"}]"#,
+        r#"[{"profile":"codex","prompt":"one"}]"#,
         &unflagged,
         &defaults,
     )
@@ -230,13 +234,13 @@ fn fanout_validates_the_whole_task_list_before_launch() {
     assert!(empty.to_string().contains("at least one task"));
 
     let missing_prompt =
-        parse_fanout_launches(r#"[{"spec":"codex","name":"auth"}]"#, &fanout, &defaults)
+        parse_fanout_launches(r#"[{"profile":"codex","name":"auth"}]"#, &fanout, &defaults)
             .expect_err("missing prompt");
     assert!(format!("{missing_prompt:#}").contains("task 1 (auth)"));
     assert!(format!("{missing_prompt:#}").contains("prompt from the parent"));
 
     let conflicting_prompt = parse_fanout_launches(
-        r#"[{"spec":"codex","prompt":"inline","prompt_file":"prompt.md"}]"#,
+        r#"[{"profile":"codex","prompt":"inline","prompt_file":"prompt.md"}]"#,
         &fanout,
         &defaults,
     )
@@ -245,8 +249,8 @@ fn fanout_validates_the_whole_task_list_before_launch() {
 
     let duplicate = parse_fanout_launches(
         r#"[
-            {"spec":"codex","prompt":"one","name":"auth"},
-            {"spec":"claude","prompt":"two","name":"auth"}
+            {"profile":"codex","prompt":"one","name":"auth"},
+            {"profile":"claude","prompt":"two","name":"auth"}
         ]"#,
         &fanout,
         &defaults,
@@ -257,6 +261,23 @@ fn fanout_validates_the_whole_task_list_before_launch() {
             .to_string()
             .contains("task 2 repeats child name `auth`")
     );
+}
+
+#[test]
+fn fanout_rejects_the_retired_spec_key() {
+    let Some(SubagentsSubcmd::Fanout(fanout)) = parse(&["rimz", "fanout"]).command else {
+        panic!("fanout command");
+    };
+    let error = parse_fanout_launches(
+        r#"[{"spec":"codex","prompt":"one"}]"#,
+        &fanout,
+        &rimz::config::SubagentsConfig::default(),
+    )
+    .expect_err("retired spec key");
+    let error = format!("{error:#}");
+
+    assert!(error.contains("unknown field `spec`"));
+    assert!(error.contains("`profile`"));
 }
 
 #[test]
@@ -291,7 +312,7 @@ fn prompt_files_resolve_for_single_launch_and_fanout() {
         panic!("fanout command");
     };
     let raw = format!(
-        r#"[{{"spec":"codex","prompt_file":{}}}]"#,
+        r#"[{{"profile":"codex","prompt_file":{}}}]"#,
         serde_json::to_string(prompt_path.as_ref()).expect("json path")
     );
     let launches = parse_fanout_launches(&raw, &fanout, &rimz::config::SubagentsConfig::default())
@@ -444,7 +465,7 @@ fn profiles_are_the_only_user_shell_subcommand() {
     for command in ["specs", "types"] {
         let args = parse(&["rimz", command]);
         assert!(args.command.is_none());
-        assert_eq!(args.launch.spec.as_deref(), Some(command));
+        assert_eq!(args.launch.profile.as_deref(), Some(command));
         assert!(command_is_agent_only(args.command.as_ref()));
     }
 }

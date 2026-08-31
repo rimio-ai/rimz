@@ -303,9 +303,9 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
 fn process_compiler_appends_available_catalog_only_to_peer_launches() {
     let project = tempfile::tempdir().expect("project");
     let catalog = crate::harness::subagent_policy::SubagentCatalog::Available(vec![
-        crate::harness::subagent_policy::SubagentSpec {
+        crate::harness::subagent_policy::SubagentProfile {
             name: "explorer".to_owned(),
-            source: crate::harness::subagent_policy::SubagentSpecSource::Profile,
+            source: crate::harness::subagent_policy::SubagentProfileSource::Profile,
             agent: Some("claude".to_owned()),
             model: Some("sonnet".to_owned()),
             effort: None,

@@ -164,7 +164,7 @@ pub(crate) fn agent_specs() -> Vec<CompletionCandidate> {
     agent_specs_from(&MachineConfig::load_lenient())
 }
 
-pub(crate) fn subagent_specs() -> Vec<CompletionCandidate> {
+pub(crate) fn subagent_profiles() -> Vec<CompletionCandidate> {
     let config = MachineConfig::load_lenient();
     launch_specs_from(&config, &config.subagents.profiles)
 }
@@ -434,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_specs_use_the_subagent_profile_namespace() {
+    fn subagent_profiles_resolve_in_the_subagent_namespace() {
         let config: MachineConfig = toml::from_str(
             r#"
             [agents.profiles.writer]
