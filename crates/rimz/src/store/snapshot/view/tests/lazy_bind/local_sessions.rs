@@ -515,6 +515,36 @@ fn latest_hook_bound_antigravity_conversation_consumes_the_shared_pane() {
 }
 
 #[test]
+fn exact_resume_moves_a_co_resident_non_owner_to_its_new_pane() {
+    let shared_pane = pane("%1", "agy", "/repo/main");
+    let mut resumed_pane = pane("%2", "agy", "/repo/main");
+    resumed_pane.resumed_session_id = Some(AgentSessionId::from("conversation-old"));
+    let mut old = agent("antigravity", "conversation-old", AgentStatus::Success, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(120);
+    old.registered_at = Some(ago(600));
+    let mut owner = agent("antigravity", "conversation-owner", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(5);
+    owner.registered_at = Some(ago(60));
+    let mut resumed = observation("conversation-old", 600, Some(10), None);
+    resumed.kind = AgentKind::new_unchecked("antigravity");
+
+    let snapshot =
+        room(vec![old, owner]).with_local_sessions(&[shared_pane, resumed_pane], vec![resumed]);
+
+    assert_eq!(
+        rollup_agent(&snapshot, "conversation-old")
+            .pane
+            .as_ref()
+            .map(|pane| pane.pane_id.raw()),
+        Some("%2")
+    );
+}
+
+#[test]
 fn lifecycle_state_newer_than_turn_start_but_older_than_activity_is_rejected() {
     let pane = pane("%1", "agy", "/repo/main");
     let mut durable = agent("antigravity", "conversation-a", AgentStatus::Running, 0)
