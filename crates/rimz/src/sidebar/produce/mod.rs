@@ -220,6 +220,7 @@ fn produce_resolution_snapshot(
         frame,
         opts.exclude.as_ref(),
         crate::sidebar::agent_projection::probe_current(),
+        runtime,
     ))
 }
 
@@ -406,7 +407,9 @@ fn fold_resolution_frame(
     frame: PaneFrame,
     exclude: Option<&PaneId>,
     wired: WiredAgentProjection,
+    runtime: &RuntimePaths,
 ) -> SidebarSnapshot {
+    crate::store::agent_context::attach_rest_certificates(runtime, snapshot.agents.iter_mut());
     snapshot.wired_kinds = wired.kinds;
     snapshot.wired_default_models = wired.default_models;
     snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
@@ -589,24 +592,23 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{AgentState, AgentStatus};
+    use crate::agents::{AgentContext, AgentState, AgentStatus, AgentTurnError, TurnErrorClass};
     use crate::ids::WorkspaceId;
     use crate::pane::RuntimeOwnerKind;
     use jiff::Timestamp;
 
     #[test]
     fn resolution_frame_folds_bound_and_lazy_panes_without_render_spine() {
+        let dir = tempfile::tempdir().expect("runtime root");
+        let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo/main"));
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime paths");
         let now = Timestamp::from_second(1_750_000_000).expect("fixed timestamp");
         let bound_pane = test_support::pane("bound", Some("claude"), Some("/repo/main"));
         let lazy_pane = test_support::pane("lazy", Some("codex"), Some("/repo/lazy"));
         let mut bound_agent = agent("claude", "sess-bound", now);
         bound_agent.pane = Some(bound_pane.clone());
         bound_agent.worktree_path = Some("/repo/main".to_owned());
-        let snapshot = SidebarSnapshot::build_with_agents(
-            WorkspaceId::from_project_root(std::path::Path::new("/repo/main")),
-            vec![bound_agent],
-            now,
-        );
+        let snapshot = SidebarSnapshot::build_with_agents(workspace, vec![bound_agent], now);
         let frame = assemble_frame(vec![bound_pane, lazy_pane], 123, "rimz-test".to_owned());
 
         let snapshot = fold_resolution_frame(
@@ -617,6 +619,7 @@ mod tests {
                 kinds: vec!["codex".to_owned()],
                 default_models: std::collections::BTreeMap::new(),
             },
+            &runtime,
         );
 
         let bound = snapshot
@@ -640,6 +643,51 @@ mod tests {
         assert!(snapshot.workspace_value_tally.is_none());
         assert!(snapshot.today_spend_live_usd.is_none());
         assert!(snapshot.worktree_roots.is_empty());
+    }
+
+    #[test]
+    fn resolution_frame_uses_rest_certificates_before_selecting_the_pane_owner() {
+        let dir = tempfile::tempdir().expect("runtime root");
+        let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo/main"));
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime paths");
+        let older_at = Timestamp::from_second(1_750_000_000).expect("older timestamp");
+        let error_at = Timestamp::from_second(1_750_000_001).expect("error timestamp");
+        let newer_at = Timestamp::from_second(1_750_000_002).expect("newer timestamp");
+        let live_pane = test_support::pane("shared", Some("codex"), Some("/repo/main"));
+        let mut dead_owner = agent("codex", "dead-owner", older_at);
+        dead_owner.pane = Some(live_pane.clone());
+        dead_owner.worktree_path = Some("/repo/main".to_owned());
+        let mut successor = agent("codex", "successor", newer_at);
+        successor.status = AgentStatus::Success;
+        successor.pane = Some(live_pane.clone());
+        successor.worktree_path = Some("/repo/main".to_owned());
+        let context = AgentContext {
+            turn_error: Some(AgentTurnError {
+                class: TurnErrorClass::PausedOverloaded,
+                at: error_at,
+                label: Some("server_overloaded".to_owned()),
+            }),
+            ..AgentContext::new("codex", error_at)
+        };
+        crate::store::agent_context::write(&runtime, "codex", "dead-owner", &context)
+            .expect("write rest certificate");
+        let snapshot =
+            SidebarSnapshot::build_with_agents(workspace, vec![dead_owner, successor], newer_at);
+        let frame = assemble_frame(vec![live_pane], 123, "rimz-test".to_owned());
+
+        let snapshot = fold_resolution_frame(
+            snapshot,
+            frame,
+            None,
+            WiredAgentProjection::default(),
+            &runtime,
+        );
+
+        assert_eq!(snapshot.agent_panes.len(), 1);
+        assert_eq!(
+            snapshot.agent_panes[0].agent_id.as_deref(),
+            Some("successor")
+        );
     }
 
     #[test]
