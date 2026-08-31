@@ -4,7 +4,7 @@ use super::*;
 
 use super::super::view::{attach_sub_agents, row_from_agent, sub_agent_from_state};
 use crate::agents::lifecycle::TurnPhase;
-use crate::agents::{AgentStatus, LaunchParams, SessionOrigin};
+use crate::agents::{AgentStatus, LaunchParams, PermissionMode, SessionOrigin};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
@@ -42,6 +42,32 @@ fn raw_lifecycle_at(
     let mut event = raw_lifecycle(source, params);
     event.timestamp = Timestamp::from_second(epoch().as_second() + secs_after_epoch).unwrap();
     event
+}
+
+fn same_process_registration(
+    id: &str,
+    name: &str,
+    secs_after_epoch: i64,
+    pane_id: &str,
+    owner_pid: u32,
+) -> EventEnvelope {
+    raw_lifecycle_at(
+        "codex",
+        secs_after_epoch,
+        json!({
+            "agent_id": id,
+            "agent_name": name,
+            "signal": { "signal": "registered" },
+            "pane_id": pane_id,
+            "pane_process_start": "pane-start",
+            "runtime_owner": {
+                "kind": "agent",
+                "subject_id": id,
+                "pid": owner_pid,
+                "process_start": "agent-start",
+            },
+        }),
+    )
 }
 
 fn launch_payload(agent_id: &str, agent_name: &str) -> AgentLaunchPayload {
@@ -797,6 +823,113 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
         agents[0].pane.as_ref().map(|pane| pane.pane_id.to_string()),
         Some("zellij:terminal_1".to_owned())
     );
+}
+
+#[test]
+fn same_process_successor_inherits_launch_identity_without_card_primacy() {
+    let pane_id = "tmux:%1";
+    let owner_pid = 42;
+    let launch = launch_event(
+        "codex",
+        AgentLaunchPayload {
+            launch_id: Some(AgentSessionId::from("launch_coder")),
+            agent_name_explicit: true,
+            launch: LaunchParams {
+                profile: Some("codex-coder".to_owned()),
+                mode: Some(PermissionMode::Auto),
+                role: Some("coder".to_owned()),
+                team: Some("forge".to_owned()),
+                launch_group: Some("launch_group_1".to_owned()),
+                launch_ordinal: Some(1),
+                channel: Some("card-state".to_owned()),
+                launch_depth: Some(0),
+                ..LaunchParams::default()
+            },
+            pane_id: Some(PaneId::parse(pane_id).expect("pane id")),
+            runtime_owner: Some(RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "launch_coder",
+                owner_pid,
+                Some("agent-start".to_owned()),
+            )),
+            prompt: None,
+            ..launch_payload("launch_coder", "coder-card")
+        },
+    );
+    let first = same_process_registration("conversation-a", "coder-card", 2, pane_id, owner_pid);
+    let successor =
+        same_process_registration("conversation-b", "successor-card", 3, pane_id, owner_pid);
+
+    let agents = reduce_agent_states(&[launch, first, successor]);
+    let first = agents
+        .iter()
+        .find(|agent| agent.agent_id == "conversation-a")
+        .expect("first conversation");
+    let successor = agents
+        .iter()
+        .find(|agent| agent.agent_id == "conversation-b")
+        .expect("successor conversation");
+
+    assert_eq!(successor.launch_id.as_deref(), Some("launch_coder"));
+    assert_eq!(successor.profile.as_deref(), Some("codex-coder"));
+    assert_eq!(successor.mode, Some(PermissionMode::Auto));
+    assert_eq!(successor.role.as_deref(), Some("coder"));
+    assert_eq!(successor.team.as_deref(), Some("forge"));
+    assert_eq!(successor.launch_group.as_deref(), Some("launch_group_1"));
+    assert_eq!(successor.launch_ordinal, Some(1));
+    assert_eq!(successor.channel.as_deref(), Some("card-state"));
+    assert_eq!(successor.launch_depth, Some(0));
+    assert_eq!(successor.name.as_deref(), Some("successor-card"));
+    assert!(!successor.name_explicit);
+    assert_eq!(
+        successor.registered_at,
+        Some(Timestamp::from_second(epoch().as_second() + 3).unwrap())
+    );
+    assert_ne!(successor.registered_at, first.registered_at);
+}
+
+#[test]
+fn launched_child_successor_stays_nested_under_its_parent() {
+    let pane_id = "tmux:%2";
+    let owner_pid = 84;
+    let launch = launch_event(
+        "codex",
+        AgentLaunchPayload {
+            launch_id: Some(AgentSessionId::from("launch_child")),
+            launch: LaunchParams {
+                parent_agent_id: Some(AgentSessionId::from("root-session")),
+                parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+                launch_depth: Some(2),
+                role: Some("reviewer".to_owned()),
+                ..LaunchParams::default()
+            },
+            pane_id: Some(PaneId::parse(pane_id).expect("pane id")),
+            runtime_owner: Some(RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "launch_child",
+                owner_pid,
+                Some("agent-start".to_owned()),
+            )),
+            ..launch_payload("launch_child", "reviewer")
+        },
+    );
+    let first = same_process_registration("child-a", "reviewer", 2, pane_id, owner_pid);
+    let successor = same_process_registration("child-b", "child-b", 3, pane_id, owner_pid);
+
+    let agents = reduce_agent_states(&[launch, first, successor]);
+    let successor = agents
+        .iter()
+        .find(|agent| agent.agent_id == "child-b")
+        .expect("child successor");
+
+    assert_eq!(successor.launch_id.as_deref(), Some("launch_child"));
+    assert_eq!(successor.parent_agent_id.as_deref(), Some("root-session"));
+    assert_eq!(
+        successor.parent_agent_kind.as_ref(),
+        Some(&AgentKind::new_unchecked("claude"))
+    );
+    assert_eq!(successor.launch_depth, Some(2));
+    assert!(successor.is_launched_child());
 }
 
 #[test]

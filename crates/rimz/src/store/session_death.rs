@@ -73,7 +73,7 @@ fn same_process_conversation_supersedes(older: &AgentState, newer: &AgentState) 
 }
 
 /// Whether two roots name the same pane and agent-process incarnation.
-fn same_agent_instance(older: &AgentState, newer: &AgentState) -> bool {
+pub(crate) fn same_agent_instance(older: &AgentState, newer: &AgentState) -> bool {
     let same_pane = matches!(
         (older.pane.as_ref(), newer.pane.as_ref()),
         (Some(older_pane), Some(newer_pane))
