@@ -72,7 +72,7 @@ pub(crate) fn print_run_forensics<W: Write + ?Sized>(
 }
 
 pub(crate) fn status_label(status: RunStatus) -> &'static str {
-    status.as_str()
+    status.label()
 }
 
 pub(super) fn verify_status_label(verify: &rimz::harness::run::RunVerify) -> String {
@@ -359,7 +359,7 @@ mod tests {
 
         assert_eq!(String::from_utf8(out).unwrap(), "claimed done\n");
         let err = anstream::adapter::strip_str(&String::from_utf8(err).unwrap()).to_string();
-        assert!(err.contains("rimz: run verify_failed (exit 123)"));
+        assert!(err.contains("rimz: run verify failed (exit 123)"));
         assert!(err.contains("verify `cargo xtask test auth` exited 7 (attempt 3)"));
         assert!(err.contains("still broken"));
     }

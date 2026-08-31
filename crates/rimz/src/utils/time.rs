@@ -122,6 +122,22 @@ pub fn parse_duration_units(raw: &str, allowed: &[DurationUnit]) -> Result<Durat
     Ok(unit.duration(amount))
 }
 
+pub fn format_compact_duration(duration: Duration) -> String {
+    let mut seconds = duration.as_secs();
+    let mut rendered = String::new();
+    for (unit_seconds, suffix) in [(86_400, "d"), (3_600, "h"), (60, "m")] {
+        let amount = seconds / unit_seconds;
+        if amount > 0 {
+            rendered.push_str(&format!("{amount}{suffix}"));
+            seconds %= unit_seconds;
+        }
+    }
+    if seconds > 0 || rendered.is_empty() {
+        rendered.push_str(&format!("{seconds}s"));
+    }
+    rendered
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +187,12 @@ mod tests {
         for raw in ["", "8", "24:00", "23:60", "noon"] {
             assert!(raw.parse::<ClockTime>().is_err(), "{raw}");
         }
+    }
+
+    #[test]
+    fn compact_duration_uses_each_nonzero_unit() {
+        assert_eq!(format_compact_duration(Duration::ZERO), "0s");
+        assert_eq!(format_compact_duration(Duration::from_secs(252)), "4m12s");
+        assert_eq!(format_compact_duration(Duration::from_secs(3_660)), "1h1m");
     }
 }
