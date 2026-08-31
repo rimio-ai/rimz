@@ -1,5 +1,7 @@
-//! Agent session supersession rules shared by durable and view reaps. The
-//! writer attaches provider rest certificates before applying them; the
+//! Agent session lineage and supersession rules shared by reducer inheritance
+//! and durable/view reaps. [`same_instance_lineage`] proves replacement
+//! ancestry; reaping adds activity and open-turn guards. The writer attaches
+//! provider rest certificates before applying those guards, while the
 //! store-only view reap deliberately falls back to durable lifecycle state.
 
 use jiff::Timestamp;
@@ -70,6 +72,24 @@ fn same_process_conversation_supersedes(older: &AgentState, newer: &AgentState) 
         return false;
     }
     same_agent_instance(older, newer)
+}
+
+/// Whether two roots are replacement conversations in one agent-process and
+/// pane incarnation. This deliberately ignores liveness: the reducer uses it
+/// to transfer launch identity even when only a later sidecar proves the older
+/// raw-active root rested.
+pub(crate) fn same_instance_lineage(older: &AgentState, newer: &AgentState) -> bool {
+    if !same_agent_instance(older, newer) {
+        return false;
+    }
+    let fresh_replacement =
+        older.origin == Some(SessionOrigin::Fresh) && newer.origin == Some(SessionOrigin::Fresh);
+    let compacted_continuation = newer.compacted_from.as_ref() == Some(&older.agent_id);
+    let follows_latest =
+        crate::agents::spec_by_kind(older.kind.as_str()).is_some_and(|definition| {
+            definition.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
+        });
+    fresh_replacement || compacted_continuation || follows_latest
 }
 
 /// Whether two roots name the same pane and agent-process incarnation.
