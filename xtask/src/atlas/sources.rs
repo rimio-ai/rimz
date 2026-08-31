@@ -11,8 +11,6 @@ use syn::token::Comma;
 
 use crate::source_files;
 
-use super::modules::path_in_scope;
-
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct Source {
     pub(super) path: PathBuf,
@@ -53,52 +51,7 @@ impl Source {
     }
 }
 
-pub(super) fn scope_sources(root: &Path, scope: &Path, at: Option<&str>) -> Result<Vec<Source>> {
-    let sources = all_sources(root, at)?;
-    sources_in_scope(&sources, scope)
-}
-
-pub(super) fn all_sources(root: &Path, at: Option<&str>) -> Result<Vec<Source>> {
-    let mut sources = if let Some(revision) = at {
-        revision_sources(root, revision)?
-    } else {
-        source_files::tracked_rust_files(root)?
-            .into_iter()
-            .map(|path| {
-                let relative = path
-                    .strip_prefix(root)
-                    .with_context(|| format!("making {} root-relative", path.display()))?
-                    .to_path_buf();
-                let text = fs::read_to_string(&path)
-                    .with_context(|| format!("reading {}", path.display()))?;
-                Ok(Source {
-                    path: relative,
-                    text,
-                    kind: SourceKind::Production,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?
-    };
-    classify_sources(&mut sources);
-    if sources.is_empty() {
-        bail!("no tracked Rust files in the repository");
-    }
-    Ok(sources)
-}
-
-pub(super) fn sources_in_scope(sources: &[Source], scope: &Path) -> Result<Vec<Source>> {
-    let sources = sources
-        .iter()
-        .filter(|source| path_in_scope(&source.path, scope))
-        .cloned()
-        .collect::<Vec<_>>();
-    if sources.is_empty() {
-        bail!("no tracked Rust files under `{}`", scope.display());
-    }
-    Ok(sources)
-}
-
-fn revision_sources(root: &Path, revision: &str) -> Result<Vec<Source>> {
+pub(super) fn revision_sources(root: &Path, revision: &str) -> Result<Vec<Source>> {
     let output = Command::new("git")
         .args(["ls-tree", "-r", "--name-only", revision, "--"])
         .current_dir(root)

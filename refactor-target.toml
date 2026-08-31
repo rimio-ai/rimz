@@ -1,118 +1,223 @@
-version = 2
+version = 3
+layers = ["build_id", "utils", "tui", "ids", "lane", "sock", "update", "testkit", "workspace", "transcript", "agent_activity", "pane", "proc", "store", "config", "trust", "theme", "agents", "daemon_view", "message", "mux", "remote", "observability", "diag", "harness", "forge", "worktree", "child_process", "room", "remote_control", "sidebar", "sidebar_pane", "osc", "web", "reload", "uninstall", "disk_usage", "daemon_content", "channel", "bin", "cli"]
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
-allowed-imports = [
-    "ids",
-    "store",
-]
+upward-imports = ["store"]
 surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/agents"
-allowed-imports = [
-    "(crate)",
-    "agent_activity",
-    "daemon_view",
-    "harness::run",
-    "ids",
-    "mux",
-    "pane",
-    "sock",
-    "store",
-    "transcript",
-]
+upward-imports = ["daemon_view", "mux"]
 surface-budget = 998
 
 [[module]]
 path = "crates/rimz/src/bin"
-allowed-imports = ["testkit::sandbox"]
 surface-budget = 0
 
 [[module]]
 path = "crates/rimz/src/build_id.rs"
-allowed-imports = []
 surface-budget = 7
 
 [[module]]
 path = "crates/rimz/src/channel.rs"
-allowed-imports = [
-    "store::atomic",
-    "store::lock",
-    "store::paths",
-    "workspace",
-]
 surface-budget = 13
 
 [[module]]
 path = "crates/rimz/src/child_process.rs"
-allowed-imports = ["(crate)"]
 surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/cli"
-allowed-imports = [
-    "(crate)",
-    "agents",
-    "build_id",
-    "config",
-    "diag::record",
-    "disk_usage",
-    "forge",
-    "harness",
-    "ids",
-    "message",
-    "mux",
-    "pane",
-    "proc",
-    "reload",
-    "remote",
-    "room",
-    "sidebar",
-    "sidebar_pane",
-    "store",
-    "theme",
-    "utils::time",
-    "transcript",
-    "trust",
-    "tui",
-    "uninstall",
-    "update",
-    "web",
-    "workspace",
-    "worktree",
-]
 surface-budget = 26
 
 [[module]]
+path = "crates/rimz/src/config"
+upward-imports = ["agents", "harness::budget", "harness::schedule", "harness::spec", "message", "sidebar::timing", "trust"]
+surface-budget = 13
+
+[[module]]
+path = "crates/rimz/src/config.rs"
+surface-budget = 169
+
+[[module]]
+path = "crates/rimz/src/daemon_content.rs"
+surface-budget = 7
+
+[[module]]
+path = "crates/rimz/src/daemon_view.rs"
+upward-imports = ["mux"]
+surface-budget = 20
+
+[[module]]
+path = "crates/rimz/src/diag"
+upward-imports = ["sidebar::presence"]
+surface-budget = 63
+
+[[module]]
+path = "crates/rimz/src/diag.rs"
+surface-budget = 20
+
+[[module]]
+path = "crates/rimz/src/disk_usage.rs"
+surface-budget = 7
+
+[[module]]
+path = "crates/rimz/src/forge.rs"
+surface-budget = 39
+
+[[module]]
+path = "crates/rimz/src/harness"
+surface-budget = 590
+
+[[module]]
+path = "crates/rimz/src/ids.rs"
+surface-budget = 38
+
+[[module]]
+path = "crates/rimz/src/lane.rs"
+surface-budget = 9
+
+[[module]]
+path = "crates/rimz/src/lib.rs"
+surface-budget = 69
+
+[[module]]
+path = "crates/rimz/src/main.rs"
+surface-budget = 0
+
+[[module]]
+path = "crates/rimz/src/message"
+upward-imports = ["harness::run", "mux"]
+surface-budget = 68
+
+[[module]]
+path = "crates/rimz/src/message.rs"
+upward-imports = ["harness::target"]
+surface-budget = 89
+
+[[module]]
+path = "crates/rimz/src/mux"
+upward-imports = ["remote", "sidebar::cache", "sidebar::timing"]
+surface-budget = 246
+
+[[module]]
+path = "crates/rimz/src/observability"
+surface-budget = 0
+
+[[module]]
+path = "crates/rimz/src/observability.rs"
+surface-budget = 11
+
+[[module]]
+path = "crates/rimz/src/osc.rs"
+surface-budget = 4
+
+[[module]]
+path = "crates/rimz/src/pane"
+upward-imports = ["proc"]
+surface-budget = 15
+
+[[module]]
+path = "crates/rimz/src/pane.rs"
+surface-budget = 11
+
+[[module]]
+path = "crates/rimz/src/proc"
+surface-budget = 95
+
+[[module]]
+path = "crates/rimz/src/reload.rs"
+surface-budget = 11
+
+[[module]]
+path = "crates/rimz/src/remote"
+surface-budget = 176
+
+[[module]]
+path = "crates/rimz/src/remote_control.rs"
+surface-budget = 15
+
+[[module]]
+path = "crates/rimz/src/room"
+upward-imports = ["remote_control"]
+surface-budget = 48
+
+[[module]]
+path = "crates/rimz/src/sidebar"
+surface-budget = 440
+
+[[module]]
+path = "crates/rimz/src/sidebar_pane"
+upward-imports = ["osc"]
+surface-budget = 190
+
+[[module]]
+path = "crates/rimz/src/sock.rs"
+surface-budget = 17
+
+[[module]]
+path = "crates/rimz/src/store"
+upward-imports = ["agents", "config", "daemon_view", "diag::record", "harness::run", "message", "remote::link", "sidebar::heartbeat", "sidebar::timing", "theme"]
+surface-budget = 362
+
+[[module]]
+path = "crates/rimz/src/theme"
+upward-imports = ["agents"]
+surface-budget = 33
+
+[[module]]
+path = "crates/rimz/src/transcript.rs"
+upward-imports = ["store"]
+surface-budget = 15
+
+[[module]]
+path = "crates/rimz/src/trust.rs"
+upward-imports = ["agents"]
+surface-budget = 36
+
+[[module]]
+path = "crates/rimz/src/tui.rs"
+surface-budget = 16
+
+[[module]]
+path = "crates/rimz/src/uninstall.rs"
+surface-budget = 10
+
+[[module]]
+path = "crates/rimz/src/update.rs"
+surface-budget = 18
+
+[[module]]
+path = "crates/rimz/src/utils.rs"
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/web"
+surface-budget = 48
+
+[[module]]
+path = "crates/rimz/src/workspace.rs"
+upward-imports = ["store::workspace_record"]
+surface-budget = 21
+
+[[module]]
+path = "crates/rimz/src/worktree"
+surface-budget = 0
+
+[[module]]
+path = "crates/rimz/src/worktree.rs"
+surface-budget = 55
+
+[[module]]
 path = "crates/rimz/src/cli/remote/supervisor.rs"
-allowed-imports = [
-    "cli::remote::outage_ui",
-    "remote",
-]
+allowed-imports = ["cli::remote::outage_ui", "remote"]
 surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/cli/remote/web.rs"
 allowed-imports = ["cli::remote"]
 surface-budget = 2
-
-[[module]]
-path = "crates/rimz/src/config"
-allowed-imports = [
-    "agents",
-    "harness::budget",
-    "harness::run",
-    "harness::schedule",
-    "harness::spec",
-    "ids",
-    "message",
-    "sidebar::timing",
-    "store::atomic",
-    "utils::time",
-    "trust",
-]
-surface-budget = 13
 
 [[module]]
 path = "crates/rimz/src/config/notifications.rs"
@@ -135,162 +240,13 @@ allowed-imports = []
 surface-budget = 4
 
 [[module]]
-path = "crates/rimz/src/config.rs"
-allowed-imports = [
-    "store::parse_cache",
-    "store::paths",
-]
-surface-budget = 169
-
-[[module]]
-path = "crates/rimz/src/daemon_content.rs"
-allowed-imports = [
-    "child_process",
-    "config",
-]
-surface-budget = 7
-
-[[module]]
-path = "crates/rimz/src/daemon_view.rs"
-allowed-imports = [
-    "config",
-    "ids",
-    "mux",
-    "pane",
-    "store",
-]
-surface-budget = 20
-
-[[module]]
-path = "crates/rimz/src/diag"
-allowed-imports = [
-    "ids",
-    "mux",
-    "remote::link",
-    "sidebar::presence",
-    "store",
-]
-surface-budget = 63
-
-[[module]]
-path = "crates/rimz/src/diag.rs"
-allowed-imports = ["ids"]
-surface-budget = 20
-
-[[module]]
-path = "crates/rimz/src/disk_usage.rs"
-allowed-imports = ["store"]
-surface-budget = 7
-
-[[module]]
-path = "crates/rimz/src/forge.rs"
-allowed-imports = ["store::snapshot"]
-surface-budget = 39
-
-[[module]]
-path = "crates/rimz/src/harness"
-allowed-imports = [
-    "(crate)",
-    "agents",
-    "config",
-    "ids",
-    "message",
-    "mux",
-    "sock",
-    "store",
-    "utils::time",
-    "trust",
-    "workspace",
-]
-surface-budget = 590
-
-[[module]]
-path = "crates/rimz/src/ids.rs"
-allowed-imports = []
-surface-budget = 38
-
-[[module]]
-path = "crates/rimz/src/lane.rs"
-allowed-imports = []
-surface-budget = 9
-
-[[module]]
-path = "crates/rimz/src/lib.rs"
-allowed-imports = [
-    "agents",
-    "harness::run_wake",
-    "harness::target",
-    "ids",
-    "pane",
-    "store",
-    "workspace",
-]
-surface-budget = 69
-
-[[module]]
-path = "crates/rimz/src/main.rs"
-allowed-imports = ["observability"]
-surface-budget = 0
-
-[[module]]
-path = "crates/rimz/src/message"
-allowed-imports = [
-    "(crate)",
-    "agents",
-    "harness::run",
-    "ids",
-    "mux",
-    "store",
-    "workspace",
-]
-surface-budget = 68
-
-[[module]]
-path = "crates/rimz/src/message.rs"
-allowed-imports = [
-    "agents",
-    "harness::target",
-    "ids",
-    "store::snapshot",
-    "utils::time",
-]
-surface-budget = 89
-
-[[module]]
 path = "crates/rimz/src/message/send.rs"
-allowed-imports = [
-    "(crate)",
-    "agents",
-    "ids",
-    "message",
-    "mux",
-    "store::snapshot",
-    "workspace",
-]
+allowed-imports = ["(crate)", "agents", "ids", "message", "mux", "store::snapshot", "workspace"]
 surface-budget = 9
-
-[[module]]
-path = "crates/rimz/src/mux"
-allowed-imports = [
-    "(crate)",
-    "config",
-    "ids",
-    "pane",
-    "proc",
-    "remote",
-    "sidebar::cache",
-    "sidebar::timing",
-    "store",
-    "workspace",
-]
-surface-budget = 246
 
 [[module]]
 path = "crates/rimz/src/mux/mount_proof.rs"
-allowed-imports = [
-    "ids",
-    "mux",
-]
+allowed-imports = ["ids", "mux"]
 surface-budget = 2
 
 [[module]]
@@ -300,199 +256,18 @@ surface-budget = 19
 
 [[module]]
 path = "crates/rimz/src/mux/recovery.rs"
-allowed-imports = [
-    "(crate)",
-    "ids",
-    "mux",
-    "proc",
-]
+allowed-imports = ["(crate)", "ids", "mux", "proc"]
 surface-budget = 16
 
 [[module]]
 path = "crates/rimz/src/mux/zellij/session.rs"
-allowed-imports = [
-    "config",
-    "ids",
-    "mux",
-    "sidebar::cache",
-    "sidebar::timing",
-    "store::paths",
-    "workspace",
-]
+allowed-imports = ["config", "ids", "mux", "sidebar::cache", "sidebar::timing", "store::paths", "workspace"]
 surface-budget = 15
-
-[[module]]
-path = "crates/rimz/src/observability"
-allowed-imports = [
-    "config",
-    "workspace",
-]
-surface-budget = 0
-
-[[module]]
-path = "crates/rimz/src/observability.rs"
-allowed-imports = []
-surface-budget = 11
-
-[[module]]
-path = "crates/rimz/src/osc.rs"
-allowed-imports = [
-    "config",
-    "ids",
-]
-surface-budget = 4
-
-[[module]]
-path = "crates/rimz/src/pane"
-allowed-imports = [
-    "ids",
-    "proc",
-]
-surface-budget = 15
-
-[[module]]
-path = "crates/rimz/src/pane.rs"
-allowed-imports = ["ids"]
-surface-budget = 11
-
-[[module]]
-path = "crates/rimz/src/proc"
-allowed-imports = [
-    "(crate)",
-    "ids",
-    "pane",
-]
-surface-budget = 95
-
-[[module]]
-path = "crates/rimz/src/reload.rs"
-allowed-imports = [
-    "config",
-    "diag::record",
-    "ids",
-    "mux",
-    "proc",
-    "room::session",
-    "sidebar::heartbeat",
-    "sidebar::timing",
-    "store",
-    "workspace",
-]
-surface-budget = 11
-
-[[module]]
-path = "crates/rimz/src/remote"
-allowed-imports = [
-    "config",
-    "ids",
-    "mux",
-    "sock",
-    "store",
-    "update",
-]
-# Remote failure presentation needs typed access to the path sentinel, target
-# path, retained recovery error, and supervised-attach marker; keeping these
-# private forced string dispatch, dummy-frame construction, or duplicated wire
-# names across the library/binary boundary.
-surface-budget = 176
-
-[[module]]
-path = "crates/rimz/src/remote_control.rs"
-allowed-imports = [
-    "agents::runtime_control",
-    "config",
-    "room::session",
-    "store",
-]
-surface-budget = 15
-
-[[module]]
-path = "crates/rimz/src/room"
-allowed-imports = [
-    "(crate)",
-    "config",
-    "harness::rebirth",
-    "harness::resume",
-    "ids",
-    "mux",
-    "remote_control",
-    "store",
-    "workspace",
-]
-surface-budget = 48
-
-[[strangler]]
-symbol = "NormalBirth"
-path = "crates/rimz/src"
-baseline = 0
-
-[[strangler]]
-symbol = "SupervisedBirth"
-path = "crates/rimz/src"
-baseline = 0
-
-[[strangler]]
-symbol = "BackgroundViewBirth"
-path = "crates/rimz/src"
-baseline = 0
-
-[[module]]
-path = "crates/rimz/src/sidebar"
-allowed-imports = [
-    "(crate)",
-    "agents",
-    "child_process",
-    "config",
-    "diag",
-    "forge",
-    "harness::auto_continue",
-    "ids",
-    "lane",
-    "mux",
-    "pane",
-    "proc",
-    "remote::link",
-    "store",
-    "theme",
-    "workspace",
-    "worktree",
-]
-surface-budget = 440
-
-[[module]]
-path = "crates/rimz/src/sidebar_pane"
-allowed-imports = [
-    "(crate)",
-    "agents",
-    "config",
-    "diag",
-    "ids",
-    "mux",
-    "observability",
-    "osc",
-    "remote::link",
-    "sidebar",
-    "store::agent_context",
-    "store::paths",
-    "store::snapshot",
-    "theme",
-    "tui",
-]
-surface-budget = 190
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/pets"
-allowed-imports = [
-    "config",
-    "sidebar",
-    "sidebar_pane",
-]
+allowed-imports = ["config", "sidebar", "sidebar_pane"]
 surface-budget = 28
-
-[[module]]
-path = "crates/rimz/src/sock.rs"
-allowed-imports = []
-surface-budget = 17
 
 [[module]]
 path = "crates/rimz/src/store/atomic.rs"
@@ -501,38 +276,8 @@ surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/store/gc"
-allowed-imports = [
-    "(crate)",
-    "ids",
-    "sidebar::heartbeat",
-    "sidebar::timing",
-    "store",
-]
+allowed-imports = ["(crate)", "ids", "sidebar::heartbeat", "sidebar::timing", "store"]
 surface-budget = 0
-
-[[module]]
-path = "crates/rimz/src/store"
-allowed-imports = [
-    "agent_activity",
-    "agents",
-    "config",
-    "daemon_view",
-    "diag::record",
-    "harness::run",
-    "harness::run_wake",
-    "ids",
-    "message",
-    "pane",
-    "proc",
-    "remote::link",
-    "sidebar::heartbeat",
-    "sidebar::timing",
-    "sidebar::wakeup",
-    "sock",
-    "theme",
-    "workspace",
-]
-surface-budget = 362
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"
@@ -540,41 +285,9 @@ allowed-imports = ["store"]
 surface-budget = 37
 
 [[module]]
-path = "crates/rimz/src/theme"
-allowed-imports = [
-    "agents",
-    "config",
-]
-surface-budget = 33
-
-[[module]]
-path = "crates/rimz/src/utils.rs"
-allowed-imports = []
-surface-budget = 1
-
-[[module]]
 path = "crates/rimz/src/utils/time.rs"
 allowed-imports = []
 surface-budget = 7
-
-[[module]]
-path = "crates/rimz/src/transcript.rs"
-allowed-imports = [
-    "ids",
-    "store",
-]
-surface-budget = 15
-
-[[module]]
-path = "crates/rimz/src/trust.rs"
-allowed-imports = [
-    "agents",
-    "config",
-    "ids",
-    "store::atomic",
-    "store::paths",
-]
-surface-budget = 36
 
 [[module]]
 path = "crates/rimz/src/harness/ancestry.rs"
@@ -583,49 +296,22 @@ surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/harness/plan.rs"
-allowed-imports = [
-    "agents",
-    "config",
-    "harness::ancestry",
-    "harness::budget",
-    "harness::spec",
-    "ids",
-    "mux",
-    "store::writer",
-]
+allowed-imports = ["agents", "config", "harness::ancestry", "harness::budget", "harness::spec", "ids", "mux", "store::writer"]
 surface-budget = 27
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"
-allowed-imports = [
-    "(crate)",
-    "agents",
-    "config",
-    "harness::plan",
-    "harness::spec",
-    "ids",
-    "mux",
-    "store::runtime",
-    "store::writer",
-]
+allowed-imports = ["(crate)", "agents", "config", "harness::plan", "harness::spec", "ids", "mux", "store::runtime", "store::writer"]
 surface-budget = 61
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
-allowed-imports = [
-    "agents::capabilities",
-    "ids",
-    "trust",
-]
+allowed-imports = ["agents::capabilities", "ids", "trust"]
 surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"
-allowed-imports = [
-    "agents",
-    "ids",
-    "store",
-]
+allowed-imports = ["agents", "ids", "store"]
 surface-budget = 42
 
 [[module]]
@@ -635,109 +321,22 @@ surface-budget = 2
 
 [[module]]
 path = "crates/rimz/src/harness/run_wake.rs"
-allowed-imports = [
-    "harness::run",
-    "ids",
-    "sock",
-    "store",
-]
+allowed-imports = ["harness::run", "ids", "sock", "store"]
 surface-budget = 16
 
 [[module]]
 path = "crates/rimz/src/harness/prompt_compose.rs"
-allowed-imports = [
-    "agents",
-    "ids",
-    "store",
-]
+allowed-imports = ["agents", "ids", "store"]
 surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"
-allowed-imports = [
-    "agents",
-    "config",
-    "harness::plan",
-    "harness::run",
-    "harness::schedule",
-    "ids",
-    "store::paths",
-    "utils::time",
-    "workspace",
-]
+allowed-imports = ["agents", "config", "harness::plan", "harness::run", "harness::schedule", "ids", "store::paths", "utils::time", "workspace"]
 surface-budget = 48
-
-[[module]]
-path = "crates/rimz/src/tui.rs"
-allowed-imports = []
-# Reload handoffs need a named terminal-preservation API; hiding the lifecycle
-# behind call-site `mem::forget` makes the log-capture ownership invisible.
-surface-budget = 16
-
-[[module]]
-path = "crates/rimz/src/uninstall.rs"
-allowed-imports = ["store"]
-surface-budget = 10
-
-[[module]]
-path = "crates/rimz/src/update.rs"
-allowed-imports = []
-surface-budget = 18
-
-[[module]]
-path = "crates/rimz/src/web"
-allowed-imports = [
-    "config",
-    "ids",
-    "mux",
-    "room::session",
-    "sidebar_pane::pixel",
-    "store",
-]
-surface-budget = 48
-
-[[strangler]]
-symbol = "mod share;"
-path = "crates/rimz/src/web"
-baseline = 0
-
-[[module]]
-path = "crates/rimz/src/workspace.rs"
-allowed-imports = [
-    "ids",
-    "store::workspace_record",
-]
-surface-budget = 21
-
-[[module]]
-path = "crates/rimz/src/worktree"
-allowed-imports = [
-    "config",
-    "forge",
-]
-surface-budget = 0
-
-[[module]]
-path = "crates/rimz/src/worktree.rs"
-allowed-imports = [
-    "agents",
-    "config",
-    "forge",
-    "ids",
-    "pane",
-    "store::runtime",
-    "workspace",
-]
-surface-budget = 55
 
 [[strangler]]
 symbol = "purge_zellij_session_cache_in"
 path = "crates/rimz/src/mux/recovery.rs"
-baseline = 0
-
-[[strangler]]
-symbol = "logtail"
-path = "crates/rimz/src/mux"
 baseline = 0
 
 [[strangler]]
@@ -753,29 +352,4 @@ baseline = 0
 [[strangler]]
 symbol = "store::run_store"
 path = "crates/rimz/tests"
-baseline = 0
-
-[[strangler]]
-symbol = "rank_windows"
-path = "crates/rimz/src/store/snapshot"
-baseline = 0
-
-[[strangler]]
-symbol = "resolve_task_spec"
-path = "crates/rimz/src/harness/schedule/runner.rs"
-baseline = 0
-
-[[strangler]]
-symbol = "candidate_resume_command"
-path = "crates/rimz/src/harness/resume.rs"
-baseline = 0
-
-[[strangler]]
-symbol = "run::PermissionMode"
-path = "crates/rimz/src"
-baseline = 0
-
-[[strangler]]
-symbol = "wait_for_web_recovery"
-path = "crates/rimz/src/cli/remote/web.rs"
 baseline = 0

@@ -31,6 +31,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 syn = { version = "3", features = ["full", "visit"] }
+# Atlas consumes rust-analyzer's batch SCIP export so reference evidence is
+# exact and generated once per working-tree snapshot rather than queried live.
+scip = "0.9.0"
+# SCIP's generated message types use protobuf's `Message` trait for decoding;
+# keep this aligned with the exact protobuf release required by scip 0.9.0.
+protobuf = "3.7.2"
 # Atlas reports source locations from parsed syntax. `span-locations` adds
 # compile work to proc-macro2 but is required to expose those locations.
 proc-macro2 = { version = "1", features = ["span-locations"] }

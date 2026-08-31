@@ -7,12 +7,14 @@ use serde::Serialize;
 
 use super::modules::{rust_module_for_path, scope_for_matching};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Commit {
+    id: String,
+    time: i64,
     changes: Vec<Change>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Change {
     Touch(PathBuf),
     Delete(PathBuf),
@@ -52,21 +54,132 @@ pub(super) struct CochangeReport {
     pub(super) edges: Vec<CochangeEdge>,
 }
 
+#[derive(Debug)]
+pub(super) struct Log {
+    commits: Vec<Commit>,
+}
+
+impl Log {
+    pub(super) fn read(root: &Path, scope: &Path) -> Result<Self> {
+        let commits = parse_history(&git_history(root, scope)?)?;
+        if commits.is_empty() {
+            bail!("no non-merge commits touch `{}`", scope.display());
+        }
+        Ok(Self { commits })
+    }
+
+    pub(super) fn window_start(&self, window_pct: usize) -> i64 {
+        recent_window(&self.commits, window_pct)
+            .first()
+            .map_or(0, |commit| commit.time)
+    }
+
+    pub(super) fn first_time(&self) -> i64 {
+        self.commits.first().map_or(0, |commit| commit.time)
+    }
+
+    pub(super) fn last_time(&self) -> i64 {
+        self.commits.last().map_or(0, |commit| commit.time)
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct Blame {
+    pub(super) lines: BTreeMap<PathBuf, Vec<(String, i64)>>,
+}
+
+impl Blame {
+    pub(super) fn read(root: &Path, files: &[PathBuf], workers: usize) -> Result<Self> {
+        let workers = workers.max(1).min(files.len().max(1));
+        let chunks = (0..workers)
+            .map(|worker| {
+                files
+                    .iter()
+                    .skip(worker)
+                    .step_by(workers)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let batches = std::thread::scope(|scope| {
+            let handles = chunks
+                .into_iter()
+                .map(|paths| scope.spawn(move || blame_files(root, paths)))
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("atlas blame worker panicked"))?
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
+        Ok(Self {
+            lines: batches.into_iter().flatten().collect(),
+        })
+    }
+}
+
+fn blame_files(root: &Path, paths: Vec<PathBuf>) -> Result<Vec<(PathBuf, Vec<(String, i64)>)>> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let output = Command::new("git")
+                .args(["blame", "--line-porcelain", "--"])
+                .arg(&path)
+                .current_dir(root)
+                .output()
+                .with_context(|| format!("blaming {}", path.display()))?;
+            if !output.status.success() {
+                bail!(
+                    "git blame failed for {}: {}",
+                    path.display(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+            let raw = String::from_utf8(output.stdout).context("git blame returned non-UTF-8")?;
+            Ok((path, parse_blame(&raw)?))
+        })
+        .collect()
+}
+
+fn parse_blame(input: &str) -> Result<Vec<(String, i64)>> {
+    let mut commit = String::new();
+    let mut time = 0;
+    let mut lines = Vec::new();
+    for line in input.lines() {
+        if let Some(value) = line.strip_prefix("committer-time ") {
+            time = value
+                .parse()
+                .with_context(|| format!("invalid git blame time `{value}`"))?;
+        } else if line.starts_with('\t') {
+            lines.push((commit.clone(), time));
+        } else if line.split_whitespace().next().is_some_and(|value| {
+            value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }) {
+            commit = line
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+        }
+    }
+    Ok(lines)
+}
+
 pub(super) fn pace(
+    log: &Log,
     root: &Path,
     scope: &Path,
     window_pct: usize,
     noise_lifetime: usize,
     noise_window: usize,
 ) -> Result<PaceReport> {
-    let commits = parse_history(&git_history(root, scope, None)?)?;
-    if commits.is_empty() {
-        bail!("no non-merge commits touch `{}`", scope.display());
-    }
     Ok(fold_pace(
         root,
         scope,
-        &commits,
+        &log.commits,
         window_pct,
         noise_lifetime,
         noise_window,
@@ -74,17 +187,25 @@ pub(super) fn pace(
 }
 
 pub(super) fn cochange(
+    log: &Log,
     root: &Path,
     scope: &Path,
     since: Option<&str>,
     window_pct: usize,
     max_commit_files: usize,
 ) -> Result<CochangeReport> {
-    let commits = parse_history(&git_history(root, scope, since)?)?;
-    let commits = if since.is_some() {
-        &commits
+    let selected;
+    let commits = if let Some(reference) = since {
+        let ids = commits_since(root, reference)?;
+        selected = log
+            .commits
+            .iter()
+            .filter(|commit| ids.contains(&commit.id))
+            .cloned()
+            .collect::<Vec<_>>();
+        selected.as_slice()
     } else {
-        recent_window(&commits, window_pct)
+        recent_window(&log.commits, window_pct)
     };
     Ok(CochangeReport {
         commits: commits.len(),
@@ -145,7 +266,7 @@ fn fold_cochange(commits: &[Commit], scope: &Path, max_commit_files: usize) -> V
     edges
 }
 
-fn git_history(root: &Path, scope: &Path, since: Option<&str>) -> Result<String> {
+fn git_history(root: &Path, scope: &Path) -> Result<String> {
     let mut command = Command::new("git");
     command.args([
         "-c",
@@ -154,13 +275,10 @@ fn git_history(root: &Path, scope: &Path, since: Option<&str>) -> Result<String>
         "--reverse",
         "--topo-order",
         "--no-merges",
-        "--format=@%H",
+        "--format=@%H %ct",
         "--name-status",
         "-M",
     ]);
-    if let Some(reference) = since {
-        command.arg(format!("{reference}..HEAD"));
-    }
     let output = command
         .arg("--")
         .arg(scope)
@@ -176,11 +294,37 @@ fn git_history(root: &Path, scope: &Path, since: Option<&str>) -> Result<String>
     String::from_utf8(output.stdout).context("git log returned non-UTF-8 paths")
 }
 
+fn commits_since(root: &Path, reference: &str) -> Result<BTreeSet<String>> {
+    let output = Command::new("git")
+        .args(["rev-list", &format!("{reference}..HEAD")])
+        .current_dir(root)
+        .output()
+        .with_context(|| format!("listing commits since `{reference}`"))?;
+    if !output.status.success() {
+        bail!(
+            "git rev-list `{reference}..HEAD` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8(output.stdout)
+        .context("git rev-list returned non-UTF-8 commit ids")?
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+
 fn parse_history(input: &str) -> Result<Vec<Commit>> {
     let mut commits = Vec::<Commit>::new();
     for line in input.lines().filter(|line| !line.is_empty()) {
-        if line.starts_with('@') && !line.contains('\t') {
+        if let Some(header) = line.strip_prefix('@').filter(|line| !line.contains('\t')) {
+            let (id, time) = header
+                .split_once(' ')
+                .map_or((header, "0"), |(id, time)| (id, time));
             commits.push(Commit {
+                id: id.to_owned(),
+                time: time
+                    .parse()
+                    .with_context(|| format!("invalid git commit time `{time}`"))?,
                 changes: Vec::new(),
             });
             continue;

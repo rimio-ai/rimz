@@ -198,3 +198,102 @@ fn workspace_crate_imports_normalize_to_local_module_paths() {
         .collect::<Vec<_>>();
     assert_eq!(resolved, ["store", "agents"]);
 }
+
+#[test]
+fn public_items_record_their_full_end_line() {
+    let report = analyze_sources(&[source(
+        r#"pub struct View {
+    width: usize,
+}
+pub fn render(
+    view: View,
+) {
+    drop(view);
+}
+"#,
+    )]);
+    let spans = report.files[0]
+        .pub_items
+        .iter()
+        .map(|item| (item.name.as_str(), item.line, item.end_line))
+        .collect::<Vec<_>>();
+    assert_eq!(spans, [("View", 1, 3), ("render", 4, 8)]);
+}
+
+#[test]
+fn forwarding_functions_are_single_call_expressions_with_transparent_wrappers() {
+    let report = analyze_sources(&[source(
+        r#"
+fn direct(value: usize) { target(value) }
+fn returned(value: usize) { return target(value); }
+fn tried(value: usize) -> Result<(), ()> { target(value)? }
+async fn awaited(value: usize) { target(value).await }
+fn method(value: View) { value.render() }
+fn nested(value: usize) {{ target(value) }}
+fn setup(value: usize) { prepare(); target(value) }
+fn transformed(value: usize) { target(value) + 1; }
+fn conditional(value: usize) { if value > 0 { target(value) } }
+"#,
+    )]);
+    let forwards = report.files[0]
+        .fns
+        .iter()
+        .map(|function| (function.name.as_str(), function.forwards.is_some()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for name in ["direct", "returned", "tried", "awaited", "method", "nested"] {
+        assert!(forwards[name], "{name} should be a pass-through");
+    }
+    for name in ["setup", "transformed", "conditional"] {
+        assert!(!forwards[name], "{name} should not be a pass-through");
+    }
+}
+
+#[test]
+fn guards_cover_if_while_and_match_and_normalize_tokens() {
+    let report = analyze_sources(&[source(
+        r#"
+fn run(state: State, mut retries: usize, value: Option<usize>) {
+    if ready { proceed(); }
+    if retries > 0 && state.is_ready() { proceed(); }
+    while retries /* formatting is not syntax */ > 0 && state . is_ready ( ) { retries -= 1; }
+    match value {
+        Some(value) if retries > 0 && state.is_ready() => consume(value),
+        _ => {}
+    }
+}
+#[cfg(test)]
+mod tests {
+    fn ignored() { if retries > 0 && state.is_ready() {} }
+}
+"#,
+    )]);
+    let guards = &report.files[0].guards;
+    assert_eq!(
+        guards
+            .iter()
+            .map(|guard| guard.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["if", "while", "match"]
+    );
+    assert_eq!(guards[0].line, 4);
+    assert_eq!(guards[1].line, 5);
+    assert_eq!(guards[2].line, 7);
+    assert_eq!(guards[0].normalized, guards[1].normalized);
+    assert_eq!(guards[1].normalized, guards[2].normalized);
+    assert_eq!(guards[0].path, Path::new("crates/rimz/src/cli/demo.rs"));
+}
+
+#[test]
+fn guards_require_at_least_five_tokens() {
+    let report = analyze_sources(&[source(
+        r#"
+fn run(ready: bool, closed: bool) {
+    if ready { proceed(); }
+    while ready && closed { wait(); }
+    if ready && !closed { proceed(); }
+}
+"#,
+    )]);
+    assert_eq!(report.files[0].guards.len(), 1);
+    assert_eq!(report.files[0].guards[0].line, 5);
+}

@@ -4,16 +4,16 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
+use super::facts::{Facets, Facts};
 use super::history::{self, CochangeEdge};
-use super::modules::{crate_module_for_path, module_for_path, workspace_crate_names};
-use super::sources;
+use super::modules::{crate_module_for_path, module_for_path, path_in_scope};
 use super::syntax;
 use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
 const DEFAULT_TOP: usize = 15;
 
-const USAGE: &str = "cargo xtask atlas seams [--path <prefix>] [--top N] [--module <name>] [--window <pct>] [--since <ref>] [--max-commit-files N] [--min-cochange N] [--json]
+const USAGE: &str = "cargo xtask atlas seams [--path <prefix>] [--top N] [--module <name>] [--window <pct>] [--since <ref>] [--max-commit-files N] [--min-cochange N] [--no-index] [--json]
 
 Imports come from Rust `use` items; inline fully-qualified paths are not counted.
 The provider table ranks outside modules by distinct imported item names across
@@ -28,7 +28,7 @@ module's pairwise co-change fanout folds into one annotated hub row.
   --since <ref>          restrict co-change to <ref>..HEAD (excludes --window)
   --max-commit-files N   omit commits broader than N Rust sources (default 10)
   --min-cochange N       co-change and divergence threshold (default 3)
-  --json                 versioned JSON agent contract (v2)";
+  --json                 versioned JSON agent contract (v3)";
 
 #[derive(Debug)]
 struct Args {
@@ -39,6 +39,7 @@ struct Args {
     since: Option<String>,
     max_commit_files: usize,
     min_cochange: usize,
+    no_index: bool,
     json: bool,
 }
 
@@ -54,6 +55,13 @@ struct ImportItems {
     from: String,
     to: String,
     items: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct Caller {
+    module: String,
+    items: usize,
+    item_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -101,6 +109,8 @@ struct Report {
     import_edges: Vec<ImportEdge>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     import_items: Vec<ImportItems>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    callers: Vec<Caller>,
     total_external_surface: usize,
     external_surface: Vec<ExternalSurface>,
     total_external_providers: usize,
@@ -125,6 +135,9 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
         println!("{USAGE}");
         return Ok(());
     };
+    if args.no_index {
+        super::note_no_index();
+    }
     let report = build_report(root, &args)?;
     if args.json {
         println!(
@@ -148,6 +161,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut since = None;
     let mut max_commit_files = None;
     let mut min_cochange = None;
+    let mut no_index = false;
     let mut json = false;
     let mut index = 0;
     while let Some(arg) = args.get(index) {
@@ -203,6 +217,11 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 set_once(&mut min_cochange, parsed, "seams", "--min-cochange")?;
                 index += 2;
             }
+            "--no-index" if !no_index => {
+                no_index = true;
+                index += 1;
+            }
+            "--no-index" => bail!("atlas seams --no-index may only be passed once"),
             "--json" if !json => {
                 json = true;
                 index += 1;
@@ -222,20 +241,33 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         since,
         max_commit_files: max_commit_files.unwrap_or(10),
         min_cochange: min_cochange.unwrap_or(3),
+        no_index,
         json,
     }))
 }
 
 fn build_report(root: &Path, args: &Args) -> Result<Report> {
-    let all_sources = sources::all_sources(root, None)?;
-    let scoped_sources = sources::sources_in_scope(&all_sources, &args.path)?;
-    let syntax = syntax::analyze_sources(&scoped_sources);
-    let known_modules = all_sources
-        .into_iter()
-        .filter(|source| source.is_production())
-        .map(|source| crate_module_for_path(&source.path))
-        .collect::<BTreeSet<_>>();
-    let workspace_crates = workspace_crate_names(root)?;
+    let facts = Facts::load(
+        root,
+        &args.path,
+        Facets {
+            history: true,
+            metrics: false,
+            references: Some(if args.no_index {
+                super::index::IndexPolicy::Skip
+            } else {
+                super::index::IndexPolicy::Required
+            }),
+            ..Facets::default()
+        },
+    )?;
+    let scoped_sources = facts.sources_in(&args.path);
+    let syntax_files = facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| path_in_scope(&file.path, &args.path))
+        .collect::<Vec<_>>();
     let scope_module = crate_module_for_path(&args.path.join("mod.rs"));
     let mut scope_endpoints = scoped_sources
         .iter()
@@ -251,12 +283,14 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         );
     }
     let mut imports = BTreeMap::<(String, String), BTreeSet<String>>::new();
-    for file in &syntax.files {
+    for file in &syntax_files {
         let from = module_for_path(&file.path, &args.path);
         for imported in &file.imports {
-            let Some(imported_module) =
-                syntax::resolved_internal_import(imported, &known_modules, &workspace_crates)
-            else {
+            let Some(imported_module) = syntax::resolved_internal_import(
+                imported,
+                &facts.known_modules,
+                &facts.crate_names,
+            ) else {
                 continue;
             };
             let to = endpoint(&imported_module, &scope_module);
@@ -294,6 +328,47 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             })
             .collect()
     });
+    let mut edges = imports
+        .iter()
+        .flat_map(|((from, to), items)| {
+            items.iter().map(|item| super::references::Edge {
+                from: from.clone(),
+                to: to.clone(),
+                item: item.clone(),
+                kind: super::references::EdgeKind::Use,
+                test: false,
+            })
+        })
+        .collect::<Vec<_>>();
+    if let Some(references) = &facts.references {
+        edges.extend(references.edges.iter().filter(|edge| !edge.test).cloned());
+    }
+    let mut coupling = BTreeMap::<(String, String), BTreeSet<String>>::new();
+    for edge in edges {
+        let from = endpoint(&edge.from, &scope_module);
+        let to = endpoint(&edge.to, &scope_module);
+        if from != to {
+            coupling.entry((from, to)).or_default().insert(edge.item);
+        }
+    }
+    let mut callers = args.module.as_ref().map_or_else(Vec::new, |requested| {
+        let mut callers = coupling
+            .iter()
+            .filter(|((from, to), _)| to == requested && from != requested)
+            .map(|((from, _), items)| Caller {
+                module: from.clone(),
+                items: items.len(),
+                item_names: items.iter().take(args.top).cloned().collect(),
+            })
+            .collect::<Vec<_>>();
+        callers.sort_by(|left, right| {
+            right
+                .items
+                .cmp(&left.items)
+                .then_with(|| left.module.cmp(&right.module))
+        });
+        callers
+    });
     let mut surfaces = BTreeMap::<String, (BTreeSet<String>, BTreeSet<(String, String)>)>::new();
     for ((from, to), items) in &imports {
         if scope_endpoints.contains(to) {
@@ -322,6 +397,10 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let mut external_providers = external_providers(&imports, &scope_endpoints);
 
     let cochange = history::cochange(
+        facts
+            .history
+            .as_ref()
+            .context("seams history facts missing")?,
         root,
         &args.path,
         args.since.as_deref(),
@@ -329,9 +408,9 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         args.max_commit_files,
     )?;
     let cochange_edges = cochange.edges;
-    let import_lookup = import_edges
+    let import_lookup = coupling
         .iter()
-        .map(|edge| ((edge.from.clone(), edge.to.clone()), edge.items))
+        .map(|((from, to), items)| ((from.clone(), to.clone()), items.len()))
         .collect::<BTreeMap<_, _>>();
     let cochange_lookup = cochange_edges
         .iter()
@@ -388,6 +467,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     external_providers.truncate(args.top);
     cochange_edges.truncate(args.top);
     divergence.truncate(args.top);
+    callers.truncate(args.top);
     Ok(Report {
         version: REPORT_VERSION,
         verb: "seams",
@@ -399,6 +479,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         total_import_edges,
         import_edges,
         import_items,
+        callers,
         total_external_surface,
         external_surface,
         total_external_providers,
@@ -410,7 +491,12 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         cochange_without_import,
         import_without_cochange,
         divergence,
-        parse_failures: syntax.parse_failures.len(),
+        parse_failures: facts
+            .syntax
+            .parse_failures
+            .iter()
+            .filter(|path| path_in_scope(path, &args.path))
+            .count(),
     })
 }
 

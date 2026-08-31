@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::modules::module_for_path;
-use super::sources;
-use super::syntax::{self, FnBody};
+use super::facts::{Facets, Facts};
+use super::modules::{module_for_path, path_in_scope};
+use super::syntax::FnBody;
 use super::{REPORT_VERSION, finite_nonnegative, positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
@@ -27,7 +27,7 @@ Clusters spanning more modules and files rank before member-count × mean-sloc.
   --top N         clusters to report (default 10)
   --min-sloc N    minimum function source lines (default 40)
   --similarity S  Jaccard threshold from 0 through 1 (default 0.35)
-  --json          versioned JSON agent contract (v2)";
+  --json          versioned JSON agent contract (v3)";
 
 #[derive(Debug)]
 struct Args {
@@ -151,11 +151,16 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
 }
 
 fn build_report(root: &Path, args: &Args) -> Result<Report> {
-    let sources = sources::scope_sources(root, &args.path, None)?;
-    let syntax = syntax::analyze_sources(&sources);
-    let functions = syntax
+    let facts = Facts::load(root, &args.path, Facets::default())?;
+    view(&facts, args)
+}
+
+fn view(facts: &Facts, args: &Args) -> Result<Report> {
+    let functions = facts
+        .syntax
         .files
         .iter()
+        .filter(|file| path_in_scope(&file.path, &args.path))
         .flat_map(|file| &file.fns)
         .filter(|function| function.sloc >= args.min_sloc)
         .cloned()
@@ -187,8 +192,27 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         eligible_functions: functions.len(),
         total_clusters,
         clusters,
-        parse_failures: syntax.parse_failures.len(),
+        parse_failures: facts
+            .syntax
+            .parse_failures
+            .iter()
+            .filter(|path| path_in_scope(path, &args.path))
+            .count(),
     })
+}
+
+pub(super) fn survey_value(facts: &Facts, scope: &Path) -> Result<serde_json::Value> {
+    let report = view(
+        facts,
+        &Args {
+            path: scope.to_path_buf(),
+            top: usize::MAX,
+            min_sloc: 40,
+            similarity: 0.35,
+            json: true,
+        },
+    )?;
+    serde_json::to_value(report).context("rendering atlas shapes survey value")
 }
 
 fn sort_clusters(clusters: &mut [Cluster]) {
@@ -566,6 +590,7 @@ mod tests {
             line,
             sloc,
             callees: ["prepare", "resolve", "launch"].map(str::to_owned).to_vec(),
+            forwards: None,
         };
         let functions = vec![
             function("src/fixture.rs", 1, 100),
