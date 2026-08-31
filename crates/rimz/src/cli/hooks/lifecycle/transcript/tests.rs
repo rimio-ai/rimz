@@ -196,6 +196,45 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
 }
 
 #[test]
+fn subagent_report_records_as_an_attributed_message() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let message = rimz::message::MessageRecord::new(
+        workspace.workspace_id.clone(),
+        &agent,
+        "child result".to_owned(),
+        true,
+        rimz::message::DeliveryGate::Done,
+    )
+    .with_sender(rimz::message::MessageSender::Subagent {
+        kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        name: "lucid-atlas".to_owned(),
+    });
+    let mut started = recorded(LifecycleSignal::TurnStarted);
+    started.observation.prompt =
+        Some("Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nchild result".to_owned());
+
+    record_conversation(
+        &workspace,
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &started,
+        None,
+        &[],
+        std::slice::from_ref(&message),
+    )
+    .unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Message);
+    assert_eq!(entries[0].from.as_deref(), Some("@lucid-atlas"));
+    assert_eq!(entries[0].text, "child result");
+    assert_eq!(entries[0].message_id.as_ref(), Some(&message.message_id));
+}
+
+#[test]
 fn user_message_header_records_prompt_without_envelope() {
     let (_dir, store) = store();
     let workspace = workspace();

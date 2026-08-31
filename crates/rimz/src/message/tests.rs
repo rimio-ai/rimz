@@ -829,6 +829,13 @@ fn sender_render_uses_attributed_address_precedence() {
         (MessageSender::Human, "you"),
         (MessageSender::System, "rimz"),
         (
+            MessageSender::Subagent {
+                kind: AgentKind::new_unchecked("codex"),
+                name: "lucid-atlas".to_owned(),
+            },
+            "@lucid-atlas",
+        ),
+        (
             MessageSender::Agent {
                 kind: AgentKind::new_unchecked("claude"),
                 name: Some("lucid-atlas".to_owned()),
@@ -862,6 +869,22 @@ fn sender_render_uses_attributed_address_precedence() {
     for (sender, expected) in cases {
         assert_eq!(sender.render(), expected);
     }
+}
+
+#[test]
+fn subagent_sender_round_trips_with_its_own_origin() {
+    let sender = MessageSender::Subagent {
+        kind: AgentKind::new_unchecked("codex"),
+        name: "lucid-atlas".to_owned(),
+    };
+    let json = serde_json::to_value(&sender).unwrap();
+
+    assert_eq!(json["origin"], "subagent");
+    assert_eq!(
+        serde_json::from_value::<MessageSender>(json).unwrap(),
+        sender
+    );
+    assert_eq!(sender.attributed(), Some(sender.clone()));
 }
 
 #[test]
