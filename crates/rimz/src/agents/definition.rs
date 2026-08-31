@@ -939,8 +939,8 @@ pub struct Capabilities {
     /// Provides an authoritative, identity-bearing direct account-usage
     /// probe. Scheduling uses this static declaration before provider work.
     pub direct_account_usage: bool,
-    /// Which co-resident root session owns a live pane when one agent process
-    /// carries more than one session id.
+    /// How co-resident open turns are ordered when one agent process carries
+    /// more than one session id. Rested roots always follow latest activity.
     pub same_pane_session: SamePaneSessionPolicy,
     /// Remote-control surfaces the provider can host.
     pub remote_control: RemoteControlCapability,
@@ -949,9 +949,9 @@ pub struct Capabilities {
 /// Pane ownership for multiple root sessions hosted by one live agent process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SamePaneSessionPolicy {
-    /// Keep the earliest registered session as the pane's primary owner.
+    /// Keep the earliest registered open turn as the pane's primary owner.
     KeepPrimary,
-    /// Hand the pane to the most recently registered active conversation.
+    /// Hand the pane to the most recently registered open conversation.
     FollowLatest,
 }
 

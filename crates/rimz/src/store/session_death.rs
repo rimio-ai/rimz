@@ -1,4 +1,6 @@
-//! Store-provable agent session death rules shared by durable and view reaps.
+//! Agent session supersession rules shared by durable and view reaps. The
+//! writer attaches provider rest certificates before applying them; the
+//! store-only view reap deliberately falls back to durable lifecycle state.
 
 use jiff::Timestamp;
 

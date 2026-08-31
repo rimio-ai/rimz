@@ -420,6 +420,9 @@ pub fn stamped_agent_for_pane<'a>(
     PaneBindingIndex::new(agents).stamped_agent(pane)
 }
 
+/// Which co-resident root owns a pane: an open turn outranks a rested one;
+/// policy orders open pairs; latest activity orders rested pairs. Registration
+/// and session id break the remaining ties deterministically.
 fn compare_same_pane_owners(left: &AgentState, right: &AgentState) -> Ordering {
     let follows_latest = left.kind == right.kind
         && crate::agents::spec_by_kind(left.kind.as_str()).is_some_and(|definition| {
@@ -433,6 +436,7 @@ fn compare_same_pane_owners(left: &AgentState, right: &AgentState) -> Ordering {
     if left.holds_open_turn() {
         if follows_latest {
             return compare_latest_registration(left, right)
+                .then_with(|| right.last_activity.cmp(&left.last_activity))
                 .then_with(|| right.agent_id.cmp(&left.agent_id));
         }
         return registered_rank(left)

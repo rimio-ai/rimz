@@ -221,6 +221,64 @@ fn antigravity_shared_pane_follows_latest_conversation() {
 }
 
 #[test]
+fn antigravity_open_legacy_roots_fall_back_to_latest_activity() {
+    let mut older = agent(
+        "antigravity",
+        "conversation-old",
+        AgentStatus::Running,
+        1_000,
+    )
+    .worktree("/repo/main")
+    .in_pane("%1")
+    .active_ago(120);
+    older.registered_at = None;
+    let mut newer = agent(
+        "antigravity",
+        "conversation-new",
+        AgentStatus::Running,
+        2_000,
+    )
+    .worktree("/repo/main")
+    .in_pane("%1")
+    .active_ago(5);
+    newer.registered_at = None;
+
+    let snapshot =
+        room(vec![older, newer]).with_live_panes(vec![pane("%1", "agy", "/repo/main")], None);
+
+    assert_eq!(rows(&snapshot)[0].id, "conversation-new");
+}
+
+#[test]
+fn antigravity_rested_roots_follow_latest_activity_over_registration() {
+    let mut switched_back = agent(
+        "antigravity",
+        "conversation-old",
+        AgentStatus::Success,
+        1_000,
+    )
+    .worktree("/repo/main")
+    .in_pane("%1")
+    .active_ago(5);
+    switched_back.registered_at = Some(ago(600));
+    let mut previously_latest = agent(
+        "antigravity",
+        "conversation-new",
+        AgentStatus::Success,
+        2_000,
+    )
+    .worktree("/repo/main")
+    .in_pane("%1")
+    .active_ago(120);
+    previously_latest.registered_at = Some(ago(60));
+
+    let snapshot = room(vec![switched_back, previously_latest])
+        .with_live_panes(vec![pane("%1", "agy", "/repo/main")], None);
+
+    assert_eq!(rows(&snapshot)[0].id, "conversation-old");
+}
+
+#[test]
 fn shared_pane_primary_is_stable_when_registration_ties() {
     for (label, a_active_ago, b_active_ago) in [
         ("agent-b is fresher", 120, 5),
