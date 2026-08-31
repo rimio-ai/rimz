@@ -409,14 +409,32 @@ fn compare_same_pane_owners(left: &AgentState, right: &AgentState) -> Ordering {
         && crate::agents::spec_by_kind(left.kind.as_str()).is_some_and(|definition| {
             definition.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
         });
-    if !follows_latest {
+    let open_turn_order = right.holds_open_turn().cmp(&left.holds_open_turn());
+    if open_turn_order != Ordering::Equal {
+        return open_turn_order;
+    }
+
+    if left.holds_open_turn() {
+        if follows_latest {
+            return compare_latest_registration(left, right)
+                .then_with(|| right.agent_id.cmp(&left.agent_id));
+        }
         return registered_rank(left)
             .cmp(&registered_rank(right))
             .then_with(|| left.agent_id.cmp(&right.agent_id));
     }
-    compare_latest_registration(left, right)
-        .then_with(|| right.last_activity.cmp(&left.last_activity))
-        .then_with(|| right.agent_id.cmp(&left.agent_id))
+
+    right
+        .last_activity
+        .cmp(&left.last_activity)
+        .then_with(|| compare_latest_registration(left, right))
+        .then_with(|| {
+            if follows_latest {
+                right.agent_id.cmp(&left.agent_id)
+            } else {
+                left.agent_id.cmp(&right.agent_id)
+            }
+        })
 }
 
 fn compare_latest_registration(left: &AgentState, right: &AgentState) -> Ordering {
