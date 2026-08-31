@@ -179,11 +179,7 @@ impl<'a> PaneBindingIndex<'a> {
                     && agent.agent_id != *agent_id
                     && pane_start_allows_bind(agent.last_activity, evidence.pane)
             })
-            .min_by(|left, right| {
-                registered_rank(left)
-                    .cmp(&registered_rank(right))
-                    .then_with(|| left.agent_id.cmp(&right.agent_id))
-            })
+            .min_by(|left, right| compare_same_pane_owners(left, right))
     }
 }
 

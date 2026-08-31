@@ -543,6 +543,54 @@ fn certificate_dead_occupied_pane_binds_without_focus() {
 }
 
 #[test]
+fn certificate_dead_primary_does_not_hide_a_live_occupied_owner() {
+    let pane_id = id("terminal_30");
+    let mut dead_primary = prior(
+        "codex",
+        "dead-primary",
+        Some(pane_id.clone()),
+        AgentStatus::Running,
+        Some(SessionOrigin::Fresh),
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+    let error_at = jiff::Timestamp::from_second(1).unwrap();
+    dead_primary.context = Some(AgentContext {
+        turn_error: Some(AgentTurnError {
+            class: TurnErrorClass::PausedOverloaded,
+            at: error_at,
+            label: Some("server_overloaded".to_owned()),
+        }),
+        ..AgentContext::new("codex", error_at)
+    });
+    let live_owner = prior(
+        "codex",
+        "live-owner",
+        Some(pane_id),
+        AgentStatus::Running,
+        Some(SessionOrigin::Forked),
+        error_at,
+    );
+
+    let selected = select(
+        &[dead_primary, live_owner],
+        &[candidate("terminal_30", false)],
+        Some(&[]),
+        Some(SessionOrigin::Fresh),
+        HookPaneRecoveryPhase::TurnStarted,
+    );
+
+    assert_eq!(selected.pane_id, None);
+    assert_eq!(selected.candidate_count, 0);
+    assert!(
+        selected.candidates[0]
+            .reject_reasons
+            .contains(&StampedToOther {
+                agent_id: "live-owner".to_owned(),
+            })
+    );
+}
+
+#[test]
 fn antigravity_turn_start_follows_the_sole_resting_conversation_without_lineage() {
     let pane_id = id("terminal_30");
     let owner = prior(
