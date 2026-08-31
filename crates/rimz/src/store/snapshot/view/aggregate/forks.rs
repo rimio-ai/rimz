@@ -1,9 +1,9 @@
 use crate::agents::{AgentState, AgentStatus};
 use crate::store::snapshot::row::SidebarRow;
 
-/// Fold later-registered, same-pane root clocks onto the pinned primary row.
-/// Display-only — every fork keeps its own durable projection and card fields.
-pub(super) fn fold_fork_clocks_onto_primaries(rows: &mut [SidebarRow], agents: &[AgentState]) {
+/// Fold every other same-pane root's clocks onto the bound row. Display-only —
+/// each conversation keeps its own durable projection and card fields.
+pub(super) fn fold_same_pane_clocks_onto_bound_row(rows: &mut [SidebarRow], agents: &[AgentState]) {
     for row in rows {
         let Some(card) = row.as_agent() else {
             continue;
@@ -13,7 +13,7 @@ pub(super) fn fold_fork_clocks_onto_primaries(rows: &mut [SidebarRow], agents: &
         {
             continue;
         }
-        let (Some(pane), Some(registered_at)) = (row.pane.as_ref(), card.registered_at) else {
+        let Some(pane) = row.pane.as_ref() else {
             continue;
         };
 
@@ -26,9 +26,6 @@ pub(super) fn fold_fork_clocks_onto_primaries(rows: &mut [SidebarRow], agents: &
                     .pane
                     .as_ref()
                     .is_some_and(|fork_pane| fork_pane.pane_id == pane.pane_id)
-                && agent
-                    .registered_at
-                    .is_some_and(|fork_registered_at| fork_registered_at > registered_at)
         }) {
             row.last_activity = row.last_activity.max(fork.last_activity);
             if let Some(secs) = fork.estimated_active_secs {

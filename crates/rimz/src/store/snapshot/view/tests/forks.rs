@@ -143,6 +143,33 @@ fn same_pane_fork_folds_clocks_onto_the_primary_row() {
 }
 
 #[test]
+fn bound_fork_folds_its_rested_primary_clock() {
+    let mut primary = agent("codex", "primary", AgentStatus::Success, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(120);
+    primary.registered_at = Some(ago(600));
+    primary.estimated_active_secs = Some(10);
+
+    let mut fork = agent("codex", "fork", AgentStatus::Running, 2_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(5);
+    fork.registered_at = Some(ago(60));
+    fork.estimated_active_secs = Some(7);
+
+    let snapshot =
+        room(vec![primary, fork]).with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+    let fork = row(&snapshot, "fork");
+
+    assert_eq!(fork.last_activity, ago(5));
+    assert_eq!(
+        fork.as_agent().and_then(|card| card.estimated_active_secs),
+        Some(17)
+    );
+}
+
+#[test]
 fn waiting_primary_keeps_its_own_clock() {
     let mut primary = agent("codex", "primary", AgentStatus::Waiting, 1_000)
         .worktree("/repo/main")

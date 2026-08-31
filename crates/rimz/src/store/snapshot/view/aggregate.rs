@@ -118,9 +118,9 @@ pub(super) fn build_worktree_groups_from_rows(
     // A delegating parent's work is its children's, so their activity advances
     // the parent row's displayed clock before the stall check reads it.
     subagents::fold_child_activity_onto_parents(&mut rows);
-    // A same-pane fork keeps its own durable projection while the pane stays
-    // pinned to the primary, so fold only its clocks onto the displayed row.
-    forks::fold_fork_clocks_onto_primaries(&mut rows, agent_projection.agents);
+    // Same-pane conversations keep separate durable projections, so fold the
+    // hidden roots' clocks onto whichever one currently owns the pane.
+    forks::fold_same_pane_clocks_onto_bound_row(&mut rows, agent_projection.agents);
     // Project the displayed status now that each row knows its subagents and
     // the full agent set is in hand.
     status::project_display_status(
