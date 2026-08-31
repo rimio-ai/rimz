@@ -1,13 +1,11 @@
 //! Provider-neutral local-session and daemon evidence services.
 
 use std::collections::BTreeSet;
-#[cfg(any(test, feature = "testkit"))]
+#[cfg(feature = "testkit")]
 use std::path::Path;
 
 use jiff::Timestamp;
 
-#[cfg(test)]
-use super::adapters::codex;
 use super::{AgentTurnError, ProviderCapacity};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -54,12 +52,4 @@ pub fn discover_local_sessions_under(
     super::find_definition(kind).map_or_else(Vec::new, |definition| {
         definition.discover_local_sessions_under(home, workspaces)
     })
-}
-
-#[cfg(test)]
-pub(crate) fn with_sessions_root<T>(kind: &str, path: &Path, f: impl FnOnce() -> T) -> T {
-    match kind {
-        "codex" => codex::with_codex_sessions_root(path, f),
-        _ => f(),
-    }
 }
