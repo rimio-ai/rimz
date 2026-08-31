@@ -258,6 +258,13 @@ pub(super) fn record_conversation(
                                 entry.from = Some(sender);
                                 (entry, delivered_text)
                             }
+                            Some((rimz::harness::target::HeaderKind::Subagent, sender, body)) => {
+                                let delivered_text = body.clone();
+                                let mut entry =
+                                    entry_base(rimz::transcript::TranscriptKind::Message, body);
+                                entry.from = Some(sender);
+                                (entry, delivered_text)
+                            }
                             Some((rimz::harness::target::HeaderKind::User, _, body)) => {
                                 let delivered_text = body.clone();
                                 (

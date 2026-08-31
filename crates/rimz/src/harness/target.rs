@@ -957,6 +957,7 @@ pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeaderKind {
     Agent,
+    Subagent,
     User,
 }
 
@@ -968,6 +969,7 @@ pub fn parse_message_header(text: &str) -> Option<(HeaderKind, String, String)> 
     let (kind, rest) = text.split_once('\n')?;
     let kind = match kind {
         "Type: AGENT_MESSAGE" => HeaderKind::Agent,
+        "Type: SUBAGENT_REPORT" => HeaderKind::Subagent,
         "Type: USER_MESSAGE" => HeaderKind::User,
         _ => return None,
     };
@@ -993,7 +995,10 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
             next_start += 1;
         }
         let first_line = text[next_start..].lines().next().unwrap_or_default();
-        if matches!(first_line, "Type: AGENT_MESSAGE" | "Type: USER_MESSAGE") {
+        if matches!(
+            first_line,
+            "Type: AGENT_MESSAGE" | "Type: SUBAGENT_REPORT" | "Type: USER_MESSAGE"
+        ) {
             segments.push(&text[start..boundary]);
             start = next_start;
         }
@@ -1028,6 +1033,14 @@ pub fn align_submitted_prompt<'a>(
         match record.sender {
             MessageSender::Agent { .. } => {
                 let attributed = body.strip_prefix("Type: AGENT_MESSAGE\nFrom: @")?;
+                let (handle, text) = attributed.split_once("\nContent:\n")?;
+                if handle.is_empty() || handle.chars().any(char::is_whitespace) {
+                    return None;
+                }
+                body = text;
+            }
+            MessageSender::Subagent { .. } => {
+                let attributed = body.strip_prefix("Type: SUBAGENT_REPORT\nFrom: @")?;
                 let (handle, text) = attributed.split_once("\nContent:\n")?;
                 if handle.is_empty() || handle.chars().any(char::is_whitespace) {
                     return None;
@@ -1069,7 +1082,7 @@ pub fn align_submitted_prompt<'a>(
     Some(segments)
 }
 
-/// The structured header for a human- or agent-authored message.
+/// The structured header for a human-, agent-, or subagent-authored message.
 ///
 /// Agent-authored text uses the shortest live handle when the sender is visible
 /// in the snapshot and falls back to the launch environment identity.
@@ -1081,6 +1094,9 @@ pub fn message_header(
 ) -> Option<String> {
     if matches!(sender, MessageSender::Human) {
         return Some("Type: USER_MESSAGE\nFrom: @user\nContent:\n".to_owned());
+    }
+    if let MessageSender::Subagent { name, .. } = sender {
+        return Some(format!("Type: SUBAGENT_REPORT\nFrom: @{name}\nContent:\n"));
     }
     let MessageSender::Agent {
         kind,

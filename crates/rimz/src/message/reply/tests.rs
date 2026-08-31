@@ -429,6 +429,22 @@ fn dependency_graph_ignores_non_running_and_unnamed_senders() {
     if let MessageSender::Agent { name, .. } = &mut message.sender {
         *name = None;
     }
+    assert!(
+        wait_cycle(
+            &[message.clone()],
+            &[],
+            &agents,
+            &agents[0].kind,
+            "a",
+            &agents[1]
+        )
+        .is_none()
+    );
+
+    message.sender = MessageSender::Subagent {
+        kind: agents[1].kind.clone(),
+        name: "child".to_owned(),
+    };
     assert!(wait_cycle(&[message], &[], &agents, &agents[0].kind, "a", &agents[1]).is_none());
 }
 

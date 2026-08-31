@@ -61,6 +61,10 @@ pub enum MessageSender {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         channel: Option<String>,
     },
+    Subagent {
+        kind: AgentKind,
+        name: String,
+    },
     System,
 }
 
@@ -68,7 +72,7 @@ impl MessageSender {
     pub fn attributed(&self) -> Option<Self> {
         match self {
             Self::Human => None,
-            Self::Agent { .. } | Self::System => Some(self.clone()),
+            Self::Agent { .. } | Self::Subagent { .. } | Self::System => Some(self.clone()),
         }
     }
 
@@ -76,6 +80,7 @@ impl MessageSender {
         match self {
             Self::Human => "you".to_owned(),
             Self::System => "rimz".to_owned(),
+            Self::Subagent { name, .. } => format!("@{name}"),
             Self::Agent {
                 kind,
                 profile,
@@ -702,7 +707,9 @@ impl MessageRecord {
     pub fn batch_key(&self) -> Option<&str> {
         match &self.sender {
             MessageSender::Agent { channel, .. } => channel.as_deref(),
-            MessageSender::Human | MessageSender::System => self.channel.as_deref(),
+            MessageSender::Human | MessageSender::Subagent { .. } | MessageSender::System => {
+                self.channel.as_deref()
+            }
         }
     }
 

@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{
-    AfterCondition, DeliveryGate, MessageRecord, MessageStatus, WhenCondition,
+    AfterCondition, DeliveryGate, MessageRecord, MessageSender, MessageStatus, WhenCondition,
     command_submit_delay_from_env, delivery_window_from_env, gate_open_for_agent,
     max_delivery_attempts_from_env, message_interval_from_env, older_ready_blocker, queue_head,
 };
@@ -139,16 +139,17 @@ pub enum DeliveryVerdict {
 /// continues, auto-continue resumes, and supervised verify re-prompts. A nudge
 /// carries the agent's channel, always submits, and stays verbatim as system
 /// text; its gate marks the automation.
-fn nudge_record(
+fn synthetic_record(
     workspace_id: crate::ids::WorkspaceId,
     agent: &crate::agents::AgentState,
+    sender: MessageSender,
     text: String,
     gate: DeliveryGate,
     pane_id: Option<&PaneId>,
 ) -> MessageRecord {
     let record = MessageRecord::new(workspace_id, agent, text, true, gate)
         .with_channel(crate::harness::target::agent_channel(agent))
-        .with_sender(crate::message::MessageSender::System);
+        .with_sender(sender);
     match pane_id {
         Some(pane_id) => record.with_pane_id(pane_id.clone()),
         None => record,
@@ -164,9 +165,49 @@ pub fn queue_nudge(
     gate: DeliveryGate,
     pane_id: Option<&PaneId>,
 ) -> Result<MessageId> {
-    let message = nudge_record(workspace.workspace_id.clone(), agent, text, gate, pane_id);
+    let message = synthetic_record(
+        workspace.workspace_id.clone(),
+        agent,
+        MessageSender::System,
+        text,
+        gate,
+        pane_id,
+    );
     store.queue_message(&message, &workspace.session_name)?;
     Ok(message.message_id)
+}
+
+/// Queue a synthetic report and attempt boundary delivery when the recipient pane is known.
+pub fn queue_report(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &crate::agents::AgentState,
+    sender: MessageSender,
+    text: String,
+    gate: DeliveryGate,
+    pane_id: Option<&PaneId>,
+) -> Result<(MessageId, bool)> {
+    let message = synthetic_record(
+        workspace.workspace_id.clone(),
+        agent,
+        sender,
+        text,
+        gate,
+        pane_id,
+    );
+    store.queue_message(&message, &workspace.session_name)?;
+    let Some(pane_id) = pane_id else {
+        return Ok((message.message_id, false));
+    };
+    let delivered = deliver_one(
+        workspace,
+        store,
+        &message.message_id,
+        Duration::ZERO,
+        Some(pane_id.mux()),
+        DeliveryPolicy::Boundary,
+    )?;
+    Ok((message.message_id, delivered))
 }
 
 /// Queue a nudge against a known pane and attempt boundary delivery in the same
@@ -954,9 +995,10 @@ mod tests {
         agent.channel = Some("auth".to_owned());
         let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_4");
 
-        let resume = nudge_record(
+        let resume = synthetic_record(
             workspace_id(),
             &agent,
+            MessageSender::System,
             "continue".to_owned(),
             DeliveryGate::Resume,
             Some(&pane_id),
@@ -971,9 +1013,10 @@ mod tests {
         assert_eq!(resume.pane_id.as_ref(), Some(&pane_id));
         assert_eq!(resume.status, MessageStatus::Queued);
 
-        let parked = nudge_record(
+        let parked = synthetic_record(
             workspace_id(),
             &agent,
+            MessageSender::System,
             "continue".to_owned(),
             DeliveryGate::Done,
             None,

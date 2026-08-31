@@ -612,7 +612,7 @@ fn handle_falls_back_to_petname_without_an_ordinal() {
 }
 
 #[test]
-fn message_header_parser_round_trips_agent_and_human_senders() {
+fn message_header_parser_round_trips_attributed_senders() {
     let body = "ship it";
     let sender = MessageSender::Agent {
         kind: AgentKind::new_unchecked("codex"),
@@ -644,6 +644,20 @@ fn message_header_parser_round_trips_agent_and_human_senders() {
         Some((HeaderKind::User, "@user".to_owned(), body.to_owned()))
     );
     assert_eq!(message_header(&MessageSender::System, &[], None), None);
+
+    let subagent = MessageSender::Subagent {
+        kind: AgentKind::new_unchecked("codex"),
+        name: "lucid-atlas".to_owned(),
+    };
+    let report = message_header(&subagent, &[], None).unwrap() + body;
+    assert_eq!(
+        parse_message_header(&report),
+        Some((
+            HeaderKind::Subagent,
+            "@lucid-atlas".to_owned(),
+            body.to_owned()
+        ))
+    );
 }
 
 #[test]
@@ -678,8 +692,31 @@ fn align_submitted_prompt_consumes_human_header() {
 }
 
 #[test]
+fn align_submitted_prompt_consumes_subagent_header() {
+    let recipient = agent("claude", "session-recipient", Some("main"), "terminal_1");
+    let record = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+        &recipient,
+        "ship it".to_owned(),
+        true,
+        crate::message::DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Subagent {
+        kind: AgentKind::new_unchecked("codex"),
+        name: "lucid-atlas".to_owned(),
+    });
+    let prompt = "Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nship it";
+
+    assert_eq!(
+        align_submitted_prompt(prompt, &[&record]),
+        Some(vec![prompt])
+    );
+}
+
+#[test]
 fn split_batched_prompt_splits_only_on_typed_sections() {
     let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
+    let subagent = "Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nreport";
     let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
     assert_eq!(
         split_batched_prompt(&format!("{agent}\n\n{human}")),
@@ -692,6 +729,10 @@ fn split_batched_prompt_splits_only_on_typed_sections() {
     assert_eq!(
         split_batched_prompt(&format!("{agent}\n\n\n{human}")),
         vec![agent, human]
+    );
+    assert_eq!(
+        split_batched_prompt(&format!("{agent}\n\n{subagent}\n\n{human}")),
+        vec![agent, subagent, human]
     );
     assert_eq!(
         split_batched_prompt(&format!("{agent}\n\nsecond paragraph")),

@@ -1145,6 +1145,16 @@ mod tests {
         };
         assert_eq!(turn_openers_for_sender(&snapshot, &sender), vec![opener]);
         assert!(turn_openers_for_sender(&snapshot, &MessageSender::Human).is_empty());
+        assert!(
+            turn_openers_for_sender(
+                &snapshot,
+                &MessageSender::Subagent {
+                    kind: AgentKind::new_unchecked("codex"),
+                    name: "child".to_owned(),
+                },
+            )
+            .is_empty()
+        );
     }
 
     #[test]
