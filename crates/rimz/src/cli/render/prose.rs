@@ -424,9 +424,7 @@ impl Layout {
         match tag {
             TagEnd::Paragraph => {
                 self.flush_inline();
-                if self.items.is_empty() {
-                    self.push_blank();
-                }
+                self.push_blank();
             }
             TagEnd::Heading(_) => {
                 self.flush_inline();
@@ -693,6 +691,15 @@ mod tests {
         let rendered =
             plain(Prose::Markdown.lines("> quoted text\n\n```rust\nlet value = 1;\n```", 40));
         assert_eq!(rendered, "▌ quoted text\n\n    let value = 1;");
+    }
+
+    #[test]
+    fn markdown_indents_nested_lists_and_spaces_loose_items() {
+        let nested = plain(Prose::Markdown.lines("3. outer\n   - inner", 40));
+        assert_eq!(nested, "3. outer\n  • inner");
+
+        let loose = plain(Prose::Markdown.lines("- first\n\n- second", 40));
+        assert_eq!(loose, "• first\n\n• second");
     }
 
     #[test]
