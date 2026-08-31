@@ -21,13 +21,6 @@ pub(crate) fn tracked_text_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-pub(crate) fn tracked_rust_files(root: &Path) -> Result<Vec<PathBuf>> {
-    Ok(git_tracked_files(root)?
-        .into_iter()
-        .filter(|path| path.extension().and_then(OsStr::to_str) == Some("rs"))
-        .collect())
-}
-
 pub(crate) fn is_test_file(path: &Path) -> bool {
     path.file_name()
         .and_then(OsStr::to_str)

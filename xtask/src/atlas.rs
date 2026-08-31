@@ -7,18 +7,24 @@
 //! the source/syntax/history seams into a crate if another repository adopts it.
 
 mod api;
+mod brief;
 mod conform;
+mod detect;
+mod facts;
 mod history;
+mod index;
 mod metrics;
 mod modules;
 mod rank;
+mod references;
 mod seams;
 mod shapes;
 mod sources;
+mod survey;
 mod syntax;
 mod target;
 
-pub(super) const REPORT_VERSION: u8 = 2;
+pub(super) const REPORT_VERSION: u8 = 3;
 
 use std::path::{Component, Path, PathBuf};
 
@@ -29,8 +35,10 @@ pub(crate) const USAGE: &str = "cargo xtask atlas <verb> [flags]
 Verbs:
   rank      prioritize modules by size, escaping surface, churn, and complexity
   seams     report imports, external surface, co-change, and divergence
-  api       report effective reach and production/test name-match evidence
+  api       report effective reach and exact production/test references
   shapes    cluster large functions by shared call choreography
+  survey    produce one architecture-review sweep over a scope
+  brief     produce a module dossier (or one per split leaf)
   conform   compare the tree with refactor-target.toml budgets
 
 Run `cargo xtask atlas <verb> --help` for verb-specific flags.";
@@ -52,7 +60,9 @@ pub(crate) fn atlas(root: &Path, args: &[String]) -> Result<()> {
         "rank" => rank::run(root, rest),
         "seams" => seams::run(root, rest),
         "api" => api::run(root, rest),
+        "brief" => brief::run(root, rest),
         "shapes" => shapes::run(root, rest),
+        "survey" => survey::run(root, rest),
         "conform" => conform::run(root, rest),
         _ => bail!("unknown atlas verb `{verb}`\n\n{USAGE}"),
     }
@@ -109,4 +119,12 @@ fn finite_nonnegative(value: &str, verb: &str, flag: &str) -> Result<f64> {
         bail!("atlas {verb} {flag} requires a finite non-negative number");
     }
     Ok(parsed)
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "atlas explicitly reports degraded no-index analysis"
+)]
+fn note_no_index() {
+    eprintln!("atlas: --no-index omits exact-reference fields");
 }

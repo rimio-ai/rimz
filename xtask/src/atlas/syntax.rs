@@ -1,13 +1,15 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde::Serialize;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
-    Expr, ExprCall, ExprMethodCall, File, ImplItem, ImplItemFn, Item, ItemFn, ItemMod, TraitItem,
-    UseTree, Visibility,
+    Expr, ExprCall, ExprIf, ExprMethodCall, ExprWhile, File, FnArg, ImplItem, ImplItemFn, Item,
+    ItemFn, ItemMod, Pat, PatGuard, Stmt, TraitItem, UseTree, Visibility,
 };
 
 use super::modules::{
@@ -22,10 +24,9 @@ pub(super) struct PubItem {
     pub(super) kind: String,
     pub(super) params: Option<usize>,
     pub(super) line: usize,
+    pub(super) end_line: usize,
     pub(super) declared: String,
     pub(super) reach: String,
-    #[serde(skip)]
-    pub(super) signature_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -45,6 +46,15 @@ pub(super) struct FnBody {
     pub(super) line: usize,
     pub(super) sloc: usize,
     pub(super) callees: Vec<String>,
+    pub(super) forwards: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct Guard {
+    pub(super) path: PathBuf,
+    pub(super) line: usize,
+    pub(super) kind: String,
+    pub(super) normalized: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -57,6 +67,7 @@ pub(super) struct FileSyntax {
     pub(super) test_regions: Vec<Range<usize>>,
     pub(super) imports: Vec<ImportedItem>,
     pub(super) fns: Vec<FnBody>,
+    pub(super) guards: Vec<Guard>,
 }
 
 #[derive(Debug)]
@@ -107,7 +118,7 @@ pub(super) fn analyze_sources(sources: &[Source]) -> SyntaxReport {
             continue;
         }
         match syn::parse_file(&source.text) {
-            Ok(file) => files.push(analyze_file(&source.path, &file)),
+            Ok(file) => files.push(analyze_file(&source.path, &source.text, &file)),
             Err(_) => parse_failures.push(source.path.clone()),
         }
     }
@@ -117,7 +128,7 @@ pub(super) fn analyze_sources(sources: &[Source]) -> SyntaxReport {
     }
 }
 
-fn analyze_file(path: &Path, file: &File) -> FileSyntax {
+fn analyze_file(path: &Path, source: &str, file: &File) -> FileSyntax {
     let module_path = crate_module_for_path(path);
     let crate_path = crate_path_for_source(path);
     let mut pub_items = Vec::new();
@@ -147,6 +158,13 @@ fn analyze_file(path: &Path, file: &File) -> FileSyntax {
     };
     fn_collector.visit_file(file);
 
+    let mut guard_collector = GuardCollector {
+        path,
+        source,
+        guards: Vec::new(),
+    };
+    guard_collector.visit_file(file);
+
     FileSyntax {
         path: path.to_path_buf(),
         crate_path,
@@ -156,6 +174,7 @@ fn analyze_file(path: &Path, file: &File) -> FileSyntax {
         test_regions,
         imports,
         fns: fn_collector.functions,
+        guards: guard_collector.guards,
     }
 }
 
@@ -178,13 +197,13 @@ fn collect_public_items(
                         kind: "fn".to_owned(),
                         params: Some(method.sig.inputs.len()),
                         line: method.sig.ident.span().start().line,
+                        end_line: method.span().end().line,
                         declared: render_visibility(&method.vis),
                         reach: narrower_reach(
                             &visibility_reach(&method.vis, module),
                             enclosing_reach,
                             module,
                         ),
-                        signature_names: signature_type_names(&method.sig),
                     });
                 }
             }
@@ -203,9 +222,9 @@ fn collect_public_items(
                     kind: "trait".to_owned(),
                     params: None,
                     line: item.ident.span().start().line,
+                    end_line: item.span().end().line,
                     declared: render_visibility(&item.vis),
                     reach: trait_reach.clone(),
-                    signature_names: Vec::new(),
                 });
                 for method in &item.items {
                     if let TraitItem::Fn(method) = method {
@@ -215,9 +234,9 @@ fn collect_public_items(
                             kind: "fn".to_owned(),
                             params: Some(method.sig.inputs.len()),
                             line: method.sig.ident.span().start().line,
+                            end_line: method.span().end().line,
                             declared: "inherited".to_owned(),
                             reach: trait_reach.clone(),
-                            signature_names: signature_type_names(&method.sig),
                         });
                     }
                 }
@@ -242,9 +261,9 @@ fn collect_public_items(
                     kind: "mod".to_owned(),
                     params: None,
                     line: item.ident.span().start().line,
+                    end_line: item.span().end().line,
                     declared: render_visibility(&item.vis),
                     reach: module_reach.clone(),
-                    signature_names: Vec::new(),
                 });
             }
             if let Some((_, items)) = &item.content {
@@ -252,14 +271,13 @@ fn collect_public_items(
             }
             continue;
         }
-        let (visibility, name, kind, params, line, signature_names) = match item {
+        let (visibility, name, kind, params, line) = match item {
             Item::Const(item) => (
                 &item.vis,
                 item.ident.to_string(),
                 "const",
                 None,
                 item.ident.span().start().line,
-                type_names(&item.ty),
             ),
             Item::Enum(item) => (
                 &item.vis,
@@ -267,11 +285,6 @@ fn collect_public_items(
                 "enum",
                 None,
                 item.ident.span().start().line,
-                item.variants
-                    .iter()
-                    .flat_map(|variant| variant.fields.iter())
-                    .flat_map(|field| type_names(&field.ty))
-                    .collect(),
             ),
             Item::Fn(item) => (
                 &item.vis,
@@ -279,7 +292,6 @@ fn collect_public_items(
                 "fn",
                 Some(item.sig.inputs.len()),
                 item.sig.ident.span().start().line,
-                signature_type_names(&item.sig),
             ),
             Item::Static(item) => (
                 &item.vis,
@@ -287,7 +299,6 @@ fn collect_public_items(
                 "static",
                 None,
                 item.ident.span().start().line,
-                type_names(&item.ty),
             ),
             Item::Struct(item) => (
                 &item.vis,
@@ -295,10 +306,6 @@ fn collect_public_items(
                 "struct",
                 None,
                 item.ident.span().start().line,
-                item.fields
-                    .iter()
-                    .flat_map(|field| type_names(&field.ty))
-                    .collect(),
             ),
             Item::TraitAlias(item) => (
                 &item.vis,
@@ -306,7 +313,6 @@ fn collect_public_items(
                 "trait-alias",
                 None,
                 item.ident.span().start().line,
-                Vec::new(),
             ),
             Item::Type(item) => (
                 &item.vis,
@@ -314,7 +320,6 @@ fn collect_public_items(
                 "type",
                 None,
                 item.ident.span().start().line,
-                type_names(&item.ty),
             ),
             Item::Union(item) => (
                 &item.vis,
@@ -322,11 +327,6 @@ fn collect_public_items(
                 "union",
                 None,
                 item.ident.span().start().line,
-                item.fields
-                    .named
-                    .iter()
-                    .flat_map(|field| type_names(&field.ty))
-                    .collect(),
             ),
             Item::Use(item) if is_boundary_visible(&item.vis) => {
                 let mut names = Vec::new();
@@ -338,13 +338,13 @@ fn collect_public_items(
                         kind: "use".to_owned(),
                         params: None,
                         line: item.span().start().line,
+                        end_line: item.span().end().line,
                         declared: render_visibility(&item.vis),
                         reach: narrower_reach(
                             &visibility_reach(&item.vis, module),
                             enclosing_reach,
                             module,
                         ),
-                        signature_names: Vec::new(),
                     });
                 }
                 continue;
@@ -358,41 +358,15 @@ fn collect_public_items(
                 kind: kind.to_owned(),
                 params,
                 line,
+                end_line: item.span().end().line,
                 declared: render_visibility(visibility),
                 reach: narrower_reach(
                     &visibility_reach(visibility, module),
                     enclosing_reach,
                     module,
                 ),
-                signature_names,
             });
         }
-    }
-}
-
-fn signature_type_names(signature: &syn::Signature) -> Vec<String> {
-    let mut collector = TypeNameCollector::default();
-    collector.visit_signature(signature);
-    collector.names
-}
-
-fn type_names(ty: &syn::Type) -> Vec<String> {
-    let mut collector = TypeNameCollector::default();
-    collector.visit_type(ty);
-    collector.names
-}
-
-#[derive(Default)]
-struct TypeNameCollector {
-    names: Vec<String>,
-}
-
-impl<'ast> Visit<'ast> for TypeNameCollector {
-    fn visit_type_path(&mut self, ty: &'ast syn::TypePath) {
-        if let Some(segment) = ty.path.segments.last() {
-            self.names.push(segment.ident.to_string());
-        }
-        visit::visit_type_path(self, ty);
     }
 }
 
@@ -654,29 +628,136 @@ struct FnCollector<'a> {
 }
 
 impl FnCollector<'_> {
-    fn push(&mut self, name: String, span: proc_macro2::Span, block: &syn::Block) {
+    fn push(&mut self, signature: &syn::Signature, span: proc_macro2::Span, block: &syn::Block) {
         let start = span.start().line;
         let end = span.end().line;
         let mut calls = CallCollector::default();
         calls.visit_block(block);
         self.functions.push(FnBody {
-            name,
+            name: signature.ident.to_string(),
             path: self.path.to_path_buf(),
             line: start,
             sloc: end.saturating_sub(start) + 1,
             callees: calls.callees,
+            forwards: forwarded_expression(block)
+                .and_then(|expression| forwarded_callee(signature, expression)),
         });
     }
 }
 
+fn forwarded_expression(block: &syn::Block) -> Option<&Expr> {
+    let [statement] = block.stmts.as_slice() else {
+        return None;
+    };
+    let Stmt::Expr(expression, _) = statement else {
+        return None;
+    };
+    peel_forwarded(expression, true)
+}
+
+fn peel_forwarded(expression: &Expr, allow_wrap: bool) -> Option<&Expr> {
+    match expression {
+        Expr::Call(call) if allow_wrap && is_wrapper(&call.func) && call.args.len() == 1 => {
+            peel_forwarded(call.args.first()?, false)
+        }
+        Expr::Call(_) | Expr::MethodCall(_) => Some(expression),
+        Expr::Await(expression) => peel_forwarded(&expression.base, allow_wrap),
+        Expr::Block(expression) => forwarded_expression(&expression.block),
+        Expr::Group(expression) => peel_forwarded(&expression.expr, allow_wrap),
+        Expr::Paren(expression) => peel_forwarded(&expression.expr, allow_wrap),
+        Expr::Return(expression) => expression
+            .expr
+            .as_deref()
+            .and_then(|expression| peel_forwarded(expression, allow_wrap)),
+        Expr::Try(expression) => peel_forwarded(&expression.expr, allow_wrap),
+        _ => None,
+    }
+}
+
+fn is_wrapper(expression: &Expr) -> bool {
+    let Expr::Path(path) = expression else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| matches!(segment.ident.to_string().as_str(), "Ok" | "Some"))
+}
+
+fn forwarded_callee(signature: &syn::Signature, expression: &Expr) -> Option<String> {
+    let parameters = signature_parameters(signature)?;
+    match expression {
+        Expr::Call(call) => {
+            arguments_match(call.args.iter(), &parameters)?;
+            let Expr::Path(path) = call.func.as_ref() else {
+                return None;
+            };
+            Some(
+                path.path
+                    .segments
+                    .iter()
+                    .map(|segment| segment.ident.to_string())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+            )
+        }
+        Expr::MethodCall(call) => {
+            let receiver = expression_ident(&call.receiver)?;
+            let expected = if parameters
+                .first()
+                .is_some_and(|parameter| parameter == &receiver)
+            {
+                &parameters[1..]
+            } else {
+                return None;
+            };
+            arguments_match(call.args.iter(), expected)?;
+            Some(format!(".{}", call.method))
+        }
+        _ => None,
+    }
+}
+
+fn signature_parameters(signature: &syn::Signature) -> Option<Vec<String>> {
+    signature
+        .inputs
+        .iter()
+        .map(|argument| match argument {
+            FnArg::Receiver(_) => Some("self".to_owned()),
+            FnArg::Typed(argument) => match argument.pat.as_ref() {
+                Pat::Ident(ident) if ident.subpat.is_none() => Some(ident.ident.to_string()),
+                _ => None,
+            },
+        })
+        .collect()
+}
+
+fn arguments_match<'a>(
+    arguments: impl Iterator<Item = &'a Expr>,
+    parameters: &[String],
+) -> Option<()> {
+    let arguments = arguments
+        .map(expression_ident)
+        .collect::<Option<Vec<_>>>()?;
+    (arguments == parameters).then_some(())
+}
+
+fn expression_ident(expression: &Expr) -> Option<String> {
+    let Expr::Path(path) = expression else {
+        return None;
+    };
+    (path.qself.is_none() && path.path.segments.len() == 1)
+        .then(|| path.path.segments[0].ident.to_string())
+}
+
 impl<'ast> Visit<'ast> for FnCollector<'_> {
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        self.push(item.sig.ident.to_string(), item.span(), &item.block);
+        self.push(&item.sig, item.span(), &item.block);
         visit::visit_item_fn(self, item);
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
-        self.push(item.sig.ident.to_string(), item.span(), &item.block);
+        self.push(&item.sig, item.span(), &item.block);
         visit::visit_impl_item_fn(self, item);
     }
 
@@ -695,6 +776,104 @@ fn is_cfg_test(attributes: &[syn::Attribute]) -> bool {
                 _ => false,
             }
     })
+}
+
+struct GuardCollector<'a> {
+    path: &'a Path,
+    source: &'a str,
+    guards: Vec<Guard>,
+}
+
+impl GuardCollector<'_> {
+    fn push(&mut self, kind: &str, expression: &Expr) {
+        let Some(raw) = span_text(self.source, expression.span()) else {
+            return;
+        };
+        let Ok(tokens) = TokenStream::from_str(raw) else {
+            return;
+        };
+        if token_count(tokens.clone()) < 5 {
+            return;
+        }
+        self.guards.push(Guard {
+            path: self.path.to_path_buf(),
+            line: expression.span().start().line,
+            kind: kind.to_owned(),
+            normalized: normalize_tokens(tokens),
+        });
+    }
+}
+
+impl<'ast> Visit<'ast> for GuardCollector<'_> {
+    fn visit_expr_if(&mut self, expression: &'ast ExprIf) {
+        self.push("if", &expression.cond);
+        visit::visit_expr_if(self, expression);
+    }
+
+    fn visit_expr_while(&mut self, expression: &'ast ExprWhile) {
+        self.push("while", &expression.cond);
+        visit::visit_expr_while(self, expression);
+    }
+
+    fn visit_pat_guard(&mut self, guard: &'ast PatGuard) {
+        self.push("match", &guard.guard);
+        visit::visit_pat_guard(self, guard);
+    }
+
+    fn visit_item_mod(&mut self, item: &'ast ItemMod) {
+        if !is_cfg_test(&item.attrs) {
+            visit::visit_item_mod(self, item);
+        }
+    }
+}
+
+fn span_text(source: &str, span: proc_macro2::Span) -> Option<&str> {
+    let start = source_offset(source, span.start().line, span.start().column)?;
+    let end = source_offset(source, span.end().line, span.end().column)?;
+    source.get(start..end)
+}
+
+fn source_offset(source: &str, line: usize, column: usize) -> Option<usize> {
+    if line == 0 {
+        return None;
+    }
+    let line_start = source
+        .split_inclusive('\n')
+        .take(line.saturating_sub(1))
+        .map(str::len)
+        .sum::<usize>();
+    let offset = line_start.checked_add(column)?;
+    source.is_char_boundary(offset).then_some(offset)
+}
+
+fn token_count(tokens: TokenStream) -> usize {
+    tokens
+        .into_iter()
+        .map(|token| match token {
+            TokenTree::Group(group) => token_count(group.stream()).saturating_add(2),
+            _ => 1,
+        })
+        .sum()
+}
+
+fn normalize_tokens(tokens: TokenStream) -> String {
+    tokens
+        .into_iter()
+        .map(|token| match token {
+            TokenTree::Group(group) => {
+                let (open, close) = match group.delimiter() {
+                    Delimiter::Parenthesis => ("(", ")"),
+                    Delimiter::Brace => ("{", "}"),
+                    Delimiter::Bracket => ("[", "]"),
+                    Delimiter::None => ("", ""),
+                };
+                format!("{open}{}{close}", normalize_tokens(group.stream()))
+            }
+            TokenTree::Literal(_) => "_".to_owned(),
+            TokenTree::Ident(ident) => ident.to_string(),
+            TokenTree::Punct(punct) => punct.as_char().to_string(),
+        })
+        .collect()
 }
 
 #[derive(Default)]

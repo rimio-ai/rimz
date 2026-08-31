@@ -4,24 +4,22 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::api::OccurrenceCorpus;
-use super::modules::{
-    crate_module_for_path, module_is_within, path_in_scope, scope_for_matching,
-    workspace_crate_names,
-};
-use super::sources::{self, Source};
+use super::facts::{Facets, Facts};
+use super::modules::{crate_module_for_path, module_is_within, path_in_scope, scope_for_matching};
+use super::sources::Source;
 use super::syntax;
 use super::target::{self, ModuleRule, TARGET_FILE, Target};
 use super::{REPORT_VERSION, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
 
-const USAGE: &str = "cargo xtask atlas conform [--ratchet|--tighten|--init] [--file <path>] [--path <prefix>] [--verbose] [--json]
+const USAGE: &str = "cargo xtask atlas conform [--ratchet|--tighten|--init] [--file <path>] [--path <prefix>] [--layers <a,b,...>] [--verbose] [--json]
 
 Compares the working tree with a refactor target (root refactor-target.toml by
 default). `--ratchet` fails only when current values exceed budgets/baselines or
 an import is outside its allow list. `--tighten` atomically lowers budgets and
-baselines to current values; it never raises them. A strangler counts whole-word
+baselines to current values and removes unused upward-import admissions; it never
+raises them. A strangler counts whole-word
 occurrences of its symbol in non-test Rust under its path (a file or directory).
 A missing default target passes; a missing explicit --file is an error. `--init`
 creates a clean current-tree baseline and never overwrites an existing target.
@@ -29,19 +27,20 @@ Import allow-lists cover resolved internal `use` declarations only.
 Split Rust modules (`foo.rs` plus `foo/`) remain separate filesystem rules.
 
   --ratchet      fail on regressions (the checks/gate mode)
-  --tighten      lower budgets and baselines to current values
-  --init         seed module budgets and import allow-lists from the current tree
+  --tighten      lower budgets/baselines and remove unused upward imports
+  --init         seed module budgets, layers, and upward imports from the current tree
   --file <path>  target file (default root refactor-target.toml);
                  absolute as-is, relative from the repository root
   --path <path>  root-relative init subtree (default crates/rimz/src)
   --verbose      show every rule instead of folding rules exactly at budget
-  --json         versioned JSON agent contract (v2)
+  --json         versioned JSON agent contract (v3)
 
 Schema:
-  version = 2
+  version = 3
+  layers = [\"store\", \"agents\", \"cli\"]
   [[module]]
   path = \"crates/rimz/src/cli\"
-  allowed-imports = [\"agents\"]
+  upward-imports = [\"agents\"]
   surface-budget = 10
   [[strangler]]
   symbol = \"legacy_symbol\"
@@ -61,6 +60,7 @@ struct Args {
     mode: Mode,
     file: Option<PathBuf>,
     path: Option<PathBuf>,
+    layers: Option<Vec<String>>,
     verbose: bool,
     json: bool,
 }
@@ -83,6 +83,8 @@ struct RuleResult {
     delta: isize,
     unallowed_imports: Vec<String>,
     unallowed_import_sites: Vec<ImportSite>,
+    #[serde(skip)]
+    used_upward_imports: BTreeSet<String>,
     config_line: usize,
 }
 
@@ -93,6 +95,7 @@ struct Report {
     target: PathBuf,
     #[serde(skip)]
     default_target: bool,
+    layers: Vec<String>,
     rules: Vec<RuleResult>,
     regressions: usize,
     parse_failures: usize,
@@ -123,7 +126,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
             .path
             .as_deref()
             .unwrap_or_else(|| Path::new(DEFAULT_PATH));
-        let target = initialize(root, scope)?;
+        let target = initialize(root, scope, args.layers.as_deref())?;
         let seeded = target.modules.len();
         target::write(&target_path, &target)?;
         println!(
@@ -208,6 +211,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut mode = Mode::Report;
     let mut file = None;
     let mut path = None;
+    let mut layers = None;
     let mut verbose = false;
     let mut json = false;
     let mut index = 0;
@@ -242,6 +246,18 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 set_once(&mut path, parsed, "conform", "--path")?;
                 index += 2;
             }
+            "--layers" => {
+                let parsed = value(args, index, "conform", "--layers")?
+                    .split(',')
+                    .map(str::trim)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                if parsed.is_empty() || parsed.iter().any(String::is_empty) {
+                    bail!("atlas conform --layers requires comma-separated module names");
+                }
+                set_once(&mut layers, parsed, "conform", "--layers")?;
+                index += 2;
+            }
             "--verbose" if !verbose => {
                 verbose = true;
                 index += 1;
@@ -264,6 +280,9 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     if mode != Mode::Init && path.is_some() {
         bail!("atlas conform --path requires --init");
     }
+    if mode != Mode::Init && layers.is_some() {
+        bail!("atlas conform --layers requires --init");
+    }
     if mode != Mode::Report && verbose {
         bail!("atlas conform --verbose is only valid for the default report mode");
     }
@@ -274,37 +293,36 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         mode,
         file,
         path,
+        layers,
         verbose,
         json,
     }))
 }
 
-fn initialize(root: &Path, scope: &Path) -> Result<Target> {
-    let all_sources = sources::working_tree_rust_sources(root)?;
-    let all_syntax = syntax::analyze_sources(&all_sources);
-    let mod_index = syntax::ModIndex::new(&all_syntax.files);
-    let scoped_sources = all_sources
+fn initialize(root: &Path, scope: &Path, requested_layers: Option<&[String]>) -> Result<Target> {
+    let facts = Facts::load(root, scope, Facets::default())?;
+    let scoped_files = facts
+        .syntax
+        .files
         .iter()
-        .filter(|source| path_in_scope(&source.path, scope))
-        .cloned()
+        .filter(|file| path_in_scope(&file.path, scope))
         .collect::<Vec<_>>();
-    if scoped_sources.is_empty() {
-        bail!("no Rust files under `{}`", scope.display());
-    }
-    let syntax = syntax::analyze_sources(&scoped_sources);
-    let known_modules = all_sources
-        .iter()
-        .filter(|source| source.is_production())
-        .map(|source| crate_module_for_path(&source.path))
-        .collect::<BTreeSet<_>>();
-    let workspace_crates = workspace_crate_names(root)?;
     let mut files_by_rule = BTreeMap::new();
-    for file in &syntax.files {
+    for file in scoped_files {
         files_by_rule
             .entry(direct_rule_path(&file.path, scope))
             .or_insert_with(Vec::new)
             .push(file);
     }
+    let layers = requested_layers.map_or_else(
+        || greedy_layers(scope, files_by_rule.values().flatten().copied(), &facts),
+        <[String]>::to_vec,
+    );
+    let layer_positions = layers
+        .iter()
+        .enumerate()
+        .map(|(index, layer)| (layer.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
     let modules = files_by_rule
         .into_iter()
         .map(|(path, files)| {
@@ -314,36 +332,114 @@ fn initialize(root: &Path, scope: &Path) -> Result<Target> {
                 path.clone()
             };
             let target_module = crate_module_for_path(&module_entry);
+            let from_layer = files
+                .first()
+                .and_then(|file| layer_positions.get(top_module(&file.module_path)).copied());
             let imports = files
                 .iter()
                 .flat_map(|file| &file.imports)
                 .filter_map(|import| {
-                    syntax::resolved_internal_import(import, &known_modules, &workspace_crates)
+                    syntax::resolved_internal_import(
+                        import,
+                        &facts.known_modules,
+                        &facts.crate_names,
+                    )
                 })
-                .filter(|import| !module_is_within(import, &target_module))
+                .filter(|import| {
+                    let to_layer = layer_positions.get(top_module(import)).copied();
+                    from_layer.zip(to_layer).is_some_and(|(from, to)| to > from)
+                })
                 .collect::<BTreeSet<_>>();
-            let mut allowed_imports = Vec::<String>::new();
+            let mut upward_imports = Vec::<String>::new();
             for import in imports {
-                if !allowed_imports
+                if !upward_imports
                     .iter()
                     .any(|allowed| module_is_within(&import, allowed))
                 {
-                    allowed_imports.push(import);
+                    upward_imports.push(import);
                 }
             }
             ModuleRule {
                 path,
-                allowed_imports,
-                surface_budget: escaping_surface(files.iter().copied(), &target_module, &mod_index),
+                allowed_imports: None,
+                upward_imports: (!upward_imports.is_empty()).then_some(upward_imports),
+                surface_budget: escaping_surface(
+                    files.iter().copied(),
+                    &target_module,
+                    &facts.mod_index,
+                ),
                 config_line: 0,
             }
         })
         .collect();
     Ok(Target {
-        version: 2,
+        version: 3,
+        layers,
         modules,
         strangler: Vec::new(),
     })
+}
+
+fn top_module(module: &str) -> &str {
+    module
+        .split("::")
+        .next()
+        .filter(|part| !part.is_empty())
+        .unwrap_or("(crate)")
+}
+
+fn greedy_layers<'a>(
+    _scope: &Path,
+    files: impl Iterator<Item = &'a syntax::FileSyntax>,
+    facts: &Facts,
+) -> Vec<String> {
+    let files = files.collect::<Vec<_>>();
+    let mut nodes = files
+        .iter()
+        .map(|file| top_module(&file.module_path).to_owned())
+        .collect::<BTreeSet<_>>();
+    let mut edges = BTreeMap::<(String, String), usize>::new();
+    for file in files {
+        let from = top_module(&file.module_path);
+        for import in &file.imports {
+            let Some(resolved) =
+                syntax::resolved_internal_import(import, &facts.known_modules, &facts.crate_names)
+            else {
+                continue;
+            };
+            let to = top_module(&resolved);
+            if from != to && nodes.contains(to) {
+                *edges.entry((from.to_owned(), to.to_owned())).or_default() += 1;
+            }
+        }
+    }
+    let mut layers = Vec::with_capacity(nodes.len());
+    while !nodes.is_empty() {
+        let next = nodes
+            .iter()
+            .max_by(|left, right| {
+                let score = |node: &str| {
+                    let incoming = edges
+                        .iter()
+                        .filter(|((_, to), _)| to == node)
+                        .map(|(_, weight)| *weight as isize)
+                        .sum::<isize>();
+                    let outgoing = edges
+                        .iter()
+                        .filter(|((from, _), _)| from == node)
+                        .map(|(_, weight)| *weight as isize)
+                        .sum::<isize>();
+                    incoming - outgoing
+                };
+                score(left).cmp(&score(right)).then_with(|| right.cmp(left))
+            })
+            .cloned()
+            .expect("a non-empty layer graph has a candidate");
+        nodes.remove(&next);
+        edges.retain(|(edge, _), _| edge != &next);
+        layers.push(next);
+    }
+    layers
 }
 
 fn direct_rule_path(path: &Path, scope: &Path) -> PathBuf {
@@ -367,15 +463,7 @@ fn evaluate(
     target_path: &Path,
     default_target: bool,
 ) -> Result<Report> {
-    let all_sources = sources::working_tree_rust_sources(root)?;
-    let all_syntax = syntax::analyze_sources(&all_sources);
-    let mod_index = syntax::ModIndex::new(&all_syntax.files);
-    let known_modules = all_sources
-        .iter()
-        .filter(|source| source.is_production())
-        .map(|source| crate_module_for_path(&source.path))
-        .collect::<BTreeSet<_>>();
-    let workspace_crates = workspace_crate_names(root)?;
+    let facts = Facts::load(root, Path::new("."), Facets::default())?;
     let mut rules = Vec::new();
     let mut parse_failures = 0;
     for module in &target.modules {
@@ -388,30 +476,85 @@ fn evaluate(
                 module.path.display()
             );
         }
-        let module_sources = sources_for_path(&all_sources, &module.path, absolute.is_file());
-        let parsed = syntax::analyze_sources(&module_sources);
-        parse_failures += parsed.parse_failures.len();
+        let module_files = facts
+            .syntax
+            .files
+            .iter()
+            .filter(|file| {
+                if absolute.is_file() {
+                    file.path == module.path
+                } else {
+                    path_in_scope(&file.path, &module.path)
+                }
+            })
+            .collect::<Vec<_>>();
+        parse_failures += facts
+            .syntax
+            .parse_failures
+            .iter()
+            .filter(|path| {
+                if absolute.is_file() {
+                    *path == &module.path
+                } else {
+                    path_in_scope(path, &module.path)
+                }
+            })
+            .count();
         let module_entry = if absolute.is_dir() {
             module.path.join("mod.rs")
         } else {
             module.path.clone()
         };
         let target_module = crate_module_for_path(&module_entry);
-        let current = escaping_surface(parsed.files.iter(), &target_module, &mod_index);
+        let current = escaping_surface(
+            module_files.iter().copied(),
+            &target_module,
+            &facts.mod_index,
+        );
         let mut unallowed = BTreeMap::<String, BTreeSet<(PathBuf, usize)>>::new();
-        for file in &parsed.files {
+        let mut used_upward_imports = BTreeSet::new();
+        for file in module_files {
             for import in &file.imports {
-                let Some(resolved) =
-                    syntax::resolved_internal_import(import, &known_modules, &workspace_crates)
-                else {
+                let Some(resolved) = syntax::resolved_internal_import(
+                    import,
+                    &facts.known_modules,
+                    &facts.crate_names,
+                ) else {
                     continue;
                 };
-                if module_is_within(&resolved, &target_module)
-                    || module
-                        .allowed_imports
+                if module_is_within(&resolved, &target_module) {
+                    continue;
+                }
+                let allowed = if let Some(allowed_imports) = &module.allowed_imports {
+                    allowed_imports
                         .iter()
                         .any(|allowed| module_is_within(&resolved, allowed))
-                {
+                } else {
+                    let from = target
+                        .layers
+                        .iter()
+                        .position(|layer| layer == top_module(&file.module_path));
+                    let to = target
+                        .layers
+                        .iter()
+                        .position(|layer| layer == top_module(&resolved));
+                    match from.zip(to) {
+                        Some((from, to)) if to > from => {
+                            let matching = module
+                                .upward_imports
+                                .as_deref()
+                                .unwrap_or_default()
+                                .iter()
+                                .filter(|allowed| module_is_within(&resolved, allowed))
+                                .cloned()
+                                .collect::<Vec<_>>();
+                            used_upward_imports.extend(matching.iter().cloned());
+                            !matching.is_empty()
+                        }
+                        _ => true,
+                    }
+                };
+                if allowed {
                     continue;
                 }
                 unallowed
@@ -433,7 +576,11 @@ fn evaluate(
             .collect();
         let regression = current > module.surface_budget || !unallowed_imports.is_empty();
         rules.push(RuleResult {
-            kind: "module",
+            kind: if module.allowed_imports.is_some() {
+                "module"
+            } else {
+                "upward-import"
+            },
             path: module.path.clone(),
             symbol: None,
             status: if regression { "regression" } else { "ok" },
@@ -442,6 +589,7 @@ fn evaluate(
             delta: current as isize - module.surface_budget as isize,
             unallowed_imports,
             unallowed_import_sites,
+            used_upward_imports,
             config_line: module.config_line,
         });
     }
@@ -455,12 +603,8 @@ fn evaluate(
                 strangler.path.display()
             );
         }
-        let scoped_sources = sources_for_path(&all_sources, &strangler.path, absolute.is_file());
-        let current = OccurrenceCorpus::count_in_sources(
-            &scoped_sources,
-            &all_syntax.files,
-            &strangler.symbol,
-        );
+        let scoped_sources = sources_for_path(&facts.sources, &strangler.path, absolute.is_file());
+        let current = count_in_sources(&scoped_sources, &facts.syntax.files, &strangler.symbol);
         rules.push(RuleResult {
             kind: "strangler",
             path: strangler.path.clone(),
@@ -475,6 +619,7 @@ fn evaluate(
             delta: current as isize - strangler.baseline as isize,
             unallowed_imports: Vec::new(),
             unallowed_import_sites: Vec::new(),
+            used_upward_imports: BTreeSet::new(),
             config_line: strangler.config_line,
         });
     }
@@ -483,6 +628,7 @@ fn evaluate(
         verb: "conform",
         target: target_path.to_path_buf(),
         default_target,
+        layers: target.layers.clone(),
         regressions: rules
             .iter()
             .filter(|rule| rule.status == "regression")
@@ -523,6 +669,37 @@ fn sources_for_path(sources: &[Source], path: &Path, is_file: bool) -> Vec<Sourc
         })
         .cloned()
         .collect()
+}
+
+fn count_in_sources(
+    sources: &[Source],
+    syntax_files: &[syntax::FileSyntax],
+    symbol: &str,
+) -> usize {
+    sources
+        .iter()
+        .filter(|source| source.is_production())
+        .map(|source| {
+            let test_regions = syntax_files
+                .iter()
+                .find(|file| file.path == source.path)
+                .map_or(&[][..], |file| file.test_regions.as_slice());
+            source
+                .text
+                .split_inclusive('\n')
+                .enumerate()
+                .filter(|(index, _)| {
+                    !test_regions
+                        .iter()
+                        .any(|region| region.contains(&(index + 1)))
+                })
+                .flat_map(|(_, line)| {
+                    line.split(|character: char| character != '_' && !character.is_alphanumeric())
+                })
+                .filter(|identifier| *identifier == symbol)
+                .count()
+        })
+        .sum()
 }
 
 fn enforce(report: &Report) -> Result<()> {
@@ -584,6 +761,12 @@ fn tighten(target: &mut Target, report: &Report) {
     for module in &mut target.modules {
         if let Some(result) = results.next() {
             module.surface_budget = module.surface_budget.min(result.current);
+            if let Some(upward_imports) = &mut module.upward_imports {
+                upward_imports.retain(|import| result.used_upward_imports.contains(import));
+                if upward_imports.is_empty() {
+                    module.upward_imports = None;
+                }
+            }
         }
     }
     for strangler in &mut target.strangler {
@@ -599,6 +782,9 @@ fn tighten(target: &mut Target, report: &Report) {
 )]
 fn print_report(report: &Report, verbose: bool) {
     println!("Atlas conform — {}", report.target.display());
+    if !report.layers.is_empty() {
+        println!("layers: {}", report.layers.join(" < "));
+    }
     println!("status      kind        current  budget      Δ  rule");
     let (rules, folded) = displayed_rules(report, verbose);
     for rule in rules {
@@ -671,6 +857,7 @@ mod tests {
                 mode: Mode::Report,
                 file: None,
                 path: None,
+                layers: None,
                 verbose: false,
                 json: false,
             })
@@ -681,6 +868,7 @@ mod tests {
                 mode: Mode::Ratchet,
                 file: None,
                 path: None,
+                layers: None,
                 verbose: false,
                 json: false,
             })
@@ -773,6 +961,7 @@ mod tests {
             delta: current as isize - budget as isize,
             unallowed_imports: Vec::new(),
             unallowed_import_sites: Vec::new(),
+            used_upward_imports: BTreeSet::new(),
             config_line: 1,
         };
         let report = Report {
@@ -780,6 +969,7 @@ mod tests {
             verb: "conform",
             target: PathBuf::from("target.toml"),
             default_target: false,
+            layers: Vec::new(),
             rules: vec![
                 rule("at-budget", "ok", 2, 2),
                 rule("headroom", "ok", 1, 3),
@@ -799,6 +989,52 @@ mod tests {
         );
         assert_eq!(folded, 1);
         assert_eq!(displayed_rules(&report, true).0.len(), 3);
+    }
+
+    #[test]
+    fn tighten_removes_unused_upward_import_admissions() {
+        let mut target = Target {
+            version: 3,
+            layers: vec!["store".to_owned(), "cli".to_owned()],
+            modules: vec![ModuleRule {
+                path: PathBuf::from("src/store"),
+                allowed_imports: None,
+                upward_imports: Some(vec!["cli".to_owned(), "agents".to_owned()]),
+                surface_budget: 4,
+                config_line: 2,
+            }],
+            strangler: Vec::new(),
+        };
+        let report = Report {
+            version: REPORT_VERSION,
+            verb: "conform",
+            target: PathBuf::from("target.toml"),
+            default_target: false,
+            layers: target.layers.clone(),
+            rules: vec![RuleResult {
+                kind: "upward-import",
+                path: PathBuf::from("src/store"),
+                symbol: None,
+                status: "ok",
+                current: 3,
+                budget: 4,
+                delta: -1,
+                unallowed_imports: Vec::new(),
+                unallowed_import_sites: Vec::new(),
+                used_upward_imports: BTreeSet::from(["cli".to_owned()]),
+                config_line: 2,
+            }],
+            regressions: 0,
+            parse_failures: 0,
+        };
+
+        tighten(&mut target, &report);
+
+        assert_eq!(target.modules[0].surface_budget, 3);
+        assert_eq!(
+            target.modules[0].upward_imports.as_deref(),
+            Some(&["cli".to_owned()][..])
+        );
     }
 
     #[test]
@@ -834,7 +1070,8 @@ mod tests {
         fs::write(
             root.path().join(TARGET_FILE),
             r#"
-version = 2
+version = 3
+layers = []
 [[module]]
 path = "src/nested"
 allowed-imports = ["other"]
@@ -855,7 +1092,11 @@ baseline = 5
         let target_path = root.path().join(TARGET_FILE);
         let mut configured = target::load(&target_path).unwrap().unwrap();
         let mut forbidden = configured.clone();
-        forbidden.modules[0].allowed_imports.clear();
+        forbidden.modules[0]
+            .allowed_imports
+            .as_mut()
+            .unwrap()
+            .clear();
         let forbidden_report = evaluate(root.path(), &forbidden, &target_path, true).unwrap();
         assert_eq!(forbidden_report.regressions, 1);
         assert_eq!(forbidden_report.rules[0].unallowed_imports, ["other"]);
@@ -896,9 +1137,9 @@ baseline = 5
             evaluate(root.path(), &initialized, &initialized_path, false).unwrap();
         assert_eq!(initialized_report.regressions, 0);
         assert_eq!(initialized.modules.len(), 3);
-        assert!(initialized.modules[0].allowed_imports.is_empty());
+        assert!(initialized.modules[0].allowed_imports.is_none());
         assert_eq!(initialized.modules[1].path, Path::new("src/nested"));
-        assert_eq!(initialized.modules[1].allowed_imports, ["other"]);
+        assert!(initialized.modules[1].upward_imports.is_none());
         let before_tighten = fs::read_to_string(&initialized_path).unwrap();
         run(
             root.path(),
@@ -961,7 +1202,8 @@ baseline = 5
         .unwrap();
 
         let target = Target {
-            version: 2,
+            version: 3,
+            layers: Vec::new(),
             modules: Vec::new(),
             strangler: vec![
                 target::StranglerRule {
