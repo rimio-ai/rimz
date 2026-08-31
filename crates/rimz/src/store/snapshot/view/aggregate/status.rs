@@ -102,9 +102,10 @@ pub(super) fn project_display_status(
                 (AgentStatus::Running, false)
             }
         };
-        if crate::agents::settled_outcome(status, agent.context.as_ref(), last_activity)
-            == Some(TurnSettleOutcome::NativeWait)
-        {
+        if matches!(
+            crate::agents::settled_outcome(status, agent.context.as_ref(), last_activity),
+            Some(TurnSettleOutcome::NativeWait | TurnSettleOutcome::PlanProposed)
+        ) {
             agent.status = AgentStatus::Waiting;
             agent.phase = TurnPhase::Idle;
             continue;
