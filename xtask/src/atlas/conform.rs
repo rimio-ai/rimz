@@ -1231,6 +1231,60 @@ baseline = 5
     }
 
     #[test]
+    fn uncovered_layered_file_rejects_upward_imports() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("src")).unwrap();
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(root.path().join("src/lib.rs"), "mod cli;\nmod store;\n").unwrap();
+        fs::write(root.path().join("src/cli.rs"), "pub struct Report;\n").unwrap();
+        fs::write(
+            root.path().join("src/store.rs"),
+            "use crate::cli::Report;\nfn load() -> Report { Report }\n",
+        )
+        .unwrap();
+        let target = Target {
+            version: 3,
+            layers: vec!["store".to_owned(), "cli".to_owned()],
+            modules: vec![ModuleRule {
+                path: PathBuf::from("src/cli.rs"),
+                allowed_imports: None,
+                upward_imports: None,
+                surface_budget: 1,
+                config_line: 1,
+            }],
+            strangler: Vec::new(),
+        };
+
+        let report = evaluate(
+            root.path(),
+            &target,
+            &root.path().join("target.toml"),
+            false,
+        )
+        .unwrap();
+        let uncovered = report
+            .rules
+            .iter()
+            .find(|rule| rule.path == Path::new("src/store.rs"))
+            .unwrap();
+
+        assert_eq!(uncovered.status, "regression");
+        assert_eq!(uncovered.unallowed_imports, ["cli"]);
+        assert_eq!(
+            uncovered.unallowed_import_sites,
+            [ImportSite {
+                module: "cli".to_owned(),
+                path: PathBuf::from("src/store.rs"),
+                line: 1,
+            }]
+        );
+    }
+
+    #[test]
     fn strangler_paths_do_not_count_matching_modules_from_other_crates() {
         let root = tempfile::tempdir().unwrap();
         for path in ["app/src/legacy", "tool/src/legacy"] {
