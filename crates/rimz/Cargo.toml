@@ -143,6 +143,7 @@ workspace = true
 [dependencies]
 anstream.workspace = true
 anstyle.workspace = true
+pulldown-cmark.workspace = true
 base64.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
