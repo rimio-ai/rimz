@@ -47,8 +47,10 @@ fn launch_implies_supervised_background_defaults() {
     let mut agents = agents;
     agents.launch.self_cleanup_on_completion = true;
     assert!(launch.subagent);
+    assert!(launch.report_to_parent);
     assert_eq!(launch.prompt.as_deref(), Some("review this"));
     agents.launch.subagent = true;
+    agents.launch.report_to_parent = true;
 
     assert_eq!(launch, agents.launch);
 }
@@ -75,6 +77,7 @@ fn waited_launch_still_desugars_to_a_background_run() {
     let mut agents = agents;
     agents.launch.self_cleanup_on_completion = true;
     assert!(launch.subagent);
+    assert!(!launch.report_to_parent);
     assert_eq!(launch.prompt.as_deref(), Some("review this"));
     agents.launch.subagent = true;
 
@@ -178,6 +181,7 @@ fn fanout_task_matches_the_single_launch_surface() {
     let mut agents = agents;
     agents.launch.self_cleanup_on_completion = true;
     assert!(launches[0].subagent);
+    assert!(!launches[0].report_to_parent);
     assert_eq!(launches[0].prompt.as_deref(), Some("review this"));
     agents.launch.subagent = true;
 
@@ -202,6 +206,7 @@ fn fanout_timeout_precedence_is_task_then_flag_then_config() {
     )
     .expect("task timeout");
     assert_eq!(task[0].timeout, Some(Duration::from_secs(5 * 60)));
+    assert!(task[0].report_to_parent);
 
     let flag = parse_fanout_launches(
         r#"[{"profile":"codex","prompt":"one"}]"#,

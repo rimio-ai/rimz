@@ -576,6 +576,7 @@ fn execute_attempt(
     );
     record.keep = request.keep;
     record.subagent = request.subagent;
+    record.report_to_parent = request.report_to_parent;
     record.budget.clone_from(&agent_cell.launch.budget);
     record.deadline_at = request
         .timeout
