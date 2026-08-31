@@ -94,6 +94,7 @@ pub(super) fn module_is_within(module: &str, ancestor: &str) -> bool {
 }
 
 pub(super) fn module_endpoint(module: &str, scope_module: &str) -> String {
+    let module = if module.is_empty() { "(crate)" } else { module };
     let top = |module: &str| {
         module
             .split("::")
@@ -278,7 +279,7 @@ mod tests {
     #[test]
     fn module_endpoints_distinguish_scope_root_from_crate_root() {
         assert_eq!(module_endpoint("", ""), "(root)");
-        assert_eq!(module_endpoint("", "agents"), "(root)");
+        assert_eq!(module_endpoint("", "agents"), "(crate)");
         assert_eq!(module_endpoint("(crate)", ""), "(root)");
         assert_eq!(module_endpoint("agents", "agents"), "(root)");
         assert_eq!(module_endpoint("agents::adapters", "agents"), "adapters");
