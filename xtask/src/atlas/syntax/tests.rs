@@ -297,3 +297,17 @@ fn run(ready: bool, closed: bool) {
     assert_eq!(report.files[0].guards.len(), 1);
     assert_eq!(report.files[0].guards[0].line, 5);
 }
+
+#[test]
+fn guards_after_non_ascii_text_keep_their_span() {
+    let report = analyze_sources(&[source(
+        r#"
+fn run(ready: bool, closed: bool) {
+    let label = "é"; if ready && !closed { proceed(); }
+}
+"#,
+    )]);
+
+    assert_eq!(report.files[0].guards.len(), 1);
+    assert_eq!(report.files[0].guards[0].normalized, "ready&&!closed");
+}

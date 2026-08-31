@@ -290,14 +290,20 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
                 items: item_count,
                 escaping_items: escaping.len(),
                 params_median,
-                refs: references_loaded.then(|| {
-                    median(
-                        resolved
-                            .iter()
-                            .map(|item| item.production_ref_modules.as_ref().map_or(0, Vec::len))
-                            .collect(),
-                    )
-                }),
+                refs: references_loaded
+                    .then(|| {
+                        (!resolved.is_empty()).then(|| {
+                            median(
+                                resolved
+                                    .iter()
+                                    .map(|item| {
+                                        item.production_ref_modules.as_ref().map_or(0, Vec::len)
+                                    })
+                                    .collect(),
+                            )
+                        })
+                    })
+                    .flatten(),
                 unref: references_loaded.then(|| {
                     resolved
                         .iter()
@@ -495,12 +501,46 @@ pub(super) fn median(mut values: Vec<usize>) -> f64 {
 )]
 fn print_report(report: &Report, top: usize, requested_module: Option<&str>, show_delta: bool) {
     println!("Atlas api — {}", report.path.display());
-    println!("{}", module_header(show_delta));
+    let show_references = report
+        .modules
+        .iter()
+        .any(|module| module.unresolved.is_some());
+    println!("{}", module_header(show_references, show_delta));
     for module in report.modules.iter().take(top) {
         let params = module
             .params_median
             .map_or_else(|| "—".to_owned(), |value| format!("{value:.1}"));
-        if show_delta {
+        let refs = module
+            .refs
+            .map_or_else(|| "—".to_owned(), |value| format!("{value:.1}"));
+        if show_references && show_delta {
+            println!(
+                "{:<25} {:>5} {:>5} {:>9} {:>5} {:>5} {:>5} {:>6} {:>10} {:+4}",
+                module.module,
+                module.items,
+                module.escaping_items,
+                params,
+                refs,
+                module.unref.unwrap_or(0),
+                module.test_only.unwrap_or(0),
+                module.single.unwrap_or(0),
+                module.unresolved.unwrap_or(0),
+                module.delta_pub.unwrap_or(0)
+            );
+        } else if show_references {
+            println!(
+                "{:<25} {:>5} {:>5} {:>9} {:>5} {:>5} {:>5} {:>6} {:>10}",
+                module.module,
+                module.items,
+                module.escaping_items,
+                params,
+                refs,
+                module.unref.unwrap_or(0),
+                module.test_only.unwrap_or(0),
+                module.single.unwrap_or(0),
+                module.unresolved.unwrap_or(0)
+            );
+        } else if show_delta {
             println!(
                 "{:<25} {:>5} {:>5} {:>9} {:+4}",
                 module.module,
@@ -526,8 +566,23 @@ fn print_report(report: &Report, top: usize, requested_module: Option<&str>, sho
     if let Some(module) = requested_module {
         println!("Public items in {module}");
         for item in report.module_items.iter().take(top) {
+            let reference_evidence = item.resolved.map_or_else(String::new, |resolved| {
+                format!(
+                    " resolved {resolved} prod {} [{}] test {} [{}]",
+                    item.production_refs.unwrap_or(0),
+                    item.production_ref_modules
+                        .as_deref()
+                        .unwrap_or_default()
+                        .join(","),
+                    item.test_refs.unwrap_or(0),
+                    item.test_ref_modules
+                        .as_deref()
+                        .unwrap_or_default()
+                        .join(",")
+                )
+            });
             println!(
-                "{}::{} ({}) {}:{} declared {} reach {} params {} [{}]",
+                "{}::{} ({}) {}:{} declared {} reach {} params {} [{}]{}",
                 item.module,
                 item.name,
                 item.kind,
@@ -538,6 +593,7 @@ fn print_report(report: &Report, top: usize, requested_module: Option<&str>, sho
                 item.params
                     .map_or_else(|| "—".to_owned(), |value| value.to_string()),
                 item_tags(item),
+                reference_evidence,
             );
         }
         if report.module_items.len() > top {
@@ -547,14 +603,46 @@ fn print_report(report: &Report, top: usize, requested_module: Option<&str>, sho
             );
         }
     }
+    if let Some(modules) = &report.single_caller_modules {
+        println!();
+        println!("Single-caller escaping items by defining module");
+        for module in modules.iter().take(top) {
+            println!("{:<32} {:>5}", module.module, module.items);
+        }
+    }
+    if let Some(items) = &report.single_caller_items {
+        println!();
+        println!("Exact single-caller escaping items");
+        for item in items.iter().take(top) {
+            let caller = item
+                .production_ref_modules
+                .as_deref()
+                .and_then(|modules| modules.first())
+                .map_or("—", String::as_str);
+            println!(
+                "{}:{} {}::{} -> {}",
+                item.path.display(),
+                item.line,
+                item.module,
+                item.name,
+                caller
+            );
+        }
+    }
     println!(
-        "total: {} modules, {} parse failures",
-        report.total_modules, report.parse_failures
+        "total: {} modules, {} exact single-caller items, {} parse failures",
+        report.total_modules,
+        report.total_single_caller_items.unwrap_or(0),
+        report.parse_failures
     );
 }
 
-fn module_header(show_delta: bool) -> &'static str {
-    if show_delta {
+fn module_header(show_references: bool, show_delta: bool) -> &'static str {
+    if show_references && show_delta {
+        "module                    items   esc params/fn  refs unref  test single unresolved Δpub"
+    } else if show_references {
+        "module                    items   esc params/fn  refs unref  test single unresolved"
+    } else if show_delta {
         "module                    items   esc params/fn Δpub"
     } else {
         "module                    items   esc params/fn"
@@ -586,8 +674,9 @@ mod v3_tests {
 
     #[test]
     fn api_header_only_advertises_requested_delta() {
-        assert!(!module_header(false).contains("Δpub"));
-        assert!(module_header(true).ends_with("Δpub"));
+        assert!(!module_header(false, false).contains("Δpub"));
+        assert!(module_header(false, true).ends_with("Δpub"));
+        assert!(module_header(true, false).contains("unresolved"));
     }
 
     #[test]

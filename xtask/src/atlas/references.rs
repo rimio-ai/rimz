@@ -47,6 +47,8 @@ pub(super) enum EdgeKind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) struct Edge {
+    #[serde(skip)]
+    pub(super) from_path: PathBuf,
     pub(super) from: String,
     pub(super) to: String,
     pub(super) item: String,
@@ -128,6 +130,7 @@ impl References {
                     .entry(&occurrence.symbol)
                     .or_default()
                     .push(ReferenceSite {
+                        path: path.clone(),
                         module: module.clone(),
                         test,
                     });
@@ -160,6 +163,7 @@ impl References {
                             item_refs.production_count += 1;
                         }
                         references.edges.push(Edge {
+                            from_path: site.path.clone(),
                             from: site.module.clone(),
                             to: item.module.clone(),
                             item: item.name.clone(),
@@ -177,6 +181,7 @@ impl References {
 
 #[derive(Debug)]
 struct ReferenceSite {
+    path: PathBuf,
     module: String,
     test: bool,
 }

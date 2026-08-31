@@ -134,16 +134,17 @@ fn blame_files(root: &Path, paths: Vec<PathBuf>) -> Result<Vec<BlamedFile>> {
                 .output()
                 .with_context(|| format!("blaming {}", path.display()))?;
             if !output.status.success() {
-                bail!(
-                    "git blame failed for {}: {}",
-                    path.display(),
-                    String::from_utf8_lossy(&output.stderr).trim()
-                );
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if stderr.contains("no such path") {
+                    return Ok(None);
+                }
+                bail!("git blame failed for {}: {}", path.display(), stderr.trim());
             }
             let raw = String::from_utf8(output.stdout).context("git blame returned non-UTF-8")?;
-            Ok((path, parse_blame(&raw)?))
+            Ok(Some((path, parse_blame(&raw)?)))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()
+        .map(|files| files.into_iter().flatten().collect())
 }
 
 fn parse_blame(input: &str) -> Result<Vec<(String, i64)>> {
@@ -213,6 +214,72 @@ pub(super) fn cochange(
         commits: commits.len(),
         edges: fold_cochange(commits, scope, max_commit_files),
     })
+}
+
+pub(super) fn cochange_partners(
+    log: &Log,
+    scope: &Path,
+    module: &Path,
+    window_pct: usize,
+    max_commit_files: usize,
+) -> CochangeReport {
+    let target = module
+        .strip_prefix(scope_for_matching(scope))
+        .unwrap_or(module)
+        .with_extension("")
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    let mut counts = BTreeMap::<String, usize>::new();
+    let commits = recent_window(&log.commits, window_pct);
+    for commit in commits {
+        let files = commit
+            .changes
+            .iter()
+            .map(|change| match change {
+                Change::Touch(path) | Change::Delete(path) => path,
+                Change::Rename { new, .. } => new,
+            })
+            .filter(|path| path.starts_with(scope_for_matching(scope)))
+            .filter(|path| rust_module_for_path(path, scope).is_some())
+            .collect::<BTreeSet<_>>();
+        if files.len() > max_commit_files {
+            continue;
+        }
+        let modules = files
+            .into_iter()
+            .filter_map(|path| {
+                if path.starts_with(scope_for_matching(module)) {
+                    Some(target.clone())
+                } else {
+                    rust_module_for_path(path, scope)
+                }
+            })
+            .collect::<BTreeSet<_>>();
+        if !modules.contains(&target) {
+            continue;
+        }
+        for partner in modules.iter().filter(|partner| *partner != &target) {
+            *counts.entry(partner.clone()).or_default() += 1;
+        }
+    }
+    let mut edges = counts
+        .into_iter()
+        .map(|(partner, commits)| CochangeEdge {
+            left: target.clone(),
+            right: partner,
+            commits,
+        })
+        .collect::<Vec<_>>();
+    edges.sort_by(|left, right| {
+        right
+            .commits
+            .cmp(&left.commits)
+            .then_with(|| left.right.cmp(&right.right))
+    });
+    CochangeReport {
+        commits: commits.len(),
+        edges,
+    }
 }
 
 fn recent_window(commits: &[Commit], window_pct: usize) -> &[Commit] {
@@ -481,6 +548,40 @@ fn new_identity(path: &Path, identities: &mut Vec<Identity>) -> usize {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn blame_skips_files_not_present_in_head() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("scratch.rs"), "fn scratch() {}\n").unwrap();
+        let output = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let output = Command::new("git")
+            .args([
+                "-c",
+                "user.name=Atlas Test",
+                "-c",
+                "user.email=atlas@example.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ])
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+
+        assert!(
+            blame_files(root.path(), vec![PathBuf::from("scratch.rs")])
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn cochange_history_parser_preserves_renames() {

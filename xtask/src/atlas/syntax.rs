@@ -842,8 +842,13 @@ fn source_offset(source: &str, line: usize, column: usize) -> Option<usize> {
         .take(line.saturating_sub(1))
         .map(str::len)
         .sum::<usize>();
-    let offset = line_start.checked_add(column)?;
-    source.is_char_boundary(offset).then_some(offset)
+    let line_text = source.get(line_start..)?.split('\n').next()?;
+    let byte_column = line_text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(line_text.len()))
+        .nth(column)?;
+    line_start.checked_add(byte_column)
 }
 
 fn token_count(tokens: TokenStream) -> usize {

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::detect::{self, PassThrough, RepeatedGuard, VestigialItem};
+use super::detect::{self, PassThrough, RepeatedGuard, SingleCaller, VestigialItem};
 use super::facts::{Facets, Facts};
 use super::history;
 use super::index::IndexPolicy;
@@ -69,6 +69,7 @@ struct Report {
     cochange: Vec<super::history::CochangeEdge>,
     divergence: Vec<super::survey::Divergence>,
     shapes: serde_json::Value,
+    single_callers: Vec<SingleCaller>,
     passthroughs: Vec<PassThrough>,
     vestigial_items: Vec<VestigialItem>,
     repeated_guards: Vec<RepeatedGuard>,
@@ -93,7 +94,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         &args.path,
         Facets {
             history: true,
-            metrics: true,
+            metrics: false,
             references: Some(if args.no_index {
                 IndexPolicy::Skip
             } else {
@@ -109,21 +110,16 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
             .context("brief --all output directory missing")?;
         fs::create_dir_all(out_dir)
             .with_context(|| format!("creating brief output directory {}", out_dir.display()))?;
-        let modules = facts
-            .sizes
-            .keys()
-            .filter(|path| path_in_scope(path, &args.path))
-            .map(|path| module_for_path(path, &args.path))
-            .filter(|module| module != "(root)")
-            .collect::<BTreeSet<_>>();
-        for module in modules {
-            let path = args.path.join(&module);
+        for path in split_leaf_paths(&facts, &args.path, 8_000) {
             let report = build_report(&facts, &path, &args)?;
-            fs::write(
-                out_dir.join(format!("{}.md", module.replace('/', "-"))),
-                markdown(&report),
-            )
-            .with_context(|| format!("writing brief for {module}"))?;
+            let label = path
+                .strip_prefix(&args.path)
+                .unwrap_or(&path)
+                .with_extension("")
+                .to_string_lossy()
+                .replace('/', "-");
+            fs::write(out_dir.join(format!("{label}.md")), markdown(&report))
+                .with_context(|| format!("writing brief for {}", path.display()))?;
         }
         println!("wrote briefs to {}", out_dir.display());
         return Ok(());
@@ -139,6 +135,42 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         print!("{}", markdown(&report));
     }
     Ok(())
+}
+
+fn split_leaf_paths(facts: &Facts, scope: &Path, split_above: u64) -> Vec<PathBuf> {
+    let mut groups = BTreeMap::<String, (u64, Vec<&PathBuf>)>::new();
+    for (path, size) in facts
+        .sizes
+        .iter()
+        .filter(|(path, _)| path_in_scope(path, scope))
+    {
+        let row = groups.entry(module_for_path(path, scope)).or_default();
+        row.0 += size.code;
+        row.1.push(path);
+    }
+    let mut leaves = Vec::new();
+    for (module, (code, paths)) in groups {
+        if module == "(root)" {
+            continue;
+        }
+        let directory = scope.join(&module);
+        if facts.root.join(&directory).is_dir() {
+            if code > split_above {
+                leaves.extend(split_leaf_paths(facts, &directory, split_above));
+            } else {
+                leaves.push(directory);
+            }
+            continue;
+        }
+        if let Some(path) = paths.into_iter().find(|path| {
+            path.parent() == Some(scope)
+                && path.file_stem().is_some_and(|stem| stem == module.as_str())
+        }) {
+            leaves.push(path.clone());
+        }
+    }
+    leaves.sort();
+    leaves
 }
 
 fn parse_args(args: &[String]) -> Result<Option<Args>> {
@@ -263,17 +295,17 @@ fn build_report(facts: &Facts, module: &Path, args: &Args) -> Result<Report> {
     }
     let callers = callers(facts, &crate_module);
     let providers = providers(facts, module, &crate_module);
-    let cochange = history::cochange(
+    let cochange = history::cochange_partners(
         facts
             .history
             .as_ref()
             .context("brief history facts missing")?,
-        &facts.root,
+        &args.path,
         module,
-        None,
         25,
         10,
-    )?;
+    );
+    let single_callers = detect::single_callers(facts, module);
     let passthroughs = detect::passthroughs(facts, module);
     let vestigial_items = detect::vestigial(facts, module, 25);
     let repeated_guards = detect::guards(facts, module, 3);
@@ -317,6 +349,7 @@ fn build_report(facts: &Facts, module: &Path, args: &Args) -> Result<Report> {
         cochange: cochange.edges,
         divergence,
         shapes: super::shapes::survey_value(facts, module)?,
+        single_callers,
         passthroughs,
         vestigial_items,
         repeated_guards,
@@ -442,6 +475,19 @@ fn markdown(report: &Report) -> String {
         "```\n\n## Shapes\n```\n{}\n```",
         serde_json::to_string_pretty(&report.shapes).unwrap_or_default()
     );
+    let _ = writeln!(out, "\n## Exact single callers\n```");
+    for row in &report.single_callers {
+        let _ = writeln!(
+            out,
+            "{}:{} {}::{} -> {}",
+            row.path.display(),
+            row.line,
+            row.module,
+            row.name,
+            row.caller
+        );
+    }
+    let _ = writeln!(out, "```");
     let _ = writeln!(out, "\n## Pass-throughs\n```");
     for row in &report.passthroughs {
         let _ = writeln!(

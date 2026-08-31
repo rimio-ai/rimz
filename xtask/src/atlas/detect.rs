@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::facts::Facts;
-use super::modules::{module_for_path, module_is_within, path_in_scope};
+use super::modules::{crate_module_for_row, module_for_path, module_is_within, path_in_scope};
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct PassThrough {
@@ -23,6 +23,15 @@ pub(super) struct VestigialItem {
     pub(super) name: String,
     pub(super) age_days: i64,
     pub(super) production_ref_modules: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct SingleCaller {
+    pub(super) module: String,
+    pub(super) path: PathBuf,
+    pub(super) line: usize,
+    pub(super) name: String,
+    pub(super) caller: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -57,6 +66,52 @@ pub(super) fn passthroughs(facts: &Facts, scope: &Path) -> Vec<PassThrough> {
             })
         })
         .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        left.module
+            .cmp(&right.module)
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.line.cmp(&right.line))
+    });
+    rows
+}
+
+pub(super) fn single_callers(facts: &Facts, scope: &Path) -> Vec<SingleCaller> {
+    let Some(references) = &facts.references else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for file in facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| path_in_scope(&file.path, scope))
+    {
+        let module = module_for_path(&file.path, scope);
+        let target_module = crate_module_for_row(scope, &module);
+        for item in &file.pub_items {
+            let reach = facts.mod_index.effective_reach(file, item);
+            if module_is_within(&reach, &target_module) {
+                continue;
+            }
+            let Some(item_refs) = references.get(file, item) else {
+                continue;
+            };
+            let callers = item_refs
+                .production
+                .iter()
+                .filter(|caller| !module_is_within(caller, &item.module))
+                .collect::<Vec<_>>();
+            if let [caller] = callers.as_slice() {
+                rows.push(SingleCaller {
+                    module: module.clone(),
+                    path: file.path.clone(),
+                    line: item.line,
+                    name: item.name.clone(),
+                    caller: (*caller).clone(),
+                });
+            }
+        }
+    }
     rows.sort_by(|left, right| {
         left.module
             .cmp(&right.module)

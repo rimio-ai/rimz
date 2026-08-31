@@ -155,8 +155,6 @@ fn file_sizes(sources: &[Source], syntax: &SyntaxReport) -> BTreeMap<PathBuf, Fi
         }
         let (code, tests) = if source.is_test() {
             (0, source_files::rust_sloc(&source.text))
-        } else if !source.is_production() {
-            (0, 0)
         } else {
             let test_regions = syntax
                 .files

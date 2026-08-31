@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::facts::{Facets, Facts};
+use super::facts::{Facets, Facts, FileSize};
 use super::history;
 use super::metrics::FunctionMetric;
 use super::modules::{crate_module_for_row, module_for_path, module_is_within};
@@ -63,11 +63,7 @@ struct Args {
     json: bool,
 }
 
-#[derive(Clone, Debug, Default)]
-struct Size {
-    code: u64,
-    tests: u64,
-}
+type Size = FileSize;
 
 #[derive(Clone, Debug, Default, Serialize)]
 struct Row {
@@ -439,9 +435,6 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         })
         .collect::<Vec<_>>();
     sort_rows(&mut rows);
-    if !args.no_split {
-        split_rows(&mut rows, &facts, args, &args.path, "")?;
-    }
     let total_modules = rows.len();
     let total_code = rows.iter().map(|row| row.code).sum();
     let total_tests = rows.iter().map(|row| row.tests).sum();
@@ -461,6 +454,9 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .as_ref()
         .map(|previous| total_escaping_items as isize - previous.values().sum::<usize>() as isize);
     rows.truncate(args.top);
+    if !args.no_split {
+        split_rows(&mut rows, &facts, args, &args.path, "")?;
+    }
     let shown = rows
         .iter()
         .map(|row| row.module.as_str())
@@ -805,7 +801,7 @@ fn print_row(row: &Row, show_delta: bool, indent: usize) {
     let module = format!("{}{name}", " ".repeat(indent), name = row.module);
     if show_delta {
         println!(
-            "{:<22} {:>6} {:>5} {:>5} {:>8} {:>7.1} {:>5} {:>7.1} {:>6}  {:<12} {:+6} {:+4}",
+            "{:<35} {:>6} {:>5} {:>5} {:>8} {:>7.1} {:>5} {:>7.1} {:>6}  {:<12} {:+6} {:+4}",
             module,
             row.code,
             row.pub_items,
@@ -821,7 +817,7 @@ fn print_row(row: &Row, show_delta: bool, indent: usize) {
         );
     } else {
         println!(
-            "{:<22} {:>6} {:>5} {:>5} {:>8} {:>7.1} {:>5} {:>7.1} {:>6}  {}",
+            "{:<35} {:>6} {:>5} {:>5} {:>8} {:>7.1} {:>5} {:>7.1} {:>6}  {}",
             module,
             row.code,
             row.pub_items,
