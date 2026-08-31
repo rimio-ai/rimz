@@ -1,6 +1,6 @@
-//! Human-facing CLI presentation: one styled stdout path plus borderless,
-//! auto-fit tables and aligned key/value blocks, so every `rimz` command reads
-//! consistently and in the room's palette.
+//! Human-facing CLI presentation: one styled stdout path plus terminal prose,
+//! borderless auto-fit tables, and aligned key/value blocks, so every `rimz`
+//! command reads consistently and in the room's palette.
 //!
 //! `--json` output and snapshot tests stay byte-clean: [`out`] writes through
 //! `anstream`, which strips ANSI when stdout is not a terminal or color is
@@ -9,6 +9,7 @@
 //! the `print_stdout` lint still guards the protocol surface.
 
 pub(crate) mod palette;
+pub(crate) mod prose;
 pub(crate) mod room;
 pub(crate) mod status;
 
