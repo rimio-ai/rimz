@@ -118,6 +118,30 @@ impl<'a> PaneBindingIndex<'a> {
             })
     }
 
+    fn stamped_agent_for_launch(
+        &self,
+        pane: &PaneRef,
+        kind: &AgentKind,
+        launch_id: &AgentSessionId,
+    ) -> Option<&'a AgentState> {
+        self.stamped_by_pane
+            .get(&pane.pane_id)?
+            .iter()
+            .filter_map(|index| self.agents.get(*index))
+            .filter(|agent| {
+                agent.kind == *kind
+                    && agent.launch_id.as_ref() == Some(launch_id)
+                    && !agent.is_provider_subagent()
+            })
+            .filter(|agent| {
+                agent
+                    .pane
+                    .as_ref()
+                    .is_some_and(|stamped| stamped_agent_matches_live_pane(agent, stamped, pane))
+            })
+            .min_by(|left, right| compare_same_pane_owners(left, right))
+    }
+
     /// The newest RimZ-launched root stamped on this live pane. Unlike
     /// [`Self::stamped_agent`], this deliberately ignores the adapter's
     /// same-pane primary policy: a later launch is the pane-incarnation clock
@@ -420,6 +444,16 @@ pub fn stamped_agent_for_pane<'a>(
     PaneBindingIndex::new(agents).stamped_agent(pane)
 }
 
+#[doc(hidden)]
+pub fn stamped_agent_for_launch<'a>(
+    pane: &PaneRef,
+    agents: &'a [AgentState],
+    kind: &AgentKind,
+    launch_id: &AgentSessionId,
+) -> Option<&'a AgentState> {
+    PaneBindingIndex::new(agents).stamped_agent_for_launch(pane, kind, launch_id)
+}
+
 /// Which co-resident root owns a pane: an open turn outranks a rested one;
 /// policy orders open pairs; latest activity orders rested pairs. Registration
 /// and session id break the remaining ties deterministically.
@@ -708,6 +742,39 @@ mod tests {
             pane_start_matches_agent_stamp(&stamped, &live),
             "old floor-era agent stamps still attach to the now-exact live process"
         );
+    }
+
+    #[test]
+    fn launch_identity_lookup_uses_the_same_pane_owner_order() {
+        let mut dead = agent("codex", "conversation-a", AgentStatus::Running, 1_000)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(120)
+            .overloaded_turn_error(110, "server_overloaded");
+        dead.launch_id = Some(AgentSessionId::from("launch_coder"));
+        dead.registered_at = Some(ago(600));
+        let mut successor = agent("codex", "conversation-b", AgentStatus::Success, 2_000)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(5);
+        successor.launch_id = Some(AgentSessionId::from("launch_coder"));
+        successor.registered_at = Some(ago(60));
+        let pane = PaneRef {
+            command: Some("codex".to_owned()),
+            cwd: Some("/repo/main".to_owned()),
+            ..PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%1"))
+        };
+        let agents = [dead, successor];
+
+        let owner = stamped_agent_for_launch(
+            &pane,
+            &agents,
+            &AgentKind::new_unchecked("codex"),
+            &AgentSessionId::from("launch_coder"),
+        )
+        .expect("launched pane owner");
+
+        assert_eq!(owner.agent_id.as_str(), "conversation-b");
     }
 
     #[test]
