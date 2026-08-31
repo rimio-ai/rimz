@@ -9,7 +9,9 @@ use super::detect::{self, PassThrough, RepeatedGuard, SingleCaller, VestigialIte
 use super::facts::{Facets, Facts};
 use super::history;
 use super::index::IndexPolicy;
-use super::modules::{crate_module_for_path, module_for_path, module_is_within, path_in_scope};
+use super::modules::{
+    crate_module_for_path, module_for_path, module_is_within, path_in_scope, reference_module_label,
+};
 use super::{REPORT_VERSION, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
@@ -299,7 +301,9 @@ fn build_report(facts: &Facts, module: &Path, args: &Args) -> Result<Report> {
                             .production
                             .iter()
                             .filter(|caller| !module_is_within(caller, &item.module))
-                            .cloned()
+                            .map(|caller| reference_module_label(caller, &crate_module))
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
                             .collect()
                     })
             });
@@ -399,7 +403,7 @@ fn callers(facts: &Facts, crate_module: &str) -> Vec<Caller> {
                 && module_is_within(&edge.to, crate_module)
                 && !module_is_within(&edge.from, crate_module)
         }) {
-            rows.entry(edge.from.clone())
+            rows.entry(reference_module_label(&edge.from, crate_module))
                 .or_default()
                 .insert(edge.item.clone());
         }

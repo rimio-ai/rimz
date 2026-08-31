@@ -122,6 +122,14 @@ pub(super) fn module_endpoint(module: &str, scope_module: &str) -> String {
     top(module)
 }
 
+pub(super) fn reference_module_label(module: &str, scope_module: &str) -> String {
+    if module.is_empty() || module == "(crate)" {
+        module_endpoint(module, scope_module)
+    } else {
+        module.to_owned()
+    }
+}
+
 pub(super) fn crate_module_for_row(scope: &Path, row: &str) -> String {
     let scope_entry = if scope.extension().is_some_and(|extension| extension == "rs") {
         scope.to_path_buf()
@@ -284,5 +292,15 @@ mod tests {
         assert_eq!(module_endpoint("agents", "agents"), "(root)");
         assert_eq!(module_endpoint("agents::adapters", "agents"), "adapters");
         assert_eq!(module_endpoint("(crate)", "agents"), "(crate)");
+    }
+
+    #[test]
+    fn reference_labels_preserve_exact_non_root_modules() {
+        assert_eq!(reference_module_label("", ""), "(root)");
+        assert_eq!(reference_module_label("", "agents"), "(crate)");
+        assert_eq!(
+            reference_module_label("cli::agents_cmd", "agents"),
+            "cli::agents_cmd"
+        );
     }
 }
