@@ -940,19 +940,23 @@ pub struct Capabilities {
     /// probe. Scheduling uses this static declaration before provider work.
     pub direct_account_usage: bool,
     /// How co-resident open turns are ordered when one agent process carries
-    /// more than one session id. Rested roots always follow latest activity;
-    /// forked conversations never inherit the primary's launch role.
+    /// more than one conversation. Every same-instance conversation carries
+    /// launch identity; only the selected occupant claims launch-derived
+    /// handles. Rested roots always follow latest activity, independent of
+    /// this policy.
     pub same_pane_session: SamePaneSessionPolicy,
     /// Remote-control surfaces the provider can host.
     pub remote_control: RemoteControlCapability,
 }
 
-/// Pane ownership for multiple root sessions hosted by one live agent process.
+/// Pane ownership for multiple open root sessions hosted by one live agent
+/// process. The policy selects the launch's current occupant; it does not
+/// distinguish a successor from a fork or apply to rested-root ordering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SamePaneSessionPolicy {
-    /// Keep the earliest registered open turn as the pane's primary owner.
+    /// Among open turns, keep the earliest registered as the current occupant.
     KeepPrimary,
-    /// Hand the pane to the most recently registered open conversation.
+    /// Among open turns, select the most recently registered conversation.
     FollowLatest,
 }
 
