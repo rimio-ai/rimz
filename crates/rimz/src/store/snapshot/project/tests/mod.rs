@@ -57,6 +57,7 @@ fn same_process_registration(
         json!({
             "agent_id": id,
             "agent_name": name,
+            "origin": "fresh",
             "signal": { "signal": "registered" },
             "pane_id": pane_id,
             "pane_process_start": "pane-start",
@@ -930,6 +931,202 @@ fn launched_child_successor_stays_nested_under_its_parent() {
     );
     assert_eq!(successor.launch_depth, Some(2));
     assert!(successor.is_launched_child());
+}
+
+#[test]
+fn same_process_fork_does_not_inherit_launch_identity() {
+    let pane_id = "tmux:%3";
+    let owner_pid = 126;
+    let launch = launch_event(
+        "codex",
+        AgentLaunchPayload {
+            launch_id: Some(AgentSessionId::from("launch_coder")),
+            launch: LaunchParams {
+                role: Some("coder".to_owned()),
+                team: Some("forge".to_owned()),
+                ..LaunchParams::default()
+            },
+            pane_id: Some(PaneId::parse(pane_id).expect("pane id")),
+            runtime_owner: Some(RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "launch_coder",
+                owner_pid,
+                Some("agent-start".to_owned()),
+            )),
+            ..launch_payload("launch_coder", "coder-card")
+        },
+    );
+    let primary = same_process_registration("primary", "coder-card", 2, pane_id, owner_pid);
+    let fork = raw_lifecycle_at(
+        "codex",
+        3,
+        json!({
+            "agent_id": "side-thread",
+            "agent_name": "side-card",
+            "origin": "forked",
+            "signal": { "signal": "registered" },
+            "pane_id": pane_id,
+            "pane_process_start": "pane-start",
+            "runtime_owner": {
+                "kind": "agent",
+                "subject_id": "side-thread",
+                "pid": owner_pid,
+                "process_start": "agent-start",
+            },
+        }),
+    );
+
+    let agents = reduce_agent_states(&[launch, primary, fork]);
+    let fork = agents
+        .iter()
+        .find(|agent| agent.agent_id == "side-thread")
+        .expect("side thread");
+
+    assert!(fork.launch_id.is_none());
+    assert!(fork.role.is_none());
+    assert!(fork.team.is_none());
+    let snapshot = SidebarSnapshot::build_with_agents(workspace(), agents, epoch());
+    let resolved = crate::harness::target::resolve_one(&snapshot, "@coder", None, None)
+        .expect("role remains unique without pane context");
+    assert_eq!(resolved.agent_id.as_str(), "primary");
+}
+
+#[test]
+fn launch_identity_waits_for_late_successor_origin() {
+    let pane_id = "tmux:%4";
+    let owner_pid = 168;
+    let launch = launch_event(
+        "codex",
+        AgentLaunchPayload {
+            launch_id: Some(AgentSessionId::from("launch_coder")),
+            launch: LaunchParams {
+                role: Some("coder".to_owned()),
+                ..LaunchParams::default()
+            },
+            pane_id: Some(PaneId::parse(pane_id).expect("pane id")),
+            runtime_owner: Some(RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "launch_coder",
+                owner_pid,
+                Some("agent-start".to_owned()),
+            )),
+            ..launch_payload("launch_coder", "coder-card")
+        },
+    );
+    let primary = same_process_registration("primary", "coder-card", 2, pane_id, owner_pid);
+    let successor_without_origin = raw_lifecycle_at(
+        "codex",
+        3,
+        json!({
+            "agent_id": "successor",
+            "agent_name": "successor-card",
+            "signal": { "signal": "registered" },
+            "pane_id": pane_id,
+            "pane_process_start": "pane-start",
+            "runtime_owner": {
+                "kind": "agent",
+                "subject_id": "successor",
+                "pid": owner_pid,
+                "process_start": "agent-start",
+            },
+        }),
+    );
+    let origin_arrives = raw_lifecycle_at(
+        "codex",
+        4,
+        json!({
+            "agent_id": "successor",
+            "origin": "fresh",
+            "signal": { "signal": "turn_started" },
+            "pane_id": pane_id,
+            "pane_process_start": "pane-start",
+            "runtime_owner": {
+                "kind": "agent",
+                "subject_id": "successor",
+                "pid": owner_pid,
+                "process_start": "agent-start",
+            },
+        }),
+    );
+
+    let before_origin = reduce_agent_states(&[
+        launch.clone(),
+        primary.clone(),
+        successor_without_origin.clone(),
+    ]);
+    assert!(
+        before_origin
+            .iter()
+            .find(|agent| agent.agent_id == "successor")
+            .expect("successor before origin")
+            .launch_id
+            .is_none()
+    );
+
+    let after_origin =
+        reduce_agent_states(&[launch, primary, successor_without_origin, origin_arrives]);
+    let successor = after_origin
+        .iter()
+        .find(|agent| agent.agent_id == "successor")
+        .expect("successor after origin");
+    assert_eq!(successor.launch_id.as_deref(), Some("launch_coder"));
+    assert_eq!(successor.role.as_deref(), Some("coder"));
+}
+
+#[test]
+fn follow_latest_successor_inherits_launch_identity_without_origin() {
+    let pane_id = "tmux:%5";
+    let owner_pid = 210;
+    let launch = launch_event(
+        "antigravity",
+        AgentLaunchPayload {
+            launch_id: Some(AgentSessionId::from("launch_coder")),
+            launch: LaunchParams {
+                role: Some("coder".to_owned()),
+                ..LaunchParams::default()
+            },
+            pane_id: Some(PaneId::parse(pane_id).expect("pane id")),
+            runtime_owner: Some(RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "launch_coder",
+                owner_pid,
+                Some("agent-start".to_owned()),
+            )),
+            ..launch_payload("launch_coder", "coder-card")
+        },
+    );
+    let registration = |id: &str, name: &str, at: i64| {
+        raw_lifecycle_at(
+            "antigravity",
+            at,
+            json!({
+                "agent_id": id,
+                "agent_name": name,
+                "signal": { "signal": "registered" },
+                "pane_id": pane_id,
+                "pane_process_start": "pane-start",
+                "runtime_owner": {
+                    "kind": "agent",
+                    "subject_id": id,
+                    "pid": owner_pid,
+                    "process_start": "agent-start",
+                },
+            }),
+        )
+    };
+
+    let agents = reduce_agent_states(&[
+        launch,
+        registration("conversation-a", "coder-card", 2),
+        registration("conversation-b", "successor-card", 3),
+    ]);
+    let successor = agents
+        .iter()
+        .find(|agent| agent.agent_id == "conversation-b")
+        .expect("successor");
+
+    assert_eq!(successor.launch_id.as_deref(), Some("launch_coder"));
+    assert_eq!(successor.role.as_deref(), Some("coder"));
 }
 
 #[test]

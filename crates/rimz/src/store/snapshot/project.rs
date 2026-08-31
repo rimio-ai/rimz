@@ -694,12 +694,6 @@ fn inherit_launch_identity(
     {
         return;
     }
-    let key = (successor.kind.clone(), successor.agent_id.clone());
-    if map.get(&key).is_some_and(|prior| {
-        prior.pane == successor.pane && prior.runtime_owner == successor.runtime_owner
-    }) {
-        return;
-    }
     let Some(predecessor) = map
         .values()
         .filter(|candidate| {
@@ -707,7 +701,7 @@ fn inherit_launch_identity(
                 && candidate.agent_id != successor.agent_id
                 && candidate.launch_id.is_some()
                 && !candidate.is_provider_subagent()
-                && crate::store::session_death::same_agent_instance(candidate, successor)
+                && crate::store::session_death::same_instance_lineage(candidate, successor)
         })
         .min_by_key(|candidate| {
             (
