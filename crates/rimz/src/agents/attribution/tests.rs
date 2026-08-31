@@ -240,7 +240,7 @@ fn launched_child_effort_stays_out_of_the_parent_seat() {
     active_time::record_stop(&runtime, "claude", "parent", at(10), 180).unwrap();
     active_time::record_progress(&runtime, "claude", "child", at(0), 180).unwrap();
     active_time::record_stop(&runtime, "claude", "child", at(20), 180).unwrap();
-    let child_transcript = [
+    let transcript_entries = [
         TranscriptEntry::new(
             at(50),
             child.kind.clone(),
@@ -269,7 +269,7 @@ fn launched_child_effort_stays_out_of_the_parent_seat() {
         agents: &refs,
         peers: &refs,
         subagents: &[],
-        transcript: &child_transcript,
+        transcript: &transcript_entries,
         me: None,
         runtime: &runtime,
         active_grace_secs: 180,
