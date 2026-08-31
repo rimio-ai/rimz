@@ -1473,6 +1473,7 @@ fn team_cohorts_keep_only_the_owner_of_an_inherited_launch_identity() {
     rested.team = Some("forge".to_owned());
     rested.role = Some("coder".to_owned());
     rested.channel = Some("auth".to_owned());
+    rested.origin = Some(crate::agents::SessionOrigin::Fresh);
     rested.status = AgentStatus::Success;
     rested.runtime_owner = Some(crate::pane::RuntimeOwner::new(
         crate::pane::RuntimeOwnerKind::Agent,
@@ -1485,6 +1486,7 @@ fn team_cohorts_keep_only_the_owner_of_an_inherited_launch_identity() {
     successor.team = Some("forge".to_owned());
     successor.role = Some("coder".to_owned());
     successor.channel = Some("auth".to_owned());
+    successor.origin = Some(crate::agents::SessionOrigin::Fresh);
     successor.status = AgentStatus::Running;
     successor.runtime_owner = Some(crate::pane::RuntimeOwner::new(
         crate::pane::RuntimeOwnerKind::Agent,
