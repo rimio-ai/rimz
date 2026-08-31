@@ -222,6 +222,7 @@ fn cached_alive_snapshot_attaches_rest_certificates_for_team_ownership() {
     dead_owner.launch_id = Some("launch-coder".into());
     dead_owner.role = Some("coder".to_owned());
     dead_owner.team = Some("forge".to_owned());
+    dead_owner.origin = Some(crate::agents::SessionOrigin::Fresh);
     let mut successor = root_agent("codex", "conversation-b", None);
     successor.last_activity = newer_at;
     successor.pane = Some(shared_pane);
@@ -232,6 +233,7 @@ fn cached_alive_snapshot_attaches_rest_certificates_for_team_ownership() {
     successor.launch_id = Some("launch-coder".into());
     successor.role = Some("coder".to_owned());
     successor.team = Some("forge".to_owned());
+    successor.origin = Some(crate::agents::SessionOrigin::Fresh);
     let context = AgentContext {
         turn_error: Some(AgentTurnError {
             class: TurnErrorClass::PausedOverloaded,
