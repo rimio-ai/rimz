@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use super::facts::{Facets, Facts};
 use super::history::{self, CochangeEdge};
-use super::modules::{crate_module_for_path, module_for_path, path_in_scope};
+use super::modules::{crate_module_for_path, module_endpoint, module_for_path, path_in_scope};
 use super::syntax;
 use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
 
@@ -293,7 +293,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             ) else {
                 continue;
             };
-            let to = endpoint(&imported_module, &scope_module);
+            let to = module_endpoint(&imported_module, &scope_module);
             if from != to {
                 imports
                     .entry((from.clone(), to))
@@ -333,6 +333,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .flat_map(|((from, to), items)| {
             items.iter().map(|item| super::references::Edge {
                 from_path: PathBuf::new(),
+                to_path: PathBuf::new(),
                 from: from.clone(),
                 to: to.clone(),
                 item: item.clone(),
@@ -346,8 +347,8 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     }
     let mut coupling = BTreeMap::<(String, String), BTreeSet<String>>::new();
     for edge in edges {
-        let from = endpoint(&edge.from, &scope_module);
-        let to = endpoint(&edge.to, &scope_module);
+        let from = module_endpoint(&edge.from, &scope_module);
+        let to = module_endpoint(&edge.to, &scope_module);
         if from != to {
             coupling.entry((from, to)).or_default().insert(edge.item);
         }
@@ -566,31 +567,6 @@ fn partition_cochange_edges(
         })
 }
 
-fn endpoint(module_path: &str, scope_module: &str) -> String {
-    if scope_module.is_empty() {
-        return if module_path == "(crate)" {
-            "(root)".to_owned()
-        } else {
-            module_path
-                .split("::")
-                .next()
-                .unwrap_or("(root)")
-                .to_owned()
-        };
-    }
-    if module_path == scope_module {
-        return "(root)".to_owned();
-    }
-    if let Some(relative) = module_path.strip_prefix(&format!("{scope_module}::")) {
-        return relative.split("::").next().unwrap_or("(root)").to_owned();
-    }
-    module_path
-        .split("::")
-        .next()
-        .unwrap_or("(root)")
-        .to_owned()
-}
-
 fn ordered_pair(left: &str, right: &str) -> (String, String) {
     if left <= right {
         (left.to_owned(), right.to_owned())
@@ -723,8 +699,11 @@ mod tests {
 
     #[test]
     fn endpoints_follow_scope_granularity() {
-        assert_eq!(endpoint("cli::agents_cmd::show", "cli"), "agents_cmd");
-        assert_eq!(endpoint("store::event", "cli"), "store");
+        assert_eq!(
+            module_endpoint("cli::agents_cmd::show", "cli"),
+            "agents_cmd"
+        );
+        assert_eq!(module_endpoint("store::event", "cli"), "store");
     }
 
     #[test]

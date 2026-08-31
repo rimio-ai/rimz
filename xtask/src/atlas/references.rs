@@ -49,6 +49,8 @@ pub(super) enum EdgeKind {
 pub(super) struct Edge {
     #[serde(skip)]
     pub(super) from_path: PathBuf,
+    #[serde(skip)]
+    pub(super) to_path: PathBuf,
     pub(super) from: String,
     pub(super) to: String,
     pub(super) item: String,
@@ -164,6 +166,7 @@ impl References {
                         }
                         references.edges.push(Edge {
                             from_path: site.path.clone(),
+                            to_path: file.path.clone(),
                             from: site.module.clone(),
                             to: item.module.clone(),
                             item: item.name.clone(),
@@ -297,7 +300,10 @@ mod tests {
         assert_eq!(item_refs.test_count, 2);
         assert_eq!(references.edges.len(), 3);
         assert!(references.edges.iter().all(|edge| {
-            edge.item == "target" && edge.kind == EdgeKind::Reference && edge.to.is_empty()
+            edge.item == "target"
+                && edge.kind == EdgeKind::Reference
+                && edge.to.is_empty()
+                && edge.to_path == Path::new("crates/demo/src/lib.rs")
         }));
         assert_eq!(references.edges.iter().filter(|edge| edge.test).count(), 2);
     }
