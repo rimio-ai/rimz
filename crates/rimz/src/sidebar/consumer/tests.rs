@@ -209,6 +209,8 @@ fn cached_alive_snapshot_attaches_rest_certificates_for_team_ownership() {
     let error_at = Timestamp::from_second(1_750_000_001).unwrap();
     let newer_at = Timestamp::from_second(1_750_000_002).unwrap();
     let shared_pane = pane("terminal_1", "codex", "/repo/main");
+    let frame = assemble_frame(vec![shared_pane.clone()], unix_now_ms(), "rimz-test");
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
     let owner = crate::pane::RuntimeOwner::new(
         crate::pane::RuntimeOwnerKind::Agent,
         "conversation-a",
@@ -225,7 +227,7 @@ fn cached_alive_snapshot_attaches_rest_certificates_for_team_ownership() {
     dead_owner.origin = Some(crate::agents::SessionOrigin::Fresh);
     let mut successor = root_agent("codex", "conversation-b", None);
     successor.last_activity = newer_at;
-    successor.pane = Some(shared_pane);
+    successor.pane = Some(shared_pane.clone());
     successor.runtime_owner = Some(crate::pane::RuntimeOwner {
         subject_id: "conversation-b".into(),
         ..owner
@@ -243,6 +245,29 @@ fn cached_alive_snapshot_attaches_rest_certificates_for_team_ownership() {
         ..AgentContext::new("codex", error_at)
     };
     crate::store::agent_context::write(&runtime, "codex", "conversation-a", &context).unwrap();
+    let observation = crate::agents::LocalSessionObservation {
+        kind: crate::ids::AgentKind::new_unchecked("codex"),
+        session_id: crate::ids::AgentSessionId::from("conversation-b"),
+        workspace: PathBuf::from("/repo/main"),
+        transcript_path: PathBuf::from("/repo/main/conversation-b.jsonl"),
+        created_at: newer_at,
+        fresh_binding_at: Some(newer_at),
+        first_event_at: Some(newer_at),
+        last_activity: newer_at,
+        projection: crate::agents::LocalSessionProjection::IdentityOnly,
+    };
+    atomic::write_temp_then_rename_cache(
+        &runtime.agent_projection_path(),
+        &crate::sidebar::agent_projection::AgentProjectionPublication {
+            session_name: "rimz-test".to_owned(),
+            wiring: Default::default(),
+            inputs: crate::sidebar::agent_projection::LocalSessionInputs::from_panes(&[
+                shared_pane,
+            ]),
+            observations: vec![observation],
+        },
+    )
+    .unwrap();
     let base = SidebarSnapshot::build_with_agents(workspace, vec![dead_owner, successor], newer_at);
 
     let snapshot = cached_alive_snapshot(base, &runtime, "rimz-test");
@@ -254,6 +279,15 @@ fn cached_alive_snapshot_attaches_rest_certificates_for_team_ownership() {
         .unwrap();
     assert_eq!(dead_owner.status, AgentStatus::Running);
     assert!(!dead_owner.holds_open_turn());
+    let successor = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == "conversation-b")
+        .unwrap();
+    assert_eq!(
+        successor.transcript_path.as_deref(),
+        Some("/repo/main/conversation-b.jsonl")
+    );
     let cohorts = crate::harness::target::team_cohorts(&snapshot.agents);
     assert_eq!(cohorts[0].members.len(), 1);
     assert_eq!(cohorts[0].members[0].agent_id.as_str(), "conversation-b");
