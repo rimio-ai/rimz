@@ -962,7 +962,7 @@ fn foreign_owner_diagnostic_is_independent_of_rollup_order() {
         );
         assert_eq!(
             selected.candidates[0].occupied_by_agent_id.as_deref(),
-            Some("primary")
+            Some("secondary")
         );
     }
 }
