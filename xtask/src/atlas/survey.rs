@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::detect::{self, PassThrough, RepeatedGuard, VestigialItem};
+use super::detect::{self, PassThrough, RepeatedGuard, SingleCaller, VestigialItem};
 use super::facts::{Facets, Facts};
 use super::history::{self, CochangeEdge};
 use super::index::IndexPolicy;
@@ -80,6 +80,7 @@ struct Report {
     divergence: Vec<Divergence>,
     shapes: serde_json::Value,
     external_providers: Vec<Provider>,
+    single_callers: Vec<SingleCaller>,
     passthroughs: Vec<PassThrough>,
     vestigial_items: Vec<VestigialItem>,
     repeated_guards: Vec<RepeatedGuard>,
@@ -226,10 +227,15 @@ fn build_report(facts: &Facts, args: &Args) -> Result<Report> {
             .then_with(|| left.module.cmp(&right.module))
     });
     let cochange = history::cochange(log, &facts.root, &args.path, None, 25, 10)?;
+    let single_callers = detect::single_callers(facts, &args.path);
     let passthroughs = detect::passthroughs(facts, &args.path);
     let vestigial_items = detect::vestigial(facts, &args.path, 25);
     let repeated_guards = detect::guards(facts, &args.path, args.guard_files);
     let detector_counts = BTreeMap::from([
+        (
+            "single-callers".to_owned(),
+            detect::counts_by_module(&single_callers, |row| &row.module),
+        ),
         (
             "passthroughs".to_owned(),
             detect::counts_by_module(&passthroughs, |row| &row.module),
@@ -256,6 +262,7 @@ fn build_report(facts: &Facts, args: &Args) -> Result<Report> {
         divergence,
         shapes: super::shapes::survey_value(facts, &args.path)?,
         external_providers: providers(facts, &args.path),
+        single_callers,
         passthroughs,
         vestigial_items,
         repeated_guards,
@@ -358,7 +365,11 @@ pub(super) fn divergence(
         }
     }
     if let Some(references) = &facts.references {
-        for edge in references.edges.iter().filter(|edge| !edge.test) {
+        for edge in references
+            .edges
+            .iter()
+            .filter(|edge| !edge.test && path_in_scope(&edge.from_path, scope))
+        {
             let from = endpoint(&edge.from);
             let to = endpoint(&edge.to);
             if from != to {
@@ -488,6 +499,13 @@ fn rank_rows(facts: &Facts, scope: &Path, prefix: &str, args: &Args) -> Result<V
 
 fn providers(facts: &Facts, scope: &Path) -> Vec<Provider> {
     let scope_module = crate_module_for_path(&scope.join("mod.rs"));
+    let scope_endpoints = facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| path_in_scope(&file.path, scope))
+        .map(|file| module_for_path(&file.path, scope))
+        .collect::<BTreeSet<_>>();
     let mut rows = BTreeMap::<String, (BTreeSet<String>, BTreeSet<String>)>::new();
     for file in facts
         .syntax
@@ -504,10 +522,19 @@ fn providers(facts: &Facts, scope: &Path) -> Vec<Provider> {
             ) else {
                 continue;
             };
-            if module_is_within(&resolved, &scope_module) {
+            let relative = resolved
+                .strip_prefix(&scope_module)
+                .and_then(|value| value.strip_prefix("::"))
+                .unwrap_or(&resolved);
+            let provider = relative
+                .split("::")
+                .next()
+                .filter(|value| !value.is_empty())
+                .unwrap_or("(root)")
+                .to_owned();
+            if scope_endpoints.contains(&provider) {
                 continue;
             }
-            let provider = resolved.split("::").next().unwrap_or("(crate)").to_owned();
             let row = rows.entry(provider).or_default();
             row.0.insert(from.clone());
             row.1.insert(import.item.clone());
@@ -577,6 +604,18 @@ fn print_markdown(report: &Report, top: usize, markdown: bool) {
         for cluster in clusters.iter().take(top) {
             println!("{}", serde_json::to_string(cluster).unwrap_or_default());
         }
+    }
+    close(fence);
+    section("Exact single callers", fence);
+    for row in report.single_callers.iter().take(top) {
+        println!(
+            "{}:{} {}::{} -> {}",
+            row.path.display(),
+            row.line,
+            row.module,
+            row.name,
+            row.caller
+        );
     }
     close(fence);
     section("Pass-throughs", fence);

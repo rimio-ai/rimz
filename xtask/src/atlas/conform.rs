@@ -593,6 +593,73 @@ fn evaluate(
             config_line: module.config_line,
         });
     }
+    for file in facts.syntax.files.iter().filter(|file| {
+        !target.modules.iter().any(|module| {
+            let absolute = root.join(&module.path);
+            if absolute.is_file() {
+                file.path == module.path
+            } else {
+                path_in_scope(&file.path, &module.path)
+            }
+        })
+    }) {
+        let Some(from) = target
+            .layers
+            .iter()
+            .position(|layer| layer == top_module(&file.module_path))
+        else {
+            continue;
+        };
+        let mut unallowed = BTreeMap::<String, BTreeSet<(PathBuf, usize)>>::new();
+        for import in &file.imports {
+            let Some(resolved) =
+                syntax::resolved_internal_import(import, &facts.known_modules, &facts.crate_names)
+            else {
+                continue;
+            };
+            let Some(to) = target
+                .layers
+                .iter()
+                .position(|layer| layer == top_module(&resolved))
+            else {
+                continue;
+            };
+            if to <= from {
+                continue;
+            }
+            unallowed
+                .entry(resolved)
+                .or_default()
+                .insert((file.path.clone(), import.line));
+        }
+        if unallowed.is_empty() {
+            continue;
+        }
+        let unallowed_imports = unallowed.keys().cloned().collect::<Vec<_>>();
+        let unallowed_import_sites = unallowed
+            .into_iter()
+            .flat_map(|(module, sites)| {
+                sites.into_iter().map(move |(path, line)| ImportSite {
+                    module: module.clone(),
+                    path,
+                    line,
+                })
+            })
+            .collect();
+        rules.push(RuleResult {
+            kind: "upward-import",
+            path: file.path.clone(),
+            symbol: None,
+            status: "regression",
+            current: 0,
+            budget: 0,
+            delta: 0,
+            unallowed_imports,
+            unallowed_import_sites,
+            used_upward_imports: BTreeSet::new(),
+            config_line: 1,
+        });
+    }
     for strangler in &target.strangler {
         let absolute = root.join(&strangler.path);
         if !absolute.exists() {
@@ -757,9 +824,12 @@ fn enforce(report: &Report) -> Result<()> {
 }
 
 fn tighten(target: &mut Target, report: &Report) {
-    let mut results = report.rules.iter();
     for module in &mut target.modules {
-        if let Some(result) = results.next() {
+        if let Some(result) = report
+            .rules
+            .iter()
+            .find(|result| result.symbol.is_none() && result.path == module.path)
+        {
             module.surface_budget = module.surface_budget.min(result.current);
             if let Some(upward_imports) = &mut module.upward_imports {
                 upward_imports.retain(|import| result.used_upward_imports.contains(import));
@@ -770,7 +840,9 @@ fn tighten(target: &mut Target, report: &Report) {
         }
     }
     for strangler in &mut target.strangler {
-        if let Some(result) = results.next() {
+        if let Some(result) = report.rules.iter().find(|result| {
+            result.symbol.as_deref() == Some(&strangler.symbol) && result.path == strangler.path
+        }) {
             strangler.baseline = strangler.baseline.min(result.current);
         }
     }

@@ -124,6 +124,7 @@ pub(super) fn revision_sources(root: &Path, revision: &str) -> Result<Vec<Source
     if !status.success() {
         bail!("git cat-file --batch failed");
     }
+    classify_sources(&mut sources);
     Ok(sources)
 }
 

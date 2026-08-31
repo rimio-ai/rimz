@@ -332,6 +332,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         .iter()
         .flat_map(|((from, to), items)| {
             items.iter().map(|item| super::references::Edge {
+                from_path: PathBuf::new(),
                 from: from.clone(),
                 to: to.clone(),
                 item: item.clone(),
