@@ -271,7 +271,10 @@ fn mixed_submit_records_stray_text_as_direct_input() {
 
     let entries = rimz::transcript::read_all(store.paths()).unwrap();
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Message);
+    assert_eq!(
+        entries[0].entry,
+        rimz::transcript::TranscriptKind::SubagentReport
+    );
     assert_eq!(entries[0].text, "child result");
     assert_eq!(entries[0].message_id.as_ref(), Some(&message.message_id));
     assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Prompt);
