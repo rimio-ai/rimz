@@ -463,8 +463,10 @@ fn subagent_reports_are_json_only_and_do_not_consume_the_human_last_slot() {
         None,
         Some(1),
         false,
-        Hidden::for_json(false),
-        true,
+        ViewMode {
+            hidden: Hidden::for_json(false),
+            flat: true,
+        },
     )
     .expect("human view");
     let human_lines = selected_lines(&human);
@@ -478,8 +480,10 @@ fn subagent_reports_are_json_only_and_do_not_consume_the_human_last_slot() {
         None,
         None,
         false,
-        Hidden::for_json(true),
-        true,
+        ViewMode {
+            hidden: Hidden::for_json(true),
+            flat: true,
+        },
     )
     .expect("json view");
     let lines = selected_lines(&json);
