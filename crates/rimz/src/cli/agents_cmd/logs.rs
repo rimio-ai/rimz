@@ -13,10 +13,18 @@ pub(super) fn logs_agent(
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let target = agent_logs_target(&reference);
+    let hidden = crate::cli::transcript::Hidden::for_json(json);
     if follow {
-        return follow_agent_logs(&workspace, &target, tail, all, json);
+        return follow_agent_logs(&workspace, &target, tail, all, json, hidden);
     }
-    let view = crate::cli::transcript::chat_view(&workspace, Some(&target), None, tail, all)?;
+    let view = crate::cli::transcript::chat_view_with_hidden(
+        &workspace,
+        Some(&target),
+        None,
+        tail,
+        all,
+        hidden,
+    )?;
     let selected = crate::cli::transcript::selected_lines(&view);
     if json {
         render::finish(write_json_pretty(
@@ -61,12 +69,27 @@ fn follow_agent_logs(
     tail: Option<usize>,
     all: bool,
     json: bool,
+    hidden: crate::cli::transcript::Hidden,
 ) -> Result<()> {
-    let initial = crate::cli::transcript::chat_view(workspace, Some(target), None, tail, all)?;
+    let initial = crate::cli::transcript::chat_view_with_hidden(
+        workspace,
+        Some(target),
+        None,
+        tail,
+        all,
+        hidden,
+    )?;
     let baseline = if tail.is_some() {
-        crate::cli::transcript::chat_view(workspace, Some(target), None, None, all)?
-            .entries
-            .len()
+        crate::cli::transcript::chat_view_with_hidden(
+            workspace,
+            Some(target),
+            None,
+            None,
+            all,
+            hidden,
+        )?
+        .entries
+        .len()
     } else {
         initial.entries.len()
     };
@@ -89,7 +112,14 @@ fn follow_agent_logs(
     let mut seen = baseline;
     loop {
         std::thread::sleep(Duration::from_secs(1));
-        let view = crate::cli::transcript::chat_view(workspace, Some(target), None, None, all)?;
+        let view = crate::cli::transcript::chat_view_with_hidden(
+            workspace,
+            Some(target),
+            None,
+            None,
+            all,
+            hidden,
+        )?;
         if view.entries.len() <= seen {
             continue;
         }

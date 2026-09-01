@@ -265,19 +265,19 @@ pub(super) fn record_conversation(
                     }
                     let (mut entry, delivered_text) =
                         match rimz::harness::target::parse_message_header(segment) {
-                            Some((rimz::harness::target::HeaderKind::Agent, sender, body)) => {
+                            Some((
+                                header @ (rimz::harness::target::HeaderKind::Agent
+                                | rimz::harness::target::HeaderKind::Subagent),
+                                sender,
+                                body,
+                            )) => {
                                 let delivered_text = body.clone();
-                                let mut entry =
-                                    entry_base(rimz::transcript::TranscriptKind::Message, body);
-                                entry.from = Some(sender);
-                                (entry, delivered_text)
-                            }
-                            Some((rimz::harness::target::HeaderKind::Subagent, sender, body)) => {
-                                let delivered_text = body.clone();
-                                let mut entry = entry_base(
-                                    rimz::transcript::TranscriptKind::SubagentReport,
-                                    body,
-                                );
+                                let kind = if header == rimz::harness::target::HeaderKind::Agent {
+                                    rimz::transcript::TranscriptKind::Message
+                                } else {
+                                    rimz::transcript::TranscriptKind::SubagentReport
+                                };
+                                let mut entry = entry_base(kind, body);
                                 entry.from = Some(sender);
                                 (entry, delivered_text)
                             }
