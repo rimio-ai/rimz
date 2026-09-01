@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) fn confirm_sent_message_for_lifecycle(
     store: &Store,
     agent: &AgentDefinition,
