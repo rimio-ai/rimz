@@ -51,6 +51,23 @@ pub(super) struct FnRef {
     pub(super) line: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct FunctionId {
+    pub(super) path: PathBuf,
+    pub(super) label: String,
+    pub(super) line: usize,
+}
+
+impl FunctionId {
+    pub(super) fn new(path: &Path, function: &FnRef) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            label: function.label.clone(),
+            line: function.line,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) struct Edge {
     #[serde(skip)]
@@ -345,7 +362,7 @@ mod tests {
             Source::new("crates/demo/src/target.rs", "pub fn target() {}\n"),
             Source::new(
                 "crates/demo/src/lib.rs",
-                "mod target;\nuse target::target;\n\nstruct Foo;\n\nimpl Foo {\n    fn run(&self) {\n        target();\n    }\n}\n",
+                "mod target;\nuse target::target;\n\nstruct Foo;\n\nimpl Foo {\n    fn run(&self) {\n        target();\n    }\n\n    #[cfg(test)]\n    fn conformance(&self) {\n        target();\n    }\n}\n",
             ),
         ];
         let syntax = super::super::syntax::analyze_sources(&sources);
@@ -358,7 +375,11 @@ mod tests {
                 ),
                 document(
                     "crates/demo/src/lib.rs",
-                    vec![occurrence(1, target, false), occurrence(7, target, false)],
+                    vec![
+                        occurrence(1, target, false),
+                        occurrence(7, target, false),
+                        occurrence(12, target, false),
+                    ],
                 ),
             ],
             ..Index::default()
@@ -386,6 +407,19 @@ mod tests {
                 label: "Foo::run".to_owned(),
                 line: 7,
             })
+        );
+        let test_method_edge = references
+            .edges
+            .iter()
+            .find(|edge| edge.from_line == 13)
+            .expect("test method reference edge");
+        assert!(test_method_edge.test);
+        assert_eq!(
+            test_method_edge
+                .from_fn
+                .as_ref()
+                .map(|function| function.label.as_str()),
+            Some("Foo::conformance")
         );
     }
 

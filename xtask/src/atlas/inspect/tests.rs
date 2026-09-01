@@ -129,12 +129,57 @@ fn functions_rank_by_distinct_items_and_quote_the_heaviest() {
     assert_eq!(totals.sites, 5);
     assert_eq!(functions[0].function, "heavy");
     assert_eq!(functions[0].items, ["a", "b"]);
+    assert_eq!(functions[0].items_total, 2);
     assert_eq!(functions.last().unwrap().function, "(outside any function)");
     let heaviest = heaviest.unwrap();
     assert_eq!(heaviest.function, "heavy");
     assert_eq!(heaviest.source.lines().count(), 81);
     assert!(heaviest.source.ends_with("… 3 more lines"));
     assert_eq!(tests[0].items, ["a"]);
+    assert_eq!(tests[0].items_total, 1);
+}
+
+#[test]
+fn compact_json_preserves_complete_item_counts() {
+    let mut report = Report {
+        version: REPORT_VERSION,
+        verb: "inspect",
+        from: "caller".to_owned(),
+        to: "store".to_owned(),
+        path: PathBuf::from("."),
+        totals: Totals {
+            functions: 1,
+            items: 3,
+            sites: 3,
+        },
+        functions: vec![FunctionRow {
+            function: "run".to_owned(),
+            path: PathBuf::from("src/lib.rs"),
+            line: 1,
+            end_line: 4,
+            items: vec!["a".to_owned(), "b".to_owned(), "c".to_owned()],
+            items_total: 3,
+            sites: 3,
+            outside: false,
+        }],
+        heaviest: None,
+        tests: vec![TestRow {
+            path: PathBuf::from("tests/api.rs"),
+            sites: 3,
+            items: vec!["a".to_owned(), "b".to_owned(), "c".to_owned()],
+            items_total: 3,
+        }],
+        rules: Vec::new(),
+        parse_failures: Vec::new(),
+        target_configured: false,
+    };
+
+    compact_json(&mut report, 1);
+
+    assert_eq!(report.functions[0].items, ["a"]);
+    assert_eq!(report.functions[0].items_total, 3);
+    assert_eq!(report.tests[0].items, ["a"]);
+    assert_eq!(report.tests[0].items_total, 3);
 }
 
 #[test]
@@ -158,8 +203,7 @@ fn rules_report_direction_admission_and_debt() {
         "use crate::cli::Thing;\npub fn visible() -> Thing { Thing }\n",
     )
     .unwrap();
-    let sources = super::super::sources::working_tree_rust_sources(root.path()).unwrap();
-    let syntax = super::super::syntax::analyze_sources(&sources);
+    let facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
     let target = Target {
         version: 4,
         layers: vec![
@@ -182,7 +226,7 @@ fn rules_report_direction_admission_and_debt() {
         root.path(),
         &target,
         &root.path().join("target.toml"),
-        &syntax.files,
+        &facts,
         &selector("store"),
         &selector("cli"),
     )
@@ -194,6 +238,23 @@ fn rules_report_direction_admission_and_debt() {
     let debt = rules[0].debt.as_ref().unwrap();
     assert_eq!(debt.prefix, "cli");
     assert_eq!(debt.sites, 1);
+
+    let partial = rule_row(
+        &ModuleRule {
+            path: PathBuf::from("src/store.rs"),
+            allowed_imports: Some(vec!["cli::render".to_owned()]),
+            upward_imports: None,
+            surface_budget: 2,
+            surface_goal: None,
+            upward_debt: None,
+            config_line: 4,
+        },
+        &BTreeMap::new(),
+        &target.layer_ranks(),
+        "store",
+        "cli",
+    );
+    assert_eq!(partial.admitted, None);
 }
 
 fn edge(item: &str, function: Option<(&str, usize)>, test: bool) -> Edge {

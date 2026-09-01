@@ -13,7 +13,7 @@ use super::modules::{
     ItemId, crate_module_for_path, escaping_items_for_boundary, module_for_path, module_is_within,
     path_in_scope, reference_module_label,
 };
-use super::references::{Edge, EdgeKind};
+use super::references::{Edge, EdgeKind, FunctionId};
 use super::{REPORT_VERSION, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
@@ -428,7 +428,7 @@ fn callers_from_edges(edges: &[Edge], crate_module: &str) -> Vec<Caller> {
     #[derive(Default)]
     struct Assembly {
         items: BTreeSet<String>,
-        functions: BTreeMap<(String, PathBuf, usize), BTreeSet<String>>,
+        functions: BTreeMap<FunctionId, BTreeSet<String>>,
     }
 
     let mut rows = BTreeMap::<String, Assembly>::new();
@@ -444,11 +444,7 @@ fn callers_from_edges(edges: &[Edge], crate_module: &str) -> Vec<Caller> {
         row.items.insert(edge.item.clone());
         if let Some(function) = &edge.from_fn {
             row.functions
-                .entry((
-                    function.label.clone(),
-                    edge.from_path.clone(),
-                    function.line,
-                ))
+                .entry(FunctionId::new(&edge.from_path, function))
                 .or_default()
                 .insert(edge.item.clone());
         }
@@ -459,10 +455,10 @@ fn callers_from_edges(edges: &[Edge], crate_module: &str) -> Vec<Caller> {
             let mut top_fns = assembly
                 .functions
                 .into_iter()
-                .map(|((function, path, line), items)| CallerFn {
-                    function,
-                    path,
-                    line,
+                .map(|(function, items)| CallerFn {
+                    function: function.label,
+                    path: function.path,
+                    line: function.line,
                     items: items.len(),
                 })
                 .collect::<Vec<_>>();

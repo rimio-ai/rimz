@@ -303,6 +303,10 @@ fn functions_include_trait_defaults_and_exclude_cfg_test_bodies() {
     fn run(&self) {
         target();
     }
+    #[cfg(test)]
+    fn test_default(&self) {
+        target();
+    }
 }
 #[cfg(not(test))]
 fn production() {
@@ -315,9 +319,9 @@ mod tests {
     }
 }
 struct View;
-#[cfg(test)]
 impl View {
-    fn test_only(&self) {
+    #[cfg(test)]
+    pub fn test_only(&self) {
         target();
     }
 }
@@ -332,11 +336,30 @@ impl View {
             .collect::<Vec<_>>(),
         ["run", "production"]
     );
+    assert_eq!(
+        file.test_fns
+            .iter()
+            .map(|function| function.label())
+            .collect::<Vec<_>>(),
+        ["test_default", "check", "View::test_only"]
+    );
     assert_eq!(file.enclosing_fn(3).unwrap().label(), "run");
-    assert_eq!(file.enclosing_fn(13).unwrap().label(), "check");
-    assert_eq!(file.enclosing_fn(20).unwrap().label(), "View::test_only");
-    assert!(file.test_regions.iter().any(|region| region.contains(&13)));
-    assert!(file.test_regions.iter().any(|region| region.contains(&20)));
+    for function in &file.test_fns {
+        assert!(
+            file.test_regions
+                .iter()
+                .any(|region| region.contains(&function.line)),
+            "{} should be in a test region",
+            function.label()
+        );
+    }
+    assert!(!file.pub_items.iter().any(|item| item.name == "test_only"));
+    assert!(
+        !file
+            .pub_items
+            .iter()
+            .any(|item| item.name == "test_default")
+    );
 }
 
 #[test]

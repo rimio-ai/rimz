@@ -8,7 +8,7 @@ use super::conform::{self, Direction};
 use super::facts::{Facets, Facts};
 use super::index::IndexPolicy;
 use super::modules::{bounded_names, crate_module_for_path, module_is_within, path_in_scope};
-use super::references::{Edge, EdgeKind};
+use super::references::{Edge, EdgeKind, FunctionId};
 use super::sources::Source;
 use super::syntax::FileSyntax;
 use super::target::{self, ModuleRule, TARGET_FILE, Target};
@@ -69,7 +69,10 @@ struct FunctionRow {
     line: usize,
     end_line: usize,
     items: Vec<String>,
+    items_total: usize,
     sites: usize,
+    #[serde(skip)]
+    outside: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,6 +89,7 @@ struct TestRow {
     path: PathBuf,
     sites: usize,
     items: Vec<String>,
+    items_total: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -101,13 +105,6 @@ struct RuleRow {
 struct RuleDebt {
     prefix: String,
     sites: usize,
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct FunctionKey {
-    path: PathBuf,
-    function: String,
-    line: usize,
 }
 
 #[derive(Default)]
@@ -286,7 +283,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     }
     let rules = target.as_ref().map_or_else(
         || Ok(Vec::new()),
-        |target| target_rules(root, target, &target_path, &facts.syntax.files, &from, &to),
+        |target| target_rules(root, target, &target_path, &facts, &from, &to),
     )?;
     let target_configured = target.is_some();
     Ok(Report {
@@ -378,17 +375,13 @@ fn assembly_report(
         })
         .collect::<Vec<_>>();
     let mut items = BTreeSet::new();
-    let mut by_function = BTreeMap::<FunctionKey, FunctionAggregate>::new();
+    let mut by_function = BTreeMap::<FunctionId, FunctionAggregate>::new();
     let mut outside = FunctionAggregate::default();
     for edge in &production {
         items.insert(edge.item.clone());
         if let Some(function) = &edge.from_fn {
             let aggregate = by_function
-                .entry(FunctionKey {
-                    path: edge.from_path.clone(),
-                    function: function.label.clone(),
-                    line: function.line,
-                })
+                .entry(FunctionId::new(&edge.from_path, function))
                 .or_default();
             aggregate.items.insert(edge.item.clone());
             aggregate.sites += 1;
@@ -401,11 +394,13 @@ fn assembly_report(
         .into_iter()
         .map(|(key, aggregate)| FunctionRow {
             end_line: function_end_line(syntax_files, &key),
-            function: key.function,
+            function: key.label,
             path: key.path,
             line: key.line,
+            items_total: aggregate.items.len(),
             items: aggregate.items.into_iter().collect(),
             sites: aggregate.sites,
+            outside: false,
         })
         .collect::<Vec<_>>();
     functions.sort_by(|left, right| {
@@ -427,8 +422,10 @@ fn assembly_report(
             path: PathBuf::from("-"),
             line: 0,
             end_line: 0,
+            items_total: outside.items.len(),
             items: outside.items.into_iter().collect(),
             sites: outside.sites,
+            outside: true,
         });
     }
 
@@ -449,6 +446,7 @@ fn assembly_report(
         .map(|(path, aggregate)| TestRow {
             path,
             sites: aggregate.sites,
+            items_total: aggregate.items.len(),
             items: aggregate.items.into_iter().collect(),
         })
         .collect::<Vec<_>>();
@@ -470,14 +468,14 @@ fn assembly_report(
     )
 }
 
-fn function_end_line(files: &[FileSyntax], key: &FunctionKey) -> usize {
+fn function_end_line(files: &[FileSyntax], key: &FunctionId) -> usize {
     files
         .iter()
         .find(|file| file.path == key.path)
         .and_then(|file| {
             file.fns
                 .iter()
-                .find(|function| function.line == key.line && function.label() == key.function)
+                .find(|function| function.line == key.line && function.label() == key.label)
         })
         .map_or(key.line, |function| function.end_line)
 }
@@ -508,12 +506,14 @@ fn target_rules(
     root: &Path,
     target: &Target,
     target_path: &Path,
-    syntax_files: &[FileSyntax],
+    facts: &Facts,
     from: &ModuleSelector,
     to: &ModuleSelector,
 ) -> Result<Vec<RuleRow>> {
-    let debt_sites = conform::debt_sites_by_rule(root, target, target_path)?;
-    let from_files = syntax_files
+    let debt_sites = conform::debt_sites_by_rule(root, target, target_path, facts)?;
+    let from_files = facts
+        .syntax
+        .files
         .iter()
         .filter(|file| from.matches(&file.module_path, &file.path))
         .collect::<Vec<_>>();
@@ -550,13 +550,13 @@ fn rule_row(
         .unwrap_or_default();
     let admitted = admissions
         .iter()
-        .find(|prefix| modules_overlap(to, prefix))
+        .find(|prefix| module_is_within(to, prefix))
         .cloned();
     let debt = rule
         .upward_debt
         .iter()
         .flatten()
-        .find(|prefix| modules_overlap(to, prefix))
+        .find(|prefix| module_is_within(to, prefix))
         .map(|prefix| RuleDebt {
             prefix: prefix.clone(),
             sites: debt_sites
@@ -577,15 +577,11 @@ fn rule_row(
     }
 }
 
-fn modules_overlap(left: &str, right: &str) -> bool {
-    module_is_within(left, right) || module_is_within(right, left)
-}
-
 fn compact_json(report: &mut Report, top: usize) {
     let outside = report
         .functions
         .iter()
-        .position(|function| function.function == "(outside any function)")
+        .position(|function| function.outside)
         .map(|index| report.functions.remove(index));
     report.functions.truncate(top);
     if let Some(outside) = outside {
@@ -624,7 +620,7 @@ fn print_report(report: &Report, top: usize, markdown: bool) {
             function.function,
             function.path.display(),
             function.line,
-            function.items.len(),
+            function.items_total,
             function.sites
         );
     }
@@ -707,15 +703,10 @@ fn displayed_functions(report: &Report, top: usize) -> Vec<&FunctionRow> {
     let mut functions = report
         .functions
         .iter()
-        .filter(|function| function.function != "(outside any function)")
+        .filter(|function| !function.outside)
         .take(top)
         .collect::<Vec<_>>();
-    functions.extend(
-        report
-            .functions
-            .iter()
-            .find(|function| function.function == "(outside any function)"),
-    );
+    functions.extend(report.functions.iter().find(|function| function.outside));
     functions
 }
 
