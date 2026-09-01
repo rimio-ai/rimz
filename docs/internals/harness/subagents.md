@@ -8,7 +8,7 @@ RimZ shows both under one product term and nests both under the same card, so th
 
 A **provider-native subagent** is the agent's own child, running headless inside the parent's process. RimZ learns it exists only from `SubagentStarted` and `SubagentStopped` hook signals and folds it into the rollup as a child row. It has no pane, no run record, and no address — [model.md](../agents/model.md) owns it.
 
-A **launched subagent** is a full RimZ agent: its own pane, provider process, durable run record, petname, launch profile, transcript, cost, and address. `rimz subagents` creates it. Its separate transcript spend folds into the parent's live and lifetime figures in the sidebar, `agents show`, and teams; `agents attribution` emits an origin-tagged `rimz_launched` row rendered as `(+{cost}, launched)` and carries that spend in the separate `+{cost} launched` / `launched_cost_usd` figure. Provider-native child spend is already in the parent transcript and its attribution row is `provider_native`, rendered as `({cost}, native)`. This page owns the launched form.
+A **launched subagent** is a full RimZ agent: its own pane, provider process, durable run record, petname, launch profile, transcript, cost, and address. `rimz subagents` creates it. The petname is always minted and remains its address; the sidebar card labels it by launch profile. Its separate transcript spend folds into the parent's live and lifetime figures in the sidebar, `agents show`, and teams; `agents attribution` emits an origin-tagged `rimz_launched` row rendered as `(+{cost}, launched)` and carries that spend in the separate `+{cost} launched` / `launched_cost_usd` figure. Provider-native child spend is already in the parent transcript and its attribution row is `provider_native`, rendered as `({cost}, native)`. This page owns the launched form.
 
 One field separates them, and both predicates live in [`agents/state.rs`](../../../crates/rimz/src/agents/state.rs):
 
@@ -91,7 +91,7 @@ The supervised runner resolves the durable caller before it resolves a subagent 
 
 `rimz subagents fanout` accepts a JSON array and desugars every entry through the same `SubagentLaunchArgs::into_agent_launch` path above. Task `timeout` wins over the fanout flag, which wins over the configured default. Fanout-level `keep` applies uniformly; per-task foreground, retention, and passthrough argv are not part of the data format.
 
-Parsing, required fields, timeout syntax, and duplicate explicit names are validated across the entire array before the first side effect. Pane opens then happen sequentially in the caller process. This avoids racing two backend split operations against the same ambient pane, while the child processes themselves run in parallel as soon as each pane opens.
+Parsing, required fields, and timeout syntax are validated across the entire array before the first side effect. Pane opens then happen sequentially in the caller process. This avoids racing two backend split operations against the same ambient pane, while the child processes themselves run in parallel as soon as each pane opens.
 
 The supervised runner's background outcome carries the minted petname and run ID back to the subagents command. Single launch prints the identity directly, while fanout collects every identity. This avoids rediscovering children from a before/after store snapshot, which could confuse another launch racing in the same family.
 

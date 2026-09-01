@@ -33,7 +33,6 @@ Each array entry has the single-launch fields that make sense for data-driven de
 | `profile` | yes | A configured subagent profile, agent kind, or shared command |
 | `prompt` | exactly one | Complete task supplied by the parent |
 | `prompt_file` | exactly one | File whose contents become the prompt; exclusive with `prompt` |
-| `name` | no | Durable child petname |
 | `model` | no | Model override |
 | `agent` | no | Profile or provider-kind rebase |
 | `effort` | no | Reasoning effort |
@@ -41,7 +40,7 @@ Each array entry has the single-launch fields that make sense for data-driven de
 | `max_turns` | no | Maximum agentic turns |
 | `description` | no | Initial child-card description |
 
-Explicit names must be unique within the list. Relative `prompt_file` paths resolve from the caller's current working directory. A task timeout overrides the fanout-level `--timeout`, which overrides `[agents.subagents] timeout` (30 minutes by default). `--keep` applies to every child. Per-task raw argv, execution mode, and pane retention are deliberately omitted; use `[subagents.profiles]` for provider arguments or separate single launches when children need different lifecycle controls.
+Relative `prompt_file` paths resolve from the caller's current working directory. A task timeout overrides the fanout-level `--timeout`, which overrides `[agents.subagents] timeout` (30 minutes by default). `--keep` applies to every child. Per-task raw argv, execution mode, and pane retention are deliberately omitted; use `[subagents.profiles]` for provider arguments or separate single launches when children need different lifecycle controls.
 
 All tasks are validated before the first launch. If a runtime failure occurs after some children have started, the error names them; they keep their normal deadline and cleanup behavior and remain available to `subagents wait` and `subagents stop`.
 
@@ -67,7 +66,7 @@ The bare form and `launch` verb are equivalent. A prompt is mandatory: the paren
 | Checkout | caller's current checkout | fixed |
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
 | Pane after completion | closes when the run settles | `--keep` holds it until `stop` or `rimz gc` |
-| Address | minted petname | `--name/-n` |
+| Address | minted petname | fixed |
 
 A finished child's in-pane wrapper stamps its durable end and closes the pane after stopping the provider. The run result remains joinable, and the finished child stays on the parent card until the parent's next prompt boundary. `--keep` instead holds the pane after completion and past parent exit, leaving reclamation to `stop` or `rimz gc`.
 
@@ -147,7 +146,7 @@ Every child is addressable as `@<petname>`. A supervised print-mode provider is 
 
 ## Parentage and sidebar placement
 
-Only `rimz subagents` creates a parented pane-backed child. The child appears in the subagent section nested under its direct parent and is not duplicated as a top-level card. Its entry shows the petname, launch profile, description, and own session cost; that spend rolls into the parent's live and lifetime figures in the sidebar, `agents show`, and teams. `agents attribution` renders it as `{count} × {type} (+{cost}, launched)` and carries its spend in the separate `+{cost} launched` / `launched_cost_usd` figure rather than `cost_usd`. Its schema 4 origin is `rimz_launched`. Provider-native children share the product term *subagent* and the same nested presentation, but their cost is already inside `cost_usd`; they render as `{count} × {type} ({cost}, native)` with origin `provider_native`.
+Only `rimz subagents` creates a parented pane-backed child. The child appears in the subagent section nested under its direct parent and is not duplicated as a top-level card. Its entry shows the launch profile, description, and own session cost; the petname is its address in `list`, `wait`, and `rimz message`. That spend rolls into the parent's live and lifetime figures in the sidebar, `agents show`, and teams. `agents attribution` renders it as `{count} × {type} (+{cost}, launched)` and carries its spend in the separate `+{cost} launched` / `launched_cost_usd` figure rather than `cost_usd`. Its schema 4 origin is `rimz_launched`. Provider-native children share the product term *subagent* and the same nested presentation, but their cost is already inside `cost_usd`; they render as `{count} × {type} ({cost}, native)` with origin `provider_native`.
 
 Subagent launches are not capped by `[agents] max-chain-length`; that setting governs successive top-level peer launches through `rimz agents` and `rimz teams`. Instead, a subagent cannot launch anything through either doorway. A refused call creates no run, pane, worktree, or provisional agent.
 

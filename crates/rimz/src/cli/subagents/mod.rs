@@ -1,6 +1,6 @@
 //! `rimz subagents` — supervised child launch and lifecycle sugar.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -115,7 +115,6 @@ struct FanoutTask {
     profile: Option<String>,
     prompt: Option<String>,
     prompt_file: Option<PathBuf>,
-    name: Option<String>,
     model: Option<String>,
     agent: Option<String>,
     effort: Option<String>,
@@ -141,9 +140,6 @@ struct SubagentLaunchArgs {
     /// File whose contents become the child's prompt.
     #[arg(long = "prompt-file", value_name = "PATH", conflicts_with = "prompt")]
     prompt_file: Option<PathBuf>,
-    /// Durable child petname.
-    #[arg(long, short = 'n')]
-    name: Option<String>,
     /// Model for the child.
     #[arg(long, value_name = "MODEL")]
     model: Option<String>,
@@ -358,27 +354,12 @@ fn parse_fanout_launches(
     if tasks.is_empty() {
         bail!("fanout needs at least one task");
     }
-    let mut names = HashSet::new();
-    for (index, task) in tasks.iter().enumerate() {
-        if let Some(name) = task.name.as_deref() {
-            rimz::harness::plan::validate_agent_name(name)
-                .with_context(|| format!("task {} ({name})", index + 1))?;
-            if !names.insert(name) {
-                bail!("task {} repeats child name `{name}`", index + 1);
-            }
-        }
-    }
     tasks
         .into_iter()
         .enumerate()
         .map(|(index, task)| {
-            let label = task
-                .name
-                .as_deref()
-                .map(|name| format!(" ({name})"))
-                .unwrap_or_default();
             task.into_agent_launch(args, defaults)
-                .with_context(|| format!("task {}{label}", index + 1))
+                .with_context(|| format!("task {}", index + 1))
         })
         .collect()
 }
@@ -401,7 +382,6 @@ impl FanoutTask {
             profile: self.profile,
             prompt: self.prompt,
             prompt_file: self.prompt_file,
-            name: self.name,
             model: self.model,
             agent: self.agent,
             effort: self.effort,
@@ -457,7 +437,6 @@ impl SubagentLaunchArgs {
                 bg: true,
                 ..Default::default()
             },
-            name: self.name,
             model: self.model,
             agent: self.agent,
             effort: self.effort,
@@ -476,7 +455,6 @@ impl SubagentLaunchArgs {
 fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
     if args.prompt.is_some()
         || args.prompt_file.is_some()
-        || args.name.is_some()
         || args.model.is_some()
         || args.agent.is_some()
         || args.effort.is_some()

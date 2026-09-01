@@ -72,8 +72,13 @@ fn launched_child_projects_profile_cost_and_lifetime_delegated_spend() {
     child.context = Some(context);
 
     let projected = sub_agent_from_state(&child, epoch());
+    assert_eq!(projected.name, "explorer");
     assert_eq!(projected.profile.as_deref(), Some("explorer"));
     assert_eq!(projected.cost_usd, Some(0.42));
+
+    let mut bare = child.clone();
+    bare.profile = None;
+    assert_eq!(sub_agent_from_state(&bare, epoch()).name, "codex");
 
     let mut native = child_state("root", "native", AgentStatus::Success, 5);
     native.subagent_cost_usd = Some(0.25);
@@ -180,7 +185,7 @@ fn launched_cross_kind_child_nests_without_losing_its_pane() {
     let children = row(&snapshot, "root").sub_agents();
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].id, "child");
-    assert_eq!(children[0].name, "helper");
+    assert_eq!(children[0].name, "codex");
     assert!(snapshot.agent_panes.iter().any(|pane| {
         pane.agent_id
             .as_ref()

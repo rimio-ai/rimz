@@ -139,7 +139,6 @@ fn fanout_task_matches_the_single_launch_surface() {
         r#"[{
             "profile": "claude",
             "prompt": "review this",
-            "name": "auth-review",
             "model": "opus",
             "agent": "reviewer",
             "effort": "high",
@@ -155,8 +154,6 @@ fn fanout_task_matches_the_single_launch_surface() {
         "rimz",
         "claude",
         "review this",
-        "--name",
-        "auth-review",
         "--model",
         "opus",
         "--agent",
@@ -233,10 +230,9 @@ fn fanout_validates_the_whole_task_list_before_launch() {
     let empty = parse_fanout_launches("[]", &fanout, &defaults).expect_err("empty task list");
     assert!(empty.to_string().contains("at least one task"));
 
-    let missing_prompt =
-        parse_fanout_launches(r#"[{"profile":"codex","name":"auth"}]"#, &fanout, &defaults)
-            .expect_err("missing prompt");
-    assert!(format!("{missing_prompt:#}").contains("task 1 (auth)"));
+    let missing_prompt = parse_fanout_launches(r#"[{"profile":"codex"}]"#, &fanout, &defaults)
+        .expect_err("missing prompt");
+    assert!(format!("{missing_prompt:#}").contains("task 1"));
     assert!(format!("{missing_prompt:#}").contains("prompt from the parent"));
 
     let conflicting_prompt = parse_fanout_launches(
@@ -246,21 +242,22 @@ fn fanout_validates_the_whole_task_list_before_launch() {
     )
     .expect_err("conflicting prompt sources");
     assert!(format!("{conflicting_prompt:#}").contains("both `prompt` and `prompt_file`"));
+}
 
-    let duplicate = parse_fanout_launches(
-        r#"[
-            {"profile":"codex","prompt":"one","name":"auth"},
-            {"profile":"claude","prompt":"two","name":"auth"}
-        ]"#,
+#[test]
+fn caller_chosen_subagent_names_are_rejected() {
+    assert!(Harness::try_parse_from(["rimz", "claude", "review this", "-n", "auth"]).is_err());
+
+    let Some(SubagentsSubcmd::Fanout(fanout)) = parse(&["rimz", "fanout"]).command else {
+        panic!("fanout command");
+    };
+    let error = parse_fanout_launches(
+        r#"[{"profile":"codex","prompt":"one","name":"auth"}]"#,
         &fanout,
-        &defaults,
+        &rimz::config::SubagentsConfig::default(),
     )
-    .expect_err("duplicate name");
-    assert!(
-        duplicate
-            .to_string()
-            .contains("task 2 repeats child name `auth`")
-    );
+    .expect_err("caller-chosen fanout name");
+    assert!(format!("{error:#}").contains("unknown field `name`"));
 }
 
 #[test]

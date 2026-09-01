@@ -606,9 +606,10 @@ fn is_false(value: &bool) -> bool {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarSubAgent {
     pub id: String,
-    /// The subagent's type (`Explore`, `review`, …), from the `SubagentStart`
-    /// task definition; falls back to a short degraded id when none was
-    /// reported.
+    /// The subagent's type (`Explore`, `review`, …). A launched child's type is
+    /// its launch profile, or its agent kind for a bare-kind launch, never its
+    /// petname. A provider-native child falls back to a short degraded id when
+    /// no type was reported.
     pub name: String,
     /// Whether this is a provider-native paneless child. The neutral marker
     /// survives publication so consumers can lift the child's attention state.
