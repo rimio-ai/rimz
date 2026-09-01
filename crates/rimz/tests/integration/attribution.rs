@@ -310,7 +310,7 @@ fn attribution_cli_credits_claude_subagent_companions() {
     assert_eq!(report["totals"]["cost_usd"], 3.0);
     assert_eq!(
         report["groups"][0]["members"][0]["subagents"][0]["task"],
-        "Explore"
+        "explore"
     );
     assert_eq!(
         report["groups"][0]["members"][0]["subagents"][0]["count"],

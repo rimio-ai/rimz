@@ -378,7 +378,7 @@ fn subagents_label(member: &AttributionMember) -> Option<String> {
     let mut cost_usd = None;
     let mut segments = Vec::with_capacity(member.subagents.len());
     for stat in &member.subagents {
-        let task = stat.task.as_deref().unwrap_or("other").to_lowercase();
+        let task = stat.task.as_deref().unwrap_or("other");
         segments.push(format!("{} × {task}", stat.count));
         cost_usd = rimz::agents::spending::sum_optional_cost(cost_usd, stat.cost_usd);
     }
@@ -524,7 +524,7 @@ mod tests {
             cost_usd: Some(1.60),
             subagents: vec![
                 SubagentStat {
-                    task: Some("Explorer".to_owned()),
+                    task: Some("explorer".to_owned()),
                     count: 4,
                     cost_usd: Some(0.90),
                 },

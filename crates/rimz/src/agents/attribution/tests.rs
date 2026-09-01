@@ -93,7 +93,7 @@ fn mixed_origin_report() -> Attribution {
     let mut native = agent("native", "claude", 20);
     native.parent_agent_id = Some(parent.agent_id.clone());
     native.parent_agent_kind = Some(parent.kind.clone());
-    native.task = Some("explorer".to_owned());
+    native.task = Some("Explorer".to_owned());
     let mut launched = agent("launched", "claude", 30);
     launched.parent_agent_id = Some(parent.agent_id.clone());
     launched.parent_agent_kind = Some(parent.kind.clone());
@@ -911,7 +911,7 @@ fn subagents_group_by_task_and_join_durable_child_cost() {
         stats,
         &[
             SubagentStat {
-                task: Some("Explore".to_owned()),
+                task: Some("explore".to_owned()),
                 count: 2,
                 cost_usd: Some(3.25),
             },
@@ -926,7 +926,7 @@ fn subagents_group_by_task_and_join_durable_child_cost() {
 
 #[test]
 fn subagent_type_rejects_descriptions_and_unbounded_labels() {
-    assert_eq!(subagent_type(Some("Explore")), Some("Explore".to_owned()));
+    assert_eq!(subagent_type(Some("Explore")), Some("explore".to_owned()));
     assert_eq!(
         subagent_type(Some("general-purpose")),
         Some("general-purpose".to_owned())
