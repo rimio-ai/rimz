@@ -173,13 +173,7 @@ fn subagent_caller_refuses_subagent_launch_before_creating_runtime_state() {
 
     let output = env
         .rimz()
-        .args([
-            "subagents",
-            "claude",
-            "try to delegate again",
-            "--name",
-            "subagent-refused",
-        ])
+        .args(["subagents", "claude", "try to delegate again"])
         .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
         .env(rimz::harness::launch::ENV_AGENT_ID, launch_id.as_str())
         .output()
