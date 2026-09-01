@@ -1,6 +1,6 @@
 # Agent-launched subagents
 
-> One agent delegating a bounded prompt to another. This page owns the child lifecycle: the agent-only launch and lifecycle verbs, what a launch desugars to, the direct-parent stamp and no-further-launch rule, how settled results report to the parent, how the caller-scoped verbs decide who its children are, and the boundary with the provider-native children that share the name. The supervised run underneath a child is [scripting.md](./scripting.md); the launch core it rides on is [fleet.md](./fleet.md).
+> One agent delegating a bounded prompt to another. This page owns the child lifecycle: the agent-only launch, fanout, wait, and stop verbs; the shell-readable list and profile catalog; what a launch desugars to; the direct-parent stamp and no-further-launch rule; how settled results report to the parent; how each selector decides which children count; and the boundary with the provider-native children that share the name. The supervised run underneath a child is [scripting.md](./scripting.md); the launch core it rides on is [fleet.md](./fleet.md).
 
 ## Two things are called a subagent
 
@@ -27,7 +27,9 @@ The two also differ in reach: a pane-backed child is a peer for `rimz message` a
 
 ## The doorway
 
-Launch, fanout, and the caller-scoped `list`, `wait`, and `stop` verbs refuse outside a RimZ-launched agent ([`cli/subagents/mod.rs`](../../../crates/rimz/src/cli/subagents/mod.rs)). The test is one environment variable: `RIMZ_AGENT_KIND`, exported into every agent pane by the [exec wrapper](./fleet.md#the-exec-wrapper). A user shell has no such variable and gets pointed at `rimz agents` or `rimz teams` instead. The read-only `profiles` catalog is deliberately exempt because it only loads machine configuration and does not depend on caller ancestry.
+Launch, fanout, `wait`, and `stop` refuse outside a RimZ-launched agent ([`cli/subagents/mod.rs`](../../../crates/rimz/src/cli/subagents/mod.rs)). The test is one environment variable: `RIMZ_AGENT_KIND`, exported into every agent pane by the [exec wrapper](./fleet.md#the-exec-wrapper). A user shell that invokes one of those verbs has no such variable and gets pointed at `rimz agents` or `rimz teams` instead.
+
+The read-only `list` and `profiles` verbs are deliberately exempt. `profiles` only loads machine configuration, while `list` selects by caller ancestry when `RIMZ_AGENT_KIND` is present and by the shell's channel when it is absent. Neither operation mutates child lifecycle state.
 
 This is a usability boundary, not a security one — the same launch is expressible as `rimz agents … -p --bg`, and `subagents` exists so a delegating agent does not have to choose the supervision flags correctly. What the doorway buys is that every child launched through it is *uniformly* supervised, background, deadlined, and self-cleaning.
 
@@ -127,17 +129,22 @@ Fanout does not change that accounting: each array entry gets the same direct pa
 
 Ancestry failures are `LaunchAncestryError`, and their messages are written for a reader that is itself an agent: each states the refusal, explains the limit, and ends with *do not retry this command*. That phrasing is load-bearing. An agent that reads "launch refused" without a terminal instruction tends to retry with a variation; the message closes that door.
 
-## Who counts as the caller's children
+## Who counts as a launched child
 
-`list`, `wait`, and `stop` all resolve membership the same way: `resolve_launch_caller_from_env` for the caller, then [`target::launched_children`](../../../crates/rimz/src/harness/target.rs) for the set. Sharing that resolver has one wart worth knowing before you chase it as a bug: a read-only `rimz subagents list` that cannot identify its caller reports `launch refused: …`, because the error text belongs to the launch path it borrows. That function keeps rows where `is_launched_child()` holds and `parent_agent_id` equals the caller's `agent_id`, sorted by registration.
+Agent-scoped `list`, `wait`, and `stop` resolve membership the same way: `resolve_launch_caller_from_env` identifies the caller, then [`target::launched_children`](../../../crates/rimz/src/harness/target.rs) selects its children. That selector keeps rows where `is_launched_child()` holds and the child's `parent_agent_id` matches either the parent's current `agent_id` or its stable `launch_id`, with `parent_agent_kind` corroborating the match when stamped, then sorts by registration. The `launch_id` alternative preserves the family when a launched parent adopts its provider-native session id and its `agent_id` changes.
 
-Because a subagent cannot launch again, that set is exactly the caller's direct children. Peer-chain agents carry no parent id and never enter it.
+Because a subagent cannot launch again, that set is exactly the caller's direct RimZ-launched children. Peer-chain agents carry no parent id, and provider-native subagents carry no launch generation, so neither enters it.
+
+User-shell `list` has no caller to resolve. [`target::launched_children_in_channel`](../../../crates/rimz/src/harness/target.rs) instead keeps RimZ-launched children by their own durable channel stamp and the current scope from `Ctx::channel`: a concrete current channel matches only that stamp, while `None` means all channels. It does not infer membership from a live parent, so ended parents and adopted identities do not hide durable child history. [`target::launched_parent`](../../../crates/rimz/src/harness/target.rs) performs the inverse stable-id join so every listed child can label its parent. The human and JSON reports identify the child by name and include that parent label and the child's channel.
+
+One channel limitation follows from the shared `Ctx` contract. A RimZ-launched pane carries `RIMZ_CHANNEL`, and a shell in a separate worktree derives its worktree channel, but a plain user shell in the project directory cannot derive an in-place team's `<directory>/<team>` stamp from cwd alone. `Ctx::channel` is therefore `None` there, so user-shell `list` returns all channels; the channel field on each row is the way to distinguish those in-place lanes.
 
 Which projection each verb reads is the other half:
 
 | Verb | Projection | Effect |
 | --- | --- | --- |
-| `list`, `wait` | `RuntimeScope::Audit` | includes ended children, so completed work stays listable and joinable |
+| agent `list`, `wait` | `RuntimeScope::Audit` | includes ended children, so completed work stays listable and joinable |
+| user-shell `list` | `RuntimeScope::Audit` | includes ended RimZ-launched children in the current channel, or every channel when there is no current channel |
 | `stop` | alive snapshot, `ended_at.is_none()` | only live children can be stopped |
 
 `wait` with no names joins every child that has a run record; `--any` first filters to children whose newest run is still non-terminal, since reporting "the first to finish" is meaningless against an already-terminal set. Named children resolve against the child set alone, so an address that names some other agent in the room fails with ``not one of this agent's subagents`` rather than reaching outside the family. Each child's newest run is matched by `agent_id`, falling back to `agent_name`, taking the latest `started_at`.
