@@ -310,7 +310,13 @@ impl MessageEventPayload {
 }
 
 fn attributed_sender(sender: &MessageSender) -> Option<MessageSender> {
-    (!matches!(sender, MessageSender::Human)).then(|| sender.clone())
+    match sender {
+        MessageSender::Human => None,
+        MessageSender::Agent { .. }
+        | MessageSender::Harness { .. }
+        | MessageSender::Subagent { .. }
+        | MessageSender::System => Some(sender.clone()),
+    }
 }
 
 impl AgentLifecyclePayload {

@@ -1432,7 +1432,9 @@ fn validate_profile_names(profiles: &ProfilesConfig) -> Result<()> {
         {
             return Err(LayoutErr::InvalidProfileName { name: name.clone() });
         }
-        if petname::RESERVED_AGENT_WORDS.contains(&name.as_str()) {
+        if petname::RESERVED_AGENT_WORDS.contains(&name.as_str())
+            || petname::HEADER_PSEUDO_HANDLES.contains(&name.as_str())
+        {
             return Err(LayoutErr::ReservedProfileName { name: name.clone() });
         }
         if let Some(reason) = address_grammar_clash(name) {
@@ -1454,7 +1456,9 @@ fn validate_command_names(commands: &CommandsConfig) -> Result<()> {
         {
             return Err(LayoutErr::InvalidCommandName { name: name.clone() });
         }
-        if petname::RESERVED_AGENT_WORDS.contains(&name.as_str()) {
+        if petname::RESERVED_AGENT_WORDS.contains(&name.as_str())
+            || petname::HEADER_PSEUDO_HANDLES.contains(&name.as_str())
+        {
             return Err(LayoutErr::ReservedCommandName { name: name.clone() });
         }
     }
@@ -1466,6 +1470,9 @@ fn validate_command_names(commands: &CommandsConfig) -> Result<()> {
 /// unambiguously: it shadows the broadcast handle (`@all`), a kind ordinal
 /// (`@claude-2`), or a pane/channel address (`zellij:%1`, `@x#chan`).
 fn address_grammar_clash(name: &str) -> Option<&'static str> {
+    if petname::HEADER_PSEUDO_HANDLES.contains(&name) {
+        return Some("it is reserved for a non-agent message sender");
+    }
     if name == "all" {
         return Some("`@all` is the broadcast handle");
     }
@@ -1491,11 +1498,10 @@ fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
     if let Some(name) = teams.0.keys().find(|name| name.contains(['.', '/'])) {
         return Err(LayoutErr::InvalidTeamName { name: name.clone() });
     }
-    if let Some(name) = teams
-        .0
-        .keys()
-        .find(|name| petname::RESERVED_AGENT_WORDS.contains(&name.as_str()))
-    {
+    if let Some(name) = teams.0.keys().find(|name| {
+        petname::RESERVED_AGENT_WORDS.contains(&name.as_str())
+            || petname::HEADER_PSEUDO_HANDLES.contains(&name.as_str())
+    }) {
         return Err(LayoutErr::ReservedTeamName(name.clone()));
     }
     Ok(())

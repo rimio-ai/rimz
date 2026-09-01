@@ -651,6 +651,19 @@ fn explicit_launch_name_survives_session_adoption() {
 }
 
 #[test]
+fn durable_envelope_handle_survives_projection_fold() {
+    let agents = reduce_agent_states(&[launch_event(
+        "claude",
+        AgentLaunchPayload {
+            agent_name_explicit: true,
+            ..launch_payload("launch_a", "rimz")
+        },
+    )]);
+
+    assert_eq!(agents[0].name.as_deref(), Some("rimz"));
+}
+
+#[test]
 fn explicit_name_collision_remint_clears_explicit_bit() {
     let first = launch_event(
         "claude",

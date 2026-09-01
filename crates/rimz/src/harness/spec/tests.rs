@@ -239,7 +239,7 @@ fn inline_roles_compose_and_validate() {
             })
         );
     }
-    for role in ["codex", "all", "claude-2"] {
+    for role in ["codex", "all", "claude-2", "user", "rimz"] {
         assert!(matches!(
             parse_layout_spec(&format!("claude:{role}"), &profiles, &commands),
             Err(LayoutErr::InlineRoleShadowsAddress { name, .. }) if name == role
@@ -347,6 +347,14 @@ fn resolve_spec_dispatches_default_inline_peer_and_team() {
         resolve_spec(Some("claude"), &profiles, &no_commands(), &teams),
         Err(LayoutErr::ReservedTeamName("claude".to_owned()))
     );
+    teams
+        .0
+        .insert("rimz".to_owned(), team(vec![role("lead", "planner")]));
+    assert_eq!(
+        resolve_spec(Some("rimz"), &profiles, &no_commands(), &teams),
+        Err(LayoutErr::ReservedTeamName("rimz".to_owned()))
+    );
+    teams.0.remove("rimz");
     assert!(matches!(
         resolve_spec(Some("missing"), &profiles, &no_commands(), &teams),
         Err(LayoutErr::UnknownTeam { team, .. }) if team == "missing"
@@ -915,6 +923,18 @@ fn config_names_reject_grammar_clashes() {
             name: "term".to_owned(),
         })
     );
+    assert!(matches!(
+        parse_layout_spec(
+            "claude",
+            &profiles([("rimz", profile("claude"))]),
+            &no_commands()
+        ),
+        Err(LayoutErr::ReservedProfileName { name }) if name == "rimz"
+    ));
+    assert!(matches!(
+        parse_layout_spec("claude", &no_profiles(), &commands([("user", "nvim")])),
+        Err(LayoutErr::ReservedCommandName { name }) if name == "user"
+    ));
 
     for name in ["all", "claude-2", "a:b", "a#b"] {
         assert!(matches!(
@@ -1183,7 +1203,7 @@ fn team_validation_rejects_invalid_roles_and_layouts() {
         error(team_with_layout(roles(), "planner,coder+ghost")),
         LayoutErr::UnknownRoleInLayout { role, .. } if role == "ghost"
     ));
-    for name in ["all", "claude"] {
+    for name in ["all", "claude", "user", "rimz"] {
         assert!(matches!(
             validate_config(
                 &profiles,

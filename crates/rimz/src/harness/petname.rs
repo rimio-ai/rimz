@@ -43,7 +43,7 @@ pub const RESERVED_AGENT_WORDS: &[&str] = &[
 ];
 
 /// Handles used in message envelopes for senders that are not agents.
-const HEADER_PSEUDO_HANDLES: &[&str] = &["user", "rimz"];
+pub(super) const HEADER_PSEUDO_HANDLES: &[&str] = &["user", "rimz"];
 
 pub fn mint(taken: impl IntoIterator<Item = impl AsRef<str>>) -> String {
     let seed = Uuid::now_v7().simple().to_string();
@@ -76,14 +76,18 @@ fn basic_valid_name(name: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
         && name != "all"
         && !RESERVED_AGENT_WORDS.contains(&name)
-        && !HEADER_PSEUDO_HANDLES.contains(&name)
 }
 
 fn mint_from_seed(seed: &str, taken: impl IntoIterator<Item = impl AsRef<str>>) -> String {
-    let taken: BTreeSet<String> = taken
+    let mut taken: BTreeSet<String> = taken
         .into_iter()
         .map(|value| value.as_ref().to_owned())
         .collect();
+    taken.extend(
+        HEADER_PSEUDO_HANDLES
+            .iter()
+            .map(|value| (*value).to_owned()),
+    );
     for attempt in 0u32.. {
         let value = hash_u64(seed, attempt);
         let adjective = ADJECTIVES[(value as usize) % ADJECTIVES.len()];
@@ -134,8 +138,8 @@ mod tests {
             ("fork", false),
             // `all` is the @all fan-out keyword; the generator must never mint it.
             ("all", false),
-            ("user", false),
-            ("rimz", false),
+            ("user", true),
+            ("rimz", true),
             ("two words", false),
             ("claude", false),
             ("claude-1", false),
@@ -148,5 +152,8 @@ mod tests {
             &AgentSessionId::from("session-matrix"),
             std::iter::empty::<&str>(),
         )));
+        assert!(!HEADER_PSEUDO_HANDLES.contains(
+            &mint_for_session(&AgentSessionId::from("user"), std::iter::empty::<&str>(),).as_str()
+        ));
     }
 }
