@@ -170,7 +170,7 @@ fn digest_parents_from(agents: &[AgentState], runs: &[RunRecord]) -> Vec<AgentSe
         .iter()
         .filter(|parent| parent.ended_at.is_none())
         .filter_map(|parent| {
-            let children = crate::harness::target::launched_children(&agents, parent);
+            let children = crate::harness::target::launched_children(agents, parent);
             if children.is_empty() {
                 return None;
             }
