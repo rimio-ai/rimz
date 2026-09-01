@@ -457,13 +457,11 @@ fn member(
         &launched_effort,
     );
     let mut tokens = effort.total.tokens;
-    let cost_usd =
-        launched_effort
-            .iter()
-            .fold(effort.total.cost_usd, |total, (_, child_effort)| {
-                tokens.add_assign(child_effort.tokens);
-                spending::sum_optional_cost(total, child_effort.cost_usd)
-            });
+    let mut cost_usd = effort.total.cost_usd;
+    for (_, child_effort) in &launched_effort {
+        tokens.add_assign(child_effort.tokens);
+        cost_usd = spending::sum_optional_cost(cost_usd, child_effort.cost_usd);
+    }
     let active_secs = seat
         .identity
         .iter()
@@ -674,13 +672,13 @@ fn subagent_stats(
 }
 
 fn subagent_type(task: Option<&str>) -> Option<String> {
-    let task = task?.trim();
+    let task = task?.trim().to_lowercase();
     (!task.is_empty()
         && task.chars().count() <= SUBAGENT_TYPE_MAX_CHARS
         && task
             .chars()
             .all(|character| !character.is_whitespace() && !character.is_control()))
-    .then(|| task.to_owned())
+    .then_some(task)
 }
 
 fn newest<'a>(records: &[&'a AgentState]) -> Option<&'a AgentState> {
