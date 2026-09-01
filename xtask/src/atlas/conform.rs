@@ -380,12 +380,37 @@ fn initialize(root: &Path, scope: &Path, requested_layers: Option<&[String]>) ->
     })
 }
 
-fn top_module(module: &str) -> &str {
+pub(super) fn top_module(module: &str) -> &str {
     module
         .split("::")
         .next()
         .filter(|part| !part.is_empty())
         .unwrap_or("(crate)")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Direction {
+    Upward,
+    Same,
+    Downward,
+}
+
+pub(super) fn layer_direction(
+    layers: &[String],
+    from_module: &str,
+    to_module: &str,
+) -> Option<Direction> {
+    let from = layers
+        .iter()
+        .position(|layer| layer == top_module(from_module))?;
+    let to = layers
+        .iter()
+        .position(|layer| layer == top_module(to_module))?;
+    Some(match to.cmp(&from) {
+        std::cmp::Ordering::Greater => Direction::Upward,
+        std::cmp::Ordering::Equal => Direction::Same,
+        std::cmp::Ordering::Less => Direction::Downward,
+    })
 }
 
 fn greedy_layers<'a>(
@@ -529,16 +554,8 @@ fn evaluate(
                         .iter()
                         .any(|allowed| module_is_within(&resolved, allowed))
                 } else {
-                    let from = target
-                        .layers
-                        .iter()
-                        .position(|layer| layer == top_module(&file.module_path));
-                    let to = target
-                        .layers
-                        .iter()
-                        .position(|layer| layer == top_module(&resolved));
-                    match from.zip(to) {
-                        Some((from, to)) if to > from => {
+                    match layer_direction(&target.layers, &file.module_path, &resolved) {
+                        Some(Direction::Upward) => {
                             let matching = module
                                 .upward_imports
                                 .as_deref()
@@ -602,13 +619,13 @@ fn evaluate(
             }
         })
     }) {
-        let Some(from) = target
+        if !target
             .layers
             .iter()
-            .position(|layer| layer == top_module(&file.module_path))
-        else {
+            .any(|layer| layer == top_module(&file.module_path))
+        {
             continue;
-        };
+        }
         let mut unallowed = BTreeMap::<String, BTreeSet<(PathBuf, usize)>>::new();
         for import in &file.imports {
             let Some(resolved) =
@@ -616,14 +633,9 @@ fn evaluate(
             else {
                 continue;
             };
-            let Some(to) = target
-                .layers
-                .iter()
-                .position(|layer| layer == top_module(&resolved))
-            else {
-                continue;
-            };
-            if to <= from {
+            if layer_direction(&target.layers, &file.module_path, &resolved)
+                != Some(Direction::Upward)
+            {
                 continue;
             }
             unallowed
@@ -709,21 +721,11 @@ fn escaping_surface<'a>(
     target_module: &str,
     mod_index: &syntax::ModIndex,
 ) -> usize {
-    files
-        .into_iter()
-        .map(|file| {
-            file.pub_items
-                .iter()
-                .filter(|item| {
-                    let reach = mod_index.effective_reach(file, item);
-                    !module_is_within(&reach, target_module)
-                })
-                .count()
-        })
-        .sum::<usize>()
+    let files = files.into_iter().collect::<Vec<_>>();
+    super::modules::escaping_items_for_boundary(&files, target_module, mod_index).len()
 }
 
-fn sources_for_path(sources: &[Source], path: &Path, is_file: bool) -> Vec<Source> {
+pub(super) fn sources_for_path(sources: &[Source], path: &Path, is_file: bool) -> Vec<Source> {
     sources
         .iter()
         .filter(|source| {
@@ -737,7 +739,7 @@ fn sources_for_path(sources: &[Source], path: &Path, is_file: bool) -> Vec<Sourc
         .collect()
 }
 
-fn count_in_sources(
+pub(super) fn count_in_sources(
     sources: &[Source],
     syntax_files: &[syntax::FileSyntax],
     symbol: &str,
@@ -984,6 +986,25 @@ mod tests {
     fn allow_list_matches_descendants_not_prefix_collisions() {
         assert!(module_is_within("cli::render::table", "cli::render"));
         assert!(!module_is_within("cli::renderer", "cli::render"));
+    }
+
+    #[test]
+    fn layer_direction_classifies_upward_same_downward_and_unknown() {
+        let layers = vec!["store".to_owned(), "agents".to_owned(), "cli".to_owned()];
+
+        assert_eq!(
+            layer_direction(&layers, "store::writer", "cli::render"),
+            Some(Direction::Upward)
+        );
+        assert_eq!(
+            layer_direction(&layers, "agents::state", "agents::adapters"),
+            Some(Direction::Same)
+        );
+        assert_eq!(
+            layer_direction(&layers, "cli", "store"),
+            Some(Direction::Downward)
+        );
+        assert_eq!(layer_direction(&layers, "remote", "store"), None);
     }
 
     #[test]

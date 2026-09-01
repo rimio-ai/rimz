@@ -1,10 +1,79 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
+use serde::Serialize;
+
+use super::syntax::{FileSyntax, ModIndex, PubItem};
 
 pub(super) const EXTERNAL_REACH: &str = "(extern)";
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(super) struct ItemId {
+    pub(super) module: String,
+    pub(super) kind: String,
+    pub(super) name: String,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct EscapingItem {
+    pub(super) id: ItemId,
+    pub(super) path: PathBuf,
+    pub(super) line: usize,
+}
+
+pub(super) fn item_escapes(
+    file: &FileSyntax,
+    item: &PubItem,
+    target_module: &str,
+    mod_index: &ModIndex,
+) -> bool {
+    !module_is_within(&mod_index.effective_reach(file, item), target_module)
+}
+
+pub(super) fn escaping_items(
+    files: &[FileSyntax],
+    scope: &Path,
+    mod_index: &ModIndex,
+) -> BTreeMap<String, Vec<EscapingItem>> {
+    let mut files_by_row = BTreeMap::<String, Vec<&FileSyntax>>::new();
+    for file in files {
+        let row = module_for_path(&file.path, scope);
+        files_by_row.entry(row).or_default().push(file);
+    }
+    files_by_row
+        .into_iter()
+        .map(|(row, files)| {
+            let target_module = crate_module_for_row(scope, &row);
+            (
+                row,
+                escaping_items_for_boundary(&files, &target_module, mod_index),
+            )
+        })
+        .collect()
+}
+
+pub(super) fn escaping_items_for_boundary(
+    files: &[&FileSyntax],
+    target_module: &str,
+    mod_index: &ModIndex,
+) -> Vec<EscapingItem> {
+    files
+        .iter()
+        .flat_map(|file| file.pub_items.iter().map(move |item| (*file, item)))
+        .filter(|(file, item)| item_escapes(file, item, target_module, mod_index))
+        .map(|(file, item)| EscapingItem {
+            id: ItemId {
+                module: item.module.clone(),
+                kind: item.kind.clone(),
+                name: item.name.clone(),
+            },
+            path: file.path.clone(),
+            line: item.line,
+        })
+        .collect()
+}
 
 pub(super) fn scope_for_matching(scope: &Path) -> &Path {
     match scope.strip_prefix(Path::new(".")) {
@@ -214,6 +283,7 @@ fn crate_name_from_manifest(raw: &str) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::atlas::{sources::Source, syntax};
 
     #[test]
     fn module_rollup_follows_the_requested_scope() {
@@ -253,6 +323,27 @@ mod tests {
                 Path::new("crates/rimz/src/cli")
             ),
             "(root)"
+        );
+    }
+
+    #[test]
+    fn escaping_items_preserve_duplicate_cross_revision_identities() {
+        let sources = vec![Source::new(
+            "src/agents.rs",
+            "pub struct A;\npub struct B;\nimpl A { pub fn name() {} }\nimpl B { pub fn name() {} }\n",
+        )];
+        let syntax = syntax::analyze_sources(&sources);
+        let index = syntax::ModIndex::new(&syntax.files);
+
+        let items = escaping_items(&syntax.files, Path::new("src"), &index);
+
+        assert_eq!(items["agents"].len(), 4);
+        assert_eq!(
+            items["agents"]
+                .iter()
+                .filter(|item| item.id.name == "name")
+                .count(),
+            2
         );
     }
 

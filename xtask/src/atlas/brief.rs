@@ -10,7 +10,8 @@ use super::facts::{Facets, Facts};
 use super::history;
 use super::index::IndexPolicy;
 use super::modules::{
-    crate_module_for_path, module_for_path, module_is_within, path_in_scope, reference_module_label,
+    ItemId, crate_module_for_path, escaping_items_for_boundary, module_for_path, module_is_within,
+    path_in_scope, reference_module_label,
 };
 use super::{REPORT_VERSION, set_once, validate_scope, value};
 
@@ -286,13 +287,24 @@ fn build_report(facts: &Facts, module: &Path, args: &Args) -> Result<Report> {
         .iter()
         .filter(|file| path_in_scope(&file.path, module))
         .collect::<Vec<_>>();
+    let escaping = escaping_items_for_boundary(&files, &crate_module, &facts.mod_index);
+    let escaping_count = escaping.len();
+    let escaping = escaping
+        .into_iter()
+        .map(|item| (item.path, item.line, item.id))
+        .collect::<BTreeSet<_>>();
     let mut interface = Vec::new();
     for file in &files {
         for item in &file.pub_items {
-            let reach = facts.mod_index.effective_reach(file, item);
-            if module_is_within(&reach, &crate_module) {
+            let id = ItemId {
+                module: item.module.clone(),
+                kind: item.kind.clone(),
+                name: item.name.clone(),
+            };
+            if !escaping.contains(&(file.path.clone(), item.line, id)) {
                 continue;
             }
+            let reach = facts.mod_index.effective_reach(file, item);
             let refs = facts.references.as_ref().map(|references| {
                 references
                     .get(file, item)
@@ -374,7 +386,7 @@ fn build_report(facts: &Facts, module: &Path, args: &Args) -> Result<Report> {
         test_files,
         inline_test_regions,
         pub_items: files.iter().map(|file| file.pub_items.len()).sum(),
-        escaping_items: interface.len(),
+        escaping_items: escaping_count,
         interface,
         callers,
         providers,

@@ -10,8 +10,7 @@ use super::facts::{Facets, Facts};
 use super::history::{self, CochangeEdge};
 use super::index::IndexPolicy;
 use super::modules::{
-    crate_module_for_path, crate_module_for_row, module_endpoint, module_for_path,
-    module_is_within, path_in_scope,
+    crate_module_for_path, module_endpoint, module_for_path, module_is_within, path_in_scope,
 };
 use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
 
@@ -537,13 +536,22 @@ fn rank_rows(facts: &Facts, scope: &Path, prefix: &str, args: &Args) -> Result<V
         let Some(row) = rows.get_mut(&module) else {
             continue;
         };
-        let target = crate_module_for_row(scope, &module);
         row.pub_items += file.pub_items.len();
-        row.escaping_items += file
-            .pub_items
+    }
+    for (module, items) in super::modules::escaping_items(
+        &facts
+            .syntax
+            .files
             .iter()
-            .filter(|item| !module_is_within(&facts.mod_index.effective_reach(file, item), &target))
-            .count();
+            .filter(|file| path_in_scope(&file.path, scope))
+            .cloned()
+            .collect::<Vec<_>>(),
+        scope,
+        &facts.mod_index,
+    ) {
+        if let Some(row) = rows.get_mut(&module) {
+            row.escaping_items = items.len();
+        }
     }
     if let Some(metrics) = &facts.metrics {
         for function in metrics

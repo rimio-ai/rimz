@@ -10,6 +10,7 @@ mod api;
 mod brief;
 mod conform;
 mod detect;
+mod diff;
 mod facts;
 mod history;
 mod index;
@@ -39,6 +40,7 @@ Verbs:
   shapes    cluster large functions by shared call choreography
   survey    produce one architecture-review sweep over a scope
   brief     produce a module dossier (or one per split leaf)
+  diff      compare a base revision with the working tree: surface, imports, edges, files
   conform   compare the tree with refactor-target.toml budgets
 
 Run `cargo xtask atlas <verb> --help` for verb-specific flags.";
@@ -61,6 +63,7 @@ pub(crate) fn atlas(root: &Path, args: &[String]) -> Result<()> {
         "seams" => seams::run(root, rest),
         "api" => api::run(root, rest),
         "brief" => brief::run(root, rest),
+        "diff" => diff::run(root, rest),
         "shapes" => shapes::run(root, rest),
         "survey" => survey::run(root, rest),
         "conform" => conform::run(root, rest),

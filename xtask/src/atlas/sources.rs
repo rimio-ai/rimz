@@ -80,14 +80,12 @@ pub(super) fn revision_sources(root: &Path, revision: &str) -> Result<Vec<Source
         .stdout(Stdio::piped())
         .spawn()
         .context("starting git cat-file --batch")?;
-    {
-        let stdin = child.stdin.as_mut().context("opening git cat-file stdin")?;
-        for path in &paths {
-            writeln!(stdin, "{revision}:{}", path.display())
-                .context("writing git cat-file request")?;
-        }
-    }
-    drop(child.stdin.take());
+    let mut stdin = child.stdin.take().context("opening git cat-file stdin")?;
+    let requests = paths
+        .iter()
+        .map(|path| format!("{revision}:{}\n", path.display()))
+        .collect::<String>();
+    let writer = std::thread::spawn(move || stdin.write_all(requests.as_bytes()));
     let mut stdout = BufReader::new(child.stdout.take().context("opening git cat-file stdout")?);
     let mut sources = Vec::with_capacity(paths.len());
     for path in paths {
@@ -121,11 +119,31 @@ pub(super) fn revision_sources(root: &Path, revision: &str) -> Result<Vec<Source
         });
     }
     let status = child.wait().context("waiting for git cat-file")?;
+    writer
+        .join()
+        .map_err(|_| anyhow::anyhow!("git cat-file request writer panicked"))?
+        .context("writing git cat-file requests")?;
     if !status.success() {
         bail!("git cat-file --batch failed");
     }
     classify_sources(&mut sources);
     Ok(sources)
+}
+
+pub(super) fn revision_blob(root: &Path, revision: &str, path: &Path) -> Result<Vec<u8>> {
+    let object = format!("{revision}:{}", path.display());
+    let output = Command::new("git")
+        .args(["cat-file", "blob", &object])
+        .current_dir(root)
+        .output()
+        .with_context(|| format!("reading `{object}`"))?;
+    if !output.status.success() {
+        bail!(
+            "git cat-file `{object}` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(output.stdout)
 }
 
 pub(super) fn working_tree_rust_sources(root: &Path) -> Result<Vec<Source>> {
