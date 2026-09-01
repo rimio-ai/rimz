@@ -1081,8 +1081,7 @@ fn provider_account_stage_validates_and_reenters_once() {
             project.path(),
             Path::new("/bin/rimz"),
             &BTreeMap::new(),
-            None,
-            None,
+            (None, None),
         )
         .expect_err("binding scope");
         assert_eq!(
@@ -1108,8 +1107,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
         Path::new("/bin/rimz"),
         &BTreeMap::new(),
-        None,
-        None,
+        (None, None),
     )
     .expect("pending stage");
     let AgentProcessStage::LoginShellReentry { argv, .. } = stage else {
@@ -1132,8 +1130,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
         Path::new("/bin/rimz"),
         &BTreeMap::new(),
-        None,
-        None,
+        (None, None),
     )
     .expect_err("unresolved account mismatches");
     assert!(err.is_finalized_provider_mismatch());
@@ -1160,8 +1157,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
         Path::new("/bin/rimz"),
         &BTreeMap::new(),
-        None,
-        None,
+        (None, None),
     )
     .expect("ordinary stage") else {
         panic!("unbound launch is ready");
