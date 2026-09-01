@@ -1,14 +1,14 @@
-//! Parent-facing completion reports emitted by the in-pane wrapper.
+//! Parent-facing completion digests emitted by the last settling child wrapper.
 //!
-//! The durable run record remains truth. Report delivery is best-effort latency:
-//! a parked message returns the settled outcome when the parent still exists.
-//! Sibling state is read at send time, so children settling together may each
-//! truthfully report that all siblings have finished.
+//! Durable run records remain truth and `rimz subagents wait` reads their
+//! results. The parked digest carries status only. Sibling state is read before
+//! the rows are stamped, so two children settling together may each queue a
+//! truthful digest rather than lose the completion notice.
 
 use rimz::agents::AgentState;
 use rimz::harness::run::{self, RunRecord, RunStatus};
 use rimz::ids::MessageId;
-use rimz::message::{DeliveryGate, MessageSender};
+use rimz::message::{DeliveryGate, HarnessNotice, MessageSender};
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{RuntimeScope, Store};
 
@@ -22,7 +22,8 @@ pub(super) enum ReportOutcome {
     ChildMissing,
     NoParent,
     ParentEnded,
-    Joined,
+    SiblingsRunning,
+    NothingToReport,
     NotRequested,
 }
 
@@ -46,10 +47,6 @@ pub(super) fn report_settled_child(
     if !run.subagent || !run.status.is_terminal() {
         return Ok(ReportOutcome::NotRequested);
     }
-    if run.joined_at.is_some() {
-        return Ok(ReportOutcome::Joined);
-    }
-
     let projection = store.runtime_projection(RuntimeScope::Audit)?;
     let Some(child) = projection.agents.iter().find(|agent| {
         run.agent_id.as_ref().map_or_else(
@@ -76,23 +73,27 @@ pub(super) fn report_settled_child(
     }
 
     let runs = run::list(store.paths())?;
-    let still_running = rimz::harness::target::launched_children(&projection.agents, parent)
+    let children = rimz::harness::target::launched_children(&projection.agents, parent)
         .into_iter()
-        .filter_map(|sibling| {
-            let sibling_run = newest_run_for_agent(&runs, sibling)?;
-            (sibling_run.run_id != run.run_id && !sibling_run.status.is_terminal()).then(|| {
-                sibling
-                    .name
-                    .as_deref()
-                    .unwrap_or_else(|| sibling.agent_id.as_str())
-            })
+        .filter_map(|child| {
+            let run = newest_run_for_agent(&runs, child)?;
+            Some((child, run))
         })
         .collect::<Vec<_>>();
-    let text = compose_report(child, run, &still_running);
-    let name = child_name(child, run).to_owned();
-    let sender = MessageSender::Subagent {
-        kind: child.kind.clone(),
-        name,
+    if children.iter().any(|(_, run)| !run.status.is_terminal()) {
+        return Ok(ReportOutcome::SiblingsRunning);
+    }
+    let rows = children
+        .into_iter()
+        .filter(|(_, run)| run.report_message_id.is_none() && run.joined_at.is_none())
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return Ok(ReportOutcome::NothingToReport);
+    }
+
+    let text = compose_digest(&rows);
+    let sender = MessageSender::Harness {
+        notice: HarnessNotice::SubagentReport,
     };
     let pane_id = parent.pane.as_ref().map(|pane| &pane.pane_id);
     let message_id = rimz::message::deliver::queue_synthetic(
@@ -104,11 +105,8 @@ pub(super) fn report_settled_child(
         DeliveryGate::Done,
         pane_id,
     )?;
-    let recorded =
+    for (_, run) in rows {
         run::report::record_report_message(store.paths(), &run.run_id, message_id.clone())?;
-    if recorded.joined_at.is_some() {
-        store.cancel_message(&message_id, &workspace.session_name, "joined inline")?;
-        return Ok(ReportOutcome::Joined);
     }
     let delivered = match pane_id {
         Some(pane_id) => rimz::message::deliver::deliver_one(
@@ -131,31 +129,47 @@ pub(super) fn report_settled_child(
     })
 }
 
-fn compose_report(child: &AgentState, run: &RunRecord, still_running: &[&str]) -> String {
-    let name = child_name(child, run);
-    let metadata = [child.profile.as_deref(), child.description.as_deref()]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let metadata = if metadata.is_empty() {
-        String::new()
+fn compose_digest(rows: &[(&AgentState, &RunRecord)]) -> String {
+    let heading = if rows.len() == 1 {
+        "Your subagent settled, read with `rimz subagents wait`.".to_owned()
     } else {
-        format!(" ({metadata})")
+        format!(
+            "All {} settled, read with `rimz subagents wait`.",
+            rows.len()
+        )
     };
+    let rows = rows
+        .iter()
+        .map(|(child, run)| compose_digest_row(child, run))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{heading}\n\n{rows}")
+}
+
+fn compose_digest_row(child: &AgentState, run: &RunRecord) -> String {
     let finished_at = run.completed_at.unwrap_or(run.updated_at);
     let elapsed_seconds = finished_at.duration_since(run.started_at).as_secs().max(0) as u64;
     let elapsed = format_compact_duration(elapsed_seconds);
-    let mut report = format!(
-        "@{name}{metadata} {} in {elapsed}.\n{}",
+    let preposition = if run.status == RunStatus::TimedOut {
+        "after"
+    } else {
+        "in"
+    };
+    let mut row = format!(
+        "@{} — {} {preposition} {elapsed}, {}",
+        child_name(child, run),
         crate::cli::supervised::output::status_label(run.status),
-        sibling_summary(still_running)
+        result_size(run),
     );
-    if let Some(detail) = report_detail(run) {
-        report.push_str("\n\n");
-        report.push_str(&detail);
+    if let Some(description) = child
+        .description
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        row.push_str(" — ");
+        row.push_str(description);
     }
-    report
+    row
 }
 
 fn newest_run_for_agent<'a>(runs: &'a [RunRecord], agent: &AgentState) -> Option<&'a RunRecord> {
@@ -190,43 +204,31 @@ fn child_name<'a>(child: &'a AgentState, run: &'a RunRecord) -> &'a str {
         .unwrap_or_else(|| child.agent_id.as_str())
 }
 
-fn sibling_summary(still_running: &[&str]) -> String {
-    match still_running {
-        [] => "All your subagents have finished.".to_owned(),
-        [name] => format!("1 subagent still running: @{name}."),
-        names => format!(
-            "{} subagents still running: {}.",
-            names.len(),
-            names
-                .iter()
-                .map(|name| format!("@{name}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    }
-}
-
-fn report_detail(run: &RunRecord) -> Option<String> {
+fn result_size(run: &RunRecord) -> String {
     if run.status == RunStatus::Completed {
-        return Some(
-            run.last_message
-                .clone()
-                .filter(|message| !message.trim().is_empty())
-                .unwrap_or_else(|| match run.transcript_path.as_deref() {
-                    Some(path) => format!("(no final message; transcript: {path})"),
-                    None => "(no final message)".to_owned(),
-                }),
-        );
+        let lines = run
+            .last_message
+            .as_deref()
+            .into_iter()
+            .flat_map(str::lines)
+            .filter(|line| !line.trim().is_empty())
+            .count();
+        return match lines {
+            0 => "no final message".to_owned(),
+            1 => "1 line".to_owned(),
+            lines => format!("{lines} lines"),
+        };
     }
 
-    let mut detail = run.failure_tail.clone().unwrap_or_default();
-    if let Some(path) = run.transcript_path.as_deref() {
-        if !detail.is_empty() {
-            detail.push('\n');
-        }
-        detail.push_str(&format!("transcript: {path}"));
+    let reason = run
+        .failure_tail
+        .as_deref()
+        .and_then(|tail| tail.lines().rev().find(|line| !line.trim().is_empty()))
+        .map(str::trim);
+    match reason {
+        Some(reason) => format!("no result: {reason}"),
+        None => "no result".to_owned(),
     }
-    (!detail.is_empty()).then_some(detail)
 }
 
 #[cfg(test)]
@@ -240,11 +242,11 @@ mod tests {
     use rimz::workspace::RootClass;
     use std::path::{Path, PathBuf};
 
-    fn child() -> AgentState {
+    fn child(name: &str, description: Option<&str>) -> AgentState {
         let mut child = AgentState::stub("codex", "sess-child", AgentStatus::Success);
-        child.name = Some("naming".to_owned());
+        child.name = Some(name.to_owned());
         child.profile = Some("explorer".to_owned());
-        child.description = Some("map spec/profile surfaces".to_owned());
+        child.description = description.map(str::to_owned);
         child
     }
 
@@ -325,30 +327,39 @@ mod tests {
     }
 
     #[test]
-    fn completed_report_keeps_the_final_message_verbatim() {
+    fn single_digest_reports_result_size_without_result_text() {
         let mut run = run(RunStatus::Completed);
         run.last_message = Some("Done.\n\nTwo paragraphs.\n".to_owned());
+        let child = child("naming", Some("map spec/profile surfaces"));
 
         assert_eq!(
-            compose_report(&child(), &run, &["runtime"]),
-            "@naming (explorer · map spec/profile surfaces) completed in 4m12s.\n\
-             1 subagent still running: @runtime.\n\n\
-             Done.\n\nTwo paragraphs.\n"
+            compose_digest(&[(&child, &run)]),
+            "Your subagent settled, read with `rimz subagents wait`.\n\n\
+             @naming — completed in 4m12s, 2 lines — map spec/profile surfaces"
         );
     }
 
     #[test]
-    fn failed_report_includes_siblings_tail_and_transcript() {
-        let mut run = run(RunStatus::TimedOut);
-        run.failure_tail = Some("provider did not stop".to_owned());
-        run.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
+    fn fleet_digest_formats_mixed_outcomes() {
+        let mut completed = run(RunStatus::Completed);
+        completed.last_message = Some("Done.\nSecond line.\n".to_owned());
+        let blank = run(RunStatus::Completed);
+        let mut timed_out = run(RunStatus::TimedOut);
+        timed_out.failure_tail = Some("first detail\n\nprovider did not stop\n".to_owned());
+        let naming = child("naming", Some("map spec/profile surfaces"));
+        let runtime = child("runtime", None);
+        let reviewer = child("slow-reviewer", Some("review correctness"));
 
         assert_eq!(
-            compose_report(&child(), &run, &[]),
-            "@naming (explorer · map spec/profile surfaces) timed out in 4m12s.\n\
-             All your subagents have finished.\n\n\
-             provider did not stop\n\
-             transcript: /tmp/transcript.jsonl"
+            compose_digest(&[
+                (&naming, &completed),
+                (&runtime, &blank),
+                (&reviewer, &timed_out),
+            ]),
+            "All 3 settled, read with `rimz subagents wait`.\n\n\
+             @naming — completed in 4m12s, 2 lines — map spec/profile surfaces\n\
+             @runtime — completed in 4m12s, no final message\n\
+             @slow-reviewer — timed out after 4m12s, no result: provider did not stop — review correctness"
         );
     }
 
@@ -389,45 +400,121 @@ mod tests {
     }
 
     #[test]
-    fn queued_report_counts_only_nonterminal_siblings() {
+    fn siblings_running_queues_nothing() {
         let (_dir, workspace, store) = report_fixture();
         append_agent(&store, "parent", None, LifecycleSignal::Registered);
-        for name in ["child", "running", "finished"] {
+        for name in ["child", "running"] {
             append_agent(&store, name, Some("parent"), LifecycleSignal::Registered);
         }
         let child = child_run(&workspace.workspace_id, "child", RunStatus::Completed);
         let running = child_run(&workspace.workspace_id, "running", RunStatus::Running);
-        let finished = child_run(&workspace.workspace_id, "finished", RunStatus::Completed);
-        for run in [&child, &running, &finished] {
+        for run in [&child, &running] {
+            run::create(store.paths(), run).expect("create run");
+        }
+
+        assert_eq!(
+            report_settled_child(&workspace, &store, &child).unwrap(),
+            ReportOutcome::SiblingsRunning
+        );
+        assert!(store.list_messages().expect("messages").is_empty());
+        assert_eq!(
+            run::load(store.paths(), &child.run_id)
+                .expect("stored child")
+                .report_message_id,
+            None
+        );
+    }
+
+    #[test]
+    fn joined_and_reported_rows_are_excluded() {
+        let (_dir, workspace, store) = report_fixture();
+        append_agent(&store, "parent", None, LifecycleSignal::Registered);
+        for name in ["fresh", "joined", "reported"] {
+            append_agent(&store, name, Some("parent"), LifecycleSignal::Registered);
+        }
+        let fresh = child_run(&workspace.workspace_id, "fresh", RunStatus::Completed);
+        let joined = child_run(&workspace.workspace_id, "joined", RunStatus::Completed);
+        let reported = child_run(&workspace.workspace_id, "reported", RunStatus::Completed);
+        for run in [&fresh, &joined, &reported] {
+            run::create(store.paths(), run).expect("create run");
+        }
+        run::report::mark_joined(store.paths(), &joined.run_id).expect("mark joined");
+        let previous = MessageId::new();
+        run::report::record_report_message(store.paths(), &reported.run_id, previous.clone())
+            .expect("mark reported");
+
+        let ReportOutcome::Queued {
+            message_id,
+            delivered: false,
+            parent,
+        } = report_settled_child(&workspace, &store, &fresh).unwrap()
+        else {
+            panic!("digest should queue");
+        };
+        assert_eq!(parent, "parent");
+        let messages = store.list_messages().expect("messages");
+        let digest = messages
+            .iter()
+            .find(|message| message.message_id == message_id)
+            .expect("queued digest");
+        assert!(digest.text.contains("@fresh"));
+        assert!(!digest.text.contains("@joined"));
+        assert!(!digest.text.contains("@reported"));
+        assert_eq!(
+            run::load(store.paths(), &reported.run_id)
+                .expect("reported run")
+                .report_message_id,
+            Some(previous)
+        );
+    }
+
+    #[test]
+    fn queued_digest_stamps_every_row() {
+        let (_dir, workspace, store) = report_fixture();
+        append_agent(&store, "parent", None, LifecycleSignal::Registered);
+        for name in ["first", "second"] {
+            append_agent(&store, name, Some("parent"), LifecycleSignal::Registered);
+        }
+        let first = child_run(&workspace.workspace_id, "first", RunStatus::Completed);
+        let second = child_run(&workspace.workspace_id, "second", RunStatus::Canceled);
+        for run in [&first, &second] {
             run::create(store.paths(), run).expect("create run");
         }
 
         let ReportOutcome::Queued {
             message_id,
-            delivered,
+            delivered: false,
             parent,
-        } = report_settled_child(&workspace, &store, &child).unwrap()
+        } = report_settled_child(&workspace, &store, &first).unwrap()
         else {
-            panic!("report should queue");
+            panic!("digest should queue");
         };
-        assert!(!delivered);
         assert_eq!(parent, "parent");
         assert_eq!(
-            run::load(store.paths(), &child.run_id)
-                .expect("stored child")
+            run::load(store.paths(), &first.run_id)
+                .expect("first run")
+                .report_message_id,
+            Some(message_id.clone())
+        );
+        assert_eq!(
+            run::load(store.paths(), &second.run_id)
+                .expect("second run")
                 .report_message_id,
             Some(message_id.clone())
         );
         let messages = store.list_messages().expect("messages");
-        let report = messages
+        let digest = messages
             .iter()
             .find(|message| message.message_id == message_id)
-            .expect("queued report");
-        assert!(report.text.contains("1 subagent still running: @running."));
-        assert!(!report.text.contains("@finished"));
+            .expect("queued digest");
+        assert!(digest.text.contains("All 2 settled"));
+        assert!(digest.text.contains("@first — completed"));
+        assert!(digest.text.contains("@second — canceled"));
         assert!(matches!(
-            &report.sender,
-            MessageSender::Subagent { name, .. } if name == "child"
+            &digest.sender,
+            MessageSender::Harness {
+                notice: HarnessNotice::SubagentReport
+            }
         ));
     }
 }

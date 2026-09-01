@@ -424,6 +424,85 @@ fn flat_and_last_apply_to_display_order() {
 }
 
 #[test]
+fn subagent_reports_are_json_only_and_do_not_consume_the_human_last_slot() {
+    let prompt = log_entry(
+        "claude",
+        "receiver",
+        TranscriptKind::Prompt,
+        None,
+        "visible prompt",
+    );
+    let mut report = log_entry(
+        "claude",
+        "receiver",
+        TranscriptKind::SubagentReport,
+        Some("@rimz"),
+        "hidden report",
+    );
+    report.at = ts("2026-06-01T00:00:01Z");
+    let logged = vec![prompt, report];
+    let identities = build_identities(&logged);
+    let entries_for = |include_hidden| {
+        logged
+            .iter()
+            .filter(|entry| entry_is_visible(entry, include_hidden))
+            .map(|entry| render_entry_for_log_entry(entry, &identities, false))
+            .collect::<Vec<_>>()
+    };
+
+    let human = RenderedChat {
+        channel: Some("chat".to_owned()),
+        focus: None,
+        entries: entries_for(false),
+        archive_prefix: 0,
+        archived_hidden: 0,
+        newest_archived_at: None,
+        empty_message: None,
+        last: Some(1),
+        flat: true,
+    };
+    let mut out = Vec::new();
+    render_lines_to(&mut out, &human, &TimeZone::UTC, Prose::Raw).expect("human render");
+    let out = String::from_utf8(out).expect("utf8");
+    assert!(out.contains("visible prompt"), "{out}");
+    assert!(!out.contains("hidden report"), "{out}");
+
+    let json = RenderedChat {
+        entries: entries_for(true),
+        last: None,
+        ..human
+    };
+    let lines = selected_lines(&json);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[1].from, "@rimz");
+    assert_eq!(lines[1].text, "hidden report");
+    assert_eq!(
+        serde_json::to_value(&lines).unwrap()[1]["text"],
+        "hidden report"
+    );
+}
+
+#[test]
+fn subagent_report_opens_the_receiving_agent_turn() {
+    let entries = vec![
+        render_entry(
+            TranscriptKind::SubagentReport,
+            "@rimz",
+            Some("@claude"),
+            "2026-06-28T04:00:00Z",
+            "digest",
+        ),
+        assistant_entry("2026-06-28T04:01:00Z", "acknowledged"),
+    ];
+
+    let display = assemble_threads(&entries, 0, false);
+
+    assert_eq!(display[0].block, display[1].block);
+    assert!(display[0].lane.is_margin());
+    assert!(!display[1].lane.is_margin());
+}
+
+#[test]
 fn threaded_render_puts_replies_behind_a_spine() {
     let mut root_a = render_entry(
         TranscriptKind::Message,

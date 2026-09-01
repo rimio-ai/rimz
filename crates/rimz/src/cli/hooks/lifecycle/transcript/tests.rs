@@ -196,7 +196,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
 }
 
 #[test]
-fn subagent_report_records_as_an_attributed_message() {
+fn subagent_report_records_as_a_hidden_harness_report() {
     let (_dir, store) = store();
     let workspace = workspace();
     let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
@@ -213,7 +213,7 @@ fn subagent_report_records_as_an_attributed_message() {
     });
     let mut started = recorded(LifecycleSignal::TurnStarted);
     started.observation.prompt =
-        Some("Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nchild result".to_owned());
+        Some("Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nchild result".to_owned());
 
     record_conversation(
         &workspace,
@@ -228,8 +228,11 @@ fn subagent_report_records_as_an_attributed_message() {
 
     let entries = rimz::transcript::read_all(store.paths()).unwrap();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Message);
-    assert_eq!(entries[0].from.as_deref(), Some("@lucid-atlas"));
+    assert_eq!(
+        entries[0].entry,
+        rimz::transcript::TranscriptKind::SubagentReport
+    );
+    assert_eq!(entries[0].from.as_deref(), Some("@rimz"));
     assert_eq!(entries[0].text, "child result");
     assert_eq!(entries[0].message_id.as_ref(), Some(&message.message_id));
 }

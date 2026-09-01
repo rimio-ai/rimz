@@ -1220,6 +1220,10 @@ fn align_submitted_prompt_from<'a>(
                 }
                 body = text;
             }
+            MessageSender::Harness { notice } => {
+                let header = format!("Type: {}\nFrom: @rimz\nContent:\n", notice.header_type());
+                body = body.strip_prefix(&header)?;
+            }
             MessageSender::Human => {
                 body = body.strip_prefix("Type: USER_MESSAGE\nFrom: @user\nContent:\n")?;
             }
@@ -1273,6 +1277,12 @@ pub fn message_header(
     }
     if let MessageSender::Subagent { name, .. } = sender {
         return Some(format!("Type: SUBAGENT_REPORT\nFrom: @{name}\nContent:\n"));
+    }
+    if let MessageSender::Harness { notice } = sender {
+        return Some(format!(
+            "Type: {}\nFrom: @rimz\nContent:\n",
+            notice.header_type()
+        ));
     }
     let MessageSender::Agent {
         kind,
