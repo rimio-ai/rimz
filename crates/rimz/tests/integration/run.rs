@@ -6,8 +6,9 @@ use crate::common::{
 use jiff::Timestamp;
 use rimz::agents::PermissionMode;
 use rimz::agents::{
-    AgentLifecycleObservation, AgentRateLimits, LaunchParams, LifecycleSignal, RateLimitCacheEntry,
-    RateLimitWindow, RateLimitsCache,
+    AgentContext, AgentLifecycleObservation, AgentRateLimits, AgentTurnError, LaunchParams,
+    LifecycleSignal, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache, SessionOrigin,
+    TurnErrorClass,
 };
 use rimz::harness::run::{RunRecord, RunStatus};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, ViewKind};
@@ -1682,6 +1683,154 @@ fn assert_agents_list_requires_live_room(env: &Env, args: &[&str]) {
 }
 
 #[test]
+fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
+    let env = Env::new();
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let store = env.store();
+    let pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
+    let owner_pid = std::process::id();
+    let launch_id = AgentSessionId::from("launch-coder");
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            workspace.session_name.clone(),
+            &AgentKind::new_unchecked("codex"),
+            AgentLaunchPayload {
+                agent_id: launch_id.clone(),
+                launch_id: Some(launch_id.clone()),
+                agent_name: "coder-card".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    role: Some("coder".to_owned()),
+                    ..LaunchParams::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(pane_id.clone()),
+                runtime_owner: Some(rimz::store::runtime::process_owner(
+                    rimz::RuntimeOwnerKind::Agent,
+                    launch_id.as_str(),
+                    owner_pid,
+                )),
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("append launch");
+
+    for (agent_id, name, origin, terminal_signal) in [
+        (
+            "first",
+            "coder-card",
+            SessionOrigin::Fresh,
+            LifecycleSignal::TurnStarted,
+        ),
+        (
+            "second",
+            "second-card",
+            SessionOrigin::Fresh,
+            LifecycleSignal::TurnStarted,
+        ),
+        (
+            "successful",
+            "successful-card",
+            SessionOrigin::Forked,
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            },
+        ),
+    ] {
+        append_card_state_lifecycle(
+            &store,
+            &workspace,
+            &pane_id,
+            owner_pid,
+            agent_id,
+            name,
+            origin,
+            LifecycleSignal::Registered,
+        );
+        append_card_state_lifecycle(
+            &store,
+            &workspace,
+            &pane_id,
+            owner_pid,
+            agent_id,
+            name,
+            origin,
+            terminal_signal,
+        );
+    }
+    for agent_id in ["first", "second"] {
+        let at = Timestamp::now();
+        let mut context = AgentContext::new("codex", at);
+        context.turn_error = Some(AgentTurnError {
+            class: TurnErrorClass::PausedOverloaded,
+            at,
+            label: Some("server_overloaded".to_owned()),
+        });
+        rimz::store::agent_context::write_record(
+            &env.runtime_paths(),
+            &rimz::store::agent_context::new_record("codex", agent_id, context),
+        )
+        .expect("write provider rest certificate");
+    }
+    publish_pane_frame(
+        &env,
+        &workspace.session_name,
+        vec![list_pane(
+            &workspace.session_name,
+            "%1",
+            "codex",
+            &env.project_root,
+        )],
+    );
+
+    let listed = run_agents_json_command(&env, &workspace.session_name, &["agents", "list"]);
+    assert_agent_ids(&listed, &["successful"]);
+    assert_eq!(listed["agents"][0]["handle"], "@coder");
+
+    let shown =
+        run_agents_json_command(&env, &workspace.session_name, &["agents", "show", "@coder"]);
+    assert_eq!(shown["agent"]["id"], "successful");
+}
+
+fn append_card_state_lifecycle(
+    store: &rimz::Store,
+    workspace: &rimz::ResolvedWorkspace,
+    pane_id: &PaneId,
+    owner_pid: u32,
+    agent_id: &str,
+    name: &str,
+    origin: SessionOrigin,
+    signal: LifecycleSignal,
+) {
+    let mut observation =
+        AgentLifecycleObservation::new(Some(AgentSessionId::from(agent_id)), signal);
+    observation.agent_name = Some(name.to_owned());
+    observation.origin = Some(origin);
+    observation.worktree_path = Some(workspace.project_root.display().to_string());
+    observation.pane_id = Some(pane_id.clone());
+    observation.runtime_owner = Some(rimz::store::runtime::process_owner(
+        rimz::RuntimeOwnerKind::Agent,
+        agent_id,
+        owner_pid,
+    ));
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            workspace.session_name.clone(),
+            "codex",
+            "agent-hook",
+            &observation,
+        ))
+        .expect("append lifecycle");
+}
+
+#[test]
 fn agents_scope_positional_lists_one_lane_and_address_hint_is_actionable() {
     let env = Env::new();
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
@@ -1706,11 +1855,11 @@ fn agents_scope_positional_lists_one_lane_and_address_hint_is_actionable() {
         ],
     );
 
-    let top_level = run_agents_json_list(&env, &workspace.session_name, &["agents", "#auth"]);
+    let top_level = run_agents_json_command(&env, &workspace.session_name, &["agents", "#auth"]);
     assert_agent_ids(&top_level, &["sess-auth"]);
 
     let subcommand =
-        run_agents_json_list(&env, &workspace.session_name, &["agents", "list", "#auth"]);
+        run_agents_json_command(&env, &workspace.session_name, &["agents", "list", "#auth"]);
     assert_agent_ids(&subcommand, &["sess-auth"]);
 
     let out = env
@@ -1794,7 +1943,7 @@ fn publish_pane_frame(env: &Env, session_name: &str, panes: Vec<rimz::pane::Pane
         .expect("publish pane frame");
 }
 
-fn run_agents_json_list(env: &Env, session_name: &str, args: &[&str]) -> serde_json::Value {
+fn run_agents_json_command(env: &Env, session_name: &str, args: &[&str]) -> serde_json::Value {
     let trace_log = env.project_root.join(format!("{}.log", args.join("-")));
     let mut command = env.rimz();
     command
@@ -1807,10 +1956,10 @@ fn run_agents_json_list(env: &Env, session_name: &str, args: &[&str]) -> serde_j
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
             format!("{session_name} [Created 1s ago]\n"),
         );
-    let out = command.output().expect("agents list json");
+    let out = command.output().expect("agents json command");
     assert!(
         out.status.success(),
-        "agents list failed\nstdout:\n{}\nstderr:\n{}",
+        "agents command failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
