@@ -203,6 +203,8 @@ rimz agents help show
 
 rimz agents help stop
 
+rimz agents help subagent-digest [hidden]
+
 rimz agents help top
 
 rimz agents help wait
@@ -395,6 +397,15 @@ rimz agents stop
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents subagent-digest [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --request <JSON>  [action=set takes=1..=1 required hidden]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
@@ -779,6 +790,8 @@ rimz help agents run-timeout [hidden]
 rimz help agents show
 
 rimz help agents stop
+
+rimz help agents subagent-digest [hidden]
 
 rimz help agents top
 
