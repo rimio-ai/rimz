@@ -534,6 +534,97 @@ fn launched_child_in_another_lane_follows_its_parent() {
 }
 
 #[test]
+fn same_named_children_of_different_parents_stay_with_their_launcher() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut parents = Vec::new();
+    let mut children = Vec::new();
+    for (ordinal, role, child_id, cost) in [
+        (0, "planner", "planner-audit", 1.0),
+        (1, "coder", "coder-audit", 2.0),
+    ] {
+        let mut parent = agent(role, "claude", 10 + i64::from(ordinal));
+        parent.team = Some("forge".to_owned());
+        parent.role = Some(role.to_owned());
+        parent.launch_ordinal = Some(ordinal);
+        let transcript = dir.path().join(format!("{child_id}.jsonl"));
+        std::fs::write(
+            &transcript,
+            format!(
+                "{{\"timestamp\":\"2026-01-01T10:00:01.000Z\",\"costUSD\":{cost},\"requestId\":\"{child_id}\",\"message\":{{\"id\":\"{child_id}\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":1}}}}}}\n"
+            ),
+        )
+        .expect("write child transcript");
+        let mut child = agent(child_id, "claude", 30 + i64::from(ordinal));
+        child.name = Some("audit".to_owned());
+        child.name_explicit = true;
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.launch_depth = Some(1);
+        child.profile = Some("reviewer".to_owned());
+        child.transcript_path = Some(transcript.to_string_lossy().into_owned());
+        parents.push(parent);
+        children.push(child);
+    }
+    let agents = parents.into_iter().chain(children).collect::<Vec<_>>();
+
+    let report = build_for(&agents);
+    let members = &report.groups[0].members;
+    let planner = members
+        .iter()
+        .find(|member| member.role.as_deref() == Some("planner"))
+        .expect("planner member");
+    let coder = members
+        .iter()
+        .find(|member| member.role.as_deref() == Some("coder"))
+        .expect("coder member");
+
+    assert_eq!(planner.launched_cost_usd, Some(1.0));
+    assert_eq!(coder.launched_cost_usd, Some(2.0));
+    assert_eq!(planner.subagents[0].count, 1);
+    assert_eq!(planner.subagents[0].cost_usd, Some(1.0));
+    assert_eq!(coder.subagents[0].count, 1);
+    assert_eq!(coder.subagents[0].cost_usd, Some(2.0));
+    assert_eq!(report.totals.launched_cost_usd, Some(3.0));
+}
+
+#[test]
+fn launched_cost_sums_child_slots_in_stable_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut parent = agent("parent", "claude", 10);
+    parent.team = Some("forge".to_owned());
+    parent.role = Some("planner".to_owned());
+    let mut agents = vec![parent.clone()];
+    for (ordinal, child_id, cost) in [
+        (0, "child-a", 0.1_f64),
+        (1, "child-b", 0.2_f64),
+        (2, "child-c", 0.3_f64),
+    ] {
+        let transcript = dir.path().join(format!("{child_id}.jsonl"));
+        std::fs::write(
+            &transcript,
+            format!(
+                "{{\"timestamp\":\"2026-01-01T10:00:01.000Z\",\"costUSD\":{cost},\"requestId\":\"{child_id}\",\"message\":{{\"id\":\"{child_id}\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":1}}}}}}\n"
+            ),
+        )
+        .expect("write child transcript");
+        let mut child = agent(child_id, "claude", 30 + ordinal);
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.launch_depth = Some(1);
+        child.profile = Some("reviewer".to_owned());
+        child.transcript_path = Some(transcript.to_string_lossy().into_owned());
+        agents.push(child);
+    }
+
+    let report = build_for(&agents);
+    let member = &report.groups[0].members[0];
+    let expected = 0.1_f64 + 0.2_f64 + 0.3_f64;
+
+    assert_eq!(member.launched_cost_usd, Some(expected));
+    assert_eq!(member.subagents[0].cost_usd, Some(expected));
+}
+
+#[test]
 fn launched_child_without_a_retained_parent_is_not_a_member() {
     let dir = tempfile::tempdir().expect("tempdir");
     let transcript = dir.path().join("child.jsonl");
