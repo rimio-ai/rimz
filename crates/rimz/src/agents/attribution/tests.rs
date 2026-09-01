@@ -55,6 +55,55 @@ fn build_with(
     })
 }
 
+fn mixed_origin_report() -> Attribution {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let transcript = dir.path().join("parent.jsonl");
+    let subagent_dir = dir.path().join("parent/subagents");
+    let launched_transcript = dir.path().join("launched.jsonl");
+    std::fs::create_dir_all(&subagent_dir).expect("mkdir subagent dir");
+    std::fs::write(
+        &transcript,
+        concat!(
+            r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":1.0,"requestId":"parent","message":{"id":"parent","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            "\n"
+        ),
+    )
+    .expect("write parent transcript");
+    std::fs::write(
+        subagent_dir.join("agent-native.jsonl"),
+        concat!(
+            r#"{"timestamp":"2026-01-01T10:00:01.000Z","costUSD":2.0,"requestId":"native","isSidechain":true,"message":{"id":"native","usage":{"input_tokens":20,"output_tokens":2}}}"#,
+            "\n"
+        ),
+    )
+    .expect("write native transcript");
+    std::fs::write(
+        &launched_transcript,
+        concat!(
+            r#"{"timestamp":"2026-01-01T10:00:02.000Z","costUSD":3.0,"requestId":"launched","message":{"id":"launched","usage":{"input_tokens":30,"output_tokens":3}}}"#,
+            "\n"
+        ),
+    )
+    .expect("write launched transcript");
+
+    let mut parent = agent("parent", "claude", 10);
+    parent.team = Some("forge".to_owned());
+    parent.role = Some("planner".to_owned());
+    parent.transcript_path = Some(transcript.to_string_lossy().into_owned());
+    let mut native = agent("native", "claude", 20);
+    native.parent_agent_id = Some(parent.agent_id.clone());
+    native.parent_agent_kind = Some(parent.kind.clone());
+    native.task = Some("explorer".to_owned());
+    let mut launched = agent("launched", "claude", 30);
+    launched.parent_agent_id = Some(parent.agent_id.clone());
+    launched.parent_agent_kind = Some(parent.kind.clone());
+    launched.launch_depth = Some(1);
+    launched.profile = Some("explorer".to_owned());
+    launched.transcript_path = Some(launched_transcript.to_string_lossy().into_owned());
+
+    build_with(&[parent, launched], &[native], &[])
+}
+
 #[test]
 fn folds_compaction_continuations_and_sums_rollup_effort() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -199,11 +248,13 @@ fn launched_child_continuations_deduplicate_as_one_subagent_seat() {
     assert_eq!(
         member.subagents,
         vec![SubagentStat {
+            origin: SubagentOrigin::RimzLaunched,
             task: Some("explorer".to_owned()),
             count: 1,
             cost_usd: Some(2.0),
         }]
     );
+    assert_eq!(member.launched_cost_usd, Some(2.0));
 }
 
 #[test]
@@ -337,17 +388,149 @@ fn launched_child_effort_stays_out_of_the_parent_seat() {
     assert_eq!(
         member.subagents,
         vec![SubagentStat {
+            origin: SubagentOrigin::RimzLaunched,
             task: Some("explorer".to_owned()),
             count: 1,
             cost_usd: Some(2.0),
         }]
     );
+    assert_eq!(member.launched_cost_usd, Some(2.0));
     assert_eq!(report.totals.cost_usd, Some(1.0));
+    assert_eq!(report.totals.launched_cost_usd, Some(2.0));
     assert_eq!(report.totals.tokens.input, 10);
     assert_eq!(report.groups[0].totals.tool_calls, 1);
     assert_eq!(report.totals.active_secs, Some(10));
     assert_eq!(report.totals.asks, 0);
     assert_eq!(report.totals.messages, MessageCounts::default());
+}
+
+#[test]
+fn mixed_origin_subagents_with_one_label_stay_distinct() {
+    let report = mixed_origin_report();
+    let group = &report.groups[0];
+    let member = &group.members[0];
+
+    assert_eq!(member.cost_usd, Some(3.0));
+    assert_eq!(member.launched_cost_usd, Some(3.0));
+    assert_eq!(
+        member.subagents,
+        [
+            SubagentStat {
+                origin: SubagentOrigin::ProviderNative,
+                task: Some("explorer".to_owned()),
+                count: 1,
+                cost_usd: Some(2.0),
+            },
+            SubagentStat {
+                origin: SubagentOrigin::RimzLaunched,
+                task: Some("explorer".to_owned()),
+                count: 1,
+                cost_usd: Some(3.0),
+            },
+        ]
+    );
+    assert_eq!(group.totals.cost_usd, Some(3.0));
+    assert_eq!(group.totals.launched_cost_usd, Some(3.0));
+    assert_eq!(report.totals.cost_usd, Some(3.0));
+    assert_eq!(report.totals.launched_cost_usd, Some(3.0));
+}
+
+#[test]
+fn subagent_origin_serializes_the_documented_vocabulary() {
+    let report = serde_json::to_value(mixed_origin_report()).expect("serialize attribution");
+
+    assert_eq!(report["schema"], 4);
+    assert_eq!(
+        report["groups"][0]["members"][0]["subagents"][0]["origin"],
+        "provider_native"
+    );
+    assert_eq!(
+        report["groups"][0]["members"][0]["subagents"][1]["origin"],
+        "rimz_launched"
+    );
+    assert_eq!(report["groups"][0]["members"][0]["launched_cost_usd"], 3.0);
+    assert_eq!(report["totals"]["launched_cost_usd"], 3.0);
+}
+
+#[test]
+fn launched_only_delegation_keeps_the_member_with_launched_cost() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let child_transcript = dir.path().join("child.jsonl");
+    std::fs::write(
+        &child_transcript,
+        concat!(
+            r#"{"timestamp":"2026-01-01T10:00:01.000Z","costUSD":3.0,"requestId":"child","message":{"id":"child","usage":{"input_tokens":30,"output_tokens":3}}}"#,
+            "\n"
+        ),
+    )
+    .expect("write child transcript");
+    let mut parent = agent("parent", "claude", 10);
+    parent.team = Some("forge".to_owned());
+    parent.role = Some("planner".to_owned());
+    let mut child = agent("child", "claude", 30);
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child.profile = Some("explorer".to_owned());
+    child.transcript_path = Some(child_transcript.to_string_lossy().into_owned());
+    let agents = [parent, child];
+    let refs = agents.iter().collect::<Vec<_>>();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime paths");
+
+    let report = build(AttributionRequest {
+        agents: &refs,
+        peers: &refs,
+        subagents: &[],
+        transcript: &[],
+        me: None,
+        runtime: &runtime,
+        active_grace_secs: 180,
+        require_contribution: true,
+        scope: AttributionScope::default(),
+        now: at(100),
+    });
+    let member = &report.groups[0].members[0];
+
+    assert_eq!(member.cost_usd, None);
+    assert_eq!(member.launched_cost_usd, Some(3.0));
+    assert_eq!(report.groups[0].totals.launched_cost_usd, Some(3.0));
+    assert_eq!(report.totals.launched_cost_usd, Some(3.0));
+}
+
+#[test]
+fn launched_child_in_another_lane_follows_its_parent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let child_transcript = dir.path().join("child.jsonl");
+    std::fs::write(
+        &child_transcript,
+        concat!(
+            r#"{"timestamp":"2026-01-01T10:00:01.000Z","costUSD":3.0,"requestId":"child","message":{"id":"child","usage":{"input_tokens":30,"output_tokens":3}}}"#,
+            "\n"
+        ),
+    )
+    .expect("write child transcript");
+    let mut parent = agent("parent", "claude", 10);
+    parent.channel = Some("feature".to_owned());
+    parent.team = Some("forge".to_owned());
+    parent.role = Some("planner".to_owned());
+    let mut child = agent("child", "claude", 30);
+    child.channel = Some("sibling".to_owned());
+    child.worktree_path = Some("/repo/sibling".to_owned());
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child.profile = Some("explorer".to_owned());
+    child.transcript_path = Some(child_transcript.to_string_lossy().into_owned());
+
+    let report = build_for(&[parent, child]);
+
+    assert_eq!(report.totals.agents, 1);
+    assert_eq!(report.totals.launched_cost_usd, Some(3.0));
+    assert_eq!(
+        report.groups[0].members[0].subagents[0].origin,
+        SubagentOrigin::RimzLaunched
+    );
 }
 
 #[test]
@@ -645,11 +828,13 @@ fn subagents_group_by_task_and_join_durable_child_cost() {
         stats,
         &[
             SubagentStat {
+                origin: SubagentOrigin::ProviderNative,
                 task: Some("Explore".to_owned()),
                 count: 2,
                 cost_usd: Some(3.25),
             },
             SubagentStat {
+                origin: SubagentOrigin::ProviderNative,
                 task: None,
                 count: 2,
                 cost_usd: Some(0.5),
