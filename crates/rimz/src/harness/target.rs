@@ -1009,19 +1009,50 @@ pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
 /// Ended children remain in this projection so callers can list and wait on
 /// completed supervised work. Lifecycle commands filter to live rows.
 pub fn launched_children<'a>(agents: &'a [AgentState], parent: &AgentState) -> Vec<&'a AgentState> {
-    let mut children = agents
+    by_registration(
+        agents
+            .iter()
+            .filter(|child| is_launched_child_of(child, parent))
+            .collect(),
+    )
+}
+
+/// Pane-backed children launched through `rimz subagents` by any parent,
+/// scoped to `channel` when one is in play.
+pub fn launched_children_in_channel<'a>(
+    agents: &'a [AgentState],
+    channel: Option<&str>,
+) -> Vec<&'a AgentState> {
+    by_registration(
+        agents
+            .iter()
+            .filter(|agent| {
+                agent.is_launched_child() && channel.is_none_or(|filter| agent.in_worktree(filter))
+            })
+            .collect(),
+    )
+}
+
+/// The row that launched `child`, including parents whose provider session
+/// replaced their original launch identity.
+pub fn launched_parent<'a>(agents: &'a [AgentState], child: &AgentState) -> Option<&'a AgentState> {
+    agents
         .iter()
-        .filter(|agent| {
-            agent.is_launched_child()
-                && agent.parent_agent_id.as_ref().is_some_and(|parent_id| {
-                    parent_id == &parent.agent_id || parent.launch_id.as_ref() == Some(parent_id)
-                })
-                && agent
-                    .parent_agent_kind
-                    .as_ref()
-                    .is_none_or(|kind| kind == &parent.kind)
+        .find(|parent| is_launched_child_of(child, parent))
+}
+
+fn is_launched_child_of(child: &AgentState, parent: &AgentState) -> bool {
+    child.is_launched_child()
+        && child.parent_agent_id.as_ref().is_some_and(|parent_id| {
+            parent_id == &parent.agent_id || parent.launch_id.as_ref() == Some(parent_id)
         })
-        .collect::<Vec<_>>();
+        && child
+            .parent_agent_kind
+            .as_ref()
+            .is_none_or(|kind| kind == &parent.kind)
+}
+
+fn by_registration(mut children: Vec<&AgentState>) -> Vec<&AgentState> {
     children.sort_by_key(|agent| (agent.registered_at, agent.agent_id.clone()));
     children
 }
