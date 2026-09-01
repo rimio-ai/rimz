@@ -502,8 +502,9 @@ pub(super) fn debt_sites_by_rule(
     root: &Path,
     target: &Target,
     target_path: &Path,
+    facts: &Facts,
 ) -> Result<BTreeMap<(PathBuf, String), usize>> {
-    let report = evaluate(root, target, target_path, false, Mode::Status)?;
+    let report = evaluate_with_facts(root, target, target_path, false, Mode::Status, facts)?;
     Ok(report
         .rules
         .into_iter()
@@ -591,6 +592,17 @@ fn evaluate(
     mode: Mode,
 ) -> Result<Report> {
     let facts = Facts::load(root, Path::new("."), Facets::default())?;
+    evaluate_with_facts(root, target, target_path, default_target, mode, &facts)
+}
+
+fn evaluate_with_facts(
+    root: &Path,
+    target: &Target,
+    target_path: &Path,
+    default_target: bool,
+    mode: Mode,
+    facts: &Facts,
+) -> Result<Report> {
     let layer_ranks = target.layer_ranks();
     let mut rules = Vec::new();
     let mut parse_failure_paths = BTreeSet::new();

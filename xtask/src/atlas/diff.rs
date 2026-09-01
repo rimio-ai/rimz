@@ -11,7 +11,7 @@ use super::index::IndexPolicy;
 use super::modules::{
     ItemId, bounded_names, crate_module_for_row, module_endpoint, module_for_path, path_in_scope,
 };
-use super::references::{Edge, EdgeKind};
+use super::references::{Edge, EdgeKind, FunctionId};
 use super::target::{self, LayerRanks, TARGET_FILE, Target};
 use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
 
@@ -735,13 +735,6 @@ fn import_changes(
         .collect()
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct FunctionId {
-    path: PathBuf,
-    label: String,
-    line: usize,
-}
-
 #[derive(Clone, Debug, Default)]
 struct EdgeData {
     items: BTreeSet<String>,
@@ -819,11 +812,7 @@ fn collect_reference_edges<'a>(
             data.items.insert(edge.item.clone());
             if let Some(function) = &edge.from_fn {
                 data.by_fn
-                    .entry(FunctionId {
-                        path: edge.from_path.clone(),
-                        label: function.label.clone(),
-                        line: function.line,
-                    })
+                    .entry(FunctionId::new(&edge.from_path, function))
                     .or_default()
                     .insert(edge.item.clone());
             }
