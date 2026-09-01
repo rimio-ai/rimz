@@ -13,7 +13,7 @@ const MATCH_OPTIONS: glob::MatchOptions = glob::MatchOptions {
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LaunchSession {
+enum LaunchSession {
     Fresh,
     Resumed,
     Forked,
@@ -30,30 +30,30 @@ impl From<&ExecAction> for LaunchSession {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ScratchFile {
-    pub path: PathBuf,
-    pub lines: usize,
+struct ScratchFile {
+    path: PathBuf,
+    lines: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ScratchEntry {
-    pub pattern: String,
-    pub present: Vec<ScratchFile>,
+struct ScratchEntry {
+    pattern: String,
+    present: Vec<ScratchFile>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TeamLaunchContext {
-    pub team: String,
-    pub role: String,
-    pub channel: Option<String>,
-    pub leader: String,
-    pub roles: Vec<String>,
-    pub worktree: PathBuf,
-    pub session: LaunchSession,
-    pub scratch: Vec<ScratchEntry>,
+pub(super) struct TeamLaunchContext {
+    team: String,
+    role: String,
+    channel: Option<String>,
+    leader: String,
+    roles: Vec<String>,
+    worktree: PathBuf,
+    session: LaunchSession,
+    scratch: Vec<ScratchEntry>,
 }
 
-pub fn team_launch_context(
+pub(super) fn team_launch_context(
     params: &LaunchParams,
     action: &ExecAction,
     team: &Team,
@@ -121,7 +121,7 @@ fn matching_scratch_files(cwd: &Path, pattern: &str) -> Vec<ScratchFile> {
     files
 }
 
-pub fn reminder(context: &TeamLaunchContext) -> String {
+pub(super) fn reminder(context: &TeamLaunchContext) -> String {
     let mut identity = format!("You are @{} in team `{}`", context.role, context.team);
     if let Some(channel) = context.channel.as_deref() {
         identity.push_str(&format!(", channel #{}", channel.trim_start_matches('#')));

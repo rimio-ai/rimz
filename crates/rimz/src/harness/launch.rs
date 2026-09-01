@@ -158,12 +158,6 @@ pub struct CompiledAgentProcess {
     pub env: BTreeMap<String, String>,
 }
 
-#[derive(Default)]
-pub struct LaunchReminders<'a> {
-    pub subagent_catalog: Option<&'a crate::harness::subagent_policy::SubagentCatalog>,
-    pub team_context: Option<&'a crate::harness::launch_context::TeamLaunchContext>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentProcessStage {
     Ready(CompiledAgentProcess),
@@ -570,7 +564,8 @@ pub fn compile_agent_process(
         request,
         cwd,
         &BTreeMap::new(),
-        &LaunchReminders::default(),
+        None,
+        None,
     )
 }
 
@@ -580,7 +575,8 @@ fn compile_agent_process_with_extra_env(
     request: &ExecRequest,
     cwd: &Path,
     extra_env: &BTreeMap<String, String>,
-    reminders: &LaunchReminders<'_>,
+    subagent_catalog: Option<&crate::harness::subagent_policy::SubagentCatalog>,
+    team: Option<&crate::config::Team>,
 ) -> AgentProcessResult<CompiledAgentProcess> {
     let kind = request.kind.as_str();
     let adapter = crate::agents::find_definition(kind).ok_or_else(|| {
@@ -594,23 +590,27 @@ fn compile_agent_process_with_extra_env(
         if let Some(channel) = adapter.append_system_text_channel() {
             merge_appended_system_text(action.extra_args_mut(), &channel, SUBAGENT_REMINDER);
         }
-    } else if let (Some(catalog), Some(channel)) = (
-        reminders.subagent_catalog,
-        adapter.append_system_text_channel(),
-    ) {
+    } else if let (Some(catalog), Some(channel)) =
+        (subagent_catalog, adapter.append_system_text_channel())
+    {
         merge_appended_system_text(
             action.extra_args_mut(),
             &channel,
             &crate::harness::subagent_policy::reminder(catalog),
         );
     }
-    if let (Some(context), Some(channel)) =
-        (reminders.team_context, adapter.append_system_text_channel())
+    if let (Some(team), Some(channel)) = (team, adapter.append_system_text_channel())
+        && let Some(context) = crate::harness::launch_context::team_launch_context(
+            &request.identity.params,
+            &request.action,
+            team,
+            cwd,
+        )
     {
         merge_appended_system_text(
             action.extra_args_mut(),
             &channel,
-            &crate::harness::launch_context::reminder(context),
+            &crate::harness::launch_context::reminder(&context),
         );
     }
     let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
@@ -726,7 +726,8 @@ pub fn compile_agent_process_stage_with_extra_env(
     cwd: &Path,
     rimz_bin: &Path,
     extra_env: &BTreeMap<String, String>,
-    reminders: &LaunchReminders<'_>,
+    subagent_catalog: Option<&crate::harness::subagent_policy::SubagentCatalog>,
+    team: Option<&crate::config::Team>,
 ) -> Result<AgentProcessStage, AgentProcessStageErr> {
     let bound = !matches!(&request.provider_account, ProviderAccountState::Unbound);
     if bound && !matches!(&request.action, ExecAction::Launch { .. }) {
@@ -739,7 +740,8 @@ pub fn compile_agent_process_stage_with_extra_env(
         request,
         cwd,
         extra_env,
-        reminders,
+        subagent_catalog,
+        team,
     )?;
     let managed_launch = if bound {
         let adapter = crate::agents::find_definition(request.kind.as_str()).ok_or_else(|| {
