@@ -457,11 +457,11 @@ impl SidebarSnapshot {
     /// Attach each session's rich context sidecar to its `AgentState` by
     /// `(kind, agent_id)`. Context is display-only and never changes durable
     /// lifecycle truth or `last_activity`; explicit context markers may refine
-    /// a displayed status and its attention rank. Context reaches rows only
-    /// through the live-pane fold. A context whose session is absent from the (already
-    /// reaped) rollup is dropped — the session is gone, so its context is just
-    /// history. Records carry no identity of their own; the key they're filed
-    /// under is authority.
+    /// a displayed status and its attention rank. Shared cached-snapshot and
+    /// live-pane folds both use this join. A context whose session is absent
+    /// from the (already reaped) rollup is dropped — the session is gone, so
+    /// its context is just history. Records carry no identity of their own;
+    /// the key they're filed under is authority.
     pub fn with_agent_context(mut self, records: Vec<AgentContextRecord>) -> Self {
         if records.is_empty() {
             return self;
