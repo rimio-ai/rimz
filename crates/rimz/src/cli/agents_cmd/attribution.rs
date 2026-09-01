@@ -6,7 +6,7 @@ use super::*;
 use crate::cli::render;
 use rimz::agents::attribution::{
     Attribution, AttributionGroup, AttributionMember, AttributionRequest, AttributionScope,
-    EffortTotals,
+    EffortTotals, SubagentOrigin,
 };
 
 const REPO_URL: &str = "https://github.com/rimio-ai/rimz";
@@ -33,11 +33,19 @@ pub(super) fn attribution(
     let channel = super::list::list_channel_filter(all, scope.as_deref(), &ctx.workspace);
     let default_worktree =
         (!all && channel.is_none()).then_some(ctx.workspace.worktree_root.as_path());
-    let (subagents, roots) = snapshot
-        .agents
-        .iter()
-        .partition::<Vec<_>, _>(|agent| agent.is_provider_subagent());
-    let agents = roots
+    let mut roots = Vec::new();
+    let mut children = Vec::new();
+    let mut subagents = Vec::new();
+    for agent in &snapshot.agents {
+        if agent.is_provider_subagent() {
+            subagents.push(agent);
+        } else if agent.is_launched_child() {
+            children.push(agent);
+        } else {
+            roots.push(agent);
+        }
+    }
+    let roots = roots
         .into_iter()
         .filter(|agent| {
             if let Some(filter) = channel.as_deref() {
@@ -52,6 +60,9 @@ pub(super) fn attribution(
             }
         })
         .collect::<Vec<_>>();
+    let report_scope = report_scope(scope, channel, default_worktree, &roots);
+    // A launched child follows its durable parent link, not its own lane stamp.
+    let agents = roots.iter().copied().chain(children).collect::<Vec<_>>();
     let transcript =
         rimz::transcript::read_all(ctx.store.paths()).context("reading conversation transcript")?;
     let me = super::report::SelfIdentity::from_env().resolve(&snapshot);
@@ -68,7 +79,7 @@ pub(super) fn attribution(
             .active_grace_secs
             .get(),
         require_contribution: md,
-        scope: report_scope(scope, channel, default_worktree, &agents),
+        scope: report_scope,
         now: jiff::Timestamp::now(),
     });
 
@@ -291,7 +302,7 @@ fn markdown_model_label(member: &AttributionMember) -> String {
 }
 
 fn effort_label(member: &AttributionMember) -> Option<String> {
-    let mut parts = Vec::with_capacity(2);
+    let mut parts = Vec::with_capacity(3);
     if let Some(active) = member
         .active_secs
         .map(|seconds| format!("{} active", duration_label(seconds)))
@@ -300,6 +311,9 @@ fn effort_label(member: &AttributionMember) -> Option<String> {
     }
     if let Some(cost) = member.cost_usd.map(rimz::theme::fmt::dollars2) {
         parts.push(cost);
+    }
+    if let Some(cost) = member.launched_cost_usd.map(rimz::theme::fmt::dollars2) {
+        parts.push(format!("+{cost} launched"));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
@@ -370,11 +384,21 @@ fn subagents_label(member: &AttributionMember) -> Option<String> {
                 segment.push(' ');
                 segment.push_str("other");
             }
-            if let Some(cost) = stat.cost_usd {
-                segment.push_str(" (");
-                segment.push_str(&rimz::theme::fmt::dollars2(cost));
-                segment.push(')');
+            segment.push_str(" (");
+            match (stat.origin, stat.cost_usd) {
+                (SubagentOrigin::ProviderNative, Some(cost)) => {
+                    segment.push_str(&rimz::theme::fmt::dollars2(cost));
+                    segment.push_str(", native");
+                }
+                (SubagentOrigin::RimzLaunched, Some(cost)) => {
+                    segment.push('+');
+                    segment.push_str(&rimz::theme::fmt::dollars2(cost));
+                    segment.push_str(", launched");
+                }
+                (SubagentOrigin::ProviderNative, None) => segment.push_str("native"),
+                (SubagentOrigin::RimzLaunched, None) => segment.push_str("launched"),
             }
+            segment.push(')');
             segment
         })
         .reduce(|mut label, segment| {
@@ -431,6 +455,9 @@ fn totals_label(totals: &EffortTotals) -> String {
     }
     if let Some(cost) = totals.cost_usd.map(rimz::theme::fmt::dollars2) {
         parts.push(cost);
+    }
+    if let Some(cost) = totals.launched_cost_usd.map(rimz::theme::fmt::dollars2) {
+        parts.push(format!("+{cost} launched"));
     }
     let messages = totals
         .messages
@@ -516,13 +543,22 @@ mod tests {
                 cache_read: 3_000,
             },
             cost_usd: Some(1.25),
+            launched_cost_usd: Some(0.35),
             subagents: vec![
                 SubagentStat {
+                    origin: SubagentOrigin::ProviderNative,
                     task: Some("Explorer".to_owned()),
                     count: 3,
                     cost_usd: Some(0.55),
                 },
                 SubagentStat {
+                    origin: SubagentOrigin::RimzLaunched,
+                    task: Some("Explorer".to_owned()),
+                    count: 1,
+                    cost_usd: Some(0.35),
+                },
+                SubagentStat {
+                    origin: SubagentOrigin::ProviderNative,
                     task: None,
                     count: 1,
                     cost_usd: None,
@@ -539,6 +575,7 @@ mod tests {
             active_secs: Some(3_900 * members.len() as u64),
             wall_clock_secs: 4_000,
             cost_usd: Some(1.25 * members.len() as f64),
+            launched_cost_usd: Some(0.35 * members.len() as f64),
             asks: 2 * members.len() as u64,
             asks_answered: members.len() as u64,
             tool_calls: 7 * members.len() as u64,
@@ -558,7 +595,7 @@ mod tests {
         let team_members = vec![team_member];
         let other_members = vec![stray];
         Attribution {
-            schema: 3,
+            schema: 4,
             generated_at: jiff::Timestamp::UNIX_EPOCH,
             rimz_version: "test".to_owned(),
             scope: AttributionScope::default(),
@@ -585,26 +622,26 @@ mod tests {
     fn panel_groups_team_and_stray_members() {
         let mut output = anstream::StripStream::new(Vec::new());
         render_panel(&mut output, &report()).expect("render panel");
-        insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @r"
-        forge team · 1 agent · 1h05m active · $1.25 · 7 messages (2 from you)
+        insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @"
+        forge team · 1 agent · 1h05m active · $1.25 · +$0.35 launched · 7 messages (2 from you)
 
           @planner (plan|ner) · Claude · fable`2@high
-              effort:    1h05m active · $1.25
+              effort:    1h05m active · $1.25 · +$0.35 launched
               calls:     2 asks · 7 tool calls · 1 compaction
               messages:  2 from you · 5 from teammates · 4 to teammates
               tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
-              subagents: 3 × explorer ($0.55) · 1 × other
+              subagents: 3 × explorer ($0.55, native) · 1 × explorer (+$0.35, launched) · 1 × other (native)
 
-        Other agents · 1 agent · 1h05m active · $1.25 · 7 messages (2 from you)
+        Other agents · 1 agent · 1h05m active · $1.25 · +$0.35 launched · 7 messages (2 from you)
 
           @codex · Codex · gpt-5.5@high
-              effort:    1h05m active · $1.25
+              effort:    1h05m active · $1.25 · +$0.35 launched
               calls:     2 asks · 7 tool calls · 1 compaction
               messages:  2 from you · 5 from teammates · 4 to teammates
               tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
-              subagents: 3 × explorer ($0.55) · 1 × other
+              subagents: 3 × explorer ($0.55, native) · 1 × explorer (+$0.35, launched) · 1 × other (native)
 
-        Total · 2 agents · 2h10m active · $2.50 · 14 messages (4 from you)
+        Total · 2 agents · 2h10m active · $2.50 · +$0.70 launched · 14 messages (4 from you)
         ");
     }
 
@@ -617,15 +654,15 @@ mod tests {
 
         let mut output = anstream::StripStream::new(Vec::new());
         render_panel(&mut output, &report).expect("render panel");
-        insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @r"
+        insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @"
           @codex · Codex · gpt-5.5@high
-              effort:    1h05m active · $1.25
+              effort:    1h05m active · $1.25 · +$0.35 launched
               calls:     2 asks · 7 tool calls · 1 compaction
               messages:  2 from you · 5 from teammates · 4 to teammates
               tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
-              subagents: 3 × explorer ($0.55) · 1 × other
+              subagents: 3 × explorer ($0.55, native) · 1 × explorer (+$0.35, launched) · 1 × other (native)
 
-        Total · 1 agent · 1h05m active · $1.25 · 7 messages (2 from you)
+        Total · 1 agent · 1h05m active · $1.25 · +$0.35 launched · 7 messages (2 from you)
         ");
     }
 
@@ -633,30 +670,30 @@ mod tests {
     fn markdown_escapes_values_and_renders_grouped_bullets() {
         let mut output = Vec::new();
         render_markdown(&mut output, &report()).expect("render markdown");
-        insta::assert_snapshot!(String::from_utf8(output).expect("utf8"), @r###"
+        insta::assert_snapshot!(String::from_utf8(output).expect("utf8"), @r#"
         <details>
-        <summary>Implemented by <a href="https://github.com/rimio-ai/rimz">RimZ</a> agents · 2 agents · 2h10m active · $2.50 · 14 messages (4 from you)</summary>
+        <summary>Implemented by <a href="https://github.com/rimio-ai/rimz">RimZ</a> agents · 2 agents · 2h10m active · $2.50 · +$0.70 launched · 14 messages (4 from you)</summary>
 
         **forge team**
 
         - **plan|ner** — Claude fable&#96;2@high
-          - effort: 1h05m active · $1.25
+          - effort: 1h05m active · $1.25 · +$0.35 launched
           - calls: 2 asks · 7 tool calls · 1 compaction
           - messages: 2 from you · 5 from teammates · 4 to teammates
           - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
-          - subagents: 3 × explorer ($0.55) · 1 × other
+          - subagents: 3 × explorer ($0.55, native) · 1 × explorer (+$0.35, launched) · 1 × other (native)
 
         **Other agents**
 
         - **@codex** — Codex `gpt-5.5@high`
-          - effort: 1h05m active · $1.25
+          - effort: 1h05m active · $1.25 · +$0.35 launched
           - calls: 2 asks · 7 tool calls · 1 compaction
           - messages: 2 from you · 5 from teammates · 4 to teammates
           - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
-          - subagents: 3 × explorer ($0.55) · 1 × other
+          - subagents: 3 × explorer ($0.55, native) · 1 × explorer (+$0.35, launched) · 1 × other (native)
 
         </details>
-        "###);
+        "#);
     }
 
     #[test]
@@ -784,6 +821,7 @@ mod tests {
         report.groups.truncate(1);
         report.groups[0].members[0].active_secs = None;
         report.groups[0].members[0].cost_usd = None;
+        report.groups[0].members[0].launched_cost_usd = None;
         report.groups[0].members[0].asks = 0;
         report.groups[0].members[0].tool_calls = 0;
         report.groups[0].members[0].compactions = 0;
@@ -792,6 +830,7 @@ mod tests {
         report.groups[0].members[0].subagents.clear();
         report.groups[0].totals.active_secs = None;
         report.groups[0].totals.cost_usd = None;
+        report.groups[0].totals.launched_cost_usd = None;
         report.groups[0].totals.messages = MessageCounts::default();
         report.totals = report.groups[0].totals.clone();
 

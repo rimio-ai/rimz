@@ -185,7 +185,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
-    assert_eq!(report["schema"], 3);
+    assert_eq!(report["schema"], 4);
     assert_eq!(
         report["groups"].as_array().map(Vec::len),
         Some(1),
@@ -320,6 +320,11 @@ fn attribution_cli_credits_claude_subagent_companions() {
         report["groups"][0]["members"][0]["subagents"][0]["cost_usd"],
         2.0
     );
+    assert_eq!(
+        report["groups"][0]["members"][0]["subagents"][0]["origin"],
+        "provider_native"
+    );
+    assert!(report["groups"][0]["members"][0]["launched_cost_usd"].is_null());
 
     let markdown = env
         .rimz()
@@ -331,7 +336,7 @@ fn attribution_cli_credits_claude_subagent_companions() {
     assert!(markdown.status.success());
     let markdown = String::from_utf8(markdown.stdout).expect("markdown utf8");
     assert!(markdown.contains("effort: $3.00"));
-    assert!(markdown.contains("subagents: 1 × explore ($2.00)"));
+    assert!(markdown.contains("subagents: 1 × explore ($2.00, native)"));
 }
 
 #[test]
@@ -495,4 +500,119 @@ fn attribution_default_stays_in_the_callers_checkout() {
     );
     let all: Value = serde_json::from_slice(&all.stdout).expect("all json");
     assert_eq!(all["totals"]["agents"], 2);
+}
+
+#[test]
+fn attribution_scope_keeps_a_launched_child_with_its_parent() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let sibling = env.home_root.join("sibling-worktree");
+    std::fs::create_dir_all(&sibling).expect("mkdir sibling worktree");
+    let transcripts = env.home_root.join("attribution-transcripts");
+    std::fs::create_dir_all(&transcripts).expect("mkdir transcript dir");
+    let parent_transcript = transcripts.join("parent.jsonl");
+    let child_transcript = transcripts.join("child.jsonl");
+    std::fs::write(
+        &parent_transcript,
+        concat!(
+            r#"{"timestamp":"2026-07-23T00:00:00.000Z","costUSD":1.0,"requestId":"parent","message":{"id":"parent","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            "\n"
+        ),
+    )
+    .expect("write parent transcript");
+    std::fs::write(
+        &child_transcript,
+        concat!(
+            r#"{"timestamp":"2026-07-23T00:00:01.000Z","costUSD":3.0,"requestId":"child","message":{"id":"child","usage":{"input_tokens":30,"output_tokens":3}}}"#,
+            "\n"
+        ),
+    )
+    .expect("write child transcript");
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+
+    let mut parent = AgentLifecycleObservation::new(
+        Some("sess-attribution-parent".into()),
+        LifecycleSignal::Registered,
+    );
+    parent.launch.team = Some("forge".to_owned());
+    parent.launch.role = Some("planner".to_owned());
+    parent.launch.channel = Some("project/forge".to_owned());
+    parent.worktree_path = Some(env.project_root.display().to_string());
+    parent.transcript_path = Some(parent_transcript.display().to_string());
+    env.store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "UserPromptSubmit",
+            &parent,
+        ))
+        .expect("register parent");
+
+    let mut child = AgentLifecycleObservation::new(
+        Some("sess-attribution-child".into()),
+        LifecycleSignal::Registered,
+    );
+    child.launch.parent_agent_id = Some("sess-attribution-parent".into());
+    child.launch.parent_agent_kind = Some(rimz::ids::AgentKind::new_unchecked("claude"));
+    child.launch.launch_depth = Some(1);
+    child.launch.profile = Some("explorer".to_owned());
+    child.launch.channel = Some("sibling-worktree".to_owned());
+    child.worktree_path = Some(sibling.display().to_string());
+    child.transcript_path = Some(child_transcript.display().to_string());
+    env.store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "UserPromptSubmit",
+            &child,
+        ))
+        .expect("register child");
+
+    let run_json = |args: &[&str]| {
+        let output = env
+            .rimz()
+            .arg("--root")
+            .arg(&env.project_root)
+            .args(args)
+            .output()
+            .expect("run attribution");
+        assert!(
+            output.status.success(),
+            "attribution failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).expect("attribution json")
+    };
+
+    let default = run_json(&["agents", "attribution", "--json"]);
+    assert_eq!(default["totals"]["agents"], 1);
+    assert_eq!(default["totals"]["cost_usd"], 1.0);
+    assert_eq!(default["totals"]["launched_cost_usd"], 3.0);
+    assert_eq!(
+        default["groups"][0]["members"][0]["subagents"][0]["origin"],
+        "rimz_launched"
+    );
+
+    let sibling_scope = run_json(&["agents", "attribution", "sibling-worktree", "--json"]);
+    assert_eq!(sibling_scope["totals"]["agents"], 0);
+
+    let all = run_json(&["agents", "attribution", "--all", "--json"]);
+    assert_eq!(all["totals"]["agents"], 1);
+    assert_eq!(all["totals"]["launched_cost_usd"], 3.0);
+
+    let markdown = env
+        .rimz()
+        .arg("--root")
+        .arg(&env.project_root)
+        .args(["agents", "attribution", "--md"])
+        .output()
+        .expect("run Markdown attribution");
+    assert!(markdown.status.success());
+    assert!(
+        String::from_utf8(markdown.stdout)
+            .expect("Markdown utf8")
+            .contains("+$3.00 launched")
+    );
 }
