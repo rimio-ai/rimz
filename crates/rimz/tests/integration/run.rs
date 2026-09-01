@@ -1689,6 +1689,29 @@ fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
     let store = env.store();
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
     let owner_pid = std::process::id();
+    let append_lifecycle =
+        |agent_id: &str, name: &str, origin: SessionOrigin, signal: LifecycleSignal| {
+            let mut observation =
+                AgentLifecycleObservation::new(Some(AgentSessionId::from(agent_id)), signal);
+            observation.agent_name = Some(name.to_owned());
+            observation.origin = Some(origin);
+            observation.worktree_path = Some(workspace.project_root.display().to_string());
+            observation.pane_id = Some(pane_id.clone());
+            observation.runtime_owner = Some(rimz::store::runtime::process_owner(
+                rimz::RuntimeOwnerKind::Agent,
+                agent_id,
+                owner_pid,
+            ));
+            store
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id.clone(),
+                    workspace.session_name.clone(),
+                    "codex",
+                    "agent-hook",
+                    &observation,
+                ))
+                .expect("append lifecycle");
+        };
     let launch_id = AgentSessionId::from("launch-coder");
     store
         .append_event(&EventEnvelope::agent_launched(
@@ -1743,26 +1766,8 @@ fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
             },
         ),
     ] {
-        append_card_state_lifecycle(
-            &store,
-            &workspace,
-            &pane_id,
-            owner_pid,
-            agent_id,
-            name,
-            origin,
-            LifecycleSignal::Registered,
-        );
-        append_card_state_lifecycle(
-            &store,
-            &workspace,
-            &pane_id,
-            owner_pid,
-            agent_id,
-            name,
-            origin,
-            terminal_signal,
-        );
+        append_lifecycle(agent_id, name, origin, LifecycleSignal::Registered);
+        append_lifecycle(agent_id, name, origin, terminal_signal);
     }
     for agent_id in ["first", "second"] {
         let at = Timestamp::now();
@@ -1796,38 +1801,6 @@ fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
     let shown =
         run_agents_json_command(&env, &workspace.session_name, &["agents", "show", "@coder"]);
     assert_eq!(shown["agent"]["id"], "successful");
-}
-
-fn append_card_state_lifecycle(
-    store: &rimz::Store,
-    workspace: &rimz::ResolvedWorkspace,
-    pane_id: &PaneId,
-    owner_pid: u32,
-    agent_id: &str,
-    name: &str,
-    origin: SessionOrigin,
-    signal: LifecycleSignal,
-) {
-    let mut observation =
-        AgentLifecycleObservation::new(Some(AgentSessionId::from(agent_id)), signal);
-    observation.agent_name = Some(name.to_owned());
-    observation.origin = Some(origin);
-    observation.worktree_path = Some(workspace.project_root.display().to_string());
-    observation.pane_id = Some(pane_id.clone());
-    observation.runtime_owner = Some(rimz::store::runtime::process_owner(
-        rimz::RuntimeOwnerKind::Agent,
-        agent_id,
-        owner_pid,
-    ));
-    store
-        .append_event(&EventEnvelope::agent_lifecycle(
-            workspace.workspace_id.clone(),
-            workspace.session_name.clone(),
-            "codex",
-            "agent-hook",
-            &observation,
-        ))
-        .expect("append lifecycle");
 }
 
 #[test]
