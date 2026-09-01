@@ -1,6 +1,6 @@
 # Atlas: refactor analysis
 
-`cargo xtask atlas` is the instrument for target-driven architecture work. It builds one set of facts about the tree, presents those facts at several resolutions, and checks the result against `refactor-target.toml`. The operating loop is **survey → brief → target → diff → conform**.
+`cargo xtask atlas` is the instrument for target-driven architecture work. It builds one set of facts about the tree, presents those facts at several resolutions, and checks the result against `refactor-target.toml`. The operating loop is **survey → brief → inspect → target → diff → conform**.
 
 Opportunity-driven refactoring does not terminate. Atlas work starts by writing the intended boundary, gives each pass a bounded scope and line budget, and ends when `conform --ratchet` proves that boundary. Reopening a finished rule requires a deliberate target-file edit.
 
@@ -19,7 +19,7 @@ Every report uses these terms; the rest of this page assumes them.
 ## The operating loop
 
 1. **Survey the scope once.** Run `survey` to see ranked size and surface, repeated shapes, seam divergence, API reference evidence, and detector shortlists in one report. Read the rank table and the shapes first; the section on [reading the detectors](#detectors--annotations-not-shortlists) explains why the shortlists are read last and never at face value. This is the reading queue, not the decision.
-2. **Read one brief per candidate.** Run `brief --module <path>` for each candidate module. Its **Callers by assembly** table is the primary evidence: how many distinct items each outside module must assemble to use this one. Read that beside the providers, co-change neighbours, shapes, and conform rules before deciding whether a wide interface is a missing seam or legitimate coupling.
+2. **Read one brief per candidate.** Run `brief --module <path>` for each candidate module. Its **Callers by assembly** table separates each outside module's interface breadth (`items`) from the most any one function assembles (`max/fn`). Open `inspect --from <caller> --to <candidate>` on the highest `max/fn`, then read that call site beside the providers, co-change neighbours, shapes, and conform rules before deciding whether a wide interface is a missing seam or legitimate coupling.
 3. **Write the target before moving code.** State the layer order, admitted upward-import debt, exact allow-lists where a nested boundary needs one, surface budgets, stranglers, pass order, and line budget. Treat every proposed demotion or split as a hypothesis until the compiler and tests accept it. The [target section](#baseline-versus-target) says what the file can and cannot record.
 4. **Diff, conform, and ratchet.** Implement one seam or submodule per pass. `diff --base <ref>` is the structural proof: it names escaping items and dependency edges opened and closed, alongside the complete SLOC movement. A pass exits when behaviour holds, the diff shows the intended movement, and `conform --ratchet` is clean. `rank --since <ref>` remains the narrower line-arithmetic view. Run `conform --tighten` after an improvement to preserve it.
 
@@ -27,7 +27,7 @@ Modules flagged `pin` get characterization tests before their pass. Independent 
 
 ## What Atlas cannot measure
 
-Atlas counts and cross-references; it does not read call sites. The one question that decides most depth findings — what the heaviest caller must construct, wire, and sequence to reach the common case — starts from the assembly table and ends in the caller's source. Quote that call site in the finding; the number alone is not the evidence. Likewise, whether an old item is a paid-for fix or dead weight is answered by `git log -S'<symbol>'` and the introducing commit's subject, not by its age.
+Atlas counts and cross-references, and `inspect` locates and quotes the heaviest call site. It still cannot decide what that function must construct, wire, and sequence to reach the common case: read the quoted source and carry it into the finding, because the number alone is not evidence of accidental depth. Likewise, whether an old item is a paid-for fix or dead weight is answered by `git log -S'<symbol>'` and the introducing commit's subject, not by its age.
 
 ## One facts model
 
@@ -37,7 +37,7 @@ Every table honours its scope, limits displayed rows with `--top`, and retains c
 
 ## The SCIP index
 
-`rank`, `seams`, `api`, `survey`, `brief`, and `diff` require exact references by default. Atlas asks `rust-analyzer` for a SCIP export, parses it with `scip`, and caches the result under `target/atlas/`, keyed by sorted source contents and `Cargo.lock`. The cache keeps the two most recently used indexes so `diff` can retain both the working tree and one base. A cold index on this workspace costs about 73 seconds and 6 GB; with a warm cache `survey` runs in about 15 seconds and `brief` in about 5. Install the pinned toolchain's component with `rustup component add rust-analyzer`, or provide `rust-analyzer` on `PATH`. A missing indexer fails at command entry with that fix. If `rust-analyzer` panics during export (a known upstream inlay-hint inference bug), Atlas retries once with cache priming serialized and otherwise reports both attempts; it never substitutes heuristics.
+`rank`, `seams`, `api`, `survey`, `brief`, `inspect`, and `diff` require exact references by default. Atlas asks `rust-analyzer` for a SCIP export, parses it with `scip`, and caches the result under `target/atlas/`, keyed by sorted source contents and `Cargo.lock`. The cache keeps the two most recently used indexes so `diff` can retain both the working tree and one base. A cold index on this workspace costs about 73 seconds and 6 GB; with a warm cache `survey` runs in about 15 seconds and `brief` in about 5. Install the pinned toolchain's component with `rustup component add rust-analyzer`, or provide `rust-analyzer` on `PATH`. A missing indexer fails at command entry with that fix. If `rust-analyzer` panics during export (a known upstream inlay-hint inference bug), Atlas retries once with cache priming serialized and otherwise reports both attempts; it never substitutes heuristics.
 
 For a reference-aware diff, Atlas materializes the base with `git archive` in a temporary `target/atlas/checkout-*` directory, indexes that checkout while sharing the main target directory's dependency artifacts, then removes it on success or failure. The base cache key uses the base sources and base `Cargo.lock`, not either working-tree input. SCIP paths remain checkout-relative. Crate names still come from the current manifests, so crate renames between the base and working tree are outside this comparison.
 
@@ -57,12 +57,18 @@ Read in this order: the largest churn-weighted rank rows, then the shapes cluste
 
 `brief --module <path>` is the dossier for one module at any depth; `brief --all --out-dir <dir>` writes one per split leaf. Its sections, in reading order:
 
-- **Callers by assembly** — each outside production module with the count and names of distinct items it references. A caller needing dozens of items to do one job is paying for a seam the module does not provide; this is the strongest depth signal Atlas produces, and the row to open in the source.
+- **Callers by assembly** — each outside production module with its distinct referenced-item breadth (`items`), the maximum distinct items referenced by one function (`max/fn`), and its three heaviest functions with `path:line`. Sort and investigate by `max/fn`: a wide module with low per-function assembly is catalog breadth, while one function needing dozens of items may be paying for a seam the target module does not provide.
 - **Providers** — what this module imports from whom, by item name. For a low layer, every provider above it is a candidate `rehome`.
 - **Co-change and divergence**, **Shapes**, and the detector sections, scoped to the module.
 - **Conform rules** — the target rules whose path covers this module.
 
 The **Interface** listing at the top duplicates `api --module` and is long (several hundred lines for a large module); skip it unless you are auditing visibility item by item.
+
+### `inspect` — what does the heaviest caller assemble?
+
+`inspect --from <caller> --to <target>` turns one brief row into call-site evidence. It reports distinct target items per production calling function, ranks functions by that count, quotes the heaviest function with its full source span (capped at 80 lines), lists tests touching the same items, and shows covering target rules with direction, admission, and debt-site count. Inputs may be crate module paths such as `sidebar::enrich` or root-relative files and directories; path inputs retain their file or directory scope when module names repeat across crates. The exact reference index is required; `--no-index` is not a degraded form of this question.
+
+The header's `items` is complete module breadth and `sites` is reference occurrences. Function assembly deduplicates item names within one function; references outside functions still contribute to breadth and appear in a trailing row, but never inflate `max/fn`. A zero-edge result is valid evidence. Any parse failures in scope are listed separately; treat them as incomplete attribution. Read the quoted source to judge construction and sequencing, and use the test and target sections to check whether the seam is already protected.
 
 ### `rank` — where does accretion cost concentrate?
 
@@ -80,7 +86,7 @@ A wide, thin row has `esc >= 20` and `loc/esc < 120`:
 
 ### `diff` — did the pass shrink the interface?
 
-`diff --base <ref>` compares a resolved base commit with the working tree per top-level module and in total. Read the totals and module table first, then the named changes: escaping items added and removed, upward-import site movement under the configured layer order, `use` and exact-reference edges, strangler movement, newly unresolved definitions, and created or deleted Rust files. Upward rows report base and current site counts per layer pair, including partial closure; reference edges report the distinct-item assembly count on each side. If the default target file does not exist, the upward-import and strangler sections are omitted and the report says so; an explicitly selected missing target is an error.
+`diff --base <ref>` compares a resolved base commit with the working tree per top-level module and in total. Read the totals and module table first, then the named changes: escaping items added and removed, upward-import site movement under the configured layer order, `use` and exact-reference edges, strangler movement, newly unresolved definitions, and created or deleted Rust files. Upward rows report base and current site counts per layer pair, including partial closure; reference edges retain module breadth while `asm Δ` reports movement in the maximum distinct items referenced by one calling function. If the default target file does not exist, the upward-import and strangler sections are omitted and the report says so; an explicitly selected missing target is an error.
 
 Escaping-item identity is Rust module path, item kind, and name; source lines do not participate, so moving an item within its module does not fabricate removal and addition. Same-named methods in one module collapse to one identity. Renames are intentionally one removal plus one addition, and file renames are one deletion plus one creation.
 
@@ -92,7 +98,7 @@ Escaping-item identity is Rust module path, item kind, and name; source lines do
 
 ### `seams` — which boundaries already exist?
 
-The import-edge table remains `use`-only because those are the edges target rules constrain. Divergence uses the union of `use` and exact reference edges, so inline qualified paths no longer hide coupling. `--module <name>` adds **callers**: production calling modules ranked by the number of distinct referenced items, with item names for the leading rows.
+The import-edge table remains `use`-only because those are the edges target rules constrain. Divergence uses the union of `use` and exact reference edges, so inline qualified paths no longer hide coupling. `--module <name>` adds **callers**: production calling modules ranked by distinct referenced-item breadth, with item names for the leading rows. This remains a module-breadth view because its union includes `use` edges, which have no enclosing function; use `brief` and `inspect` for per-function assembly.
 
 Co-change is computed in this order: fold renames to their HEAD paths, discard oversized commits, count file pairs, roll those pairs up to report rows (including root-dispatcher collapsing), then hide low-frequency rolled-up edges. Two divergence kinds result:
 
@@ -167,11 +173,11 @@ The first rule still permits lower-layer imports and admits only the named upwar
 
 Every JSON report carries `version: 4` and `verb`; scoped analysis also carries its path and parse failures. Totals always describe the complete result even when displayed row arrays honour `--top`. `survey` and `brief` return their sections in one untruncated v4 payload, including `detector_counts` per module. Reference-derived fields are optional and are omitted under `--no-index`, not filled with heuristic values.
 
-Important per-verb additions are recursive `rank.rows[].children` and optional `ref_median`; `seams.callers` with calling module, distinct-item count, and item names; and `api` resolution plus production/test reference module fields and exact single-caller arrays. `diff` reports complete totals plus module rows and added/removed arrays for surface, imports, edges, unresolved definitions, and files; reference-derived fields are absent under `--no-index`. `conform` reports `mode`, layers as strings or peer arrays, and optional `goal`, `remaining`, and `debt` fields on rules. Schema v2 name-match and over-publication fields do not exist in v4.
+Important per-verb additions are recursive `rank.rows[].children` and optional `ref_median`; `seams.callers` with calling module, distinct-item count, and item names; and `api` resolution plus production/test reference module fields and exact single-caller arrays. `brief.callers` carries module breadth, `max_fn_items`, and the three heaviest functions with location and item count. `inspect` carries complete function/item/site totals, per-function item arrays and spans, the capped heaviest source, matching tests, target-rule direction/admission/debt, and parse-failure paths. `diff` reports complete totals plus module rows and added/removed arrays for surface, imports, edges, unresolved definitions, and files; its assembly fields are per-function maxima, and reference-derived fields are absent under `--no-index`. `conform` reports `mode`, layers as strings or peer arrays, and optional `goal`, `remaining`, and `debt` fields on rules. Schema v2 name-match and over-publication fields do not exist in v4.
 
 ## A worked reading chain
 
-Suppose `shapes` clusters the `decode_hook` functions of three adapters, and a second cluster holds two more. Open a brief on their common adapter parent rather than assigning five directory-local cleanups. If its callers-by-assembly table shows the same outside consumers reaching the same items, and the divergence rows show the adapters co-changing without importing each other, the evidence supports one **collapse** candidate: centralize hook decoding behind a provider-neutral seam, then make each adapter translate only provider-specific input. Encode that destination in the hand-off as the budgets and admissions the pass will remove; use `rank --since` and `conform --ratchet` to judge the pass, and `conform --tighten` to record it.
+Suppose `shapes` clusters the `decode_hook` functions of three adapters, and a second cluster holds two more. Open a brief on their common adapter parent rather than assigning five directory-local cleanups. Open `inspect` on the row with the highest `max/fn`: if the quoted function assembles the same adapter items and the divergence rows show those adapters co-changing without importing each other, the evidence supports one **collapse** candidate. Centralize hook decoding behind a provider-neutral seam, then make each adapter translate only provider-specific input. Encode that destination in the hand-off as the budgets and admissions the pass will remove; use `diff` and `conform --ratchet` to judge the pass, and `conform --tighten` to record it.
 
 The chain matters: shapes locate repeated choreography, assembly identifies the boundary's consumers, divergence locates shared hidden knowledge, and the target states the desired dependency direction. No single row establishes the refactor.
 
@@ -183,6 +189,9 @@ cargo xtask atlas survey --path crates/rimz/src --md > /tmp/atlas-survey.md
 
 # One focused dossier per shortlisted module.
 cargo xtask atlas brief --module crates/rimz/src/agents/adapters --md
+
+# Open the heaviest caller from the brief and quote its assembly site.
+cargo xtask atlas inspect --from sidebar::enrich --to store --md
 
 # Exact callers for one item, once a brief has named it.
 cargo xtask atlas api --module store --top 40

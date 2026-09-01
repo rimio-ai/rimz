@@ -219,6 +219,19 @@ pub(super) fn path_in_scope(path: &Path, scope: &Path) -> bool {
     path.starts_with(scope_for_matching(scope))
 }
 
+pub(super) fn bounded_names(items: &[String], top: usize) -> String {
+    let mut rendered = items
+        .iter()
+        .take(top)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if items.len() > top {
+        rendered.push_str(&format!(" … {} more", items.len() - top));
+    }
+    rendered
+}
+
 pub(super) fn workspace_crate_names(root: &Path) -> Result<BTreeSet<String>> {
     let manifest_path = root.join("Cargo.toml");
     let raw = fs::read_to_string(&manifest_path)

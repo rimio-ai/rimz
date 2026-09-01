@@ -335,6 +335,8 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
                 from_path: PathBuf::new(),
                 to_path: PathBuf::new(),
                 from: from.clone(),
+                from_line: 0,
+                from_fn: None,
                 to: to.clone(),
                 item: item.clone(),
                 kind: super::references::EdgeKind::Use,

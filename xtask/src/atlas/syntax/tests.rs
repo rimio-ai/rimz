@@ -221,6 +221,125 @@ pub fn render(
 }
 
 #[test]
+fn functions_record_end_line_and_impl_owner() {
+    let report = analyze_sources(&[source(
+        r#"fn free() {
+    fn nested() {
+        work();
+    }
+}
+struct View;
+impl crate::views::View {
+    fn inherent(&self) {
+        work();
+    }
+}
+trait Draw {
+    fn draw(&self);
+}
+impl Draw for crate::views::View {
+    fn trait_method(&self) {
+        fn helper() {
+            work();
+        }
+        helper();
+    }
+}
+fn after() {}
+"#,
+    )]);
+    let file = &report.files[0];
+    let functions = file
+        .fns
+        .iter()
+        .map(|function| {
+            (
+                function.name.as_str(),
+                function.owner.as_deref(),
+                function.line,
+                function.end_line,
+                function.sloc,
+                function.label(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        functions,
+        [
+            ("free", None, 1, 5, 5, "free".to_owned()),
+            ("nested", None, 2, 4, 3, "nested".to_owned()),
+            (
+                "inherent",
+                Some("View"),
+                8,
+                10,
+                3,
+                "View::inherent".to_owned(),
+            ),
+            (
+                "trait_method",
+                Some("View"),
+                16,
+                21,
+                6,
+                "View::trait_method".to_owned(),
+            ),
+            ("helper", None, 17, 19, 3, "helper".to_owned()),
+            ("after", None, 23, 23, 1, "after".to_owned()),
+        ]
+    );
+    assert_eq!(file.enclosing_fn(3).unwrap().name, "nested");
+    assert_eq!(file.enclosing_fn(4).unwrap().name, "nested");
+    assert_eq!(file.enclosing_fn(5).unwrap().name, "free");
+    assert_eq!(file.enclosing_fn(18).unwrap().name, "helper");
+    assert_eq!(file.enclosing_fn(8).unwrap().name, "inherent");
+    assert!(file.enclosing_fn(6).is_none());
+}
+
+#[test]
+fn functions_include_trait_defaults_and_exclude_cfg_test_bodies() {
+    let report = analyze_sources(&[source(
+        r#"trait Backend {
+    fn run(&self) {
+        target();
+    }
+}
+#[cfg(not(test))]
+fn production() {
+    target();
+}
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    fn check() {
+        target();
+    }
+}
+struct View;
+#[cfg(test)]
+impl View {
+    fn test_only(&self) {
+        target();
+    }
+}
+"#,
+    )]);
+    let file = &report.files[0];
+
+    assert_eq!(
+        file.fns
+            .iter()
+            .map(|function| function.label())
+            .collect::<Vec<_>>(),
+        ["run", "production"]
+    );
+    assert_eq!(file.enclosing_fn(3).unwrap().label(), "run");
+    assert_eq!(file.enclosing_fn(13).unwrap().label(), "check");
+    assert_eq!(file.enclosing_fn(20).unwrap().label(), "View::test_only");
+    assert!(file.test_regions.iter().any(|region| region.contains(&13)));
+    assert!(file.test_regions.iter().any(|region| region.contains(&20)));
+}
+
+#[test]
 fn forwarding_functions_are_single_call_expressions_with_transparent_wrappers() {
     let report = analyze_sources(&[source(
         r#"

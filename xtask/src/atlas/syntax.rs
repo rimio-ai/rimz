@@ -9,7 +9,8 @@ use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
     Expr, ExprCall, ExprIf, ExprMethodCall, ExprWhile, File, FnArg, ImplItem, ImplItemFn, Item,
-    ItemFn, ItemMod, Pat, PatGuard, Stmt, TraitItem, UseTree, Visibility,
+    ItemFn, ItemImpl, ItemMod, ItemTrait, Pat, PatGuard, Stmt, TraitItem, TraitItemFn, UseTree,
+    Visibility,
 };
 
 use super::modules::{
@@ -42,11 +43,22 @@ pub(super) struct ImportedItem {
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct FnBody {
     pub(super) name: String,
+    pub(super) owner: Option<String>,
     pub(super) path: PathBuf,
     pub(super) line: usize,
+    pub(super) end_line: usize,
     pub(super) sloc: usize,
     pub(super) callees: Vec<String>,
     pub(super) forwards: Option<String>,
+}
+
+impl FnBody {
+    pub(super) fn label(&self) -> String {
+        self.owner.as_ref().map_or_else(
+            || self.name.clone(),
+            |owner| format!("{owner}::{}", self.name),
+        )
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -67,7 +79,19 @@ pub(super) struct FileSyntax {
     pub(super) test_regions: Vec<Range<usize>>,
     pub(super) imports: Vec<ImportedItem>,
     pub(super) fns: Vec<FnBody>,
+    #[serde(skip)]
+    test_fns: Vec<FnBody>,
     pub(super) guards: Vec<Guard>,
+}
+
+impl FileSyntax {
+    pub(super) fn enclosing_fn(&self, line: usize) -> Option<&FnBody> {
+        self.fns
+            .iter()
+            .chain(&self.test_fns)
+            .filter(|function| function.line <= line && line <= function.end_line)
+            .max_by_key(|function| function.line)
+    }
 }
 
 #[derive(Debug)]
@@ -155,6 +179,9 @@ fn analyze_file(path: &Path, source: &str, file: &File) -> FileSyntax {
     let mut fn_collector = FnCollector {
         path,
         functions: Vec::new(),
+        test_functions: Vec::new(),
+        owner: None,
+        in_test_region: false,
     };
     fn_collector.visit_file(file);
 
@@ -174,6 +201,7 @@ fn analyze_file(path: &Path, source: &str, file: &File) -> FileSyntax {
         test_regions,
         imports,
         fns: fn_collector.functions,
+        test_fns: fn_collector.test_functions,
         guards: guard_collector.guards,
     }
 }
@@ -372,18 +400,41 @@ fn collect_public_items(
 
 fn collect_test_regions(items: &[Item], output: &mut Vec<Range<usize>>) {
     for item in items {
-        let Item::Mod(item_mod) = item else {
-            continue;
-        };
-        if is_cfg_test(&item_mod.attrs) {
-            let start = item_mod.attrs.first().map_or_else(
-                || item_mod.span().start().line,
-                |attr| attr.span().start().line,
+        if is_cfg_test(item_attributes(item)) {
+            let attributes = item_attributes(item);
+            let start = attributes.first().map_or_else(
+                || item.span().start().line,
+                |attribute| attribute.span().start().line,
             );
-            output.push(start..item_mod.span().end().line.saturating_add(1));
-        } else if let Some((_, nested)) = &item_mod.content {
+            output.push(start..item.span().end().line.saturating_add(1));
+            continue;
+        }
+        if let Item::Mod(item_mod) = item
+            && let Some((_, nested)) = &item_mod.content
+        {
             collect_test_regions(nested, output);
         }
+    }
+}
+
+fn item_attributes(item: &Item) -> &[syn::Attribute] {
+    match item {
+        Item::Const(item) => &item.attrs,
+        Item::Enum(item) => &item.attrs,
+        Item::ExternCrate(item) => &item.attrs,
+        Item::Fn(item) => &item.attrs,
+        Item::ForeignMod(item) => &item.attrs,
+        Item::Impl(item) => &item.attrs,
+        Item::Macro(item) => &item.attrs,
+        Item::Mod(item) => &item.attrs,
+        Item::Static(item) => &item.attrs,
+        Item::Struct(item) => &item.attrs,
+        Item::Trait(item) => &item.attrs,
+        Item::TraitAlias(item) => &item.attrs,
+        Item::Type(item) => &item.attrs,
+        Item::Union(item) => &item.attrs,
+        Item::Use(item) => &item.attrs,
+        _ => &[],
     }
 }
 
@@ -625,6 +676,9 @@ fn resolve_import_path(file_module: &str, path: &[String]) -> String {
 struct FnCollector<'a> {
     path: &'a Path,
     functions: Vec<FnBody>,
+    test_functions: Vec<FnBody>,
+    owner: Option<String>,
+    in_test_region: bool,
 }
 
 impl FnCollector<'_> {
@@ -633,15 +687,22 @@ impl FnCollector<'_> {
         let end = span.end().line;
         let mut calls = CallCollector::default();
         calls.visit_block(block);
-        self.functions.push(FnBody {
+        let function = FnBody {
             name: signature.ident.to_string(),
+            owner: self.owner.clone(),
             path: self.path.to_path_buf(),
             line: start,
+            end_line: end,
             sloc: end.saturating_sub(start) + 1,
             callees: calls.callees,
             forwards: forwarded_expression(block)
                 .and_then(|expression| forwarded_callee(signature, expression)),
-        });
+        };
+        if self.in_test_region {
+            self.test_functions.push(function);
+        } else {
+            self.functions.push(function);
+        }
     }
 }
 
@@ -751,9 +812,31 @@ fn expression_ident(expression: &Expr) -> Option<String> {
 }
 
 impl<'ast> Visit<'ast> for FnCollector<'_> {
+    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+        let owner = match item.self_ty.as_ref() {
+            syn::Type::Path(path) => path
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string()),
+            _ => None,
+        };
+        let previous_owner = std::mem::replace(&mut self.owner, owner);
+        let previous_test_region = self.in_test_region;
+        self.in_test_region |= is_cfg_test(&item.attrs);
+        visit::visit_item_impl(self, item);
+        self.in_test_region = previous_test_region;
+        self.owner = previous_owner;
+    }
+
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+        let previous_owner = self.owner.take();
+        let previous_test_region = self.in_test_region;
+        self.in_test_region |= is_cfg_test(&item.attrs);
         self.push(&item.sig, item.span(), &item.block);
         visit::visit_item_fn(self, item);
+        self.in_test_region = previous_test_region;
+        self.owner = previous_owner;
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
@@ -762,20 +845,75 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
     }
 
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
-        if !is_cfg_test(&item.attrs) {
-            visit::visit_item_mod(self, item);
+        let previous = self.in_test_region;
+        self.in_test_region |= is_cfg_test(&item.attrs);
+        visit::visit_item_mod(self, item);
+        self.in_test_region = previous;
+    }
+
+    fn visit_item_trait(&mut self, item: &'ast ItemTrait) {
+        let previous = self.in_test_region;
+        self.in_test_region |= is_cfg_test(&item.attrs);
+        visit::visit_item_trait(self, item);
+        self.in_test_region = previous;
+    }
+
+    fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
+        let previous_owner = self.owner.take();
+        if let Some(block) = &item.default {
+            self.push(&item.sig, item.span(), block);
         }
+        visit::visit_trait_item_fn(self, item);
+        self.owner = previous_owner;
     }
 }
 
 fn is_cfg_test(attributes: &[syn::Attribute]) -> bool {
-    attributes.iter().any(|attribute| {
-        attribute.path().is_ident("cfg")
-            && match &attribute.meta {
-                syn::Meta::List(list) => list.tokens.to_string() == "test",
-                _ => false,
-            }
+    attributes.iter().any(|attribute| match &attribute.meta {
+        syn::Meta::List(list) if list.path.is_ident("cfg") => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|predicates| {
+                !predicates
+                    .iter()
+                    .all(|predicate| cfg_possibilities(predicate).1)
+            }),
+        _ => false,
     })
+}
+
+fn cfg_possibilities(meta: &syn::Meta) -> (bool, bool) {
+    match meta {
+        syn::Meta::Path(path) if path.is_ident("test") => (true, false),
+        syn::Meta::Path(_) | syn::Meta::NameValue(_) => (true, true),
+        syn::Meta::List(list) => {
+            let Ok(nested) = list.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            ) else {
+                return (true, true);
+            };
+            let possibilities = nested.iter().map(cfg_possibilities).collect::<Vec<_>>();
+            if list.path.is_ident("all") {
+                return (
+                    possibilities.iter().any(|(can_be_false, _)| *can_be_false),
+                    possibilities.iter().all(|(_, can_be_true)| *can_be_true),
+                );
+            }
+            if list.path.is_ident("any") {
+                return (
+                    possibilities.iter().all(|(can_be_false, _)| *can_be_false),
+                    possibilities.iter().any(|(_, can_be_true)| *can_be_true),
+                );
+            }
+            if list.path.is_ident("not")
+                && let [possibility] = possibilities.as_slice()
+            {
+                return (possibility.1, possibility.0);
+            }
+            (true, true)
+        }
+    }
 }
 
 struct GuardCollector<'a> {

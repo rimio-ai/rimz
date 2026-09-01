@@ -46,12 +46,20 @@ pub(super) enum EdgeKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(super) struct FnRef {
+    pub(super) label: String,
+    pub(super) line: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) struct Edge {
     #[serde(skip)]
     pub(super) from_path: PathBuf,
     #[serde(skip)]
     pub(super) to_path: PathBuf,
     pub(super) from: String,
+    pub(super) from_line: usize,
+    pub(super) from_fn: Option<FnRef>,
     pub(super) to: String,
     pub(super) item: String,
     pub(super) kind: EdgeKind,
@@ -134,6 +142,7 @@ impl References {
                     .push(ReferenceSite {
                         path: path.clone(),
                         module: module.clone(),
+                        line,
                         test,
                     });
             }
@@ -164,10 +173,19 @@ impl References {
                             item_refs.production.insert(site.module.clone());
                             item_refs.production_count += 1;
                         }
+                        let from_fn = syntax_by_path
+                            .get(site.path.as_path())
+                            .and_then(|file| file.enclosing_fn(site.line))
+                            .map(|function| FnRef {
+                                label: function.label(),
+                                line: function.line,
+                            });
                         references.edges.push(Edge {
                             from_path: site.path.clone(),
                             to_path: file.path.clone(),
                             from: site.module.clone(),
+                            from_line: site.line,
+                            from_fn,
                             to: item.module.clone(),
                             item: item.name.clone(),
                             kind: EdgeKind::Reference,
@@ -186,6 +204,7 @@ impl References {
 struct ReferenceSite {
     path: PathBuf,
     module: String,
+    line: usize,
     test: bool,
 }
 
@@ -306,6 +325,68 @@ mod tests {
                 && edge.to_path == Path::new("crates/demo/src/lib.rs")
         }));
         assert_eq!(references.edges.iter().filter(|edge| edge.test).count(), 2);
+        let inline_test = references
+            .edges
+            .iter()
+            .find(|edge| edge.test && edge.from_path == Path::new("crates/demo/src/lib.rs"))
+            .expect("inline test reference edge");
+        assert_eq!(
+            inline_test.from_fn.as_ref(),
+            Some(&FnRef {
+                label: "calls_target".to_owned(),
+                line: 5,
+            })
+        );
+    }
+
+    #[test]
+    fn reference_edges_carry_the_enclosing_function() {
+        let sources = vec![
+            Source::new("crates/demo/src/target.rs", "pub fn target() {}\n"),
+            Source::new(
+                "crates/demo/src/lib.rs",
+                "mod target;\nuse target::target;\n\nstruct Foo;\n\nimpl Foo {\n    fn run(&self) {\n        target();\n    }\n}\n",
+            ),
+        ];
+        let syntax = super::super::syntax::analyze_sources(&sources);
+        let target = "rust-analyzer cargo demo 0.1.0 target().";
+        let index = Index {
+            documents: vec![
+                document(
+                    "crates/demo/src/target.rs",
+                    vec![occurrence(0, target, true)],
+                ),
+                document(
+                    "crates/demo/src/lib.rs",
+                    vec![occurrence(1, target, false), occurrence(7, target, false)],
+                ),
+            ],
+            ..Index::default()
+        };
+
+        let directory = tempfile::tempdir().expect("temporary SCIP directory");
+        let index_path = directory.path().join("index.scip");
+        scip::write_message_to_file(&index_path, index).expect("write hand-built SCIP index");
+        let references =
+            References::load(&index_path, &syntax, &sources).expect("parse hand-built SCIP index");
+        let use_edge = references
+            .edges
+            .iter()
+            .find(|edge| edge.from_line == 2)
+            .expect("use reference edge");
+        assert_eq!(use_edge.from_fn, None);
+        let method_edge = references
+            .edges
+            .iter()
+            .find(|edge| edge.from_line == 8)
+            .expect("method reference edge");
+        assert_eq!(
+            method_edge.from_fn.as_ref(),
+            Some(&FnRef {
+                label: "Foo::run".to_owned(),
+                line: 7,
+            })
+        );
     }
 
     #[test]

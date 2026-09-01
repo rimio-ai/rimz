@@ -14,6 +14,7 @@ mod diff;
 mod facts;
 mod history;
 mod index;
+mod inspect;
 mod metrics;
 mod modules;
 mod rank;
@@ -41,6 +42,7 @@ Verbs:
   survey    produce one architecture-review sweep over a scope
   brief     produce a module dossier (or one per split leaf)
   diff      compare a base revision with the working tree: surface, imports, edges, files
+  inspect   show what one module's functions assemble from another, and where
   conform   compare the tree with refactor-target.toml budgets
 
 Run `cargo xtask atlas <verb> --help` for verb-specific flags.";
@@ -64,6 +66,7 @@ pub(crate) fn atlas(root: &Path, args: &[String]) -> Result<()> {
         "api" => api::run(root, rest),
         "brief" => brief::run(root, rest),
         "diff" => diff::run(root, rest),
+        "inspect" => inspect::run(root, rest),
         "shapes" => shapes::run(root, rest),
         "survey" => survey::run(root, rest),
         "conform" => conform::run(root, rest),
