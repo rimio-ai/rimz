@@ -130,6 +130,9 @@ const GROK_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     subagents: ConcernCoverage::Wired {
         via: "SubagentStart/SubagentStop",
     },
+    launch_reminders: ConcernCoverage::Unsupported {
+        reason: "no additive system-text launch channel is implemented",
+    },
     background_parking: ConcernCoverage::Unsupported {
         reason: "stock Grok hooks expose no background parking lifecycle",
     },

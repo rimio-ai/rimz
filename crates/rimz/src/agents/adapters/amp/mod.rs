@@ -118,6 +118,9 @@ const AMP_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     subagents: ConcernCoverage::Unsupported {
         reason: "interactive events expose no durable child identity",
     },
+    launch_reminders: ConcernCoverage::Unsupported {
+        reason: "no additive system-text launch channel is implemented",
+    },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking signal",
     },

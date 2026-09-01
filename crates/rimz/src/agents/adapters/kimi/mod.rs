@@ -158,6 +158,9 @@ const KIMI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "SubagentStart/Stop + state.json/wire join",
         gap: "resumed subagents and ambiguous starts surface only at stop",
     },
+    launch_reminders: ConcernCoverage::Unsupported {
+        reason: "no additive system-text launch channel is implemented",
+    },
     background_parking: ConcernCoverage::Unsupported {
         reason: "background parking is not mapped",
     },

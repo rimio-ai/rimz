@@ -55,13 +55,6 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         },
         None => None,
     };
-    let machine_config = crate::cli::machine_config();
-    let subagent_catalog = exec_subagent_catalog(
-        &request,
-        &machine_config,
-        &workspace.project_root,
-        &rimz::store::paths::config_home(),
-    );
     let provider_cwd = match &request.action {
         rimz::harness::launch::ExecAction::Fork { .. } => {
             std::env::current_dir().context("reading the fork pane cwd")?
@@ -73,6 +66,14 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .clone()
             .unwrap_or_else(|| workspace.worktree_root.clone()),
     };
+    let machine_config = crate::cli::machine_config();
+    let reminders = exec_launch_reminders(
+        &request,
+        &machine_config,
+        &workspace.project_root,
+        &rimz::store::paths::config_home(),
+        &provider_cwd,
+    );
     let stage = rimz::harness::launch::compile_agent_process_stage_with_extra_env(
         &workspace.project_root,
         machine_config.harness.rtk,
@@ -80,7 +81,10 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &provider_cwd,
         &rimz::proc::rimz_exe(),
         &materialized_prompt.env,
-        subagent_catalog.as_ref(),
+        &rimz::harness::launch::LaunchReminders {
+            subagent_catalog: reminders.subagent_catalog.as_ref(),
+            team_context: reminders.team_context.as_ref(),
+        },
     );
     let stage = match stage {
         Ok(stage) => stage,
@@ -191,14 +195,21 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     )
 }
 
-fn exec_subagent_catalog(
+#[derive(Default)]
+struct ExecLaunchReminders {
+    subagent_catalog: Option<rimz::harness::subagent_policy::SubagentCatalog>,
+    team_context: Option<rimz::harness::launch_context::TeamLaunchContext>,
+}
+
+fn exec_launch_reminders(
     request: &rimz::harness::launch::ExecRequest,
     machine_config: &rimz::config::MachineConfig,
     project_root: &std::path::Path,
     config_root: &std::path::Path,
-) -> Option<rimz::harness::subagent_policy::SubagentCatalog> {
+    provider_cwd: &std::path::Path,
+) -> ExecLaunchReminders {
     if request.subagent {
-        return None;
+        return ExecLaunchReminders::default();
     }
     let effective = match rimz::config::effective::load(
         &machine_config.agents,
@@ -210,17 +221,41 @@ fn exec_subagent_catalog(
         Err(err) => {
             let _ = writeln!(
                 std::io::stderr().lock(),
-                "rimz: {err}; launching without the subagent reminder"
+                "rimz: {err}; launching without RimZ launch reminders"
             );
-            return None;
+            return ExecLaunchReminders::default();
         }
     };
-    Some(rimz::harness::subagent_policy::catalog(
+    let subagent_catalog = Some(rimz::harness::subagent_policy::catalog(
         request.identity.params.profile.as_deref(),
         &effective.profiles,
         &effective.subagent_profiles,
         &machine_config.agents.commands,
-    ))
+    ));
+    let team_context = request
+        .identity
+        .params
+        .team
+        .as_deref()
+        .and_then(|team_name| match effective.teams.0.get(team_name) {
+            Some(team) => rimz::harness::launch_context::team_launch_context(
+                &request.identity.params,
+                &request.action,
+                team,
+                provider_cwd,
+            ),
+            None => {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "rimz: team `{team_name}` is no longer configured; launching without the team context reminder"
+                );
+                None
+            }
+        });
+    ExecLaunchReminders {
+        subagent_catalog,
+        team_context,
+    }
 }
 
 fn apply_materialized_system_prompt(
@@ -1398,10 +1433,119 @@ mod tests {
             },
         );
 
-        assert!(
-            exec_subagent_catalog(&request, &machine_config, project.path(), config.path())
-                .is_none()
+        let reminders = exec_launch_reminders(
+            &request,
+            &machine_config,
+            project.path(),
+            config.path(),
+            project.path(),
         );
+        assert!(reminders.subagent_catalog.is_none());
+        assert!(reminders.team_context.is_none());
+    }
+
+    #[test]
+    fn derives_team_launch_context_from_effective_config() {
+        let project = tempfile::tempdir().expect("project");
+        std::fs::write(project.path().join("blackboard.md"), "one\ntwo\n").expect("blackboard");
+        let config = tempfile::tempdir().expect("config");
+        let mut machine_config = rimz::config::MachineConfig::default();
+        machine_config.agents.teams.0.insert(
+            "forge".to_owned(),
+            rimz::config::Team {
+                roles: vec![
+                    rimz::config::RoleBinding {
+                        role: "planner".to_owned(),
+                        profile: "claude".to_owned(),
+                        mode: None,
+                        model: None,
+                        effort: None,
+                        budget: None,
+                        system_prompt_file: None,
+                        append_system_prompt_files: Vec::new(),
+                        args: None,
+                    },
+                    rimz::config::RoleBinding {
+                        role: "coder".to_owned(),
+                        profile: "codex".to_owned(),
+                        mode: None,
+                        model: None,
+                        effort: None,
+                        budget: None,
+                        system_prompt_file: None,
+                        append_system_prompt_files: Vec::new(),
+                        args: None,
+                    },
+                ],
+                leader: Some("planner".to_owned()),
+                layout: None,
+                scratch_files: vec!["blackboard.md".to_owned()],
+            },
+        );
+        let mut request = request(
+            "codex",
+            ExecAction::Resume {
+                session_id: "session".to_owned(),
+                extra_args: Vec::new(),
+            },
+        );
+        request.identity.params = rimz::agents::LaunchParams {
+            team: Some("forge".to_owned()),
+            role: Some("coder".to_owned()),
+            channel: Some("feature".to_owned()),
+            ..rimz::agents::LaunchParams::default()
+        };
+
+        let reminders = exec_launch_reminders(
+            &request,
+            &machine_config,
+            project.path(),
+            config.path(),
+            project.path(),
+        );
+        let context = reminders.team_context.expect("team context");
+        assert_eq!(context.leader, "planner");
+        assert_eq!(context.roles, ["planner", "coder"]);
+        assert_eq!(
+            context.session,
+            rimz::harness::launch_context::LaunchSession::Resumed
+        );
+        assert_eq!(context.scratch[0].present[0].lines, 2);
+    }
+
+    #[test]
+    fn omits_team_context_without_team_identity_and_all_reminders_for_children() {
+        let project = tempfile::tempdir().expect("project");
+        let config = tempfile::tempdir().expect("config");
+        let machine_config = rimz::config::MachineConfig::default();
+        let request = request(
+            "claude",
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        );
+        let reminders = exec_launch_reminders(
+            &request,
+            &machine_config,
+            project.path(),
+            config.path(),
+            project.path(),
+        );
+        assert!(reminders.subagent_catalog.is_some());
+        assert!(reminders.team_context.is_none());
+
+        let mut child = request;
+        child.subagent = true;
+        let reminders = exec_launch_reminders(
+            &child,
+            &machine_config,
+            project.path(),
+            config.path(),
+            project.path(),
+        );
+        assert!(reminders.subagent_catalog.is_none());
+        assert!(reminders.team_context.is_none());
     }
 
     #[test]
@@ -1527,7 +1671,7 @@ mod tests {
             project.path(),
             Path::new("/bin/rimz"),
             &materialized.env,
-            None,
+            &rimz::harness::launch::LaunchReminders::default(),
         )
         .expect("compile qwen process");
         let AgentProcessStage::Ready(process) = stage else {

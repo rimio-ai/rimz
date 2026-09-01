@@ -480,6 +480,9 @@ fn derive_coverage(manifest: &PluginManifest, hook_reason: &'static str) -> Cove
             "canonical subagent_start/subagent_end",
             "canonical subagent pair and capability not declared",
         ),
+        launch_reminders: ConcernCoverage::Unsupported {
+            reason: "canonical wire declares no system-text channel",
+        },
         background_parking: ConcernCoverage::Unsupported {
             reason: "canonical protocol has no background-parking signal",
         },

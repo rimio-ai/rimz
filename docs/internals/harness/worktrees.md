@@ -94,6 +94,8 @@ Because the `info/exclude` a linked directory is registered in is commonly the r
 
 A team definition's `scratch-files` entries are verbatim gitignore patterns for ephemeral cooperation records. Fresh launch, explicit cohort resume (including the relaunch reconciliation path), and place-first team restore all register the patterns in the checkout's effective `info/exclude` before panes start. Registration is idempotent, uses an atomic whole-file replacement, and stays best-effort: a Git or filesystem failure warns but does not block the team.
 
+At member launch, the team context reminder reports which declared scratch entries matched files at the checkout root and their line counts. That report is a launch-time snapshot only; RimZ never creates the scratch files.
+
 Git commonly resolves a linked worktree's effective exclude file to the repository's shared `.git/info/exclude`. Team scratch patterns therefore hide matching untracked names in the main checkout and every sibling worktree too. Removing the appended lines reverses the registration; RimZ does not remove them automatically because another team or checkout may still depend on them.
 
 A content-landed worktree containing only declared scratch files is clean and therefore eligible for unprompted wrapper cleanup and `rimz gc`; removing the worktree removes those scratch files with it. That lifecycle consequence is the purpose of declaring the records ephemeral.

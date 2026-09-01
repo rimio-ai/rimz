@@ -161,6 +161,9 @@ const PI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     subagents: ConcernCoverage::Wired {
         via: "child pi sessions self-identify through RimZ process-lineage markers and feed lifecycle keyed by their own session id",
     },
+    launch_reminders: ConcernCoverage::Unsupported {
+        reason: "no additive system-text flag; --system-prompt replaces the whole prompt",
+    },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
     },
@@ -331,6 +334,7 @@ impl crate::agents::capabilities::CoreCapability for PiAdapter {
     }
 }
 
+// TODO(launch-reminders): compose additive text into materialized --system-prompt text or the extension.
 impl crate::agents::capabilities::LaunchCapability for PiAdapter {}
 
 impl crate::agents::capabilities::HookCapability for PiAdapter {

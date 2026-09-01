@@ -53,6 +53,8 @@ The launch planner independently rejects any `rimz agents` or `rimz subagents` c
 
 The exec wrapper builds every non-child's allowed catalog from its launching profile and appends an availability reminder on the adapter's native append-system-text channel. Fresh launches, resumes, forks, restarts, and recovery launches all pass through that wrapper. Claude, Codex, Qwen, and Droid receive the reminder; adapters without a native channel receive none because an interactive launch has no user prompt to extend safely.
 
+For team peers, that channel can carry two RimZ reminders: the subagent catalog first, then the team launch context with its launch-time scratch-file snapshot.
+
 The reminder points the agent at `Skill(rimz-subagents)` and lists the same filtered profiles as `rimz subagents profiles --json`. A profile with `subagents = []` instead receives a disabled reminder telling it to work directly; an available catalog with no configured profiles or commands receives dedicated nothing-configured text instead of an empty list. Both surfaces use `subagent_policy::catalog`, so catalog assembly, literal allowlist filtering, and the distinction between a disabled policy and an available but empty named catalog have one owner. If effective project config fails during crash recovery, reminder enrichment warns and is skipped rather than killing the recovered pane.
 
 ## What a launch desugars to

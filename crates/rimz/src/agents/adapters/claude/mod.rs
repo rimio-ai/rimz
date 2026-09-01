@@ -182,6 +182,9 @@ const CLAUDE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     subagents: ConcernCoverage::Wired {
         via: "SubagentStart/SubagentStop + interrupt-derived close",
     },
+    launch_reminders: ConcernCoverage::Wired {
+        via: "--append-system-prompt",
+    },
     background_parking: ConcernCoverage::Wired {
         via: "Stop.background_tasks/session_crons",
     },
