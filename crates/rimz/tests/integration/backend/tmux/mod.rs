@@ -18,6 +18,7 @@ mod layout;
 mod pane_io;
 mod presence;
 mod reconcile;
+mod remote_reconnect;
 mod server_cwd;
 mod session;
 mod sidebar;

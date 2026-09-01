@@ -4,7 +4,8 @@
 //! the attach form drives the `ssh-trace` shim through `RIMZ_SSH_BIN`,
 //! asserting the exact argv handed to ssh and scripting link drops via
 //! `$RIMZ_TEST_SSH_PLAN`. Quoting precision lives in `remote/mod.rs` unit tests;
-//! these prove the CLI surface end to end.
+//! these prove the CLI surface end to end. Shared PTY and terminal-query
+//! behavior lives in `common::ssh_trace` for the live mux suites too.
 
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -15,23 +16,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use nix::sys::termios::{self, InputFlags, LocalFlags, OutputFlags, Termios};
-use portable_pty::{CommandBuilder, PtyPair, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, PtyPair};
 
+use crate::common::ssh_trace::{
+    Answers, FakeTerminal, is_control_check_invocation, is_main_invocation, is_master_invocation,
+    is_path_preflight_invocation, is_probe_invocation, main_invocation_count,
+    master_invocation_count, remote_connect_pty, remote_connect_pty_command, shim_invocations,
+    ssh_shim,
+};
 use crate::common::{CommandTimeoutExt, Env};
-
-fn ssh_shim() -> PathBuf {
-    crate::common::cargo_bin("ssh-trace", env!("CARGO_BIN_EXE_ssh-trace"))
-}
-
-/// One `Vec<argv>` per shim invocation, from the tab-joined trace log.
-fn shim_invocations(log: &Path) -> Vec<Vec<String>> {
-    std::fs::read_to_string(log)
-        .expect("read ssh trace log")
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| line.split('\t').map(ToOwned::to_owned).collect())
-        .collect()
-}
 
 fn stdout_line(out: &Output) -> String {
     assert!(
@@ -88,33 +81,6 @@ fn remote_path_connect_command(env: &Env, log: &Path) -> Command {
     .env("RIMZ_REMOTE_MIN_DISPLAY_MS", "0")
     .env("TERM", "xterm-256color");
     cmd
-}
-
-fn remote_connect_pty_command(env: &Env, log: &Path) -> CommandBuilder {
-    let mut cmd = CommandBuilder::new(env.rimz_bin());
-    env.pin_pty_command(&mut cmd);
-    cmd.args(["remote", "connect", "dev-box:query-engine", "--attach"]);
-    cmd.cwd(env.project_root.as_os_str());
-    cmd.env("RIMZ_SSH_BIN", ssh_shim());
-    cmd.env("RIMZ_TEST_SSH_LOG", log);
-    cmd.env("RIMZ_REMOTE_DIAL_MS", "0");
-    cmd.env("RIMZ_REMOTE_PROBE_MS", "0");
-    cmd.env("RIMZ_REMOTE_INTERNET_PROBE", "0");
-    cmd.env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "1");
-    cmd.env("RIMZ_REMOTE_MIN_DISPLAY_MS", "0");
-    cmd.env("TERM", "xterm-256color");
-    cmd
-}
-
-fn remote_connect_pty() -> PtyPair {
-    native_pty_system()
-        .openpty(PtySize {
-            rows: 24,
-            cols: 100,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("open remote connect pty")
 }
 
 fn put_pty_in_raw_mode(pair: &PtyPair) {
@@ -359,56 +325,6 @@ fn wait_for_notify_log(path: &Path, needles: &[&str]) -> String {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-}
-
-fn is_probe_invocation(argv: &[String]) -> bool {
-    argv.iter()
-        .any(|arg| arg.contains("remote link-stats ingest"))
-}
-
-fn is_control_check_invocation(argv: &[String]) -> bool {
-    argv.windows(2)
-        .any(|args| args[0] == "-O" && args[1] == "check")
-}
-
-fn is_config_query_invocation(argv: &[String]) -> bool {
-    argv.iter().any(|arg| arg == "-G")
-}
-
-fn is_path_preflight_invocation(argv: &[String]) -> bool {
-    argv.iter().any(|arg| arg.starts_with("test -d "))
-}
-
-fn is_master_invocation(argv: &[String]) -> bool {
-    argv.iter().any(|arg| arg == "-M")
-}
-
-fn is_main_invocation(argv: &[String]) -> bool {
-    !is_probe_invocation(argv)
-        && !is_control_check_invocation(argv)
-        && !is_config_query_invocation(argv)
-        && !is_master_invocation(argv)
-        && !is_path_preflight_invocation(argv)
-}
-
-fn main_invocation_count(log: &Path) -> usize {
-    std::fs::read_to_string(log)
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| line.split('\t').map(ToOwned::to_owned).collect::<Vec<_>>())
-        .filter(|argv| is_main_invocation(argv))
-        .count()
-}
-
-fn master_invocation_count(log: &Path) -> usize {
-    std::fs::read_to_string(log)
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| line.split('\t').map(ToOwned::to_owned).collect::<Vec<_>>())
-        .filter(|argv| is_master_invocation(argv))
-        .count()
 }
 
 fn tunnel_invocation_count(log: &Path) -> usize {
@@ -1357,23 +1273,14 @@ fn supervised_reconnect_discards_stale_terminal_replies_and_preserves_user_input
 
     let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
     drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
-    let reader_thread = std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let _ = reader.read_to_end(&mut output);
-        output
-    });
-    let mut writer = pair.master.take_writer().expect("take pty writer");
+    let terminal = FakeTerminal::new(pair.master, Duration::ZERO, Answers::StatusOnly);
     let deadline = Instant::now() + Duration::from_secs(5);
 
     while main_invocation_count(&log) < 1 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(main_invocation_count(&log), 1, "first attach did not start");
-    writer
-        .write_all(TERMINAL_REPLIES)
-        .expect("queue terminal replies");
-    writer.flush().expect("flush terminal replies");
+    terminal.write(TERMINAL_REPLIES);
 
     while main_invocation_count(&log) < 2 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -1383,9 +1290,7 @@ fn supervised_reconnect_discards_stale_terminal_replies_and_preserves_user_input
         2,
         "replacement attach did not start"
     );
-    writer.write_all(USER_MARKER).expect("write user marker");
-    writer.flush().expect("flush user marker");
-    drop(writer);
+    terminal.write(USER_MARKER);
 
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll remote connect") {
@@ -1398,9 +1303,7 @@ fn supervised_reconnect_discards_stale_terminal_replies_and_preserves_user_input
         }
         std::thread::sleep(Duration::from_millis(10));
     };
-    drop(pair.master);
-    let output =
-        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    let output = String::from_utf8_lossy(&terminal.finish()).into_owned();
     let status = status.unwrap_or_else(|| panic!("remote connect timed out; output:\n{output}"));
     assert!(
         status.success(),
@@ -1430,7 +1333,7 @@ fn supervised_reconnect_discards_stale_terminal_replies_and_preserves_user_input
 }
 
 #[test]
-fn supervised_reconnect_absorbs_terminal_replies_arriving_after_the_flush() {
+fn supervised_reconnect_fences_replies_that_arrive_after_the_quiet_window() {
     const TERMINAL_REPLIES: &[u8] = b"\x1b[?62;22;52c\x1b[>1;10;0c\x1bP>|ghostty 1.3.1\x1b\\";
     const USER_MARKER: &[u8] = b"RIMZ-USER-MARKER\r";
 
@@ -1446,7 +1349,7 @@ fn supervised_reconnect_absorbs_terminal_replies_arriving_after_the_flush() {
     let mut cmd = remote_connect_pty_command(&env, &log);
     cmd.env("RIMZ_TEST_SSH_PLAN", &exit_plan);
     cmd.env("RIMZ_TEST_SSH_RAW_TTY", "1");
-    cmd.env("RIMZ_TEST_SSH_SLEEP_MS", "1000");
+    cmd.env("RIMZ_TEST_SSH_SLEEP_MS", "0");
     cmd.env("RIMZ_TEST_SSH_STDIN_PLAN", &stdin_plan);
     cmd.env("RIMZ_TEST_SSH_STDIN_LOG", &stdin_log);
     cmd.env("RIMZ_TEST_SSH_STDIN_UNTIL", "RIMZ-USER-MARKER");
@@ -1454,13 +1357,7 @@ fn supervised_reconnect_absorbs_terminal_replies_arriving_after_the_flush() {
 
     let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
     drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
-    let reader_thread = std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let _ = reader.read_to_end(&mut output);
-        output
-    });
-    let mut writer = pair.master.take_writer().expect("take pty writer");
+    let terminal = FakeTerminal::new(pair.master, Duration::from_millis(400), Answers::StatusOnly);
     let deadline = Instant::now() + Duration::from_secs(5);
 
     while main_invocation_count(&log) < 1 && Instant::now() < deadline {
@@ -1468,18 +1365,9 @@ fn supervised_reconnect_absorbs_terminal_replies_arriving_after_the_flush() {
     }
     assert_eq!(main_invocation_count(&log), 1, "first attach did not start");
 
-    while master_invocation_count(&log) < 2 && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert_eq!(
-        master_invocation_count(&log),
-        2,
-        "replacement master did not start"
-    );
-    writer
-        .write_all(TERMINAL_REPLIES)
-        .expect("deliver late terminal replies");
-    writer.flush().expect("flush late terminal replies");
+    terminal.wait_for_status_query(1, deadline);
+    terminal.write_after(Duration::from_millis(300), TERMINAL_REPLIES);
+    terminal.write_after_next_reply(USER_MARKER);
 
     while main_invocation_count(&log) < 2 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -1489,10 +1377,6 @@ fn supervised_reconnect_absorbs_terminal_replies_arriving_after_the_flush() {
         2,
         "replacement attach did not start"
     );
-    writer.write_all(USER_MARKER).expect("write user marker");
-    writer.flush().expect("flush user marker");
-    drop(writer);
-
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll remote connect") {
             break Some(status);
@@ -1504,9 +1388,7 @@ fn supervised_reconnect_absorbs_terminal_replies_arriving_after_the_flush() {
         }
         std::thread::sleep(Duration::from_millis(10));
     };
-    drop(pair.master);
-    let output =
-        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    let output = String::from_utf8_lossy(&terminal.finish()).into_owned();
     let status = status.unwrap_or_else(|| panic!("remote connect timed out; output:\n{output}"));
     assert!(
         status.success(),
@@ -1530,7 +1412,7 @@ fn supervised_reconnect_absorbs_terminal_replies_arriving_after_the_flush() {
             !recorded
                 .windows(stale_token.len())
                 .any(|window| window == stale_token),
-            "late terminal reply reached replacement attach: {recorded:?}"
+            "stale terminal reply reached replacement attach: {recorded:?}"
         );
     }
 }

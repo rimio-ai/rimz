@@ -6,12 +6,22 @@ use nix::errno::Errno;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::termios::{self, FlushArg, SetArg, Termios};
 
-use rimz::remote::tty::{EMULATOR_RESET, sanitize_flags, termios_damaged};
+use rimz::remote::tty::{
+    EMULATOR_RESET, STATUS_QUERY, StatusReplyScanner, sanitize_flags, termios_damaged,
+};
 
-/// Quiet window the local tty must show before a replacement attach may own it.
+/// Quiet window used when the terminal cannot be queried for a causal fence.
 const SETTLE_QUIET: Duration = Duration::from_millis(250);
-/// Hard cap, so a terminal that never stops talking cannot stall a reconnect.
+/// Hard cap for waiting on a terminal's causal fence reply.
 const SETTLE_MAX: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Eq, PartialEq)]
+enum Settled {
+    Fenced,
+    Quiet,
+    Expired,
+    Interrupted,
+}
 
 pub(super) struct TtyGuard {
     saved: Option<Termios>,
@@ -34,9 +44,12 @@ impl TtyGuard {
         }
     }
 
-    /// Absorbs terminal-protocol replies still arriving from a killed SSH
-    /// generation, so the replacement attach cannot accept them as replies to
-    /// its own capability queries and pass its real replies through as input.
+    /// Fences terminal-protocol replies still arriving from a killed SSH
+    /// generation with a DSR status round trip. Terminals answer queries in
+    /// order, so the fence reply follows every earlier reply and precedes input
+    /// belonging to the replacement. Reading one byte at a time stops exactly
+    /// at that boundary. If the query cannot be written, a quiet-window drain
+    /// remains as a fallback.
     ///
     /// Callers must only use this before a replacement attach: exit paths
     /// preserve pending input for the shell that regains the terminal.
@@ -58,14 +71,33 @@ impl TtyGuard {
             return;
         }
 
-        drain_until_quiet(&stdin, SETTLE_QUIET, SETTLE_MAX);
+        let scanner = if io::stderr().is_terminal() {
+            let mut stderr = io::stderr().lock();
+            match stderr
+                .write_all(STATUS_QUERY.as_bytes())
+                .and_then(|()| stderr.flush())
+            {
+                Ok(()) => Some(StatusReplyScanner::default()),
+                Err(err) => {
+                    tracing::debug!(error = %err, "local tty status query failed");
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
-        if let Err(err) = termios::tcflush(&stdin, FlushArg::TCIFLUSH) {
+        let outcome = settle_input(&stdin, scanner, SETTLE_QUIET, SETTLE_MAX);
+
+        if outcome != Settled::Fenced
+            && let Err(err) = termios::tcflush(&stdin, FlushArg::TCIFLUSH)
+        {
             tracing::debug!(error = %err, "local tty input flush failed");
         }
         if let Err(err) = termios::tcsetattr(&stdin, SetArg::TCSADRAIN, saved) {
             tracing::debug!(error = %err, "local tty restore after settle failed");
         }
+        tracing::debug!(outcome = ?outcome, "local tty settled");
     }
 
     pub(super) fn reset_emulator(&self) {
@@ -91,43 +123,62 @@ impl TtyGuard {
     }
 }
 
-fn drain_until_quiet(stdin: &impl AsFd, quiet: Duration, max: Duration) {
+fn settle_input(
+    stdin: &impl AsFd,
+    mut scanner: Option<StatusReplyScanner>,
+    quiet: Duration,
+    max: Duration,
+) -> Settled {
     let started = Instant::now();
     let deadline = started + max;
     let mut quiet_deadline = started + quiet;
-    let mut buffer = [0_u8; 256];
+    let mut buffer = [0_u8; 1];
     loop {
         let now = Instant::now();
-        let wait_until = quiet_deadline.min(deadline);
-        if now >= wait_until {
-            break;
+        if now >= deadline {
+            return Settled::Expired;
         }
+        if scanner.is_none() && now >= quiet_deadline {
+            return Settled::Quiet;
+        }
+        let wait_until = scanner
+            .as_ref()
+            .map_or_else(|| quiet_deadline.min(deadline), |_| deadline);
         let timeout = PollTimeout::try_from(wait_until.saturating_duration_since(now))
             .unwrap_or(PollTimeout::MAX);
         let mut fds = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];
         match poll(&mut fds, timeout) {
-            Ok(0) => break,
+            Ok(0) => {}
             Ok(_)
                 if fds[0]
                     .revents()
                     .is_some_and(|events| events.contains(PollFlags::POLLIN)) =>
             {
                 match nix::unistd::read(stdin, &mut buffer) {
-                    Ok(0) => break,
-                    Ok(read) if buffer[..read].contains(&0x03) => break,
-                    Ok(_) => quiet_deadline = Instant::now() + quiet,
+                    Ok(0) => return Settled::Expired,
+                    Ok(_) => {
+                        if let Some(scanner) = &mut scanner {
+                            if scanner.feed(buffer[0]) {
+                                return Settled::Fenced;
+                            }
+                        } else if buffer[0] == 0x03 {
+                            return Settled::Interrupted;
+                        } else {
+                            quiet_deadline = Instant::now() + quiet;
+                        }
+                    }
                     Err(Errno::EINTR) => {}
                     Err(err) => {
                         tracing::debug!(error = %err, "local tty settle read failed");
-                        break;
+                        return Settled::Expired;
                     }
                 }
             }
-            Ok(_) => break,
+            Ok(_) => return Settled::Expired,
             Err(Errno::EINTR) => {}
             Err(err) => {
                 tracing::debug!(error = %err, "local tty settle poll failed");
-                break;
+                return Settled::Expired;
             }
         }
     }
@@ -178,11 +229,82 @@ mod tests {
         let quiet = Duration::from_secs(1);
         let started = Instant::now();
 
-        drain_until_quiet(&reader, quiet, Duration::from_secs(2));
+        let outcome = settle_input(&reader, None, quiet, Duration::from_secs(2));
 
+        assert_eq!(outcome, Settled::Interrupted);
         assert!(
             started.elapsed() < quiet / 2,
             "Ctrl-C should end the drain immediately, not after {quiet:?}"
         );
+    }
+
+    #[test]
+    fn fenced_settle_leaves_bytes_after_status_reply_unread() {
+        let (reader, writer) = nix::unistd::pipe().expect("open test pipe");
+        nix::unistd::write(
+            &writer,
+            b"\x1b[?62;22;52c\x1b[>1;10;0c\x1bP>|ghostty 1.3.1\x1b\\\x1b[0nuser",
+        )
+        .expect("write stale replies, fence reply, and user bytes");
+
+        let outcome = settle_input(
+            &reader,
+            Some(StatusReplyScanner::default()),
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+        );
+        let mut remaining = [0_u8; 4];
+        let read = nix::unistd::read(&reader, &mut remaining).expect("read remaining bytes");
+
+        assert_eq!(outcome, Settled::Fenced);
+        assert_eq!(&remaining[..read], b"user");
+    }
+
+    #[test]
+    fn ctrl_c_does_not_abandon_a_fenced_settle() {
+        let (reader, writer) = nix::unistd::pipe().expect("open test pipe");
+        nix::unistd::write(&writer, b"\x03\x1b[0n").expect("write Ctrl-C and status reply");
+
+        let outcome = settle_input(
+            &reader,
+            Some(StatusReplyScanner::default()),
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(outcome, Settled::Fenced);
+    }
+
+    #[test]
+    fn scanner_waits_until_max_instead_of_quiet_timeout() {
+        let (reader, writer) = nix::unistd::pipe().expect("open test pipe");
+        nix::unistd::write(
+            &writer,
+            b"\x1b[?62;22;52c\x1b[>1;10;0c\x1bP>|ghostty 1.3.1\x1b\\",
+        )
+        .expect("write stale replies");
+
+        let outcome = settle_input(
+            &reader,
+            Some(StatusReplyScanner::default()),
+            Duration::from_millis(1),
+            Duration::from_millis(20),
+        );
+
+        assert_eq!(outcome, Settled::Expired);
+    }
+
+    #[test]
+    fn settle_without_scanner_uses_quiet_timeout() {
+        let (reader, _writer) = nix::unistd::pipe().expect("open test pipe");
+
+        let outcome = settle_input(
+            &reader,
+            None,
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(outcome, Settled::Quiet);
     }
 }
