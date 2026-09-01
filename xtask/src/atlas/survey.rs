@@ -544,7 +544,6 @@ fn rank_rows(facts: &Facts, scope: &Path, prefix: &str, args: &Args) -> Result<V
             .files
             .iter()
             .filter(|file| path_in_scope(&file.path, scope))
-            .cloned()
             .collect::<Vec<_>>(),
         scope,
         &facts.mod_index,

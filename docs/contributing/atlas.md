@@ -9,6 +9,8 @@ Opportunity-driven refactoring does not terminate. Atlas work starts by writing 
 Every report uses these terms; the rest of this page assumes them.
 
 - **Escaping (`esc`)** — an item whose *effective* visibility leaves the row's module boundary: a `pub` item re-exported from the crate root escapes, a `pub` item inside a private module does not. `pub` is what the source declares; `esc` is what a caller can reach. Every budget and detector counts `esc`, never raw `pub`.
+- **Goal** — the designed escaping-surface ceiling for a module. Goals describe the destination; budgets remain the ratchet ceiling enforced by the gate.
+- **Debt** — an admitted upward-import prefix the refactor program intends to close. Admissions keep the gate green; debt marks which admissions still count toward the destination.
 - **Churn%** — the share of scoped history commits that touched the module, after folding renames to their HEAD paths. `rank` sorts by `code × churn%`.
 - **Pace** — the module's share of commits in the recent window divided by its share of lifetime commits, so `1.0` means the module is changing at its historical rate and `hot` (≥ 1.5) means it is accelerating. The window is the most recent `--window` percent of scoped commits (default 25). Modules under `--noise-lifetime` lifetime or `--noise-window` window commits report no pace.
 - **Window start** — the commit time where the pace window begins. Detectors that speak of "older than the window" mean older than this point, which on a young repository is only weeks ago.
@@ -116,34 +118,36 @@ The single-caller list is a rehome candidate list, not permission to demote or m
 
 ### `conform` — does the tree match the target?
 
-`conform` checks target schema v3: layer direction, admitted upward imports, exact allowed imports, escaping `surface-budget` values, and stranglers. It reads root `refactor-target.toml` unless `--file` selects another target. `--path` is accepted only with `--init`; normal checks use the paths encoded by the target.
+`conform` checks target schema v4: grouped layer direction, admitted upward imports, exact allowed imports, escaping `surface-budget` values, and stranglers. It reads root `refactor-target.toml` unless `--file` selects another target. `--path` is accepted only with `--init`; normal checks use the paths encoded by the target.
 
-`--init` writes a truthful current-tree baseline and never overwrites. It derives a low-to-high layer order from the current `use` graph unless `--layers a,b,c` supplies one. `--ratchet` fails on unadmitted upward imports and other regressions and is inert when no default target exists. `--tighten` atomically lowers budgets, removes stale admissions, and never loosens a rule. `--verbose` shows every rule instead of folding the ones exactly at budget.
+`--init` writes a truthful current-tree baseline and never overwrites. It derives a low-to-high layer order from the current `use` graph unless `--layers a+b,c` supplies one; commas order layers and `+` groups peers at the same rank. `--ratchet` fails on unadmitted upward imports and other regressions and is inert when no default target exists. `--status` reports each goal's remaining surface and the matched site count plus open or closed state for each declared debt prefix, without changing what the gate enforces; by default it folds every rule without a goal, debt, or regression. `--tighten` atomically lowers budgets, removes stale admissions with their closed debt entries, retires goals the tree has met, and never loosens a rule. `--verbose` shows every rule.
 
 ## Baseline versus target
 
 `--init` produces a **baseline**: every budget equals the current count, every existing upward import is admitted, and the layer order is the weighted greedy order derived from the `use` graph. A baseline is a regression guard, and that is what the gate runs: `checks` and `gate` call `conform --ratchet`, so any pass that widens a surface or adds an upward import must edit the target file in a deliberate commit. That friction is the point.
 
-A baseline is not a design. The generated `layers` array is a total order over every top-level module, and the `upward-imports` admissions on a low layer are exactly the imports a from-scratch design would not have. Read the admissions as the debt queue: each named prefix on `store` or `config` is a `rehome` candidate, and the passes that close them are the program. The file cannot yet record a destination that differs from the present without turning the gate red, so the destination lives in the hand-off plan: name the admission or budget the pass will remove, close it in that pass, and let `--tighten` write the new truth. Removing an admission by hand before the pass is done makes `ratchet` fail on every commit in between; do not.
+A baseline is not a design. The generated `layers` array is a total order over every top-level module, and the `upward-imports` admissions on a low layer are exactly the imports a from-scratch design would not have. Turn that baseline into a target by setting `surface-goal` to the designed ceiling and listing the admitted prefixes the program will close under `upward-debt`. These fields do not make the gate red: `--status` measures the distance while budgets and admissions continue to protect the current tree, and `--tighten` records each improvement without moving an open goal. Once current surface reaches or passes a goal, status marks it `met` and tighten retires the goal into the lower ratchet budget. Removing an admission by hand before the pass is done still makes `ratchet` fail on every commit in between; do not.
 
 Writing a real target means supplying `--layers` with a handful of layers a human chose rather than accepting the derived order, and it means every later target edit is either `--tighten` output or a reviewed loosening with a reason.
 
-## Target schema v3
+## Target schema v4
 
-`layers` list top-level crate modules from lower to upper. A module may import its own or a lower layer; importing a higher layer is an `upward-import`. `(crate)` may name root-declared items. A top-level name absent from `layers` is unconstrained.
+`layers` list top-level crate modules from lower to upper. A string is one layer; an array groups peer modules at the same rank, so peer imports are neither upward nor downward. A module may import its own or a lower layer; importing a higher layer is an `upward-import`. `(crate)` may name root-declared items. A top-level name absent from `layers` is unconstrained.
 
-Most module rules use `upward-imports` to admit known debt additively while retaining the layer rule. A hand-written nested rule may instead use `allowed-imports`, which is an exact allow-list and overrides layer checking for that rule. A rule may not contain both.
+Most module rules use `upward-imports` to admit existing higher-layer dependencies while retaining the layer rule. `upward-debt` is the subset the program promises to close, and every debt entry must exactly match an admission. `surface-goal` must not exceed `surface-budget`. A hand-written nested rule may instead use `allowed-imports`, which is an exact allow-list and overrides layer checking for that rule; such a rule cannot carry upward debt. Layer groups cannot be empty, and a module may appear in only one layer.
 
 ```toml
-version = 3
-layers = ["ids", "store", "agents", "cli"]
+version = 4
+layers = ["ids", "store", ["agents", "harness"], "cli"]
 
 # Store is intentionally low. This records one known upward dependency while
 # every other higher-layer import remains a regression.
 [[module]]
 path = "crates/rimz/src/store"
 upward-imports = ["agents::state"]
+upward-debt = ["agents::state"]
 surface-budget = 12
+surface-goal = 6
 
 # This nested migration has a deliberately narrower, exact boundary.
 [[module]]
@@ -157,13 +161,13 @@ path = "crates/rimz/src/cli"
 baseline = 0
 ```
 
-The first rule still permits lower-layer imports and admits only the named upward prefix. The second bypasses layer direction and permits exactly its listed prefixes. Before implementation, `conform` reports upward or unallowed import sites, excess surface, and strangler occurrences; after the pass, ratchet and tighten preserve the result.
+The first rule still permits lower-layer imports and admits only the named upward prefix; status reports that debt as open while it remains in use and reports `current - surface-goal` as remaining surface. The second bypasses layer direction and permits exactly its listed prefixes. Before implementation, `conform` reports upward or unallowed import sites, excess surface, and strangler occurrences; after the pass, ratchet and tighten preserve the result.
 
-## JSON v3
+## JSON v4
 
-Every JSON report carries `version: 3` and `verb`; scoped analysis also carries its path and parse failures. Totals always describe the complete result even when displayed row arrays honour `--top`. `survey` and `brief` return their sections in one untruncated v3 payload, including `detector_counts` per module. Reference-derived fields are optional and are omitted under `--no-index`, not filled with heuristic values.
+Every JSON report carries `version: 4` and `verb`; scoped analysis also carries its path and parse failures. Totals always describe the complete result even when displayed row arrays honour `--top`. `survey` and `brief` return their sections in one untruncated v4 payload, including `detector_counts` per module. Reference-derived fields are optional and are omitted under `--no-index`, not filled with heuristic values.
 
-Important per-verb additions are recursive `rank.rows[].children` and optional `ref_median`; `seams.callers` with calling module, distinct-item count, and item names; and `api` resolution plus production/test reference module fields and exact single-caller arrays. `diff` reports complete totals plus module rows and added/removed arrays for surface, imports, edges, unresolved definitions, and files; reference-derived fields are absent under `--no-index`. `conform` reports layers and `upward-import` findings. Schema v2 name-match and over-publication fields do not exist in v3.
+Important per-verb additions are recursive `rank.rows[].children` and optional `ref_median`; `seams.callers` with calling module, distinct-item count, and item names; and `api` resolution plus production/test reference module fields and exact single-caller arrays. `diff` reports complete totals plus module rows and added/removed arrays for surface, imports, edges, unresolved definitions, and files; reference-derived fields are absent under `--no-index`. `conform` reports `mode`, layers as strings or peer arrays, and optional `goal`, `remaining`, and `debt` fields on rules. Schema v2 name-match and over-publication fields do not exist in v4.
 
 ## A worked reading chain
 
@@ -183,12 +187,13 @@ cargo xtask atlas brief --module crates/rimz/src/agents/adapters --md
 # Exact callers for one item, once a brief has named it.
 cargo xtask atlas api --module store --top 40
 
-# Seed once with a chosen layer order, then edit the baseline into the intended design.
-cargo xtask atlas conform --init --path crates/rimz/src --layers ids,store,agents,harness,cli
+# Seed once with a chosen layer order (join peers with +), then add goals and debt.
+cargo xtask atlas conform --init --path crates/rimz/src --layers ids+utils,store+config,agents+harness,cli
 
 # Per-pass proof.
 cargo xtask atlas diff --base <baseline-ref> --path <scope> --md
 cargo xtask atlas conform --ratchet
+cargo xtask atlas conform --status
 cargo xtask atlas conform --tighten
 cargo xtask atlas rank --path <scope> --since <baseline-ref>
 ```

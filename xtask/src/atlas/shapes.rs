@@ -27,7 +27,7 @@ Clusters spanning more modules and files rank before member-count × mean-sloc.
   --top N         clusters to report (default 10)
   --min-sloc N    minimum function source lines (default 40)
   --similarity S  Jaccard threshold from 0 through 1 (default 0.35)
-  --json          versioned JSON agent contract (v3)";
+  --json          versioned JSON agent contract (v4)";
 
 #[derive(Debug)]
 struct Args {

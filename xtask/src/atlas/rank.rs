@@ -40,7 +40,7 @@ Requires rust-code-analysis-cli (`cargo install rust-code-analysis-cli --locked`
   --no-split             keep the report at one level
   --since <ref>          add row deltas and complete totals deltas
   --verbose              list top offender functions for shown modules
-  --json                 versioned JSON agent contract (v3)";
+  --json                 versioned JSON agent contract (v4)";
 
 #[derive(Debug)]
 struct Args {
@@ -677,7 +677,7 @@ fn escaping_counts(
     scope: &Path,
     mod_index: &syntax::ModIndex,
 ) -> BTreeMap<String, usize> {
-    super::modules::escaping_items(files, scope, mod_index)
+    super::modules::escaping_items(&files.iter().collect::<Vec<_>>(), scope, mod_index)
         .into_iter()
         .map(|(module, items)| (module, items.len()))
         .collect()

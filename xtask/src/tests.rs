@@ -135,6 +135,7 @@ fn atlas_accepts_verbs_and_verb_help() {
     for argv in [
         args(&["atlas", "rank"]),
         args(&["atlas", "conform", "--ratchet"]),
+        args(&["atlas", "conform", "--status"]),
         args(&["atlas", "shapes", "--help"]),
         args(&["atlas", "survey", "--help"]),
         args(&["atlas", "brief", "--help"]),

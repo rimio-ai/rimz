@@ -33,14 +33,14 @@ pub(super) fn item_escapes(
 }
 
 pub(super) fn escaping_items(
-    files: &[FileSyntax],
+    files: &[&FileSyntax],
     scope: &Path,
     mod_index: &ModIndex,
 ) -> BTreeMap<String, Vec<EscapingItem>> {
     let mut files_by_row = BTreeMap::<String, Vec<&FileSyntax>>::new();
     for file in files {
         let row = module_for_path(&file.path, scope);
-        files_by_row.entry(row).or_default().push(file);
+        files_by_row.entry(row).or_default().push(*file);
     }
     files_by_row
         .into_iter()
@@ -335,7 +335,8 @@ mod tests {
         let syntax = syntax::analyze_sources(&sources);
         let index = syntax::ModIndex::new(&syntax.files);
 
-        let items = escaping_items(&syntax.files, Path::new("src"), &index);
+        let files = syntax.files.iter().collect::<Vec<_>>();
+        let items = escaping_items(&files, Path::new("src"), &index);
 
         assert_eq!(items["agents"].len(), 4);
         assert_eq!(

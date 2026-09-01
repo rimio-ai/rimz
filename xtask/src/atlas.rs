@@ -25,7 +25,7 @@ mod survey;
 mod syntax;
 mod target;
 
-pub(super) const REPORT_VERSION: u8 = 3;
+pub(super) const REPORT_VERSION: u8 = 4;
 
 use std::path::{Component, Path, PathBuf};
 

@@ -28,7 +28,7 @@ module's pairwise co-change fanout folds into one annotated hub row.
   --since <ref>          restrict co-change to <ref>..HEAD (excludes --window)
   --max-commit-files N   omit commits broader than N Rust sources (default 10)
   --min-cochange N       co-change and divergence threshold (default 3)
-  --json                 versioned JSON agent contract (v3)";
+  --json                 versioned JSON agent contract (v4)";
 
 #[derive(Debug)]
 struct Args {
