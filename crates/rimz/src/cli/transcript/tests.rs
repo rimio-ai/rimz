@@ -425,6 +425,19 @@ fn flat_and_last_apply_to_display_order() {
 
 #[test]
 fn subagent_reports_are_json_only_and_do_not_consume_the_human_last_slot() {
+    let project = tempfile::TempDir::new().expect("project tempdir");
+    let workspace_id = rimz::WorkspaceId::from_project_root(project.path());
+    let workspace = rimz::ResolvedWorkspace {
+        workspace_id: workspace_id.clone(),
+        project_root: project.path().to_path_buf(),
+        cwd_project_root: None,
+        root_class: rimz::workspace::RootClass::Directory,
+        worktree_root: project.path().to_path_buf(),
+        worktree_branch: None,
+        session_name: "transcript-hidden-test".to_owned(),
+        mux_hint: None,
+    };
+    let paths = rimz::StatePaths::under(workspace_id, project.path()).expect("state paths");
     let prompt = log_entry(
         "claude",
         "receiver",
@@ -440,38 +453,35 @@ fn subagent_reports_are_json_only_and_do_not_consume_the_human_last_slot() {
         "hidden report",
     );
     report.at = ts("2026-06-01T00:00:01Z");
-    let logged = vec![prompt, report];
-    let identities = build_identities(&logged);
-    let entries_for = |include_hidden| {
-        logged
-            .iter()
-            .filter(|entry| entry_is_visible(entry, include_hidden))
-            .map(|entry| render_entry_for_log_entry(entry, &identities, false))
-            .collect::<Vec<_>>()
-    };
+    rimz::transcript::append(&paths, &prompt).expect("append prompt");
+    rimz::transcript::append(&paths, &report).expect("append report");
 
-    let human = RenderedChat {
-        channel: Some("chat".to_owned()),
-        focus: None,
-        entries: entries_for(false),
-        archive_prefix: 0,
-        archived_hidden: 0,
-        newest_archived_at: None,
-        empty_message: None,
-        last: Some(1),
-        flat: true,
-    };
-    let mut out = Vec::new();
-    render_lines_to(&mut out, &human, &TimeZone::UTC, Prose::Raw).expect("human render");
-    let out = String::from_utf8(out).expect("utf8");
-    assert!(out.contains("visible prompt"), "{out}");
-    assert!(!out.contains("hidden report"), "{out}");
+    let human = chat_view_with_mode(
+        &workspace,
+        &paths,
+        Some("@all"),
+        None,
+        Some(1),
+        false,
+        Hidden::for_json(false),
+        true,
+    )
+    .expect("human view");
+    let human_lines = selected_lines(&human);
+    assert_eq!(human_lines.len(), 1);
+    assert_eq!(human_lines[0].text, "visible prompt");
 
-    let json = RenderedChat {
-        entries: entries_for(true),
-        last: None,
-        ..human
-    };
+    let json = chat_view_with_mode(
+        &workspace,
+        &paths,
+        Some("@all"),
+        None,
+        None,
+        false,
+        Hidden::for_json(true),
+        true,
+    )
+    .expect("json view");
     let lines = selected_lines(&json);
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[1].from, "@rimz");

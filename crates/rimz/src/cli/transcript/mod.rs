@@ -96,6 +96,22 @@ pub(crate) struct RenderEntry {
     pub(crate) chat: ChatLine,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Hidden {
+    Show,
+    Skip,
+}
+
+impl Hidden {
+    pub(crate) fn for_json(json: bool) -> Self {
+        if json { Self::Show } else { Self::Skip }
+    }
+
+    fn includes(self, entry: &TranscriptEntry) -> bool {
+        self == Self::Show || entry.entry != TranscriptKind::SubagentReport
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Identity {
     base_handle: String,
@@ -132,13 +148,16 @@ use thread::entries_for_view;
 use {chat::*, scope::*, thread::*};
 pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing state paths")?;
     let view = chat_view_with_mode(
         &workspace,
+        &paths,
         args.target.as_deref(),
         args.worktree.as_deref(),
         args.last,
         args.all,
-        args.json,
+        Hidden::for_json(args.json),
         args.flat,
     )?;
     let selected = selected_lines(&view);
@@ -189,23 +208,37 @@ pub(crate) fn chat_view(
     last: Option<usize>,
     all: bool,
 ) -> Result<RenderedChat> {
-    chat_view_with_mode(workspace, target, worktree, last, all, false, false)
+    chat_view_with_hidden(workspace, target, worktree, last, all, Hidden::Skip)
 }
 
-fn chat_view_with_mode(
+pub(crate) fn chat_view_with_hidden(
     workspace: &rimz::ResolvedWorkspace,
     target: Option<&str>,
     worktree: Option<&str>,
     last: Option<usize>,
     all: bool,
-    include_hidden: bool,
-    flat: bool,
+    hidden: Hidden,
 ) -> Result<RenderedChat> {
     let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
+    chat_view_with_mode(
+        workspace, &paths, target, worktree, last, all, hidden, false,
+    )
+}
+
+fn chat_view_with_mode(
+    workspace: &rimz::ResolvedWorkspace,
+    paths: &rimz::StatePaths,
+    target: Option<&str>,
+    worktree: Option<&str>,
+    last: Option<usize>,
+    all: bool,
+    hidden: Hidden,
+    flat: bool,
+) -> Result<RenderedChat> {
     let current = current_channel(workspace);
-    let target = resolve_run_target(&paths, target)?;
-    let entries = dedup_asks(rimz::transcript::read_all(&paths)?);
+    let target = resolve_run_target(paths, target)?;
+    let entries = dedup_asks(rimz::transcript::read_all(paths)?);
     if entries.is_empty() {
         return Ok(RenderedChat {
             channel: None,
@@ -232,7 +265,7 @@ fn chat_view_with_mode(
     let filtered: Vec<&TranscriptEntry> = entries
         .iter()
         .filter(|entry| entry_in_scope(entry, &scope))
-        .filter(|entry| entry_is_visible(entry, include_hidden))
+        .filter(|entry| hidden.includes(entry))
         .collect();
     if filtered.is_empty() {
         let empty_message = empty_scope_message(&scope, target.as_deref());
@@ -306,10 +339,6 @@ fn chat_view_with_mode(
         last,
         flat,
     })
-}
-
-fn entry_is_visible(entry: &TranscriptEntry, include_hidden: bool) -> bool {
-    include_hidden || entry.entry != TranscriptKind::SubagentReport
 }
 
 pub(crate) fn render_lines_to(
