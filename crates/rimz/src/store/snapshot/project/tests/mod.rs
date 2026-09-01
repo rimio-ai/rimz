@@ -6,7 +6,7 @@ use super::super::view::{attach_sub_agents, row_from_agent, sub_agent_from_state
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentStatus, LaunchParams, PermissionMode, SessionOrigin};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
-use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
+use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
     AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, EventEnvelope,
 };
@@ -80,9 +80,9 @@ fn indexed_launch_agent(
     let mut agent = crate::testkit::agent_state("codex", id, epoch());
     agent.launch_id = launch_id.map(AgentSessionId::from);
     agent.registered_at = Some(epoch());
-    agent.pane = Some(PaneRef {
+    agent.pane = Some(crate::pane::PaneRef {
         pane_process_start: Some(epoch()),
-        ..PaneRef::from_id(PaneId::parse(pane_id).expect("pane id"))
+        ..crate::pane::PaneRef::from_id(PaneId::parse(pane_id).expect("pane id"))
     });
     agent.runtime_owner = Some(RuntimeOwner::new(
         RuntimeOwnerKind::Agent,
