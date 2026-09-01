@@ -42,6 +42,9 @@ pub const RESERVED_AGENT_WORDS: &[&str] = &[
     "exec", "focus", "fork", "list", "ls", "profiles", "show", "stop", "term", "wait",
 ];
 
+/// Handles used in message envelopes for senders that are not agents.
+pub const HEADER_PSEUDO_HANDLES: &[&str] = &["user", "rimz"];
+
 pub fn mint(taken: impl IntoIterator<Item = impl AsRef<str>>) -> String {
     let seed = Uuid::now_v7().simple().to_string();
     mint_from_seed(&seed, taken)
@@ -73,6 +76,7 @@ fn basic_valid_name(name: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
         && name != "all"
         && !RESERVED_AGENT_WORDS.contains(&name)
+        && !HEADER_PSEUDO_HANDLES.contains(&name)
 }
 
 fn mint_from_seed(seed: &str, taken: impl IntoIterator<Item = impl AsRef<str>>) -> String {
@@ -130,6 +134,8 @@ mod tests {
             ("fork", false),
             // `all` is the @all fan-out keyword; the generator must never mint it.
             ("all", false),
+            ("user", false),
+            ("rimz", false),
             ("two words", false),
             ("claude", false),
             ("claude-1", false),

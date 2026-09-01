@@ -355,9 +355,10 @@ pub(super) fn message_digest_groups(
 pub(super) fn rendered_sender(sender: &MessageSender, rendered: &str) -> String {
     match sender {
         MessageSender::Human => render::paint(render::palette::cool(), rendered),
-        MessageSender::Agent { .. } | MessageSender::Subagent { .. } | MessageSender::System => {
-            render::paint(render::palette::meta().bold(), rendered)
-        }
+        MessageSender::Agent { .. }
+        | MessageSender::Harness { .. }
+        | MessageSender::Subagent { .. }
+        | MessageSender::System => render::paint(render::palette::meta().bold(), rendered),
     }
 }
 

@@ -1153,39 +1153,25 @@ fn tmux_settled_subagent_reports_to_parent() {
         String::from_utf8_lossy(&first.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&first.stderr).contains("no need to wait"),
+        String::from_utf8_lossy(&first.stderr).contains("read results with"),
         "background launch should explain callback delivery: {}",
         String::from_utf8_lossy(&first.stderr)
     );
-    wait_for_named_terminal_run(&env, "report-first", CAPTURE_BUDGET);
-    let deadline = Instant::now() + CAPTURE_BUDGET;
-    let first_report = loop {
-        if let Some(report) = env
-            .store()
+    let first_run = wait_for_named_terminal_run(&env, "report-first", CAPTURE_BUDGET);
+    assert_eq!(
+        first_run.report_message_id, None,
+        "the first settler must wait for the rest of the fleet"
+    );
+    assert!(
+        env.store()
             .list_messages()
             .expect("list queued reports")
-            .into_iter()
-            .find(|message| {
-                matches!(
-                    &message.sender,
-                    rimz::message::MessageSender::Subagent { name, .. }
-                        if name == "report-first"
-                )
-            })
-        {
-            break report;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "first child report was not queued"
-        );
-        std::thread::sleep(Duration::from_millis(25));
-    };
-    assert!(first_report.text.contains("stub done"));
-    assert!(
-        first_report
-            .text
-            .contains("1 subagent still running: @report-second.")
+            .iter()
+            .all(|message| !matches!(
+                &message.sender,
+                rimz::message::MessageSender::Harness { .. }
+            )),
+        "no digest should queue while a sibling is running"
     );
 
     let stopped = env
@@ -1195,7 +1181,40 @@ fn tmux_settled_subagent_reports_to_parent() {
         .bounded_output_within(Duration::from_secs(20))
         .expect("stop second subagent");
     assert!(stopped.status.success(), "stop second failed: {stopped:?}");
-    wait_for_named_terminal_run(&env, "report-second", CAPTURE_BUDGET);
+    let second_run = wait_for_named_terminal_run(&env, "report-second", CAPTURE_BUDGET);
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    let fleet_digest = loop {
+        if let Some(report) = env
+            .store()
+            .list_messages()
+            .expect("list fleet digest")
+            .into_iter()
+            .find(|message| {
+                matches!(
+                    message.sender,
+                    rimz::message::MessageSender::Harness {
+                        notice: rimz::message::HarnessNotice::SubagentReport
+                    }
+                )
+            })
+        {
+            break report;
+        }
+        assert!(Instant::now() < deadline, "fleet digest was not queued");
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert!(fleet_digest.text.contains("All 2 settled"));
+    assert!(fleet_digest.text.contains("@report-first — completed"));
+    assert!(fleet_digest.text.contains("@report-second — canceled"));
+    assert!(fleet_digest.text.contains("rimz subagents wait"));
+    for run in [&first_run, &second_run] {
+        assert_eq!(
+            rimz::harness::run::load(env.store().paths(), &run.run_id)
+                .expect("reload reported run")
+                .report_message_id,
+            Some(fleet_digest.message_id.clone())
+        );
+    }
 
     for (key, value) in [
         ("RIMZ_TEST_AGENT_SESSION", "sess-report-waited"),
@@ -1236,17 +1255,21 @@ fn tmux_settled_subagent_reports_to_parent() {
         String::from_utf8_lossy(&waited.stderr)
     );
     assert!(String::from_utf8_lossy(&waited.stdout).contains("stub done"));
-    assert!(
+    assert_eq!(
         env.store()
             .list_messages()
             .expect("list reports after waited launch")
             .iter()
-            .all(|message| !matches!(
-                &message.sender,
-                rimz::message::MessageSender::Subagent { name, .. }
-                    if name == "report-waited"
-            )),
-        "--wait launch must not queue a duplicate report"
+            .filter(|message| {
+                message.status != rimz::message::MessageStatus::Canceled
+                    && matches!(
+                        &message.sender,
+                        rimz::message::MessageSender::Harness { .. }
+                    )
+            })
+            .count(),
+        1,
+        "--wait launch must not queue a new digest"
     );
 
     for (key, value) in [
@@ -1304,9 +1327,11 @@ fn tmux_settled_subagent_reports_to_parent() {
                 message.status == rimz::message::MessageStatus::Sent
                     && matches!(
                         &message.sender,
-                        rimz::message::MessageSender::Subagent { name, .. }
-                            if name == "report-timed"
+                        rimz::message::MessageSender::Harness {
+                            notice: rimz::message::HarnessNotice::SubagentReport
+                        }
                     )
+                    && message.message_id != fleet_digest.message_id
             })
         {
             break report;
@@ -1317,28 +1342,27 @@ fn tmux_settled_subagent_reports_to_parent() {
         );
         std::thread::sleep(Duration::from_millis(25));
     };
+    assert!(timed_report.text.contains("Your subagent settled"));
+    assert!(timed_report.text.contains("@report-timed — completed"));
 
     let parent_frame = capture_joined_until(
         &socket,
         &parent_pane_raw,
         |frame| {
             frame.contains("Type: SUBAGENT_REPORT")
-                && frame.contains("From: @report-first")
-                && frame.contains("1 subagent still running: @report-second.")
-                && frame.contains("stub done")
-                && frame.contains("From: @report-second")
-                && frame.contains("All your subagents have finished.")
+                && frame.contains("From: @rimz")
+                && frame.contains("@report-first — completed")
+                && frame.contains("@report-second — canceled")
         },
         CAPTURE_BUDGET,
     );
     assert!(
         parent_frame.contains("Type: SUBAGENT_REPORT")
-            && parent_frame.contains("From: @report-first")
-            && parent_frame.contains("1 subagent still running: @report-second.")
-            && parent_frame.contains("stub done")
-            && parent_frame.contains("From: @report-second")
-            && parent_frame.contains("All your subagents have finished."),
-        "parent pane did not receive the queued reports; timed report: {timed_report:?}\n{parent_frame}"
+            && parent_frame.contains("From: @rimz")
+            && parent_frame.contains("@report-first — completed")
+            && parent_frame.contains("@report-second — canceled")
+            && !parent_frame.contains("stub done"),
+        "parent pane did not receive status-only digests; timed report: {timed_report:?}\n{parent_frame}"
     );
 }
 

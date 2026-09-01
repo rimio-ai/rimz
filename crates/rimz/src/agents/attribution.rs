@@ -563,7 +563,10 @@ fn conversation_counts(
                     counts.asks_answered = counts.asks_answered.saturating_add(1);
                 }
             }
-            TranscriptKind::Assistant | TranscriptKind::Answer | TranscriptKind::Error => {}
+            TranscriptKind::SubagentReport
+            | TranscriptKind::Assistant
+            | TranscriptKind::Answer
+            | TranscriptKind::Error => {}
         }
     }
     counts

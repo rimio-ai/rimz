@@ -61,6 +61,11 @@ pub enum MessageSender {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         channel: Option<String>,
     },
+    Harness {
+        notice: HarnessNotice,
+    },
+    /// Legacy per-child completion sender retained for queued records in
+    /// existing rooms. New completion digests use [`Self::Harness`].
     Subagent {
         kind: AgentKind,
         name: String,
@@ -68,11 +73,27 @@ pub enum MessageSender {
     System,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessNotice {
+    SubagentReport,
+}
+
+impl HarnessNotice {
+    pub const fn header_type(self) -> &'static str {
+        match self {
+            Self::SubagentReport => "SUBAGENT_REPORT",
+        }
+    }
+}
+
 impl MessageSender {
     pub fn attributed(&self) -> Option<Self> {
         match self {
             Self::Human => None,
-            Self::Agent { .. } | Self::Subagent { .. } | Self::System => Some(self.clone()),
+            Self::Agent { .. } | Self::Harness { .. } | Self::Subagent { .. } | Self::System => {
+                Some(self.clone())
+            }
         }
     }
 
@@ -80,6 +101,7 @@ impl MessageSender {
         match self {
             Self::Human => "you".to_owned(),
             Self::System => "rimz".to_owned(),
+            Self::Harness { .. } => "@rimz".to_owned(),
             Self::Subagent { name, .. } => format!("@{name}"),
             Self::Agent {
                 kind,
@@ -709,6 +731,7 @@ impl MessageRecord {
     pub fn batch_key(&self) -> Option<&str> {
         match &self.sender {
             MessageSender::Agent { channel, .. } => channel.as_deref(),
+            MessageSender::Harness { .. } => None,
             MessageSender::Human | MessageSender::Subagent { .. } | MessageSender::System => {
                 self.channel.as_deref()
             }

@@ -284,8 +284,10 @@ fn mark_joined<'a>(
             continue;
         };
         let result = (|| -> Result<()> {
-            let record = rimz::harness::run::report::mark_joined(store.paths(), &record.run_id)?;
-            if let Some(message_id) = record.report_message_id {
+            let joined = rimz::harness::run::report::mark_joined(store.paths(), &record.run_id)?;
+            if let Some(message_id) = joined.report_message_id
+                && rimz::harness::run::report::digest_fully_joined(store.paths(), &message_id)?
+            {
                 store.cancel_message(&message_id, session_name, "joined inline")?;
             }
             Ok(())
@@ -294,7 +296,7 @@ fn mark_joined<'a>(
             tracing::warn!(
                 run_id = %record.run_id,
                 error = %err,
-                "could not mark the joined run; a duplicate report may follow",
+                "could not mark the joined run",
             );
         }
     }

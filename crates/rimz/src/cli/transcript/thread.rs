@@ -97,7 +97,7 @@ pub(super) fn assemble_threads(
         // Typed prompts have no recorded linkage, so their output falls back
         // to the latest opener for the same agent session.
         match entry.kind {
-            TranscriptKind::Prompt | TranscriptKind::Message => {
+            TranscriptKind::Prompt | TranscriptKind::Message | TranscriptKind::SubagentReport => {
                 latest_opener.insert(entry.agent.clone(), index);
             }
             TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error
@@ -170,7 +170,7 @@ fn thread_edge(parent: &RenderEntry, child: &RenderEntry) -> bool {
         | TranscriptKind::Ask
         | TranscriptKind::Error
         | TranscriptKind::Answer => true,
-        TranscriptKind::Prompt | TranscriptKind::Message => {
+        TranscriptKind::Prompt | TranscriptKind::Message | TranscriptKind::SubagentReport => {
             parent.chat.from != "user"
                 && child
                     .chat

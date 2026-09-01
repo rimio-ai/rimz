@@ -288,10 +288,12 @@ pub struct RunRecord {
     /// Pane-backed child launched through `rimz subagents`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub subagent: bool,
-    /// Time at which a joiner claimed the settled result for inline output.
+    /// Time at which a joiner claimed the settled result for inline output;
+    /// joined runs are excluded from the next completion digest and let the
+    /// joiner cancel a digest once every row it lists has been joined.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub joined_at: Option<Timestamp>,
-    /// Completion message queued by the in-pane wrapper.
+    /// Completion digest that listed this run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_message_id: Option<crate::ids::MessageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

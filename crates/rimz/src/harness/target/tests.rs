@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use super::*;
 use crate::agents::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
-use crate::message::MessageSender;
+use crate::message::{HarnessNotice, MessageSender};
 use crate::pane::PaneRef;
 
 #[test]
@@ -645,18 +645,13 @@ fn message_header_parser_round_trips_attributed_senders() {
     );
     assert_eq!(message_header(&MessageSender::System, &[], None), None);
 
-    let subagent = MessageSender::Subagent {
-        kind: AgentKind::new_unchecked("codex"),
-        name: "lucid-atlas".to_owned(),
+    let subagent = MessageSender::Harness {
+        notice: HarnessNotice::SubagentReport,
     };
     let report = message_header(&subagent, &[], None).unwrap() + body;
     assert_eq!(
         parse_message_header(&report),
-        Some((
-            HeaderKind::Subagent,
-            "@lucid-atlas".to_owned(),
-            body.to_owned()
-        ))
+        Some((HeaderKind::Subagent, "@rimz".to_owned(), body.to_owned()))
     );
 }
 
@@ -692,7 +687,7 @@ fn align_submitted_prompt_consumes_human_header() {
 }
 
 #[test]
-fn align_submitted_prompt_consumes_subagent_header() {
+fn align_submitted_prompt_consumes_harness_report_header() {
     let recipient = agent("claude", "session-recipient", Some("main"), "terminal_1");
     let record = MessageRecord::new(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
@@ -701,11 +696,10 @@ fn align_submitted_prompt_consumes_subagent_header() {
         true,
         crate::message::DeliveryGate::Done,
     )
-    .with_sender(MessageSender::Subagent {
-        kind: AgentKind::new_unchecked("codex"),
-        name: "lucid-atlas".to_owned(),
+    .with_sender(MessageSender::Harness {
+        notice: HarnessNotice::SubagentReport,
     });
-    let prompt = "Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nship it";
+    let prompt = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nship it";
 
     let (leading, segments, trailing) =
         align_submitted_prompt(prompt, &[&record]).expect("aligned prompt");
@@ -795,7 +789,7 @@ fn align_submitted_prompt_requires_exact_system_text() {
 #[test]
 fn split_batched_prompt_splits_only_on_typed_sections() {
     let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
-    let subagent = "Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nreport";
+    let subagent = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nreport";
     let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
     assert_eq!(
         split_batched_prompt(&format!("{agent}\n\n{human}")),
@@ -817,6 +811,20 @@ fn split_batched_prompt_splits_only_on_typed_sections() {
         split_batched_prompt(&format!("{agent}\n\nsecond paragraph")),
         vec![format!("{agent}\n\nsecond paragraph")]
     );
+}
+
+#[test]
+fn legacy_subagent_sender_still_decodes() {
+    let sender = serde_json::from_str::<MessageSender>(
+        r#"{"origin":"subagent","kind":"codex","name":"lucid-atlas"}"#,
+    )
+    .expect("legacy sender");
+
+    assert!(matches!(
+        sender,
+        MessageSender::Subagent { kind, name }
+            if kind.as_str() == "codex" && name == "lucid-atlas"
+    ));
 }
 
 #[test]

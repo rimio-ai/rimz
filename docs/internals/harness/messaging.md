@@ -50,7 +50,7 @@ A record is keyed on a **card**, the logical agent identity the rollup tracks: a
 | `kind`, `agent_id`, `agent_name` | receiver card; the name folds provisional ids into the registered queue |
 | `address` | receiver handle as resolved at enqueue, rendered by `list` and `show` after the live card is gone |
 | `channel` | receiver lane at enqueue time |
-| `sender` | `Human`, `Agent { kind, name, profile, role, channel }`, `Subagent { kind, name }` (renders as `@petname`), or `System` (renders as `rimz`) |
+| `sender` | `Human`, `Agent { kind, name, profile, role, channel }`, `Harness { notice }` (renders as `@rimz`), or `System` (renders as `rimz`); legacy `Subagent { kind, name }` records remain decodable but have no producer |
 | `automated` | background orchestration traffic; never earns a dollar-budget waiver |
 | `reply_wait` | a CLI is blocked on this record's reply ([Reply waits](#reply-waits)) |
 | `in_reply_to` | the messages that opened the sender's authoring turn; empty starts a new conversation root |
@@ -271,11 +271,11 @@ Content:
 <message>
 ```
 
-`Type` is `AGENT_MESSAGE` for a send from a RimZ-launched agent, `SUBAGENT_REPORT` for a launched child's settled result, and `USER_MESSAGE` for a human's `rimz message`; a human header always uses `From: @user`, while a subagent report uses the child's petname. An agent handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
+`Type` is `AGENT_MESSAGE` for a send from a RimZ-launched agent, `SUBAGENT_REPORT` for the status-only fleet digest sent after all of an agent's launched children settle, and `USER_MESSAGE` for a human's `rimz message`; a human header always uses `From: @user`, while the fleet digest uses `From: @rimz`. An agent handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
 
 The agent handle is the shortest unique selector over addressable agents: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down this ladder. System records and `--no-from` sends stay verbatim.
 
-The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` and `SUBAGENT_REPORT` become first-class `Message` transcript entries with structured `from`; `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. When the agent has an open question, the first direct human `Prompt` segment instead becomes its id-stamped `Answer`; an attributed queue record never answers it. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
+The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` becomes a first-class `Message` transcript entry, while `SUBAGENT_REPORT` becomes a `SubagentReport` entry; both carry structured `from`. Human transcript rendering hides `SubagentReport`, while `rimz transcript --json` includes it. `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. When the agent has an open question, the first direct human `Prompt` segment instead becomes its id-stamped `Answer`; an attributed queue record never answers it. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
 
 ## Smart compaction
 
@@ -376,6 +376,7 @@ Hook and delivery paths append to fixed 7-day buckets at `transcript/<bucket-sta
 | --- | --- | --- |
 | `Prompt` | a human prompt when no question is open | `user: @receiver, text` |
 | `Message` | an inter-agent delivery, with structured `from` | `@sender: @receiver, text` |
+| `SubagentReport` | the status-only launched-child fleet digest, with `from: @rimz` | hidden from human rendering; included by `--json` |
 | `Assistant` | a root turn's final assistant message | `@receiver: text` |
 | `Ask` | a native question, when a blocking hook marks the agent waiting; `questions` carry option labels and descriptions | the agent's question |
 | `Answer` | the effective answer from the native prompt UI or the first human prompt submitted while a question is open | `you` to the agent, folded into its ask card |

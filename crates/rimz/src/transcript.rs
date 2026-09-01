@@ -42,6 +42,7 @@ pub type Result<T> = std::result::Result<T, TranscriptLogErr>;
 pub enum TranscriptKind {
     Prompt,
     Message,
+    SubagentReport,
     Assistant,
     Ask,
     Answer,
@@ -470,6 +471,7 @@ mod tests {
         for kind in [
             TranscriptKind::Prompt,
             TranscriptKind::Message,
+            TranscriptKind::SubagentReport,
             TranscriptKind::Assistant,
             TranscriptKind::Ask,
             TranscriptKind::Answer,

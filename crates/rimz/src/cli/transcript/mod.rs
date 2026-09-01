@@ -138,6 +138,7 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         args.worktree.as_deref(),
         args.last,
         args.all,
+        args.json,
         args.flat,
     )?;
     let selected = selected_lines(&view);
@@ -188,7 +189,7 @@ pub(crate) fn chat_view(
     last: Option<usize>,
     all: bool,
 ) -> Result<RenderedChat> {
-    chat_view_with_mode(workspace, target, worktree, last, all, false)
+    chat_view_with_mode(workspace, target, worktree, last, all, false, false)
 }
 
 fn chat_view_with_mode(
@@ -197,6 +198,7 @@ fn chat_view_with_mode(
     worktree: Option<&str>,
     last: Option<usize>,
     all: bool,
+    include_hidden: bool,
     flat: bool,
 ) -> Result<RenderedChat> {
     let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
@@ -230,6 +232,7 @@ fn chat_view_with_mode(
     let filtered: Vec<&TranscriptEntry> = entries
         .iter()
         .filter(|entry| entry_in_scope(entry, &scope))
+        .filter(|entry| entry_is_visible(entry, include_hidden))
         .collect();
     if filtered.is_empty() {
         let empty_message = empty_scope_message(&scope, target.as_deref());
@@ -303,6 +306,10 @@ fn chat_view_with_mode(
         last,
         flat,
     })
+}
+
+fn entry_is_visible(entry: &TranscriptEntry, include_hidden: bool) -> bool {
+    include_hidden || entry.entry != TranscriptKind::SubagentReport
 }
 
 pub(crate) fn render_lines_to(

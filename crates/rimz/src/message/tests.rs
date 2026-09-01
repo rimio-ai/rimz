@@ -828,6 +828,12 @@ fn sender_render_uses_attributed_address_precedence() {
         (MessageSender::Human, "you"),
         (MessageSender::System, "rimz"),
         (
+            MessageSender::Harness {
+                notice: HarnessNotice::SubagentReport,
+            },
+            "@rimz",
+        ),
+        (
             MessageSender::Subagent {
                 kind: AgentKind::new_unchecked("codex"),
                 name: "lucid-atlas".to_owned(),
