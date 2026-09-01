@@ -24,7 +24,7 @@ JSON
 
 `fanout` reads a JSON task array from `FILE`, or from stdin when `FILE` is omitted. It validates the whole list and opens each child pane in sequence. The children run in parallel after their panes open, and each minted petname prints as it launches.
 
-By default, `fanout` returns after launching. Once every launched child in the parent's current fleet has settled, one status-only `SUBAGENT_REPORT` digest from `@rimz` lists their outcomes; read the results with `rimz subagents wait`. Use `--wait[=DURATION]` to join exactly the children from that fanout, optionally with a caller-side deadline; each answer prints as it finishes under a `--- petname ---` header using the shared [agent-prose rendering rule](../cli.md#agent-prose), with a status suffix only for an abnormal outcome, and the command exits nonzero if any child does. Waiting reads durable results; if every child listed by one queued digest prints inline, RimZ cancels that redundant digest, while any unread row keeps it queued. This wait deadline is distinct from the children's `--timeout`. With background fanout `--json`, RimZ emits a map from petname to `run_id`; with `--wait --json`, fanout emits the same labeled result map as a plural `rimz subagents wait --json`, including each run's `last_message` when available.
+By default, `fanout` returns after launching. Once every launched child in the parent's current fleet has settled, one status-only `SUBAGENT_REPORT` digest from `@rimz` lists their outcomes and names the exact `rimz subagents wait @…` command for those rows. Use `--wait[=DURATION]` to join exactly the children from that fanout, optionally with a caller-side deadline; each answer prints as it finishes under a `--- petname ---` header using the shared [agent-prose rendering rule](../cli.md#agent-prose), with a status suffix only for an abnormal outcome, and the command exits nonzero if any child does. Waiting reads durable results; if every child listed by one queued digest prints inline, RimZ cancels that redundant digest, while any unread row keeps it queued. This wait deadline is distinct from the children's `--timeout`. With background fanout `--json`, RimZ emits a map from petname to `run_id`; with `--wait --json`, fanout emits the same labeled result map as a plural `rimz subagents wait --json`, including each run's `last_message` when available.
 
 Each array entry has the single-launch fields that make sense for data-driven delegation:
 
@@ -97,18 +97,18 @@ Background children signal settlement through the ordinary durable message queue
 Type: SUBAGENT_REPORT
 From: @rimz
 Content:
-All 3 settled, read with `rimz subagents wait`.
+All 3 settled, read with `rimz subagents wait @naming @runtime @slow-reviewer`.
 
 @naming — completed in 4m12s, 84 lines — map spec/profile surfaces
 @runtime — completed in 5m03s, 1 line — inspect runtime behavior
-@slow-reviewer — timed out after 30m, no result: provider did not stop — review correctness
+@slow-reviewer — timed out after 30m, 12 lines; provider did not stop — review correctness
 ```
 
-For more than one child the header is ``All {n} settled, read with `rimz subagents wait`.``; for one it is ``Your subagent settled, read with `rimz subagents wait`.`` Rows use ``@{name} — {status_label} {in|after} {elapsed}, {size} — {description}``: timed-out runs use `after`, every other status uses `in`, elapsed time is compact, and the optional description is the launcher's description rather than the profile. Rows follow child registration order.
+For more than one child the header is ``All {n} settled, read with `rimz subagents wait @a @b …`.``; for one it is ``Your subagent settled, read with `rimz subagents wait @a`.`` The command names exactly the rows in that digest and is never a bare wait, which would join every recorded child. Rows use ``@{name} — {status_label} {in|after} {elapsed}, {size} — {description}``: timed-out runs use `after`, every other status uses `in`, elapsed time is compact, and the optional description is the launcher's description rather than the profile. Rows follow child registration order and duplicate audit rows for one run are deduplicated by run id.
 
-For a completed run with a non-blank final message, size is the number of non-empty lines (`1 line` or `{N} lines`); a blank final message reads `no final message`. Every other terminal status reads `no result`, followed by `: {reason}` when the failure tail has a non-empty line; the reason is its last non-empty line. The digest never carries a child's result text or JSON; use `rimz subagents wait --json` for structured results.
+For every status, a non-blank `last_message` contributes its number of non-empty lines (`1 line` or `{N} lines`); a blank value reads `no result`. A non-completed status then appends `; {reason}` when `failure_tail` has a non-empty line, using its last non-empty line. The digest never carries a child's result text or JSON; use `rimz subagents wait --json` for structured results.
 
-A child launched while the fleet is still running joins that fleet; one launched after digest composition starts belongs to the next. Children already printed by a join are excluded from a digest that has not yet been composed. For a queued digest, `rimz subagents wait` cancels it only after every listed child has printed inline; a digest with any unread row stands. Simultaneous last settlers may each queue a truthful digest before either stamps its rows. No digest is sent when the parent has ended. Durable run records remain the result truth: `list` shows them and `wait` can read their full results after panes close.
+A child launched while the fleet is still running joins that fleet; one launched after digest composition starts belongs to the next. Children already printed by a join are excluded from a digest that has not yet been composed. RimZ stamps every listed row with the digest id before queueing, so a join cannot cancel a half-observed row set. For a queued digest, a wait cancels only that digest and only after every listed child has printed inline; a digest with any unread row stands. Simultaneous last settlers race on first-writer-wins stamps, so each row appears at most once and none is lost. No digest is sent when the parent has ended. Durable run records remain the result truth: `list` shows them and `wait` can read their full results after panes close, and the elected producer's once-per-minute orphan scan reconstructs a missed digest from those records.
 
 ## Join results manually
 

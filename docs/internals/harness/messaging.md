@@ -208,7 +208,7 @@ The same reactor separately nudges the sweep when this agent is *referenced* by 
 
 When a queued head delivers, the helper extends the claim through the contiguous ready prefix of that head's lane, so a run of messages that piled up during one turn arrives as one interaction instead of several.
 
-A member joins the batch only if it is a `Prompt` that submits with Enter, does not start with `/`, has its own gate open, matches the head's `force` flag, and shares the head's batch key (the sender's channel for an agent, the receiver's channel for a human, as if typed in the pane). A `Command` body, slash text, a no-enter draft, a force mismatch, a closed gate, or a cross-channel sender stops the batch. Resume control messages never batch.
+A member joins the batch only if it is a `Prompt` that submits with Enter, does not start with `/`, has its own gate open, matches the head's `force` flag, and shares the head's batch key. That key is the sender's channel for an `Agent` and the receiver's channel for a `Human`, legacy `Subagent`, or `System` sender; a `Harness` sender has no batch channel. A `Command` body, slash text, a no-enter draft, a force mismatch, a closed gate, or a cross-channel sender stops the batch. Resume control messages never batch.
 
 The batch lands as one paste and one submit. Agent- and human-authored members keep their own structured message header, system members stay verbatim, and sections are separated by a blank line. Claim, `Sent` recording, release, and pre-send failure each mutate the whole batch in one queue transaction, while audit events stay one per message in message order.
 

@@ -97,7 +97,7 @@ This indexes what lives where; runtime shape and the single-binary rationale liv
 **Repository** — `crates/rimz/` (the binary plus the runtime/domain library; `benches/`, and `presence/`/`pricing/`/`themes/` data `build.rs` embeds), `crates/rimz-presence-zellij/` (headless Zellij presence plugin, wasm32-wasip1, no rimz-crate deps), `docs/` (product and engineering docs; `docs/externals/` mirrors upstream), `xtask/` (task runner and every gate), `examples/`, `ci/`, `docker/`, `scripts/`, `supply-chain/`.
 
 **Subsystems — `crates/rimz/src/`**, each carrying its own `AGENTS.md` contract:
-- `cli/` — command parsing, one `run(...)` per subcommand, shared `cli/render/` output, and wrapper-owned subagent completion reports.
+- `cli/` — command parsing, one `run(...)` per subcommand, shared `cli/render/` output, and the subagent fleet digest.
 - `agents/` — the provider-neutral `AgentDefinition` catalog, caller-aligned capability contracts and services, `state.rs` rollup, private `adapters/` implementations for every built-in and process plugin, and shared spend/pricing/account machinery including upstream pricing projection.
 - `room/` — private managed-room context, birth/reset lifecycle, sidebar/presence options, and health gating.
 - `harness/` — layout IR, teams, address grammar, launch argv, supervised runs and their wake socket, loop scheduling, resume planning, and rebirth recovery inspection/materialization.
