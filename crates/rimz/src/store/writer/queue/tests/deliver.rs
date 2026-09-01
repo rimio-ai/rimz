@@ -316,6 +316,31 @@ fn correlated_ack_confirms_matching_prompt_instead_of_oldest_sent() {
 }
 
 #[test]
+fn correlated_ack_settles_mixed_submit_with_reason() {
+    let q = Queue::new();
+    let sent = q.sent_with(1, |message| message.text = "rimz prompt".to_owned());
+
+    let delivered = q
+        .confirm_delivered_for_card(
+            &sent.kind,
+            &sent.agent_id,
+            None,
+            DeliveryAck::TurnStarted {
+                prompt: Some(&format!("before{}after", user_message("rimz prompt"))),
+            },
+            "session",
+        )
+        .unwrap();
+
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].message_id, sent.message_id);
+    assert_eq!(
+        q.reason("message.delivered"),
+        "confirmed inside a mixed submit; 6 stray bytes before, 5 stray bytes after"
+    );
+}
+
+#[test]
 fn correlated_ack_aligns_headered_and_mixed_batches() {
     for (first_sender, first_text, second_text, prompt) in [
         (

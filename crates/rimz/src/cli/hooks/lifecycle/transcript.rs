@@ -242,9 +242,23 @@ pub(super) fn record_conversation(
                 let aligned =
                     rimz::harness::target::align_submitted_prompt(prompt, &delivered_refs);
                 let batch_aligned = aligned.is_some();
-                let segments =
-                    aligned.unwrap_or_else(|| rimz::harness::target::split_batched_prompt(prompt));
-                for segment in segments {
+                let segments = if let Some(aligned) = aligned {
+                    let mut segments = Vec::with_capacity(aligned.segments.len() + 2);
+                    if let Some(leading) = aligned.leading {
+                        segments.push((leading, false));
+                    }
+                    segments.extend(aligned.segments.into_iter().map(|segment| (segment, true)));
+                    if let Some(trailing) = aligned.trailing {
+                        segments.push((trailing, false));
+                    }
+                    segments
+                } else {
+                    rimz::harness::target::split_batched_prompt(prompt)
+                        .into_iter()
+                        .map(|segment| (segment, false))
+                        .collect()
+                };
+                for (segment, aligned_record) in segments {
                     let segment = segment.trim();
                     if segment.is_empty() {
                         continue;
@@ -278,13 +292,15 @@ pub(super) fn record_conversation(
                                 segment.to_owned(),
                             ),
                         };
-                    let matched = if batch_aligned {
+                    let matched = if aligned_record {
                         delivered.get(delivered_cursor).map(|message| (0, message))
-                    } else {
+                    } else if !batch_aligned {
                         delivered[delivered_cursor..]
                             .iter()
                             .enumerate()
                             .find(|(_, message)| message.text == delivered_text)
+                    } else {
+                        None
                     };
                     if let Some((offset, message)) = matched {
                         entry.message_id = Some(message.message_id.clone());
@@ -295,9 +311,10 @@ pub(super) fn record_conversation(
                         matched_ids.push(message.message_id.clone());
                         delivered_cursor += offset + 1;
                     }
-                    // ponytail: agent messages do not answer an open ask; add
-                    // explicit sender semantics before classifying them.
-                    let fallback_prompt = if entry.entry == rimz::transcript::TranscriptKind::Prompt
+                    // Only direct input answers an open ask; attributed queue
+                    // records arrived through RimZ's separate delivery path.
+                    let fallback_prompt = if entry.message_id.is_none()
+                        && entry.entry == rimz::transcript::TranscriptKind::Prompt
                         && let Some(ask_id) = open_ask_id.take()
                     {
                         let fallback = entry.clone();

@@ -763,42 +763,57 @@ impl Store {
                             message.body == MessageBody::Prompt
                                 && message.same_card(card)
                                 && (message.status == MessageStatus::Sent
-                                    || message.awaiting_late_ack(now))
+                                    || message.awaiting_late_ack())
                         })
                         .collect::<Vec<_>>();
                     confirmable.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
-                    let mut selected = BTreeSet::new();
+                    let mut selected = (BTreeSet::new(), None);
                     for first in &confirmable {
                         let batch = confirmable
                             .iter()
                             .copied()
                             .filter(|message| same_submitted_batch(first, message))
                             .collect::<Vec<_>>();
-                        if crate::harness::target::align_submitted_prompt(prompt, &batch).is_some()
+                        if let Some(aligned) =
+                            crate::harness::target::align_submitted_prompt(prompt, &batch)
                         {
-                            selected.extend(
+                            selected.0.extend(
                                 batch
                                     .iter()
                                     .map(|message| message.message_id.as_str().to_owned()),
                             );
+                            let (before, after) = aligned.stray_bytes();
+                            if !aligned.is_exact() {
+                                let mut parts = Vec::new();
+                                if before > 0 {
+                                    parts.push(format!("{before} stray bytes before"));
+                                }
+                                if after > 0 {
+                                    parts.push(format!("{after} stray bytes after"));
+                                }
+                                selected.1 = Some(format!(
+                                    "confirmed inside a mixed submit; {}",
+                                    parts.join(", ")
+                                ));
+                            }
                             break;
                         }
                     }
                     selected
                 }
-                DeliveryAck::TurnStarted { .. } => oldest_sent_batch(MessageBody::Prompt),
-                DeliveryAck::Compaction => oldest_sent_batch(MessageBody::Command),
+                DeliveryAck::TurnStarted { .. } => (oldest_sent_batch(MessageBody::Prompt), None),
+                DeliveryAck::Compaction => (oldest_sent_batch(MessageBody::Command), None),
             };
-            if selected.is_empty() {
+            if selected.0.is_empty() {
                 return Ok(Vec::new());
             }
             let delivered = queue.apply_all(session_name, now, |message| {
-                if !selected.contains(message.message_id.as_str()) {
+                if !selected.0.contains(message.message_id.as_str()) {
                     return MessageUpdate::Keep;
                 }
                 MessageUpdate::Finalize {
                     status: MessageStatus::Delivered,
-                    reason: None,
+                    reason: selected.1.clone(),
                 }
             });
             Ok(delivered)

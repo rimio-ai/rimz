@@ -1156,21 +1156,77 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
     }
 }
 
+/// One submitted pane paste aligned with the records written as its batch.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SubmittedAlignment<'a> {
+    pub leading: Option<&'a str>,
+    pub segments: Vec<&'a str>,
+    pub trailing: Option<&'a str>,
+}
+
+impl SubmittedAlignment<'_> {
+    pub fn is_exact(&self) -> bool {
+        self.leading.is_none() && self.trailing.is_none()
+    }
+
+    pub fn stray_bytes(&self) -> (usize, usize) {
+        (
+            self.leading.map_or(0, str::len),
+            self.trailing.map_or(0, str::len),
+        )
+    }
+}
+
 /// Align one submitted pane paste with the records written as its batch.
 ///
 /// Record text supplies the otherwise ambiguous boundaries between adjacent
 /// messages. Agent-, subagent-, and human-authored records consume their
 /// rendered headers; system records stay verbatim. Interior record whitespace
 /// matches verbatim; only the paste's outer first/last whitespace follows hook
-/// normalization.
+/// normalization. Composer text around an intact batch is returned separately.
 pub fn align_submitted_prompt<'a>(
     prompt: &'a str,
     records: &[&MessageRecord],
-) -> Option<Vec<&'a str>> {
+) -> Option<SubmittedAlignment<'a>> {
     if records.is_empty() {
         return None;
     }
-    let mut remaining = prompt.trim();
+    let prompt = prompt.trim();
+    let anchor = match records[0].sender {
+        MessageSender::Agent { .. } => "Type: AGENT_MESSAGE\nFrom: @",
+        MessageSender::Subagent { .. } => "Type: SUBAGENT_REPORT\nFrom: @",
+        MessageSender::Human => "Type: USER_MESSAGE\nFrom: @user\nContent:\n",
+        MessageSender::System => {
+            let text = if records.len() == 1 {
+                records[0].text.trim()
+            } else {
+                records[0].text.trim_start()
+            };
+            if text.is_empty() {
+                return None;
+            }
+            text
+        }
+    };
+    for (start, _) in prompt.match_indices(anchor) {
+        let Some((segments, trailing)) = align_submitted_prompt_from(&prompt[start..], records)
+        else {
+            continue;
+        };
+        return Some(SubmittedAlignment {
+            leading: nonempty_trimmed(&prompt[..start]),
+            segments,
+            trailing: nonempty_trimmed(trailing),
+        });
+    }
+    None
+}
+
+fn align_submitted_prompt_from<'a>(
+    prompt: &'a str,
+    records: &[&MessageRecord],
+) -> Option<(Vec<&'a str>, &'a str)> {
+    let mut remaining = prompt;
     let mut segments = Vec::with_capacity(records.len());
     for (index, record) in records.iter().enumerate() {
         let segment = remaining;
@@ -1213,18 +1269,21 @@ pub fn align_submitted_prompt<'a>(
         }
         let after_text = body.strip_prefix(expected)?;
         if last {
-            if !after_text.is_empty() {
-                return None;
-            }
-            segments.push(segment.trim());
-            continue;
+            let segment_end = segment.len() - after_text.len();
+            segments.push(segment[..segment_end].trim());
+            return Some((segments, after_text));
         }
         let after_join = after_text.strip_prefix("\n\n")?;
         let segment_end = segment.len() - after_text.len();
         segments.push(segment[..segment_end].trim());
         remaining = after_join;
     }
-    Some(segments)
+    None
+}
+
+fn nonempty_trimmed(text: &str) -> Option<&str> {
+    let text = text.trim();
+    (!text.is_empty()).then_some(text)
 }
 
 /// The structured header for a human-, agent-, or subagent-authored message.
