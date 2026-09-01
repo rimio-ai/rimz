@@ -726,8 +726,10 @@ pub fn compile_agent_process_stage_with_extra_env(
     cwd: &Path,
     rimz_bin: &Path,
     extra_env: &BTreeMap<String, String>,
-    subagent_catalog: Option<&crate::harness::subagent_policy::SubagentCatalog>,
-    team: Option<&crate::config::Team>,
+    reminders: (
+        Option<&crate::harness::subagent_policy::SubagentCatalog>,
+        Option<&crate::config::Team>,
+    ),
 ) -> Result<AgentProcessStage, AgentProcessStageErr> {
     let bound = !matches!(&request.provider_account, ProviderAccountState::Unbound);
     if bound && !matches!(&request.action, ExecAction::Launch { .. }) {
@@ -740,8 +742,8 @@ pub fn compile_agent_process_stage_with_extra_env(
         request,
         cwd,
         extra_env,
-        subagent_catalog,
-        team,
+        reminders.0,
+        reminders.1,
     )?;
     let managed_launch = if bound {
         let adapter = crate::agents::find_definition(request.kind.as_str()).ok_or_else(|| {

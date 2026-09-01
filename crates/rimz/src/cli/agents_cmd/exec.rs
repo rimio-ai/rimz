@@ -80,8 +80,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &provider_cwd,
         &rimz::proc::rimz_exe(),
         &materialized_prompt.env,
-        reminders.subagent_catalog.as_ref(),
-        reminders.team.as_ref(),
+        (reminders.subagent_catalog.as_ref(), reminders.team.as_ref()),
     );
     let stage = match stage {
         Ok(stage) => stage,
@@ -1643,8 +1642,7 @@ mod tests {
             project.path(),
             Path::new("/bin/rimz"),
             &materialized.env,
-            None,
-            None,
+            (None, None),
         )
         .expect("compile qwen process");
         let AgentProcessStage::Ready(process) = stage else {
