@@ -138,6 +138,7 @@ fn atlas_accepts_verbs_and_verb_help() {
         args(&["atlas", "shapes", "--help"]),
         args(&["atlas", "survey", "--help"]),
         args(&["atlas", "brief", "--help"]),
+        args(&["atlas", "diff", "--help"]),
     ] {
         assert_eq!(
             parse_args(&argv).unwrap(),

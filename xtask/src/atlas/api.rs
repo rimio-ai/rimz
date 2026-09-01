@@ -215,7 +215,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let previous = args
         .since
         .as_deref()
-        .map(|reference| Facts::load_at(root, &args.path, reference))
+        .map(|reference| Facts::load_at(root, &args.path, reference, None))
         .transpose()?;
     let previous_counts = previous.as_ref().map(|facts| {
         let files = facts

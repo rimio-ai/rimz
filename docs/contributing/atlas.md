@@ -1,6 +1,6 @@
 # Atlas: refactor analysis
 
-`cargo xtask atlas` is the instrument for target-driven architecture work. It builds one set of facts about the tree, presents those facts at several resolutions, and checks the result against `refactor-target.toml`. The operating loop is **survey → brief → target → conform**.
+`cargo xtask atlas` is the instrument for target-driven architecture work. It builds one set of facts about the tree, presents those facts at several resolutions, and checks the result against `refactor-target.toml`. The operating loop is **survey → brief → target → diff → conform**.
 
 Opportunity-driven refactoring does not terminate. Atlas work starts by writing the intended boundary, gives each pass a bounded scope and line budget, and ends when `conform --ratchet` proves that boundary. Reopening a finished rule requires a deliberate target-file edit.
 
@@ -19,7 +19,7 @@ Every report uses these terms; the rest of this page assumes them.
 1. **Survey the scope once.** Run `survey` to see ranked size and surface, repeated shapes, seam divergence, API reference evidence, and detector shortlists in one report. Read the rank table and the shapes first; the section on [reading the detectors](#detectors--annotations-not-shortlists) explains why the shortlists are read last and never at face value. This is the reading queue, not the decision.
 2. **Read one brief per candidate.** Run `brief --module <path>` for each candidate module. Its **Callers by assembly** table is the primary evidence: how many distinct items each outside module must assemble to use this one. Read that beside the providers, co-change neighbours, shapes, and conform rules before deciding whether a wide interface is a missing seam or legitimate coupling.
 3. **Write the target before moving code.** State the layer order, admitted upward-import debt, exact allow-lists where a nested boundary needs one, surface budgets, stranglers, pass order, and line budget. Treat every proposed demotion or split as a hypothesis until the compiler and tests accept it. The [target section](#baseline-versus-target) says what the file can and cannot record.
-4. **Conform and ratchet.** Implement one seam or submodule per pass. A pass exits when behaviour holds, `conform --ratchet` is clean, and `rank --since <ref>` shows the intended complete-scope line delta. Run `conform --tighten` after an improvement to preserve it.
+4. **Diff, conform, and ratchet.** Implement one seam or submodule per pass. `diff --base <ref>` is the structural proof: it names escaping items and dependency edges opened and closed, alongside the complete SLOC movement. A pass exits when behaviour holds, the diff shows the intended movement, and `conform --ratchet` is clean. `rank --since <ref>` remains the narrower line-arithmetic view. Run `conform --tighten` after an improvement to preserve it.
 
 Modules flagged `pin` get characterization tests before their pass. Independent passes may use parallel worktrees only when their briefs share neither a co-change edge nor a prerequisite. A hand-off carries the relevant brief, target rules, expected post-pass budgets, and verification commands; it does not ask the executor to repeat the survey.
 
@@ -35,7 +35,9 @@ Every table honours its scope, limits displayed rows with `--top`, and retains c
 
 ## The SCIP index
 
-`rank`, `seams`, `api`, `survey`, and `brief` require exact references by default. Atlas asks `rust-analyzer` for a SCIP export, parses it with `scip`, and caches the result under `target/atlas/`, keyed by sorted source contents and `Cargo.lock`. A cold index on this workspace costs about 73 seconds and 6 GB; with a warm cache `survey` runs in about 15 seconds and `brief` in about 5. Install the pinned toolchain's component with `rustup component add rust-analyzer`, or provide `rust-analyzer` on `PATH`. A missing indexer fails at command entry with that fix. If `rust-analyzer` panics during export (a known upstream inlay-hint inference bug), Atlas retries once with cache priming serialized and otherwise reports both attempts; it never substitutes heuristics.
+`rank`, `seams`, `api`, `survey`, `brief`, and `diff` require exact references by default. Atlas asks `rust-analyzer` for a SCIP export, parses it with `scip`, and caches the result under `target/atlas/`, keyed by sorted source contents and `Cargo.lock`. The cache keeps the two most recently used indexes so `diff` can retain both the working tree and one base. A cold index on this workspace costs about 73 seconds and 6 GB; with a warm cache `survey` runs in about 15 seconds and `brief` in about 5. Install the pinned toolchain's component with `rustup component add rust-analyzer`, or provide `rust-analyzer` on `PATH`. A missing indexer fails at command entry with that fix. If `rust-analyzer` panics during export (a known upstream inlay-hint inference bug), Atlas retries once with cache priming serialized and otherwise reports both attempts; it never substitutes heuristics.
+
+For a reference-aware diff, Atlas materializes the base with `git archive` in a temporary `target/atlas/checkout-*` directory, indexes that checkout while sharing the main target directory's dependency artifacts, then removes it on success or failure. The base cache key uses the base sources and base `Cargo.lock`, not either working-tree input. SCIP paths remain checkout-relative. Crate names still come from the current manifests, so crate renames between the base and working tree are outside this comparison.
 
 `--no-index` is the explicit lower-cost mode. It keeps syntax-derived facts and `use` edges but omits every reference-derived column, shortlist, flag, and JSON field; it never substitutes name matching. `shapes` and `conform` never load the index, so the conform gate does not pay this cost.
 
@@ -73,6 +75,14 @@ A wide, thin row has `esc >= 20` and `loc/esc < 120`:
 - otherwise it is `hub`.
 
 `pin` identifies churny, under-tested code; `hot` marks pace at least 1.5. Flags are reading prompts, not verdicts. `--verbose` lists the functions driving complexity. With `--since <ref>`, every row gains `Δcode`/`Δpub` and the overall line covers the complete scope, not only shown rows; this is the per-pass line arithmetic.
+
+### `diff` — did the pass shrink the interface?
+
+`diff --base <ref>` compares a resolved base commit with the working tree per top-level module and in total. Read the totals and module table first, then the named changes: escaping items added and removed, upward-import site movement under the configured layer order, `use` and exact-reference edges, strangler movement, newly unresolved definitions, and created or deleted Rust files. Upward rows report base and current site counts per layer pair, including partial closure; reference edges report the distinct-item assembly count on each side. If the default target file does not exist, the upward-import and strangler sections are omitted and the report says so; an explicitly selected missing target is an error.
+
+Escaping-item identity is Rust module path, item kind, and name; source lines do not participate, so moving an item within its module does not fabricate removal and addition. Same-named methods in one module collapse to one identity. Renames are intentionally one removal plus one addition, and file renames are one deletion plus one creation.
+
+`--no-index` keeps SLOC, escaping surface, layer-direction movement, `use` edges, stranglers, and files. It omits exact-reference edges, assembly deltas, and newly unresolved definitions. Both formats report parse failures separately for the base and working tree; treat any nonzero count as incomplete evidence rather than an interface change. The first indexed comparison against a new base pays for a second SCIP export; repeated runs reuse both cached indexes.
 
 ### `shapes` — what choreography repeats?
 
@@ -112,7 +122,7 @@ The single-caller list is a rehome candidate list, not permission to demote or m
 
 ## Baseline versus target
 
-`--init` produces a **baseline**: every budget equals the current count, every existing upward import is admitted, and the layer order is whatever topological sort the `use` graph allows. A baseline is a regression guard, and that is what the gate runs: `checks` and `gate` call `conform --ratchet`, so any pass that widens a surface or adds an upward import must edit the target file in a deliberate commit. That friction is the point.
+`--init` produces a **baseline**: every budget equals the current count, every existing upward import is admitted, and the layer order is the weighted greedy order derived from the `use` graph. A baseline is a regression guard, and that is what the gate runs: `checks` and `gate` call `conform --ratchet`, so any pass that widens a surface or adds an upward import must edit the target file in a deliberate commit. That friction is the point.
 
 A baseline is not a design. The generated `layers` array is a total order over every top-level module, and the `upward-imports` admissions on a low layer are exactly the imports a from-scratch design would not have. Read the admissions as the debt queue: each named prefix on `store` or `config` is a `rehome` candidate, and the passes that close them are the program. The file cannot yet record a destination that differs from the present without turning the gate red, so the destination lives in the hand-off plan: name the admission or budget the pass will remove, close it in that pass, and let `--tighten` write the new truth. Removing an admission by hand before the pass is done makes `ratchet` fail on every commit in between; do not.
 
@@ -153,7 +163,7 @@ The first rule still permits lower-layer imports and admits only the named upwar
 
 Every JSON report carries `version: 3` and `verb`; scoped analysis also carries its path and parse failures. Totals always describe the complete result even when displayed row arrays honour `--top`. `survey` and `brief` return their sections in one untruncated v3 payload, including `detector_counts` per module. Reference-derived fields are optional and are omitted under `--no-index`, not filled with heuristic values.
 
-Important per-verb additions are recursive `rank.rows[].children` and optional `ref_median`; `seams.callers` with calling module, distinct-item count, and item names; and `api` resolution plus production/test reference module fields and exact single-caller arrays. `conform` reports layers and `upward-import` findings. Schema v2 name-match and over-publication fields do not exist in v3.
+Important per-verb additions are recursive `rank.rows[].children` and optional `ref_median`; `seams.callers` with calling module, distinct-item count, and item names; and `api` resolution plus production/test reference module fields and exact single-caller arrays. `diff` reports complete totals plus module rows and added/removed arrays for surface, imports, edges, unresolved definitions, and files; reference-derived fields are absent under `--no-index`. `conform` reports layers and `upward-import` findings. Schema v2 name-match and over-publication fields do not exist in v3.
 
 ## A worked reading chain
 
@@ -177,6 +187,7 @@ cargo xtask atlas api --module store --top 40
 cargo xtask atlas conform --init --path crates/rimz/src --layers ids,store,agents,harness,cli
 
 # Per-pass proof.
+cargo xtask atlas diff --base <baseline-ref> --path <scope> --md
 cargo xtask atlas conform --ratchet
 cargo xtask atlas conform --tighten
 cargo xtask atlas rank --path <scope> --since <baseline-ref>

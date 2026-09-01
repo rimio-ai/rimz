@@ -52,10 +52,15 @@ impl Facts {
         {
             bail!("no tracked Rust files under `{}`", scope.display());
         }
-        Self::from_sources(root, scope, sources, facets)
+        Self::from_sources(root, scope, sources, facets, None)
     }
 
-    pub(super) fn load_at(root: &Path, scope: &Path, reference: &str) -> Result<Self> {
+    pub(super) fn load_at(
+        root: &Path,
+        scope: &Path,
+        reference: &str,
+        references: Option<IndexPolicy>,
+    ) -> Result<Self> {
         let sources = sources::revision_sources(root, reference)?;
         if !sources
             .iter()
@@ -66,7 +71,16 @@ impl Facts {
                 scope.display()
             );
         }
-        Self::from_sources(root, scope, sources, Facets::default())
+        Self::from_sources(
+            root,
+            scope,
+            sources,
+            Facets {
+                references,
+                ..Facets::default()
+            },
+            Some(reference),
+        )
     }
 
     fn from_sources(
@@ -74,6 +88,7 @@ impl Facts {
         scope: &Path,
         sources: Vec<Source>,
         facets: Facets,
+        reference: Option<&str>,
     ) -> Result<Self> {
         let syntax = syntax::analyze_sources(&sources);
         let mod_index = ModIndex::new(&syntax.files);
@@ -102,7 +117,11 @@ impl Facts {
             .transpose()?;
         let references = match facets.references {
             Some(IndexPolicy::Required) => {
-                let path = index::ensure(root, &sources)?;
+                let path = if let Some(reference) = reference {
+                    index::ensure_revision(root, reference, &sources)?
+                } else {
+                    index::ensure(root, &sources)?
+                };
                 Some(References::load(&path, &syntax, &sources)?)
             }
             Some(IndexPolicy::Skip) | None => None,

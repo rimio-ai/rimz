@@ -339,7 +339,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let previous = args
         .since
         .as_deref()
-        .map(|reference| Facts::load_at(root, &args.path, reference))
+        .map(|reference| Facts::load_at(root, &args.path, reference, None))
         .transpose()?;
     let previous_sizes = previous.as_ref().map(|facts| sizes(facts, &args.path));
     let previous_pub = previous.as_ref().map(|facts| {
@@ -677,21 +677,10 @@ fn escaping_counts(
     scope: &Path,
     mod_index: &syntax::ModIndex,
 ) -> BTreeMap<String, usize> {
-    let mut counts = BTreeMap::new();
-    for file in files {
-        let row = module_for_path(&file.path, scope);
-        let target_module = crate_module_for_row(scope, &row);
-        let escaping = file
-            .pub_items
-            .iter()
-            .filter(|item| {
-                let reach = mod_index.effective_reach(file, item);
-                !module_is_within(&reach, &target_module)
-            })
-            .count();
-        *counts.entry(row).or_default() += escaping;
-    }
-    counts
+    super::modules::escaping_items(files, scope, mod_index)
+        .into_iter()
+        .map(|(module, items)| (module, items.len()))
+        .collect()
 }
 
 fn reference_medians(
