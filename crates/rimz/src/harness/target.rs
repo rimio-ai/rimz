@@ -32,7 +32,7 @@ use std::path::Path;
 
 use crate::agents::AgentState;
 use crate::ids::PaneId;
-use crate::message::{MessageRecord, MessageSender, identity_handle};
+use crate::message::{HarnessNotice, MessageRecord, MessageSender, identity_handle};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 
 pub use crate::store::snapshot::compose_channel;
@@ -1221,7 +1221,10 @@ fn align_submitted_prompt_from<'a>(
                 body = text;
             }
             MessageSender::Harness { notice } => {
-                let header = format!("Type: {}\nFrom: @rimz\nContent:\n", notice.header_type());
+                let header = format!(
+                    "Type: {}\nFrom: @rimz\nContent:\n",
+                    harness_notice_type(&notice)
+                );
                 body = body.strip_prefix(&header)?;
             }
             MessageSender::Human => {
@@ -1281,7 +1284,7 @@ pub fn message_header(
     if let MessageSender::Harness { notice } = sender {
         return Some(format!(
             "Type: {}\nFrom: @rimz\nContent:\n",
-            notice.header_type()
+            harness_notice_type(notice)
         ));
     }
     let MessageSender::Agent {
@@ -1313,6 +1316,12 @@ pub fn message_header(
         handle.push_str(channel);
     }
     Some(format!("Type: AGENT_MESSAGE\nFrom: {handle}\nContent:\n"))
+}
+
+const fn harness_notice_type(notice: &HarnessNotice) -> &'static str {
+    match notice {
+        HarnessNotice::SubagentReport => "SUBAGENT_REPORT",
+    }
 }
 
 fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {
