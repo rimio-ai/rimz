@@ -178,20 +178,21 @@ START             DUR  TOKENS       COST     OUTCOME  PROMPT
 
 ```console
 $ rimz agents attribution
-forge team · 2 agents · 36m active · $29.39
+forge team · 2 agents · 36m active · $29.39 · +$4.10 launched
 
   @planner · Claude · claude-opus-5@xhigh
       effort:    15m active · $16.72
       calls:     84 tool calls
       tokens:    11k input, 148k output, 16m cache read
-      subagents: 3 × explore ($2.19)
+      subagents: 3 × explore ($2.19, native)
 
   @coder · Codex · gpt-5.6-sol@xhigh
-      effort: 21m active · $12.67
-      calls:  106 tool calls
-      tokens: 294k input, 41k output, 19m cache read
+      effort:    21m active · $12.67 · +$4.10 launched
+      calls:     106 tool calls
+      tokens:    294k input, 41k output, 19m cache read
+      subagents: 1 × reviewer (+$4.10, launched)
 
-Total · 2 agents · 36m active · $29.39
+Total · 2 agents · 36m active · $29.39 · +$4.10 launched
 ```
 
 The `--md` form turns the same figures and wording into a collapsed pull-request receipt whose summary links RimZ to its repository.
