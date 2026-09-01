@@ -235,6 +235,48 @@ fn subagent_report_records_as_an_attributed_message() {
 }
 
 #[test]
+fn mixed_submit_records_stray_text_as_direct_input() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let message = rimz::message::MessageRecord::new(
+        workspace.workspace_id.clone(),
+        &agent,
+        "child result".to_owned(),
+        true,
+        rimz::message::DeliveryGate::Done,
+    )
+    .with_sender(rimz::message::MessageSender::Subagent {
+        kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        name: "lucid-atlas".to_owned(),
+    });
+    let mut started = recorded(LifecycleSignal::TurnStarted);
+    started.observation.prompt = Some(
+        "Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nchild resultdo you still".to_owned(),
+    );
+
+    record_conversation(
+        &workspace,
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &started,
+        None,
+        &[],
+        std::slice::from_ref(&message),
+    )
+    .unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Message);
+    assert_eq!(entries[0].text, "child result");
+    assert_eq!(entries[0].message_id.as_ref(), Some(&message.message_id));
+    assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Prompt);
+    assert_eq!(entries[1].text, "do you still");
+    assert_eq!(entries[1].message_id, None);
+}
+
+#[test]
 fn user_message_header_records_prompt_without_envelope() {
     let (_dir, store) = store();
     let workspace = workspace();

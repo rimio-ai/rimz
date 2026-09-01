@@ -1923,6 +1923,219 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
 }
 
 #[test]
+fn mixed_submit_confirms_record_and_never_resends() {
+    let env = Env::new();
+    env.write_config(&env.project_root, "");
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-mixed", "feature-mixed", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-mixed",
+            "tool_name": "AskUserQuestion",
+            "tool_input": { "questions": [{ "question": "Continue?" }] },
+            "worktree_branch": "feature-mixed",
+        }),
+        pane_env,
+    );
+    assert_eq!(env.snapshot_json()["agents"][0]["status"], "waiting");
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+
+    let queued_trace = env.project_root.join("zellij-mixed-queued-trace.log");
+    let queued = run_success(
+        traced_rimz(&env, "zellij-mixed-queued-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "@claude", "--", "report body"]),
+        "queue while question is open",
+    );
+    let message_id = MessageId::parse(&queued_id_from_stdout(&queued.stdout)).expect("message id");
+    assert!(trace_lines(&queued_trace).is_empty());
+    assert_eq!(
+        message_by_id(&env, &message_id).status,
+        MessageStatus::Queued
+    );
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-mixed",
+            "worktree_branch": "feature-mixed",
+        }),
+        pane_env,
+    );
+    let sent_trace = env.project_root.join("zellij-mixed-sent-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-mixed-sent-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "deliver", "--message-id", message_id.as_str()]),
+        "deliver after question closes",
+    );
+    assert_text_then_enter(&sent_trace, &user_message("report body"));
+    let sent = message_by_id(&env, &message_id);
+    assert_eq!(sent.status, MessageStatus::Sent);
+    assert_eq!(sent.attempts, 1);
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-mixed",
+            "prompt": format!("{}do you still", user_message("report body")),
+            "worktree_branch": "feature-mixed",
+        }),
+        pane_env,
+    );
+    assert!(
+        env.store()
+            .list_messages()
+            .expect("messages")
+            .iter()
+            .all(|message| message.message_id != message_id)
+    );
+    let delivered = env
+        .store()
+        .list_message_history()
+        .expect("history")
+        .into_iter()
+        .find(|message| message.message_id == message_id)
+        .expect("delivered prompt");
+    assert_eq!(delivered.status, MessageStatus::Delivered);
+    assert_eq!(delivered.unconfirmed_sends, 0);
+    let delivered_event = env
+        .read_events()
+        .into_iter()
+        .find(|event| {
+            event.method == "message.delivered"
+                && event.params_value()["message_id"] == message_id.as_str()
+        })
+        .expect("delivered event");
+    assert!(
+        delivered_event.params_value()["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("12 stray bytes after"))
+    );
+    let entries = rimz::transcript::read_all(env.store().paths()).expect("transcript");
+    let attributed = entries
+        .iter()
+        .find(|entry| entry.message_id.as_ref() == Some(&message_id))
+        .expect("attributed message");
+    assert_eq!(attributed.text, "report body");
+    let direct = entries
+        .iter()
+        .find(|entry| entry.text == "do you still")
+        .expect("direct composer input");
+    assert_eq!(direct.message_id, None);
+
+    let sweep_trace = env.project_root.join("zellij-mixed-sweep-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-mixed-sweep-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
+            .args(["message", "sweep"]),
+        "sweep after mixed acknowledgement",
+    );
+    assert!(trace_lines(&sweep_trace).is_empty());
+}
+
+#[test]
+fn late_ack_after_reconcile_window_still_settles_without_resend() {
+    let env = Env::new();
+    env.write_config(&env.project_root, "");
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(
+        &env,
+        "sess-unbounded-ack",
+        "feature-unbounded-ack",
+        pane_env,
+    );
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-unbounded-ack",
+            "worktree_branch": "feature-unbounded-ack",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let sent_trace = env.project_root.join("zellij-unbounded-ack-sent-trace.log");
+    let sent = run_success(
+        traced_rimz(&env, "zellij-unbounded-ack-sent-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "@claude", "--", "arrived once"]),
+        "send prompt",
+    );
+    let message_id = MessageId::parse(&delivered_id_from_stdout(&sent.stdout)).expect("message id");
+    assert_text_then_enter(&sent_trace, &user_message("arrived once"));
+    let last_sent_at = message_by_id(&env, &message_id)
+        .last_sent_at
+        .expect("send timestamp");
+
+    let empty_panes = env.write_pane_fixture(&[]);
+    let requeue_trace = env
+        .project_root
+        .join("zellij-unbounded-ack-requeue-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-unbounded-ack-requeue-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &empty_panes)
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
+            .args(["message", "sweep"]),
+        "requeue unconfirmed prompt",
+    );
+    assert!(trace_lines(&requeue_trace).is_empty());
+    let queued = message_by_id(&env, &message_id);
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(queued.unconfirmed_sends, 1);
+    assert_eq!(queued.last_sent_at, Some(last_sent_at));
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-unbounded-ack",
+            "prompt": user_message("arrived once"),
+            "worktree_branch": "feature-unbounded-ack",
+        }),
+        &[
+            ("ZELLIJ_PANE_ID", "3"),
+            ("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0"),
+        ],
+    );
+    assert!(
+        env.store()
+            .list_messages()
+            .expect("messages")
+            .iter()
+            .all(|message| message.message_id != message_id)
+    );
+    assert!(
+        env.store()
+            .list_message_history()
+            .expect("history")
+            .iter()
+            .any(|message| message.message_id == message_id
+                && message.status == MessageStatus::Delivered)
+    );
+
+    let sweep_trace = env
+        .project_root
+        .join("zellij-unbounded-ack-sweep-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-unbounded-ack-sweep-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "sweep"]),
+        "sweep after late acknowledgement",
+    );
+    assert!(trace_lines(&sweep_trace).is_empty());
+}
+
+#[test]
 fn shortened_reconcile_window_preserves_prompt_for_late_correlated_ack() {
     let env = Env::new();
     env.write_config(&env.project_root, "");

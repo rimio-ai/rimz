@@ -682,12 +682,14 @@ impl MessageRecord {
             .then_some(self.last_sent_at.unwrap_or(self.updated_at) + self.body.delivery_window())
     }
 
-    pub fn awaiting_late_ack(&self, now: Timestamp) -> bool {
+    /// Whether a prior unconfirmed pane write can still be acknowledged.
+    ///
+    /// Submitted text proves consumption regardless of elapsed time. A queued
+    /// record has no competing write; a new claim supersedes this state.
+    pub fn awaiting_late_ack(&self) -> bool {
         self.status == MessageStatus::Queued
             && self.unconfirmed_sends > 0
-            && self
-                .last_sent_at
-                .is_some_and(|sent_at| now <= sent_at + self.body.delivery_window() * 2)
+            && self.last_sent_at.is_some()
     }
 
     /// Next time the elder should sweep this record, or `None` if it arms nothing.

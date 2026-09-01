@@ -685,10 +685,9 @@ fn align_submitted_prompt_consumes_human_header() {
     );
     let prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nship it";
 
-    assert_eq!(
-        align_submitted_prompt(prompt, &[&record]),
-        Some(vec![prompt])
-    );
+    let aligned = align_submitted_prompt(prompt, &[&record]).expect("aligned prompt");
+    assert!(aligned.is_exact());
+    assert_eq!(aligned.segments, vec![prompt]);
 }
 
 #[test]
@@ -707,9 +706,62 @@ fn align_submitted_prompt_consumes_subagent_header() {
     });
     let prompt = "Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nship it";
 
+    let aligned = align_submitted_prompt(prompt, &[&record]).expect("aligned prompt");
+    assert!(aligned.is_exact());
+    assert_eq!(aligned.segments, vec![prompt]);
+}
+
+#[test]
+fn align_submitted_prompt_separates_stray_composer_text() {
+    let recipient = agent("claude", "session-recipient", Some("main"), "terminal_1");
+    let first = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+        &recipient,
+        "first".to_owned(),
+        true,
+        crate::message::DeliveryGate::Done,
+    );
+    let second = MessageRecord::new(
+        first.workspace_id.clone(),
+        &recipient,
+        "second".to_owned(),
+        true,
+        crate::message::DeliveryGate::Done,
+    );
+    let first_prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nfirst";
+    let second_prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
+    let prompt = format!(
+        "decoy Type: USER_MESSAGE\nFrom: @user\nContent:\nnot it before{first_prompt}\n\n{second_prompt}after"
+    );
+
+    let aligned =
+        align_submitted_prompt(&prompt, &[&first, &second]).expect("embedded batch aligned");
     assert_eq!(
-        align_submitted_prompt(prompt, &[&record]),
-        Some(vec![prompt])
+        aligned.leading,
+        Some("decoy Type: USER_MESSAGE\nFrom: @user\nContent:\nnot it before")
+    );
+    assert_eq!(aligned.segments, vec![first_prompt, second_prompt]);
+    assert_eq!(aligned.trailing, Some("after"));
+    assert_eq!(aligned.stray_bytes(), (59, 5));
+}
+
+#[test]
+fn align_submitted_prompt_rejects_a_truncated_record() {
+    let recipient = agent("claude", "session-recipient", Some("main"), "terminal_1");
+    let record = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+        &recipient,
+        "ship it".to_owned(),
+        true,
+        crate::message::DeliveryGate::Done,
+    );
+
+    assert_eq!(
+        align_submitted_prompt(
+            "Type: USER_MESSAGE\nFrom: @user\nContent:\nship",
+            &[&record]
+        ),
+        None
     );
 }
 
