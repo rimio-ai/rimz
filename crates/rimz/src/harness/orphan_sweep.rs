@@ -26,6 +26,12 @@ pub struct OrphanSubagentRequest {
     pub parent_agent_id: AgentSessionId,
 }
 
+#[derive(Serialize)]
+struct SubagentDigestRequest {
+    workspace_id: WorkspaceId,
+    parent_agent_id: AgentSessionId,
+}
+
 #[derive(Clone, Debug)]
 pub struct OrphanedSubagent {
     pub child: AgentState,
@@ -56,6 +62,20 @@ pub fn enforce(paths: &StatePaths, runtime: &RuntimePaths, runs: &[RunRecord], n
     };
     for orphan in orphans {
         spawn_helper(runtime, &orphan);
+    }
+    let parents = match digest_parents(paths, runs) {
+        Ok(parents) => parents,
+        Err(err) => {
+            tracing::debug!(
+                workspace = %runtime.workspace_id,
+                error = &err as &dyn std::error::Error,
+                "sidebar: failed to scan for missing subagent digests",
+            );
+            return;
+        }
+    };
+    for parent_agent_id in parents {
+        spawn_digest_helper(runtime, parent_agent_id);
     }
 }
 
@@ -137,6 +157,37 @@ fn newest_run<'a>(child: &AgentState, runs: &'a [RunRecord]) -> Option<&'a RunRe
         .max_by_key(|run| run.started_at)
 }
 
+fn digest_parents(
+    paths: &StatePaths,
+    runs: &[RunRecord],
+) -> Result<Vec<AgentSessionId>, OrphanSweepErr> {
+    let agents = crate::store::runtime::audit_projection(paths)?.agents;
+    Ok(digest_parents_from(&agents, runs))
+}
+
+fn digest_parents_from(agents: &[AgentState], runs: &[RunRecord]) -> Vec<AgentSessionId> {
+    agents
+        .iter()
+        .filter(|parent| parent.ended_at.is_none())
+        .filter_map(|parent| {
+            let children = crate::harness::target::launched_children(&agents, parent);
+            if children.is_empty() {
+                return None;
+            }
+            let newest = children
+                .into_iter()
+                .filter_map(|child| newest_run(child, runs))
+                .collect::<Vec<_>>();
+            (!newest.is_empty()
+                && newest.iter().all(|run| run.status.is_terminal())
+                && newest
+                    .iter()
+                    .any(|run| run.report_message_id.is_none() && run.joined_at.is_none()))
+            .then(|| parent.agent_id.clone())
+        })
+        .collect()
+}
+
 fn spawn_helper(runtime: &RuntimePaths, orphan: &OrphanedSubagent) {
     let request = OrphanSubagentRequest {
         workspace_id: runtime.workspace_id.clone(),
@@ -148,10 +199,12 @@ fn spawn_helper(runtime: &RuntimePaths, orphan: &OrphanedSubagent) {
             .clone()
             .expect("launched child has a parent id"),
     };
-    let args = crate::child_process::agent_helper_argv("orphan-subagent", &request);
-    if let Err(err) =
-        crate::child_process::spawn_detached_rimz(runtime, args, "orphan-subagent-repair")
-    {
+    if let Err(err) = spawn_request(
+        runtime,
+        "orphan-subagent",
+        &request,
+        "orphan-subagent-repair",
+    ) {
         tracing::debug!(
             workspace = %runtime.workspace_id,
             child = %orphan.child.agent_id,
@@ -159,6 +212,35 @@ fn spawn_helper(runtime: &RuntimePaths, orphan: &OrphanedSubagent) {
             "sidebar: failed to spawn orphaned subagent repair helper",
         );
     }
+}
+
+fn spawn_digest_helper(runtime: &RuntimePaths, parent_agent_id: AgentSessionId) {
+    let request = SubagentDigestRequest {
+        workspace_id: runtime.workspace_id.clone(),
+        parent_agent_id,
+    };
+    if let Err(err) = spawn_request(
+        runtime,
+        "subagent-digest",
+        &request,
+        "subagent-digest-backstop",
+    ) {
+        tracing::debug!(
+            workspace = %runtime.workspace_id,
+            error = &err as &dyn std::error::Error,
+            "sidebar: failed to spawn subagent digest backstop",
+        );
+    }
+}
+
+fn spawn_request<T: Serialize>(
+    runtime: &RuntimePaths,
+    verb: &str,
+    request: &T,
+    label: &'static str,
+) -> std::io::Result<()> {
+    let args = crate::child_process::agent_helper_argv(verb, request);
+    crate::child_process::spawn_detached_rimz(runtime, args, label)
 }
 
 fn orphan_grace() -> Duration {
@@ -252,5 +334,34 @@ mod tests {
         child.registered_at = Some(old);
 
         assert!(orphaned_child(&child, &[parent, child.clone()], &[], now).is_none());
+    }
+
+    #[test]
+    fn terminal_unreported_fleet_needs_one_digest_backstop() {
+        let at = Timestamp::from_second(1_000).unwrap();
+        let parent = crate::testkit::agent_state("codex", "parent", at);
+        let children = ["first", "second"].map(|name| {
+            let mut child = crate::testkit::agent_state("codex", name, at);
+            child.name = Some(name.to_owned());
+            child.parent_agent_id = Some(parent.agent_id.clone());
+            child.parent_agent_kind = Some(parent.kind.clone());
+            child.launch_depth = Some(1);
+            child
+        });
+        let mut runs = children.each_ref().map(|child| {
+            let mut run = run(child.name.as_deref().unwrap(), at);
+            run.agent_id = Some(child.agent_id.clone());
+            run.status = crate::harness::run::RunStatus::Completed;
+            run.subagent = true;
+            run
+        });
+        let agents = [vec![parent.clone()], children.to_vec()].concat();
+
+        assert_eq!(digest_parents_from(&agents, &runs), vec![parent.agent_id]);
+        let message_id = crate::MessageId::new();
+        for run in &mut runs {
+            run.report_message_id = Some(message_id.clone());
+        }
+        assert!(digest_parents_from(&agents, &runs).is_empty());
     }
 }

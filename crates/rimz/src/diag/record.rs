@@ -7,7 +7,9 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{AgentKind, AgentSessionId, PaneId, SidebarInstanceId, ViewId, WorkspaceId};
+use crate::ids::{
+    AgentKind, AgentSessionId, MessageId, PaneId, SidebarInstanceId, ViewId, WorkspaceId,
+};
 use crate::remote::link::LinkTier;
 
 const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
@@ -507,6 +509,10 @@ pub enum DiagEvent {
         parent_agent_id: AgentSessionId,
         orphaned_at_ms: u64,
     },
+    SubagentDigestBackstopped {
+        parent_agent_id: AgentSessionId,
+        message_id: MessageId,
+    },
     SubagentOrphanRepairFailed {
         agent_kind: AgentKind,
         agent_id: AgentSessionId,
@@ -616,6 +622,7 @@ impl DiagEvent {
             | Self::NewbornQuarantined { .. }
             | Self::MixedBuildWriters { .. }
             | Self::TopologyWriterChanged { .. }
+            | Self::SubagentDigestBackstopped { .. }
             | Self::SupervisorConvergence { .. }
             | Self::RendererExit {
                 cause: RendererExitCause::SelfCloseEmptyTab,
@@ -676,6 +683,7 @@ impl DiagEvent {
             Self::RendererOrphanReaped { .. } => "renderer_orphan_reaped",
             Self::SidebarOrphanReaped { .. } => "sidebar_orphan_reaped",
             Self::SubagentOrphanReaped { .. } => "subagent_orphan_reaped",
+            Self::SubagentDigestBackstopped { .. } => "subagent_digest_backstopped",
             Self::SubagentOrphanRepairFailed { .. } => "subagent_orphan_repair_failed",
             Self::PaneCacheDivergence { .. } => "pane_cache_divergence",
             Self::SupervisorConvergence { .. } => "supervisor_convergence",
@@ -901,6 +909,9 @@ impl DiagEvent {
                 agent_id,
                 ..
             } => format!("{}:{agent_kind}:{agent_id}", self.kind_name()),
+            Self::SubagentDigestBackstopped {
+                parent_agent_id, ..
+            } => format!("{}:{parent_agent_id}", self.kind_name()),
             Self::SupervisorConvergence { target_build }
             | Self::SupervisorPreflightRejected { target_build, .. } => {
                 format!("{}:{target_build}", self.kind_name())
@@ -1277,6 +1288,12 @@ impl DiagEvent {
                 orphaned_at_ms,
             } => format!(
                 "reaped orphaned subagent {agent_kind}/{agent_id} after parent {parent_agent_id} remained ended or absent past grace (evidence timestamp {orphaned_at_ms})"
+            ),
+            Self::SubagentDigestBackstopped {
+                parent_agent_id,
+                message_id,
+            } => format!(
+                "queued subagent fleet digest {message_id} for parent {parent_agent_id} from durable run records"
             ),
             Self::SubagentOrphanRepairFailed {
                 agent_kind,

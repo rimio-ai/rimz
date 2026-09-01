@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 
+use anyhow::Context;
 use rimz::agents::AgentState;
 use rimz::harness::run::{self as run, RunRecord, RunStatus};
 use rimz::ids::{AgentSessionId, MessageId, RunId};
@@ -161,6 +162,26 @@ pub(super) fn report_settled_child(
         return Ok(ReportOutcome::NoParent);
     };
     report_fleet(workspace, store, parent_id)
+}
+
+pub(super) fn backstop_digest(request: super::SubagentDigestRequest) -> anyhow::Result<()> {
+    let ctx = super::Ctx::for_workspace(request.workspace_id, None)
+        .context("resolving subagent digest workspace")?;
+    let outcome = report_fleet(&ctx.workspace, &ctx.store, &request.parent_agent_id)
+        .context("reconstructing subagent fleet digest")?;
+    let ReportOutcome::Queued { message_id, .. } = outcome else {
+        return Ok(());
+    };
+    rimz::diag::DiagSink::for_workspace(
+        ctx.workspace.workspace_id.clone(),
+        ctx.workspace.session_name.clone(),
+        None,
+    )
+    .emit(rimz::diag::record::DiagEvent::SubagentDigestBackstopped {
+        parent_agent_id: request.parent_agent_id,
+        message_id,
+    });
+    Ok(())
 }
 
 fn digest_fully_joined(store: &Store, message_id: &MessageId) -> Result<bool, run::RunStoreErr> {

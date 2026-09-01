@@ -1111,6 +1111,7 @@ fn classify_diagnostic(
         | DiagEvent::TopologyWriteRejected { .. }
         | DiagEvent::NewbornQuarantined { .. }
         | DiagEvent::LocalSessionBindRejected { .. }
+        | DiagEvent::SubagentDigestBackstopped { .. }
         | DiagEvent::ClientReaped { settled: true, .. } => model::DoctorState::Contained,
         DiagEvent::FrameShrinkVerified { .. }
         | DiagEvent::PaneCarryRefuted { .. }
