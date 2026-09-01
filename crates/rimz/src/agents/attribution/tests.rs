@@ -242,19 +242,18 @@ fn launched_child_continuations_deduplicate_as_one_subagent_seat() {
     let report = build_for(&agents);
     let member = &report.groups[0].members[0];
 
-    assert_eq!(member.tokens, TokenSplit::default());
-    assert_eq!(member.cost_usd, None);
+    assert_eq!(member.tokens.input, 20);
+    assert_eq!(member.tokens.output, 2);
+    assert_eq!(member.cost_usd, Some(2.0));
     assert_eq!(member.sessions, 1);
     assert_eq!(
         member.subagents,
         vec![SubagentStat {
-            origin: SubagentOrigin::RimzLaunched,
             task: Some("explorer".to_owned()),
             count: 1,
             cost_usd: Some(2.0),
         }]
     );
-    assert_eq!(member.launched_cost_usd, Some(2.0));
 }
 
 #[test]
@@ -293,7 +292,7 @@ fn claude_slot_credits_subagent_transcript_effort() {
 }
 
 #[test]
-fn launched_child_effort_stays_out_of_the_parent_seat() {
+fn launched_child_effort_folds_into_the_parent_seat() {
     let dir = tempfile::tempdir().expect("tempdir");
     let parent_transcript = dir.path().join("parent.jsonl");
     let child_transcript = dir.path().join("child.jsonl");
@@ -377,8 +376,9 @@ fn launched_child_effort_stays_out_of_the_parent_seat() {
     assert_eq!(report.totals.agents, 1);
     assert_eq!(member.handle, "@planner");
     assert_eq!(member.sessions, 1);
-    assert_eq!(member.cost_usd, Some(1.0));
-    assert_eq!(member.tokens.input, 10);
+    assert_eq!(member.cost_usd, Some(3.0));
+    assert_eq!(member.tokens.input, 30);
+    assert_eq!(member.tokens.output, 3);
     assert_eq!(member.tool_calls, 1);
     assert_eq!(member.compactions, 0);
     assert_eq!(member.last_activity, parent_last_activity);
@@ -388,16 +388,14 @@ fn launched_child_effort_stays_out_of_the_parent_seat() {
     assert_eq!(
         member.subagents,
         vec![SubagentStat {
-            origin: SubagentOrigin::RimzLaunched,
             task: Some("explorer".to_owned()),
             count: 1,
             cost_usd: Some(2.0),
         }]
     );
-    assert_eq!(member.launched_cost_usd, Some(2.0));
-    assert_eq!(report.totals.cost_usd, Some(1.0));
-    assert_eq!(report.totals.launched_cost_usd, Some(2.0));
-    assert_eq!(report.totals.tokens.input, 10);
+    assert_eq!(report.totals.cost_usd, Some(3.0));
+    assert_eq!(report.totals.tokens.input, 30);
+    assert_eq!(report.totals.tokens.output, 3);
     assert_eq!(report.groups[0].totals.tool_calls, 1);
     assert_eq!(report.totals.active_secs, Some(10));
     assert_eq!(report.totals.asks, 0);
@@ -405,55 +403,51 @@ fn launched_child_effort_stays_out_of_the_parent_seat() {
 }
 
 #[test]
-fn mixed_origin_subagents_with_one_label_stay_distinct() {
+fn subagents_with_one_label_merge_across_origins() {
     let report = mixed_origin_report();
     let group = &report.groups[0];
     let member = &group.members[0];
 
-    assert_eq!(member.cost_usd, Some(3.0));
-    assert_eq!(member.launched_cost_usd, Some(3.0));
+    assert_eq!(member.cost_usd, Some(6.0));
+    assert_eq!(member.tokens.input, 60);
+    assert_eq!(member.tokens.output, 6);
     assert_eq!(
         member.subagents,
-        [
-            SubagentStat {
-                origin: SubagentOrigin::ProviderNative,
-                task: Some("explorer".to_owned()),
-                count: 1,
-                cost_usd: Some(2.0),
-            },
-            SubagentStat {
-                origin: SubagentOrigin::RimzLaunched,
-                task: Some("explorer".to_owned()),
-                count: 1,
-                cost_usd: Some(3.0),
-            },
-        ]
+        [SubagentStat {
+            task: Some("explorer".to_owned()),
+            count: 2,
+            cost_usd: Some(5.0),
+        }]
     );
-    assert_eq!(group.totals.cost_usd, Some(3.0));
-    assert_eq!(group.totals.launched_cost_usd, Some(3.0));
-    assert_eq!(report.totals.cost_usd, Some(3.0));
-    assert_eq!(report.totals.launched_cost_usd, Some(3.0));
+    assert_eq!(group.totals.cost_usd, Some(6.0));
+    assert_eq!(report.totals.cost_usd, Some(6.0));
 }
 
 #[test]
-fn subagent_origin_serializes_the_documented_vocabulary() {
+fn schema_five_serializes_one_cost_and_task_grouped_subagents() {
     let report = serde_json::to_value(mixed_origin_report()).expect("serialize attribution");
+    let member = &report["groups"][0]["members"][0];
+    let subagent = &member["subagents"][0];
 
-    assert_eq!(report["schema"], 4);
+    assert_eq!(report["schema"], 5);
+    assert_eq!(member["cost_usd"], 6.0);
+    assert_eq!(member.as_object().map(serde_json::Map::len), Some(22));
     assert_eq!(
-        report["groups"][0]["members"][0]["subagents"][0]["origin"],
-        "provider_native"
+        subagent,
+        &json!({
+            "task": "explorer",
+            "count": 2,
+            "cost_usd": 5.0,
+        })
     );
     assert_eq!(
-        report["groups"][0]["members"][0]["subagents"][1]["origin"],
-        "rimz_launched"
+        report["totals"].as_object().map(serde_json::Map::len),
+        Some(10)
     );
-    assert_eq!(report["groups"][0]["members"][0]["launched_cost_usd"], 3.0);
-    assert_eq!(report["totals"]["launched_cost_usd"], 3.0);
 }
 
 #[test]
-fn launched_only_delegation_keeps_the_member_with_launched_cost() {
+fn launched_only_delegation_keeps_the_member_with_all_in_cost() {
     let dir = tempfile::tempdir().expect("tempdir");
     let child_transcript = dir.path().join("child.jsonl");
     std::fs::write(
@@ -492,10 +486,11 @@ fn launched_only_delegation_keeps_the_member_with_launched_cost() {
     });
     let member = &report.groups[0].members[0];
 
-    assert_eq!(member.cost_usd, None);
-    assert_eq!(member.launched_cost_usd, Some(3.0));
-    assert_eq!(report.groups[0].totals.launched_cost_usd, Some(3.0));
-    assert_eq!(report.totals.launched_cost_usd, Some(3.0));
+    assert_eq!(member.cost_usd, Some(3.0));
+    assert_eq!(member.tokens.input, 30);
+    assert_eq!(member.tokens.output, 3);
+    assert_eq!(report.groups[0].totals.cost_usd, Some(3.0));
+    assert_eq!(report.totals.cost_usd, Some(3.0));
 }
 
 #[test]
@@ -526,11 +521,8 @@ fn launched_child_in_another_lane_follows_its_parent() {
     let report = build_for(&[parent, child]);
 
     assert_eq!(report.totals.agents, 1);
-    assert_eq!(report.totals.launched_cost_usd, Some(3.0));
-    assert_eq!(
-        report.groups[0].members[0].subagents[0].origin,
-        SubagentOrigin::RimzLaunched
-    );
+    assert_eq!(report.totals.cost_usd, Some(3.0));
+    assert_eq!(report.groups[0].members[0].subagents[0].count, 1);
 }
 
 #[test]
@@ -578,17 +570,17 @@ fn same_named_children_of_different_parents_stay_with_their_launcher() {
         .find(|member| member.role.as_deref() == Some("coder"))
         .expect("coder member");
 
-    assert_eq!(planner.launched_cost_usd, Some(1.0));
-    assert_eq!(coder.launched_cost_usd, Some(2.0));
+    assert_eq!(planner.cost_usd, Some(1.0));
+    assert_eq!(coder.cost_usd, Some(2.0));
     assert_eq!(planner.subagents[0].count, 1);
     assert_eq!(planner.subagents[0].cost_usd, Some(1.0));
     assert_eq!(coder.subagents[0].count, 1);
     assert_eq!(coder.subagents[0].cost_usd, Some(2.0));
-    assert_eq!(report.totals.launched_cost_usd, Some(3.0));
+    assert_eq!(report.totals.cost_usd, Some(3.0));
 }
 
 #[test]
-fn launched_cost_sums_child_slots_in_stable_order() {
+fn all_in_cost_sums_child_slots_in_stable_order() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut parent = agent("parent", "claude", 10);
     parent.team = Some("forge".to_owned());
@@ -620,7 +612,7 @@ fn launched_cost_sums_child_slots_in_stable_order() {
     let member = &report.groups[0].members[0];
     let expected = 0.1_f64 + 0.2_f64 + 0.3_f64;
 
-    assert_eq!(member.launched_cost_usd, Some(expected));
+    assert_eq!(member.cost_usd, Some(expected));
     assert_eq!(member.subagents[0].cost_usd, Some(expected));
 }
 
@@ -919,13 +911,11 @@ fn subagents_group_by_task_and_join_durable_child_cost() {
         stats,
         &[
             SubagentStat {
-                origin: SubagentOrigin::ProviderNative,
                 task: Some("Explore".to_owned()),
                 count: 2,
                 cost_usd: Some(3.25),
             },
             SubagentStat {
-                origin: SubagentOrigin::ProviderNative,
                 task: None,
                 count: 2,
                 cost_usd: Some(0.5),

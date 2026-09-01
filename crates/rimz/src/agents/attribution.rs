@@ -2,8 +2,9 @@
 //!
 //! Identity, tool calls, and compactions come from the audit rollup; tokens and
 //! dollars come from provider transcripts through the shared price book; active
-//! time comes from runtime sidecars and can become unavailable after GC. Launched
-//! children contribute to a separate launched-cost figure and subagent breakdown.
+//! time comes from runtime sidecars and can become unavailable after GC. A member's
+//! tokens and dollars cover its seat and every subagent it spawned; the subagent
+//! breakdown groups that spend by task.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -20,7 +21,7 @@ use super::{AgentState, pricing, spending};
 
 pub use super::spending::EffortTokens as TokenSplit;
 
-const ATTRIBUTION_SCHEMA: u8 = 4;
+const ATTRIBUTION_SCHEMA: u8 = 5;
 const SUBAGENT_TYPE_MAX_CHARS: usize = 24;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -77,7 +78,6 @@ pub struct AttributionMember {
     pub messages: MessageCounts,
     pub tokens: TokenSplit,
     pub cost_usd: Option<f64>,
-    pub launched_cost_usd: Option<f64>,
     pub subagents: Vec<SubagentStat>,
 }
 
@@ -103,17 +103,9 @@ pub struct MessageCounts {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SubagentStat {
-    pub origin: SubagentOrigin,
     pub task: Option<String>,
     pub count: u32,
     pub cost_usd: Option<f64>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SubagentOrigin {
-    ProviderNative,
-    RimzLaunched,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -122,7 +114,6 @@ pub struct EffortTotals {
     pub active_secs: Option<u64>,
     pub wall_clock_secs: u64,
     pub cost_usd: Option<f64>,
-    pub launched_cost_usd: Option<f64>,
     pub asks: u64,
     pub asks_answered: u64,
     pub tool_calls: u64,
@@ -465,9 +456,14 @@ fn member(
         &effort.subagents,
         &launched_effort,
     );
-    let launched_cost_usd = launched_effort.iter().fold(None, |total, (_, effort)| {
-        spending::sum_optional_cost(total, effort.cost_usd)
-    });
+    let mut tokens = effort.total.tokens;
+    let cost_usd =
+        launched_effort
+            .iter()
+            .fold(effort.total.cost_usd, |total, (_, child_effort)| {
+                tokens.add_assign(child_effort.tokens);
+                spending::sum_optional_cost(total, child_effort.cost_usd)
+            });
     let active_secs = seat
         .identity
         .iter()
@@ -524,9 +520,8 @@ fn member(
             total.saturating_add(agent.compaction_count)
         }),
         messages,
-        tokens: effort.total.tokens,
-        cost_usd: effort.total.cost_usd,
-        launched_cost_usd,
+        tokens,
+        cost_usd,
         subagents,
     }
 }
@@ -640,17 +635,13 @@ fn subagent_stats(
         children.entry(child_id.clone()).or_default();
     }
 
-    let mut grouped = BTreeMap::<(SubagentOrigin, Option<String>), SubagentStat>::new();
+    let mut grouped = BTreeMap::<Option<String>, SubagentStat>::new();
     for (child_id, task) in children {
-        let origin = SubagentOrigin::ProviderNative;
-        let stat = grouped
-            .entry((origin, task.clone()))
-            .or_insert_with(|| SubagentStat {
-                origin,
-                task,
-                count: 0,
-                cost_usd: None,
-            });
+        let stat = grouped.entry(task.clone()).or_insert_with(|| SubagentStat {
+            task,
+            count: 0,
+            cost_usd: None,
+        });
         stat.count = stat.count.saturating_add(1);
         stat.cost_usd = spending::sum_optional_cost(
             stat.cost_usd,
@@ -659,15 +650,11 @@ fn subagent_stats(
     }
     for (child, effort) in launched {
         let task = subagent_type(child.profile.as_deref());
-        let origin = SubagentOrigin::RimzLaunched;
-        let stat = grouped
-            .entry((origin, task.clone()))
-            .or_insert_with(|| SubagentStat {
-                origin,
-                task,
-                count: 0,
-                cost_usd: None,
-            });
+        let stat = grouped.entry(task.clone()).or_insert_with(|| SubagentStat {
+            task,
+            count: 0,
+            cost_usd: None,
+        });
         stat.count = stat.count.saturating_add(1);
         stat.cost_usd = spending::sum_optional_cost(stat.cost_usd, effort.cost_usd);
     }
@@ -682,7 +669,6 @@ fn subagent_stats(
                 (None, Some(_)) => Ordering::Greater,
                 (None, None) => Ordering::Equal,
             })
-            .then_with(|| left.origin.cmp(&right.origin))
     });
     stats
 }
@@ -733,8 +719,6 @@ fn totals_from_refs(members: &[&AttributionMember]) -> EffortTotals {
             (None, None) => None,
         };
         totals.cost_usd = spending::sum_optional_cost(totals.cost_usd, member.cost_usd);
-        totals.launched_cost_usd =
-            spending::sum_optional_cost(totals.launched_cost_usd, member.launched_cost_usd);
         totals.asks = totals.asks.saturating_add(member.asks);
         totals.asks_answered = totals.asks_answered.saturating_add(member.asks_answered);
         totals.tool_calls = totals.tool_calls.saturating_add(member.tool_calls);
