@@ -184,13 +184,13 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
     );
 
     assert!(
-        rendered.contains("helper · explorer — map sidebar"),
+        rendered.contains("explorer — map sidebar"),
         "the child line names its profile:\n{rendered}"
     );
     assert!(
         rendered
             .lines()
-            .any(|line| line.contains("helper · explorer") && line.contains("$0.42")),
+            .any(|line| line.contains("explorer — map sidebar") && line.contains("$0.42")),
         "the child cost pins on its line:\n{rendered}"
     );
     assert!(

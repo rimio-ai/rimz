@@ -189,20 +189,28 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
     child: &AgentState,
     now: Timestamp,
 ) -> SidebarSubAgent {
-    let name = (child.is_launched_child() || child.name_explicit)
-        .then(|| child.name.clone())
-        .flatten()
-        .filter(|name| !name.is_empty())
-        .or_else(|| child.task.clone().filter(|task| !task.is_empty()))
-        .unwrap_or_else(|| {
-            debug!(
-                target: "rimz::agent::lifecycle",
-                kind = %child.kind,
-                child = %child.agent_id,
-                "subagent has no type label — rendering a degraded placeholder",
-            );
-            degraded_subagent_label(&child.agent_id)
-        });
+    let name = if child.is_launched_child() {
+        child
+            .profile
+            .clone()
+            .unwrap_or_else(|| child.kind.as_str().to_owned())
+    } else {
+        child
+            .name_explicit
+            .then(|| child.name.clone())
+            .flatten()
+            .filter(|name| !name.is_empty())
+            .or_else(|| child.task.clone().filter(|task| !task.is_empty()))
+            .unwrap_or_else(|| {
+                debug!(
+                    target: "rimz::agent::lifecycle",
+                    kind = %child.kind,
+                    child = %child.agent_id,
+                    "subagent has no type label — rendering a degraded placeholder",
+                );
+                degraded_subagent_label(&child.agent_id)
+            })
+    };
     let started_at = child.subagent_started_at.or(child.registered_at);
     let elapsed_secs = started_at.map(|started| {
         let until = if child.status == AgentStatus::Running {
