@@ -164,7 +164,7 @@ When prompt fragments exist, the wrapper reads the base first and then the fragm
 
 For a non-child request, the wrapper also derives the profile's allowed subagent catalog from effective project and machine configuration. The process compiler appends that catalog's availability or disabled reminder through adapters with a native append-system-text channel; child requests keep their separate no-delegation reminder.
 
-For a team member, the wrapper also derives a team launch context: the worktree, role and team handles, channel, leader and teammates, whether the session is fresh or resumed, and which declared scratch entries were present at launch with their line counts. The process compiler appends that launch-time snapshot through the same channel, after the catalog reminder.
+For a team member, the wrapper also resolves the effective team definition. The process compiler combines it with the worktree, role and team handles, channel, leader and teammates, session posture, and declared scratch entries present at launch with their line counts, then appends that launch-time snapshot through the same channel after the catalog reminder.
 
 The wrapper then runs the agent in the pane, inheriting the pane's TTY. It launches through the user's shell-startup path when that shell and `/usr/bin/env` are available and falls back to direct exec otherwise, and it exports `RIMZ_RTK` from `[harness] rtk` so `cargo xtask` can route recognized cargo subcommands through `rtk`.
 

@@ -86,20 +86,41 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
     }
 }
 
-fn team_context() -> crate::harness::launch_context::TeamLaunchContext {
-    crate::harness::launch_context::TeamLaunchContext {
-        team: "forge".to_owned(),
-        role: "coder".to_owned(),
-        channel: Some("feature".to_owned()),
-        leader: "planner".to_owned(),
-        roles: vec!["planner".to_owned(), "coder".to_owned()],
-        worktree: PathBuf::from("/repo/feature"),
-        session: crate::harness::launch_context::LaunchSession::Fresh,
-        scratch: vec![crate::harness::launch_context::ScratchEntry {
-            pattern: "blackboard.md".to_owned(),
-            present: Vec::new(),
-        }],
+fn team() -> crate::config::Team {
+    let role = |role: &str, profile: &str| crate::config::RoleBinding {
+        role: role.to_owned(),
+        profile: profile.to_owned(),
+        mode: None,
+        model: None,
+        effort: None,
+        budget: None,
+        system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
+        args: None,
+    };
+    crate::config::Team {
+        roles: vec![role("planner", "claude"), role("coder", "codex")],
+        leader: Some("planner".to_owned()),
+        layout: None,
+        scratch_files: vec!["blackboard.md".to_owned()],
     }
+}
+
+fn team_request(kind: &str) -> ExecRequest {
+    let mut invocation = request(
+        kind,
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    invocation.identity.params = crate::agents::LaunchParams {
+        team: Some("forge".to_owned()),
+        role: Some("coder".to_owned()),
+        channel: Some("feature".to_owned()),
+        ..crate::agents::LaunchParams::default()
+    };
+    invocation
 }
 
 fn round_trip(input: &ExecRequest) -> (Vec<String>, ExecRequest) {
@@ -344,10 +365,8 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             &invocation,
             project.path(),
             &BTreeMap::new(),
-            &LaunchReminders {
-                subagent_catalog: Some(&catalog),
-                team_context: None,
-            },
+            Some(&catalog),
+            None,
         )
         .expect("peer process");
         if kind == "claude" {
@@ -388,10 +407,8 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             &child,
             project.path(),
             &BTreeMap::new(),
-            &LaunchReminders {
-                subagent_catalog: Some(&catalog),
-                team_context: None,
-            },
+            Some(&catalog),
+            None,
         )
         .expect("child process");
         assert!(
@@ -412,28 +429,27 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
 #[test]
 fn process_compiler_appends_team_context_for_native_adapters() {
     let project = tempfile::tempdir().expect("project");
-    let context = team_context();
+    let team = team();
+    let invocation = team_request("claude");
+    let context = crate::harness::launch_context::team_launch_context(
+        &invocation.identity.params,
+        &invocation.action,
+        &team,
+        project.path(),
+    )
+    .expect("team context");
     let reminder = crate::harness::launch_context::reminder(&context);
-    let reminders = LaunchReminders {
-        subagent_catalog: None,
-        team_context: Some(&context),
-    };
 
     for kind in ["claude", "qwen", "droid"] {
-        let invocation = request(
-            kind,
-            ExecAction::Launch {
-                prompt: None,
-                extra_args: Vec::new(),
-            },
-        );
+        let invocation = team_request(kind);
         let process = compile_agent_process_with_extra_env(
             project.path(),
             crate::config::RtkMode::Auto,
             &invocation,
             project.path(),
             &BTreeMap::new(),
-            &reminders,
+            None,
+            Some(&team),
         )
         .expect("process");
         assert!(
@@ -446,20 +462,15 @@ fn process_compiler_appends_team_context_for_native_adapters() {
         );
     }
 
-    let invocation = request(
-        "codex",
-        ExecAction::Launch {
-            prompt: None,
-            extra_args: Vec::new(),
-        },
-    );
+    let invocation = team_request("codex");
     let process = compile_agent_process_with_extra_env(
         project.path(),
         crate::config::RtkMode::Auto,
         &invocation,
         project.path(),
         &BTreeMap::new(),
-        &reminders,
+        None,
+        Some(&team),
     )
     .expect("codex process");
     let occurrences = crate::agents::PresetArgMatcher::ConfigKey {
@@ -485,28 +496,27 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
         },
     ]);
     let catalog_reminder = crate::harness::subagent_policy::reminder(&catalog);
-    let context = team_context();
+    let team = team();
+    let invocation = team_request("claude");
+    let context = crate::harness::launch_context::team_launch_context(
+        &invocation.identity.params,
+        &invocation.action,
+        &team,
+        project.path(),
+    )
+    .expect("team context");
     let team_reminder = crate::harness::launch_context::reminder(&context);
-    let reminders = LaunchReminders {
-        subagent_catalog: Some(&catalog),
-        team_context: Some(&context),
-    };
 
     for kind in ["claude", "codex"] {
-        let invocation = request(
-            kind,
-            ExecAction::Launch {
-                prompt: None,
-                extra_args: Vec::new(),
-            },
-        );
+        let invocation = team_request(kind);
         let process = compile_agent_process_with_extra_env(
             project.path(),
             crate::config::RtkMode::Auto,
             &invocation,
             project.path(),
             &BTreeMap::new(),
-            &reminders,
+            Some(&catalog),
+            Some(&team),
         )
         .expect("process");
         let channel = crate::agents::find_definition(kind)
@@ -525,25 +535,24 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
 #[test]
 fn process_compiler_omits_team_context_for_unsupported_adapter() {
     let project = tempfile::tempdir().expect("project");
-    let context = team_context();
+    let team = team();
+    let invocation = team_request("pi");
+    let context = crate::harness::launch_context::team_launch_context(
+        &invocation.identity.params,
+        &invocation.action,
+        &team,
+        project.path(),
+    )
+    .expect("team context");
     let reminder = crate::harness::launch_context::reminder(&context);
-    let invocation = request(
-        "pi",
-        ExecAction::Launch {
-            prompt: None,
-            extra_args: Vec::new(),
-        },
-    );
     let process = compile_agent_process_with_extra_env(
         project.path(),
         crate::config::RtkMode::Auto,
         &invocation,
         project.path(),
         &BTreeMap::new(),
-        &LaunchReminders {
-            subagent_catalog: None,
-            team_context: Some(&context),
-        },
+        None,
+        Some(&team),
     )
     .expect("pi process");
     assert!(
@@ -1072,7 +1081,8 @@ fn provider_account_stage_validates_and_reenters_once() {
             project.path(),
             Path::new("/bin/rimz"),
             &BTreeMap::new(),
-            &LaunchReminders::default(),
+            None,
+            None,
         )
         .expect_err("binding scope");
         assert_eq!(
@@ -1098,7 +1108,8 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
         Path::new("/bin/rimz"),
         &BTreeMap::new(),
-        &LaunchReminders::default(),
+        None,
+        None,
     )
     .expect("pending stage");
     let AgentProcessStage::LoginShellReentry { argv, .. } = stage else {
@@ -1121,7 +1132,8 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
         Path::new("/bin/rimz"),
         &BTreeMap::new(),
-        &LaunchReminders::default(),
+        None,
+        None,
     )
     .expect_err("unresolved account mismatches");
     assert!(err.is_finalized_provider_mismatch());
@@ -1148,7 +1160,8 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
         Path::new("/bin/rimz"),
         &BTreeMap::new(),
-        &LaunchReminders::default(),
+        None,
+        None,
     )
     .expect("ordinary stage") else {
         panic!("unbound launch is ready");
