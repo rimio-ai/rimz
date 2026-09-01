@@ -1023,7 +1023,9 @@ fn fresh_agent_pane(
 }
 
 pub fn validate_agent_name(name: &str) -> Result<()> {
-    if !crate::harness::petname::valid_agent_name(name) {
+    if !crate::harness::petname::valid_agent_name(name)
+        || crate::harness::petname::HEADER_PSEUDO_HANDLES.contains(&name)
+    {
         bail!("invalid agent name `{name}`; use ASCII letters, numbers, and `-`");
     }
     Ok(())

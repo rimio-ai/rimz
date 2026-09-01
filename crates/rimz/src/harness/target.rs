@@ -1265,7 +1265,7 @@ fn nonempty_trimmed(text: &str) -> Option<&str> {
     (!text.is_empty()).then_some(text)
 }
 
-/// The structured header for a human-, agent-, or subagent-authored message.
+/// The structured header for a human-, agent-, subagent-, or harness-authored message.
 ///
 /// Agent-authored text uses the shortest live handle when the sender is visible
 /// in the snapshot and falls back to the launch environment identity.

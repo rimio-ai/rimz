@@ -25,19 +25,58 @@ pub fn mark_joined(paths: &StatePaths, run_id: &RunId) -> Result<(RunRecord, boo
     Ok((record, fully_joined))
 }
 
-pub fn record_report_message(
+pub fn record_report_messages(
     paths: &StatePaths,
-    run_id: &RunId,
-    message_id: MessageId,
-) -> Result<RunRecord> {
-    update_record(paths, run_id, |record, _| {
-        if record.report_message_id.is_some() {
-            return Ok(RecordMutation::Keep(()));
+    run_ids: &[RunId],
+    message_id: Option<&MessageId>,
+) -> Result<Vec<RunRecord>> {
+    let _guard = crate::store::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let originals = run_ids
+        .iter()
+        .map(|run_id| super::load(paths, run_id))
+        .collect::<Result<Vec<_>>>()?;
+    if message_id.is_some()
+        && originals
+            .iter()
+            .any(|record| record.report_message_id.is_some())
+    {
+        return Ok(originals);
+    }
+    let mut written: Vec<RunRecord> = Vec::new();
+    let mut records = Vec::with_capacity(originals.len());
+    let mut write_error = None;
+    let now = jiff::Timestamp::now();
+    for original in &originals {
+        let mut record = original.clone();
+        match message_id {
+            Some(message_id) if record.report_message_id.is_none() => {
+                record.report_message_id = Some(message_id.clone());
+            }
+            None if record.report_message_id.is_some() => record.report_message_id = None,
+            _ => {
+                records.push(record);
+                continue;
+            }
         }
-        record.report_message_id = Some(message_id);
-        Ok(RecordMutation::Write(()))
-    })
-    .map(|(record, ())| record)
+        record.updated_at = now;
+        match crate::store::run_store::write(&paths.runs_dir, &record) {
+            Ok(()) => written.push(original.clone()),
+            Err(err) => {
+                write_error.get_or_insert(err);
+            }
+        }
+        records.push(record);
+    }
+    if let Some(write_error) = write_error {
+        let mut rollback_error = None;
+        for original in written.iter().rev() {
+            if let Err(err) = crate::store::run_store::write(&paths.runs_dir, original) {
+                rollback_error.get_or_insert(err);
+            }
+        }
+        return Err(rollback_error.unwrap_or(write_error));
+    }
+    Ok(records)
 }
 
 fn digest_fully_joined(paths: &StatePaths, message_id: &MessageId) -> Result<bool> {
@@ -83,10 +122,18 @@ mod tests {
 
         let first = MessageId::new();
         let second = MessageId::new();
-        let reported = record_report_message(&paths, &record.run_id, first.clone())
-            .expect("record report message");
+        let reported =
+            record_report_messages(&paths, std::slice::from_ref(&record.run_id), Some(&first))
+                .expect("record report message")
+                .into_iter()
+                .find(|run| run.run_id == record.run_id)
+                .expect("reported run");
         let reported_again =
-            record_report_message(&paths, &record.run_id, second).expect("repeat report message");
+            record_report_messages(&paths, std::slice::from_ref(&record.run_id), Some(&second))
+                .expect("repeat report message")
+                .into_iter()
+                .find(|run| run.run_id == record.run_id)
+                .expect("reported run");
         assert_eq!(reported.report_message_id.as_ref(), Some(&first));
         assert_eq!(reported_again.report_message_id.as_ref(), Some(&first));
     }
@@ -106,8 +153,12 @@ mod tests {
                 Path::new("/tmp/run-report-digest").to_path_buf(),
             );
             super::super::create(&paths, &record).expect("create run");
-            record_report_message(&paths, &record.run_id, message_id.clone())
-                .expect("record digest");
+            record_report_messages(
+                &paths,
+                std::slice::from_ref(&record.run_id),
+                Some(&message_id),
+            )
+            .expect("record digest");
             record
         });
 

@@ -126,7 +126,7 @@ struct FanoutTask {
 
 #[derive(Debug, Default, PartialEq, Args)]
 #[command(
-    after_help = "Launch several children in parallel; RimZ reports back once all your subagents have settled, and you read results with `rimz subagents wait`. The printed petname is also an address: use `rimz message @petname \"…\"` for a follow-up."
+    after_help = "Launch several children in parallel; RimZ reports back as `@rimz` once all your subagents have settled, and the report names the `rimz subagents wait @…` command that reads the results. The printed petname is also an address: use `rimz message @petname \"…\"` for a follow-up."
 )]
 struct SubagentLaunchArgs {
     /// Configured subagent profile, agent kind, or shared command.
@@ -249,8 +249,7 @@ fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> 
     let Some(timeout) = wait else {
         writeln!(
             render::err(),
-            "@{} reports back once all your subagents have settled; read results with `rimz subagents wait`.",
-            child.name
+            "RimZ reports back as `@rimz` once all your subagents have settled; the report names the `rimz subagents wait @…` command that reads the results."
         )?;
         return Ok(());
     };
@@ -307,7 +306,7 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
     let Some(wait_timeout) = args.wait else {
         writeln!(
             render::err(),
-            "{} subagents launched; RimZ reports back once all your subagents have settled; read results with `rimz subagents wait`.",
+            "{} subagents launched; RimZ reports back as `@rimz` once all your subagents have settled; the report names the `rimz subagents wait @…` command that reads the results.",
             launched.len()
         )?;
         if args.json {

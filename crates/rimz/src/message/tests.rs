@@ -892,6 +892,21 @@ fn subagent_sender_round_trips_with_its_own_origin() {
 }
 
 #[test]
+fn harness_sender_round_trips_with_stable_notice_wire() {
+    let sender = MessageSender::Harness {
+        notice: HarnessNotice::SubagentReport,
+    };
+    let json = serde_json::to_value(&sender).unwrap();
+
+    assert_eq!(json["origin"], "harness");
+    assert_eq!(json["notice"], "subagent_report");
+    assert_eq!(
+        serde_json::from_value::<MessageSender>(json).unwrap(),
+        sender
+    );
+}
+
+#[test]
 fn queue_head_selects_oldest_deliverable_record_per_lane() {
     let now = Timestamp::now();
     let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
