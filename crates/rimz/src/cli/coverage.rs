@@ -408,7 +408,7 @@ mod tests {
         assert_eq!(count(&claude, MatrixCellState::Absent), 0);
 
         let codex = agent_cells(&matrix, "codex");
-        assert_eq!(count(&codex, MatrixCellState::Ok), 13);
+        assert_eq!(count(&codex, MatrixCellState::Ok), 14);
         assert_eq!(count(&codex, MatrixCellState::Partial), 3);
         assert_eq!(count(&codex, MatrixCellState::Absent), 1);
         // `end` and `idle` are derived, while live tool hooks miss two paths.
@@ -425,7 +425,7 @@ mod tests {
         let amp = agent_cells(&matrix, "amp");
         assert_eq!(count(&amp, MatrixCellState::Ok), 3);
         assert_eq!(count(&amp, MatrixCellState::Partial), 5);
-        assert_eq!(count(&amp, MatrixCellState::Absent), 9);
+        assert_eq!(count(&amp, MatrixCellState::Absent), 10);
         assert_eq!(
             agent_labels(&matrix, "amp", MatrixCellState::Partial),
             ["end", "idle", "usage", "live$", "spend"]
@@ -433,40 +433,41 @@ mod tests {
         assert_eq!(
             agent_labels(&matrix, "amp", MatrixCellState::Absent),
             [
-                "plan", "ask", "answer", "compact", "sub", "bg", "rich", "tools", "remote"
+                "plan", "ask", "answer", "compact", "sub", "remind", "bg", "rich", "tools",
+                "remote"
             ]
         );
 
         let copilot = agent_cells(&matrix, "copilot");
         assert_eq!(count(&copilot, MatrixCellState::Ok), 7);
         assert_eq!(count(&copilot, MatrixCellState::Partial), 5);
-        assert_eq!(count(&copilot, MatrixCellState::Absent), 5);
+        assert_eq!(count(&copilot, MatrixCellState::Absent), 6);
         assert_eq!(
             agent_labels(&matrix, "copilot", MatrixCellState::Partial),
             ["compact", "sub", "idle", "live$", "spend"]
         );
         assert_eq!(
             agent_labels(&matrix, "copilot", MatrixCellState::Absent),
-            ["plan", "answer", "bg", "tools", "remote"]
+            ["plan", "answer", "remind", "bg", "tools", "remote"]
         );
 
         let kimi = agent_cells(&matrix, "kimi");
         assert_eq!(count(&kimi, MatrixCellState::Ok), 8);
         assert_eq!(count(&kimi, MatrixCellState::Partial), 4);
-        assert_eq!(count(&kimi, MatrixCellState::Absent), 5);
+        assert_eq!(count(&kimi, MatrixCellState::Absent), 6);
         assert_eq!(
             agent_labels(&matrix, "kimi", MatrixCellState::Partial),
             ["sub", "idle", "usage", "spend"]
         );
         assert_eq!(
             agent_labels(&matrix, "kimi", MatrixCellState::Absent),
-            ["answer", "bg", "rich", "tools", "remote"]
+            ["answer", "remind", "bg", "rich", "tools", "remote"]
         );
 
         let pi = agent_cells(&matrix, "pi");
         assert_eq!(count(&pi, MatrixCellState::Ok), 12);
         assert_eq!(count(&pi, MatrixCellState::Partial), 1);
-        assert_eq!(count(&pi, MatrixCellState::Absent), 4);
+        assert_eq!(count(&pi, MatrixCellState::Absent), 5);
         // Pi's `agent_settled` marks final idle, while the stall window
         // reconstructs the missing idle-timeout nudge — partial, like Codex,
         // not absent. Subagents are wired: the rimz extension bridges pi's
@@ -482,24 +483,24 @@ mod tests {
         );
         assert_eq!(
             agent_labels(&matrix, "pi", MatrixCellState::Absent),
-            ["perm", "plan", "bg", "remote"]
+            ["perm", "plan", "remind", "bg", "remote"]
         );
 
         let cursor = agent_cells(&matrix, "cursor");
         assert_eq!(count(&cursor, MatrixCellState::Ok), 5);
         assert_eq!(count(&cursor, MatrixCellState::Partial), 6);
-        assert_eq!(count(&cursor, MatrixCellState::Absent), 6);
+        assert_eq!(count(&cursor, MatrixCellState::Absent), 7);
         assert_eq!(
             agent_labels(&matrix, "cursor", MatrixCellState::Partial),
             ["plan", "ask", "compact", "sub", "idle", "live$"]
         );
         assert_eq!(
             agent_labels(&matrix, "cursor", MatrixCellState::Absent),
-            ["perm", "answer", "bg", "spend", "tools", "remote"]
+            ["perm", "answer", "remind", "bg", "spend", "tools", "remote"]
         );
 
         let droid = agent_cells(&matrix, "droid");
-        assert_eq!(count(&droid, MatrixCellState::Ok), 6);
+        assert_eq!(count(&droid, MatrixCellState::Ok), 7);
         assert_eq!(count(&droid, MatrixCellState::Partial), 3);
         assert_eq!(count(&droid, MatrixCellState::Absent), 8);
         assert_eq!(
@@ -516,14 +517,14 @@ mod tests {
         let kiro = agent_cells(&matrix, "kiro");
         assert_eq!(count(&kiro, MatrixCellState::Ok), 0);
         assert_eq!(count(&kiro, MatrixCellState::Partial), 5);
-        assert_eq!(count(&kiro, MatrixCellState::Absent), 12);
+        assert_eq!(count(&kiro, MatrixCellState::Absent), 13);
         assert_eq!(
             agent_labels(&matrix, "kiro", MatrixCellState::Partial),
             ["turn", "perm", "end", "idle", "usage"]
         );
 
         let qwen = agent_cells(&matrix, "qwen");
-        assert_eq!(count(&qwen, MatrixCellState::Ok), 12);
+        assert_eq!(count(&qwen, MatrixCellState::Ok), 13);
         assert_eq!(count(&qwen, MatrixCellState::Partial), 2);
         assert_eq!(count(&qwen, MatrixCellState::Absent), 3);
         assert_eq!(
@@ -538,27 +539,29 @@ mod tests {
         let grok = agent_cells(&matrix, "grok");
         assert_eq!(count(&grok, MatrixCellState::Ok), 10);
         assert_eq!(count(&grok, MatrixCellState::Partial), 3);
-        assert_eq!(count(&grok, MatrixCellState::Absent), 4);
+        assert_eq!(count(&grok, MatrixCellState::Absent), 5);
         assert_eq!(
             agent_labels(&matrix, "grok", MatrixCellState::Partial),
             ["idle", "live$", "rich"]
         );
         assert_eq!(
             agent_labels(&matrix, "grok", MatrixCellState::Absent),
-            ["answer", "bg", "tools", "remote"]
+            ["answer", "remind", "bg", "tools", "remote"]
         );
 
         let antigravity = agent_cells(&matrix, "antigravity");
         assert_eq!(count(&antigravity, MatrixCellState::Ok), 5);
         assert_eq!(count(&antigravity, MatrixCellState::Partial), 6);
-        assert_eq!(count(&antigravity, MatrixCellState::Absent), 6);
+        assert_eq!(count(&antigravity, MatrixCellState::Absent), 7);
         assert_eq!(
             agent_labels(&matrix, "antigravity", MatrixCellState::Partial),
             ["perm", "ask", "sub", "end", "idle", "live$"]
         );
         assert_eq!(
             agent_labels(&matrix, "antigravity", MatrixCellState::Absent),
-            ["plan", "answer", "compact", "spend", "tools", "remote"]
+            [
+                "plan", "answer", "compact", "remind", "spend", "tools", "remote"
+            ]
         );
     }
 

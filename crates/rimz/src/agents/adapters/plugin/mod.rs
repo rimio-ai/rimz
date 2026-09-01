@@ -1166,7 +1166,7 @@ globs = ["history/**/*.jsonl"]
             }] += 1;
             totals
         });
-        assert_eq!(coverage, [10, 1, 6]);
+        assert_eq!(coverage, [10, 1, 7]);
         let lifecycle = spec
             .lifecycle_hooks
             .iter()
