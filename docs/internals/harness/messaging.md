@@ -214,9 +214,22 @@ The batch lands as one paste and one submit. Agent- and human-authored members k
 
 ### Confirmation and retry
 
-A `TurnStarted` hook aligns the whole submitted paste against candidate `Prompt` batches for that card. Durable record text supplies the boundaries between adjacent messages; agent- and human-authored records consume their structured headers, while system records match verbatim. Record text and the blank-line join match verbatim inside a batch; only the first record's leading and last record's trailing whitespace follow the hook payload's outer normalization. The acknowledgement confirms a batch only when every record accounts for the reported paste; reported text that aligns with no batch is direct pane input and confirms nothing. The correlated path also accepts a requeued prompt until twice its body window after `last_sent_at`, so the record keeps one additional window after reconciliation to absorb a racing acknowledgement instead of allowing another write.
+A `TurnStarted` hook aligns the submitted prompt against candidate `Prompt` batches for that card. Durable record text supplies the boundaries between adjacent messages; agent- and human-authored records consume their structured headers, while system records match verbatim. Record text and the blank-line join match verbatim inside a batch; only the first record's leading and last record's trailing whitespace follow the hook payload's outer normalization. A submission that contains the whole batch confirms it even when composer text appears before or after it. That stray text becomes separate direct-input transcript entries, and the delivered event records a mixed-submit reason with the stray byte counts. Stray composer text is never a reason to write the pane again. Reported text that contains no intact candidate batch is direct pane input and confirms nothing.
 
 When a turn-start adapter reports no usable prompt text, confirmation falls back to the oldest `Sent` prompt and its `batch_id`, preserving hookless-text compatibility. A `Compacting` hook uses the same oldest-`Sent` fallback for `Command` records. Correlation never selects a `Claimed` record because its deliverer owns an in-progress pane write.
+
+| Record state and event | Result |
+| --- | --- |
+| `Sent` + acknowledgement containing the batch exactly | `Delivered` |
+| `Sent` + acknowledgement containing the batch with surrounding text | `Delivered` with a mixed-submit reason; surrounding text is direct transcript input |
+| `Sent` + acknowledgement without the batch | No queue transition; the prompt is direct input |
+| `Sent` prompt + delivery window elapsed | `Queued`, preserving `last_sent_at` and incrementing `unconfirmed_sends` |
+| `Sent` command + delivery window elapsed | `TimedOut`; commands are never resent |
+| `Queued` after an unconfirmed write + correlated acknowledgement | `Delivered`, with no acknowledgement time limit |
+| `Claimed` + acknowledgement | Ignored; the in-flight write owns the pane and its subsequent acknowledgement settles the record |
+| Unconfirmed-send cap reached | `TimedOut` |
+
+The `Claimed` exclusion leaves one residual duplicate window between claim and the write's acknowledgement (normally the 400 ms settle plus the paste). Settling during that interval could not retract the in-flight paste, so the active deliverer keeps ownership. While the receiver is compacting, reconciliation holds a stale `Sent` record in place rather than applying the elapsed-window transition.
 
 Failure has three shapes:
 
@@ -226,7 +239,7 @@ Failure has three shapes:
 
 **Unconfirmed command** (bytes landed, no hook arrived for 3 minutes by default). The sweep settles the record `TimedOut` with `delivery unconfirmed; command not resent`. A command reaches the pane at most once because a duplicate `/compact` can discard context and no missing acknowledgement proves the first submit failed.
 
-While the receiver is compacting, the reconciler holds either body in place and pushes its wake hint one body-specific window ahead: confirmation is delayed rather than discarded.
+While the receiver is compacting, the reconciler pushes the held record's wake hint one body-specific window ahead: confirmation is delayed rather than discarded.
 
 **Neither.** A record whose agent simply has not reached a qualifying boundary is not a failure. It stays `Queued` with no counter moving.
 
@@ -261,7 +274,7 @@ Content:
 
 The agent handle is the shortest unique selector over addressable agents: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down this ladder. System records and `--no-from` sends stay verbatim.
 
-The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` and `SUBAGENT_REPORT` become first-class `Message` transcript entries with structured `from`; `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. When the agent has an open question, the first human `Prompt` segment instead becomes its id-stamped `Answer`; an agent-authored `Message` never answers it. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
+The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` and `SUBAGENT_REPORT` become first-class `Message` transcript entries with structured `from`; `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. When the agent has an open question, the first direct human `Prompt` segment instead becomes its id-stamped `Answer`; an attributed queue record never answers it. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
 
 ## Smart compaction
 
