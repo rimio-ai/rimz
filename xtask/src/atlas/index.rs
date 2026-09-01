@@ -13,6 +13,7 @@ const CACHE_DIRECTORY: &str = "atlas";
 const CACHE_PREFIX: &str = "index-";
 const CACHE_SUFFIX: &str = ".scip";
 const KEY_LENGTH: usize = 16;
+const RUST_PANIC_EXIT_CODE: i32 = 101;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum IndexPolicy {
@@ -48,24 +49,42 @@ pub(super) fn ensure(root: &Path, sources: &[Source]) -> Result<PathBuf> {
     files::remove_stale_file(&staged)?;
 
     eprintln!("atlas: generating rust-analyzer SCIP index (this can take over a minute)");
-    let output = Command::new("rust-analyzer")
-        .arg("scip")
-        .arg(root)
-        .arg("--output")
-        .arg(&staged)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .output();
-    let output = match output {
+    let output = run_scip(root, &staged, None);
+    let mut output = match output {
         Ok(output) => output,
         Err(error) => {
             let _ = files::remove_stale_file(&staged);
             return Err(error).context("running rust-analyzer scip");
         }
     };
+    let initial_panic = if rust_analyzer_panicked(&output) {
+        let excerpt = stderr_excerpt(&output.stderr, 12);
+        files::remove_stale_file(&staged)?;
+        eprintln!(
+            "atlas: rust-analyzer panicked; retrying the exact SCIP export with one cache-priming worker"
+        );
+        output = match run_scip(root, &staged, Some(1)) {
+            Ok(output) => output,
+            Err(error) => {
+                let _ = files::remove_stale_file(&staged);
+                return Err(error).context(format!(
+                    "retrying rust-analyzer scip after an internal panic:\n{excerpt}"
+                ));
+            }
+        };
+        Some(excerpt)
+    } else {
+        None
+    };
     if !output.status.success() {
         let _ = files::remove_stale_file(&staged);
-        let stderr = stderr_tail(&output.stderr, 12);
+        let stderr = stderr_excerpt(&output.stderr, 12);
+        if let Some(initial_panic) = initial_panic {
+            bail!(
+                "rust-analyzer scip panicked, then its single-worker retry failed with {}:\n{stderr}\n\ninitial panic:\n{initial_panic}",
+                output.status
+            );
+        }
         if stderr.is_empty() {
             bail!("rust-analyzer scip failed with {}", output.status);
         }
@@ -91,6 +110,31 @@ pub(super) fn ensure(root: &Path, sources: &[Source]) -> Result<PathBuf> {
     }
     remove_old_indexes(&cache_dir, &destination)?;
     Ok(destination)
+}
+
+fn run_scip(
+    root: &Path,
+    destination: &Path,
+    num_threads: Option<usize>,
+) -> std::io::Result<process::Output> {
+    let mut command = Command::new("rust-analyzer");
+    command
+        .arg("scip")
+        .arg(root)
+        .arg("--output")
+        .arg(destination);
+    if let Some(num_threads) = num_threads {
+        command.arg("--num-threads").arg(num_threads.to_string());
+    }
+    command.current_dir(root).stdout(Stdio::null()).output()
+}
+
+fn rust_analyzer_panicked(output: &process::Output) -> bool {
+    is_rust_panic_exit_code(output.status.code())
+}
+
+fn is_rust_panic_exit_code(code: Option<i32>) -> bool {
+    code == Some(RUST_PANIC_EXIT_CODE)
 }
 
 fn cache_key(root: &Path, sources: &[Source]) -> Result<String> {
@@ -142,11 +186,29 @@ fn rust_analyzer_install_message() -> &'static str {
     "rust-analyzer is required to build the Atlas reference index\n\nInstall it with:\n  rustup component add rust-analyzer\n\nor install rust-analyzer on PATH"
 }
 
-fn stderr_tail(stderr: &[u8], lines: usize) -> String {
+fn stderr_excerpt(stderr: &[u8], lines: usize) -> String {
     let stderr = String::from_utf8_lossy(stderr);
     let mut tail = stderr.lines().rev().take(lines).collect::<Vec<_>>();
     tail.reverse();
-    tail.join("\n")
+    let tail = tail.join("\n");
+
+    let mut panic = stderr
+        .lines()
+        .skip_while(|line| !line.contains(" panicked at "))
+        .take_while(|line| !line.starts_with("stack backtrace:"))
+        .take(8)
+        .collect::<Vec<_>>();
+    while panic.last().is_some_and(|line| line.trim().is_empty()) {
+        panic.pop();
+    }
+    let panic = panic.join("\n");
+    if panic.is_empty() || tail.contains(&panic) {
+        tail
+    } else if tail.is_empty() {
+        panic
+    } else {
+        format!("{panic}\n...\n{tail}")
+    }
 }
 
 fn remove_old_indexes(cache_dir: &Path, current: &Path) -> Result<()> {
@@ -166,4 +228,36 @@ fn remove_old_indexes(cache_dir: &Path, current: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_rust_panic_exit_code, stderr_excerpt};
+
+    #[test]
+    fn only_a_rust_panic_exit_requests_the_exact_retry() {
+        assert!(is_rust_panic_exit_code(Some(101)));
+        assert!(!is_rust_panic_exit_code(Some(1)));
+        assert!(!is_rust_panic_exit_code(None));
+    }
+
+    #[test]
+    fn stderr_excerpt_keeps_the_panic_cause_and_backtrace_tail() {
+        let stderr = b"loading\nthread 'main' panicked at crates/hir-ty/src/infer.rs:42:5:\nassertion failed: exact references\nstack backtrace:\n   0: first\n   1: second\n   2: third\n";
+
+        assert_eq!(
+            stderr_excerpt(stderr, 2),
+            "thread 'main' panicked at crates/hir-ty/src/infer.rs:42:5:\nassertion failed: exact references\n...\n   1: second\n   2: third"
+        );
+    }
+
+    #[test]
+    fn stderr_excerpt_does_not_repeat_a_short_panic() {
+        let stderr = b"thread 'main' panicked at infer.rs:1:1:\nbroken\n";
+
+        assert_eq!(
+            stderr_excerpt(stderr, 12),
+            "thread 'main' panicked at infer.rs:1:1:\nbroken"
+        );
+    }
 }
