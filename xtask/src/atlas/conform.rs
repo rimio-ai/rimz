@@ -127,6 +127,8 @@ struct Report {
     rules: Vec<RuleResult>,
     regressions: usize,
     parse_failures: usize,
+    #[serde(skip)]
+    parse_failure_paths: Vec<PathBuf>,
 }
 
 #[expect(
@@ -220,6 +222,22 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
             Ok(())
         }
         Mode::Tighten => {
+            if !report.parse_failure_paths.is_empty() {
+                bail!(
+                    "atlas conform --tighten cannot measure configured rules while these files do not parse:\n  {}\n\nRepair the {}, then tighten.",
+                    report
+                        .parse_failure_paths
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n  "),
+                    if report.parse_failure_paths.len() == 1 {
+                        "file"
+                    } else {
+                        "files"
+                    }
+                );
+            }
             tighten(&mut target, &report);
             target::write(&target_path, &target)?;
             if !args.json {
@@ -550,7 +568,7 @@ fn evaluate(
     let facts = Facts::load(root, Path::new("."), Facets::default())?;
     let layer_ranks = target.layer_ranks();
     let mut rules = Vec::new();
-    let mut parse_failures = 0;
+    let mut parse_failure_paths = BTreeSet::new();
     for module in &target.modules {
         let absolute = root.join(&module.path);
         if !absolute.exists() {
@@ -573,18 +591,20 @@ fn evaluate(
                 }
             })
             .collect::<Vec<_>>();
-        parse_failures += facts
-            .syntax
-            .parse_failures
-            .iter()
-            .filter(|path| {
-                if absolute.is_file() {
-                    *path == &module.path
-                } else {
-                    path_in_scope(path, &module.path)
-                }
-            })
-            .count();
+        parse_failure_paths.extend(
+            facts
+                .syntax
+                .parse_failures
+                .iter()
+                .filter(|path| {
+                    if absolute.is_file() {
+                        *path == &module.path
+                    } else {
+                        path_in_scope(path, &module.path)
+                    }
+                })
+                .cloned(),
+        );
         let module_entry = if absolute.is_dir() {
             module.path.join("mod.rs")
         } else {
@@ -769,6 +789,20 @@ fn evaluate(
             );
         }
         let scoped_sources = sources_for_path(&facts.sources, &strangler.path, absolute.is_file());
+        parse_failure_paths.extend(
+            facts
+                .syntax
+                .parse_failures
+                .iter()
+                .filter(|path| {
+                    if absolute.is_file() {
+                        *path == &strangler.path
+                    } else {
+                        path_in_scope(path, &strangler.path)
+                    }
+                })
+                .cloned(),
+        );
         let current = count_in_sources(&scoped_sources, &facts.syntax.files, &strangler.symbol);
         rules.push(RuleResult {
             kind: "strangler",
@@ -803,7 +837,8 @@ fn evaluate(
             .filter(|rule| rule.status == "regression")
             .count(),
         rules,
-        parse_failures,
+        parse_failures: parse_failure_paths.len(),
+        parse_failure_paths: parse_failure_paths.into_iter().collect(),
     })
 }
 

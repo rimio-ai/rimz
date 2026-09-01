@@ -240,6 +240,7 @@ baseline = 1
             }],
             regressions: 0,
             parse_failures: 0,
+            parse_failure_paths: Vec::new(),
         }
     }
 }
@@ -427,6 +428,7 @@ mod baseline_and_ratchet {
             ],
             regressions: 1,
             parse_failures: 0,
+            parse_failure_paths: Vec::new(),
         };
 
         let (displayed, folded) = displayed_rules(&report, false);
@@ -568,6 +570,44 @@ baseline = 5
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn tighten_refuses_when_a_scoped_file_does_not_parse() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("src")).unwrap();
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(root.path().join("src/lib.rs"), "mod broken;\n").unwrap();
+        fs::write(root.path().join("src/broken.rs"), "pub fn broken(\n").unwrap();
+        let target_path = root.path().join("target.toml");
+        fs::write(
+            &target_path,
+            r#"version = 4
+layers = []
+
+[[module]]
+path = "src/broken.rs"
+allowed-imports = []
+surface-budget = 5
+"#,
+        )
+        .unwrap();
+        let before = fs::read_to_string(&target_path).unwrap();
+
+        let error = run(
+            root.path(),
+            &["--tighten".into(), "--file".into(), "target.toml".into()],
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("src/broken.rs"));
+        assert!(message.contains("Repair the file, then tighten"));
+        assert_eq!(fs::read_to_string(target_path).unwrap(), before);
     }
 
     #[test]
