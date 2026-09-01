@@ -1,8 +1,8 @@
 # Subagents
 
-`rimz subagents` provides agent-only launch and lifecycle verbs for delegating one bounded prompt to a supervised child. It is syntax sugar over `rimz agents`: the child gets a real pane, durable run record, petname, parent link, and sidebar entry without making the parent choose the supervision flags.
+`rimz subagents` provides launch and lifecycle verbs for delegating one bounded prompt to a supervised child, plus read-only discovery from any shell. It is syntax sugar over `rimz agents`: the child gets a real pane, durable run record, petname, parent link, and sidebar entry without making the parent choose the supervision flags.
 
-Launch and lifecycle commands run only from a RimZ-launched agent. A user-shell invocation fails before opening the room and points to `rimz agents` or `rimz teams`; the read-only `profiles` catalog is available from either context. The mechanics behind the sugar — the direct-parent stamp, no-further-launch rule, caller-scoped verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
+Launch, `fanout`, `wait`, and `stop` run only from a RimZ-launched agent. A user-shell invocation of one of those verbs fails before opening the room and points to `rimz agents` or `rimz teams`; the read-only `list` and `profiles` verbs work in either context. The mechanics behind the sugar — the direct-parent stamp, no-further-launch rule, caller-scoped lifecycle verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
 
 A child launched through this doorway must complete its assignment directly and cannot spawn further agents. RimZ appends that instruction to the provider's system prompt when it has a native launch flag, falls back to the user prompt for other providers, disables the provider's native delegation tool where a verified restriction exists, and refuses both `rimz agents` and `rimz subagents` when the caller is itself a subagent.
 
@@ -133,7 +133,11 @@ rimz subagents stop calm-fox
 rimz subagents stop --all
 ```
 
-Bare `rimz subagents` lists the caller's children, including completed children retained in durable history, with live status, the newest supervised-run outcome, and each child's current one-line description. `stop` accepts only live children of the caller.
+Bare `rimz subagents` is the same read-only operation as `list`. Inside an agent it lists that agent's own RimZ-launched children, including completed children retained in durable history. From a user shell it lists every RimZ-launched child in the current channel; when the shell has no current channel, it lists children across all channels. Provider-native subagents are not part of either list.
+
+Each row reports the child's name, parent, and channel alongside its live status, newest supervised-run outcome, and current one-line description; JSON exposes the same identity and scope. A plain user shell in the project directory cannot derive an in-place team's stamped `<directory>/<team>` lane because that lane is carried by the launched panes rather than the shared directory. Such a shell has no current channel, so `list` deliberately broadens to all channels and the reported channel distinguishes the rows.
+
+`stop` remains agent-only and accepts only live children of that caller.
 
 `restart` and `resume` are deliberately absent in v1: the durable run record does not yet retain every launch argument needed to reproduce the supervised deadline, wait, and self-close contracts. Relaunch the same profile and prompt to start a fresh child, matching the Agent-tool model.
 

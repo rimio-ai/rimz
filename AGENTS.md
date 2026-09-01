@@ -61,7 +61,8 @@ rimz teams focus|restart|stop forge  # drive one live team cohort
 rimz subagents claude "review this"  # from an agent: launch a supervised child
 rimz subagents profiles              # configured child profiles, commands, and descriptions
 rimz subagents wait                  # join every live child and collect results
-rimz subagents list|stop --all       # inspect or stop the caller's own children
+rimz subagents list                  # inspect own children, or the user shell's channel
+rimz subagents stop --all            # from an agent: stop all its live children
 rimz message @coder "rebase first"   # park for the next turn boundary
 rimz message @coder --wait "did the migration land? one line" # ask and print the reply
 rimz message --steer @coder "stop"   # interrupt the live turn now
