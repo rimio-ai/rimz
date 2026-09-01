@@ -185,7 +185,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
-    assert_eq!(report["schema"], 4);
+    assert_eq!(report["schema"], 5);
     assert_eq!(
         report["groups"].as_array().map(Vec::len),
         Some(1),
@@ -228,7 +228,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
     assert!(markdown.contains(" active ·"));
     assert!(markdown.contains(" messages (1 from you)</summary>"));
     assert!(markdown.contains("- **planner** — Codex `gpt-5.5@high`"));
-    assert!(markdown.contains("  - calls: 1 ask"));
+    assert!(markdown.contains("  - activity: 1 ask"));
     assert!(markdown.contains("  - messages: 1 from you · 1 to teammates"));
     assert!(markdown.contains("  - tokens: "));
     assert!(!markdown.contains("agent-time"));
@@ -320,11 +320,11 @@ fn attribution_cli_credits_claude_subagent_companions() {
         report["groups"][0]["members"][0]["subagents"][0]["cost_usd"],
         2.0
     );
-    assert_eq!(
-        report["groups"][0]["members"][0]["subagents"][0]["origin"],
-        "provider_native"
+    assert!(
+        report["groups"][0]["members"][0]["subagents"][0]
+            .get("origin")
+            .is_none()
     );
-    assert!(report["groups"][0]["members"][0]["launched_cost_usd"].is_null());
 
     let markdown = env
         .rimz()
@@ -336,7 +336,7 @@ fn attribution_cli_credits_claude_subagent_companions() {
     assert!(markdown.status.success());
     let markdown = String::from_utf8(markdown.stdout).expect("markdown utf8");
     assert!(markdown.contains("effort: $3.00"));
-    assert!(markdown.contains("subagents: 1 × explore ($2.00, native)"));
+    assert!(markdown.contains("  - effort: $3.00\n  - subagents: 1 × explore · $2.00"));
 }
 
 #[test]
@@ -588,11 +588,11 @@ fn attribution_scope_keeps_a_launched_child_with_its_parent() {
 
     let default = run_json(&["agents", "attribution", "--json"]);
     assert_eq!(default["totals"]["agents"], 1);
-    assert_eq!(default["totals"]["cost_usd"], 1.0);
-    assert_eq!(default["totals"]["launched_cost_usd"], 3.0);
-    assert_eq!(
-        default["groups"][0]["members"][0]["subagents"][0]["origin"],
-        "rimz_launched"
+    assert_eq!(default["totals"]["cost_usd"], 4.0);
+    assert!(
+        default["groups"][0]["members"][0]["subagents"][0]
+            .get("origin")
+            .is_none()
     );
 
     let sibling_scope = run_json(&["agents", "attribution", "sibling-worktree", "--json"]);
@@ -600,7 +600,7 @@ fn attribution_scope_keeps_a_launched_child_with_its_parent() {
 
     let all = run_json(&["agents", "attribution", "--all", "--json"]);
     assert_eq!(all["totals"]["agents"], 1);
-    assert_eq!(all["totals"]["launched_cost_usd"], 3.0);
+    assert_eq!(all["totals"]["cost_usd"], 4.0);
 
     let markdown = env
         .rimz()
@@ -610,9 +610,7 @@ fn attribution_scope_keeps_a_launched_child_with_its_parent() {
         .output()
         .expect("run Markdown attribution");
     assert!(markdown.status.success());
-    assert!(
-        String::from_utf8(markdown.stdout)
-            .expect("Markdown utf8")
-            .contains("+$3.00 launched")
-    );
+    let markdown = String::from_utf8(markdown.stdout).expect("Markdown utf8");
+    assert!(markdown.contains("  - effort: $4.00\n  - subagents: 1 × explorer · $3.00"));
+    assert!(!markdown.contains("launched"));
 }
