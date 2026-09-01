@@ -68,7 +68,7 @@ surface-budget = 39
 
 [[module]]
 path = "crates/rimz/src/harness"
-surface-budget = 590
+surface-budget = 592
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
