@@ -201,6 +201,119 @@ fn subagent_caller_refuses_subagent_launch_before_creating_runtime_state() {
 
 #[cfg(unix)]
 #[test]
+fn user_shell_subagents_list_inspects_the_channel() {
+    let env = Env::new();
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    let rows = [
+        ("claude", "planner", "planner", None, None, "feat-x"),
+        (
+            "codex",
+            "swift-child",
+            "swift-otter",
+            Some("planner"),
+            Some("claude"),
+            "feat-x",
+        ),
+        ("claude", "other", "other", None, None, "other"),
+        (
+            "codex",
+            "calm-child",
+            "calm-fox",
+            Some("other"),
+            Some("claude"),
+            "other",
+        ),
+    ];
+    for (kind, id, name, parent_id, parent_kind, channel) in rows {
+        env.store()
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &AgentKind::new_unchecked(kind),
+                AgentLaunchPayload {
+                    agent_id: AgentSessionId::from(id),
+                    launch_id: None,
+                    agent_name: name.to_owned(),
+                    agent_name_explicit: true,
+                    launch: LaunchParams {
+                        parent_agent_id: parent_id.map(AgentSessionId::from),
+                        parent_agent_kind: parent_kind.map(AgentKind::new_unchecked),
+                        launch_depth: parent_id.map(|_| 1),
+                        channel: Some(channel.to_owned()),
+                        ..Default::default()
+                    },
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: None,
+                    runtime_owner: None,
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: Some(channel.to_owned()),
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .expect("seed agent row");
+    }
+
+    let output = env
+        .rimz()
+        .args(["subagents", "list", "--json"])
+        .env(rimz::harness::launch::ENV_CHANNEL, "feat-x")
+        .output()
+        .expect("list current channel subagents");
+    assert!(
+        output.status.success(),
+        "user-shell list failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rows: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("channel list json");
+    let rows = rows.as_array().expect("channel list array");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], "swift-otter");
+    assert_eq!(rows[0]["parent"], "@planner");
+    assert_eq!(rows[0]["channel"], "feat-x");
+
+    let output = env
+        .rimz()
+        .args(["subagents", "list", "--json"])
+        .output()
+        .expect("list all channel subagents");
+    assert!(
+        output.status.success(),
+        "project-root list failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rows: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("all-channel list json");
+    let rows = rows.as_array().expect("all-channel list array");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["channel"], "feat-x");
+    assert_eq!(rows[1]["channel"], "other");
+
+    for args in [
+        &["subagents", "wait"][..],
+        &["subagents", "stop", "--all"],
+        &["subagents", "codex", "hello"],
+    ] {
+        let output = env
+            .rimz()
+            .args(args)
+            .output()
+            .expect("run agent-only subagents command");
+        assert!(!output.status.success(), "{args:?} unexpectedly succeeded");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("only available inside a RimZ-launched agent"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn launch_identity_and_parentage_survive_event_log_rotation() {
     let env = Env::new();
     let workspace =
