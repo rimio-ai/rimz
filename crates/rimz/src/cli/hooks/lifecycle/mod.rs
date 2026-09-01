@@ -756,6 +756,18 @@ mod tests {
             &workspace,
             rimz::agents::definition_by_kind("claude").unwrap(),
             &turn_started_recorded(),
+            std::slice::from_ref(&agent_message),
+            false,
+            Some(dir.path()),
+        );
+        let mut mixed = turn_started_recorded();
+        mixed.observation.prompt = Some(
+            "Type: AGENT_MESSAGE\nFrom: @coder\nContent:\nhuman prompttyped directly".to_owned(),
+        );
+        record_user_input_for_lifecycle(
+            &workspace,
+            rimz::agents::definition_by_kind("claude").unwrap(),
+            &mixed,
             &[agent_message],
             false,
             Some(dir.path()),
@@ -770,7 +782,7 @@ mod tests {
         );
 
         let records = rimz::agents::spending::user_input::load_in(dir.path());
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 3);
         assert!(
             records
                 .iter()
