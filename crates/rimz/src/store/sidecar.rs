@@ -19,6 +19,27 @@ use sha2::{Digest, Sha256};
 
 use crate::store::atomic;
 
+#[cfg(test)]
+pub(crate) mod testkit {
+    use std::cell::Cell;
+
+    thread_local! {
+        static PARSE_READS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn record_parse_read() {
+        PARSE_READS.set(PARSE_READS.get() + 1);
+    }
+
+    pub(crate) fn reset_parse_reads() {
+        PARSE_READS.set(0);
+    }
+
+    pub(crate) fn parse_reads() -> usize {
+        PARSE_READS.get()
+    }
+}
+
 pub(crate) trait SidecarRecord: Serialize + DeserializeOwned + Clone {
     const FILE_PREFIX: &'static str;
 
@@ -170,6 +191,8 @@ pub(crate) fn read_all<R: SidecarRecord>(dir: &Path, cache: &ParseCache<R>) -> V
         let record = match cache.get(&path) {
             Some(parsed) if parsed.mtime == mtime && parsed.len == len => parsed.record.clone(),
             _ => {
+                #[cfg(test)]
+                testkit::record_parse_read();
                 let record = fs::read(&path)
                     .ok()
                     .and_then(|bytes| serde_json::from_slice(&bytes).ok());
@@ -220,6 +243,8 @@ pub(crate) fn read_for_keys<'a, R: SidecarRecord>(
             let record = match cache.get(&record_path) {
                 Some(parsed) if parsed.mtime == mtime && parsed.len == len => parsed.record.clone(),
                 _ => {
+                    #[cfg(test)]
+                    testkit::record_parse_read();
                     let record = fs::read(&record_path)
                         .ok()
                         .and_then(|bytes| serde_json::from_slice(&bytes).ok());

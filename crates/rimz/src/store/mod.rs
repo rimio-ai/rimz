@@ -181,7 +181,14 @@ impl Store {
             Some(snapshot) => snapshot,
             None => self.snapshot()?,
         };
-        Ok(snapshot.with_agent_context(agent_context::read_all(&self.inner.runtime)))
+        let context = agent_context::read_for_keys(
+            &self.inner.runtime,
+            snapshot
+                .agents
+                .iter()
+                .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
+        );
+        Ok(snapshot.with_agent_context(context))
     }
 
     /// Walk the event log, returning every parseable record and logging
@@ -312,12 +319,25 @@ mod tests {
             ..AgentContext::new("claude", error_at)
         };
         agent_context::write(&runtime, "claude", "agent-0", &context).unwrap();
+        agent_context::write(
+            &runtime,
+            "claude",
+            "unrelated-agent",
+            &AgentContext::new("claude", error_at),
+        )
+        .unwrap();
 
+        sidecar::testkit::reset_parse_reads();
         let snapshot = store.snapshot_cached().unwrap();
         let agent = &snapshot.agents[0];
 
         assert_eq!(agent.status, AgentStatus::Running);
         assert!(!agent.holds_open_turn());
+        assert_eq!(
+            sidecar::testkit::parse_reads(),
+            1,
+            "cached snapshots read context only for projected agent keys"
+        );
     }
 
     fn lifecycle(workspace_id: &WorkspaceId, index: usize) -> EventEnvelope {

@@ -479,6 +479,15 @@ pub fn read_all(runtime: &RuntimePaths) -> Vec<AgentContextRecord> {
     CONTEXT_PARSE_CACHE.with(|cache| sidecar::read_all(&runtime.agent_context_dir, cache))
 }
 
+/// Read context only for identities already present in the snapshot.
+pub fn read_for_keys<'a>(
+    runtime: &RuntimePaths,
+    keys: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Vec<AgentContextRecord> {
+    CONTEXT_PARSE_CACHE
+        .with(|cache| sidecar::read_for_keys(&runtime.agent_context_dir, keys, cache))
+}
+
 /// Remove a session's sidecar on `SessionEnd` or reap. Best-effort:
 /// a missing file is success.
 pub fn remove(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> std::io::Result<()> {
