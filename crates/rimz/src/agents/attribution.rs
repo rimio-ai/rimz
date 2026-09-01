@@ -20,7 +20,7 @@ use super::{AgentState, pricing, spending};
 
 pub use super::spending::EffortTokens as TokenSplit;
 
-pub const ATTRIBUTION_SCHEMA: u8 = 4;
+const ATTRIBUTION_SCHEMA: u8 = 4;
 const SUBAGENT_TYPE_MAX_CHARS: usize = 24;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
