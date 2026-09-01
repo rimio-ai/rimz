@@ -2147,6 +2147,118 @@ fn write_run_status(store: &rimz::Store, record: &mut RunRecord, status: RunStat
     rimz::harness::run::create(store.paths(), record).expect("write run status");
 }
 
+fn create_finished_subagent(
+    env: &Env,
+    store: &rimz::Store,
+) -> (RunRecord, AgentKind, AgentSessionId) {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let parent_kind = AgentKind::new_unchecked("claude");
+    let parent_id = AgentSessionId::from("parent-session");
+    let parent_launch_id = AgentSessionId::from("parent-launch");
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &parent_kind,
+            AgentLaunchPayload {
+                agent_id: parent_id.clone(),
+                launch_id: Some(parent_launch_id.clone()),
+                agent_name: "parent".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed subagent parent");
+
+    let child_kind = AgentKind::new_unchecked("codex");
+    let child_id = AgentSessionId::from("child-session");
+    let child_launch_id = AgentSessionId::from("child-launch");
+    let mut record = RunRecord::new(
+        workspace.workspace_id.clone(),
+        child_kind.clone(),
+        PermissionMode::Auto,
+        "inspect the wait path".to_owned(),
+        env.project_root.clone(),
+    );
+    record.agent_id = Some(child_id.clone());
+    record.agent_name = Some("quiet-fox".to_owned());
+    record.subagent = true;
+    record.last_message = Some("durable child answer\n".to_owned());
+    record.status = RunStatus::Completed;
+    record.completed_at = Some(record.updated_at);
+    rimz::harness::run::create(store.paths(), &record).expect("create completed subagent run");
+
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &child_kind,
+            AgentLaunchPayload {
+                agent_id: child_id.clone(),
+                launch_id: Some(child_launch_id),
+                agent_name: "quiet-fox".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    parent_agent_id: Some(parent_id),
+                    parent_agent_kind: Some(parent_kind.clone()),
+                    launch_depth: Some(1),
+                    ..LaunchParams::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: Some(record.run_id.clone()),
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: Some(record.prompt.clone()),
+                description: None,
+            },
+        ))
+        .expect("seed completed subagent");
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            child_kind.as_str(),
+            "Stop",
+            &AgentLifecycleObservation::new(
+                Some(child_id.clone()),
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                },
+            ),
+        ))
+        .expect("settle completed subagent");
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            workspace.session_name,
+            child_kind.as_str(),
+            "SessionEnd",
+            &AgentLifecycleObservation::new(Some(child_id.clone()), LifecycleSignal::Ended),
+        ))
+        .expect("end completed subagent");
+    let child = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("read completed subagent")
+        .agents
+        .into_iter()
+        .find(|agent| agent.agent_id == child_id)
+        .expect("completed subagent remains in audit history");
+    assert!(child.ended_at.is_some());
+
+    (record, parent_kind, parent_launch_id)
+}
+
 fn register_running_wait_agent(env: &Env, store: &rimz::Store, name: &str, session_id: &str) {
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
     let agent_id = AgentSessionId::from(session_id);
@@ -2237,6 +2349,52 @@ fn wait_single_run_json_prints_full_record() {
     assert_eq!(json["last_message"], "done");
     assert_eq!(json["cost_usd"], 0.42);
     assert!(json.get("exit").is_none(), "must not use wait summary JSON");
+}
+
+#[test]
+fn completed_subagent_wait_prints_the_durable_result_after_the_child_ends() {
+    let env = Env::new();
+    let store = env.store();
+    let (record, parent_kind, parent_launch_id) = create_finished_subagent(&env, &store);
+
+    let out = env
+        .rimz()
+        .args(["subagents", "wait", "quiet-fox"])
+        .env(rimz::harness::launch::ENV_AGENT_KIND, parent_kind.as_str())
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
+        .output()
+        .expect("wait for completed subagent");
+
+    assert!(
+        out.status.success(),
+        "completed subagent wait failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "durable child answer\n"
+    );
+    assert!(out.stderr.is_empty());
+
+    let out = env
+        .rimz()
+        .args(["subagents", "wait", "quiet-fox", "--json"])
+        .env(rimz::harness::launch::ENV_AGENT_KIND, parent_kind.as_str())
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
+        .output()
+        .expect("wait for completed subagent JSON");
+
+    assert!(out.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("subagent run JSON");
+    assert_eq!(json["run_id"], record.run_id.as_str());
+    assert_eq!(json["last_message"], "durable child answer\n");
 }
 
 #[test]

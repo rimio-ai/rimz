@@ -423,7 +423,10 @@ fn resolve_wait_target(
         crate::cli::resolve_agent_one(snapshot, reference, None, current_channel);
     let live_agent = live_agent_result.as_ref().ok().copied();
     if let Some(run) = newest_run_by_ref(store, reference, live_agent)?
-        && (!run.status.is_terminal() || live_agent.is_none() || run.run_id.as_str() == reference)
+        && (!run.status.is_terminal()
+            || live_agent.is_none()
+            || run.run_id.as_str() == reference
+            || (run.subagent && live_agent.is_some_and(AgentState::is_launched_child)))
     {
         let name = run
             .agent_name
