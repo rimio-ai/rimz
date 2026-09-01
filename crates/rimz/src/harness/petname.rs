@@ -43,7 +43,7 @@ pub const RESERVED_AGENT_WORDS: &[&str] = &[
 ];
 
 /// Handles used in message envelopes for senders that are not agents.
-pub const HEADER_PSEUDO_HANDLES: &[&str] = &["user", "rimz"];
+const HEADER_PSEUDO_HANDLES: &[&str] = &["user", "rimz"];
 
 pub fn mint(taken: impl IntoIterator<Item = impl AsRef<str>>) -> String {
     let seed = Uuid::now_v7().simple().to_string();

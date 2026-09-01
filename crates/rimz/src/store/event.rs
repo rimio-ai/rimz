@@ -267,7 +267,7 @@ impl MessageEventPayload {
             enter: message.enter,
             attempts: message.attempts,
             unconfirmed_sends: message.unconfirmed_sends,
-            sender: message.sender.attributed(),
+            sender: attributed_sender(&message.sender),
             reason: reason.map(ToOwned::to_owned),
             enqueued_at: Some(message.enqueued_at),
             delivered_at: message.delivered_at,
@@ -300,13 +300,17 @@ impl MessageEventPayload {
             enter: true,
             attempts: 0,
             unconfirmed_sends: 0,
-            sender: sender.attributed(),
+            sender: attributed_sender(&sender),
             reason: Some(reason),
             enqueued_at: Some(at),
             delivered_at: None,
             compacted_context_tokens: None,
         }
     }
+}
+
+fn attributed_sender(sender: &MessageSender) -> Option<MessageSender> {
+    (!matches!(sender, MessageSender::Human)).then(|| sender.clone())
 }
 
 impl AgentLifecyclePayload {

@@ -9,15 +9,20 @@ use crate::store::StatePaths;
 
 use super::{RecordMutation, Result, RunRecord, update_record};
 
-pub fn mark_joined(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
-    update_record(paths, run_id, |record, now| {
+pub fn mark_joined(paths: &StatePaths, run_id: &RunId) -> Result<(RunRecord, bool)> {
+    let record = update_record(paths, run_id, |record, now| {
         if record.joined_at.is_some() {
             return Ok(RecordMutation::Keep(()));
         }
         record.joined_at = Some(now);
         Ok(RecordMutation::Write(()))
     })
-    .map(|(record, ())| record)
+    .map(|(record, ())| record)?;
+    let fully_joined = match record.report_message_id.as_ref() {
+        Some(message_id) => digest_fully_joined(paths, message_id)?,
+        None => false,
+    };
+    Ok((record, fully_joined))
 }
 
 pub fn record_report_message(
@@ -35,7 +40,7 @@ pub fn record_report_message(
     .map(|(record, ())| record)
 }
 
-pub fn digest_fully_joined(paths: &StatePaths, message_id: &MessageId) -> Result<bool> {
+fn digest_fully_joined(paths: &StatePaths, message_id: &MessageId) -> Result<bool> {
     let mut found = false;
     for record in super::list(paths)?
         .into_iter()
@@ -72,8 +77,8 @@ mod tests {
         );
         super::super::create(&paths, &record).expect("create run");
 
-        let joined = mark_joined(&paths, &record.run_id).expect("mark joined");
-        let joined_again = mark_joined(&paths, &record.run_id).expect("repeat joined");
+        let (joined, _) = mark_joined(&paths, &record.run_id).expect("mark joined");
+        let (joined_again, _) = mark_joined(&paths, &record.run_id).expect("repeat joined");
         assert_eq!(joined_again.joined_at, joined.joined_at);
 
         let first = MessageId::new();

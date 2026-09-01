@@ -79,24 +79,7 @@ pub enum HarnessNotice {
     SubagentReport,
 }
 
-impl HarnessNotice {
-    pub const fn header_type(self) -> &'static str {
-        match self {
-            Self::SubagentReport => "SUBAGENT_REPORT",
-        }
-    }
-}
-
 impl MessageSender {
-    pub fn attributed(&self) -> Option<Self> {
-        match self {
-            Self::Human => None,
-            Self::Agent { .. } | Self::Harness { .. } | Self::Subagent { .. } | Self::System => {
-                Some(self.clone())
-            }
-        }
-    }
-
     pub fn render(&self) -> String {
         match self {
             Self::Human => "you".to_owned(),

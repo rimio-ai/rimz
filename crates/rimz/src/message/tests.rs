@@ -889,7 +889,6 @@ fn subagent_sender_round_trips_with_its_own_origin() {
         serde_json::from_value::<MessageSender>(json).unwrap(),
         sender
     );
-    assert_eq!(sender.attributed(), Some(sender.clone()));
 }
 
 #[test]

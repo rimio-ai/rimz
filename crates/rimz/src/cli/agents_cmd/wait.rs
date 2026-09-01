@@ -284,9 +284,10 @@ fn mark_joined<'a>(
             continue;
         };
         let result = (|| -> Result<()> {
-            let joined = rimz::harness::run::report::mark_joined(store.paths(), &record.run_id)?;
+            let (joined, digest_fully_joined) =
+                rimz::harness::run::report::mark_joined(store.paths(), &record.run_id)?;
             if let Some(message_id) = joined.report_message_id
-                && rimz::harness::run::report::digest_fully_joined(store.paths(), &message_id)?
+                && digest_fully_joined
             {
                 store.cancel_message(&message_id, session_name, "joined inline")?;
             }
