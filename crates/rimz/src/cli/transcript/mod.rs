@@ -112,6 +112,12 @@ impl Hidden {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ViewMode {
+    hidden: Hidden,
+    flat: bool,
+}
+
 #[derive(Clone, Debug)]
 struct Identity {
     base_handle: String,
@@ -157,8 +163,10 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         args.worktree.as_deref(),
         args.last,
         args.all,
-        Hidden::for_json(args.json),
-        args.flat,
+        ViewMode {
+            hidden: Hidden::for_json(args.json),
+            flat: args.flat,
+        },
     )?;
     let selected = selected_lines(&view);
     if selected.is_empty() {
@@ -222,7 +230,16 @@ pub(crate) fn chat_view_with_hidden(
     let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
     chat_view_with_mode(
-        workspace, &paths, target, worktree, last, all, hidden, false,
+        workspace,
+        &paths,
+        target,
+        worktree,
+        last,
+        all,
+        ViewMode {
+            hidden,
+            flat: false,
+        },
     )
 }
 
@@ -233,8 +250,7 @@ fn chat_view_with_mode(
     worktree: Option<&str>,
     last: Option<usize>,
     all: bool,
-    hidden: Hidden,
-    flat: bool,
+    mode: ViewMode,
 ) -> Result<RenderedChat> {
     let current = current_channel(workspace);
     let target = resolve_run_target(paths, target)?;
@@ -249,7 +265,7 @@ fn chat_view_with_mode(
             newest_archived_at: None,
             empty_message: Some("No conversation recorded yet.".to_owned()),
             last,
-            flat,
+            flat: mode.flat,
         });
     }
     let identities = build_identities(&entries);
@@ -265,7 +281,7 @@ fn chat_view_with_mode(
     let filtered: Vec<&TranscriptEntry> = entries
         .iter()
         .filter(|entry| entry_in_scope(entry, &scope))
-        .filter(|entry| hidden.includes(entry))
+        .filter(|entry| mode.hidden.includes(entry))
         .collect();
     if filtered.is_empty() {
         let empty_message = empty_scope_message(&scope, target.as_deref());
@@ -278,7 +294,7 @@ fn chat_view_with_mode(
             newest_archived_at: None,
             empty_message: Some(empty_message),
             last,
-            flat,
+            flat: mode.flat,
         });
     }
 
@@ -302,7 +318,7 @@ fn chat_view_with_mode(
             newest_archived_at: None,
             empty_message: Some(empty_message),
             last,
-            flat,
+            flat: mode.flat,
         });
     }
 
@@ -337,7 +353,7 @@ fn chat_view_with_mode(
         newest_archived_at,
         empty_message: None,
         last,
-        flat,
+        flat: mode.flat,
     })
 }
 
