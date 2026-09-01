@@ -9,9 +9,9 @@ use super::conform::{self, Direction};
 use super::facts::{Facets, Facts};
 use super::index::IndexPolicy;
 use super::modules::{
-    ItemId, crate_module_for_row, module_endpoint, module_for_path, path_in_scope,
+    ItemId, bounded_names, crate_module_for_row, module_endpoint, module_for_path, path_in_scope,
 };
-use super::references::Edge;
+use super::references::{Edge, EdgeKind};
 use super::target::{self, LayerRanks, TARGET_FILE, Target};
 use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
 
@@ -22,7 +22,8 @@ const USAGE: &str = "cargo xtask atlas diff --base <ref> [--path <prefix>] [--fi
 
 Compares a base commit with the working tree. The report shows structural
 movement in escaping surface, layer direction, use/reference edges, stranglers,
-and Rust files. --no-index omits reference edges, assembly, and unresolved items.
+and Rust files. --no-index omits reference edges, per-function assembly, and
+unresolved items.
 
   --base <ref>          required base revision
   --path <path>         root-relative subtree (default .)
@@ -128,6 +129,7 @@ impl ModuleRow {
             && self.upward_sites_delta == 0
             && self.references_added.unwrap_or_default() == 0
             && self.references_removed.unwrap_or_default() == 0
+            && self.assembly_max_delta.unwrap_or_default() == 0
     }
 }
 
@@ -733,7 +735,26 @@ fn import_changes(
         .collect()
 }
 
-type EdgeMap = BTreeMap<(String, String), BTreeSet<String>>;
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct FunctionId {
+    path: PathBuf,
+    label: String,
+    line: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+struct EdgeData {
+    items: BTreeSet<String>,
+    by_fn: BTreeMap<FunctionId, BTreeSet<String>>,
+}
+
+impl EdgeData {
+    fn assembly(&self) -> usize {
+        self.by_fn.values().map(BTreeSet::len).max().unwrap_or(0)
+    }
+}
+
+type EdgeMap = BTreeMap<(String, String), EdgeData>;
 
 fn use_edges(facts: &Facts, scope: &Path) -> EdgeMap {
     let scope_module = crate_module_for_row(scope, "(root)");
@@ -758,6 +779,7 @@ fn use_edges(facts: &Facts, scope: &Path) -> EdgeMap {
                 edges
                     .entry((from.clone(), to))
                     .or_default()
+                    .items
                     .insert(import.item.clone());
             }
         }
@@ -767,18 +789,41 @@ fn use_edges(facts: &Facts, scope: &Path) -> EdgeMap {
 
 fn reference_edges(facts: &Facts, scope: &Path) -> EdgeMap {
     let scope_module = crate_module_for_row(scope, "(root)");
-    facts
-        .references
-        .as_ref()
-        .into_iter()
-        .flat_map(|references| &references.edges)
-        .filter(|edge| !edge.test && path_in_scope(&edge.from_path, scope))
-        .fold(EdgeMap::new(), |mut edges, edge: &Edge| {
-            let from = module_endpoint(&edge.from, &scope_module);
-            let to = module_endpoint(&edge.to, &scope_module);
-            if from != to {
-                edges
-                    .entry((from, to))
+    collect_reference_edges(
+        facts
+            .references
+            .as_ref()
+            .into_iter()
+            .flat_map(|references| &references.edges),
+        scope,
+        &scope_module,
+    )
+}
+
+fn collect_reference_edges<'a>(
+    source: impl Iterator<Item = &'a Edge>,
+    scope: &Path,
+    scope_module: &str,
+) -> EdgeMap {
+    source
+        .filter(|edge| {
+            edge.kind == EdgeKind::Reference && !edge.test && path_in_scope(&edge.from_path, scope)
+        })
+        .fold(EdgeMap::new(), |mut edges, edge| {
+            let from = module_endpoint(&edge.from, scope_module);
+            let to = module_endpoint(&edge.to, scope_module);
+            if from == to {
+                return edges;
+            }
+            let data = edges.entry((from, to)).or_default();
+            data.items.insert(edge.item.clone());
+            if let Some(function) = &edge.from_fn {
+                data.by_fn
+                    .entry(FunctionId {
+                        path: edge.from_path.clone(),
+                        label: function.label.clone(),
+                        line: function.line,
+                    })
                     .or_default()
                     .insert(edge.item.clone());
             }
@@ -788,9 +833,12 @@ fn reference_edges(facts: &Facts, scope: &Path) -> EdgeMap {
 
 fn edge_changes(left: &EdgeMap, right: &EdgeMap) -> Vec<EdgeChange> {
     left.iter()
-        .filter_map(|((from, to), items)| {
-            let other = right.get(&(from.clone(), to.clone()));
-            let changed = items
+        .filter_map(|((from, to), data)| {
+            let other = right
+                .get(&(from.clone(), to.clone()))
+                .map(|data| &data.items);
+            let changed = data
+                .items
                 .iter()
                 .filter(|item| other.is_none_or(|other| !other.contains(*item)))
                 .cloned()
@@ -815,8 +863,8 @@ fn reference_changes(
         .map(|change| {
             let key = (change.from.clone(), change.to.clone());
             ReferenceChange {
-                base_assembly: base.get(&key).map_or(0, BTreeSet::len),
-                current_assembly: current.get(&key).map_or(0, BTreeSet::len),
+                base_assembly: base.get(&key).map_or(0, EdgeData::assembly),
+                current_assembly: current.get(&key).map_or(0, EdgeData::assembly),
                 from: change.from,
                 to: change.to,
                 items: change.items,
@@ -833,8 +881,8 @@ fn assembly_deltas(base: &EdgeMap, current: &EdgeMap) -> BTreeMap<String, i64> {
         .collect::<BTreeSet<_>>();
     let mut deltas = BTreeMap::<String, i64>::new();
     for pair in pairs {
-        let delta = current.get(&pair).map_or(0, BTreeSet::len) as i64
-            - base.get(&pair).map_or(0, BTreeSet::len) as i64;
+        let delta = current.get(&pair).map_or(0, EdgeData::assembly) as i64
+            - base.get(&pair).map_or(0, EdgeData::assembly) as i64;
         let entry = deltas.entry(pair.0).or_default();
         if delta.unsigned_abs() > entry.unsigned_abs() {
             *entry = delta;
@@ -1276,7 +1324,7 @@ fn print_references(name: &str, edges: &[ReferenceChange], top: usize, markdown:
     section(&format!("{name} ({})", edges.len()), markdown);
     for edge in edges.iter().take(top) {
         println!(
-            "{} → {}  {} → {} items  {}",
+            "{} → {}  assembly {} → {} max/fn  {}",
             edge.from,
             edge.to,
             edge.base_assembly,
@@ -1287,24 +1335,12 @@ fn print_references(name: &str, edges: &[ReferenceChange], top: usize, markdown:
     close(markdown);
 }
 
-fn bounded_names(items: &[String], top: usize) -> String {
-    let mut rendered = items
-        .iter()
-        .take(top)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
-    if items.len() > top {
-        rendered.push_str(&format!(" … {} more", items.len() - top));
-    }
-    rendered
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
     use std::process::Command;
 
+    use super::super::references::FnRef;
     use super::*;
 
     #[test]
@@ -1341,6 +1377,57 @@ mod tests {
                 json: false,
                 no_index: false,
             }
+        );
+    }
+
+    #[test]
+    fn assembly_delta_uses_the_per_function_maximum() {
+        let base_edges = [
+            reference_edge("src/a.rs", "One", Some(10)),
+            reference_edge("src/a.rs", "Two", Some(10)),
+            reference_edge("src/a.rs", "Three", Some(30)),
+            reference_edge("src/b.rs", "Four", Some(10)),
+            reference_edge("src/a.rs", "Outside", None),
+        ];
+        let mut current_edges = vec![
+            reference_edge("src/a.rs", "One", Some(10)),
+            reference_edge("src/a.rs", "Two", Some(10)),
+            reference_edge("src/a.rs", "Three", Some(10)),
+            reference_edge("src/a.rs", "Four", Some(10)),
+            reference_edge("src/a.rs", "Outside", None),
+        ];
+        let mut test_edge = reference_edge("src/a.rs", "TestOnly", Some(10));
+        test_edge.test = true;
+        current_edges.push(test_edge);
+        let mut use_edge = reference_edge("src/a.rs", "UseOnly", Some(10));
+        use_edge.kind = EdgeKind::Use;
+        current_edges.push(use_edge);
+
+        let base = collect_reference_edges(base_edges.iter(), Path::new("."), "");
+        let current = collect_reference_edges(current_edges.iter(), Path::new("."), "");
+        let pair = ("caller".to_owned(), "target".to_owned());
+
+        assert_eq!(base[&pair].items, current[&pair].items);
+        assert_eq!(base[&pair].assembly(), 2);
+        assert_eq!(current[&pair].assembly(), 4);
+        let delta = assembly_deltas(&base, &current)["caller"];
+        assert_eq!(delta, 2);
+        assert!(
+            !ModuleRow {
+                module: "caller".to_owned(),
+                code: 0,
+                delta_code: 0,
+                tests: 0,
+                delta_tests: 0,
+                escaping: 0,
+                escaping_added: 0,
+                escaping_removed: 0,
+                upward_sites_delta: 0,
+                references_added: Some(0),
+                references_removed: Some(0),
+                assembly_max_delta: Some(delta),
+            }
+            .unchanged()
         );
     }
 
@@ -1474,6 +1561,23 @@ mod tests {
             markdown: false,
             json: false,
             no_index: true,
+        }
+    }
+
+    fn reference_edge(path: &str, item: &str, function_line: Option<usize>) -> Edge {
+        Edge {
+            from_path: PathBuf::from(path),
+            to_path: PathBuf::from("src/target.rs"),
+            from: "caller".to_owned(),
+            to: "target".to_owned(),
+            item: item.to_owned(),
+            kind: EdgeKind::Reference,
+            test: false,
+            from_line: function_line.unwrap_or(1),
+            from_fn: function_line.map(|line| FnRef {
+                label: "run".to_owned(),
+                line,
+            }),
         }
     }
 

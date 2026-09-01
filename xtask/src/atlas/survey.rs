@@ -777,6 +777,8 @@ mod tests {
             from_path: PathBuf::from("crates/rimz/src/cli/agents_cmd.rs"),
             to_path: PathBuf::from("crates/rimz/src/agents/mod.rs"),
             from: "cli::agents_cmd".to_owned(),
+            from_line: 1,
+            from_fn: None,
             to: "agents".to_owned(),
             item: "Agent".to_owned(),
             kind: super::super::references::EdgeKind::Reference,

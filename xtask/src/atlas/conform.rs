@@ -490,6 +490,31 @@ pub(super) fn layer_direction(
     })
 }
 
+pub(super) fn rule_covers_path(root: &Path, rule_path: &Path, path: &Path) -> bool {
+    if root.join(rule_path).is_file() {
+        path == rule_path
+    } else {
+        path_in_scope(path, rule_path)
+    }
+}
+
+pub(super) fn debt_sites_by_rule(
+    root: &Path,
+    target: &Target,
+    target_path: &Path,
+) -> Result<BTreeMap<(PathBuf, String), usize>> {
+    let report = evaluate(root, target, target_path, false, Mode::Status)?;
+    Ok(report
+        .rules
+        .into_iter()
+        .flat_map(|rule| {
+            rule.debt
+                .into_iter()
+                .map(move |debt| ((rule.path.clone(), debt.prefix), debt.sites))
+        })
+        .collect())
+}
+
 fn greedy_layers<'a>(
     files: impl Iterator<Item = &'a syntax::FileSyntax>,
     facts: &Facts,
@@ -583,26 +608,14 @@ fn evaluate(
             .syntax
             .files
             .iter()
-            .filter(|file| {
-                if absolute.is_file() {
-                    file.path == module.path
-                } else {
-                    path_in_scope(&file.path, &module.path)
-                }
-            })
+            .filter(|file| rule_covers_path(root, &module.path, &file.path))
             .collect::<Vec<_>>();
         parse_failure_paths.extend(
             facts
                 .syntax
                 .parse_failures
                 .iter()
-                .filter(|path| {
-                    if absolute.is_file() {
-                        *path == &module.path
-                    } else {
-                        path_in_scope(path, &module.path)
-                    }
-                })
+                .filter(|path| rule_covers_path(root, &module.path, path))
                 .cloned(),
         );
         let module_entry = if absolute.is_dir() {
@@ -718,14 +731,10 @@ fn evaluate(
         });
     }
     for file in facts.syntax.files.iter().filter(|file| {
-        !target.modules.iter().any(|module| {
-            let absolute = root.join(&module.path);
-            if absolute.is_file() {
-                file.path == module.path
-            } else {
-                path_in_scope(&file.path, &module.path)
-            }
-        })
+        !target
+            .modules
+            .iter()
+            .any(|module| rule_covers_path(root, &module.path, &file.path))
     }) {
         if layer_ranks.get(top_module(&file.module_path)).is_none() {
             continue;
@@ -794,13 +803,7 @@ fn evaluate(
                 .syntax
                 .parse_failures
                 .iter()
-                .filter(|path| {
-                    if absolute.is_file() {
-                        *path == &strangler.path
-                    } else {
-                        path_in_scope(path, &strangler.path)
-                    }
-                })
+                .filter(|path| rule_covers_path(root, &strangler.path, path))
                 .cloned(),
         );
         let current = count_in_sources(&scoped_sources, &facts.syntax.files, &strangler.symbol);

@@ -13,6 +13,7 @@ use super::modules::{
     ItemId, crate_module_for_path, escaping_items_for_boundary, module_for_path, module_is_within,
     path_in_scope, reference_module_label,
 };
+use super::references::{Edge, EdgeKind};
 use super::{REPORT_VERSION, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
@@ -48,6 +49,16 @@ struct Caller {
     module: String,
     items: usize,
     item_names: Vec<String>,
+    max_fn_items: usize,
+    top_fns: Vec<CallerFn>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct CallerFn {
+    function: String,
+    path: PathBuf,
+    line: usize,
+    items: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -330,7 +341,13 @@ fn build_report(facts: &Facts, module: &Path, args: &Args) -> Result<Report> {
             });
         }
     }
-    let callers = callers(facts, &crate_module);
+    let callers = callers_from_edges(
+        facts
+            .references
+            .as_ref()
+            .map_or(&[], |references| references.edges.as_slice()),
+        &crate_module,
+    );
     let providers = providers(facts, module, &crate_module);
     let cochange = history::cochange_partners(
         facts
@@ -407,31 +424,72 @@ fn build_report(facts: &Facts, module: &Path, args: &Args) -> Result<Report> {
     })
 }
 
-fn callers(facts: &Facts, crate_module: &str) -> Vec<Caller> {
-    let mut rows = BTreeMap::<String, BTreeSet<String>>::new();
-    if let Some(references) = &facts.references {
-        for edge in references.edges.iter().filter(|edge| {
-            !edge.test
-                && module_is_within(&edge.to, crate_module)
-                && !module_is_within(&edge.from, crate_module)
-        }) {
-            rows.entry(reference_module_label(&edge.from, crate_module))
+fn callers_from_edges(edges: &[Edge], crate_module: &str) -> Vec<Caller> {
+    #[derive(Default)]
+    struct Assembly {
+        items: BTreeSet<String>,
+        functions: BTreeMap<(String, PathBuf, usize), BTreeSet<String>>,
+    }
+
+    let mut rows = BTreeMap::<String, Assembly>::new();
+    for edge in edges.iter().filter(|edge| {
+        edge.kind == EdgeKind::Reference
+            && !edge.test
+            && module_is_within(&edge.to, crate_module)
+            && !module_is_within(&edge.from, crate_module)
+    }) {
+        let row = rows
+            .entry(reference_module_label(&edge.from, crate_module))
+            .or_default();
+        row.items.insert(edge.item.clone());
+        if let Some(function) = &edge.from_fn {
+            row.functions
+                .entry((
+                    function.label.clone(),
+                    edge.from_path.clone(),
+                    function.line,
+                ))
                 .or_default()
                 .insert(edge.item.clone());
         }
     }
     let mut rows = rows
         .into_iter()
-        .map(|(module, items)| Caller {
-            module,
-            items: items.len(),
-            item_names: items.into_iter().collect(),
+        .map(|(module, assembly)| {
+            let mut top_fns = assembly
+                .functions
+                .into_iter()
+                .map(|((function, path, line), items)| CallerFn {
+                    function,
+                    path,
+                    line,
+                    items: items.len(),
+                })
+                .collect::<Vec<_>>();
+            top_fns.sort_by(|left, right| {
+                right
+                    .items
+                    .cmp(&left.items)
+                    .then_with(|| left.function.cmp(&right.function))
+                    .then_with(|| left.path.cmp(&right.path))
+                    .then_with(|| left.line.cmp(&right.line))
+            });
+            let max_fn_items = top_fns.first().map_or(0, |function| function.items);
+            top_fns.truncate(3);
+            Caller {
+                module,
+                items: assembly.items.len(),
+                item_names: assembly.items.into_iter().collect(),
+                max_fn_items,
+                top_fns,
+            }
         })
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| {
         right
-            .items
-            .cmp(&left.items)
+            .max_fn_items
+            .cmp(&left.max_fn_items)
+            .then_with(|| right.items.cmp(&left.items))
             .then_with(|| left.module.cmp(&right.module))
     });
     rows
@@ -489,17 +547,32 @@ fn markdown(report: &Report) -> String {
             item.effective_reach
         );
     }
-    let _ = writeln!(out, "```\n\n## Callers by assembly\n```");
+    let _ = writeln!(
+        out,
+        "```\n\n## Callers by assembly\n\n| caller | items | max/fn | heaviest functions |\n| --- | ---: | ---: | --- |"
+    );
     for caller in &report.callers {
+        let heaviest = caller
+            .top_fns
+            .iter()
+            .map(|function| {
+                format!(
+                    "{} {}:{} ({})",
+                    function.function,
+                    function.path.display(),
+                    function.line,
+                    function.items
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         let _ = writeln!(
             out,
-            "{:<32} {:>4}  {}",
-            caller.module,
-            caller.items,
-            caller.item_names.join(", ")
+            "| {} | {} | {} | {} |",
+            caller.module, caller.items, caller.max_fn_items, heaviest
         );
     }
-    let _ = writeln!(out, "```\n\n## Providers\n```");
+    let _ = writeln!(out, "\n## Providers\n```");
     for provider in &report.providers {
         let _ = writeln!(out, "{:<32} {}", provider.module, provider.items.join(", "));
     }
@@ -574,4 +647,56 @@ fn markdown(report: &Report) -> String {
             .join("\n")
     );
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::references::{EdgeKind, FnRef};
+    use super::*;
+
+    #[test]
+    fn callers_report_breadth_and_per_function_assembly() {
+        fn edge(item: &str, function: Option<(&str, usize)>) -> Edge {
+            Edge {
+                from_path: PathBuf::from("crates/rimz/src/x.rs"),
+                to_path: PathBuf::from("crates/rimz/src/target.rs"),
+                from_line: 100,
+                from_fn: function.map(|(label, line)| FnRef {
+                    label: label.to_owned(),
+                    line,
+                }),
+                from: "x".to_owned(),
+                to: "target".to_owned(),
+                item: item.to_owned(),
+                kind: EdgeKind::Reference,
+                test: false,
+            }
+        }
+
+        let edges = vec![
+            edge("a", Some(("alpha", 10))),
+            edge("b", Some(("alpha", 10))),
+            edge("a", Some(("beta", 20))),
+            edge("c", Some(("beta", 20))),
+            edge("d", Some(("gamma", 30))),
+            edge("d", None),
+        ];
+
+        let callers = callers_from_edges(&edges, "target");
+
+        assert_eq!(callers.len(), 1);
+        let caller = &callers[0];
+        assert_eq!(caller.module, "x");
+        assert_eq!(caller.items, 4);
+        assert_eq!(caller.item_names, ["a", "b", "c", "d"]);
+        assert_eq!(caller.max_fn_items, 2);
+        assert_eq!(
+            caller
+                .top_fns
+                .iter()
+                .map(|function| (function.function.as_str(), function.line, function.items))
+                .collect::<Vec<_>>(),
+            [("alpha", 10, 2), ("beta", 20, 2), ("gamma", 30, 1)]
+        );
+    }
 }
