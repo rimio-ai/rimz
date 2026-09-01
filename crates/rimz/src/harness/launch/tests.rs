@@ -457,8 +457,7 @@ fn process_compiler_appends_team_context_for_native_adapters() {
                 .provider_argv
                 .windows(2)
                 .any(|args| args == ["--append-system-prompt", reminder.as_str()]),
-            "{kind}: {:?}",
-            process.provider_argv
+            "{kind}: append-system-prompt reminder missing"
         );
     }
 
@@ -524,7 +523,11 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
             .expect("system text matcher");
         let matcher = crate::agents::PresetArgMatcher::from(&channel);
         let occurrences = matcher.occurrences(&process.provider_argv);
-        assert_eq!(occurrences.len(), 1, "{kind}: {:?}", process.provider_argv);
+        assert_eq!(
+            occurrences.len(),
+            1,
+            "{kind}: expected one appended system-text occurrence"
+        );
         assert_eq!(
             parse_toml_string_or_raw(&occurrences[0].value),
             format!("{catalog_reminder}\n\n{team_reminder}")
