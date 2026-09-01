@@ -242,13 +242,13 @@ pub(super) fn record_conversation(
                 let aligned =
                     rimz::harness::target::align_submitted_prompt(prompt, &delivered_refs);
                 let batch_aligned = aligned.is_some();
-                let segments = if let Some(aligned) = aligned {
-                    let mut segments = Vec::with_capacity(aligned.segments.len() + 2);
-                    if let Some(leading) = aligned.leading {
+                let segments = if let Some((leading, aligned, trailing)) = aligned {
+                    let mut segments = Vec::with_capacity(aligned.len() + 2);
+                    if let Some(leading) = leading {
                         segments.push((leading, false));
                     }
-                    segments.extend(aligned.segments.into_iter().map(|segment| (segment, true)));
-                    if let Some(trailing) = aligned.trailing {
+                    segments.extend(aligned.into_iter().map(|segment| (segment, true)));
+                    if let Some(trailing) = trailing {
                         segments.push((trailing, false));
                     }
                     segments

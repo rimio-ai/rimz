@@ -774,7 +774,7 @@ impl Store {
                             .copied()
                             .filter(|message| same_submitted_batch(first, message))
                             .collect::<Vec<_>>();
-                        if let Some(aligned) =
+                        if let Some((leading, _, trailing)) =
                             crate::harness::target::align_submitted_prompt(prompt, &batch)
                         {
                             selected.0.extend(
@@ -782,8 +782,9 @@ impl Store {
                                     .iter()
                                     .map(|message| message.message_id.as_str().to_owned()),
                             );
-                            let (before, after) = aligned.stray_bytes();
-                            if !aligned.is_exact() {
+                            let before = leading.map_or(0, str::len);
+                            let after = trailing.map_or(0, str::len);
+                            if before > 0 || after > 0 {
                                 let mut parts = Vec::new();
                                 if before > 0 {
                                     parts.push(format!("{before} stray bytes before"));
