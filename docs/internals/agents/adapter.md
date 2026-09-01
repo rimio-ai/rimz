@@ -77,7 +77,7 @@ The launch block is declarative on purpose. Because permission argv, resume shap
 | `CoreCapability` | `spec()`, plus the test-only conformance fixtures | required, no default |
 | `HookCapability` | `decode_hook`, `hook_ingress`, ask options and answer plans, subagent correlation and provider-settled child recovery | no native decoder: every event classifies unknown and records nothing |
 | `InstallationCapability` | `managed_integration` and the install, preview, uninstall, detection, trust, and statusline-wrap surface it drives | hook installation is unavailable for this agent |
-| `LaunchCapability` | `is_interactive_process`, `launch_command`, `resume_command`, `launch_env`, subagent argv/env lockdown, `room_env`, version probing | render argv from the spec and apply no provider-native subagent lockdown |
+| `LaunchCapability` | `is_interactive_process`, `launch_command`, `resume_command`, `launch_env`, `append_system_text_channel`, subagent argv/env lockdown, `room_env`, version probing | render argv from the spec and apply no provider-native subagent lockdown |
 | `SessionCapability` | local-session discovery, resume-identity parsing, daemon evidence, turn-death refinement | no provider-owned session store to read |
 | `TranscriptCapability` | `parse_transcript_messages`, streaming pages, source positions | no transcript surface; JSONL adapters inherit the byte-cursor implementation |
 | `ContextCapability` | `observe_context`, `local_context_refresh`, `context_refresh_spawn`, local turn pricing | no out-of-band context source |
@@ -86,6 +86,8 @@ The launch block is declarative on purpose. Because permission argv, resume shap
 | `RuntimeControlCapability` | remote-control readiness, host argv, reconciliation | remote control is disabled |
 
 An adapter is therefore readable top to bottom as a list of `impl` blocks, and a gap is visible as an empty one. Grok is the compact worked example: a spec, a `decode_hook`, an install source, a transcript parser, a local context refresh, an account probe, a spend parser, and empty impls for the rest ([`adapters/grok/mod.rs`](../../../crates/rimz/src/agents/adapters/grok/mod.rs)).
+
+The `remind` integration concern is grounded on `append_system_text_channel`: a wired claim means RimZ-composed launch reminders can reach the agent's system or developer prompt through that additive channel.
 
 ## The hook path
 

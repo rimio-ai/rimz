@@ -130,6 +130,9 @@ const DROID_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     subagents: ConcernCoverage::Unsupported {
         reason: "SubagentStop carries no child identity",
     },
+    launch_reminders: ConcernCoverage::Wired {
+        via: "--append-system-prompt",
+    },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
     },

@@ -138,6 +138,9 @@ const CURSOR_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "chats-store subagentInfo and child transcript derivation at parent-hook cadence; native subagentStart/subagentStop mapping retained",
         gap: "the installed CLI never issues subagent hook requests, so children land on the next parent hook, often only at turn end",
     },
+    launch_reminders: ConcernCoverage::Unsupported {
+        reason: "no additive system-text launch channel is implemented",
+    },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking signal",
     },

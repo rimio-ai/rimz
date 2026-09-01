@@ -46,6 +46,8 @@ OpenCode follows the latest root conversation inside one live pane. `/new` hands
 
 **Resume.** `opencode --session <session_id>` restores a recorded session; the launching pane sets cwd and the plugin re-emits lifecycle events from the resumed server.
 
+OpenCode has no launch flag or config key for additive system text, so RimZ cannot append catalog or team launch reminders until its plugin carries them.
+
 ## Context and transcript
 
 The plugin keeps an in-memory token gauge per session from assistant `message.updated` and `message.part.updated` step-finish events, then stamps the latest gauge onto every forwarded lifecycle envelope. A child gauge that resolves a new model also re-emits its lifecycle start as described above. OpenCode reports `tokens.input`, `tokens.output`, `tokens.cache.read`, `tokens.cache.write`, and `tokens.total`; RimZ stores those as distinct `fresh_input_tokens`, `cache_read_input_tokens`, `cache_write_input_tokens`, and `output_tokens`, so the context numerator is exact (`input + cache.read + cache.write`) and the card can render the `◍` cache-write column when a model reports it.

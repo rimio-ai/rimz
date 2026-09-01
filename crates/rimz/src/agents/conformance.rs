@@ -761,6 +761,17 @@ fn assert_coverage_honest(
                 "{kind} Subagents coverage must match observed subagent lifecycle samples"
             );
         }
+        IntegrationConcern::LaunchReminders => {
+            assert!(
+                !matches!(coverage, ConcernCoverage::Partial { .. }),
+                "{kind} LaunchReminders coverage cannot be partial"
+            );
+            assert_eq!(
+                wired,
+                adapter.append_system_text_channel().is_some(),
+                "{kind} LaunchReminders coverage must match append_system_text_channel"
+            );
+        }
         IntegrationConcern::BackgroundParking => {}
         IntegrationConcern::SessionEnd => assert_eq!(
             wired,

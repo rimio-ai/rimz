@@ -615,6 +615,7 @@ integration_concerns! {
     Answer => "answer",
     Compaction => "compact",
     Subagents => "sub",
+    LaunchReminders => "remind",
     BackgroundParking => "bg",
     SessionEnd => "end",
     IdleNotification => "idle",
@@ -711,6 +712,10 @@ pub struct CoverageAnnotations {
     pub answer: ConcernCoverage,
     pub compaction: ConcernCoverage,
     pub subagents: ConcernCoverage,
+    /// RimZ-composed launch reminders (subagent policy, team launch context)
+    /// reaching the agent's system or developer prompt through
+    /// `append_system_text_channel`.
+    pub launch_reminders: ConcernCoverage,
     pub background_parking: ConcernCoverage,
     pub session_end: ConcernCoverage,
     pub idle_notification: ConcernCoverage,
@@ -733,6 +738,7 @@ impl CoverageAnnotations {
             IntegrationConcern::Answer => self.answer,
             IntegrationConcern::Compaction => self.compaction,
             IntegrationConcern::Subagents => self.subagents,
+            IntegrationConcern::LaunchReminders => self.launch_reminders,
             IntegrationConcern::BackgroundParking => self.background_parking,
             IntegrationConcern::SessionEnd => self.session_end,
             IntegrationConcern::IdleNotification => self.idle_notification,

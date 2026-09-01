@@ -240,6 +240,9 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "child hooks joined to ordered invoke_subagent parent transcript results",
         gap: "the parent-result transcript shape is live-verified rather than a documented stable wire contract",
     },
+    launch_reminders: ConcernCoverage::Unsupported {
+        reason: "no additive system-text launch channel is implemented",
+    },
     background_parking: ConcernCoverage::Wired {
         via: "Stop.fullyIdle parks a clean foreground stop while background work remains",
     },

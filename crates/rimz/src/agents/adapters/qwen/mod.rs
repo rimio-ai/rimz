@@ -143,6 +143,9 @@ const QWEN_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     subagents: ConcernCoverage::Wired {
         via: "SubagentStart/SubagentStop",
     },
+    launch_reminders: ConcernCoverage::Wired {
+        via: "--append-system-prompt",
+    },
     background_parking: ConcernCoverage::Wired {
         via: "Stop.background_tasks/crons",
     },

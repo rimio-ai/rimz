@@ -53,6 +53,8 @@ A single pi session can switch provider accounts mid-session, so the provider da
 
 RimZ renders typed prompt replacement through `pi --system-prompt <text>`. The full text is visible in the process argv, so RimZ rejects values over 120 KiB before exec. Pi's replacement is not hermetic: Pi still appends its native `APPEND_SYSTEM.md`, context files, skills, and cwd material after the replacement text.
 
+Pi has no additive system-text launch channel, so RimZ cannot append catalog or team launch reminders without composing them into the materialized `--system-prompt` text or routing them through the extension.
+
 **Integration-blind modes.** `--no-extensions` disables discovered extensions (an explicit `-e` still loads). `-p` / `--mode json` run extensions without a UI; the RimZ extension stamps `has_ui: false`, so the 2.x `ask_user_question` extension errors with `no_custom_ui` without creating a stranded ask row.
 
 ## Context and transcript

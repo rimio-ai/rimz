@@ -275,6 +275,9 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     subagents: ConcernCoverage::Wired {
         via: "all child-identified lifecycle hooks + child rollout enrichment",
     },
+    launch_reminders: ConcernCoverage::Wired {
+        via: "-c developer_instructions",
+    },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
     },

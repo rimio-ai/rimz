@@ -124,6 +124,9 @@ const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     subagents: ConcernCoverage::Unsupported {
         reason: "v3 hooks do not fire in subagents and publish no child lifecycle",
     },
+    launch_reminders: ConcernCoverage::Unsupported {
+        reason: "no additive system-text launch channel is implemented",
+    },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking signal",
     },

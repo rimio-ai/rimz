@@ -19,7 +19,7 @@ Read alongside it, in order: [adapter.md](../internals/agents/adapter.md) end to
 Produce the mapping worksheet from the reference before writing Rust; every later step consumes one of its rows.
 
 - **Lifecycle signals.** Each of the eleven [`LifecycleSignalKind`](../../crates/rimz/src/agents/lifecycle.rs)s gets a verdict: which native event carries it (*Native*), which derivation reconstructs it with what gap (*Derived*), or why it has no signal (*Absent*). Which native event means what is the lifecycle part of `decode_hook`; [model.md → The state machine](../internals/agents/model.md#the-state-machine) defines what each signal does.
-- **Integration concerns.** Each of the sixteen [`IntegrationConcern`](../../crates/rimz/src/agents/definition.rs)s gets *Wired*, *Partial* (with the gap named), or *Unsupported* (with the reason). Conformance later cross-checks every claim, so honesty here is cheaper than honesty under test failure.
+- **Integration concerns.** Each of the eighteen [`IntegrationConcern`](../../crates/rimz/src/agents/definition.rs)s gets *Wired*, *Partial* (with the gap named), or *Unsupported* (with the reason). Conformance later cross-checks every claim, so honesty here is cheaper than honesty under test failure.
 - **User capabilities.** Roll those concerns up into the six [`UserCapability`](../../crates/rimz/src/agents/definition.rs) marks the compatibility matrix prints — state, live, history, account, ask, subagents — each *Full*, *Partial* (what lands, and the limit), or *Unsupported*. Answer from the sidebar card rather than the protocol: what a person sees, and when they see it. The rubric is [agent-support.md → The six capabilities](../reference/agent-support.md#the-six-capabilities).
 - **Blocking asks.** Which native events block, each one's [`AskKind`](../../crates/rimz/src/agents/lifecycle.rs), whether the agent draws its own ask UI, and — verified, never assumed — what an empty hook response means for *this* agent: neutral semantics diverge per agent ([adapter.md → Adding an agent](../internals/agents/adapter.md#adding-an-agent)).
 - **Tool vocabularies.** The mutating tool set and its file-editing subset; the editing set drives the `reasoning → acting` phase edge.
@@ -47,7 +47,7 @@ Register the module privately in [`adapters/mod.rs`](../../crates/rimz/src/agent
 
 Two coverage declarations sit side by side and answer different questions:
 
-- `CoverageAnnotations` — **mechanism**: what the adapter reads from its agent. One mark per `IntegrationConcern`, sixteen in all, each `Wired { via }`, `Partial { via, gap }`, or `Unsupported { reason }`. This is the worksheet's concern column transcribed.
+- `CoverageAnnotations` — **mechanism**: what the adapter reads from its agent. One mark per `IntegrationConcern`, eighteen in all, each `Wired { via }`, `Partial { via, gap }`, or `Unsupported { reason }`. This is the worksheet's concern column transcribed.
 - `UserCoverage` — **behavior**: what the user sees, and when. One mark per `UserCapability`, six in all, each `Full { note }`, `Partial { shows, limit }`, or `Unsupported { reason }`. `ANTIGRAVITY_USER_COVERAGE` in [`antigravity/mod.rs`](../../crates/rimz/src/agents/adapters/antigravity/mod.rs) is the worked example that splits both ways.
 
 Conformance links the two one-directionally: a **full** mark rests on wired mechanism, and an **unsupported** mark rests on unsupported mechanism. Between those ends the roll-up is your judgement — mechanism that reports still reads **partial** when the user-visible result is incomplete or arrives late. Cursor's subagent hooks exist and the children land only when the parent's turn ends; Antigravity's dollar figure is live and covers the current turn rather than a session total. Name that limit in the mark.
@@ -110,13 +110,14 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 ## The deliverables checklist
 
 - [ ] `docs/externals/agent-adapter/<kind>-reference.md` — upstream protocol reference, pinned to sources
-- [ ] Mapping worksheet: 11 lifecycle signals, 16 concerns, 6 user capabilities, asks, tools, identity, context sources, spend, launch argv
+- [ ] Mapping worksheet: 11 lifecycle signals, 18 concerns, 6 user capabilities, asks, tools, identity, context sources, spend, launch argv
 - [ ] `crates/rimz/src/agents/adapters/<kind>/mod.rs` — private adapter, spec, every capability trait (empty where unsupported)
 - [ ] `payloads.rs` typed wire · `spend.rs` · `account.rs` (± `oauth_usage.rs`) · install surface
 - [ ] Private module in `adapters/mod.rs`, one composed entry in `registry::BUILTINS`
 - [ ] `decode_hook` · typed canonical facts · explicit `HookReply` · complete classification corpus
 - [ ] One managed integration covering install / preview / uninstall / `hooks_installed`
 - [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command`
+- [ ] `launch_reminders` coverage declared from `append_system_text_channel`
 - [ ] Context source(s): tail parse, `observe_context` transport, or payload-stamped gauge
 - [ ] `probe_account` · `spending_sources` + `parse_spend` · positive-cost conformance fixture
 - [ ] The step-9 test set, stdout shapes as inline `insta` goldens

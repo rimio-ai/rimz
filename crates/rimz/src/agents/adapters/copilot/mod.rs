@@ -141,6 +141,9 @@ const COPILOT_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "child hooks joined to parent subagent.started/subagent.completed records",
         gap: "no child tool/permission hooks",
     },
+    launch_reminders: ConcernCoverage::Unsupported {
+        reason: "no additive system-text launch channel is implemented",
+    },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no parked-on-background signal",
     },

@@ -59,6 +59,7 @@ Inside `harness/` itself, start here when you are looking for where a behaviour 
 | [`plan.rs`](../../../crates/rimz/src/harness/plan.rs) | Turning a spec into a launch: effective-config resolution, launch finalization, per-cell launch identities, and fresh or resumed compilation to backend-neutral pane commands. |
 | [`ancestry.rs`](../../../crates/rimz/src/harness/ancestry.rs) | Durable caller resolution and launch-chain policy. |
 | [`prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | Ordered system-prompt composition, content-addressed runtime artifacts, and adapter replacement argv or environment. |
+| [`launch_context.rs`](../../../crates/rimz/src/harness/launch_context.rs) | Team launch context and its launch-time scratch-file snapshot reminder. |
 | [`launch.rs`](../../../crates/rimz/src/harness/launch.rs) | The provider process: adapter argv for launch, resume, and fork; the hidden `ExecRequest` wire; launch environment composition; the login-shell wrapper; and preflight. |
 | [`target.rs`](../../../crates/rimz/src/harness/target.rs) | The address: parsing `@handle#channel`, resolving it against a snapshot, binding a match to a live pane, and rendering the canonical handle back. |
 | [`petname.rs`](../../../crates/rimz/src/harness/petname.rs) | The adjective-noun instance names, their collision check, and the deterministic fallback for records written before petnames existed. |
@@ -162,6 +163,8 @@ The command line carries two visible arguments, the kind and an optional `--work
 When prompt fragments exist, the wrapper reads the base first and then the fragments in declaration order, normalizes their trailing newlines, and separates pieces with a blank line. Path adapters receive a content-addressed `prompt/sys.<digest>.md` beneath the private runtime root. Claude and Codex receive that path in argv; Qwen receives it through `QWEN_SYSTEM_MD`; Pi receives the text through `--system-prompt`. Without fragments, path adapters receive the user's resolved base path directly. The wrapper removes matching raw replacement argv before adding the materialized value, so the typed setting wins on fresh launch, restart, fork, resume, and rebirth. The artifact is regenerated idempotently on every fresh launch and recovery path.
 
 For a non-child request, the wrapper also derives the profile's allowed subagent catalog from effective project and machine configuration. The process compiler appends that catalog's availability or disabled reminder through adapters with a native append-system-text channel; child requests keep their separate no-delegation reminder.
+
+For a team member, the wrapper also derives a team launch context: the worktree, role and team handles, channel, leader and teammates, whether the session is fresh or resumed, and which declared scratch entries were present at launch with their line counts. The process compiler appends that launch-time snapshot through the same channel, after the catalog reminder.
 
 The wrapper then runs the agent in the pane, inheriting the pane's TTY. It launches through the user's shell-startup path when that shell and `/usr/bin/env` are available and falls back to direct exec otherwise, and it exports `RIMZ_RTK` from `[harness] rtk` so `cargo xtask` can route recognized cargo subcommands through `rtk`.
 
