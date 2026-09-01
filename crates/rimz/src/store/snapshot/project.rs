@@ -2,7 +2,7 @@
 //! [`AgentState`] rollups, carrying turn, phase, subagent, and model
 //! state forward.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use jiff::Timestamp;
 use tracing::debug;
@@ -11,7 +11,7 @@ use crate::agents::lifecycle::{self, Transition};
 use crate::agents::state::{append_recent_prompt, usable_description};
 use crate::agents::{AgentLifecycleObservation, LaunchParams};
 use crate::agents::{AgentState, AgentStatus};
-use crate::ids::{AgentKind, AgentSessionId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::message::{MessageBody, MessageStatus};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
@@ -24,6 +24,110 @@ mod identity;
 pub(crate) use identity::AgentIdentityState;
 pub(super) use identity::backfill_agent_identities;
 use identity::{CardIdentity, CardIdentityAllocator, usable_name};
+
+type AgentKey = (AgentKind, AgentSessionId);
+type LaunchInstanceKey = (AgentKind, PaneId, u32);
+
+#[derive(Default)]
+struct LaunchIdentityIndex {
+    by_instance: HashMap<LaunchInstanceKey, BTreeSet<AgentKey>>,
+    by_agent: HashMap<AgentKey, LaunchInstanceKey>,
+}
+
+impl LaunchIdentityIndex {
+    fn from_map(map: &BTreeMap<AgentKey, AgentState>) -> Self {
+        let mut index = Self::default();
+        for (key, state) in map {
+            index.replace(key, state);
+        }
+        index
+    }
+
+    fn replace(&mut self, key: &AgentKey, state: &AgentState) {
+        self.remove(key);
+        if state.launch_id.is_none() || state.is_provider_subagent() {
+            return;
+        }
+        let Some(instance) = launch_instance_key(state) else {
+            return;
+        };
+        self.by_instance
+            .entry(instance.clone())
+            .or_default()
+            .insert(key.clone());
+        self.by_agent.insert(key.clone(), instance);
+    }
+
+    fn remove(&mut self, key: &AgentKey) {
+        let Some(instance) = self.by_agent.remove(key) else {
+            return;
+        };
+        let Some(keys) = self.by_instance.get_mut(&instance) else {
+            return;
+        };
+        keys.remove(key);
+        if keys.is_empty() {
+            self.by_instance.remove(&instance);
+        }
+    }
+
+    fn predecessor<'a>(
+        &self,
+        map: &'a BTreeMap<AgentKey, AgentState>,
+        successor: &AgentState,
+    ) -> Option<&'a AgentState> {
+        let instance = launch_instance_key(successor)?;
+        self.by_instance
+            .get(&instance)?
+            .iter()
+            .filter_map(|key| {
+                #[cfg(test)]
+                launch_identity_testkit::record_candidate_inspection();
+                map.get(key)
+            })
+            .filter(|candidate| {
+                candidate.kind == successor.kind
+                    && candidate.agent_id != successor.agent_id
+                    && candidate.launch_id.is_some()
+                    && !candidate.is_provider_subagent()
+                    && crate::store::session_death::same_agent_instance(candidate, successor)
+            })
+            .min_by_key(|candidate| {
+                (
+                    candidate.registered_at.is_none(),
+                    candidate.registered_at,
+                    candidate.agent_id.clone(),
+                )
+            })
+    }
+}
+
+fn launch_instance_key(state: &AgentState) -> Option<LaunchInstanceKey> {
+    let pane_id = state.pane.as_ref()?.pane_id.clone();
+    let owner = state.runtime_owner.as_ref()?;
+    (owner.kind == RuntimeOwnerKind::Agent).then(|| (state.kind.clone(), pane_id, owner.pid))
+}
+
+#[cfg(test)]
+mod launch_identity_testkit {
+    use std::cell::Cell;
+
+    thread_local! {
+        static CANDIDATE_INSPECTIONS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn record_candidate_inspection() {
+        CANDIDATE_INSPECTIONS.set(CANDIDATE_INSPECTIONS.get() + 1);
+    }
+
+    pub(super) fn reset_candidate_inspections() {
+        CANDIDATE_INSPECTIONS.set(0);
+    }
+
+    pub(super) fn candidate_inspections() -> usize {
+        CANDIDATE_INSPECTIONS.get()
+    }
+}
 
 /// Strip a trailing capability tag (`claude-opus-4-8[1m]` → `claude-opus-4-8`)
 /// so the sidebar shows one stable model id per agent. The tag rides only on a
@@ -138,23 +242,38 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
 ) {
     let mut map = seed;
     let mut identity = CardIdentityAllocator::from_map_and_state(&map, identity_state);
+    let mut launch_identity = LaunchIdentityIndex::from_map(&map);
     for event in events {
         let envelope = event.envelope;
         match &event.kind {
             EventKind::SessionRebirth => {
                 unstamp_for_rebirth(map.values_mut());
                 identity.reset_ordinals();
+                launch_identity = LaunchIdentityIndex::from_map(&map);
             }
             EventKind::AgentLaunch(payload) => {
                 let kind = AgentKind::new_unchecked(envelope.source.clone());
-                reduce_agent_launch(&mut map, &mut identity, envelope, &kind, payload);
+                reduce_agent_launch(
+                    &mut map,
+                    &mut identity,
+                    &mut launch_identity,
+                    envelope,
+                    &kind,
+                    payload,
+                );
             }
             EventKind::AgentAttach(payload) => {
                 let kind = AgentKind::new_unchecked(envelope.source.clone());
-                reduce_agent_attach(&mut map, envelope, &kind, payload);
+                reduce_agent_attach(&mut map, &mut launch_identity, envelope, &kind, payload);
             }
             EventKind::AgentLifecycle(payload) => {
-                reduce_lifecycle_event(&mut map, &mut identity, envelope, payload);
+                reduce_lifecycle_event(
+                    &mut map,
+                    &mut identity,
+                    &mut launch_identity,
+                    envelope,
+                    payload,
+                );
             }
             EventKind::Message { payload, .. } => {
                 stamp_compact_command(map.values_mut(), payload);
@@ -177,7 +296,8 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
 }
 
 fn reduce_agent_attach(
-    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    map: &mut BTreeMap<AgentKey, AgentState>,
+    launch_identity: &mut LaunchIdentityIndex,
     event: &EventEnvelope,
     kind: &AgentKind,
     payload: &AgentAttachPayload,
@@ -196,7 +316,7 @@ fn reduce_agent_attach(
     // A discovered provider session may have no prior RimZ event. The resume
     // wrapper knows enough durable identity to seed it before the provider
     // process starts, so the process can launch children immediately.
-    let state = map.entry(key).or_insert_with(|| {
+    let state = map.entry(key.clone()).or_insert_with(|| {
         AgentState::seed(
             kind.clone(),
             payload.agent_id.clone(),
@@ -212,11 +332,13 @@ fn reduce_agent_attach(
         ..PaneRef::from_id(payload.pane_id.clone())
     });
     state.runtime_owner = Some(payload.runtime_owner.clone());
+    launch_identity.replace(&key, state);
 }
 
 fn reduce_lifecycle_event(
-    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    map: &mut BTreeMap<AgentKey, AgentState>,
     identity: &mut CardIdentityAllocator,
+    launch_identity: &mut LaunchIdentityIndex,
     event: &EventEnvelope,
     payload: &AgentLifecyclePayload,
 ) {
@@ -252,10 +374,17 @@ fn reduce_lifecycle_event(
         // provisional-release key.
         None
     } else if map.contains_key(&key) {
-        release_stamped_provisional_for_existing(map, identity, &kind, &key, observation);
+        release_stamped_provisional_for_existing(
+            map,
+            identity,
+            launch_identity,
+            &kind,
+            &key,
+            observation,
+        );
         None
     } else {
-        adopt_provisional(map, identity, &kind, &key, observation)
+        adopt_provisional(map, identity, launch_identity, &kind, &key, observation)
     };
     let event_name = payload.event_name.as_deref();
     let event_parent_agent_id =
@@ -306,7 +435,8 @@ fn reduce_lifecycle_event(
         card_identity,
     });
     inherit_compaction_registration(map, &mut state);
-    inherit_launch_identity(map, &mut state);
+    inherit_launch_identity(map, launch_identity, &mut state);
+    launch_identity.replace(&key, &state);
     map.insert(key, state);
 }
 
@@ -340,8 +470,9 @@ fn quarantine_reason(
 }
 
 fn adopt_provisional(
-    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    map: &mut BTreeMap<AgentKey, AgentState>,
     identity: &mut CardIdentityAllocator,
+    launch_identity: &mut LaunchIdentityIndex,
     kind: &AgentKind,
     key: &(AgentKind, AgentSessionId),
     observation: &AgentLifecycleObservation,
@@ -350,7 +481,7 @@ fn adopt_provisional(
         .agent_name
         .as_deref()
         .and_then(|name| identity.adoptable_owner_for_name(map, kind, name, key))
-        && let Some(prior) = retire_provisional(map, identity, &provisional_key)
+        && let Some(prior) = retire_provisional(map, identity, launch_identity, &provisional_key)
     {
         return Some(prior);
     }
@@ -358,12 +489,13 @@ fn adopt_provisional(
         .pane_id
         .as_ref()
         .and_then(|pane_id| identity.adoptable_owner_for_pane(map, kind, pane_id, key))?;
-    retire_provisional(map, identity, &provisional_key)
+    retire_provisional(map, identity, launch_identity, &provisional_key)
 }
 
 fn release_stamped_provisional_for_existing(
-    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    map: &mut BTreeMap<AgentKey, AgentState>,
     identity: &mut CardIdentityAllocator,
+    launch_identity: &mut LaunchIdentityIndex,
     kind: &AgentKind,
     key: &(AgentKind, AgentSessionId),
     observation: &AgentLifecycleObservation,
@@ -381,23 +513,26 @@ fn release_stamped_provisional_for_existing(
     else {
         return;
     };
-    let _ = retire_provisional(map, identity, &provisional_key);
+    let _ = retire_provisional(map, identity, launch_identity, &provisional_key);
 }
 
 fn retire_provisional(
-    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    map: &mut BTreeMap<AgentKey, AgentState>,
     identity: &mut CardIdentityAllocator,
-    key: &(AgentKind, AgentSessionId),
+    launch_identity: &mut LaunchIdentityIndex,
+    key: &AgentKey,
 ) -> Option<AgentState> {
     let prior = map.remove(key);
+    launch_identity.remove(key);
     identity.release_key(key);
     identity.consume_launch_key(key);
     prior
 }
 
 fn reduce_agent_launch(
-    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    map: &mut BTreeMap<AgentKey, AgentState>,
     identity: &mut CardIdentityAllocator,
+    launch_identity: &mut LaunchIdentityIndex,
     event: &EventEnvelope,
     kind: &AgentKind,
     payload: &AgentLaunchPayload,
@@ -441,6 +576,7 @@ fn reduce_agent_launch(
     let prior = map.get(&key);
     let card_identity = identity.assign_launch(kind, &payload.agent_id, payload, prior);
     let state = assemble_launch_state(kind, event, payload, prior, card_identity);
+    launch_identity.replace(&key, &state);
     map.insert(key, state);
 }
 
@@ -684,7 +820,8 @@ fn inherit_compaction_registration(
 /// conversation change. Card naming stays session-scoped, and only an explicit
 /// compaction edge inherits registration primacy.
 fn inherit_launch_identity(
-    map: &BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    map: &BTreeMap<AgentKey, AgentState>,
+    launch_identity: &LaunchIdentityIndex,
     successor: &mut AgentState,
 ) {
     if successor.launch_id.is_some()
@@ -694,23 +831,7 @@ fn inherit_launch_identity(
     {
         return;
     }
-    let Some(predecessor) = map
-        .values()
-        .filter(|candidate| {
-            candidate.kind == successor.kind
-                && candidate.agent_id != successor.agent_id
-                && candidate.launch_id.is_some()
-                && !candidate.is_provider_subagent()
-                && crate::store::session_death::same_agent_instance(candidate, successor)
-        })
-        .min_by_key(|candidate| {
-            (
-                candidate.registered_at.is_none(),
-                candidate.registered_at,
-                candidate.agent_id.clone(),
-            )
-        })
-    else {
+    let Some(predecessor) = launch_identity.predecessor(map, successor) else {
         return;
     };
 

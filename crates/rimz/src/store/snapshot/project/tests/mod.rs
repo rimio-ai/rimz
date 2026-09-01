@@ -6,7 +6,7 @@ use super::super::view::{attach_sub_agents, row_from_agent, sub_agent_from_state
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentStatus, LaunchParams, PermissionMode, SessionOrigin};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
-use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
+use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
     AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, EventEnvelope,
 };
@@ -69,6 +69,28 @@ fn same_process_registration(
             },
         }),
     )
+}
+
+fn indexed_launch_agent(
+    id: &str,
+    pane_id: &str,
+    owner_pid: u32,
+    launch_id: Option<&str>,
+) -> AgentState {
+    let mut agent = crate::testkit::agent_state("codex", id, epoch());
+    agent.launch_id = launch_id.map(AgentSessionId::from);
+    agent.registered_at = Some(epoch());
+    agent.pane = Some(PaneRef {
+        pane_process_start: Some(epoch()),
+        ..PaneRef::from_id(PaneId::parse(pane_id).expect("pane id"))
+    });
+    agent.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        id,
+        owner_pid,
+        Some("agent-start".to_owned()),
+    ));
+    agent
 }
 
 fn launch_payload(agent_id: &str, agent_name: &str) -> AgentLaunchPayload {
@@ -1094,6 +1116,79 @@ fn follow_latest_successor_inherits_launch_identity_without_origin() {
 
     assert_eq!(successor.launch_id.as_deref(), Some("launch_coder"));
     assert_eq!(successor.role.as_deref(), Some("coder"));
+}
+
+#[test]
+fn launch_identity_retry_inspects_only_same_instance_candidates() {
+    let pane_id = "tmux:%5";
+    let owner_pid = 210;
+    let mut seed = BTreeMap::new();
+    let mut predecessor = indexed_launch_agent("conversation-a", pane_id, owner_pid, None);
+    predecessor.role = Some("coder".to_owned());
+    let successor = indexed_launch_agent("conversation-b", pane_id, owner_pid, None);
+    seed.insert(
+        (predecessor.kind.clone(), predecessor.agent_id.clone()),
+        predecessor,
+    );
+    seed.insert(
+        (successor.kind.clone(), successor.agent_id.clone()),
+        successor,
+    );
+    for index in 0..128 {
+        let candidate = indexed_launch_agent(
+            &format!("unrelated-{index}"),
+            &format!("tmux:%{}", index + 10),
+            owner_pid + index + 1,
+            Some(&format!("launch-unrelated-{index}")),
+        );
+        seed.insert(
+            (candidate.kind.clone(), candidate.agent_id.clone()),
+            candidate,
+        );
+    }
+
+    let attach = EventEnvelope::agent_attached(
+        workspace(),
+        "session",
+        &AgentKind::new_unchecked("codex"),
+        AgentAttachPayload {
+            agent_id: AgentSessionId::from("conversation-a"),
+            launch_id: Some(AgentSessionId::from("launch-coder")),
+            pane_id: PaneId::parse(pane_id).expect("pane id"),
+            pane_pid: None,
+            runtime_owner: RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "conversation-a",
+                owner_pid,
+                Some("agent-start".to_owned()),
+            ),
+        },
+    );
+    let heartbeat = raw_lifecycle_at(
+        "codex",
+        3,
+        json!({
+            "agent_id": "conversation-b",
+            "signal": { "signal": "turn_started" },
+        }),
+    );
+
+    launch_identity_testkit::reset_candidate_inspections();
+    let agents = reduce_agent_states_seeded(seed, &[attach, heartbeat]);
+    let successor = agents
+        .get(&(
+            AgentKind::new_unchecked("codex"),
+            AgentSessionId::from("conversation-b"),
+        ))
+        .expect("successor");
+
+    assert_eq!(successor.launch_id.as_deref(), Some("launch-coder"));
+    assert_eq!(successor.role.as_deref(), Some("coder"));
+    assert_eq!(
+        launch_identity_testkit::candidate_inspections(),
+        1,
+        "unrelated launch identities stay outside the same-instance bucket"
+    );
 }
 
 #[test]
