@@ -52,11 +52,22 @@ pub(super) fn record_user_input_for_lifecycle(
     supervised: bool,
     state_root: Option<&std::path::Path>,
 ) {
-    if recorded.observation.signal != LifecycleSignal::TurnStarted
-        || supervised
-        || (!delivered.is_empty() && !delivered.iter().any(|record| record.is_user_input()))
-    {
+    if recorded.observation.signal != LifecycleSignal::TurnStarted || supervised {
         return;
+    }
+    if !delivered.is_empty() && !delivered.iter().any(|record| record.is_user_input()) {
+        let delivered_refs = delivered.iter().collect::<Vec<_>>();
+        let mixed_submit = recorded
+            .observation
+            .prompt
+            .as_deref()
+            .and_then(|prompt| {
+                rimz::harness::target::align_submitted_prompt(prompt, &delivered_refs)
+            })
+            .is_some_and(|(leading, _, trailing)| leading.is_some() || trailing.is_some());
+        if !mixed_submit {
+            return;
+        }
     }
     let record = rimz::agents::spending::user_input::UserInputRecord {
         at: jiff::Timestamp::now(),
