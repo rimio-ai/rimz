@@ -2,6 +2,51 @@
 
 use nix::sys::termios::{InputFlags, LocalFlags, OutputFlags};
 
+/// Device Status Report query used to fence replies from an earlier client.
+pub const STATUS_QUERY: &str = "\x1b[5n";
+
+/// Recognizes a Device Status Report reply one byte at a time.
+///
+/// DA1 cannot be the fence because an attaching tmux client's own outstanding
+/// DA1 reply is indistinguishable from the fence reply. DSR 5 is not sent by
+/// the client, and its reply shares no shape with DA1, DA2, XTVERSION, or a
+/// terminfo key sequence. Both ready (`ESC[0n`) and malfunction (`ESC[3n`)
+/// replies match; private-parameter forms such as `ESC[?6n` do not. A reply
+/// arriving after the settle cap remains the documented bounded residual.
+#[derive(Debug, Default)]
+pub struct StatusReplyScanner {
+    state: StatusReplyState,
+}
+
+#[derive(Debug, Default)]
+enum StatusReplyState {
+    #[default]
+    Ground,
+    Escape,
+    Csi,
+    Parameters,
+}
+
+impl StatusReplyScanner {
+    /// Returns `true` only for the byte completing a status reply.
+    pub fn feed(&mut self, byte: u8) -> bool {
+        use StatusReplyState::{Csi, Escape, Ground, Parameters};
+
+        if matches!((&self.state, byte), (Parameters, b'n')) {
+            self.state = Ground;
+            return true;
+        }
+        self.state = match (&self.state, byte) {
+            (_, b'\x1b') => Escape,
+            (Escape, b'[') => Csi,
+            (Csi, b'0'..=b'9') => Parameters,
+            (Parameters, b'0'..=b'9') => Parameters,
+            _ => Ground,
+        };
+        false
+    }
+}
+
 /// Restores emulator modes that an interrupted remote TUI can leave behind.
 ///
 /// - `ESC[?1049l` leaves the alternate screen before later bytes target the main screen.
@@ -108,5 +153,47 @@ mod tests {
             EMULATOR_RESET,
             "\x1b[?1049l\x1b[<9999u\x1b[?2004l\x1b[?1004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[0m\x1b[r\x1b>"
         );
+    }
+
+    #[test]
+    fn status_scanner_accepts_ready_and_malfunction_replies() {
+        for reply in [b"\x1b[0n".as_slice(), b"\x1b[3n"] {
+            let mut scanner = StatusReplyScanner::default();
+            let completions = completion_indices(&mut scanner, reply);
+
+            assert_eq!(completions, [reply.len() - 1]);
+        }
+    }
+
+    #[test]
+    fn status_scanner_rejects_mux_replies_private_status_and_user_bytes() {
+        let mut scanner = StatusReplyScanner::default();
+        for bytes in [
+            b"\x1b[?62;22;52c".as_slice(),
+            b"\x1b[>1;10;0c".as_slice(),
+            b"\x1bP>|ghostty 1.3.1\x1b\\",
+            b"\x1b[?6n",
+            b"\x1b[24;1R",
+            b"RIMZ-USER-MARKER",
+        ] {
+            assert!(!bytes.iter().any(|byte| scanner.feed(*byte)));
+        }
+    }
+
+    #[test]
+    fn status_scanner_completes_after_stale_reply_trio_on_exact_last_byte() {
+        let bytes = b"\x1b[?62;22;52c\x1b[>1;10;0c\x1bP>|ghostty 1.3.1\x1b\\\x1b[0n";
+        let mut scanner = StatusReplyScanner::default();
+        let completions = completion_indices(&mut scanner, bytes);
+
+        assert_eq!(completions, [bytes.len() - 1]);
+    }
+
+    fn completion_indices(scanner: &mut StatusReplyScanner, bytes: &[u8]) -> Vec<usize> {
+        bytes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, byte)| scanner.feed(*byte).then_some(index))
+            .collect()
     }
 }

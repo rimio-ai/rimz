@@ -15,6 +15,8 @@
 //! receives `SIGCONT`, exercising the launcher's job-control mirror.
 //! `$RIMZ_TEST_SSH_STDOUT` supplies the visible attach's remote output.
 //! `$RIMZ_TEST_SSH_STDERR` supplies the visible attach's diagnostic output.
+//! `$RIMZ_TEST_SSH_EXEC_ARGV` runs tab-separated argv with inherited stdio in
+//! place of the visible attach's stdin-recording and sleep behavior.
 //! `$RIMZ_TEST_SSH_MASTER_PLAN` scripts background ControlMaster failures and
 //! `$RIMZ_TEST_SSH_MASTER_STDERR` supplies their diagnostic output.
 //! `$RIMZ_TEST_SSH_MASTER_READY_PLAN` controls whether each successful master
@@ -95,6 +97,16 @@ fn main() {
             .write_all(stderr.as_bytes())
             .expect("write attach stderr");
         stream.flush().expect("flush attach stderr");
+    }
+
+    if let Ok(argv) = env::var("RIMZ_TEST_SSH_EXEC_ARGV") {
+        let mut argv = argv.split('\t');
+        let program = argv.next().expect("exec argv has program");
+        std::process::Command::new(program)
+            .args(argv)
+            .status()
+            .expect("run visible attach command");
+        exit_from_plan("RIMZ_TEST_SSH_PLAN");
     }
 
     suspend_if_requested();
