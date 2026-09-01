@@ -1792,3 +1792,72 @@ fn launched_children_matches_a_parent_that_adopted_its_provider_session() {
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].agent_id, child.agent_id);
 }
+
+#[test]
+fn launched_children_in_channel_spans_parents_and_honours_the_filter() {
+    let parent_one = agent("codex", "parent-one", Some("feat-x"), "terminal_1");
+    let parent_two = agent("claude", "parent-two", Some("feat-x"), "terminal_2");
+    let parent_three = agent("codex", "parent-three", Some("other"), "terminal_3");
+    let mut child_one = agent("claude", "child-one", Some("feat-x"), "terminal_4");
+    child_one.parent_agent_id = Some(parent_one.agent_id.clone());
+    child_one.parent_agent_kind = Some(parent_one.kind.clone());
+    child_one.launch_depth = Some(1);
+    child_one.channel = Some("feat-x".to_owned());
+    child_one.registered_at = Some(Timestamp::from_second(2_000).unwrap());
+    let mut child_two = agent("codex", "child-two", Some("feat-x"), "terminal_5");
+    child_two.parent_agent_id = Some(parent_two.agent_id.clone());
+    child_two.parent_agent_kind = Some(parent_two.kind.clone());
+    child_two.launch_depth = Some(1);
+    child_two.registered_at = Some(Timestamp::from_second(1_000).unwrap());
+    let mut child_three = agent("claude", "child-three", Some("other"), "terminal_6");
+    child_three.parent_agent_id = Some(parent_three.agent_id.clone());
+    child_three.parent_agent_kind = Some(parent_three.kind.clone());
+    child_three.launch_depth = Some(1);
+    child_three.registered_at = Some(Timestamp::from_second(3_000).unwrap());
+    let mut native = agent("claude", "native", Some("feat-x"), "terminal_7");
+    native.parent_agent_id = Some(parent_one.agent_id.clone());
+    native.parent_agent_kind = Some(parent_one.kind.clone());
+    let agents = [
+        parent_one,
+        parent_two,
+        parent_three,
+        child_one,
+        child_two,
+        child_three,
+        native,
+    ];
+
+    assert_eq!(
+        launched_children_in_channel(&agents, Some("feat-x"))
+            .into_iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["child-two", "child-one"]
+    );
+    assert_eq!(
+        launched_children_in_channel(&agents, None)
+            .into_iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["child-two", "child-one", "child-three"]
+    );
+}
+
+#[test]
+fn launched_parent_matches_the_adopted_launch_id() {
+    let mut parent = agent("codex", "provider-parent", None, "terminal_1");
+    parent.launch_id = Some("launch-parent".into());
+    let mut child = agent("claude", "child", None, "terminal_2");
+    child.parent_agent_id = Some("launch-parent".into());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    let mut orphan = child.clone();
+    orphan.parent_agent_id = Some("missing-parent".into());
+    let agents = [parent.clone(), child.clone(), orphan.clone()];
+
+    assert_eq!(
+        launched_parent(&agents, &child).map(|agent| &agent.agent_id),
+        Some(&parent.agent_id)
+    );
+    assert!(launched_parent(&agents, &orphan).is_none());
+}
