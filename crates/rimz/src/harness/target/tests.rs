@@ -769,6 +769,30 @@ fn align_submitted_prompt_rejects_a_truncated_record() {
 }
 
 #[test]
+fn align_submitted_prompt_requires_exact_system_text() {
+    let recipient = agent("claude", "session-recipient", Some("main"), "terminal_1");
+    let record = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+        &recipient,
+        "continue".to_owned(),
+        true,
+        crate::message::DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::System);
+
+    assert_eq!(
+        align_submitted_prompt("continue", &[&record]),
+        Some((None, vec!["continue"], None))
+    );
+    for prompt in [
+        "continue with the refactor",
+        "please continue where you left off",
+    ] {
+        assert_eq!(align_submitted_prompt(prompt, &[&record]), None, "{prompt}");
+    }
+}
+
+#[test]
 fn split_batched_prompt_splits_only_on_typed_sections() {
     let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
     let subagent = "Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nreport";

@@ -214,14 +214,15 @@ The batch lands as one paste and one submit. Agent- and human-authored members k
 
 ### Confirmation and retry
 
-A `TurnStarted` hook aligns the submitted prompt against candidate `Prompt` batches for that card. Durable record text supplies the boundaries between adjacent messages; agent- and human-authored records consume their structured headers, while system records match verbatim. Record text and the blank-line join match verbatim inside a batch; only the first record's leading and last record's trailing whitespace follow the hook payload's outer normalization. A submission that contains the whole batch confirms it even when composer text appears before or after it. That stray text becomes separate direct-input transcript entries, and the delivered event records a mixed-submit reason with the stray byte counts. Stray composer text is never a reason to write the pane again. Reported text that contains no intact candidate batch is direct pane input and confirms nothing.
+A `TurnStarted` hook aligns the submitted prompt against candidate `Prompt` batches for that card. Durable record text supplies the boundaries between adjacent messages; agent- and human-authored records consume their structured headers, while system records match verbatim. Record text and the blank-line join match verbatim inside a batch; only the first record's leading and last record's trailing whitespace follow the hook payload's outer normalization. A submission that contains a whole headered batch confirms it even when composer text appears before or after it. That stray text becomes separate direct-input transcript entries, credits the human's input, and the delivered event records a mixed-submit reason with the stray byte counts. Stray composer text is never a reason to write the pane again. Headerless system batches require an exact whole-prompt match because their text alone cannot distinguish a delivery from the user's own words. Reported text that contains no intact candidate batch is direct pane input and confirms nothing.
 
 When a turn-start adapter reports no usable prompt text, confirmation falls back to the oldest `Sent` prompt and its `batch_id`, preserving hookless-text compatibility. A `Compacting` hook uses the same oldest-`Sent` fallback for `Command` records. Correlation never selects a `Claimed` record because its deliverer owns an in-progress pane write.
 
 | Record state and event | Result |
 | --- | --- |
 | `Sent` + acknowledgement containing the batch exactly | `Delivered` |
-| `Sent` + acknowledgement containing the batch with surrounding text | `Delivered` with a mixed-submit reason; surrounding text is direct transcript input |
+| `Sent` + acknowledgement containing a headered batch with surrounding text | `Delivered` with a mixed-submit reason; surrounding text is credited as direct transcript input |
+| `Sent` system batch + acknowledgement with surrounding text | No queue transition; headerless records require exact whole-prompt alignment |
 | `Sent` + acknowledgement without the batch | No queue transition; the prompt is direct input |
 | `Sent` prompt + delivery window elapsed | `Queued`, preserving `last_sent_at` and incrementing `unconfirmed_sends` |
 | `Sent` command + delivery window elapsed | `TimedOut`; commands are never resent |
