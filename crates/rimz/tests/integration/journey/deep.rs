@@ -18,7 +18,7 @@ use rimz::diag::record::DiagEvent;
 use rimz::mux::{MuxBackend, PaneListOptions, PaneReadConsistency, ZellijBackend};
 use tempfile::TempDir;
 
-use super::{RoomHarness, SETTLE, rimz_bin, session_start_at};
+use super::{rimz_bin, session_start_at};
 use crate::common::{
     CommandTimeoutExt, Env, ScrubSessionEnvExt, ZellijNamespace, path_with_front,
     write_hook_firing_agent,
@@ -822,8 +822,8 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
             "subagents",
             "codex",
             "inspect the implementation",
-            "--name",
-            "journey-child",
+            "--description",
+            "inspect the implementation",
             "--keep",
             "--timeout",
             "2m",
@@ -836,10 +836,7 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
         String::from_utf8_lossy(&child.stdout),
         String::from_utf8_lossy(&child.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&child.stdout).trim(),
-        "journey-child"
-    );
+    let child_name = launched_subagent_name(&child);
 
     // The first launch returns only after its wrapper's durable pane binding
     // is visible. Launch the sibling immediately to prove that signal reaches
@@ -872,8 +869,8 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
             "subagents",
             "codex",
             "review the implementation",
-            "--name",
-            "journey-sibling",
+            "--description",
+            "review the implementation",
             "--keep",
             "--timeout",
             "2m",
@@ -886,22 +883,23 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
         String::from_utf8_lossy(&sibling.stdout),
         String::from_utf8_lossy(&sibling.stderr)
     );
+    let sibling_name = launched_subagent_name(&sibling);
 
-    let child_agent = wait_for_named_agent(&env, "journey-child", false, CAPTURE_BUDGET);
+    let child_agent = wait_for_named_agent(&env, &child_name, true, CAPTURE_BUDGET);
     assert_eq!(
         child_agent.parent_agent_id.as_ref(),
         Some(&parent_agent.agent_id)
     );
     assert_eq!(child_agent.launch_depth, Some(1));
-    let sibling_agent = wait_for_named_agent(&env, "journey-sibling", false, CAPTURE_BUDGET);
+    let sibling_agent = wait_for_named_agent(&env, &sibling_name, true, CAPTURE_BUDGET);
     assert_eq!(
         sibling_agent.parent_agent_id.as_ref(),
         Some(&parent_agent.agent_id)
     );
-    let child_pane = wait_for_named_run(&env, "journey-child", CAPTURE_BUDGET)
+    let child_pane = wait_for_named_run(&env, &child_name, CAPTURE_BUDGET)
         .pane_id
         .expect("child run pane");
-    let sibling_pane = wait_for_named_run(&env, "journey-sibling", CAPTURE_BUDGET)
+    let sibling_pane = wait_for_named_run(&env, &sibling_name, CAPTURE_BUDGET)
         .pane_id
         .expect("sibling run pane");
     let parent_position = tmux_pane_position(&socket, parent_pane.raw());
@@ -920,30 +918,38 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
         "tmux stacks sibling panes vertically"
     );
 
-    let room = RoomHarness::launch(&env, rimz::ids::MuxName::Tmux);
-    let screen = room.wait_for(
-        |screen| {
-            screen.contains("subagents (2)")
-                && screen.contains("journey-child")
-                && screen.contains("journey-sibling")
-        },
-        SETTLE,
+    let parent_stamp = parent_agent.pane.clone().expect("parent provider pane");
+    let parent_fixture = live_agent_pane_fixture(&parent_agent, &parent_stamp);
+    let snapshot = env.snapshot_json_with_panes(&[parent_fixture]);
+    let rows = snapshot["worktree_groups"]
+        .as_array()
+        .expect("snapshot worktree groups")
+        .iter()
+        .flat_map(|group| group["rows"].as_array().expect("snapshot worktree rows"))
+        .collect::<Vec<_>>();
+    let parent_row = rows
+        .iter()
+        .find(|row| row["id"] == parent_agent.agent_id.as_str())
+        .expect("parent row");
+    let sub_agents = parent_row["sub_agents"]
+        .as_array()
+        .expect("nested children");
+    assert!(
+        sub_agents.len() == 2
+            && sub_agents
+                .iter()
+                .any(|child| child["description"] == "inspect the implementation")
+            && sub_agents
+                .iter()
+                .any(|child| child["description"] == "review the implementation"),
+        "children should project into the parent's subagent section: {snapshot:#}"
     );
     assert!(
-        screen.contains("subagents (2)")
-            && screen.contains("journey-child")
-            && screen.contains("journey-sibling"),
-        "children should render only in the parent's subagent section:\n{screen}"
-    );
-    assert_eq!(
-        screen.matches("journey-child").count(),
-        1,
-        "child should not also render as a top-level card:\n{screen}"
-    );
-    assert_eq!(
-        screen.matches("journey-sibling").count(),
-        1,
-        "sibling should not also render as a top-level card:\n{screen}"
+        rows.iter().all(|row| {
+            row["id"] != child_agent.agent_id.as_str()
+                && row["id"] != sibling_agent.agent_id.as_str()
+        }),
+        "children should not also project as top-level cards: {snapshot:#}"
     );
 
     let stopped = env
@@ -1105,15 +1111,14 @@ fn tmux_settled_subagent_reports_to_parent() {
             "subagents",
             "codex",
             "stay running",
-            "--name",
-            "report-second",
             "--timeout",
             "2m",
         ])
         .bounded_output_within(Duration::from_secs(45))
         .expect("launch second subagent");
     assert!(second.status.success(), "second launch failed: {second:?}");
-    wait_for_named_run(&env, "report-second", CAPTURE_BUDGET);
+    let second_name = launched_subagent_name(&second);
+    wait_for_named_run(&env, &second_name, CAPTURE_BUDGET);
 
     for (key, value) in [
         ("RIMZ_TEST_AGENT_SESSION", "sess-report-first"),
@@ -1139,8 +1144,6 @@ fn tmux_settled_subagent_reports_to_parent() {
             "subagents",
             "codex",
             "finish now",
-            "--name",
-            "report-first",
             "--timeout",
             "2m",
         ])
@@ -1157,7 +1160,8 @@ fn tmux_settled_subagent_reports_to_parent() {
         "background launch should explain callback delivery: {}",
         String::from_utf8_lossy(&first.stderr)
     );
-    let first_run = wait_for_named_terminal_run(&env, "report-first", CAPTURE_BUDGET);
+    let first_name = launched_subagent_name(&first);
+    let first_run = wait_for_named_terminal_run(&env, &first_name, CAPTURE_BUDGET);
     assert_eq!(
         first_run.report_message_id, None,
         "the first settler must wait for the rest of the fleet"
@@ -1174,14 +1178,15 @@ fn tmux_settled_subagent_reports_to_parent() {
         "no digest should queue while a sibling is running"
     );
 
+    let second_handle = format!("@{second_name}");
     let stopped = env
         .rimz()
         .env("TMUX", tmux_env(&socket))
-        .args(["--mux", "tmux", "agents", "stop", "@report-second"])
+        .args(["--mux", "tmux", "agents", "stop", &second_handle])
         .bounded_output_within(Duration::from_secs(20))
         .expect("stop second subagent");
     assert!(stopped.status.success(), "stop second failed: {stopped:?}");
-    let second_run = wait_for_named_terminal_run(&env, "report-second", CAPTURE_BUDGET);
+    let second_run = wait_for_named_terminal_run(&env, &second_name, CAPTURE_BUDGET);
     let deadline = Instant::now() + CAPTURE_BUDGET;
     let fleet_digest = loop {
         if let Some(report) = env
@@ -1204,8 +1209,16 @@ fn tmux_settled_subagent_reports_to_parent() {
         std::thread::sleep(Duration::from_millis(25));
     };
     assert!(fleet_digest.text.contains("All 2 settled"));
-    assert!(fleet_digest.text.contains("@report-first — completed"));
-    assert!(fleet_digest.text.contains("@report-second — canceled"));
+    assert!(
+        fleet_digest
+            .text
+            .contains(&format!("@{first_name} — completed"))
+    );
+    assert!(
+        fleet_digest
+            .text
+            .contains(&format!("@{second_name} — canceled"))
+    );
     assert!(fleet_digest.text.contains("rimz subagents wait"));
     for run in [&first_run, &second_run] {
         assert_eq!(
@@ -1240,8 +1253,6 @@ fn tmux_settled_subagent_reports_to_parent() {
             "subagents",
             "codex",
             "join this result",
-            "--name",
-            "report-waited",
             "--timeout",
             "2m",
             "--wait",
@@ -1296,8 +1307,6 @@ fn tmux_settled_subagent_reports_to_parent() {
             "subagents",
             "codex",
             "finish after the join deadline",
-            "--name",
-            "report-timed",
             "--timeout",
             "2m",
             "--wait=1s",
@@ -1311,7 +1320,8 @@ fn tmux_settled_subagent_reports_to_parent() {
         String::from_utf8_lossy(&timed.stdout),
         String::from_utf8_lossy(&timed.stderr)
     );
-    let timed_run = wait_for_named_terminal_run(&env, "report-timed", CAPTURE_BUDGET);
+    let timed_name = launched_subagent_name(&timed);
+    let timed_run = wait_for_named_terminal_run(&env, &timed_name, CAPTURE_BUDGET);
     assert_eq!(
         timed_run.joined_at, None,
         "a join deadline must not claim an unprinted result"
@@ -1343,24 +1353,30 @@ fn tmux_settled_subagent_reports_to_parent() {
         std::thread::sleep(Duration::from_millis(25));
     };
     assert!(timed_report.text.contains("Your subagent settled"));
-    assert!(timed_report.text.contains("@report-timed — completed"));
+    assert!(
+        timed_report
+            .text
+            .contains(&format!("@{timed_name} — completed"))
+    );
 
+    let first_digest_line = format!("@{first_name} — completed");
+    let second_digest_line = format!("@{second_name} — canceled");
     let parent_frame = capture_joined_until(
         &socket,
         &parent_pane_raw,
         |frame| {
             frame.contains("Type: SUBAGENT_REPORT")
                 && frame.contains("From: @rimz")
-                && frame.contains("@report-first — completed")
-                && frame.contains("@report-second — canceled")
+                && frame.contains(&first_digest_line)
+                && frame.contains(&second_digest_line)
         },
         CAPTURE_BUDGET,
     );
     assert!(
         parent_frame.contains("Type: SUBAGENT_REPORT")
             && parent_frame.contains("From: @rimz")
-            && parent_frame.contains("@report-first — completed")
-            && parent_frame.contains("@report-second — canceled")
+            && parent_frame.contains(&first_digest_line)
+            && parent_frame.contains(&second_digest_line)
             && !parent_frame.contains("stub done"),
         "parent pane did not receive status-only digests; timed report: {timed_report:?}\n{parent_frame}"
     );
@@ -1467,8 +1483,6 @@ fn tmux_completed_subagent_status_lingers_until_parent_pane_disappears() {
             "subagents",
             "codex",
             "inspect the implementation",
-            "--name",
-            "parent-watch-child",
             "--timeout",
             "2m",
         ])
@@ -1480,8 +1494,9 @@ fn tmux_completed_subagent_status_lingers_until_parent_pane_disappears() {
         String::from_utf8_lossy(&child.stdout),
         String::from_utf8_lossy(&child.stderr)
     );
+    let child_name = launched_subagent_name(&child);
 
-    let child_run = wait_for_named_terminal_run(&env, "parent-watch-child", CAPTURE_BUDGET);
+    let child_run = wait_for_named_terminal_run(&env, &child_name, CAPTURE_BUDGET);
     assert!(
         child_run.status.is_terminal(),
         "hook-firing child should have completed before the lifecycle assertion"
@@ -1509,7 +1524,7 @@ fn tmux_completed_subagent_status_lingers_until_parent_pane_disappears() {
     let child_agent = audit
         .agents
         .iter()
-        .find(|agent| agent.name.as_deref() == Some("parent-watch-child"))
+        .find(|agent| agent.name.as_deref() == Some(child_name.as_str()))
         .expect("completed child should remain in durable history");
     assert!(
         child_agent.ended_at.is_some(),
@@ -1528,7 +1543,7 @@ fn tmux_completed_subagent_status_lingers_until_parent_pane_disappears() {
         live_projection
             .agents
             .iter()
-            .any(|agent| agent.name.as_deref() == Some("parent-watch-child")),
+            .any(|agent| agent.name.as_deref() == Some(child_name.as_str())),
         "ended subagent status should remain visible under its live parent; audit={audit:#?}"
     );
 
@@ -1542,7 +1557,7 @@ fn tmux_completed_subagent_status_lingers_until_parent_pane_disappears() {
             .expect("read projection after parent exit")
             .agents
             .iter()
-            .any(|agent| agent.name.as_deref() == Some("parent-watch-child"));
+            .any(|agent| agent.name.as_deref() == Some(child_name.as_str()));
         if !child_visible {
             break;
         }
@@ -2076,6 +2091,34 @@ fn tmux_capture(socket: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+fn launched_subagent_name(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .expect("subagent launch prints its minted petname")
+        .to_owned()
+}
+
+fn live_agent_pane_fixture(
+    agent: &rimz::agents::AgentState,
+    parent_pane: &rimz::pane::PaneRef,
+) -> rimz::pane::PaneRef {
+    let mut pane = agent.pane.clone().expect("agent provider pane");
+    pane.session_name.clone_from(&parent_pane.session_name);
+    pane.view_id.clone_from(&parent_pane.view_id);
+    pane.view_kind = parent_pane.view_kind;
+    pane.command = Some(agent.kind.to_string());
+    pane.spawn_command = None;
+    pane.cwd.clone_from(&agent.worktree_path);
+    pane.pane_pid = None;
+    pane.pane_process_start = None;
+    pane.hosted_agent_kind = Some(agent.kind.clone());
+    pane.hosted_agent_process_start = None;
+    pane
 }
 
 /// Poll `capture-pane` on the session's active pane (the sidebar split) until
