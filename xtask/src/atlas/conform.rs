@@ -8,12 +8,12 @@ use super::facts::{Facets, Facts};
 use super::modules::{crate_module_for_path, module_is_within, path_in_scope, scope_for_matching};
 use super::sources::Source;
 use super::syntax;
-use super::target::{self, ModuleRule, TARGET_FILE, Target};
+use super::target::{self, Layer, LayerRanks, ModuleRule, TARGET_FILE, Target};
 use super::{REPORT_VERSION, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
 
-const USAGE: &str = "cargo xtask atlas conform [--ratchet|--tighten|--init] [--file <path>] [--path <prefix>] [--layers <a,b,...>] [--verbose] [--json]
+const USAGE: &str = "cargo xtask atlas conform [--ratchet|--tighten|--status|--init] [--file <path>] [--path <prefix>] [--layers <a+b,c,...>] [--verbose] [--json]
 
 Compares the working tree with a refactor target (root refactor-target.toml by
 default). `--ratchet` fails only when current values exceed budgets/baselines or
@@ -27,17 +27,19 @@ Import allow-lists cover resolved internal `use` declarations only.
 Split Rust modules (`foo.rs` plus `foo/`) remain separate filesystem rules.
 
   --ratchet      fail on regressions (the checks/gate mode)
-  --tighten      lower budgets/baselines and remove unused upward imports
+  --tighten      lower budgets/baselines and remove unused imports/debt
+  --status       show distance to goals and admitted debt still in use
   --init         seed module budgets, layers, and upward imports from the current tree
   --file <path>  target file (default root refactor-target.toml);
                  absolute as-is, relative from the repository root
   --path <path>  root-relative init subtree (default crates/rimz/src)
+  --layers <...> comma-separated low-to-high layers; `+` joins peers
   --verbose      show every rule instead of folding rules exactly at budget
-  --json         versioned JSON agent contract (v3)
+  --json         versioned JSON agent contract (v4)
 
 Schema:
-  version = 3
-  layers = [\"store\", \"agents\", \"cli\"]
+  version = 4
+  layers = [\"store\", [\"agents\", \"harness\"], \"cli\"]
   [[module]]
   path = \"crates/rimz/src/cli\"
   upward-imports = [\"agents\"]
@@ -52,7 +54,19 @@ enum Mode {
     Report,
     Ratchet,
     Tighten,
+    Status,
     Init,
+}
+
+impl Mode {
+    fn report_label(self) -> &'static str {
+        match self {
+            Self::Status => "status",
+            Self::Tighten => "tighten",
+            Self::Report | Self::Ratchet => "report",
+            Self::Init => unreachable!("init returns before evaluation"),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -60,7 +74,7 @@ struct Args {
     mode: Mode,
     file: Option<PathBuf>,
     path: Option<PathBuf>,
-    layers: Option<Vec<String>>,
+    layers: Option<Vec<Layer>>,
     verbose: bool,
     json: bool,
 }
@@ -73,6 +87,13 @@ struct ImportSite {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct DebtEntry {
+    prefix: String,
+    sites: usize,
+    open: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct RuleResult {
     kind: &'static str,
     path: PathBuf,
@@ -81,10 +102,16 @@ struct RuleResult {
     current: usize,
     budget: usize,
     delta: isize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    goal: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remaining: Option<usize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    debt: Vec<DebtEntry>,
     unallowed_imports: Vec<String>,
     unallowed_import_sites: Vec<ImportSite>,
     #[serde(skip)]
-    used_upward_imports: BTreeSet<String>,
+    used_upward_imports: BTreeMap<String, BTreeSet<(PathBuf, usize)>>,
     config_line: usize,
 }
 
@@ -92,10 +119,11 @@ struct RuleResult {
 struct Report {
     version: u8,
     verb: &'static str,
+    mode: &'static str,
     target: PathBuf,
     #[serde(skip)]
     default_target: bool,
-    layers: Vec<String>,
+    layers: Vec<Layer>,
     rules: Vec<RuleResult>,
     regressions: usize,
     parse_failures: usize,
@@ -150,6 +178,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
                     serde_json::to_string_pretty(&serde_json::json!({
                         "version": REPORT_VERSION,
                         "verb": "conform",
+                        "mode": args.mode.report_label(),
                         "target": target_path,
                         "configured": false,
                     }))
@@ -163,7 +192,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
         }
         return Ok(());
     };
-    let report = evaluate(root, &target, &target_path, default_target)?;
+    let report = evaluate(root, &target, &target_path, default_target, args.mode)?;
     match args.mode {
         Mode::Report => {
             if args.json {
@@ -178,6 +207,18 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
             Ok(())
         }
         Mode::Ratchet => enforce(&report),
+        Mode::Status => {
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report)
+                        .context("rendering atlas conform status JSON")?
+                );
+            } else {
+                print_status(&report, args.verbose);
+            }
+            Ok(())
+        }
         Mode::Tighten => {
             tighten(&mut target, &report);
             target::write(&target_path, &target)?;
@@ -201,7 +242,7 @@ pub(super) fn ratchet(root: &Path) -> Result<()> {
     let Some(target) = target::load(&target_path)? else {
         return Ok(());
     };
-    enforce(&evaluate(root, &target, &target_path, true)?)
+    enforce(&evaluate(root, &target, &target_path, true, Mode::Ratchet)?)
 }
 
 fn parse_args(args: &[String]) -> Result<Option<Args>> {
@@ -217,20 +258,20 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut index = 0;
     while let Some(arg) = args.get(index) {
         match arg.as_str() {
-            "--ratchet" if mode == Mode::Report => {
-                mode = Mode::Ratchet;
+            "--ratchet" | "--tighten" | "--status" | "--init" => {
+                if mode != Mode::Report {
+                    bail!(
+                        "atlas conform --ratchet, --tighten, --status, and --init are mutually exclusive"
+                    );
+                }
+                mode = match arg.as_str() {
+                    "--ratchet" => Mode::Ratchet,
+                    "--tighten" => Mode::Tighten,
+                    "--status" => Mode::Status,
+                    "--init" => Mode::Init,
+                    _ => unreachable!(),
+                };
                 index += 1;
-            }
-            "--tighten" if mode == Mode::Report => {
-                mode = Mode::Tighten;
-                index += 1;
-            }
-            "--init" if mode == Mode::Report => {
-                mode = Mode::Init;
-                index += 1;
-            }
-            "--ratchet" | "--tighten" | "--init" => {
-                bail!("atlas conform --ratchet, --tighten, and --init are mutually exclusive")
             }
             "--file" => {
                 let raw = value(args, index, "conform", "--file")?;
@@ -247,14 +288,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 index += 2;
             }
             "--layers" => {
-                let parsed = value(args, index, "conform", "--layers")?
-                    .split(',')
-                    .map(str::trim)
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>();
-                if parsed.is_empty() || parsed.iter().any(String::is_empty) {
-                    bail!("atlas conform --layers requires comma-separated module names");
-                }
+                let parsed = parse_layers(value(args, index, "conform", "--layers")?)?;
                 set_once(&mut layers, parsed, "conform", "--layers")?;
                 index += 2;
             }
@@ -283,8 +317,8 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     if mode != Mode::Init && layers.is_some() {
         bail!("atlas conform --layers requires --init");
     }
-    if mode != Mode::Report && verbose {
-        bail!("atlas conform --verbose is only valid for the default report mode");
+    if !matches!(mode, Mode::Report | Mode::Status) && verbose {
+        bail!("atlas conform --verbose is only valid for report or --status");
     }
     if json && verbose {
         bail!("atlas conform --verbose does not combine with --json");
@@ -299,7 +333,34 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     }))
 }
 
-fn initialize(root: &Path, scope: &Path, requested_layers: Option<&[String]>) -> Result<Target> {
+fn parse_layers(raw: &str) -> Result<Vec<Layer>> {
+    let layers = raw
+        .split(',')
+        .map(|layer| {
+            let modules = layer
+                .split('+')
+                .map(str::trim)
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if modules.iter().any(String::is_empty) {
+                bail!(
+                    "atlas conform --layers requires comma-separated layers; join peer modules with `+`"
+                );
+            }
+            Ok(if let [module] = modules.as_slice() {
+                Layer::Module(module.clone())
+            } else {
+                Layer::Group(modules)
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if layers.is_empty() {
+        bail!("atlas conform --layers requires comma-separated layers; join peer modules with `+`");
+    }
+    Ok(layers)
+}
+
+fn initialize(root: &Path, scope: &Path, requested_layers: Option<&[Layer]>) -> Result<Target> {
     let facts = Facts::load(root, scope, Facets::default())?;
     let scoped_files = facts
         .syntax
@@ -315,14 +376,15 @@ fn initialize(root: &Path, scope: &Path, requested_layers: Option<&[String]>) ->
             .push(file);
     }
     let layers = requested_layers.map_or_else(
-        || greedy_layers(files_by_rule.values().flatten().copied(), &facts),
-        <[String]>::to_vec,
+        || {
+            greedy_layers(files_by_rule.values().flatten().copied(), &facts)
+                .into_iter()
+                .map(Layer::Module)
+                .collect()
+        },
+        <[Layer]>::to_vec,
     );
-    let layer_positions = layers
-        .iter()
-        .enumerate()
-        .map(|(index, layer)| (layer.as_str(), index))
-        .collect::<BTreeMap<_, _>>();
+    let layer_ranks = LayerRanks::new(&layers);
     let modules = files_by_rule
         .into_iter()
         .map(|(path, files)| {
@@ -332,23 +394,22 @@ fn initialize(root: &Path, scope: &Path, requested_layers: Option<&[String]>) ->
                 path.clone()
             };
             let target_module = crate_module_for_path(&module_entry);
-            let from_layer = files
-                .first()
-                .and_then(|file| layer_positions.get(top_module(&file.module_path)).copied());
             let imports = files
                 .iter()
-                .flat_map(|file| &file.imports)
-                .filter_map(|import| {
+                .flat_map(|file| file.imports.iter().map(move |import| (*file, import)))
+                .filter_map(|(file, import)| {
                     syntax::resolved_internal_import(
                         import,
                         &facts.known_modules,
                         &facts.crate_names,
                     )
+                    .map(|resolved| (file, resolved))
                 })
-                .filter(|import| {
-                    let to_layer = layer_positions.get(top_module(import)).copied();
-                    from_layer.zip(to_layer).is_some_and(|(from, to)| to > from)
+                .filter(|(file, import)| {
+                    layer_direction(&layer_ranks, &file.module_path, import)
+                        == Some(Direction::Upward)
                 })
+                .map(|(_, import)| import)
                 .collect::<BTreeSet<_>>();
             let mut upward_imports = Vec::<String>::new();
             for import in imports {
@@ -368,12 +429,14 @@ fn initialize(root: &Path, scope: &Path, requested_layers: Option<&[String]>) ->
                     &target_module,
                     &facts.mod_index,
                 ),
+                surface_goal: None,
+                upward_debt: None,
                 config_line: 0,
             }
         })
         .collect();
     Ok(Target {
-        version: 3,
+        version: 4,
         layers,
         modules,
         strangler: Vec::new(),
@@ -396,16 +459,12 @@ pub(super) enum Direction {
 }
 
 pub(super) fn layer_direction(
-    layers: &[String],
+    ranks: &LayerRanks,
     from_module: &str,
     to_module: &str,
 ) -> Option<Direction> {
-    let from = layers
-        .iter()
-        .position(|layer| layer == top_module(from_module))?;
-    let to = layers
-        .iter()
-        .position(|layer| layer == top_module(to_module))?;
+    let from = ranks.get(top_module(from_module))?;
+    let to = ranks.get(top_module(to_module))?;
     Some(match to.cmp(&from) {
         std::cmp::Ordering::Greater => Direction::Upward,
         std::cmp::Ordering::Equal => Direction::Same,
@@ -486,8 +545,10 @@ fn evaluate(
     target: &Target,
     target_path: &Path,
     default_target: bool,
+    mode: Mode,
 ) -> Result<Report> {
     let facts = Facts::load(root, Path::new("."), Facets::default())?;
+    let layer_ranks = target.layer_ranks();
     let mut rules = Vec::new();
     let mut parse_failures = 0;
     for module in &target.modules {
@@ -536,7 +597,7 @@ fn evaluate(
             &facts.mod_index,
         );
         let mut unallowed = BTreeMap::<String, BTreeSet<(PathBuf, usize)>>::new();
-        let mut used_upward_imports = BTreeSet::new();
+        let mut used_upward_imports = BTreeMap::<String, BTreeSet<(PathBuf, usize)>>::new();
         for file in module_files {
             for import in &file.imports {
                 let Some(resolved) = syntax::resolved_internal_import(
@@ -554,18 +615,23 @@ fn evaluate(
                         .iter()
                         .any(|allowed| module_is_within(&resolved, allowed))
                 } else {
-                    match layer_direction(&target.layers, &file.module_path, &resolved) {
+                    match layer_direction(&layer_ranks, &file.module_path, &resolved) {
                         Some(Direction::Upward) => {
-                            let matching = module
+                            let mut matched = false;
+                            for prefix in module
                                 .upward_imports
                                 .as_deref()
                                 .unwrap_or_default()
                                 .iter()
                                 .filter(|allowed| module_is_within(&resolved, allowed))
-                                .cloned()
-                                .collect::<Vec<_>>();
-                            used_upward_imports.extend(matching.iter().cloned());
-                            !matching.is_empty()
+                            {
+                                used_upward_imports
+                                    .entry(prefix.clone())
+                                    .or_default()
+                                    .insert((file.path.clone(), import.line));
+                                matched = true;
+                            }
+                            matched
                         }
                         _ => true,
                     }
@@ -591,6 +657,19 @@ fn evaluate(
             })
             .collect();
         let regression = current > module.surface_budget || !unallowed_imports.is_empty();
+        let debt = module
+            .upward_debt
+            .iter()
+            .flatten()
+            .map(|prefix| {
+                let sites = used_upward_imports.get(prefix).map_or(0, BTreeSet::len);
+                DebtEntry {
+                    prefix: prefix.clone(),
+                    sites,
+                    open: sites > 0,
+                }
+            })
+            .collect();
         rules.push(RuleResult {
             kind: if module.allowed_imports.is_some() {
                 "module"
@@ -599,10 +678,19 @@ fn evaluate(
             },
             path: module.path.clone(),
             symbol: None,
-            status: if regression { "regression" } else { "ok" },
+            status: if regression {
+                "regression"
+            } else if module.surface_goal.is_some_and(|goal| current <= goal) {
+                "met"
+            } else {
+                "ok"
+            },
             current,
             budget: module.surface_budget,
             delta: current as isize - module.surface_budget as isize,
+            goal: module.surface_goal,
+            remaining: module.surface_goal.map(|goal| current.saturating_sub(goal)),
+            debt,
             unallowed_imports,
             unallowed_import_sites,
             used_upward_imports,
@@ -619,11 +707,7 @@ fn evaluate(
             }
         })
     }) {
-        if !target
-            .layers
-            .iter()
-            .any(|layer| layer == top_module(&file.module_path))
-        {
+        if layer_ranks.get(top_module(&file.module_path)).is_none() {
             continue;
         }
         let mut unallowed = BTreeMap::<String, BTreeSet<(PathBuf, usize)>>::new();
@@ -633,7 +717,7 @@ fn evaluate(
             else {
                 continue;
             };
-            if layer_direction(&target.layers, &file.module_path, &resolved)
+            if layer_direction(&layer_ranks, &file.module_path, &resolved)
                 != Some(Direction::Upward)
             {
                 continue;
@@ -665,9 +749,12 @@ fn evaluate(
             current: 0,
             budget: 0,
             delta: 0,
+            goal: None,
+            remaining: None,
+            debt: Vec::new(),
             unallowed_imports,
             unallowed_import_sites,
-            used_upward_imports: BTreeSet::new(),
+            used_upward_imports: BTreeMap::new(),
             config_line: 1,
         });
     }
@@ -695,15 +782,19 @@ fn evaluate(
             current,
             budget: strangler.baseline,
             delta: current as isize - strangler.baseline as isize,
+            goal: Some(0),
+            remaining: Some(current),
+            debt: Vec::new(),
             unallowed_imports: Vec::new(),
             unallowed_import_sites: Vec::new(),
-            used_upward_imports: BTreeSet::new(),
+            used_upward_imports: BTreeMap::new(),
             config_line: strangler.config_line,
         });
     }
     Ok(Report {
         version: REPORT_VERSION,
         verb: "conform",
+        mode: mode.report_label(),
         target: target_path.to_path_buf(),
         default_target,
         layers: target.layers.clone(),
@@ -721,8 +812,11 @@ fn escaping_surface<'a>(
     target_module: &str,
     mod_index: &syntax::ModIndex,
 ) -> usize {
-    let files = files.into_iter().collect::<Vec<_>>();
-    super::modules::escaping_items_for_boundary(&files, target_module, mod_index).len()
+    files
+        .into_iter()
+        .flat_map(|file| file.pub_items.iter().map(move |item| (file, item)))
+        .filter(|(file, item)| super::modules::item_escapes(file, item, target_module, mod_index))
+        .count()
 }
 
 pub(super) fn sources_for_path(sources: &[Source], path: &Path, is_file: bool) -> Vec<Source> {
@@ -832,10 +926,22 @@ fn tighten(target: &mut Target, report: &Report) {
             .find(|result| result.symbol.is_none() && result.path == module.path)
         {
             module.surface_budget = module.surface_budget.min(result.current);
+            if module
+                .surface_goal
+                .is_some_and(|goal| result.current <= goal)
+            {
+                module.surface_goal = None;
+            }
             if let Some(upward_imports) = &mut module.upward_imports {
-                upward_imports.retain(|import| result.used_upward_imports.contains(import));
+                upward_imports.retain(|import| result.used_upward_imports.contains_key(import));
                 if upward_imports.is_empty() {
                     module.upward_imports = None;
+                }
+            }
+            if let Some(upward_debt) = &mut module.upward_debt {
+                upward_debt.retain(|import| result.used_upward_imports.contains_key(import));
+                if upward_debt.is_empty() {
+                    module.upward_debt = None;
                 }
             }
         }
@@ -856,7 +962,7 @@ fn tighten(target: &mut Target, report: &Report) {
 fn print_report(report: &Report, verbose: bool) {
     println!("Atlas conform — {}", report.target.display());
     if !report.layers.is_empty() {
-        println!("layers: {}", report.layers.join(" < "));
+        println!("layers: {}", render_layers(&report.layers));
     }
     println!("status      kind        current  budget      Δ  rule");
     let (rules, folded) = displayed_rules(report, verbose);
@@ -898,6 +1004,113 @@ fn print_report(report: &Report, verbose: bool) {
     );
 }
 
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask atlas conform status is the command's stdout contract"
+)]
+fn print_status(report: &Report, verbose: bool) {
+    println!("Atlas conform status — {}", report.target.display());
+    if !report.layers.is_empty() {
+        println!("layers: {}", render_layers(&report.layers));
+    }
+    println!("status      kind        budget  current     goal  remaining  rule");
+    for rule in status_rules(report, verbose) {
+        let label = rule.symbol.as_ref().map_or_else(
+            || rule.path.display().to_string(),
+            |symbol| format!("{symbol} ({})", rule.path.display()),
+        );
+        let goal = rule
+            .goal
+            .map_or_else(|| "-".to_owned(), |goal| goal.to_string());
+        let remaining = rule
+            .remaining
+            .map_or_else(|| "-".to_owned(), |remaining| remaining.to_string());
+        println!(
+            "{:<11} {:<10} {:>7} {:>8} {:>8} {:>10}  {}",
+            rule.status, rule.kind, rule.budget, rule.current, goal, remaining, label
+        );
+        for debt in &rule.debt {
+            println!(
+                "  debt: {}  {} sites  {}",
+                debt.prefix,
+                debt.sites,
+                if debt.open { "open" } else { "closed" }
+            );
+        }
+    }
+    println!("{}", status_summary(report));
+}
+
+fn status_rules(report: &Report, verbose: bool) -> Vec<&RuleResult> {
+    report
+        .rules
+        .iter()
+        .filter(|rule| {
+            verbose || rule.status == "regression" || rule.goal.is_some() || !rule.debt.is_empty()
+        })
+        .collect()
+}
+
+fn render_layers(layers: &[Layer]) -> String {
+    layers
+        .iter()
+        .map(|layer| layer.modules().join(" + "))
+        .collect::<Vec<_>>()
+        .join(" < ")
+}
+
+fn status_summary(report: &Report) -> String {
+    let module_goals = report
+        .rules
+        .iter()
+        .filter(|rule| rule.kind != "strangler" && rule.goal.is_some())
+        .count();
+    let module_debt = report
+        .rules
+        .iter()
+        .filter(|rule| rule.kind != "strangler" && !rule.debt.is_empty())
+        .count();
+    let stranglers = report
+        .rules
+        .iter()
+        .filter(|rule| rule.kind == "strangler")
+        .count();
+    let remaining_surface = report
+        .rules
+        .iter()
+        .filter(|rule| rule.kind != "strangler")
+        .filter_map(|rule| rule.remaining)
+        .sum::<usize>();
+    let strangler_occurrences = report
+        .rules
+        .iter()
+        .filter(|rule| rule.kind == "strangler")
+        .map(|rule| rule.current)
+        .sum::<usize>();
+    let total_debt = report
+        .rules
+        .iter()
+        .map(|rule| rule.debt.len())
+        .sum::<usize>();
+    let open_debt = report
+        .rules
+        .iter()
+        .flat_map(|rule| &rule.debt)
+        .filter(|debt| debt.open)
+        .count();
+    let open_debt_sites = report
+        .rules
+        .iter()
+        .flat_map(|rule| &rule.debt)
+        .filter(|debt| debt.open)
+        .map(|debt| debt.sites)
+        .sum::<usize>();
+    format!(
+        "summary: {module_goals} module rules with goals, {module_debt} with debt, {stranglers} stranglers; remaining surface {remaining_surface}; strangler occurrences {strangler_occurrences}; open debt {open_debt}/{total_debt} ({open_debt_sites} sites); {} regressions; {} parse failures",
+        report.regressions, report.parse_failures
+    )
+}
+
 fn displayed_rules(report: &Report, verbose: bool) -> (Vec<&RuleResult>, usize) {
     if verbose {
         return (report.rules.iter().collect(), 0);
@@ -918,486 +1131,4 @@ fn displayed_rules(report: &Report, verbose: bool) -> (Vec<&RuleResult>, usize) 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn conform_args_separate_report_ratchet_and_tighten() {
-        assert_eq!(
-            parse_args(&[]).unwrap(),
-            Some(Args {
-                mode: Mode::Report,
-                file: None,
-                path: None,
-                layers: None,
-                verbose: false,
-                json: false,
-            })
-        );
-        assert_eq!(
-            parse_args(&["--ratchet".into()]).unwrap(),
-            Some(Args {
-                mode: Mode::Ratchet,
-                file: None,
-                path: None,
-                layers: None,
-                verbose: false,
-                json: false,
-            })
-        );
-        assert!(parse_args(&["--ratchet".into(), "--tighten".into()]).is_err());
-        assert_eq!(
-            parse_args(&["--file".into(), "targets/cli.toml".into()])
-                .unwrap()
-                .unwrap()
-                .file,
-            Some(PathBuf::from("targets/cli.toml"))
-        );
-        assert_eq!(
-            parse_args(&["--file".into(), "/tmp/target.toml".into()])
-                .unwrap()
-                .unwrap()
-                .file,
-            Some(PathBuf::from("/tmp/target.toml"))
-        );
-        assert_eq!(
-            parse_args(&["--file".into(), "../target.toml".into()])
-                .unwrap()
-                .unwrap()
-                .file,
-            Some(PathBuf::from("../target.toml"))
-        );
-        assert!(parse_args(&["--file".into(), String::new()]).is_err());
-        assert!(parse_args(&["--path".into(), "src".into()]).is_err());
-        assert!(parse_args(&["--ratchet".into(), "--verbose".into()]).is_err());
-        assert!(parse_args(&["--json".into(), "--verbose".into()]).is_err());
-        assert!(parse_args(&["--verbose".into()]).unwrap().unwrap().verbose);
-        assert_eq!(
-            parse_args(&["--init".into(), "--path".into(), "src".into()])
-                .unwrap()
-                .unwrap()
-                .path,
-            Some(PathBuf::from("src"))
-        );
-    }
-
-    #[test]
-    fn allow_list_matches_descendants_not_prefix_collisions() {
-        assert!(module_is_within("cli::render::table", "cli::render"));
-        assert!(!module_is_within("cli::renderer", "cli::render"));
-    }
-
-    #[test]
-    fn layer_direction_classifies_upward_same_downward_and_unknown() {
-        let layers = vec!["store".to_owned(), "agents".to_owned(), "cli".to_owned()];
-
-        assert_eq!(
-            layer_direction(&layers, "store::writer", "cli::render"),
-            Some(Direction::Upward)
-        );
-        assert_eq!(
-            layer_direction(&layers, "agents::state", "agents::adapters"),
-            Some(Direction::Same)
-        );
-        assert_eq!(
-            layer_direction(&layers, "cli", "store"),
-            Some(Direction::Downward)
-        );
-        assert_eq!(layer_direction(&layers, "remote", "store"), None);
-    }
-
-    #[test]
-    fn surface_budget_counts_only_reach_outside_the_rule_module() {
-        let sources = vec![
-            Source::new("src/lib.rs", "mod feature;\n"),
-            Source::new(
-                "src/feature/mod.rs",
-                "mod detail;\npub(in crate) fn crate_wide() {}\n",
-            ),
-            Source::new(
-                "src/feature/detail.rs",
-                "pub(super) fn sibling_only() {}\npub fn behind_private_link() {}\n",
-            ),
-        ];
-        let syntax = syntax::analyze_sources(&sources);
-        let index = syntax::ModIndex::new(&syntax.files);
-        let feature_files = syntax
-            .files
-            .iter()
-            .filter(|file| file.module_path.starts_with("feature"));
-        assert_eq!(escaping_surface(feature_files, "feature", &index), 1);
-    }
-
-    #[test]
-    fn crate_root_surface_counts_only_crate_external_reach() {
-        let sources = vec![Source::new(
-            "src/lib.rs",
-            "pub fn external() {}\npub(crate) fn crate_only() {}\n",
-        )];
-        let syntax = syntax::analyze_sources(&sources);
-        let index = syntax::ModIndex::new(&syntax.files);
-
-        assert_eq!(escaping_surface(&syntax.files, "", &index), 1);
-    }
-
-    #[test]
-    fn conform_default_report_prioritizes_regressions_and_headroom() {
-        let rule = |path: &str, status, current, budget| RuleResult {
-            kind: "module",
-            path: PathBuf::from(path),
-            symbol: None,
-            status,
-            current,
-            budget,
-            delta: current as isize - budget as isize,
-            unallowed_imports: Vec::new(),
-            unallowed_import_sites: Vec::new(),
-            used_upward_imports: BTreeSet::new(),
-            config_line: 1,
-        };
-        let report = Report {
-            version: REPORT_VERSION,
-            verb: "conform",
-            target: PathBuf::from("target.toml"),
-            default_target: false,
-            layers: Vec::new(),
-            rules: vec![
-                rule("at-budget", "ok", 2, 2),
-                rule("headroom", "ok", 1, 3),
-                rule("regression", "regression", 4, 2),
-            ],
-            regressions: 1,
-            parse_failures: 0,
-        };
-
-        let (displayed, folded) = displayed_rules(&report, false);
-        assert_eq!(
-            displayed
-                .iter()
-                .map(|rule| rule.path.as_path())
-                .collect::<Vec<_>>(),
-            [Path::new("regression"), Path::new("headroom")]
-        );
-        assert_eq!(folded, 1);
-        assert_eq!(displayed_rules(&report, true).0.len(), 3);
-    }
-
-    #[test]
-    fn tighten_removes_unused_upward_import_admissions() {
-        let mut target = Target {
-            version: 3,
-            layers: vec!["store".to_owned(), "cli".to_owned()],
-            modules: vec![ModuleRule {
-                path: PathBuf::from("src/store"),
-                allowed_imports: None,
-                upward_imports: Some(vec!["cli".to_owned(), "agents".to_owned()]),
-                surface_budget: 4,
-                config_line: 2,
-            }],
-            strangler: Vec::new(),
-        };
-        let report = Report {
-            version: REPORT_VERSION,
-            verb: "conform",
-            target: PathBuf::from("target.toml"),
-            default_target: false,
-            layers: target.layers.clone(),
-            rules: vec![RuleResult {
-                kind: "upward-import",
-                path: PathBuf::from("src/store"),
-                symbol: None,
-                status: "ok",
-                current: 3,
-                budget: 4,
-                delta: -1,
-                unallowed_imports: Vec::new(),
-                unallowed_import_sites: Vec::new(),
-                used_upward_imports: BTreeSet::from(["cli".to_owned()]),
-                config_line: 2,
-            }],
-            regressions: 0,
-            parse_failures: 0,
-        };
-
-        tighten(&mut target, &report);
-
-        assert_eq!(target.modules[0].surface_budget, 3);
-        assert_eq!(
-            target.modules[0].upward_imports.as_deref(),
-            Some(&["cli".to_owned()][..])
-        );
-    }
-
-    #[test]
-    fn configured_target_ratchets_and_tightens_without_subprocesses() {
-        let root = tempfile::tempdir().unwrap();
-        fs::create_dir(root.path().join("src")).unwrap();
-        fs::create_dir(root.path().join("src/nested")).unwrap();
-        fs::write(
-            root.path().join("Cargo.toml"),
-            "[workspace]\nmembers = []\n[package]\nname = \"probe\"\nversion = \"0.0.0\"\n",
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("src/lib.rs"),
-            "use probe::other::Thing;\npub fn run() -> Thing { Thing }\n",
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("src/other.rs"),
-            "pub struct Thing;\nfn caller() { let _ = crate::run(); }\n",
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("src/nested/mod.rs"),
-            "use probe::other::Thing;\npub fn nested() -> Thing { Thing }\n",
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("src/tests.rs"),
-            "fn characterization() { crate::run(); crate::run(); }\n",
-        )
-        .unwrap();
-        fs::write(
-            root.path().join(TARGET_FILE),
-            r#"
-version = 3
-layers = []
-[[module]]
-path = "src/nested"
-allowed-imports = ["other"]
-surface-budget = 5
-[[strangler]]
-symbol = "run"
-path = "src/lib.rs"
-baseline = 5
-[[strangler]]
-symbol = "run"
-path = "src"
-baseline = 5
-"#,
-        )
-        .unwrap();
-
-        ratchet(root.path()).unwrap();
-        let target_path = root.path().join(TARGET_FILE);
-        let mut configured = target::load(&target_path).unwrap().unwrap();
-        let mut forbidden = configured.clone();
-        forbidden.modules[0]
-            .allowed_imports
-            .as_mut()
-            .unwrap()
-            .clear();
-        let forbidden_report = evaluate(root.path(), &forbidden, &target_path, true).unwrap();
-        assert_eq!(forbidden_report.regressions, 1);
-        assert_eq!(forbidden_report.rules[0].unallowed_imports, ["other"]);
-        assert_eq!(
-            forbidden_report.rules[0].unallowed_import_sites,
-            [ImportSite {
-                module: "other".to_owned(),
-                path: PathBuf::from("src/nested/mod.rs"),
-                line: 1,
-            }]
-        );
-        assert!(enforce(&forbidden_report).is_err());
-
-        let report = evaluate(root.path(), &configured, &target_path, true).unwrap();
-        tighten(&mut configured, &report);
-        target::write(&target_path, &configured).unwrap();
-        let tightened = target::load(&target_path).unwrap().unwrap();
-        assert_eq!(tightened.modules[0].surface_budget, 1);
-        assert_eq!(tightened.strangler[0].baseline, 1);
-        assert_eq!(tightened.strangler[1].baseline, 2);
-
-        let target_directory = tempfile::tempdir().unwrap();
-        let initialized_path = target_directory.path().join("initialized.toml");
-        let initialized_arg = initialized_path.display().to_string();
-        run(
-            root.path(),
-            &[
-                "--init".into(),
-                "--path".into(),
-                "src".into(),
-                "--file".into(),
-                initialized_arg.clone(),
-            ],
-        )
-        .unwrap();
-        let initialized = target::load(&initialized_path).unwrap().unwrap();
-        let initialized_report =
-            evaluate(root.path(), &initialized, &initialized_path, false).unwrap();
-        assert_eq!(initialized_report.regressions, 0);
-        assert_eq!(initialized.modules.len(), 3);
-        assert!(initialized.modules[0].allowed_imports.is_none());
-        assert_eq!(initialized.modules[1].path, Path::new("src/nested"));
-        assert!(initialized.modules[1].upward_imports.is_none());
-        let before_tighten = fs::read_to_string(&initialized_path).unwrap();
-        run(
-            root.path(),
-            &["--tighten".into(), "--file".into(), initialized_arg.clone()],
-        )
-        .unwrap();
-        assert_eq!(
-            fs::read_to_string(&initialized_path).unwrap(),
-            before_tighten
-        );
-        assert!(
-            run(
-                root.path(),
-                &["--init".into(), "--file".into(), initialized_arg],
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn uncovered_layered_file_rejects_upward_imports() {
-        let root = tempfile::tempdir().unwrap();
-        fs::create_dir(root.path().join("src")).unwrap();
-        fs::write(
-            root.path().join("Cargo.toml"),
-            "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        fs::write(root.path().join("src/lib.rs"), "mod cli;\nmod store;\n").unwrap();
-        fs::write(root.path().join("src/cli.rs"), "pub struct Report;\n").unwrap();
-        fs::write(
-            root.path().join("src/store.rs"),
-            "use crate::cli::Report;\nfn load() -> Report { Report }\n",
-        )
-        .unwrap();
-        let target = Target {
-            version: 3,
-            layers: vec!["store".to_owned(), "cli".to_owned()],
-            modules: vec![ModuleRule {
-                path: PathBuf::from("src/cli.rs"),
-                allowed_imports: None,
-                upward_imports: None,
-                surface_budget: 1,
-                config_line: 1,
-            }],
-            strangler: Vec::new(),
-        };
-
-        let report = evaluate(
-            root.path(),
-            &target,
-            &root.path().join("target.toml"),
-            false,
-        )
-        .unwrap();
-        let uncovered = report
-            .rules
-            .iter()
-            .find(|rule| rule.path == Path::new("src/store.rs"))
-            .unwrap();
-
-        assert_eq!(uncovered.status, "regression");
-        assert_eq!(uncovered.unallowed_imports, ["cli"]);
-        assert_eq!(
-            uncovered.unallowed_import_sites,
-            [ImportSite {
-                module: "cli".to_owned(),
-                path: PathBuf::from("src/store.rs"),
-                line: 1,
-            }]
-        );
-    }
-
-    #[test]
-    fn strangler_paths_do_not_count_matching_modules_from_other_crates() {
-        let root = tempfile::tempdir().unwrap();
-        for path in ["app/src/legacy", "tool/src/legacy"] {
-            fs::create_dir_all(root.path().join(path)).unwrap();
-        }
-        fs::write(
-            root.path().join("Cargo.toml"),
-            "[workspace]\nmembers = [\"app\", \"tool\"]\nresolver = \"2\"\n",
-        )
-        .unwrap();
-        for member in ["app", "tool"] {
-            fs::write(
-                root.path().join(member).join("Cargo.toml"),
-                format!(
-                    "[package]\nname = \"{member}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n"
-                ),
-            )
-            .unwrap();
-        }
-        fs::write(root.path().join("app/src/lib.rs"), "pub mod legacy;\n").unwrap();
-        fs::write(
-            root.path().join("app/src/legacy/mod.rs"),
-            "fn doomed() {}\n",
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("app/src/legacy/caller.rs"),
-            "fn call() { doomed(); }\n",
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("tool/src/lib.rs"),
-            "fn doomed() { doomed(); doomed(); }\n",
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("tool/src/legacy/mod.rs"),
-            "fn doomed() { doomed(); }\n",
-        )
-        .unwrap();
-
-        let target = Target {
-            version: 3,
-            layers: Vec::new(),
-            modules: Vec::new(),
-            strangler: vec![
-                target::StranglerRule {
-                    symbol: "doomed".to_owned(),
-                    path: PathBuf::from("app/src"),
-                    baseline: 10,
-                    config_line: 1,
-                },
-                target::StranglerRule {
-                    symbol: "doomed".to_owned(),
-                    path: PathBuf::from("app/src/legacy"),
-                    baseline: 10,
-                    config_line: 2,
-                },
-                target::StranglerRule {
-                    symbol: "doomed".to_owned(),
-                    path: PathBuf::from("app/src/lib.rs"),
-                    baseline: 10,
-                    config_line: 3,
-                },
-            ],
-        };
-
-        let report = evaluate(
-            root.path(),
-            &target,
-            &root.path().join("custom-target.toml"),
-            false,
-        )
-        .unwrap();
-        assert_eq!(
-            report
-                .rules
-                .iter()
-                .map(|rule| rule.current)
-                .collect::<Vec<_>>(),
-            [2, 2, 0]
-        );
-    }
-
-    #[test]
-    fn missing_explicit_target_is_an_error() {
-        let root = tempfile::tempdir().unwrap();
-        let error = run(
-            root.path(),
-            &["--file".into(), "missing-target.toml".into()],
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("missing-target.toml"));
-    }
-}
+mod tests;

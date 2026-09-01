@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,11 +12,58 @@ pub(super) const TARGET_FILE: &str = "refactor-target.toml";
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct Target {
     pub(super) version: u8,
-    pub(super) layers: Vec<String>,
+    pub(super) layers: Vec<Layer>,
     #[serde(default, rename = "module")]
     pub(super) modules: Vec<ModuleRule>,
     #[serde(default)]
     pub(super) strangler: Vec<StranglerRule>,
+}
+
+impl Target {
+    pub(super) fn layer_ranks(&self) -> LayerRanks {
+        LayerRanks::new(&self.layers)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub(super) enum Layer {
+    Module(String),
+    Group(Vec<String>),
+}
+
+impl Layer {
+    pub(super) fn modules(&self) -> &[String] {
+        match self {
+            Self::Module(module) => std::slice::from_ref(module),
+            Self::Group(modules) => modules,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct LayerRanks(BTreeMap<String, usize>);
+
+impl LayerRanks {
+    pub(super) fn new(layers: &[Layer]) -> Self {
+        Self(
+            layers
+                .iter()
+                .enumerate()
+                .flat_map(|(rank, layer)| {
+                    layer
+                        .modules()
+                        .iter()
+                        .cloned()
+                        .map(move |module| (module, rank))
+                })
+                .collect(),
+        )
+    }
+
+    pub(super) fn get(&self, module: &str) -> Option<usize> {
+        self.0.get(module).copied()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -28,6 +75,10 @@ pub(super) struct ModuleRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) upward_imports: Option<Vec<String>>,
     pub(super) surface_budget: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) surface_goal: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) upward_debt: Option<Vec<String>>,
     #[serde(skip)]
     pub(super) config_line: usize,
 }
@@ -53,9 +104,9 @@ pub(super) fn load(path: &Path) -> Result<Option<Target>> {
         .get("version")
         .and_then(toml::Value::as_integer)
         .unwrap_or_default();
-    if version != 3 {
+    if version != 4 {
         bail!(
-            "{} has unsupported version {}; expected 3 (reseed with `cargo xtask atlas conform --init` or convert v2 by hand: layers + upward-imports)",
+            "{} has unsupported version {}; expected 4 (a v3 file is a strict subset: change `version = 3` to `version = 4`; otherwise reseed with `cargo xtask atlas conform --init`)",
             path.display(),
             version
         );
@@ -70,15 +121,26 @@ pub(super) fn load(path: &Path) -> Result<Option<Target>> {
     for (index, strangler) in target.strangler.iter_mut().enumerate() {
         strangler.config_line = strangler_lines.get(index).copied().unwrap_or(1);
     }
-    validate(path, &target)?;
+    validate(path, &target, key_line(&raw, "layers"))?;
     Ok(Some(target))
 }
 
-fn validate(path: &Path, target: &Target) -> Result<()> {
+fn validate(path: &Path, target: &Target, layers_line: usize) -> Result<()> {
     let mut seen_layers = BTreeSet::new();
     for layer in &target.layers {
-        if !seen_layers.insert(layer) {
-            bail!("{} has duplicate layer `{layer}`", path.display());
+        if layer.modules().is_empty() {
+            bail!(
+                "{}:{layers_line}: layer groups may not be empty",
+                path.display()
+            );
+        }
+        for module in layer.modules() {
+            if !seen_layers.insert(module) {
+                bail!(
+                    "{}:{layers_line}: duplicate layer `{module}`",
+                    path.display()
+                );
+            }
         }
     }
     for module in &target.modules {
@@ -90,12 +152,51 @@ fn validate(path: &Path, target: &Target) -> Result<()> {
                 module.path.display()
             );
         }
+        if module
+            .surface_goal
+            .is_some_and(|goal| goal > module.surface_budget)
+        {
+            bail!(
+                "{}:{}: module `{}` surface-goal exceeds surface-budget",
+                path.display(),
+                module.config_line,
+                module.path.display()
+            );
+        }
+        if module.allowed_imports.is_some() && module.upward_debt.is_some() {
+            bail!(
+                "{}:{}: module `{}` cannot set upward-debt with allowed-imports",
+                path.display(),
+                module.config_line,
+                module.path.display()
+            );
+        }
+        if let Some(debt) = &module.upward_debt {
+            let admissions = module.upward_imports.as_deref().unwrap_or_default();
+            if let Some(unadmitted) = debt.iter().find(|entry| !admissions.contains(entry)) {
+                bail!(
+                    "{}:{}: module `{}` upward-debt `{unadmitted}` is not present in upward-imports",
+                    path.display(),
+                    module.config_line,
+                    module.path.display()
+                );
+            }
+        }
     }
     Ok(())
 }
 
 pub(super) fn write(path: &Path, target: &Target) -> Result<()> {
-    let mut rendered = toml::to_string_pretty(target).context("rendering refactor target TOML")?;
+    validate(path, target, 1)?;
+    let mut target = target.clone();
+    for layer in &mut target.layers {
+        if let Layer::Group(modules) = layer
+            && let [module] = modules.as_slice()
+        {
+            *layer = Layer::Module(module.clone());
+        }
+    }
+    let mut rendered = toml::to_string_pretty(&target).context("rendering refactor target TOML")?;
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
@@ -109,6 +210,16 @@ fn section_lines(raw: &str, section: &str) -> Vec<usize> {
         .collect()
 }
 
+fn key_line(raw: &str, key: &str) -> usize {
+    raw.lines()
+        .position(|line| {
+            line.trim_start()
+                .strip_prefix(key)
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+        })
+        .map_or(1, |index| index + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,7 +228,7 @@ mod tests {
     fn schema_accepts_kebab_case_module_fields() {
         let target: Target = toml::from_str(
             r#"
-version = 3
+version = 4
 layers = ["cli", "agents"]
 [[module]]
 path = "crates/rimz/src/cli"
@@ -127,6 +238,8 @@ surface-budget = 10
 path = "crates/rimz/src/agents"
 upward-imports = ["cli"]
 surface-budget = 5
+surface-goal = 3
+upward-debt = ["cli"]
 [[strangler]]
 symbol = "old"
 path = "crates/rimz/src/cli/mod.rs"
@@ -134,18 +247,28 @@ baseline = 2
 "#,
         )
         .unwrap();
-        assert_eq!(target.layers, ["cli", "agents"]);
+        assert_eq!(
+            target.layers,
+            [
+                Layer::Module("cli".to_owned()),
+                Layer::Module("agents".to_owned())
+            ]
+        );
         assert_eq!(
             target.modules[0].allowed_imports.as_deref().unwrap(),
             ["agents"]
         );
         assert!(target.modules[0].upward_imports.is_none());
         assert_eq!(target.modules[0].surface_budget, 10);
+        assert!(target.modules[0].surface_goal.is_none());
+        assert!(target.modules[0].upward_debt.is_none());
         assert!(target.modules[1].allowed_imports.is_none());
         assert_eq!(
             target.modules[1].upward_imports.as_deref().unwrap(),
             ["cli"]
         );
+        assert_eq!(target.modules[1].surface_goal, Some(3));
+        assert_eq!(target.modules[1].upward_debt.as_deref().unwrap(), ["cli"]);
         assert_eq!(target.strangler[0].baseline, 2);
     }
 
@@ -155,14 +278,19 @@ baseline = 2
         let path = directory.path().join("target.toml");
         fs::write(
             &path,
-            "version = 2\n[[module]]\npath = \"src\"\npub-budget = 1\n",
+            "version = 3\n[[module]]\npath = \"src\"\npub-budget = 1\n",
         )
         .unwrap();
         let error = load(&path).unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("unsupported version 2; expected 3")
+                .contains("unsupported version 3; expected 4")
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("change `version = 3` to `version = 4`")
         );
     }
 
@@ -170,10 +298,10 @@ baseline = 2
     fn duplicate_layers_are_rejected() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("target.toml");
-        fs::write(&path, "version = 3\nlayers = [\"cli\", \"cli\"]\n").unwrap();
+        fs::write(&path, "version = 4\nlayers = [\"cli\", [\"cli\"]]\n").unwrap();
 
         let error = load(&path).unwrap_err();
-        assert!(error.to_string().contains("duplicate layer `cli`"));
+        assert!(error.to_string().contains(":2: duplicate layer `cli`"));
     }
 
     #[test]
@@ -182,7 +310,7 @@ baseline = 2
         let path = directory.path().join("target.toml");
         fs::write(
             &path,
-            r#"version = 3
+            r#"version = 4
 layers = ["cli", "agents"]
 
 [[module]]
@@ -206,7 +334,7 @@ surface-budget = 10
         let path = directory.path().join("target.toml");
         fs::write(
             &path,
-            r#"version = 3
+            r#"version = 4
 layers = []
 
 [[module]]
@@ -235,14 +363,19 @@ baseline = 3
     #[test]
     fn serialization_preserves_layers_and_present_import_mode_only() {
         let target = Target {
-            version: 3,
-            layers: vec!["cli".to_owned(), "agents".to_owned()],
+            version: 4,
+            layers: vec![
+                Layer::Module("cli".to_owned()),
+                Layer::Module("agents".to_owned()),
+            ],
             modules: vec![
                 ModuleRule {
                     path: PathBuf::from("src/cli"),
                     allowed_imports: None,
                     upward_imports: Some(vec!["agents".to_owned()]),
                     surface_budget: 4,
+                    surface_goal: None,
+                    upward_debt: None,
                     config_line: 99,
                 },
                 ModuleRule {
@@ -250,6 +383,8 @@ baseline = 3
                     allowed_imports: Some(Vec::new()),
                     upward_imports: None,
                     surface_budget: 2,
+                    surface_goal: None,
+                    upward_debt: None,
                     config_line: 100,
                 },
             ],
@@ -271,5 +406,75 @@ baseline = 3
             reparsed.modules[1].allowed_imports,
             target.modules[1].allowed_imports
         );
+    }
+
+    #[test]
+    fn grouped_layers_parse_and_singleton_groups_round_trip_as_strings() {
+        let target: Target =
+            toml::from_str("version = 4\nlayers = [[\"ids\", \"utils\"], [\"store\"], \"cli\"]\n")
+                .unwrap();
+        assert_eq!(
+            target.layers,
+            [
+                Layer::Group(vec!["ids".to_owned(), "utils".to_owned()]),
+                Layer::Group(vec!["store".to_owned()]),
+                Layer::Module("cli".to_owned()),
+            ]
+        );
+        let ranks = target.layer_ranks();
+        assert_eq!(ranks.get("ids"), Some(0));
+        assert_eq!(ranks.get("utils"), Some(0));
+        assert_eq!(ranks.get("store"), Some(1));
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("target.toml");
+        write(&path, &target).unwrap();
+        let reparsed = load(&path).unwrap().unwrap();
+        assert_eq!(
+            reparsed.layers,
+            [
+                Layer::Group(vec!["ids".to_owned(), "utils".to_owned()]),
+                Layer::Module("store".to_owned()),
+                Layer::Module("cli".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn goal_and_debt_fields_validate_against_budget_and_admissions() {
+        let error = load_fixture("surface-goal = 11\nupward-imports = [\"cli\"]\n");
+        assert!(error.contains(":4: module `src/store`"));
+        assert!(error.contains("surface-goal exceeds surface-budget"));
+
+        let error = load_fixture(
+            "surface-goal = 5\nupward-imports = [\"cli\"]\nupward-debt = [\"agents\"]\n",
+        );
+        assert!(error.contains(":4: module `src/store`"));
+        assert!(error.contains("upward-debt `agents` is not present in upward-imports"));
+
+        let error = load_fixture(
+            "surface-goal = 5\nallowed-imports = [\"cli\"]\nupward-debt = [\"cli\"]\n",
+        );
+        assert!(error.contains(":4: module `src/store`"));
+        assert!(error.contains("cannot set upward-debt with allowed-imports"));
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("target.toml");
+        fs::write(&path, "version = 4\nlayers = [[]]\n").unwrap();
+        let error = load(&path).unwrap_err().to_string();
+        assert!(error.contains(":2: layer groups may not be empty"));
+    }
+
+    fn load_fixture(module_fields: &str) -> String {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("target.toml");
+        fs::write(
+            &path,
+            format!(
+                "version = 4\nlayers = [\"store\", \"cli\"]\n\n[[module]]\npath = \"src/store\"\nsurface-budget = 10\n{module_fields}"
+            ),
+        )
+        .unwrap();
+        load(&path).unwrap_err().to_string()
     }
 }

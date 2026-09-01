@@ -12,7 +12,7 @@ use super::modules::{
     ItemId, crate_module_for_row, module_endpoint, module_for_path, path_in_scope,
 };
 use super::references::Edge;
-use super::target::{self, TARGET_FILE, Target};
+use super::target::{self, LayerRanks, TARGET_FILE, Target};
 use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = ".";
@@ -29,7 +29,7 @@ and Rust files. --no-index omits reference edges, assembly, and unresolved items
   --file <path>         target file (default refactor-target.toml)
   --top N               names shown per list (default 20)
   --md                  markdown output
-  --json                versioned JSON agent contract (v3)
+  --json                versioned JSON agent contract (v4)
   --no-index            syntax-only report";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -393,8 +393,9 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let escaping_removed = values_for_difference(&base_surface.items, &current_surface.items);
 
     let (upward, upward_sites) = if let Some(target) = &target {
-        let current_edges = upward_edges(&current, &args.path, &target.layers);
-        let base_edges = upward_edges(&base, &args.path, &target.layers);
+        let ranks = target.layer_ranks();
+        let current_edges = upward_edges(&current, &args.path, &ranks);
+        let base_edges = upward_edges(&base, &args.path, &ranks);
         (
             Some(import_changes(&base_edges, &current_edges, &args.path)),
             Some((
@@ -418,11 +419,13 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
         let base_refs = reference_edges(&base, &args.path);
         let added = reference_changes(&current_refs, &base_refs, &base_refs, &current_refs);
         let removed = reference_changes(&base_refs, &current_refs, &base_refs, &current_refs);
+        let added_count = added.len();
+        let removed_count = removed.len();
         let assembly = assembly_deltas(&base_refs, &current_refs);
         (
             Some(Changed { added, removed }),
-            edge_changes(&current_refs, &base_refs).len(),
-            edge_changes(&base_refs, &current_refs).len(),
+            added_count,
+            removed_count,
             assembly,
         )
     };
@@ -610,7 +613,6 @@ fn surface_items(facts: &Facts, scope: &Path) -> SurfaceSnapshot {
         .files
         .iter()
         .filter(|file| path_in_scope(&file.path, scope))
-        .cloned()
         .collect::<Vec<_>>();
     let escaping = super::modules::escaping_items(&files, scope, &facts.mod_index);
     let counts = escaping
@@ -649,7 +651,7 @@ fn values_for_difference(
 fn upward_edges(
     facts: &Facts,
     scope: &Path,
-    layers: &[String],
+    ranks: &LayerRanks,
 ) -> BTreeMap<(String, String), BTreeSet<Site>> {
     let mut edges = BTreeMap::<(String, String), BTreeSet<Site>>::new();
     for file in facts
@@ -666,7 +668,7 @@ fn upward_edges(
             ) else {
                 continue;
             };
-            if conform::layer_direction(layers, &file.module_path, &resolved)
+            if conform::layer_direction(ranks, &file.module_path, &resolved)
                 != Some(Direction::Upward)
             {
                 continue;
@@ -1368,7 +1370,7 @@ mod tests {
         .unwrap();
         fs::write(
             root.join("refactor-target.toml"),
-            "version = 3\nlayers = [\"store\", \"cli\"]\n[[strangler]]\nsymbol = \"LegacyToken\"\npath = \"src\"\nbaseline = 0\n",
+            "version = 4\nlayers = [\"store\", \"cli\"]\n[[strangler]]\nsymbol = \"LegacyToken\"\npath = \"src\"\nbaseline = 0\n",
         )
         .unwrap();
         run_git(root, &["add", "."]);

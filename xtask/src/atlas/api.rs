@@ -24,7 +24,7 @@ Reports declared and effective visibility for boundary-visible Rust items.
   --module <name>  drill into one module from the module table
   --since <ref>    add public-item delta against a git revision
   --no-index       omit exact-reference fields
-  --json           versioned JSON agent contract (v3)";
+  --json           versioned JSON agent contract (v4)";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {

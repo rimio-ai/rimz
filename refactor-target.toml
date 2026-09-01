@@ -1,4 +1,4 @@
-version = 3
+version = 4
 layers = ["build_id", "utils", "tui", "ids", "lane", "sock", "update", "testkit", "workspace", "transcript", "agent_activity", "pane", "proc", "store", "config", "trust", "theme", "agents", "daemon_view", "message", "mux", "remote", "observability", "diag", "harness", "forge", "worktree", "child_process", "room", "remote_control", "sidebar", "sidebar_pane", "osc", "web", "reload", "uninstall", "disk_usage", "daemon_content", "channel", "bin", "cli"]
 
 [[module]]
