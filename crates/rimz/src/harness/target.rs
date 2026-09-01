@@ -1174,6 +1174,9 @@ pub fn align_submitted_prompt<'a>(
     let anchor = match records[0].sender {
         MessageSender::Agent { .. } => "Type: AGENT_MESSAGE\nFrom: @",
         MessageSender::Subagent { .. } => "Type: SUBAGENT_REPORT\nFrom: @",
+        MessageSender::Harness {
+            notice: HarnessNotice::SubagentReport,
+        } => "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n",
         MessageSender::Human => "Type: USER_MESSAGE\nFrom: @user\nContent:\n",
         MessageSender::System => {
             let (segments, trailing) = align_submitted_prompt_from(prompt, records)?;
