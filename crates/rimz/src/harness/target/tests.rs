@@ -685,9 +685,10 @@ fn align_submitted_prompt_consumes_human_header() {
     );
     let prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nship it";
 
-    let aligned = align_submitted_prompt(prompt, &[&record]).expect("aligned prompt");
-    assert!(aligned.is_exact());
-    assert_eq!(aligned.segments, vec![prompt]);
+    let (leading, segments, trailing) =
+        align_submitted_prompt(prompt, &[&record]).expect("aligned prompt");
+    assert_eq!((leading, trailing), (None, None));
+    assert_eq!(segments, vec![prompt]);
 }
 
 #[test]
@@ -706,9 +707,10 @@ fn align_submitted_prompt_consumes_subagent_header() {
     });
     let prompt = "Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nship it";
 
-    let aligned = align_submitted_prompt(prompt, &[&record]).expect("aligned prompt");
-    assert!(aligned.is_exact());
-    assert_eq!(aligned.segments, vec![prompt]);
+    let (leading, segments, trailing) =
+        align_submitted_prompt(prompt, &[&record]).expect("aligned prompt");
+    assert_eq!((leading, trailing), (None, None));
+    assert_eq!(segments, vec![prompt]);
 }
 
 #[test]
@@ -734,15 +736,16 @@ fn align_submitted_prompt_separates_stray_composer_text() {
         "decoy Type: USER_MESSAGE\nFrom: @user\nContent:\nnot it before{first_prompt}\n\n{second_prompt}after"
     );
 
-    let aligned =
+    let (leading, segments, trailing) =
         align_submitted_prompt(&prompt, &[&first, &second]).expect("embedded batch aligned");
     assert_eq!(
-        aligned.leading,
+        leading,
         Some("decoy Type: USER_MESSAGE\nFrom: @user\nContent:\nnot it before")
     );
-    assert_eq!(aligned.segments, vec![first_prompt, second_prompt]);
-    assert_eq!(aligned.trailing, Some("after"));
-    assert_eq!(aligned.stray_bytes(), (59, 5));
+    assert_eq!(segments, vec![first_prompt, second_prompt]);
+    assert_eq!(trailing, Some("after"));
+    assert_eq!(leading.map_or(0, str::len), 59);
+    assert_eq!(trailing.map_or(0, str::len), 5);
 }
 
 #[test]

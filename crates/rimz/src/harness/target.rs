@@ -1156,27 +1156,6 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
     }
 }
 
-/// One submitted pane paste aligned with the records written as its batch.
-#[derive(Debug, PartialEq, Eq)]
-pub struct SubmittedAlignment<'a> {
-    pub leading: Option<&'a str>,
-    pub segments: Vec<&'a str>,
-    pub trailing: Option<&'a str>,
-}
-
-impl SubmittedAlignment<'_> {
-    pub fn is_exact(&self) -> bool {
-        self.leading.is_none() && self.trailing.is_none()
-    }
-
-    pub fn stray_bytes(&self) -> (usize, usize) {
-        (
-            self.leading.map_or(0, str::len),
-            self.trailing.map_or(0, str::len),
-        )
-    }
-}
-
 /// Align one submitted pane paste with the records written as its batch.
 ///
 /// Record text supplies the otherwise ambiguous boundaries between adjacent
@@ -1187,7 +1166,7 @@ impl SubmittedAlignment<'_> {
 pub fn align_submitted_prompt<'a>(
     prompt: &'a str,
     records: &[&MessageRecord],
-) -> Option<SubmittedAlignment<'a>> {
+) -> Option<(Option<&'a str>, Vec<&'a str>, Option<&'a str>)> {
     if records.is_empty() {
         return None;
     }
@@ -1213,11 +1192,11 @@ pub fn align_submitted_prompt<'a>(
         else {
             continue;
         };
-        return Some(SubmittedAlignment {
-            leading: nonempty_trimmed(&prompt[..start]),
+        return Some((
+            nonempty_trimmed(&prompt[..start]),
             segments,
-            trailing: nonempty_trimmed(trailing),
-        });
+            nonempty_trimmed(trailing),
+        ));
     }
     None
 }
