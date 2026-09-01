@@ -1153,7 +1153,7 @@ fn tmux_settled_subagent_reports_to_parent() {
         String::from_utf8_lossy(&first.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&first.stderr).contains("read results with"),
+        String::from_utf8_lossy(&first.stderr).contains("reports back as `@rimz`"),
         "background launch should explain callback delivery: {}",
         String::from_utf8_lossy(&first.stderr)
     );
