@@ -1176,15 +1176,8 @@ pub fn align_submitted_prompt<'a>(
         MessageSender::Subagent { .. } => "Type: SUBAGENT_REPORT\nFrom: @",
         MessageSender::Human => "Type: USER_MESSAGE\nFrom: @user\nContent:\n",
         MessageSender::System => {
-            let text = if records.len() == 1 {
-                records[0].text.trim()
-            } else {
-                records[0].text.trim_start()
-            };
-            if text.is_empty() {
-                return None;
-            }
-            text
+            let (segments, trailing) = align_submitted_prompt_from(prompt, records)?;
+            return trailing.is_empty().then_some((None, segments, None));
         }
     };
     for (start, _) in prompt.match_indices(anchor) {
