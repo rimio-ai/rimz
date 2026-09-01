@@ -611,6 +611,10 @@ pub struct SidebarSubAgent {
     /// petname. A provider-native child falls back to a short degraded id when
     /// no type was reported.
     pub name: String,
+    /// Minted address name for a pane-backed launched child. Provider-native
+    /// children have no address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub petname: Option<String>,
     /// Whether this is a provider-native paneless child. The neutral marker
     /// survives publication so consumers can lift the child's attention state.
     #[serde(default, skip_serializing_if = "is_false")]

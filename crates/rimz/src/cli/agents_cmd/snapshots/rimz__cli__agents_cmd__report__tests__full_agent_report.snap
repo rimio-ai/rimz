@@ -72,7 +72,7 @@ expression: entry
   "sub_agents": [
     {
       "id": "child",
-      "name": "review",
+      "name": "swift-otter",
       "status": "running",
       "phase": "reasoning",
       "model": "sonnet@high",

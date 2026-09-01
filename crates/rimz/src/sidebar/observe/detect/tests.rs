@@ -324,6 +324,7 @@ fn provider_child_attention_matches_declared_status_count() {
         .push(SidebarSubAgent {
             id: "child".to_owned(),
             name: "Explore".to_owned(),
+            petname: None,
             provider_native: true,
             status: AgentStatus::Waiting,
             phase: TurnPhase::Idle,
