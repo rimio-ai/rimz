@@ -188,6 +188,10 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
         "the child line names its profile:\n{rendered}"
     );
     assert!(
+        !rendered.contains("helper"),
+        "the child card must not render its petname:\n{rendered}"
+    );
+    assert!(
         rendered
             .lines()
             .any(|line| line.contains("explorer — map sidebar") && line.contains("$0.42")),

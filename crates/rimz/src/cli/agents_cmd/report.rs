@@ -367,7 +367,10 @@ pub(super) fn build_entry(
                     .iter()
                     .map(|sub_agent| SubAgentReport {
                         id: sub_agent.id.clone(),
-                        name: sub_agent.name.clone(),
+                        name: sub_agent
+                            .petname
+                            .clone()
+                            .unwrap_or_else(|| sub_agent.name.clone()),
                         status: sub_agent.status,
                         phase: sub_agent.phase,
                         model: model_label(sub_agent.model.as_deref(), sub_agent.effort.as_deref()),
@@ -759,12 +762,13 @@ mod tests {
                 estimated_active_secs: Some(754),
                 sub_agents: vec![SidebarSubAgent {
                     id: "child".to_owned(),
-                    name: "review".to_owned(),
-                    provider_native: true,
+                    name: "explorer".to_owned(),
+                    petname: Some("swift-otter".to_owned()),
+                    provider_native: false,
                     status: AgentStatus::Running,
                     phase: TurnPhase::Reasoning,
                     task: None,
-                    profile: None,
+                    profile: Some("explorer".to_owned()),
                     model: Some("sonnet".to_owned()),
                     effort: Some("high".to_owned()),
                     description: None,

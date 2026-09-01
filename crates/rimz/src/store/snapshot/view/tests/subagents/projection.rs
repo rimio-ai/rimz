@@ -49,6 +49,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     named.task = Some("research/explore_hooks".to_owned());
     let sub = sub_agent_from_state(&named, now);
     assert_eq!(sub.name, "Atlas");
+    assert_eq!(sub.petname, None);
     assert_eq!(sub.task.as_deref(), Some("research/explore_hooks"));
 }
 
@@ -73,6 +74,7 @@ fn launched_child_projects_profile_cost_and_lifetime_delegated_spend() {
 
     let projected = sub_agent_from_state(&child, epoch());
     assert_eq!(projected.name, "explorer");
+    assert_eq!(projected.petname.as_deref(), Some("helper"));
     assert_eq!(projected.profile.as_deref(), Some("explorer"));
     assert_eq!(projected.cost_usd, Some(0.42));
 
