@@ -11,7 +11,7 @@ use crate::agents::lifecycle::{self, Transition};
 use crate::agents::state::{append_recent_prompt, usable_description};
 use crate::agents::{AgentLifecycleObservation, LaunchParams};
 use crate::agents::{AgentState, AgentStatus};
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::message::{MessageBody, MessageStatus};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
@@ -26,7 +26,7 @@ pub(super) use identity::backfill_agent_identities;
 use identity::{CardIdentity, CardIdentityAllocator, usable_name};
 
 type AgentKey = (AgentKind, AgentSessionId);
-type LaunchInstanceKey = (AgentKind, PaneId, u32);
+type LaunchInstanceKey = (AgentKind, crate::ids::PaneId, u32);
 
 #[derive(Default)]
 struct LaunchIdentityIndex {
