@@ -31,7 +31,7 @@ enum SubagentsSubcmd {
     Launch(Box<LaunchArgs>),
     /// Launch children from a JSON task list.
     Fanout(FanoutArgs),
-    /// List this agent's children.
+    /// List supervised child agents.
     #[command(alias = "ls")]
     List {
         /// Emit JSON.
@@ -180,7 +180,7 @@ struct SubagentLaunchArgs {
 }
 
 pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
-    if command_is_agent_only(args.command.as_ref()) {
+    if command_is_agent_only(&args) {
         require_agent_caller(crate::cli::send::agent_caller())?;
     }
     match args.command {
@@ -204,17 +204,16 @@ pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
     }
 }
 
-fn command_is_agent_only(command: Option<&SubagentsSubcmd>) -> bool {
-    match command {
-        Some(SubagentsSubcmd::Profiles { .. }) => false,
+fn command_is_agent_only(args: &SubagentsArgs) -> bool {
+    match args.command.as_ref() {
+        Some(SubagentsSubcmd::Profiles { .. } | SubagentsSubcmd::List { .. }) => false,
         Some(
             SubagentsSubcmd::Launch(_)
             | SubagentsSubcmd::Fanout(_)
-            | SubagentsSubcmd::List { .. }
             | SubagentsSubcmd::Wait { .. }
             | SubagentsSubcmd::Stop { .. },
-        )
-        | None => true,
+        ) => true,
+        None => args.launch.profile.is_some(),
     }
 }
 
@@ -223,7 +222,7 @@ fn require_agent_caller(agent_caller: bool) -> Result<()> {
         return Ok(());
     }
     bail!(
-        "`rimz subagents` is only available inside a RimZ-launched agent; from a user shell use `rimz agents <spec>`, `rimz agents list/wait/stop`, or `rimz teams`"
+        "launching, joining, and stopping subagents is only available inside a RimZ-launched agent; from a user shell, `rimz subagents list` inspects the current channel's subagents, and `rimz agents <spec>`, `rimz agents list/wait/stop`, or `rimz teams` drive agents directly"
     )
 }
 
@@ -503,6 +502,9 @@ fn caller_and_children(agents: &[AgentState]) -> Result<(&AgentState, Vec<&Agent
 struct ChildReport {
     name: String,
     handle: String,
+    parent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: Option<String>,
     kind: String,
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -513,18 +515,84 @@ struct ChildReport {
     run_status: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+enum ListScope {
+    Caller,
+    Channel,
+}
+
+fn list_scope() -> ListScope {
+    if crate::cli::send::agent_caller() {
+        ListScope::Caller
+    } else {
+        ListScope::Channel
+    }
+}
+
 fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let audit = ctx
         .store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading agent history")?;
-    let (_, children) = caller_and_children(&audit.agents)?;
+    let scope = list_scope();
+    let children = match scope {
+        ListScope::Caller => caller_and_children(&audit.agents)?.1,
+        ListScope::Channel => {
+            rimz::harness::target::launched_children_in_channel(&audit.agents, ctx.channel())
+        }
+    };
     let runs = rimz::harness::run::list(ctx.store.paths())?;
-    let reports = children
-        .into_iter()
+    let reports = child_reports(&audit.agents, &children, &runs);
+    if json {
+        return render::json_pretty(&reports);
+    }
+    if reports.is_empty() {
+        return Ok(());
+    }
+    let headers = match scope {
+        ListScope::Caller => vec!["SUBAGENT", "KIND", "STATUS", "RUN"],
+        ListScope::Channel => vec!["SUBAGENT", "PARENT", "CHANNEL", "KIND", "STATUS", "RUN"],
+    };
+    let mut table = render::Table::new(headers).max_width(render::terminal_columns(120));
+    for child in reports {
+        let detail = child
+            .description
+            .map(|line| render::cell(line).fg(render::palette::muted()));
+        let row = match scope {
+            ListScope::Caller => vec![
+                render::cell(child.handle),
+                render::cell(child.kind),
+                render::cell(child.status),
+                render::cell(child.run_status.unwrap_or_else(|| "-".to_owned())).dash(),
+            ],
+            ListScope::Channel => vec![
+                render::cell(child.handle),
+                render::cell(child.parent),
+                render::cell(child.channel.unwrap_or_else(|| "-".to_owned())).dash(),
+                render::cell(child.kind),
+                render::cell(child.status),
+                render::cell(child.run_status.unwrap_or_else(|| "-".to_owned())).dash(),
+            ],
+        };
+        table.card(row, detail);
+    }
+    table.render(&mut render::out()).map_err(Into::into)
+}
+
+fn child_reports(
+    agents: &[AgentState],
+    children: &[&AgentState],
+    runs: &[rimz::harness::run::RunRecord],
+) -> Vec<ChildReport> {
+    let peers = agents
+        .iter()
+        .filter(|agent| !agent.is_provider_subagent())
+        .collect::<Vec<_>>();
+    children
+        .iter()
         .map(|child| {
-            let run = newest_run_for_child(&runs, child);
+            let run = newest_run_for_child(runs, child);
             let name = child
                 .name
                 .clone()
@@ -532,6 +600,20 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
             ChildReport {
                 handle: format!("@{name}"),
                 name,
+                parent: rimz::harness::target::launched_parent(agents, child)
+                    .map(|parent| rimz::harness::target::agent_handle(parent, &peers, false))
+                    .unwrap_or_else(|| {
+                        format!(
+                            "@{}",
+                            child
+                                .parent_agent_id
+                                .as_ref()
+                                // `children` comes from selectors whose launched-child
+                                // predicate requires a parent id.
+                                .expect("launched children have a parent")
+                        )
+                    }),
+                channel: rimz::harness::target::agent_channel(child),
                 kind: child.kind.to_string(),
                 status: child.status.as_str().to_owned(),
                 description: child.activity_line(),
@@ -539,30 +621,7 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
                 run_status: run.map(|run| run.status.as_str().to_owned()),
             }
         })
-        .collect::<Vec<_>>();
-    if json {
-        return render::json_pretty(&reports);
-    }
-    if reports.is_empty() {
-        return Ok(());
-    }
-    let mut table = render::Table::new(["SUBAGENT", "KIND", "STATUS", "RUN"])
-        .max_width(render::terminal_columns(120));
-    for child in reports {
-        let detail = child
-            .description
-            .map(|line| render::cell(line).fg(render::palette::muted()));
-        table.card(
-            [
-                render::cell(child.handle),
-                render::cell(child.kind),
-                render::cell(child.status),
-                render::cell(child.run_status.unwrap_or_else(|| "-".to_owned())).dash(),
-            ],
-            detail,
-        );
-    }
-    table.render(&mut render::out()).map_err(Into::into)
+        .collect()
 }
 
 fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {

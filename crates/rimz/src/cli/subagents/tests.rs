@@ -438,23 +438,30 @@ fn launch_requires_parent_prompt() {
 }
 
 #[test]
-fn profiles_are_the_only_user_shell_subcommand() {
+fn list_and_profiles_are_the_user_shell_subcommands() {
     let error = require_agent_caller(false).expect_err("human caller");
+    assert!(error.to_string().contains("rimz subagents list"));
     assert!(error.to_string().contains("rimz agents <spec>"));
 
     for argv in [
         &["rimz", "launch", "codex", "review"][..],
         &["rimz", "fanout"],
-        &["rimz", "list"],
         &["rimz", "wait"],
         &["rimz", "stop", "--all"],
+    ] {
+        let args = parse(argv);
+        assert!(command_is_agent_only(&args), "{argv:?}");
+    }
+    for argv in [
+        &["rimz", "list"][..],
+        &["rimz", "list", "--json"],
         &["rimz"],
     ] {
         let args = parse(argv);
-        assert!(command_is_agent_only(args.command.as_ref()), "{argv:?}");
+        assert!(!command_is_agent_only(&args), "{argv:?}");
     }
     let args = parse(&["rimz", "profiles", "--path"]);
-    assert!(!command_is_agent_only(args.command.as_ref()));
+    assert!(!command_is_agent_only(&args));
     assert!(matches!(
         args.command,
         Some(SubagentsSubcmd::Profiles {
@@ -466,7 +473,7 @@ fn profiles_are_the_only_user_shell_subcommand() {
         let args = parse(&["rimz", command]);
         assert!(args.command.is_none());
         assert_eq!(args.launch.profile.as_deref(), Some(command));
-        assert!(command_is_agent_only(args.command.as_ref()));
+        assert!(command_is_agent_only(&args));
     }
 }
 
@@ -512,6 +519,80 @@ fn default_wait_keeps_finished_supervised_children() {
         wait_references(&children, &runs, &[], true).expect("default any"),
         vec!["bright-owl"]
     );
+}
+
+#[test]
+fn child_reports_name_each_parent_and_channel() {
+    let mut planner =
+        rimz::agents::AgentState::stub("claude", "planner", rimz::agents::AgentStatus::Idle);
+    planner.name = Some("planner".to_owned());
+    planner.name_explicit = true;
+    planner.channel = Some("feat-x".to_owned());
+    let mut coder =
+        rimz::agents::AgentState::stub("codex", "coder", rimz::agents::AgentStatus::Idle);
+    coder.name = Some("coder".to_owned());
+    coder.name_explicit = true;
+    coder.channel = Some("feat-x".to_owned());
+    let mut first =
+        rimz::agents::AgentState::stub("codex", "child-a", rimz::agents::AgentStatus::Success);
+    first.name = Some("swift-otter".to_owned());
+    first.parent_agent_id = Some(planner.agent_id.clone());
+    first.parent_agent_kind = Some(planner.kind.clone());
+    first.launch_depth = Some(1);
+    first.channel = Some("feat-x".to_owned());
+    let mut second =
+        rimz::agents::AgentState::stub("claude", "child-b", rimz::agents::AgentStatus::Running);
+    second.name = Some("bright-owl".to_owned());
+    second.parent_agent_id = Some(coder.agent_id.clone());
+    second.parent_agent_kind = Some(coder.kind.clone());
+    second.launch_depth = Some(1);
+    second.channel = Some("feat-x".to_owned());
+    let mut orphan = second.clone();
+    orphan.agent_id = "child-orphan".into();
+    orphan.parent_agent_id = Some("missing-parent".into());
+    let mut run = rimz::harness::run::RunRecord::new(
+        rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-list")),
+        first.kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "review".to_owned(),
+        PathBuf::from("/tmp/subagent-list"),
+    );
+    run.agent_id = Some(first.agent_id.clone());
+    run.status = rimz::harness::run::RunStatus::Completed;
+    let agents = [planner, coder, first, second, orphan];
+    let children = [&agents[2], &agents[3], &agents[4]];
+
+    let reports = child_reports(&agents, &children, &[run]);
+
+    assert_eq!(reports[0].parent, "@planner");
+    assert_eq!(reports[1].parent, "@coder");
+    assert_eq!(reports[2].parent, "@missing-parent");
+    assert_eq!(reports[0].channel.as_deref(), Some("feat-x"));
+    assert_eq!(reports[0].run_status.as_deref(), Some("completed"));
+    assert!(reports[1].run_status.is_none());
+    let value = serde_json::to_value(&reports[0]).expect("serialize child report");
+    assert_eq!(value["parent"], "@planner");
+    assert_eq!(value["channel"], "feat-x");
+}
+
+#[test]
+fn child_report_json_includes_parent_and_omits_an_unknown_channel() {
+    let report = ChildReport {
+        name: "swift-otter".to_owned(),
+        handle: "@swift-otter".to_owned(),
+        parent: "@planner".to_owned(),
+        channel: None,
+        kind: "codex".to_owned(),
+        status: "running".to_owned(),
+        description: None,
+        run_id: None,
+        run_status: None,
+    };
+
+    let value = serde_json::to_value(report).expect("serialize child report");
+
+    assert_eq!(value["parent"], "@planner");
+    assert!(value.get("channel").is_none());
 }
 
 #[test]
