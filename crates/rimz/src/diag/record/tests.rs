@@ -422,6 +422,10 @@ fn orphan_reap_events_keep_their_evidence_on_the_wire() {
         orphaned_at_ms: 900,
         error: "pane close failed".to_owned(),
     };
+    let digest = DiagEvent::SubagentDigestBackstopped {
+        parent_agent_id: AgentSessionId::from("parent"),
+        message_id: MessageId::new(),
+    };
 
     let reaped_json = serde_json::to_value(&reaped).expect("encode orphan reap");
     assert_eq!(reaped_json["kind"], "sidebar_orphan_reaped");
@@ -436,6 +440,13 @@ fn orphan_reap_events_keep_their_evidence_on_the_wire() {
     assert_eq!(
         serde_json::from_value::<DiagEvent>(subagent_json).expect("decode subagent orphan reap"),
         subagent
+    );
+    let digest_json = serde_json::to_value(&digest).expect("encode digest backstop");
+    assert_eq!(digest_json["kind"], "subagent_digest_backstopped");
+    assert_eq!(digest.severity(), DiagSeverity::Info);
+    assert_eq!(
+        serde_json::from_value::<DiagEvent>(digest_json).expect("decode digest backstop"),
+        digest
     );
     let failure_json =
         serde_json::to_value(&subagent_failure).expect("encode subagent orphan repair failure");
