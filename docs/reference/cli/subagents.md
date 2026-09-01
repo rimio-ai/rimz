@@ -135,7 +135,7 @@ rimz subagents stop --all
 
 Bare `rimz subagents` is the same read-only operation as `list`. Inside an agent it lists that agent's own RimZ-launched children, including completed children retained in durable history. From a user shell it lists every RimZ-launched child in the current channel; when the shell has no current channel, it lists children across all channels. Provider-native subagents are not part of either list.
 
-Each row reports the child's name, parent, and channel alongside its live status, newest supervised-run outcome, and current one-line description; JSON exposes the same identity and scope. A plain user shell in the project directory cannot derive an in-place team's stamped `<directory>/<team>` lane because that lane is carried by the launched panes rather than the shared directory. Such a shell has no current channel, so `list` deliberately broadens to all channels and the reported channel distinguishes the rows.
+In a user shell, each human-readable row names the child's parent and channel alongside its live status, newest supervised-run outcome, and current one-line description. The agent-scoped table keeps its compact four columns; JSON includes `parent` and `channel` in both scopes. A plain user shell in the project directory cannot derive an in-place team's stamped `<directory>/<team>` lane because that lane is carried by the launched panes rather than the shared directory. Such a shell has no current channel, so `list` deliberately broadens to all channels and the reported channel distinguishes the rows.
 
 `stop` remains agent-only and accepts only live children of that caller.
 
