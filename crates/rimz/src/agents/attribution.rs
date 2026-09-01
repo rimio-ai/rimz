@@ -332,7 +332,7 @@ fn fold<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
     slots
 }
 
-/// Fold pane-backed children into the durable seat that launched them.
+/// Fold each pane-backed child record into the durable seat that launched it.
 /// Orphaned children retain their own slot for `slot_groups` consumers;
 /// attribution drops slots that contain no parent identity.
 fn fold_seats<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
@@ -347,15 +347,13 @@ fn fold_seats<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState
         .filter(|agent| agent.is_launched_child())
         .collect::<Vec<_>>();
     let mut slots = fold(&parents).into_iter().collect::<HashMap<_, _>>();
-    for (child_slot, child_records) in fold(&children) {
-        let parent = child_records.iter().find_map(|child| {
-            parents
-                .iter()
-                .copied()
-                .find(|parent| is_launched_child_of(child, parent))
-        });
-        let key = parent.map(slot).unwrap_or(child_slot);
-        slots.entry(key).or_default().extend(child_records);
+    for child in children {
+        let parent = parents
+            .iter()
+            .copied()
+            .find(|parent| is_launched_child_of(child, parent));
+        let key = parent.map(slot).unwrap_or_else(|| slot(child));
+        slots.entry(key).or_default().push(child);
     }
     let mut slots = slots.into_iter().collect::<Vec<_>>();
     for (_, records) in &mut slots {
@@ -408,7 +406,16 @@ fn member(
             .collect::<Vec<_>>(),
         prices,
     );
-    let launched_effort = fold(&seat.children)
+    let mut child_slots = fold(&seat.children);
+    child_slots.sort_by_key(|(_, records)| {
+        let child = newest(records).expect("folded child slot has records");
+        (
+            child.registered_at,
+            child.kind.clone(),
+            child.agent_id.clone(),
+        )
+    });
+    let launched_effort = child_slots
         .into_iter()
         .map(|(_, child_records)| {
             let child_effort = spending::slot_effort(
