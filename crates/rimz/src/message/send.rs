@@ -236,12 +236,13 @@ fn compact_message_for_target<'a>(
     if agent.compacting_since.is_some() {
         return None;
     }
+    let config = crate::config::MachineConfig::load_lenient();
     let command = crate::agents::spec_by_kind(target.kind.as_str())?
         .launch
-        .compact_command()?;
+        .compact_command(config.harness.compact_instruction())?;
     let occupied = agent.occupied_context_tokens();
     if let Some(used) = occupied
-        && already_compacted_at(store, agent, command, used)
+        && already_compacted_at(store, agent, used)
     {
         return None;
     }
@@ -264,20 +265,19 @@ fn compact_message_for_target<'a>(
             bound,
         },
         prompt.channel.as_deref(),
-        command,
+        &command,
         prompt.address.as_deref(),
     );
     record.compacted_context_tokens = occupied;
     Some((record, threshold, agent))
 }
 
-pub fn already_compacted_at(store: &Store, agent: &AgentState, command: &str, used: u64) -> bool {
+pub fn already_compacted_at(store: &Store, agent: &AgentState, used: u64) -> bool {
     let live = store
         .list_messages()
         .map(|messages| {
             messages.iter().any(|message| {
                 message.body == MessageBody::Command
-                    && message.text == command
                     && message.compacted_context_tokens == Some(used)
                     && message.same_agent_card(agent)
             })
