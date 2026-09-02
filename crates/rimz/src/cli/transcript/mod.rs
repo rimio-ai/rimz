@@ -148,7 +148,7 @@ mod thread;
 use chat::{format_marker_when, render_entry_for_log_entry};
 use scope::{
     build_identities, compare_optional_timestamps, dedup_asks, entry_in_scope, entry_matches_focus,
-    live_boundary, live_root_agents, resolve_scope,
+    live_agents, live_boundary, resolve_scope,
 };
 use thread::entries_for_view;
 #[cfg(test)]
@@ -270,8 +270,12 @@ fn chat_view_with_mode(
         });
     }
     let identities = build_identities(&entries);
-    let live_agents = live_root_agents(workspace);
-    let live_root_keys = live_agents.iter().map(|agent| agent.key.clone()).collect();
+    let live_agents = live_agents(workspace);
+    let live_root_keys = live_agents
+        .iter()
+        .filter(|agent| agent.root)
+        .map(|agent| agent.key.clone())
+        .collect();
     let scope = resolve_scope(
         target.as_deref(),
         worktree,

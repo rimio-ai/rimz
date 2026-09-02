@@ -47,7 +47,7 @@ fn conversation_input<'a>(
         assistant_message,
         questions,
         delivered,
-        run: None,
+        run_id: None,
     }
 }
 
@@ -55,6 +55,7 @@ fn append_launched_agent(
     store: &Store,
     kind: &str,
     agent_id: &str,
+    launch_id: Option<&str>,
     name: &str,
     launch: rimz::agents::LaunchParams,
 ) {
@@ -66,7 +67,7 @@ fn append_launched_agent(
             &kind,
             rimz::store::event::AgentLaunchPayload {
                 agent_id: rimz::ids::AgentSessionId::from(agent_id),
-                launch_id: None,
+                launch_id: launch_id.map(rimz::ids::AgentSessionId::from),
                 agent_name: name.to_owned(),
                 agent_name_explicit: true,
                 launch,
@@ -359,7 +360,8 @@ fn launched_child_brief_is_attributed_to_parent() {
     append_launched_agent(
         &store,
         "codex",
-        "parent-session",
+        "provider-parent-session",
+        Some("parent-launch-session"),
         "steady-parent",
         rimz::agents::LaunchParams {
             role: Some("planner".to_owned()),
@@ -371,10 +373,11 @@ fn launched_child_brief_is_attributed_to_parent() {
         &store,
         "claude",
         "child-session",
+        None,
         "swift-child",
         rimz::agents::LaunchParams {
-            parent_agent_id: Some(rimz::ids::AgentSessionId::from("parent-session")),
-            parent_agent_kind: Some(rimz::ids::AgentKind::new_unchecked("codex")),
+            parent_agent_id: Some(rimz::ids::AgentSessionId::from("parent-launch-session")),
+            parent_agent_kind: None,
             launch_depth: Some(1),
             channel: Some("chat".to_owned()),
             ..Default::default()
@@ -389,6 +392,7 @@ fn launched_child_brief_is_attributed_to_parent() {
         workspace.worktree_root.clone(),
     );
     run.subagent = true;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
     let mut started = recorded(LifecycleSignal::TurnStarted);
     started.observation.agent_id = Some(rimz::ids::AgentSessionId::from("child-session"));
     started.observation.prompt = Some("  inspect the infra  ".to_owned());
@@ -399,7 +403,7 @@ fn launched_child_brief_is_attributed_to_parent() {
         rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
         ConversationInput {
-            run: Some(&run),
+            run_id: Some(&run.run_id),
             ..conversation_input(None, &[], &[])
         },
     )
@@ -413,7 +417,7 @@ fn launched_child_brief_is_attributed_to_parent() {
         rimz::agents::definition_by_kind("claude").unwrap(),
         &later,
         ConversationInput {
-            run: Some(&run),
+            run_id: Some(&run.run_id),
             ..conversation_input(None, &[], &[])
         },
     )
@@ -425,20 +429,14 @@ fn launched_child_brief_is_attributed_to_parent() {
     assert_eq!(entries[0].from.as_deref(), Some("@planner"));
     assert_eq!(
         entries[0].parent_agent_id.as_deref(),
-        Some("parent-session")
+        Some("parent-launch-session")
     );
-    assert_eq!(
-        entries[0]
-            .parent_agent_kind
-            .as_ref()
-            .map(|kind| kind.as_str()),
-        Some("codex")
-    );
+    assert_eq!(entries[0].parent_agent_kind, None);
     assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Prompt);
     assert_eq!(entries[1].from, None);
     assert_eq!(
         entries[1].parent_agent_id.as_deref(),
-        Some("parent-session")
+        Some("parent-launch-session")
     );
 }
 
