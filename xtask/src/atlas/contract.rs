@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use super::inspect;
+use super::modules::module_is_within;
 use super::syntax::FileSyntax;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -20,6 +21,10 @@ pub(super) struct PassContract {
     pub(super) esc: Vec<EscExpectation>,
     #[serde(default)]
     pub(super) delete: Vec<DeleteExpectation>,
+    #[serde(default)]
+    pub(super) rehome: Vec<RehomeExpectation>,
+    #[serde(default)]
+    pub(super) dependency: Vec<DependencyExpectation>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -41,6 +46,21 @@ pub(super) struct EscExpectation {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) struct DeleteExpectation {
     pub(super) item: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub(super) struct RehomeExpectation {
+    pub(super) item: String,
+    pub(super) to: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub(super) struct DependencyExpectation {
+    pub(super) from: String,
+    pub(super) to: String,
+    pub(super) max_sites: usize,
 }
 
 pub(super) fn read_base(path: &Path) -> Result<String> {
@@ -91,27 +111,28 @@ fn validate(
         )?;
     }
     for expectation in &contract.delete {
-        let (module, name) = delete_item_parts(&expectation.item)?;
-        let definitions = base_syntax_files
+        validate_base_item(
+            base_syntax_files,
+            "delete",
+            &expectation.item,
+            &contract.base,
+        )?;
+    }
+    for expectation in &contract.rehome {
+        validate_base_item(
+            base_syntax_files,
+            "rehome",
+            &expectation.item,
+            &contract.base,
+        )?;
+        if !base_syntax_files
             .iter()
-            .flat_map(|file| {
-                file.pub_items
-                    .iter()
-                    .filter(move |item| item.module == module && item.name == name)
-            })
-            .count();
-        if definitions == 0 {
+            .chain(current_syntax_files)
+            .any(|file| module_is_within(&file.module_path, &expectation.to))
+        {
             bail!(
-                "pass contract delete item `{}` is not defined at base {}",
-                expectation.item,
-                contract.base
-            );
-        }
-        if definitions > 1 {
-            bail!(
-                "pass contract delete item `{}` is ambiguous at base {} ({definitions} definitions)",
-                expectation.item,
-                contract.base
+                "pass contract rehome.to `{}` does not match a module at base or current",
+                expectation.to
             );
         }
     }
@@ -161,19 +182,63 @@ fn validate_schema(contract: &PassContract) -> Result<()> {
         }
     }
     for expectation in &contract.delete {
-        delete_item_parts(&expectation.item)?;
+        item_parts("delete", &expectation.item)?;
+    }
+    for expectation in &contract.rehome {
+        item_parts("rehome", &expectation.item)?;
+        validate_module_path("rehome.to", &expectation.to)?;
+    }
+    for expectation in &contract.dependency {
+        validate_module_path("dependency.from", &expectation.from)?;
+        validate_module_path("dependency.to", &expectation.to)?;
     }
     Ok(())
 }
 
-fn delete_item_parts(key: &str) -> Result<(&str, &str)> {
+fn item_parts<'a>(kind: &str, key: &'a str) -> Result<(&'a str, &'a str)> {
     let Some((module, name)) = key.rsplit_once("::") else {
-        bail!("pass contract delete item `{key}` must use `module::Name`");
+        bail!("pass contract {kind} item `{key}` must use `module::Name`");
     };
     if module.is_empty() || name.is_empty() {
-        bail!("pass contract delete item `{key}` must use `module::Name`");
+        bail!("pass contract {kind} item `{key}` must use `module::Name`");
     }
     Ok((module, name))
+}
+
+fn validate_base_item(files: &[FileSyntax], kind: &str, key: &str, base: &str) -> Result<()> {
+    let (module, name) = item_parts(kind, key)?;
+    let definitions = files
+        .iter()
+        .flat_map(|file| {
+            file.pub_items
+                .iter()
+                .filter(move |item| item.module == module && item.name == name)
+        })
+        .count();
+    if definitions == 0 {
+        bail!("pass contract {kind} item `{key}` is not defined at base {base}");
+    }
+    if definitions > 1 {
+        bail!(
+            "pass contract {kind} item `{key}` is ambiguous at base {base} ({definitions} definitions)"
+        );
+    }
+    Ok(())
+}
+
+fn validate_module_path(field: &str, module: &str) -> Result<()> {
+    let valid = !module.is_empty()
+        && module.split("::").all(|part| {
+            let mut chars = part.chars();
+            chars
+                .next()
+                .is_some_and(|first| first == '_' || first.is_alphabetic())
+                && chars.all(|character| character == '_' || character.is_alphanumeric())
+        });
+    if !valid {
+        bail!("pass contract {field} `{module}` must be a non-empty `::`-separated module path");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -207,6 +272,8 @@ mod tests {
             }],
             esc: Vec::new(),
             delete: Vec::new(),
+            rehome: Vec::new(),
+            dependency: Vec::new(),
         }
     }
 
@@ -305,6 +372,8 @@ max-production-sloc-delta = -1
         assert_eq!(loaded.version, 1);
         assert!(loaded.esc.is_empty());
         assert!(loaded.delete.is_empty());
+        assert!(loaded.rehome.is_empty());
+        assert!(loaded.dependency.is_empty());
     }
 
     #[test]
@@ -329,5 +398,92 @@ item = "provider::NEVER_DEFINED"
         assert!(
             format!("{error:#}").contains("provider::NEVER_DEFINED` is not defined at base HEAD~3")
         );
+    }
+
+    #[test]
+    fn v2_contract_loads_rehome_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let base_sources = [Source::new(
+            "src/message.rs",
+            "pub struct Thing;\npub fn send() {}",
+        )];
+        let current_sources = [
+            Source::new("src/message.rs", "pub fn send() {}"),
+            Source::new("src/store.rs", "pub struct Thing;"),
+        ];
+        let base = super::super::syntax::analyze_sources(&base_sources, &BTreeSet::new());
+        let current = super::super::syntax::analyze_sources(&current_sources, &BTreeSet::new());
+        let path = root.path().join("pass.toml");
+        fs::write(
+            &path,
+            r#"version = 2
+base = "main"
+paths = ["src"]
+max-production-sloc-delta = -1
+
+[[rehome]]
+item = "message::Thing"
+to = "store"
+"#,
+        )
+        .unwrap();
+
+        let loaded = load(root.path(), &path, &current.files, &base.files).unwrap();
+
+        assert_eq!(loaded.rehome.len(), 1);
+        assert_eq!(loaded.rehome[0].item, "message::Thing");
+        assert_eq!(loaded.rehome[0].to, "store");
+    }
+
+    #[test]
+    fn rehome_row_for_item_absent_at_base_is_rejected_at_load() {
+        let (root, syntax) = syntax();
+        let path = root.path().join("pass.toml");
+        fs::write(
+            &path,
+            r#"version = 2
+base = "HEAD~3"
+paths = ["src"]
+max-production-sloc-delta = -1
+
+[[rehome]]
+item = "provider::NEVER_DEFINED"
+to = "caller"
+"#,
+        )
+        .unwrap();
+
+        let error = load(root.path(), &path, &syntax, &syntax).unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("provider::NEVER_DEFINED` is not defined at base HEAD~3")
+        );
+    }
+
+    #[test]
+    fn v2_contract_loads_dependency_rows() {
+        let (root, syntax) = syntax();
+        let path = root.path().join("pass.toml");
+        fs::write(
+            &path,
+            r#"version = 2
+base = "main"
+paths = ["src"]
+max-production-sloc-delta = -1
+
+[[dependency]]
+from = "caller"
+to = "provider"
+max-sites = 0
+"#,
+        )
+        .unwrap();
+
+        let loaded = load(root.path(), &path, &syntax, &syntax).unwrap();
+
+        assert_eq!(loaded.dependency.len(), 1);
+        assert_eq!(loaded.dependency[0].from, "caller");
+        assert_eq!(loaded.dependency[0].to, "provider");
+        assert_eq!(loaded.dependency[0].max_sites, 0);
     }
 }

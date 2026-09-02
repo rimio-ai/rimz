@@ -8,12 +8,15 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use super::conform::{self, Direction};
-use super::contract::{AssemblyExpectation, DeleteExpectation, EscExpectation, PassContract};
+use super::contract::{
+    AssemblyExpectation, DeleteExpectation, DependencyExpectation, EscExpectation, PassContract,
+    RehomeExpectation,
+};
 use super::facts::{Facets, Facts};
 use super::inspect;
 use super::modules::{
     ItemId, bounded_names, crate_module_for_path, escaping_items_for_boundary, is_declaration_only,
-    path_in_scope,
+    module_is_within, path_in_scope,
 };
 use super::output::{self, OutputArgs};
 use super::references::{Edge, EdgeKind, FunctionId};
@@ -41,6 +44,7 @@ const SECTIONS: &[&str] = &[
     "interface",
     "surface",
     "dependencies",
+    "internal",
     "files",
     "evidence",
 ];
@@ -50,6 +54,7 @@ struct Args {
     input: Input,
     top: usize,
     output: OutputArgs,
+    show_internal: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -93,6 +98,7 @@ struct DependencySite {
     key: DependencyKey,
     line: usize,
     direction: &'static str,
+    crossing: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -147,6 +153,29 @@ struct EscCheck {
 struct DeleteCheck {
     expectation: DeleteExpectation,
     current: Option<DefinitionSite>,
+}
+
+#[derive(Clone, Debug)]
+struct RehomeCheck {
+    expectation: RehomeExpectation,
+    old: Option<DefinitionSite>,
+    destinations: Vec<DefinitionSite>,
+}
+
+#[derive(Clone, Debug)]
+struct DependencyCheck {
+    expectation: DependencyExpectation,
+    base: usize,
+    current: usize,
+}
+
+#[derive(Default)]
+struct ExpectationChecks<'a> {
+    assembly: &'a [AssemblyCheck],
+    esc: &'a [EscCheck],
+    delete: &'a [DeleteCheck],
+    rehome: &'a [RehomeCheck],
+    dependency: &'a [DependencyCheck],
 }
 
 #[derive(Clone, Debug)]
@@ -236,9 +265,9 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         .map_or(exploratory_paths, |contract| contract.paths.clone());
     let report = build_report(root, base, paths, contract.as_ref(), &base_facts, &current)?;
     let rendered = if args.output.json {
-        render_json(&report, &args.output)?
+        render_json(&report, &args.output, args.show_internal)?
     } else {
-        render_markdown(&report, args.top, &args.output)
+        render_markdown(&report, args.top, &args.output, args.show_internal)
     };
     args.output.emit(&rendered)?;
 
@@ -266,8 +295,17 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut expect = None;
     let mut top = None;
     let mut output = OutputArgs::default();
+    let mut show_internal = false;
     let mut index = 0;
     while let Some(arg) = args.get(index) {
+        if arg == "--section" {
+            show_internal = args.get(index + 1).is_some_and(|sections| {
+                sections
+                    .split(',')
+                    .map(str::trim)
+                    .any(|section| section == "internal")
+            });
+        }
         if let Some(eaten) = output.parse_flag(args, index, "diff")? {
             index += eaten;
             continue;
@@ -316,6 +354,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         input,
         top: top.unwrap_or(DEFAULT_TOP),
         output,
+        show_internal,
     }))
 }
 
@@ -406,13 +445,45 @@ fn build_report(
             })
             .collect()
     });
+    let rehome_checks = contract.map_or_else(Vec::new, |contract| {
+        contract
+            .rehome
+            .iter()
+            .map(|expectation| {
+                let (_, name) = expectation
+                    .item
+                    .rsplit_once("::")
+                    .expect("validated rehome item has a module and name");
+                RehomeCheck {
+                    expectation: expectation.clone(),
+                    old: definition_site(&current.syntax.files, &expectation.item),
+                    destinations: definition_sites(&current.syntax.files, &expectation.to, name),
+                }
+            })
+            .collect()
+    });
+    let dependency_checks = contract.map_or_else(Vec::new, |contract| {
+        contract
+            .dependency
+            .iter()
+            .map(|expectation| DependencyCheck {
+                expectation: expectation.clone(),
+                base: contract_dependency_sites(base, expectation),
+                current: contract_dependency_sites(current, expectation),
+            })
+            .collect()
+    });
     let expectations = contract.map_or_else(Vec::new, |contract| {
         expectation_rows(
             contract,
             production.delta,
-            &assembly_checks,
-            &esc_checks,
-            &delete_checks,
+            ExpectationChecks {
+                assembly: &assembly_checks,
+                esc: &esc_checks,
+                delete: &delete_checks,
+                rehome: &rehome_checks,
+                dependency: &dependency_checks,
+            },
             &changed_outside,
             evidence.complete(),
         )
@@ -529,41 +600,77 @@ fn dependencies(
     ranks: Option<&LayerRanks>,
 ) -> BTreeMap<DependencyKey, DependencySite> {
     let mut sites = BTreeMap::new();
-    for file in facts
+    let files = facts
         .syntax
         .files
         .iter()
         .filter(|file| in_paths(&file.path, paths))
-    {
+        .collect::<Vec<_>>();
+    let scope_modules = files
+        .iter()
+        .map(|file| file.module_path.as_str())
+        .collect::<BTreeSet<_>>();
+    for file in files {
         for dependency in &file.dependencies {
-            let Some(to) = super::syntax::resolved_internal_import(
-                dependency,
-                &facts.known_modules,
-                &facts.crate_names,
-            ) else {
+            let Some((key, to)) = resolved_dependency(facts, file, dependency) else {
                 continue;
             };
-            if file.module_path == to {
-                continue;
-            }
             let direction = ranks
                 .and_then(|ranks| conform::layer_direction(ranks, &file.module_path, &to))
                 .map_or("unranked", direction_label);
-            let key = DependencyKey {
-                from: file.module_path.clone(),
-                to,
-                path: file.path.clone(),
-                item: dependency.item.clone(),
-                spelling: dependency.spelling,
-            };
+            let crossing = !scope_modules
+                .iter()
+                .any(|module| module_is_within(&to, module));
             sites.entry(key.clone()).or_insert(DependencySite {
                 key,
                 line: dependency.line,
                 direction,
+                crossing,
             });
         }
     }
     sites
+}
+
+fn resolved_dependency(
+    facts: &Facts,
+    file: &super::syntax::FileSyntax,
+    dependency: &super::syntax::DependencySite,
+) -> Option<(DependencyKey, String)> {
+    let to = super::syntax::resolved_internal_import(
+        dependency,
+        &facts.known_modules,
+        &facts.crate_names,
+    )?;
+    if file.module_path == to {
+        return None;
+    }
+    Some((
+        DependencyKey {
+            from: file.module_path.clone(),
+            to: to.clone(),
+            path: file.path.clone(),
+            item: dependency.item.clone(),
+            spelling: dependency.spelling,
+        },
+        to,
+    ))
+}
+
+fn contract_dependency_sites(facts: &Facts, expectation: &DependencyExpectation) -> usize {
+    facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| module_is_within(&file.module_path, &expectation.from))
+        .flat_map(|file| {
+            file.dependencies.iter().filter_map(move |dependency| {
+                let (key, to) = resolved_dependency(facts, file, dependency)?;
+                module_is_within(&to, &expectation.to).then_some(key)
+            })
+        })
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
 fn direction_label(direction: Direction) -> &'static str {
@@ -587,9 +694,14 @@ fn difference(
 fn dependency_counts(
     sites: &BTreeMap<DependencyKey, DependencySite>,
 ) -> BTreeMap<&'static str, usize> {
-    let mut counts = BTreeMap::new();
+    let mut counts = BTreeMap::from([("internal", 0)]);
     for site in sites.values() {
-        *counts.entry(site.direction).or_default() += 1;
+        let group = if site.crossing {
+            site.direction
+        } else {
+            "internal"
+        };
+        *counts.entry(group).or_default() += 1;
     }
     counts
 }
@@ -835,12 +947,29 @@ fn definition_site(files: &[super::syntax::FileSyntax], key: &str) -> Option<Def
     })
 }
 
+fn definition_sites(
+    files: &[super::syntax::FileSyntax],
+    module: &str,
+    name: &str,
+) -> Vec<DefinitionSite> {
+    files
+        .iter()
+        .flat_map(|file| {
+            file.pub_items
+                .iter()
+                .filter(move |item| module_is_within(&item.module, module) && item.name == name)
+                .map(|item| DefinitionSite {
+                    path: file.path.clone(),
+                    line: item.line,
+                })
+        })
+        .collect()
+}
+
 fn expectation_rows(
     contract: &PassContract,
     production_delta: i64,
-    assembly: &[AssemblyCheck],
-    esc: &[EscCheck],
-    delete: &[DeleteCheck],
+    checks: ExpectationChecks<'_>,
     changed_outside: &[PathBuf],
     evidence_complete: bool,
 ) -> Vec<ExpectationRow> {
@@ -852,7 +981,7 @@ fn expectation_rows(
             contract.max_production_sloc_delta
         ),
     }];
-    rows.extend(esc.iter().map(|check| {
+    rows.extend(checks.esc.iter().map(|check| {
         let landed = check.current <= check.expectation.max;
         let excess = check.current.saturating_sub(check.expectation.max);
         ExpectationRow {
@@ -871,7 +1000,7 @@ fn expectation_rows(
             ),
         }
     }));
-    rows.extend(delete.iter().map(|check| ExpectationRow {
+    rows.extend(checks.delete.iter().map(|check| ExpectationRow {
         assertion: format!("delete `{}`", check.expectation.item),
         landed: check.current.is_none(),
         detail: check.current.as_ref().map_or_else(
@@ -879,7 +1008,47 @@ fn expectation_rows(
             |site| format!("still defined at {}:{}", site.path.display(), site.line),
         ),
     }));
-    rows.extend(assembly.iter().map(|check| ExpectationRow {
+    rows.extend(checks.rehome.iter().map(|check| {
+        let landed = check.old.is_none() && check.destinations.len() == 1;
+        let detail = if let Some(site) = &check.old {
+            format!("still defined at {}:{}", site.path.display(), site.line)
+        } else if landed {
+            "moved".to_owned()
+        } else {
+            format!("not defined under {}", check.expectation.to)
+        };
+        ExpectationRow {
+            assertion: format!(
+                "rehome {} → {}",
+                check.expectation.item, check.expectation.to
+            ),
+            landed,
+            detail,
+        }
+    }));
+    rows.extend(checks.dependency.iter().map(|check| {
+        let landed = check.current <= check.expectation.max_sites;
+        let excess = check.current.saturating_sub(check.expectation.max_sites);
+        ExpectationRow {
+            assertion: format!(
+                "dependency {} → {}",
+                check.expectation.from, check.expectation.to
+            ),
+            landed,
+            detail: format!(
+                "base {} → current {} → max {}{}",
+                check.base,
+                check.current,
+                check.expectation.max_sites,
+                if landed {
+                    String::new()
+                } else {
+                    format!("; excess {excess}")
+                }
+            ),
+        }
+    }));
+    rows.extend(checks.assembly.iter().map(|check| ExpectationRow {
         assertion: format!(
             "assembly {} → {}",
             check.expectation.from, check.expectation.to
@@ -911,7 +1080,12 @@ fn expectation_rows(
     rows
 }
 
-fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> String {
+fn render_markdown(
+    report: &Report,
+    top: usize,
+    output_args: &OutputArgs,
+    show_internal: bool,
+) -> String {
     let mut output = String::new();
     markdown_line(
         &mut output,
@@ -992,12 +1166,29 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
                 markdown_line(
                     &mut output,
                     format_args!(
-                        "| dependency sites ({direction}) | {base} | {current} | {:+} |",
+                        "| dependency sites (crossing, {direction}) | {base} | {current} | {:+} |",
                         current as i64 - base as i64
                     ),
                 );
             }
         }
+        let base_internal = report
+            .base_dependency_counts
+            .get("internal")
+            .copied()
+            .unwrap_or(0);
+        let current_internal = report
+            .current_dependency_counts
+            .get("internal")
+            .copied()
+            .unwrap_or(0);
+        markdown_line(
+            &mut output,
+            format_args!(
+                "| dependency sites (internal) | {base_internal} | {current_internal} | {:+} |",
+                current_internal as i64 - base_internal as i64
+            ),
+        );
         markdown_line(
             &mut output,
             format_args!(
@@ -1087,42 +1278,28 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
 
     if output_args.wants("dependencies") {
         markdown_line(&mut output, format_args!("\n## Dependencies\n"));
-        markdown_line(
-            &mut output,
-            format_args!("| movement | direction | module pair | item | site |"),
-        );
-        markdown_line(&mut output, format_args!("|---|---|---|---|---|"));
-        for (movement, site) in report
+        write_dependency_changes(&mut output, report, top, true);
+        let internal_added = report
             .dependencies_added
             .iter()
-            .map(|site| ("added", site))
-            .chain(
-                report
-                    .dependencies_removed
-                    .iter()
-                    .map(|site| ("removed", site)),
-            )
-            .take(top)
-        {
-            markdown_line(
-                &mut output,
-                format_args!(
-                    "| {movement} | {} | {} → {} | `{}{}` | `{}:{}` |",
-                    site.direction,
-                    site.key.from,
-                    site.key.to,
-                    site.key.item,
-                    spelling_suffix(site.key.spelling),
-                    site.key.path.display(),
-                    site.line
-                ),
-            );
-        }
-        write_omitted(
+            .filter(|site| !site.crossing)
+            .count();
+        let internal_removed = report
+            .dependencies_removed
+            .iter()
+            .filter(|site| !site.crossing)
+            .count();
+        markdown_line(
             &mut output,
-            report.dependencies_added.len() + report.dependencies_removed.len(),
-            top,
+            format_args!(
+                "\n{internal_added} internal sites added, {internal_removed} removed (`--section internal` lists them)."
+            ),
         );
+    }
+
+    if show_internal {
+        markdown_line(&mut output, format_args!("\n## Internal dependencies\n"));
+        write_dependency_changes(&mut output, report, top, false);
     }
 
     if output_args.wants("files") {
@@ -1168,6 +1345,42 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
     output
 }
 
+fn write_dependency_changes(output: &mut String, report: &Report, top: usize, crossing: bool) {
+    markdown_line(
+        output,
+        format_args!("| movement | direction | module pair | item | site |"),
+    );
+    markdown_line(output, format_args!("|---|---|---|---|---|"));
+    let sites = report
+        .dependencies_added
+        .iter()
+        .map(|site| ("added", site))
+        .chain(
+            report
+                .dependencies_removed
+                .iter()
+                .map(|site| ("removed", site)),
+        )
+        .filter(|(_, site)| site.crossing == crossing)
+        .collect::<Vec<_>>();
+    for (movement, site) in sites.iter().take(top) {
+        markdown_line(
+            output,
+            format_args!(
+                "| {movement} | {} | {} → {} | `{}{}` | `{}:{}` |",
+                site.direction,
+                site.key.from,
+                site.key.to,
+                site.key.item,
+                spelling_suffix(site.key.spelling),
+                site.key.path.display(),
+                site.line
+            ),
+        );
+    }
+    write_omitted(output, sites.len(), top);
+}
+
 fn moved_interface_rows(rows: &[InterfaceRow]) -> Vec<&InterfaceRow> {
     let mut moved = rows.iter().filter(|row| row.moved).collect::<Vec<_>>();
     moved.sort_by(|left, right| {
@@ -1181,7 +1394,7 @@ fn moved_interface_rows(rows: &[InterfaceRow]) -> Vec<&InterfaceRow> {
     moved
 }
 
-fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
+fn render_json(report: &Report, output_args: &OutputArgs, show_internal: bool) -> Result<String> {
     let mut sections = Map::new();
     if output_args.wants("expectations") {
         sections.insert(
@@ -1207,7 +1420,7 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
                 })
             })
             .collect::<Vec<_>>();
-        let dependency_sites = ["downward", "same", "upward", "unranked"]
+        let dependency_sites = ["downward", "same", "upward", "unranked", "internal"]
             .into_iter()
             .filter_map(|direction| {
                 let base = report
@@ -1220,7 +1433,7 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
                     .get(direction)
                     .copied()
                     .unwrap_or(0);
-                (base > 0 || current > 0).then(|| {
+                (direction == "internal" || base > 0 || current > 0).then(|| {
                     (
                         direction.to_owned(),
                         json!({
@@ -1272,6 +1485,15 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
                 "current_counts": &report.current_dependency_counts,
                 "added": &report.dependencies_added,
                 "removed": &report.dependencies_removed,
+            }),
+        );
+    }
+    if show_internal {
+        sections.insert(
+            "internal".to_owned(),
+            json!({
+                "added": report.dependencies_added.iter().filter(|site| !site.crossing).collect::<Vec<_>>(),
+                "removed": report.dependencies_removed.iter().filter(|site| !site.crossing).collect::<Vec<_>>(),
             }),
         );
     }
@@ -1420,6 +1642,7 @@ mod tests {
                 },
                 top: 20,
                 output: OutputArgs::default(),
+                show_internal: false,
             }
         );
     }
@@ -1442,6 +1665,18 @@ mod tests {
         assert!(parsed.output.wants("totals"));
         assert!(parsed.output.wants("dependencies"));
         assert!(!parsed.output.wants("interface"));
+        assert!(!parsed.show_internal);
+        let internal = parse_args(&[
+            "--base".into(),
+            "HEAD~1".into(),
+            "--path".into(),
+            "src".into(),
+            "--section".into(),
+            "internal".into(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(internal.show_internal);
         assert!(
             parse_args(&[
                 "--base".into(),
@@ -1524,7 +1759,16 @@ mod tests {
             base: 4,
             current: 4,
         }];
-        let rows = expectation_rows(&contract, -2, &checks, &[], &[], &[], true);
+        let rows = expectation_rows(
+            &contract,
+            -2,
+            ExpectationChecks {
+                assembly: &checks,
+                ..ExpectationChecks::default()
+            },
+            &[],
+            true,
+        );
 
         assert!(!rows[1].landed);
         assert!(rows[1].detail.contains("4 → 4"));
@@ -1539,8 +1783,21 @@ mod tests {
             current: 2,
         }];
 
-        assert!(!expectation_rows(&contract, -2, &checks, &[], &[], &[], true)[0].landed);
-        assert!(expectation_rows(&contract, -3, &checks, &[], &[], &[], true)[0].landed);
+        let landed = |delta| {
+            expectation_rows(
+                &contract,
+                delta,
+                ExpectationChecks {
+                    assembly: &checks,
+                    ..ExpectationChecks::default()
+                },
+                &[],
+                true,
+            )[0]
+            .landed
+        };
+        assert!(!landed(-2));
+        assert!(landed(-3));
     }
 
     #[test]
@@ -1556,7 +1813,16 @@ mod tests {
             current: 3,
         }];
 
-        let rows = expectation_rows(&contract, -2, &[], &checks, &[], &[], true);
+        let rows = expectation_rows(
+            &contract,
+            -2,
+            ExpectationChecks {
+                esc: &checks,
+                ..ExpectationChecks::default()
+            },
+            &[],
+            true,
+        );
         let row = rows
             .iter()
             .find(|row| row.assertion == "esc `src/message`")
@@ -1580,7 +1846,16 @@ mod tests {
             }),
         }];
 
-        let rows = expectation_rows(&contract, -2, &[], &[], &checks, &[], true);
+        let rows = expectation_rows(
+            &contract,
+            -2,
+            ExpectationChecks {
+                delete: &checks,
+                ..ExpectationChecks::default()
+            },
+            &[],
+            true,
+        );
         let row = rows
             .iter()
             .find(|row| row.assertion == "delete `message::OLD`")
@@ -1588,6 +1863,182 @@ mod tests {
 
         assert!(!row.landed);
         assert_eq!(row.detail, "still defined at src/message.rs:27");
+    }
+
+    #[test]
+    fn diff_expect_rejects_unmoved_rehome_item() {
+        let mut contract = contract(-1);
+        contract.rehome.push(RehomeExpectation {
+            item: "message::Thing".to_owned(),
+            to: "store".to_owned(),
+        });
+        let checks = [RehomeCheck {
+            expectation: contract.rehome[0].clone(),
+            old: Some(DefinitionSite {
+                path: PathBuf::from("src/message.rs"),
+                line: 27,
+            }),
+            destinations: Vec::new(),
+        }];
+
+        let rows = expectation_rows(
+            &contract,
+            -2,
+            ExpectationChecks {
+                rehome: &checks,
+                ..ExpectationChecks::default()
+            },
+            &[],
+            true,
+        );
+        let row = rows
+            .iter()
+            .find(|row| row.assertion == "rehome message::Thing → store")
+            .unwrap();
+
+        assert!(!row.landed);
+        assert_eq!(row.detail, "still defined at src/message.rs:27");
+    }
+
+    #[test]
+    fn diff_expect_accepts_moved_rehome_item() {
+        let mut contract = contract(-1);
+        contract.rehome.push(RehomeExpectation {
+            item: "message::Thing".to_owned(),
+            to: "store".to_owned(),
+        });
+        let checks = [RehomeCheck {
+            expectation: contract.rehome[0].clone(),
+            old: None,
+            destinations: vec![DefinitionSite {
+                path: PathBuf::from("src/store/model.rs"),
+                line: 12,
+            }],
+        }];
+
+        let rows = expectation_rows(
+            &contract,
+            -2,
+            ExpectationChecks {
+                rehome: &checks,
+                ..ExpectationChecks::default()
+            },
+            &[],
+            true,
+        );
+        let row = rows
+            .iter()
+            .find(|row| row.assertion == "rehome message::Thing → store")
+            .unwrap();
+
+        assert!(row.landed);
+        assert_eq!(row.detail, "moved");
+    }
+
+    #[test]
+    fn diff_expect_rejects_dependency_excess() {
+        let base = two_file_dependency_facts("use crate::agents::Thing;");
+        let current = two_file_dependency_facts("use crate::agents::Thing;");
+        let expectation = DependencyExpectation {
+            from: "store".to_owned(),
+            to: "agents".to_owned(),
+            max_sites: 0,
+        };
+        let mut contract = contract(-1);
+        contract.dependency.push(expectation.clone());
+        let checks = [DependencyCheck {
+            base: contract_dependency_sites(&base, &expectation),
+            current: contract_dependency_sites(&current, &expectation),
+            expectation,
+        }];
+
+        let rows = expectation_rows(
+            &contract,
+            -2,
+            ExpectationChecks {
+                dependency: &checks,
+                ..ExpectationChecks::default()
+            },
+            &[],
+            true,
+        );
+        let row = rows
+            .iter()
+            .find(|row| row.assertion == "dependency store → agents")
+            .unwrap();
+
+        assert!(!row.landed);
+        assert_eq!(row.detail, "base 1 → current 1 → max 0; excess 1");
+    }
+
+    #[test]
+    fn diff_expect_accepts_dependency_within_max() {
+        let base = two_file_dependency_facts("use crate::agents::Thing;");
+        let current = two_file_dependency_facts("");
+        let expectation = DependencyExpectation {
+            from: "store".to_owned(),
+            to: "agents".to_owned(),
+            max_sites: 0,
+        };
+        let mut contract = contract(-1);
+        contract.dependency.push(expectation.clone());
+        let checks = [DependencyCheck {
+            base: contract_dependency_sites(&base, &expectation),
+            current: contract_dependency_sites(&current, &expectation),
+            expectation,
+        }];
+
+        let rows = expectation_rows(
+            &contract,
+            -2,
+            ExpectationChecks {
+                dependency: &checks,
+                ..ExpectationChecks::default()
+            },
+            &[],
+            true,
+        );
+        let row = rows
+            .iter()
+            .find(|row| row.assertion == "dependency store → agents")
+            .unwrap();
+
+        assert!(row.landed);
+        assert_eq!(row.detail, "base 1 → current 0 → max 0");
+    }
+
+    #[test]
+    fn dependency_sites_split_crossing_from_internal_movement() {
+        let base = facts_for_sources(
+            vec![
+                Source::new("src/scope/mod.rs", "pub fn run() {}"),
+                Source::new("src/scope/sibling.rs", "pub struct Inside;"),
+                Source::new("src/outside.rs", "pub struct Outside;"),
+            ],
+            References::default(),
+        );
+        let current = facts_for_sources(
+            vec![
+                Source::new(
+                    "src/scope/mod.rs",
+                    "use crate::outside::Outside;\nuse crate::scope::sibling::Inside;\npub fn run(_: Outside, _: Inside) {}",
+                ),
+                Source::new("src/scope/sibling.rs", "pub struct Inside;"),
+                Source::new("src/outside.rs", "pub struct Outside;"),
+            ],
+            References::default(),
+        );
+        let paths = [PathBuf::from("src/scope")];
+        let base_sites = dependencies(&base, &paths, None);
+        let current_sites = dependencies(&current, &paths, None);
+        let added = difference(&current_sites, &base_sites);
+        let counts = dependency_counts(&current_sites);
+
+        assert_eq!(added.len(), 2);
+        assert_eq!(added.iter().filter(|site| site.crossing).count(), 1);
+        assert_eq!(added.iter().filter(|site| !site.crossing).count(), 1);
+        assert_eq!(counts.get("unranked"), Some(&1));
+        assert_eq!(counts.get("internal"), Some(&1));
     }
 
     #[test]
@@ -1603,7 +2054,16 @@ mod tests {
             base: 4,
             current: 2,
         }];
-        let rows = expectation_rows(&contract, -2, &checks, &[], &[], &outside, true);
+        let rows = expectation_rows(
+            &contract,
+            -2,
+            ExpectationChecks {
+                assembly: &checks,
+                ..ExpectationChecks::default()
+            },
+            &outside,
+            true,
+        );
 
         assert_eq!(outside, [PathBuf::from("README.md")]);
         assert!(
@@ -1758,11 +2218,16 @@ mod tests {
             }],
             esc: Vec::new(),
             delete: Vec::new(),
+            rehome: Vec::new(),
+            dependency: Vec::new(),
         }
     }
 
     fn facts_for_source(source: &str, references: References) -> Facts {
-        let sources = vec![Source::new("src/lib.rs", source)];
+        facts_for_sources(vec![Source::new("src/lib.rs", source)], references)
+    }
+
+    fn facts_for_sources(sources: Vec<Source>, references: References) -> Facts {
         let syntax = super::super::syntax::analyze_sources(&sources, &BTreeSet::new());
         Facts {
             root: PathBuf::from("."),
@@ -1785,6 +2250,16 @@ mod tests {
             metrics: None,
             references: Some(references),
         }
+    }
+
+    fn two_file_dependency_facts(store: &str) -> Facts {
+        facts_for_sources(
+            vec![
+                Source::new("src/store.rs", store),
+                Source::new("src/agents.rs", "pub struct Thing;"),
+            ],
+            References::default(),
+        )
     }
 
     fn reference_edge(path: &str, item: &str, function_line: Option<usize>) -> Edge {
