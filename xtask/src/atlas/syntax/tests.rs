@@ -548,3 +548,35 @@ fn guard_families_alpha_normalize_bindings_and_path_aliases() {
 
     assert_eq!(normalized, ["$0>_&&Status::Ready==$1"; 3]);
 }
+
+#[test]
+fn guard_families_preserve_method_and_call_names() {
+    let report = analyze_sources(&[
+        Source::new(
+            "crates/rimz/src/a.rs",
+            "fn a(err: Error) { if err.kind() == io::ErrorKind::NotFound {} }",
+        ),
+        Source::new(
+            "crates/rimz/src/b.rs",
+            "fn b(source: Error) { if source.kind() == ErrorKind::NotFound {} }",
+        ),
+        Source::new(
+            "crates/rimz/src/c.rs",
+            "fn c(x: Values) { if x.is_empty() && ready(x) {} }",
+        ),
+        Source::new(
+            "crates/rimz/src/d.rs",
+            "fn d(y: Values) { if y.is_none() && ready(y) {} }",
+        ),
+    ]);
+    let normalized = report
+        .files
+        .iter()
+        .map(|file| file.guards[0].normalized.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(normalized[0], "$0.kind()==ErrorKind::NotFound");
+    assert_eq!(normalized[1], "$0.kind()==ErrorKind::NotFound");
+    assert_eq!(normalized[2], "$0.is_empty()&&ready($0)");
+    assert_eq!(normalized[3], "$0.is_none()&&ready($0)");
+}
