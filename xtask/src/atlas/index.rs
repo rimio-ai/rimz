@@ -21,7 +21,6 @@ const RUST_PANIC_EXIT_CODE: i32 = 101;
 pub(super) enum IndexPolicy {
     #[default]
     Required,
-    Skip,
 }
 
 /// Returns the SCIP index for the exact working-tree snapshot in `sources`.

@@ -41,7 +41,6 @@ pub(super) struct ItemRefs {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum EdgeKind {
-    Use,
     Reference,
 }
 
