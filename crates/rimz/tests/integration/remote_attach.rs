@@ -1561,7 +1561,7 @@ fn established_mux_disconnect_reconnects() {
 }
 
 #[test]
-fn noninteractive_remote_session_loss_does_not_recreate() {
+fn remote_session_loss_sentinel_exits_cleanly_without_a_tty() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
@@ -1585,7 +1585,7 @@ fn noninteractive_remote_session_loss_does_not_recreate() {
     assert_eq!(
         main_invocation_count(&log),
         1,
-        "noninteractive stdin cannot consent to recreating the room"
+        "the room-end sentinel should not start another attach"
     );
     assert_eq!(
         master_invocation_count(&log),
@@ -1601,7 +1601,7 @@ fn noninteractive_remote_session_loss_does_not_recreate() {
 }
 
 #[test]
-fn supervised_remote_attach_ends_a_sidebar_only_room() {
+fn supervised_remote_attach_ends_when_the_session_disappears() {
     for attach_exits in [false, true] {
         let env = Env::new();
         let session = "watchdog-room";
@@ -1611,9 +1611,9 @@ fn supervised_remote_attach_ends_a_sidebar_only_room() {
         command
             .args(["--mux", "zellij", "attach", "--attach", session])
             .env(
-            "RIMZ_ZELLIJ_BIN",
-            crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
-        )
+                "RIMZ_ZELLIJ_BIN",
+                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+            )
             .env("RIMZ_TEST_ZELLIJ_LOG", &zellij_log)
             .env(
                 "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
@@ -1621,7 +1621,7 @@ fn supervised_remote_attach_ends_a_sidebar_only_room() {
             )
             .env(
                 "RIMZ_TEST_ZELLIJ_LIST_PANES",
-                r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+                r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
             )
             .env("RIMZ_TEST_ZELLIJ_WATCHDOG_STATE", &watchdog_state)
             .env("RIMZ_REMOTE_SUPERVISED", "1");
@@ -1643,7 +1643,10 @@ fn supervised_remote_attach_ends_a_sidebar_only_room() {
             trace.contains("\tattach\t--create\twatchdog-room"),
             "{trace}"
         );
-        assert!(trace.contains("delete-session"), "{trace}");
+        assert!(
+            trace.matches("\tlist-sessions").count() >= 2,
+            "watchdog should observe the live session and its disappearance: {trace}"
+        );
         let pid = std::fs::read_to_string(watchdog_state.with_extension("pid"))
             .expect("read attached client pid")
             .parse::<i32>()
@@ -1657,18 +1660,35 @@ fn supervised_remote_attach_ends_a_sidebar_only_room() {
 }
 
 #[test]
-fn remote_session_loss_exits_without_a_prompt_or_recreation() {
+fn watchdog_sentinel_reaches_the_local_clean_exit_policy() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
-    let plan = env.project_root.join("ssh-trace.plan");
-    std::fs::write(
-        &plan,
-        format!("{}\n", rimz::remote::REMOTE_SESSION_LOST_EXIT),
-    )
-    .expect("write attach plan");
+    let zellij_log = env.project_root.join("zellij-watchdog.log");
+    let watchdog_state = env.project_root.join("zellij-watchdog.state");
+    let session = "watchdog-room";
     let mut cmd = remote_connect_pty_command(&env, &log);
-    cmd.env("RIMZ_TEST_SSH_PLAN", &plan);
-    cmd.env("RIMZ_TEST_SSH_SLEEP_MS", "80");
+    cmd.env(
+        "RIMZ_TEST_SSH_EXEC_ARGV",
+        format!(
+            "{}\t--mux\tzellij\tattach\t--attach\t{session}",
+            env.rimz_bin().display()
+        ),
+    );
+    cmd.env(
+        "RIMZ_ZELLIJ_BIN",
+        crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+    );
+    cmd.env("RIMZ_TEST_ZELLIJ_LOG", &zellij_log);
+    cmd.env(
+        "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+        format!("{session} [Created 1s ago]\n"),
+    );
+    cmd.env(
+        "RIMZ_TEST_ZELLIJ_LIST_PANES",
+        r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+    );
+    cmd.env("RIMZ_TEST_ZELLIJ_WATCHDOG_STATE", &watchdog_state);
+    cmd.env("RIMZ_REMOTE_SUPERVISED", "1");
     cmd.env("RIMZ_REMOTE_GATETIME_MS", "20");
 
     let (output, settings) = run_pty_command(remote_connect_pty(), cmd);
@@ -1683,6 +1703,20 @@ fn remote_session_loss_exits_without_a_prompt_or_recreation() {
     assert!(
         !output.contains("recreating the remote session"),
         "{output}"
+    );
+    let trace = std::fs::read_to_string(&zellij_log).expect("read zellij watchdog trace");
+    assert!(
+        trace.contains("\tattach\t--create\twatchdog-room"),
+        "{trace}"
+    );
+    let pid = std::fs::read_to_string(watchdog_state.with_extension("pid"))
+        .expect("read attached client pid")
+        .parse::<i32>()
+        .expect("parse attached client pid");
+    assert_eq!(
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
+        Err(nix::errno::Errno::ESRCH),
+        "mux client should be dead before the local supervisor returns",
     );
     assert_shell_tty(&settings);
 }

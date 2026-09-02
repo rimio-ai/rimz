@@ -16,7 +16,8 @@
 //! `$RIMZ_TEST_SSH_STDOUT` supplies the visible attach's remote output.
 //! `$RIMZ_TEST_SSH_STDERR` supplies the visible attach's diagnostic output.
 //! `$RIMZ_TEST_SSH_EXEC_ARGV` runs tab-separated argv with inherited stdio in
-//! place of the visible attach's stdin-recording and sleep behavior.
+//! place of the visible attach's stdin-recording and sleep behavior. Without
+//! an exit plan, the shim propagates that command's status like OpenSSH.
 //! `$RIMZ_TEST_SSH_MASTER_PLAN` scripts background ControlMaster failures and
 //! `$RIMZ_TEST_SSH_MASTER_STDERR` supplies their diagnostic output.
 //! `$RIMZ_TEST_SSH_MASTER_READY_PLAN` controls whether each successful master
@@ -102,11 +103,14 @@ fn main() {
     if let Ok(argv) = env::var("RIMZ_TEST_SSH_EXEC_ARGV") {
         let mut argv = argv.split('\t');
         let program = argv.next().expect("exec argv has program");
-        std::process::Command::new(program)
+        let status = std::process::Command::new(program)
             .args(argv)
             .status()
             .expect("run visible attach command");
-        exit_from_plan("RIMZ_TEST_SSH_PLAN");
+        if env::var_os("RIMZ_TEST_SSH_PLAN").is_some() {
+            exit_from_plan("RIMZ_TEST_SSH_PLAN");
+        }
+        std::process::exit(status.code().unwrap_or(1));
     }
 
     suspend_if_requested();

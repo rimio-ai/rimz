@@ -125,6 +125,18 @@ fn classify_nested_invocation(cli: &[String]) -> Option<Invocation<'_>> {
 
 fn handle_list_sessions(log_path: &Path) {
     let scripted = env::var("RIMZ_TEST_ZELLIJ_LIST_SESSIONS").ok();
+    if let Some(state) = watchdog_state_path()
+        && state.with_extension("attached").exists()
+    {
+        let observed = state.with_extension("observed-live");
+        if observed.exists() {
+            write_stderr("No active zellij sessions found.");
+            std::process::exit(1);
+        }
+        std::fs::write(observed, b"").expect("mark live watchdog observation");
+        write_stdout_raw(scripted.as_deref().unwrap_or(""));
+        return;
+    }
     let suppress_created = env::var_os("RIMZ_TEST_ZELLIJ_DISABLE_CREATED_SESSIONS").is_some()
         || trace_mode(log_path).birth_fails();
     let created = if suppress_created {
@@ -144,26 +156,7 @@ fn handle_list_sessions(log_path: &Path) {
 fn handle_action_query(query: ActionQuery) {
     match query {
         ActionQuery::Clients => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_CLIENTS"),
-        ActionQuery::Panes => {
-            if let Some(state) = watchdog_state_path() {
-                let attached = state.with_extension("attached");
-                if attached.exists() {
-                    let observed = state.with_extension("observed");
-                    if observed.exists() {
-                        write_stdout_raw(
-                            r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"}]"#,
-                        );
-                    } else {
-                        std::fs::write(observed, b"").expect("mark first watchdog observation");
-                        write_stdout_raw(
-                            r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
-                        );
-                    }
-                    return;
-                }
-            }
-            write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES")
-        }
+        ActionQuery::Panes => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES"),
     }
 }
 
