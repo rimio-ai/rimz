@@ -2532,13 +2532,7 @@ fn steer_auto_compact_runs_before_a_full_window() {
         compact_at < paste_at,
         "compaction must precede the message; trace: {lines:?}"
     );
-    assert!(
-        lines[compact_at.expect("compact command")].ends_with(&format!(
-            "\t/compact {}",
-            rimz::config::DEFAULT_COMPACT_INSTRUCTION
-        )),
-        "default summary brief must ride the Claude compact command; trace: {lines:?}"
-    );
+    assert_compact_segments_then_enter(&lines, rimz::config::DEFAULT_COMPACT_INSTRUCTION);
     assert!(
         String::from_utf8_lossy(&out.stdout).contains("compacted"),
         "a single steer reports the compaction it ran: {}",
@@ -2680,12 +2674,9 @@ fn message_inherits_smart_compact_default() {
 
 #[test]
 fn smart_compact_sends_the_configured_instruction() {
-    for (configured, expected) in [
-        (
-            "keep the open questions",
-            "/compact keep the open questions",
-        ),
-        ("", "/compact"),
+    for (configured, expected_instruction) in [
+        ("keep the open questions", Some("keep the open questions")),
+        ("", None),
     ] {
         let env = Env::new();
         register_running_agent(
@@ -2703,12 +2694,51 @@ fn smart_compact_sends_the_configured_instruction() {
 
         let trace_log = env.project_root.join("zellij-ac-instruction-trace.log");
         run_traced_smart_compact(&env, &trace_log, "go");
-        let compact = trace_lines(&trace_log)
-            .into_iter()
-            .find(|line| is_compact_command(line))
-            .expect("compact command trace");
-        assert!(compact.ends_with(&format!("\t{expected}")), "{compact}");
+        let lines = trace_lines(&trace_log);
+        if let Some(instruction) = expected_instruction {
+            assert_compact_segments_then_enter(&lines, instruction);
+            continue;
+        }
+        let compact_at = lines
+            .iter()
+            .position(|line| {
+                line.ends_with("\taction\twrite-chars\t--pane-id\tterminal_3\t/compact")
+            })
+            .expect("bare compact command trace");
+        let enter_at = lines[compact_at + 1..]
+            .iter()
+            .position(|line| is_enter_key(line))
+            .map(|at| compact_at + 1 + at)
+            .expect("compact Enter trace");
+        assert!(
+            lines[compact_at + 1..enter_at]
+                .iter()
+                .all(|line| !line.contains("\taction\twrite-chars\t--pane-id\t")),
+            "a bare command must remain one raw write; trace: {lines:?}"
+        );
     }
+}
+
+#[test]
+fn smart_compact_types_the_slash_token_apart_from_its_instruction() {
+    let instruction = rimz::config::DEFAULT_COMPACT_INSTRUCTION;
+    assert!(
+        instruction.len() > 800,
+        "the regression instruction must exceed Claude's paste threshold"
+    );
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-ac-segments",
+        "feature-ac-segments",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_context_fill(&env, "sess-ac-segments", 80);
+
+    let trace_log = env.project_root.join("zellij-ac-segments-trace.log");
+    run_traced_smart_compact(&env, &trace_log, "go");
+
+    assert_compact_segments_then_enter(&trace_lines(&trace_log), instruction);
 }
 
 #[test]
@@ -3283,6 +3313,51 @@ fn is_compact_command(line: &str) -> bool {
     line.contains(&format!(
         "\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t/compact"
     ))
+}
+
+fn assert_compact_segments_then_enter(lines: &[String], instruction: &str) {
+    let write_prefix = format!("\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t");
+    let head_at = lines
+        .iter()
+        .position(|line| line.ends_with(&format!("{write_prefix}/compact ")))
+        .unwrap_or_else(|| {
+            panic!(
+                "the slash token must reach the composer in its own write; a >800-char chunk is a paste to Claude; trace: {lines:?}"
+            )
+        });
+    let instruction_at = head_at + 1;
+    assert!(
+        lines
+            .get(instruction_at)
+            .is_some_and(|line| line.ends_with(&format!("{write_prefix}{instruction}"))),
+        "the compact instruction must follow the slash token in its own write; trace: {lines:?}"
+    );
+    assert!(
+        lines.iter().all(|line| {
+            line.find(&write_prefix).is_none_or(|at| {
+                !line[at + write_prefix.len()..].starts_with("/compact ")
+                    || line.ends_with("/compact ")
+            })
+        }),
+        "the slash token must reach the composer in its own write; a >800-char chunk is a paste to Claude; trace: {lines:?}"
+    );
+    assert!(
+        "/compact ".len() < instruction.len(),
+        "the slash-token write must be shorter than the instruction write"
+    );
+    let paste_prefix = format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t27\t91\t50\t48\t48\t126");
+    let next_paste_at = lines[instruction_at + 1..]
+        .iter()
+        .position(|line| line.contains(&paste_prefix))
+        .map_or(lines.len(), |at| instruction_at + 1 + at);
+    assert_eq!(
+        lines[instruction_at + 1..next_paste_at]
+            .iter()
+            .filter(|line| is_enter_key(line))
+            .count(),
+        1,
+        "the split command must have exactly one Enter before the following paste; trace: {lines:?}"
+    );
 }
 
 fn assert_text_then_enter(trace_log: &Path, text: &str) {

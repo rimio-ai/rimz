@@ -10,6 +10,16 @@ use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 use crate::store::snapshot::PaneAgent;
 
 #[test]
+fn command_segments_separate_arguments_from_the_slash_token() {
+    assert_eq!(command_segments("/compact"), ("/compact", None));
+    assert_eq!(
+        command_segments("/compact keep the open questions"),
+        ("/compact ", Some("keep the open questions"))
+    );
+    assert_eq!(command_segments("/compact "), ("/compact ", None));
+}
+
+#[test]
 fn draft_record_uses_recipient_identity_and_live_pane_context() {
     let agent = agent("sess-a", Some("lucid-atlas"));
     let pane = pane(

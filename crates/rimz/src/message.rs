@@ -30,8 +30,8 @@ pub const MESSAGE_WAKE_FILE: &str = "message-wake.json";
 /// Default spacing between discrete message pane writes.
 pub const DEFAULT_MESSAGE_INTERVAL: Duration = Duration::from_secs(1);
 pub const MESSAGE_INTERVAL_ENV: &str = "RIMZ_MESSAGE_INTERVAL_MS";
-/// Default gap after raw-typed command text, allowing composer paste-burst
-/// heuristics to flush before the submit keystroke arrives.
+/// Default gap between raw-typed command segments and before submission,
+/// allowing composer paste-burst heuristics to flush.
 pub const DEFAULT_COMMAND_SUBMIT_DELAY: Duration = Duration::from_secs(1);
 pub const COMMAND_SUBMIT_DELAY_ENV: &str = "RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS";
 pub const DEFAULT_DELIVERY_WINDOW: Duration = Duration::from_secs(30);
@@ -44,6 +44,15 @@ pub const MAX_DELIVERY_ATTEMPTS_ENV: &str = "RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS"
 /// Cap for pre-send delivery failures after a queued claim.
 pub const MAX_DELIVERY_ATTEMPTS: u32 = 5;
 pub const CLAIM_TTL: Duration = Duration::from_secs(15);
+
+/// Keep a slash token out of a long chunk that a composer may classify as a
+/// paste, because a pasted slash does not dispatch the command.
+fn command_segments(text: &str) -> (&str, Option<&str>) {
+    match text.find(' ') {
+        Some(at) if at + 1 < text.len() => (&text[..=at], Some(&text[at + 1..])),
+        _ => (text, None),
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "origin")]

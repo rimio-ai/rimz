@@ -7,7 +7,7 @@ Topic detail lives in [messaging.md](../../../../docs/internals/harness/messagin
 ## Invariants
 
 - **The record is the message.** Every send persists a `MessageRecord` before a byte reaches a pane. A pane write is an attempt against that record, never the message itself.
-- **`Sent` precedes the submit.** `write_batch` records the batch as `Sent` after the paste lands and before it presses Enter, so a submitted message always has a durable record and audit event behind it.
+- **`Sent` precedes the submit.** `write_batch` records the batch as `Sent` after the text lands (the whole paste, or every raw-typed segment of a command) and before it presses Enter, so a submitted message always has a durable record and audit event behind it.
 - **One card, one FIFO queue.** Records key on `(kind, agent_id)` with `agent_name` folding a provisional `launch_*` id into the session it registers as. `msg_` id string order is FIFO order.
 - **Acknowledgements follow submitted text.** A submit that contains an intact headered record confirms it. Stray composer text around RimZ's envelope is direct input and is never a reason to write the pane again; headerless system records confirm only on an exact whole-prompt match, and reported text that contains no record confirms nothing. A late acknowledgement stays valid while the record is `Queued`; only a new claim supersedes it.
 - **Commands reach the pane at most once.** An unconfirmed command times out without a resend because duplicate commands such as `/compact` can destroy context.

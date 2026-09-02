@@ -7,6 +7,7 @@ use crate::Store;
 use crate::agents::AgentState;
 use crate::message::{
     AutoCompact, MessageBody, MessageDraft, MessageRecord, MessageSender, Recipient,
+    command_segments,
 };
 use crate::mux::{NamedKey, paste_into_pane, press_pane_key, type_into_pane};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
@@ -39,11 +40,11 @@ pub(crate) struct LiveSend {
 }
 
 impl LiveSend {
-    fn wait_before_submit(&self, body: MessageBody) {
-        self.wait_before_submit_with(body, sleep);
+    fn pause_raw_typing(&self, body: MessageBody) {
+        self.pause_raw_typing_with(body, sleep);
     }
 
-    fn wait_before_submit_with(&self, body: MessageBody, sleeper: impl FnOnce(Duration)) -> bool {
+    fn pause_raw_typing_with(&self, body: MessageBody, sleeper: impl FnOnce(Duration)) -> bool {
         let should_sleep = body == MessageBody::Command && !self.command_submit_delay.is_zero();
         if should_sleep {
             sleeper(self.command_submit_delay);
@@ -178,7 +179,12 @@ fn write_batch(
     match head.body {
         MessageBody::Command => {
             debug_assert_eq!(batch.len(), 1);
-            type_into_pane(pane_id, &head.text)?;
+            let (token, arguments) = command_segments(&head.text);
+            type_into_pane(pane_id, token)?;
+            if let Some(arguments) = arguments {
+                send.pause_raw_typing(head.body);
+                type_into_pane(pane_id, arguments)?;
+            }
         }
         MessageBody::Prompt => {
             debug_assert!(
@@ -208,10 +214,9 @@ fn write_batch(
     // submitted message is always preceded by its durable record and audit event.
     store.record_sent_batch(batch, &workspace.session_name)?;
     if head.enter {
-        // Raw-typed commands carry no paste close marker. Codex groups chars
-        // arriving within 8 ms into a paste burst and suppresses Enter for
-        // another 120 ms; wait for that state to flush before submitting.
-        send.wait_before_submit(head.body);
+        // Raw-typed commands carry no paste close marker, so wait for composer
+        // paste-burst state to flush before submitting.
+        send.pause_raw_typing(head.body);
         press_pane_key(pane_id, NamedKey::Enter)?;
     }
     Ok(PaneWrite::Sent)
@@ -322,25 +327,28 @@ mod tests {
         let mut sleeps = Vec::new();
 
         assert!(
-            !send.wait_before_submit_with(MessageBody::Prompt, |duration| {
+            !send.pause_raw_typing_with(MessageBody::Prompt, |duration| {
                 sleeps.push(duration);
             })
         );
         assert!(
-            send.wait_before_submit_with(MessageBody::Command, |duration| {
+            send.pause_raw_typing_with(MessageBody::Command, |duration| {
                 sleeps.push(duration);
             })
         );
-        assert_eq!(sleeps, vec![Duration::from_millis(200)]);
+        assert!(
+            send.pause_raw_typing_with(MessageBody::Command, |duration| {
+                sleeps.push(duration);
+            })
+        );
+        assert_eq!(sleeps, vec![Duration::from_millis(200); 2]);
 
         let no_delay = LiveSend {
             command_submit_delay: Duration::ZERO,
             ..send
         };
-        assert!(
-            !no_delay.wait_before_submit_with(MessageBody::Command, |_| {
-                panic!("zero command delay must not sleep");
-            })
-        );
+        assert!(!no_delay.pause_raw_typing_with(MessageBody::Command, |_| {
+            panic!("zero command delay must not sleep");
+        }));
     }
 }
