@@ -32,9 +32,9 @@ pub(crate) const USAGE: &str = "cargo xtask atlas <verb> [flags]
 
 Verbs:
   survey    produce one architecture-review sweep over a scope
-  diff      compare a base revision with the working tree: surface, imports, edges, files
-  inspect   show what one module's functions assemble from another, and where
-  conform   compare the tree with refactor-target.toml budgets
+  inspect   build one indexed module dossier and quote its heaviest caller
+  diff      compare a base or enforce an executable pass contract
+  conform   compare the tree with refactor-target.toml constraints
 
 Run `cargo xtask atlas <verb> --help` for verb-specific flags.";
 
