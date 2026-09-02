@@ -2533,6 +2533,13 @@ fn steer_auto_compact_runs_before_a_full_window() {
         "compaction must precede the message; trace: {lines:?}"
     );
     assert!(
+        lines[compact_at.expect("compact command")].ends_with(&format!(
+            "\t/compact {}",
+            rimz::config::DEFAULT_COMPACT_INSTRUCTION
+        )),
+        "default summary brief must ride the Claude compact command; trace: {lines:?}"
+    );
+    assert!(
         String::from_utf8_lossy(&out.stdout).contains("compacted"),
         "a single steer reports the compaction it ran: {}",
         String::from_utf8_lossy(&out.stdout)
@@ -2552,7 +2559,10 @@ fn steer_auto_compact_runs_before_a_full_window() {
         .iter()
         .find(|message| message.body == MessageBody::Prompt)
         .expect("prompt message");
-    assert_eq!(command.text, "/compact");
+    assert_eq!(
+        command.text,
+        format!("/compact {}", rimz::config::DEFAULT_COMPACT_INSTRUCTION)
+    );
     assert_eq!(command.sender, MessageSender::System);
     assert!(command.automated);
     assert_eq!(command.status, MessageStatus::Sent);
@@ -2666,6 +2676,39 @@ fn message_inherits_smart_compact_default() {
         .expect("pending messages");
     assert_eq!(messages.len(), 1, "{messages:?}");
     assert_eq!(messages[0].auto_compact, Some(AutoCompact::Percent(70)));
+}
+
+#[test]
+fn smart_compact_sends_the_configured_instruction() {
+    for (configured, expected) in [
+        (
+            "keep the open questions",
+            "/compact keep the open questions",
+        ),
+        ("", "/compact"),
+    ] {
+        let env = Env::new();
+        register_running_agent(
+            &env,
+            "sess-ac-instruction",
+            "feature-ac-instruction",
+            &[("ZELLIJ_PANE_ID", "3")],
+        );
+        seed_context_fill(&env, "sess-ac-instruction", 80);
+        run_success(
+            env.rimz()
+                .args(["config", "set", "harness.compact_instruction", configured]),
+            "set compact instruction",
+        );
+
+        let trace_log = env.project_root.join("zellij-ac-instruction-trace.log");
+        run_traced_smart_compact(&env, &trace_log, "go");
+        let compact = trace_lines(&trace_log)
+            .into_iter()
+            .find(|line| is_compact_command(line))
+            .expect("compact command trace");
+        assert!(compact.ends_with(&format!("\t{expected}")), "{compact}");
+    }
 }
 
 #[test]
@@ -2873,7 +2916,7 @@ fn steer_auto_compact_suppresses_only_an_unchanged_baseline() {
     let messages = env.store().list_messages().expect("messages");
     let commands: Vec<_> = messages
         .iter()
-        .filter(|message| message.body == MessageBody::Command && message.text == "/compact")
+        .filter(|message| message.body == MessageBody::Command)
         .collect();
     assert_eq!(commands.len(), 2, "command records: {commands:?}");
     let mut baselines: Vec<_> = commands
@@ -3237,7 +3280,7 @@ fn is_enter_key(line: &str) -> bool {
 }
 
 fn is_compact_command(line: &str) -> bool {
-    line.ends_with(&format!(
+    line.contains(&format!(
         "\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t/compact"
     ))
 }
