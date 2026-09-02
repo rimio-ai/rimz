@@ -45,11 +45,15 @@ pub const MAX_DELIVERY_ATTEMPTS_ENV: &str = "RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS"
 pub const MAX_DELIVERY_ATTEMPTS: u32 = 5;
 pub const CLAIM_TTL: Duration = Duration::from_secs(15);
 
-/// Keep a slash token out of a long chunk that a composer may classify as a
-/// paste, because a pasted slash does not dispatch the command.
-fn command_segments(text: &str) -> (&str, Option<&str>) {
-    match text.find(' ') {
-        Some(at) if at + 1 < text.len() => (&text[..=at], Some(&text[at + 1..])),
+/// Split appended arguments from the adapter's declared compact command while
+/// keeping the separating space with the command. This keeps a slash out of a
+/// long chunk that a composer may classify as a paste.
+fn command_segments<'a>(text: &'a str, command: &str) -> (&'a str, Option<&'a str>) {
+    match text
+        .strip_prefix(command)
+        .and_then(|rest| rest.strip_prefix(' '))
+    {
+        Some(arguments) if !arguments.is_empty() => (&text[..=command.len()], Some(arguments)),
         _ => (text, None),
     }
 }

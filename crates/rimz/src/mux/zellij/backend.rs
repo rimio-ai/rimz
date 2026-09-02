@@ -951,7 +951,7 @@ impl MuxBackend for ZellijBackend {
             })?
             .action_target();
         self.cmd()
-            .args(["action", "write-chars", "--pane-id", &target, text])
+            .args(["action", "write-chars", "--pane-id", &target, "--", text])
             .run()
             .map(|_| ())
     }
