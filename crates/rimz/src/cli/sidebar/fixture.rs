@@ -1,4 +1,5 @@
 use super::*;
+use rimz::agents::spending::sum_optional_cost;
 use rimz::store::snapshot::{
     AgentCard, ProcessCard, ProcessState, RemoteControlBadge, RowCard, SNAPSHOT_VERSION,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarRow, SidebarSnapshot,
@@ -1906,6 +1907,10 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> SidebarRow {
         }
         None => {}
     }
+    card.sub_agent_count = card.sub_agents.len() as u32;
+    card.sub_agent_cost_usd = card.sub_agents.iter().fold(None, |total, sub_agent| {
+        sum_optional_cost(total, sub_agent.cost_usd)
+    });
 
     SidebarRow {
         id: spec.id.to_owned(),

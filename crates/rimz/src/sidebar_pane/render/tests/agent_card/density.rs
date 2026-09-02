@@ -180,6 +180,21 @@ fn compact_density_selected_card_opens_to_full_form() {
     let mut snapshot = snapshot_with(vec![parent, child]);
     snapshot.theme.display.card_density = CardDensityMode::Compact;
 
+    let resting = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: usize::MAX,
+            ..Default::default()
+        },
+        54,
+        21,
+    );
+    assert!(
+        !resting.contains("⧉ subagents"),
+        "compact resting cards trim the stats line:\n{resting}"
+    );
+
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,

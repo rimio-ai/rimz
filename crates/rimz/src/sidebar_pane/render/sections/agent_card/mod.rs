@@ -130,8 +130,11 @@ pub(super) fn row_lines(
                     inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()));
                 }
                 CardSlot::Tokens => inner.push(context_tokens_line(ctx, row)),
+                CardSlot::SubagentStats => {
+                    inner.extend(sub_agent_stats_line(ctx, agent));
+                }
                 CardSlot::Subagents => {
-                    inner.extend(sub_agent_lines(ctx, &agent.sub_agents));
+                    inner.extend(sub_agent_entry_lines(ctx, &agent.sub_agents));
                 }
             }
         }
@@ -142,49 +145,57 @@ pub(super) fn row_lines(
         .collect()
 }
 
-/// The expanded card's subagent list: a `⧉ subagents (N)` header — the marker
-/// in the delegation violet, the label dim — then up to two indented lines per
-/// child. Line 1 leads with the same live cell an agent row wears — the
-/// thinking head while the child reasons, the working fill while it acts,
-/// the static `✓`/`!` verdict once it finishes — then the type (the launch
-/// profile for a `rimz subagents` child) and description of what the parent
-/// asked it to do, with the child's cost
-/// pinned right when a priced per-child transcript exists; line 2 (deeper
-/// indent) is its reported token figure `◇` (the card's whole-unit figure,
-/// never a decimal), model, and reasoning effort — one per-card column grid,
-/// each slot sized to its widest sibling so the figures, models, and efforts
-/// stack — with elapsed work (the clock-fill glyph over a fixed
-/// `<1m`/`9m`/`2h` label in the parent's age tone ramp) pinned right under the
-/// parent's own stats. Children are
-/// subordinate to the parent card, so their text stays at the soft middle
-/// weight — the model/effort metadata a step deeper at the dim chrome, like
-/// the parent's capability tokens — and indented past the parent's stat
-/// lines. Claude's description, cumulative tokens, and elapsed ride in from
-/// `subagentStatusLine`; Codex reports current child context from the rollout
-/// tail. Model, effort, and phase come from child lifecycle events. A child
-/// with none of them degrades to the bare type line. A finished child retains
-/// reported token/model/effort metadata but drops the elapsed clock because its
-/// work span is over.
-fn sub_agent_lines(ctx: &RowCtx<'_>, sub_agents: &[SidebarSubAgent]) -> Vec<Line<'static>> {
-    if sub_agents.is_empty() {
-        return Vec::new();
+/// An engaged card's standing subagent stats line carries the lifetime child
+/// count and known cost. The expanded card appends current-turn child entries
+/// separately.
+fn sub_agent_stats_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>> {
+    if agent.sub_agent_count == 0 {
+        return None;
     }
     let theme = ctx.theme;
     let width = content_width(ctx.width);
-    let animation_phase = ctx.animation_phase;
     // The `⧉` marker wears the violet of the delegation/meta family (the
     // compacting head, the `⇅ rc` flag); the label text reads at the soft
     // middle weight like the children below it.
-    let mut lines = vec![Line::from(trim_spans_to_width(
-        vec![
-            Span::styled(
-                format!("  {}", theme.glyph(GlyphRole::CardSubagents)),
-                theme.styled(Component::SubagentHeader, Modifier::empty()),
-            ),
-            Span::styled(format!(" subagents ({})", sub_agents.len()), theme.body()),
-        ],
-        width,
-    ))];
+    let left = vec![
+        Span::styled(
+            format!("  {}", theme.glyph(GlyphRole::CardSubagents)),
+            theme.styled(Component::SubagentHeader, Modifier::empty()),
+        ),
+        Span::styled(
+            format!(" subagents ({})", agent.sub_agent_count),
+            theme.body(),
+        ),
+    ];
+    let right = agent
+        .sub_agent_cost_usd
+        .filter(|usd| *usd >= 0.005)
+        .map(|usd| {
+            vec![Span::styled(
+                dollars2(usd),
+                theme.money_style(Modifier::empty()),
+            )]
+        })
+        .unwrap_or_default();
+    Some(pin_right(left, right, width))
+}
+
+/// Up to two indented lines for each child visible in this turn. Line 1 leads
+/// with the same live cell an agent row wears — the thinking head while the
+/// child reasons, the working fill while it acts, or the static `✓`/`!` verdict
+/// once it finishes — then its type, description, and known cost. Line 2 carries
+/// the reported token figure `◇`, model, and reasoning effort on a per-card
+/// column grid, with elapsed work pinned right. Children stay at the soft middle
+/// weight and indent past the parent's stats. A pane-backed child's token figure
+/// is its cumulative session total; Claude-native children carry the cumulative
+/// `subagentStatusLine` figure and Codex-native children the current rollout
+/// context. A metadata-free child degrades to its bare type line, while a
+/// finished child keeps metadata but drops the elapsed clock.
+fn sub_agent_entry_lines(ctx: &RowCtx<'_>, sub_agents: &[SidebarSubAgent]) -> Vec<Line<'static>> {
+    let theme = ctx.theme;
+    let width = content_width(ctx.width);
+    let animation_phase = ctx.animation_phase;
+    let mut lines = Vec::new();
     // The metadata lines below form one per-card grid: the token figure
     // right-aligns to the widest sibling and the model pads to the widest
     // sibling, so the `·` seams, the models, and the efforts stack into

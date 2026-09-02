@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
-assertion_line: 252
 expression: screen
 ---
  ⌘ query-engine
@@ -29,7 +28,7 @@ expression: screen
 ▎  observe                                           🮇
 ▎  ▢ ──────────────────────────────────────────    0%🮇
 ▎  ▤ 0                                               🮇
-
+▎  ⧉ subagents (1)                                   🮇
  ────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00

@@ -353,6 +353,16 @@ pub struct AgentCard {
     /// The turn-scoped `sub_agents` list can be shorter than this lifetime sum.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegated_cost_usd: Option<f64>,
+    /// Lifetime count of every child this session spawned — provider-native and
+    /// pane-backed alike — as far back as the store retains them. The
+    /// turn-scoped `sub_agents` list is a subset.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub sub_agent_count: u32,
+    /// Lifetime sum of every child's known cost. Provider-native cost is also
+    /// inside the parent's own session figure, so this is not additive with
+    /// `cost_usd()`; `delegated_cost_usd` is the pane-backed-only part that is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_agent_cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_severity: Option<ContextSeverity>,
     /// Estimated working time for this root session, in seconds.
@@ -363,7 +373,8 @@ pub struct AgentCard {
     /// session's first cost; row ordering keys on pane creation, not this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
-    /// Subagents this agent spawned this turn, nested under the parent.
+    /// This turn's children, nested under the parent. `sub_agent_count` is the
+    /// lifetime count as far back as the store retains them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sub_agents: Vec<SidebarSubAgent>,
     /// The agent is condensing its context window right now.
@@ -402,6 +413,8 @@ impl Default for AgentCard {
             usage: AgentUsageSummary::default(),
             context: None,
             delegated_cost_usd: None,
+            sub_agent_count: 0,
+            sub_agent_cost_usd: None,
             context_severity: None,
             estimated_active_secs: None,
             registered_at: None,
@@ -636,6 +649,9 @@ pub struct SidebarSubAgent {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Cumulative session total for a pane-backed child, the cumulative
+    /// `subagentStatusLine` count for a Claude-native child, or current context
+    /// for a Codex-native child.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
     /// Exact cumulative cost from a provider-native child feed, or from a

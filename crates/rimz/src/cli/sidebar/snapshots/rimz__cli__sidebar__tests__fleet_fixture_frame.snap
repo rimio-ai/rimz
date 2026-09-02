@@ -18,6 +18,7 @@ expression: strip_sgr(&ansi)
 ▎  port auth watcher                                 🮇
 ▎  ▣ ━━━━━━━━━━━━━━━━━━━━╺━━╺──────────────────   34%🮇
 ▎  ▤ 341k · ◌ 293k ◍ 34k ↘ 13k ↗ 42k                 🮇
+▎  ⧉ subagents (2)                              $0.46🮇
 ▎⣾ cargo nextest                                     🮇
 ▎  integration::backend::zellij                      🮇
 ▎○ codex · GPT 5.1 Codex · xhigh                     🮇
@@ -30,7 +31,6 @@ expression: strip_sgr(&ansi)
    API error
    ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━──   95%
    ▤ 258k · ◌ 248k ↘ 10k ↗ 32k
-
  ────────────────────────────────────────────────────
   W: ◎ 22  ◇ 2.0M ↘ 1.4M ↗ 398.7k ◌ 199.4k     $26.38
   M: ◎ 90  ◇ 8.0M ↘ 5.6M ↗   1.6M ◌ 797.4k    $105.50
