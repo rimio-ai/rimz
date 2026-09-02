@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
@@ -56,8 +56,55 @@ pub(super) struct FnBody {
     pub(super) line: usize,
     pub(super) end_line: usize,
     pub(super) sloc: usize,
+    pub(super) params: Vec<FnParam>,
     pub(super) callees: Vec<String>,
     pub(super) forwards: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(super) struct FnParam {
+    pub(super) index: usize,
+    pub(super) name: String,
+    pub(super) ty: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ArgShape {
+    True,
+    False,
+    None,
+    Some,
+    Path(String),
+    Other,
+}
+
+impl ArgShape {
+    pub(super) fn label(&self) -> &str {
+        match self {
+            Self::True => "true",
+            Self::False => "false",
+            Self::None => "None",
+            Self::Some => "Some(_)",
+            Self::Path(path) => path,
+            Self::Other => "_",
+        }
+    }
+}
+
+impl Serialize for ArgShape {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.label())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(super) struct CallSite {
+    pub(super) line: usize,
+    pub(super) callee: String,
+    pub(super) args: Vec<ArgShape>,
 }
 
 impl FnBody {
@@ -89,6 +136,7 @@ pub(super) struct FileSyntax {
     pub(super) test_regions: Vec<Range<usize>>,
     pub(super) dependencies: Vec<DependencySite>,
     pub(super) fns: Vec<FnBody>,
+    pub(super) calls: Vec<CallSite>,
     #[serde(skip)]
     test_fns: Vec<FnBody>,
     pub(super) guards: Vec<Guard>,
@@ -197,12 +245,16 @@ fn analyze_file(
 
     let mut fn_collector = FnCollector {
         path,
+        source,
         functions: Vec::new(),
         test_functions: Vec::new(),
         owner: None,
         in_test_region: false,
     };
     fn_collector.visit_file(file);
+
+    let mut call_collector = CallCollector::new(source);
+    call_collector.visit_file(file);
 
     let mut guard_collector = GuardCollector {
         path,
@@ -221,6 +273,7 @@ fn analyze_file(
         test_regions,
         dependencies,
         fns: fn_collector.functions,
+        calls: call_collector.sites,
         test_fns: fn_collector.test_functions,
         guards: guard_collector.guards,
     }
@@ -839,6 +892,7 @@ fn resolve_import_path(file_module: &str, path: &[String]) -> String {
 
 struct FnCollector<'a> {
     path: &'a Path,
+    source: &'a str,
     functions: Vec<FnBody>,
     test_functions: Vec<FnBody>,
     owner: Option<String>,
@@ -849,7 +903,7 @@ impl FnCollector<'_> {
     fn push(&mut self, signature: &syn::Signature, span: proc_macro2::Span, block: &syn::Block) {
         let start = span.start().line;
         let end = span.end().line;
-        let mut calls = CallCollector::default();
+        let mut calls = CallCollector::new(self.source);
         calls.visit_block(block);
         let function = FnBody {
             name: signature.ident.to_string(),
@@ -858,6 +912,23 @@ impl FnCollector<'_> {
             line: start,
             end_line: end,
             sloc: end.saturating_sub(start) + 1,
+            params: signature
+                .inputs
+                .iter()
+                .filter_map(|argument| match argument {
+                    FnArg::Receiver(_) => None,
+                    FnArg::Typed(argument) => Some(argument),
+                })
+                .enumerate()
+                .map(|(index, argument)| FnParam {
+                    index,
+                    name: match argument.pat.as_ref() {
+                        Pat::Ident(ident) => ident.ident.to_string(),
+                        pattern => compact_span(self.source, pattern.span()),
+                    },
+                    ty: compact_span(self.source, argument.ty.span()),
+                })
+                .collect(),
             callees: calls.callees,
             forwards: forwarded_expression(block)
                 .and_then(|expression| forwarded_callee(signature, expression)),
@@ -1273,29 +1344,166 @@ fn normalize_token_stream(
     normalized
 }
 
-#[derive(Default)]
-struct CallCollector {
-    callees: Vec<String>,
+fn compact_span(source: &str, span: proc_macro2::Span) -> String {
+    span_text(source, span)
+        .and_then(|raw| TokenStream::from_str(raw).ok())
+        .map_or_else(|| "_".to_owned(), compact_token_stream)
 }
 
-impl<'ast> Visit<'ast> for CallCollector {
+fn compact_token_stream(tokens: TokenStream) -> String {
+    let mut compact = String::new();
+    let mut previous_was_word = false;
+    for token in tokens {
+        let (rendered, is_word) = match token {
+            TokenTree::Group(group) => {
+                let (open, close) = match group.delimiter() {
+                    Delimiter::Parenthesis => ("(", ")"),
+                    Delimiter::Brace => ("{", "}"),
+                    Delimiter::Bracket => ("[", "]"),
+                    Delimiter::None => ("", ""),
+                };
+                (
+                    format!("{open}{}{close}", compact_token_stream(group.stream())),
+                    false,
+                )
+            }
+            TokenTree::Ident(ident) => (ident.to_string(), true),
+            TokenTree::Literal(literal) => (literal.to_string(), true),
+            TokenTree::Punct(punct) => (punct.as_char().to_string(), false),
+        };
+        if previous_was_word && is_word {
+            compact.push(' ');
+        }
+        compact.push_str(&rendered);
+        previous_was_word = is_word;
+    }
+    compact
+}
+
+struct CallCollector<'a> {
+    source: &'a str,
+    callees: Vec<String>,
+    sites: Vec<CallSite>,
+}
+
+impl<'a> CallCollector<'a> {
+    fn new(source: &'a str) -> Self {
+        Self {
+            source,
+            callees: Vec::new(),
+            sites: Vec::new(),
+        }
+    }
+
+    fn shape(&self, expression: &Expr) -> ArgShape {
+        match expression {
+            Expr::Lit(expression) => match &expression.lit {
+                syn::Lit::Bool(value) if value.value => ArgShape::True,
+                syn::Lit::Bool(_) => ArgShape::False,
+                _ => ArgShape::Other,
+            },
+            Expr::Call(call)
+                if call.args.len() == 1
+                    && matches!(call.func.as_ref(), Expr::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "Some")) =>
+            {
+                ArgShape::Some
+            }
+            Expr::Path(path) => {
+                let Some(last) = path.path.segments.last() else {
+                    return ArgShape::Other;
+                };
+                if last.ident == "None" {
+                    return ArgShape::None;
+                }
+                let name = last.ident.to_string();
+                if path.path.segments.len() > 1
+                    || name.chars().next().is_some_and(char::is_uppercase)
+                {
+                    ArgShape::Path(compact_span(self.source, path.span()))
+                } else {
+                    ArgShape::Other
+                }
+            }
+            Expr::Group(group) => self.shape(&group.expr),
+            Expr::Paren(paren) => self.shape(&paren.expr),
+            _ => ArgShape::Other,
+        }
+    }
+
+    fn args(&self, arguments: &syn::punctuated::Punctuated<Expr, syn::Token![,]>) -> Vec<ArgShape> {
+        arguments
+            .iter()
+            .map(|argument| self.shape(argument))
+            .collect()
+    }
+}
+
+impl<'ast> Visit<'ast> for CallCollector<'_> {
     fn visit_expr_call(&mut self, expression: &'ast ExprCall) {
         if let Expr::Path(path) = expression.func.as_ref() {
-            self.callees.push(
-                path.path
-                    .segments
-                    .iter()
-                    .map(|segment| segment.ident.to_string())
-                    .collect::<Vec<_>>()
-                    .join("::"),
-            );
+            let callee = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+            self.callees.push(callee);
+            if let Some(segment) = path.path.segments.last() {
+                self.sites.push(CallSite {
+                    line: segment.ident.span().start().line,
+                    callee: segment.ident.to_string(),
+                    args: self.args(&expression.args),
+                });
+            }
         }
         visit::visit_expr_call(self, expression);
     }
 
     fn visit_expr_method_call(&mut self, expression: &'ast ExprMethodCall) {
         self.callees.push(format!(".{}", expression.method));
+        self.sites.push(CallSite {
+            line: expression.method.span().start().line,
+            callee: expression.method.to_string(),
+            args: self.args(&expression.args),
+        });
         visit::visit_expr_method_call(self, expression);
+    }
+
+    fn visit_item_mod(&mut self, item: &'ast ItemMod) {
+        if !is_cfg_test(&item.attrs) {
+            visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+        if !is_cfg_test(&item.attrs) {
+            visit::visit_item_impl(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+        if !is_cfg_test(&item.attrs) {
+            visit::visit_item_fn(self, item);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
+        if !is_cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_item_trait(&mut self, item: &'ast ItemTrait) {
+        if !is_cfg_test(&item.attrs) {
+            visit::visit_item_trait(self, item);
+        }
+    }
+
+    fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
+        if !is_cfg_test(&item.attrs) {
+            visit::visit_trait_item_fn(self, item);
+        }
     }
 }
 

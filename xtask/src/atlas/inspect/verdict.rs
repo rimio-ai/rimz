@@ -22,6 +22,8 @@ pub(super) struct InspectVerdict {
     heaviest_caller_also: Vec<(String, usize)>,
     vestigial_candidates: usize,
     pins_fix: usize,
+    one_caller_flags: usize,
+    constant_parameters: usize,
 }
 
 impl InspectVerdict {
@@ -30,6 +32,8 @@ impl InspectVerdict {
         assembly: &[AssemblyGroup],
         callers: &[Caller],
         functions: &[FunctionRow],
+        one_caller_flags: usize,
+        constant_parameters: usize,
     ) -> Self {
         let top_assembly = assembly.first();
         let heaviest_caller = callers.first().and_then(|caller| caller.top_fns.first());
@@ -67,6 +71,8 @@ impl InspectVerdict {
                 .iter()
                 .filter(|item| item.pins_fix)
                 .count(),
+            one_caller_flags,
+            constant_parameters,
         }
     }
 }
@@ -139,6 +145,12 @@ pub(super) fn render_verdict(out: &mut String, verdict: &InspectVerdict) {
         out,
         "{} items without production sites, {} pin a fix",
         verdict.vestigial_candidates, verdict.pins_fix
+    )
+    .expect("writing to a String cannot fail");
+    writeln!(
+        out,
+        "{} one-caller flags, {} constant parameters",
+        verdict.one_caller_flags, verdict.constant_parameters
     )
     .expect("writing to a String cannot fail");
 }

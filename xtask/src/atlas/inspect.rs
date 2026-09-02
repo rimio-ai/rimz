@@ -20,6 +20,7 @@ use super::target::{self, ModuleRule, TARGET_FILE, Target, Verdict, VerdictKind}
 use super::{positive_usize, set_once, value};
 
 mod calls;
+mod flags;
 mod selector;
 mod surface;
 #[cfg(test)]
@@ -31,6 +32,7 @@ use calls::{
     callers_from_edges, quote_function, render_call_shapes, render_callers, render_heaviest,
     render_repeated, repeated_assembly,
 };
+use flags::{FlagSection, flag_section, render_flags};
 use selector::ModuleSelector;
 pub(super) use selector::resolve_module;
 use surface::{SurfaceSection, render_surface, surface_section, vestigial_items};
@@ -53,6 +55,7 @@ const SECTIONS: &[&str] = &[
     "surface",
     "assembly",
     "calls",
+    "flags",
     "shapes",
     "guards",
     "providers",
@@ -126,6 +129,7 @@ struct Report {
     surface: SurfaceSection,
     assembly: Vec<AssemblyGroup>,
     calls: Vec<CallShape>,
+    flags: FlagSection,
     shapes: Vec<ShapeFamily>,
     guards: Vec<GuardFamily>,
     providers: Vec<Provider>,
@@ -215,6 +219,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     surface.vestigial = vestigial_items(root, &surface.items)?;
     let repeated = repeated_assembly(&references.edges, &module, &facts.syntax.files);
     let calls = call_shapes(&references.edges, &module, &facts.syntax.files);
+    let flags = flag_section(&facts, &module, &surface);
     let shape_families = if args.all {
         shapes::families_all_with_dropped(&facts, Path::new(".")).0
     } else {
@@ -256,7 +261,14 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         })
         .count();
     let unresolved_definitions = surface.unresolved.len();
-    let verdict = InspectVerdict::from_report_data(&surface, &repeated, &callers, &assembly);
+    let verdict = InspectVerdict::from_report_data(
+        &surface,
+        &repeated,
+        &callers,
+        &assembly,
+        flags.one_caller_count(),
+        flags.constant_count(),
+    );
     let report = Report {
         verdict,
         callers,
@@ -267,6 +279,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         surface,
         assembly: repeated,
         calls,
+        flags,
         shapes: shape_families,
         guards: guard_families,
         providers,
@@ -789,6 +802,9 @@ fn render_markdown(report: &Report, output: &OutputArgs, top: usize) -> String {
     }
     if output.wants("calls") {
         render_call_shapes(&mut rendered, &report.calls, top);
+    }
+    if output.wants("flags") {
+        render_flags(&mut rendered, &report.flags, top);
     }
     if output.wants("shapes") || output.wants("guards") {
         render_duplicated(

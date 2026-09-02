@@ -44,6 +44,65 @@ pub fn run(a: usize, b: bool) {
 }
 
 #[test]
+fn extracts_function_params_and_production_call_shapes() {
+    let report = analyze_sources(&[source(
+        r#"
+enum Mode { Fast }
+struct View;
+impl View {
+    fn deliver(&self, steer: bool, delay: Option<Duration>, mode: Mode, text: &str) {
+        crate::send::deliver(
+            true,
+            Some(delay),
+            Mode::Fast,
+            text,
+        );
+        self.open(false, None, Fast, 7);
+    }
+}
+#[cfg(test)]
+fn test_only() { deliver(false, None, Mode::Fast, text); }
+"#,
+    )]);
+    let file = &report.files[0];
+    let deliver = file
+        .fns
+        .iter()
+        .find(|function| function.name == "deliver")
+        .unwrap();
+    assert_eq!(
+        deliver
+            .params
+            .iter()
+            .map(|param| (param.index, param.name.as_str(), param.ty.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (0, "steer", "bool"),
+            (1, "delay", "Option<Duration>"),
+            (2, "mode", "Mode"),
+            (3, "text", "&str"),
+        ]
+    );
+    assert_eq!(
+        file.calls
+            .iter()
+            .map(|call| {
+                (
+                    call.line,
+                    call.callee.as_str(),
+                    call.args.iter().map(ArgShape::label).collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        [
+            (6, "deliver", vec!["true", "Some(_)", "Mode::Fast", "_"]),
+            (8, "Some", vec!["_"]),
+            (12, "open", vec!["false", "None", "Fast", "_"]),
+        ]
+    );
+}
+
+#[test]
 fn parse_failures_are_reported_without_aborting_other_files() {
     let report = analyze_sources(&[source("fn {"), source("pub struct Fine;")]);
     assert_eq!(report.files.len(), 1);

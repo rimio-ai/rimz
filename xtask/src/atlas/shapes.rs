@@ -851,6 +851,7 @@ mod tests {
             line,
             end_line: line + sloc - 1,
             sloc,
+            params: Vec::new(),
             callees: ["prepare", "resolve", "launch"].map(str::to_owned).to_vec(),
             forwards: None,
         };
