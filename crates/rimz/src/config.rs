@@ -82,8 +82,8 @@ pub use glyphs::{
     validate_glyph_source,
 };
 pub use harness::{
-    DEFAULT_IDLE_COMPACT_AFTER, DayCap, DayCapParseError, HarnessConfig, IdleCompactMode, RtkMode,
-    TurnCap, TurnCapParseError,
+    DEFAULT_COMPACT_INSTRUCTION, DEFAULT_IDLE_COMPACT_AFTER, DayCap, DayCapParseError,
+    HarnessConfig, IdleCompactMode, RtkMode, TurnCap, TurnCapParseError,
 };
 pub use loop_::{CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks};
 pub use mux::{

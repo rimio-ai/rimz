@@ -7,6 +7,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::harness::budget::{BudgetSpec, BudgetWindow};
 use crate::utils::time::{DurationUnit, parse_duration_units};
 
+pub const DEFAULT_COMPACT_INSTRUCTION: &str = "Summarize the transcript inside <summary></summary> tags. Include relevant information in the summary such that this conversation will be continued by a new context window without needing to redo work or be reprovided with relevant constraints or context. Be sure to preserve: (1) any difficulties or problems that came up, and how they were handled or resolved; (2) any possibilities, options, or approaches that were raised, tried, or set aside, and why; (3) anything that was asked for, decided, agreed, ruled out, or established as a preference, constraint, or boundary — stated exactly; (4) exactly where things stand now — what has been covered, settled, or completed so far; (5) anything still open, unresolved, promised, or expected to happen next; (6) specific details that would be hard to reconstruct — names, numbers, dates, exact wording, links or references — kept exactly. Be complete on these even at the cost of length; keep everything else concise. Weight the two voices differently: keep what the user said, asked for, shared, or established carefully and close to their own words; your own explanations and reasoning can be condensed much further, to what they concluded or produced — as long as nothing in the six items above is dropped.";
+
 /// A local-calendar-day dollar cap stored as cents so machine config keeps
 /// exact equality while reusing the public budget grammar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -248,6 +250,10 @@ pub struct HarnessConfig {
         with = "smart_compact_serde"
     )]
     pub smart_compact: Option<AutoCompact>,
+    /// Free text appended to compact commands whose adapters accept it.
+    /// Unset sends RimZ's summary brief; an empty string sends the bare command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_instruction: Option<String>,
     /// Compact an idle agent before its provider prompt cache expires.
     #[serde(default, skip_serializing_if = "IdleCompactMode::is_off")]
     pub idle_compact: IdleCompactMode,
@@ -264,6 +270,12 @@ pub struct HarnessConfig {
 }
 
 impl HarnessConfig {
+    pub fn compact_instruction(&self) -> &str {
+        self.compact_instruction
+            .as_deref()
+            .unwrap_or(DEFAULT_COMPACT_INSTRUCTION)
+    }
+
     pub fn idle_compact_after(&self) -> Duration {
         self.idle_compact_after
             .unwrap_or(DEFAULT_IDLE_COMPACT_AFTER)
@@ -406,6 +418,36 @@ mod tests {
         let back: HarnessConfig = toml::from_str(&toml).expect("parse harness config");
 
         assert_eq!(back, config);
+    }
+
+    #[test]
+    fn compact_instruction_defaults_to_the_summary_brief() {
+        let config: HarnessConfig = toml::from_str("").expect("parse harness config");
+
+        assert_eq!(config.compact_instruction(), DEFAULT_COMPACT_INSTRUCTION);
+        assert!(
+            !toml::to_string(&config)
+                .expect("serialize harness config")
+                .contains("compact_instruction")
+        );
+    }
+
+    #[test]
+    fn compact_instruction_empty_value_round_trips() {
+        let config: HarnessConfig =
+            toml::from_str("compact_instruction = \"\"").expect("parse harness config");
+
+        assert_eq!(config.compact_instruction, Some(String::new()));
+        assert_eq!(config.compact_instruction(), "");
+        let rendered = toml::to_string(&config).expect("serialize harness config");
+        assert!(
+            rendered.contains("compact_instruction = \"\""),
+            "{rendered}"
+        );
+        assert_eq!(
+            toml::from_str::<HarnessConfig>(&rendered).expect("parse rendered harness config"),
+            config
+        );
     }
 
     #[test]

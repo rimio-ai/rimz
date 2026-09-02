@@ -985,6 +985,7 @@ fn parse_edit_value(raw: &str) -> Value {
 
 fn parse_set_value(path: &[String], raw: &str) -> Value {
     if is_harness_smart_compact_edit(path)
+        || is_harness_compact_instruction_edit(path)
         || is_harness_idle_compact_edit(path)
         || is_harness_idle_compact_after_edit(path)
         || is_harness_rtk_edit(path)
@@ -1036,6 +1037,9 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         if let Err(err) = crate::message::AutoCompact::parse(threshold) {
             invalid_value!("{err}");
         }
+    }
+    if is_harness_compact_instruction_edit(path) && !value.is_str() {
+        invalid_value!("harness.compact_instruction must be a string");
     }
     if is_harness_idle_compact_edit(path) {
         let Some(mode) = value.as_str() else {
@@ -1106,6 +1110,10 @@ fn is_sidebar_theme_scheme_edit(path: &[String]) -> bool {
 
 fn is_harness_smart_compact_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "smart_compact")
+}
+
+fn is_harness_compact_instruction_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "harness" && child == "compact_instruction")
 }
 
 fn is_harness_idle_compact_edit(path: &[String]) -> bool {
