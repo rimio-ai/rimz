@@ -293,7 +293,7 @@ mod tests {
                 "fn calls_target() { demo::target(); }\n",
             ),
         ];
-        let syntax = super::super::syntax::analyze_sources(&sources);
+        let syntax = super::super::syntax::analyze_sources(&sources, &BTreeSet::new());
         let target = "rust-analyzer cargo demo 0.1.0 target().";
         let wrong = "rust-analyzer cargo demo 0.1.0 wrong().";
         let index = Index {
@@ -365,7 +365,7 @@ mod tests {
                 "mod target;\nuse target::target;\n\nstruct Foo;\n\nimpl Foo {\n    fn run(&self) {\n        target();\n    }\n\n    #[cfg(test)]\n    fn conformance(&self) {\n        target();\n    }\n}\n",
             ),
         ];
-        let syntax = super::super::syntax::analyze_sources(&sources);
+        let syntax = super::super::syntax::analyze_sources(&sources, &BTreeSet::new());
         let target = "rust-analyzer cargo demo 0.1.0 target().";
         let index = Index {
             documents: vec![

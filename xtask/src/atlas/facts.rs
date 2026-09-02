@@ -90,14 +90,14 @@ impl Facts {
         facets: Facets,
         reference: Option<&str>,
     ) -> Result<Self> {
-        let syntax = syntax::analyze_sources(&sources);
+        let crate_names = workspace_crate_names(root)?;
+        let syntax = syntax::analyze_sources(&sources, &crate_names);
         let mod_index = ModIndex::new(&syntax.files);
         let known_modules = syntax
             .files
             .iter()
             .map(|file| file.module_path.clone())
             .collect();
-        let crate_names = workspace_crate_names(root)?;
         let sizes = file_sizes(&sources, &syntax);
         let scoped_sources = sources
             .iter()

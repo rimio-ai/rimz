@@ -285,7 +285,7 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
     let mut imports = BTreeMap::<(String, String), BTreeSet<String>>::new();
     for file in &syntax_files {
         let from = module_for_path(&file.path, &args.path);
-        for imported in &file.imports {
+        for imported in &file.dependencies {
             let Some(imported_module) = syntax::resolved_internal_import(
                 imported,
                 &facts.known_modules,

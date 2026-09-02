@@ -4,6 +4,10 @@ fn source(text: &str) -> Source {
     Source::new("crates/rimz/src/cli/demo.rs", text)
 }
 
+fn analyze_sources(sources: &[Source]) -> SyntaxReport {
+    super::analyze_sources(sources, &BTreeSet::new())
+}
+
 #[test]
 fn extracts_boundary_items_imports_params_and_callees() {
     let report = analyze_sources(&[source(
@@ -23,7 +27,7 @@ pub fn run(a: usize, b: bool) {
     assert_eq!(file.pub_items.len(), 2);
     assert_eq!(file.pub_items[1].params, Some(2));
     assert_eq!(
-        file.imports
+        file.dependencies
             .iter()
             .map(|item| item.module_path.as_str())
             .collect::<Vec<_>>(),
@@ -192,11 +196,76 @@ fn workspace_crate_imports_normalize_to_local_module_paths() {
     let known_modules = ["store", "agents"].map(str::to_owned).into_iter().collect();
     let workspace_crates = ["rimz".to_owned()].into_iter().collect();
     let resolved = report.files[0]
-        .imports
+        .dependencies
         .iter()
         .filter_map(|import| resolved_internal_import(import, &known_modules, &workspace_crates))
         .collect::<Vec<_>>();
     assert_eq!(resolved, ["store", "agents"]);
+}
+
+#[test]
+fn dependency_sites_include_qualified_paths_in_bodies_types_and_bounds_but_not_tests() {
+    let report = super::analyze_sources(
+        &[source(
+            r#"
+fn run<T: crate::bounds::Bound>(input: crate::types::Input) {
+    crate::body::run(input);
+    let _: rimz::store::Record;
+}
+#[cfg(test)]
+mod tests {
+    fn check() { crate::ignored::call(); }
+}
+"#,
+        )],
+        &BTreeSet::from(["rimz".to_owned()]),
+    );
+
+    let sites = report.files[0]
+        .dependencies
+        .iter()
+        .map(|site| (site.module_path.as_str(), site.item.as_str(), site.spelling))
+        .collect::<Vec<_>>();
+    assert!(sites.contains(&("bounds", "Bound", Spelling::Qualified)));
+    assert!(sites.contains(&("types", "Input", Spelling::Qualified)));
+    assert!(sites.contains(&("body", "run", Spelling::Qualified)));
+    assert!(sites.contains(&("rimz::store", "Record", Spelling::Qualified)));
+    assert!(
+        !sites
+            .iter()
+            .any(|(module, _, _)| module.contains("ignored"))
+    );
+}
+
+#[test]
+fn dependency_sites_dedupe_use_and_qualified_spellings_of_one_item() {
+    let report = analyze_sources(&[source(
+        "use crate::store::Store;\nfn open() { let _: crate::store::Store; }\n",
+    )]);
+    let stores = report.files[0]
+        .dependencies
+        .iter()
+        .filter(|site| site.module_path == "store" && site.item == "Store")
+        .collect::<Vec<_>>();
+
+    assert_eq!(stores.len(), 1);
+    assert_eq!(stores[0].line, 1);
+    assert_eq!(stores[0].spelling, Spelling::Use);
+}
+
+#[test]
+fn qualified_sites_resolve_to_the_longest_known_module_prefix() {
+    let report = analyze_sources(&[source(
+        "fn open() { crate::store::record::Record::open(); crate::unknown::Thing::new(); }\n",
+    )]);
+    let known_modules = BTreeSet::from(["store".to_owned(), "store::record".to_owned()]);
+    let resolved = report.files[0]
+        .dependencies
+        .iter()
+        .map(|site| resolved_internal_import(site, &known_modules, &BTreeSet::new()).unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(resolved, ["store::record", "(crate)"]);
 }
 
 #[test]

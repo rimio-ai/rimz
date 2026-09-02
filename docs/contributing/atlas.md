@@ -9,8 +9,6 @@ Opportunity-driven refactoring does not terminate. Atlas work starts by writing 
 Every report uses these terms; the rest of this page assumes them.
 
 - **Escaping (`esc`)** — an item whose *effective* visibility leaves the row's module boundary: a `pub` item re-exported from the crate root escapes, a `pub` item inside a private module does not. `pub` is what the source declares; `esc` is what a caller can reach. Every budget and detector counts `esc`, never raw `pub`.
-- **Goal** — the designed escaping-surface ceiling for a module. Goals describe the destination; budgets remain the ratchet ceiling enforced by the gate.
-- **Debt** — an admitted upward-import prefix the refactor program intends to close. Admissions keep the gate green; debt marks which admissions still count toward the destination.
 - **Churn%** — the share of scoped history commits that touched the module, after folding renames to their HEAD paths. `rank` sorts by `code × churn%`.
 - **Pace** — the module's share of commits in the recent window divided by its share of lifetime commits, so `1.0` means the module is changing at its historical rate and `hot` (≥ 1.5) means it is accelerating. The window is the most recent `--window` percent of scoped commits (default 25). Modules under `--noise-lifetime` lifetime or `--noise-window` window commits report no pace.
 - **Window start** — the commit time where the pace window begins. Detectors that speak of "older than the window" mean older than this point, which on a young repository is only weeks ago.
@@ -20,7 +18,7 @@ Every report uses these terms; the rest of this page assumes them.
 
 1. **Survey the scope once.** Run `survey` to see ranked size and surface, repeated shapes, seam divergence, API reference evidence, and detector shortlists in one report. Read the rank table and the shapes first; the section on [reading the detectors](#detectors--annotations-not-shortlists) explains why the shortlists are read last and never at face value. This is the reading queue, not the decision.
 2. **Read one brief per candidate.** Run `brief --module <path>` for each candidate module. Its **Callers by assembly** table separates each outside module's interface breadth (`items`) from the most any one function assembles (`max/fn`). Open `inspect --from <caller> --to <candidate>` on the highest `max/fn`, then read that call site beside the providers, co-change neighbours, shapes, and conform rules before deciding whether a wide interface is a missing seam or legitimate coupling.
-3. **Write the target before moving code.** State the layer order, admitted upward-import debt, exact allow-lists where a nested boundary needs one, surface budgets, stranglers, pass order, and line budget. Treat every proposed demotion or split as a hypothesis until the compiler and tests accept it. The [target section](#baseline-versus-target) says what the file can and cannot record.
+3. **Write the target before moving code.** State the layer order, admitted dependencies, exact allow-lists where a nested boundary needs one, surface budgets, stranglers, pass order, and line budget. Treat every proposed demotion or split as a hypothesis until the compiler and tests accept it. The [target schema](#target-schema-v5) says what the file can and cannot record.
 4. **Diff, conform, and ratchet.** Implement one seam or submodule per pass. `diff --base <ref>` is the structural proof: it names escaping items and dependency edges opened and closed, alongside the complete SLOC movement. A pass exits when behaviour holds, the diff shows the intended movement, and `conform --ratchet` is clean. `rank --since <ref>` remains the narrower line-arithmetic view. Run `conform --tighten` after an improvement to preserve it.
 
 Modules flagged `pin` get characterization tests before their pass. Independent passes may use parallel worktrees only when their briefs share neither a co-change edge nor a prerequisite. A hand-off carries the relevant brief, target rules, expected post-pass budgets, and verification commands; it does not ask the executor to repeat the survey.
@@ -66,7 +64,7 @@ The **Interface** listing at the top duplicates `api --module` and is long (seve
 
 ### `inspect` — what does the heaviest caller assemble?
 
-`inspect --from <caller> --to <target>` turns one brief row into call-site evidence. It reports distinct target items per production calling function, ranks functions by that count, quotes the heaviest function with its full source span (capped at 80 lines), lists tests touching the same items, and shows covering target rules with direction, admission, and debt-site count. Inputs may be crate module paths such as `sidebar::enrich` or root-relative files and directories; path inputs retain their file or directory scope when module names repeat across crates. The exact reference index is required; `--no-index` is not a degraded form of this question.
+`inspect --from <caller> --to <target>` turns one brief row into call-site evidence. It reports distinct target items per production calling function, ranks functions by that count, quotes the heaviest function with its full source span (capped at 80 lines), lists tests touching the same items, and shows covering target rules with direction and admission. Inputs may be crate module paths such as `sidebar::enrich` or root-relative files and directories; path inputs retain their file or directory scope when module names repeat across crates. The exact reference index is required; `--no-index` is not a degraded form of this question.
 
 The header's `items` is complete module breadth and `sites` is reference occurrences. Function assembly deduplicates item names within one function; references outside functions still contribute to breadth and appear in a trailing row, but never inflate `max/fn`. A zero-edge result is valid evidence. Any parse failures in scope are listed separately; treat them as incomplete attribution. Read the quoted source to judge construction and sequencing, and use the test and target sections to check whether the seam is already protected.
 
@@ -86,7 +84,7 @@ A wide, thin row has `esc >= 20` and `loc/esc < 120`:
 
 ### `diff` — did the pass shrink the interface?
 
-`diff --base <ref>` compares a resolved base commit with the working tree per top-level module and in total. Read the totals and module table first, then the named changes: escaping items added and removed, upward-import site movement under the configured layer order, `use` and exact-reference edges, strangler movement, newly unresolved definitions, and created or deleted Rust files. Upward rows report base and current site counts per layer pair, including partial closure; reference edges retain module breadth while `asm Δ` reports movement in the maximum distinct items referenced by one calling function. If the default target file does not exist, the upward-import and strangler sections are omitted and the report says so; an explicitly selected missing target is an error.
+`diff --base <ref>` compares a resolved base commit with the working tree per top-level module and in total. Read the totals and module table first, then the named changes: escaping items added and removed, upward-dependency site movement under the configured layer order, dependency sites and exact-reference edges, strangler movement, newly unresolved definitions, and created or deleted Rust files. Upward rows report base and current site counts per layer pair, including partial closure; reference edges retain module breadth while `asm Δ` reports movement in the maximum distinct items referenced by one calling function. If the default target file does not exist, the upward-dependency and strangler sections are omitted and the report says so; an explicitly selected missing target is an error.
 
 Escaping-item identity is Rust module path, item kind, and name; source lines do not participate, so moving an item within its module does not fabricate removal and addition. Same-named methods in one module collapse to one identity. Renames are intentionally one removal plus one addition, and file renames are one deletion plus one creation.
 
@@ -124,56 +122,55 @@ The single-caller list is a rehome candidate list, not permission to demote or m
 
 ### `conform` — does the tree match the target?
 
-`conform` checks target schema v4: grouped layer direction, admitted upward imports, exact allowed imports, escaping `surface-budget` values, and stranglers. It reads root `refactor-target.toml` unless `--file` selects another target. `--path` is accepted only with `--init`; normal checks use the paths encoded by the target.
+`conform` checks target schema v5: grouped layer direction, admitted dependency sites, escaping `surface-budget` values, and stranglers. It always reads root `refactor-target.toml`. `--ratchet` fails on unadmitted dependencies and other regressions and is inert when the target does not exist. `--tighten` atomically lowers budgets and baselines and removes stale admissions; it refuses to write while a covered file fails to parse.
 
-`--init` writes a truthful current-tree baseline and never overwrites. It derives a low-to-high layer order from the current `use` graph unless `--layers a+b,c` supplies one; commas order layers and `+` groups peers at the same rank. `--ratchet` fails on unadmitted upward imports and other regressions and is inert when no default target exists. `--status` reports each goal's remaining surface and the matched site count plus open or closed state for each declared debt prefix, without changing what the gate enforces; by default it folds every rule without a goal, debt, or regression. `--tighten` atomically lowers budgets, removes stale admissions with their closed debt entries, retires goals the tree has met, and never loosens a rule; it refuses to write while any file covered by a configured rule fails to parse. `--verbose` shows every rule.
+## Target schema v5
 
-## Baseline versus target
+`layers` lists groups of top-level crate modules from lower to upper. Imports between peers in one group are neither upward nor downward. A module may depend on its own or a lower layer; a dependency on a higher layer needs an `upward-dependencies` admission. Dependency sites include both `use` declarations and qualified paths in bodies, types, and bounds. Macro token bodies are not parsed. `(crate)` names root-declared items, and a top-level name absent from `layers` is unconstrained.
 
-`--init` produces a **baseline**: every budget equals the current count, every existing upward import is admitted, and the layer order is the weighted greedy order derived from the `use` graph. A baseline is a regression guard, and that is what the gate runs: `checks` and `gate` call `conform --ratchet`, so any pass that widens a surface or adds an upward import must edit the target file in a deliberate commit. That friction is the point.
-
-A baseline is not a design. The generated `layers` array is a total order over every top-level module, and the `upward-imports` admissions on a low layer are exactly the imports a from-scratch design would not have. Turn that baseline into a target by setting `surface-goal` to the designed ceiling and listing the admitted prefixes the program will close under `upward-debt`. These fields do not make the gate red: `--status` measures the distance while budgets and admissions continue to protect the current tree, and `--tighten` records each improvement without moving an open goal. Once current surface reaches or passes a goal, status marks it `met` and tighten retires the goal into the lower ratchet budget. Removing an admission by hand before the pass is done still makes `ratchet` fail on every commit in between; do not.
-
-Writing a real target means supplying `--layers` with a handful of layers a human chose rather than accepting the derived order, and it means every later target edit is either `--tighten` output or a reviewed loosening with a reason.
-
-## Target schema v4
-
-`layers` list top-level crate modules from lower to upper. A string is one layer; an array groups peer modules at the same rank, so peer imports are neither upward nor downward. A module may import its own or a lower layer; importing a higher layer is an `upward-import`. `(crate)` may name root-declared items. A top-level name absent from `layers` is unconstrained.
-
-Most module rules use `upward-imports` to admit existing higher-layer dependencies while retaining the layer rule. `upward-debt` is the subset the program promises to close, and every debt entry must exactly match an admission. `surface-goal` must not exceed `surface-budget`. A hand-written nested rule may instead use `allowed-imports`, which is an exact allow-list and overrides layer checking for that rule; such a rule cannot carry upward debt. Layer groups cannot be empty, and a module may appear in only one layer.
+An `allowed-dependencies` rule is an exact allow-list and overrides layer checking for that rule. A directory rule also covers its sibling Rust file: `src/store` covers both `src/store/**` and `src/store.rs`. Layer groups cannot be empty, a module may appear in only one layer, and one rule cannot set both dependency admission modes.
 
 ```toml
-version = 4
-layers = ["ids", "store", ["agents", "harness"], "cli"]
+version = 5
+layers = [["ids", "utils"], ["store"], ["agents", "harness"], ["cli"]]
 
-# Store is intentionally low. This records one known upward dependency while
-# every other higher-layer import remains a regression.
 [[module]]
 path = "crates/rimz/src/store"
-upward-imports = ["agents::state"]
-upward-debt = ["agents::state"]
+upward-dependencies = ["agents::state"]
 surface-budget = 12
-surface-goal = 6
 
-# This nested migration has a deliberately narrower, exact boundary.
 [[module]]
 path = "crates/rimz/src/cli/legacy"
-allowed-imports = ["agents", "ids"]
+allowed-dependencies = ["agents", "ids"]
 surface-budget = 4
 
 [[strangler]]
 symbol = "LegacyStoreBridge"
 path = "crates/rimz/src/cli"
 baseline = 0
+
+[[verdict]]
+kind = "pass-through"
+key = "store::open"
+reason = "Preserves the typed persistence boundary."
 ```
 
-The first rule still permits lower-layer imports and admits only the named upward prefix; status reports that debt as open while it remains in use and reports `current - surface-goal` as remaining surface. The second bypasses layer direction and permits exactly its listed prefixes. Before implementation, `conform` reports upward or unallowed import sites, excess surface, and strangler occurrences; after the pass, ratchet and tighten preserve the result.
+Verdicts record reviewed evidence without changing enforcement. Every verdict needs a non-empty reason, and `(kind, key)` must be unique:
+
+| kind | key |
+| --- | --- |
+| `item` | `module::path::Name` (methods include `Owner::method`) |
+| `pass-through` | `module::path::Name` (methods include `Owner::method`) |
+| `guard` | normalized guard text |
+| `shape` | family name |
+
+Strangler symbols are single Rust identifiers. `conform` reports unallowed dependency sites with `(qualified)` when that spelling opened the hole; ratchet and tighten preserve verdicts unchanged.
 
 ## JSON v4
 
 Every JSON report carries `version: 4` and `verb`; scoped analysis also carries its path and parse failures. Totals always describe the complete result even when displayed row arrays honour `--top`. `survey` and `brief` return their sections in one untruncated v4 payload, including `detector_counts` per module. Reference-derived fields are optional and are omitted under `--no-index`, not filled with heuristic values.
 
-Important per-verb additions are recursive `rank.rows[].children` and optional `ref_median`; `seams.callers` with calling module, distinct-item count, and item names; and `api` resolution plus production/test reference module fields and exact single-caller arrays. `brief.callers` carries module breadth, `max_fn_items`, and the three heaviest functions with location and item count. `inspect` carries complete function/item/site totals, per-function and per-test `items_total` beside bounded item arrays, function spans, the capped heaviest source, matching tests, target-rule direction/admission/debt, and parse-failure paths. `diff` reports complete totals plus module rows and added/removed arrays for surface, imports, edges, unresolved definitions, and files; its assembly fields are per-function maxima, and reference-derived fields are absent under `--no-index`. `conform` reports `mode`, layers as strings or peer arrays, and optional `goal`, `remaining`, and `debt` fields on rules. Schema v2 name-match and over-publication fields do not exist in v4.
+Important per-verb additions are recursive `rank.rows[].children` and optional `ref_median`; `seams.callers` with calling module, distinct-item count, and item names; and `api` resolution plus production/test reference module fields and exact single-caller arrays. `brief.callers` carries module breadth, `max_fn_items`, and the three heaviest functions with location and item count. `inspect` carries complete function/item/site totals, per-function and per-test `items_total` beside bounded item arrays, function spans, the capped heaviest source, matching tests, target-rule direction/admission, and parse-failure paths. `diff` reports complete totals plus module rows and added/removed arrays for surface, dependencies, edges, unresolved definitions, and files; its assembly fields are per-function maxima, and reference-derived fields are absent under `--no-index`.
 
 ## A worked reading chain
 
@@ -196,13 +193,9 @@ cargo xtask atlas inspect --from sidebar::enrich --to store --md
 # Exact callers for one item, once a brief has named it.
 cargo xtask atlas api --module store --top 40
 
-# Seed once with a chosen layer order (join peers with +), then add goals and debt.
-cargo xtask atlas conform --init --path crates/rimz/src --layers ids+utils,store+config,agents+harness,cli
-
 # Per-pass proof.
 cargo xtask atlas diff --base <baseline-ref> --path <scope> --md
 cargo xtask atlas conform --ratchet
-cargo xtask atlas conform --status
 cargo xtask atlas conform --tighten
 cargo xtask atlas rank --path <scope> --since <baseline-ref>
 ```

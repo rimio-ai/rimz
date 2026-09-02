@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use super::*;
 
 #[test]
@@ -110,7 +112,7 @@ fn large_directory_rows_split_and_preserve_the_parent_subtotal() {
         super::super::sources::Source::new("src/large/a.rs", "pub fn a() {}\n"),
         super::super::sources::Source::new("src/large/sub/b.rs", "pub fn b() {}\n"),
     ];
-    let syntax = syntax::analyze_sources(&sources);
+    let syntax = syntax::analyze_sources(&sources, &BTreeSet::new());
     let mod_index = syntax::ModIndex::new(&syntax.files);
     let facts = Facts {
         root: root.path().to_path_buf(),
