@@ -73,9 +73,11 @@ fn totals_line_uses_scope_totals_not_the_top_n_rows() {
 fn split_leaves_replace_the_parent_and_consume_top() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("src/large/sub")).unwrap();
+    std::fs::write(root.path().join("src/large.rs"), "pub fn large() {}\n").unwrap();
     std::fs::write(root.path().join("src/large/a.rs"), "pub fn a() {}\n").unwrap();
     std::fs::write(root.path().join("src/large/sub/b.rs"), "pub fn b() {}\n").unwrap();
     let sources = vec![
+        super::super::sources::Source::new("src/large.rs", "pub fn large() {}\n"),
         super::super::sources::Source::new("src/large/a.rs", "pub fn a() {}\n"),
         super::super::sources::Source::new("src/large/sub/b.rs", "pub fn b() {}\n"),
     ];
@@ -92,6 +94,13 @@ fn split_leaves_replace_the_parent_and_consume_top() {
             .collect(),
         crate_names: BTreeSet::new(),
         sizes: BTreeMap::from([
+            (
+                PathBuf::from("src/large.rs"),
+                FileSize {
+                    code: 100,
+                    tests: 1,
+                },
+            ),
             (
                 PathBuf::from("src/large/a.rs"),
                 FileSize {
@@ -119,14 +128,15 @@ fn split_leaves_replace_the_parent_and_consume_top() {
 
     let rows = rows(&facts, Path::new("src")).unwrap();
 
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 3);
     assert!(rows.iter().all(|row| row.module != "large"));
-    assert_eq!(rows.iter().map(|row| row.code).sum::<u64>(), 9_001);
+    assert_eq!(rows.iter().map(|row| row.code).sum::<u64>(), 9_101);
+    assert_eq!(rows.iter().map(|row| row.tests).sum::<u64>(), 6);
     assert_eq!(
         rows.iter()
             .map(|row| row.module.as_str())
             .collect::<Vec<_>>(),
-        ["large/sub", "large/a"]
+        ["large/sub", "large/a", "large/(root)"]
     );
     assert_eq!(rows.iter().take(1).count(), 1);
 }

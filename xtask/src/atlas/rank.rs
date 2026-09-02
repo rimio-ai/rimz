@@ -5,7 +5,10 @@ use anyhow::{Context, Result};
 
 use super::facts::{Facts, FileSize};
 use super::history;
-use super::modules::{module_for_path, path_in_scope};
+use super::modules::{
+    crate_module_for_row, escaping_items, escaping_items_for_boundary, module_for_path,
+    path_in_scope,
+};
 
 const SPLIT_ABOVE: u64 = 8_000;
 const PACE_WINDOW: usize = 25;
@@ -54,7 +57,7 @@ pub(super) fn totals(rows: &[Row]) -> Totals {
 }
 
 fn split_rows(facts: &Facts, scope: &Path, prefix: &str) -> Result<Vec<Row>> {
-    let rows = level_rows(facts, scope, prefix)?;
+    let rows = level_rows(facts, scope, prefix, !prefix.is_empty())?;
     let mut leaves = Vec::new();
     for row in rows {
         let local = row
@@ -77,26 +80,62 @@ fn split_rows(facts: &Facts, scope: &Path, prefix: &str) -> Result<Vec<Row>> {
     Ok(leaves)
 }
 
-fn level_rows(facts: &Facts, scope: &Path, prefix: &str) -> Result<Vec<Row>> {
-    let sizes = sizes(facts, scope);
+fn level_rows(
+    facts: &Facts,
+    scope: &Path,
+    prefix: &str,
+    include_module_file: bool,
+) -> Result<Vec<Row>> {
+    let sizes = sizes(facts, scope, include_module_file);
     let files = facts
         .syntax
         .files
         .iter()
         .filter(|file| path_in_scope(&file.path, scope))
         .collect::<Vec<_>>();
-    let escaping = super::modules::escaping_items(&files, scope, &facts.mod_index);
-    let pace = history::pace(
-        facts
-            .history
-            .as_ref()
-            .context("rank history facts missing")?,
+    let mut escaping = escaping_items(&files, scope, &facts.mod_index);
+    if include_module_file
+        && let Some(file) = facts
+            .syntax
+            .files
+            .iter()
+            .find(|file| file.path == scope.with_extension("rs"))
+    {
+        let target = crate_module_for_row(scope, "(root)");
+        escaping
+            .entry("(root)".to_owned())
+            .or_default()
+            .extend(escaping_items_for_boundary(
+                &[file],
+                &target,
+                &facts.mod_index,
+            ));
+    }
+    let history = facts
+        .history
+        .as_ref()
+        .context("rank history facts missing")?;
+    let mut pace = history::pace(
+        history,
         &facts.root,
         scope,
         PACE_WINDOW,
         NOISE_LIFETIME,
         NOISE_WINDOW,
     )?;
+    if include_module_file {
+        let module_file_pace = history::pace(
+            history,
+            &facts.root,
+            &scope.with_extension("rs"),
+            PACE_WINDOW,
+            NOISE_LIFETIME,
+            NOISE_WINDOW,
+        )?;
+        if let Some(metrics) = module_file_pace.modules.into_values().next() {
+            pace.modules.insert("(root)".to_owned(), metrics);
+        }
+    }
     let metrics = facts
         .metrics
         .as_ref()
@@ -110,10 +149,10 @@ fn level_rows(facts: &Facts, scope: &Path, prefix: &str) -> Result<Vec<Row>> {
         for function in metrics
             .functions
             .iter()
-            .filter(|function| path_in_scope(&function.path, scope))
+            .filter(|function| path_in_level(&function.path, scope, include_module_file))
         {
             *complexity
-                .entry(module_for_path(&function.path, scope))
+                .entry(module_for_level(&function.path, scope, include_module_file))
                 .or_default() += function.score;
         }
     }
@@ -183,14 +222,35 @@ fn sort_rows(rows: &mut [Row]) {
     });
 }
 
-fn sizes(facts: &Facts, scope: &Path) -> BTreeMap<String, Size> {
+fn path_in_level(path: &Path, scope: &Path, include_module_file: bool) -> bool {
+    path_in_scope(path, scope) || (include_module_file && path == scope.with_extension("rs"))
+}
+
+fn module_for_level(path: &Path, scope: &Path, include_module_file: bool) -> String {
+    if include_module_file && path == scope.with_extension("rs") {
+        "(root)".to_owned()
+    } else {
+        module_for_path(path, scope)
+    }
+}
+
+fn sizes(facts: &Facts, scope: &Path, include_module_file: bool) -> BTreeMap<String, Size> {
     let mut sizes = BTreeMap::<String, Size>::new();
-    for source in facts.sources_in(scope) {
+    let mut sources = facts.sources_in(scope);
+    if include_module_file
+        && let Some(source) = facts
+            .sources
+            .iter()
+            .find(|source| source.path == scope.with_extension("rs"))
+    {
+        sources.push(source.clone());
+    }
+    for source in sources {
         let Some(file_size) = facts.sizes.get(&source.path) else {
             continue;
         };
         let size = sizes
-            .entry(module_for_path(&source.path, scope))
+            .entry(module_for_level(&source.path, scope, include_module_file))
             .or_default();
         size.code += file_size.code;
         size.tests += file_size.tests;
