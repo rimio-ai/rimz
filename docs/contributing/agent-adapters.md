@@ -66,7 +66,7 @@ Install is the visible security step ([adapter.md → Hook install](../internals
 
 ## Step 6 — Wire launch, resume, and presets
 
-From the worksheet's launch row: `permission_args` for the four [`PermissionMode`](../../crates/rimz/src/harness/run.rs)s, `render_preset` (reject any `agents.toml` preset field the agent cannot render, so launch intent is never silently dropped), `resume_command` and `fork_command`, `compact_command` (declare the native manual command or a documented registry exception when the agent only compacts automatically), and `launch_command`/`launch_env`/`default_launch_model` where the stock invocation needs shaping. When the provider has a verified native delegation control, implement `lockdown_subagent_args` or `lockdown_subagent_env` so it overrides conflicting profile values without erasing unrelated settings; otherwise keep the prompt-only default.
+From the worksheet's launch row: `permission_args` for the four [`PermissionMode`](../../crates/rimz/src/harness/run.rs)s, `render_preset` (reject any `agents.toml` preset field the agent cannot render, so launch intent is never silently dropped), `resume_command` and `fork_command`, `compact_command` (declare the native manual command and use `CompactInstruction::Trailing` only when upstream verifies that it accepts summary guidance, or document a registry exception when the agent only compacts automatically), and `launch_command`/`launch_env`/`default_launch_model` where the stock invocation needs shaping. When the provider has a verified native delegation control, implement `lockdown_subagent_args` or `lockdown_subagent_env` so it overrides conflicting profile values without erasing unrelated settings; otherwise keep the prompt-only default.
 
 ## Step 7 — Wire context enrichment
 
@@ -116,7 +116,7 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] Private module in `adapters/mod.rs`, one composed entry in `registry::BUILTINS`
 - [ ] `decode_hook` · typed canonical facts · explicit `HookReply` · complete classification corpus
 - [ ] One managed integration covering install / preview / uninstall / `hooks_installed`
-- [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command`
+- [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command` with verified instruction support
 - [ ] `launch_reminders` coverage declared from `append_system_text_channel`
 - [ ] Context source(s): tail parse, `observe_context` transport, or payload-stamped gauge
 - [ ] `probe_account` · `spending_sources` + `parse_spend` · positive-cost conformance fixture
