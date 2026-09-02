@@ -1,0 +1,600 @@
+version = 5
+layers = [
+    [
+    "build_id",
+    "utils",
+    "tui",
+    "ids",
+    "lane",
+    "sock",
+    "osc",
+    "testkit",
+    "update",
+],
+    [
+    "workspace",
+    "transcript",
+    "agent_activity",
+    "pane",
+    "proc",
+    "store",
+    "config",
+    "trust",
+    "theme",
+],
+    [
+    "agents",
+    "daemon_view",
+    "message",
+    "mux",
+    "remote",
+    "observability",
+    "diag",
+],
+    [
+    "harness",
+    "forge",
+    "worktree",
+    "child_process",
+    "room",
+    "remote_control",
+],
+    [
+    "sidebar",
+    "sidebar_pane",
+    "web",
+    "reload",
+    "uninstall",
+    "disk_usage",
+    "daemon_content",
+    "channel",
+],
+    [
+    "bin",
+    "cli",
+],
+]
+verdict = []
+
+[[module]]
+path = "crates/rimz/src/agent_activity.rs"
+surface-budget = 6
+
+[[module]]
+path = "crates/rimz/src/agents"
+upward-dependencies = [
+    "child_process",
+    "harness::budget",
+    "harness::run",
+    "harness::target",
+    "worktree",
+]
+surface-budget = 977
+
+[[module]]
+path = "crates/rimz/src/bin"
+surface-budget = 0
+
+[[module]]
+path = "crates/rimz/src/build_id.rs"
+upward-dependencies = ["proc"]
+surface-budget = 7
+
+[[module]]
+path = "crates/rimz/src/channel.rs"
+surface-budget = 13
+
+[[module]]
+path = "crates/rimz/src/child_process.rs"
+surface-budget = 14
+
+[[module]]
+path = "crates/rimz/src/cli"
+surface-budget = 26
+
+[[module]]
+path = "crates/rimz/src/config"
+upward-dependencies = [
+    "agents",
+    "harness::budget",
+    "harness::resume",
+    "harness::schedule",
+    "harness::spec",
+    "message",
+    "sidebar::timing",
+]
+surface-budget = 182
+
+[[module]]
+path = "crates/rimz/src/daemon_content.rs"
+surface-budget = 7
+
+[[module]]
+path = "crates/rimz/src/daemon_view.rs"
+upward-dependencies = [
+    "daemon_content",
+    "remote_control",
+    "sidebar::cache",
+    "sidebar::frame",
+    "sidebar::timing",
+]
+surface-budget = 20
+
+[[module]]
+path = "crates/rimz/src/diag"
+upward-dependencies = [
+    "child_process",
+    "sidebar::presence",
+    "sidebar::timing",
+]
+surface-budget = 83
+
+[[module]]
+path = "crates/rimz/src/disk_usage.rs"
+surface-budget = 7
+
+[[module]]
+path = "crates/rimz/src/forge.rs"
+surface-budget = 39
+
+[[module]]
+path = "crates/rimz/src/harness"
+upward-dependencies = [
+    "sidebar::refresh",
+    "sidebar::refresh::pr",
+]
+surface-budget = 591
+
+[[module]]
+path = "crates/rimz/src/ids.rs"
+surface-budget = 38
+
+[[module]]
+path = "crates/rimz/src/lane.rs"
+surface-budget = 9
+
+[[module]]
+path = "crates/rimz/src/lib.rs"
+surface-budget = 69
+
+[[module]]
+path = "crates/rimz/src/main.rs"
+surface-budget = 0
+
+[[module]]
+path = "crates/rimz/src/message"
+upward-dependencies = [
+    "child_process",
+    "harness::ancestry",
+    "harness::assist_log",
+    "harness::auto_continue",
+    "harness::run",
+    "harness::target",
+    "sidebar::produce",
+]
+surface-budget = 157
+
+[[module]]
+path = "crates/rimz/src/mux"
+upward-dependencies = [
+    "harness::launch",
+    "sidebar",
+    "sidebar::cache",
+    "sidebar::focus_anchor",
+    "sidebar::timing",
+    "sidebar::width_target",
+]
+surface-budget = 246
+
+[[module]]
+path = "crates/rimz/src/observability"
+surface-budget = 11
+
+[[module]]
+path = "crates/rimz/src/osc.rs"
+upward-dependencies = [
+    "config",
+    "mux",
+]
+surface-budget = 4
+
+[[module]]
+path = "crates/rimz/src/pane"
+surface-budget = 26
+
+[[module]]
+path = "crates/rimz/src/proc"
+upward-dependencies = [
+    "agents",
+    "agents::registry",
+]
+surface-budget = 95
+
+[[module]]
+path = "crates/rimz/src/reload.rs"
+surface-budget = 11
+
+[[module]]
+path = "crates/rimz/src/remote"
+surface-budget = 179
+
+[[module]]
+path = "crates/rimz/src/remote_control.rs"
+upward-dependencies = ["sidebar::wakeup"]
+surface-budget = 14
+
+[[module]]
+path = "crates/rimz/src/room"
+upward-dependencies = [
+    "reload",
+    "sidebar",
+    "sidebar::body_filter",
+    "sidebar::heartbeat",
+    "sidebar::timing",
+    "sidebar::width_target",
+]
+surface-budget = 48
+
+[[module]]
+path = "crates/rimz/src/sidebar"
+surface-budget = 438
+
+[[module]]
+path = "crates/rimz/src/sidebar_pane"
+surface-budget = 180
+
+[[module]]
+path = "crates/rimz/src/sock.rs"
+surface-budget = 17
+
+[[module]]
+path = "crates/rimz/src/store"
+upward-dependencies = [
+    "agents",
+    "daemon_view",
+    "diag",
+    "diag::record",
+    "disk_usage",
+    "harness::petname",
+    "harness::run",
+    "harness::run_wake",
+    "harness::target",
+    "message",
+    "mux",
+    "remote::link",
+    "sidebar::heartbeat",
+    "sidebar::timing",
+    "sidebar::wakeup",
+    "worktree",
+]
+surface-budget = 362
+
+[[module]]
+path = "crates/rimz/src/theme"
+upward-dependencies = ["agents"]
+surface-budget = 31
+
+[[module]]
+path = "crates/rimz/src/transcript.rs"
+surface-budget = 15
+
+[[module]]
+path = "crates/rimz/src/trust.rs"
+upward-dependencies = ["agents"]
+surface-budget = 36
+
+[[module]]
+path = "crates/rimz/src/tui.rs"
+surface-budget = 16
+
+[[module]]
+path = "crates/rimz/src/uninstall.rs"
+surface-budget = 10
+
+[[module]]
+path = "crates/rimz/src/update.rs"
+surface-budget = 18
+
+[[module]]
+path = "crates/rimz/src/utils.rs"
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/web"
+surface-budget = 48
+
+[[module]]
+path = "crates/rimz/src/workspace.rs"
+upward-dependencies = ["worktree"]
+surface-budget = 21
+
+[[module]]
+path = "crates/rimz/src/worktree"
+upward-dependencies = ["disk_usage"]
+surface-budget = 55
+
+[[module]]
+path = "crates/rimz/src/cli/remote/supervisor.rs"
+allowed-dependencies = [
+    "cli::remote",
+    "cli::remote::outage_ui",
+    "cli::remote::tty",
+    "config",
+    "mux",
+    "osc",
+    "remote",
+    "sidebar::notify",
+    "sidebar::timing",
+    "store::paths",
+    "tui",
+]
+surface-budget = 9
+
+[[module]]
+path = "crates/rimz/src/cli/remote/web.rs"
+allowed-dependencies = [
+    "child_process",
+    "cli",
+    "cli::remote",
+    "mux",
+    "remote",
+    "remote::link",
+    "remote::web",
+    "web",
+]
+surface-budget = 2
+
+[[module]]
+path = "crates/rimz/src/config/notifications.rs"
+allowed-dependencies = ["agents"]
+surface-budget = 23
+
+[[module]]
+path = "crates/rimz/src/config/resume.rs"
+allowed-dependencies = [
+    "harness::resume",
+    "utils::time",
+]
+surface-budget = 5
+
+[[module]]
+path = "crates/rimz/src/config/sidebar.rs"
+allowed-dependencies = ["agents::spending"]
+surface-budget = 5
+
+[[module]]
+path = "crates/rimz/src/config/worktree.rs"
+allowed-dependencies = []
+surface-budget = 4
+
+[[module]]
+path = "crates/rimz/src/message/send.rs"
+allowed-dependencies = [
+    "(crate)",
+    "agents",
+    "config",
+    "harness::assist_log",
+    "harness::target",
+    "message",
+    "mux",
+    "store",
+    "store::snapshot",
+    "workspace",
+]
+surface-budget = 9
+
+[[module]]
+path = "crates/rimz/src/mux/mount_proof.rs"
+allowed-dependencies = [
+    "build_id",
+    "ids",
+    "mux",
+    "sidebar",
+    "store",
+]
+surface-budget = 2
+
+[[module]]
+path = "crates/rimz/src/mux/reconcile.rs"
+allowed-dependencies = [
+    "ids",
+    "mux",
+]
+surface-budget = 19
+
+[[module]]
+path = "crates/rimz/src/mux/recovery.rs"
+allowed-dependencies = [
+    "(crate)",
+    "ids",
+    "mux",
+    "proc",
+    "sidebar",
+]
+surface-budget = 16
+
+[[module]]
+path = "crates/rimz/src/mux/zellij/session.rs"
+allowed-dependencies = [
+    "config",
+    "ids",
+    "mux",
+    "sidebar::cache",
+    "sidebar::timing",
+    "store::paths",
+    "store::workspace_record",
+    "workspace",
+]
+surface-budget = 15
+
+[[module]]
+path = "crates/rimz/src/sidebar_pane/pets"
+allowed-dependencies = [
+    "config",
+    "sidebar",
+    "sidebar_pane",
+]
+surface-budget = 26
+
+[[module]]
+path = "crates/rimz/src/store/atomic.rs"
+allowed-dependencies = []
+surface-budget = 18
+
+[[module]]
+path = "crates/rimz/src/store/gc"
+allowed-dependencies = [
+    "disk_usage",
+    "ids",
+    "sidebar::heartbeat",
+    "sidebar::timing",
+    "store",
+]
+surface-budget = 10
+
+[[module]]
+path = "crates/rimz/src/store/mod.rs"
+allowed-dependencies = ["harness::run"]
+surface-budget = 37
+
+[[module]]
+path = "crates/rimz/src/utils/time.rs"
+allowed-dependencies = []
+surface-budget = 7
+
+[[module]]
+path = "crates/rimz/src/harness/ancestry.rs"
+allowed-dependencies = [
+    "agents",
+    "harness::launch",
+    "ids",
+    "mux",
+]
+surface-budget = 9
+
+[[module]]
+path = "crates/rimz/src/harness/plan.rs"
+allowed-dependencies = [
+    "agents",
+    "config",
+    "harness::ancestry",
+    "harness::budget",
+    "harness::launch",
+    "harness::petname",
+    "harness::prompt_compose",
+    "harness::spec",
+    "ids",
+    "mux",
+    "proc",
+    "store::paths",
+    "store::writer",
+    "workspace",
+]
+surface-budget = 27
+
+[[module]]
+path = "crates/rimz/src/harness/resume.rs"
+allowed-dependencies = [
+    "(crate)",
+    "agents",
+    "config",
+    "harness::ancestry",
+    "harness::plan",
+    "harness::spec",
+    "harness::target",
+    "ids",
+    "mux",
+    "store::runtime",
+    "store::writer",
+    "worktree",
+]
+surface-budget = 59
+
+[[module]]
+path = "crates/rimz/src/harness/launch.rs"
+allowed-dependencies = [
+    "agents",
+    "agents::capabilities",
+    "config",
+    "harness::launch_context",
+    "harness::subagent_policy",
+    "ids",
+    "trust",
+]
+surface-budget = 48
+
+[[module]]
+path = "crates/rimz/src/harness/run.rs"
+allowed-dependencies = [
+    "agents",
+    "forge",
+    "harness::budget",
+    "harness::run_wake",
+    "ids",
+    "proc",
+    "store",
+]
+surface-budget = 42
+
+[[module]]
+path = "crates/rimz/src/harness/run/report.rs"
+allowed-dependencies = [
+    "harness::run",
+    "ids",
+    "store",
+]
+surface-budget = 2
+
+[[module]]
+path = "crates/rimz/src/harness/run_wake.rs"
+allowed-dependencies = [
+    "harness::run",
+    "ids",
+    "sock",
+    "store",
+]
+surface-budget = 11
+
+[[module]]
+path = "crates/rimz/src/harness/prompt_compose.rs"
+allowed-dependencies = [
+    "agents",
+    "harness::spec",
+    "ids",
+    "proc",
+    "store",
+]
+surface-budget = 9
+
+[[module]]
+path = "crates/rimz/src/harness/schedule/runner.rs"
+allowed-dependencies = [
+    "agents",
+    "config",
+    "harness::budget",
+    "harness::launch",
+    "harness::plan",
+    "harness::run",
+    "harness::schedule",
+    "ids",
+    "proc",
+    "store::paths",
+    "utils::time",
+    "workspace",
+]
+surface-budget = 48
+
+[[strangler]]
+symbol = "purge_zellij_session_cache_in"
+path = "crates/rimz/src/mux/recovery.rs"
+baseline = 0
+
+[[strangler]]
+symbol = "invalidate_snapshot_caches"
+path = "crates/rimz/src/store"
+baseline = 3
+
+[[strangler]]
+symbol = "message_store"
+path = "crates/rimz/src/harness"
+baseline = 0
